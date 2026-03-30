@@ -116,6 +116,8 @@
 │  src_id: uint64                ← 源点 ID (与标签无关)            │
 │  dst_id: uint64                ← 目标点 ID (与标签无关)          │
 │  label_id: uint16              ← 边类型 ID                       │
+│  direction: uint8              ← 方向 (OUT=0x00, IN=0x01)        │
+│                                 仅存在于内存对象，不持久化         │
 │  properties: Map<string, Value>← 属性集合                        │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -271,12 +273,17 @@ Value: {edge_id:uint64 BE}
 #### Edge 数据 (完整属性)
 ```
 Key:   D|{edge_id:uint64 BE}
-Value: {src_id:uint64 BE}|{dst_id:uint64 BE}|{edge_label_id:uint16 BE}|{properties:encoded}
+Value: {properties:encoded}
 
-说明: 存储边的完整信息，用于通过 edge_id 获取边详情
+说明:
+  - 仅存储边的属性，src_id/dst_id/edge_label_id/direction 可从边索引查询中获取
+  - 一条逻辑边（如 A follows B）会产生两条索引记录：
+    - E|A|OUT|follows|B|{seq} → edge_id
+    - E|B|IN|follows|A|{seq} → edge_id
+  - 两条索引指向同一个 edge_id，共享同一份 properties
 
 示例:
-  D|0x0000000000000064 → {src: 1, dst: 2, label: 1, props: {since: 2020, weight: 0.8}}
+  D|0x0000000000000064 → {since: 2020, weight: 0.8}
 ```
 
 #### 元数据
@@ -391,6 +398,7 @@ struct Edge {
     VertexId src_id;
     VertexId dst_id;
     EdgeLabelId label_id;
+    Direction direction;    // 仅内存对象，不持久化（从索引 key 解析）
     Properties properties;
 };
 
