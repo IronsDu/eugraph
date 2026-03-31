@@ -1,0 +1,7 @@
+{
+  "default-registry": {
+    "kind": "git",
+    "repository": "/home/dodo/code/vcpkg",
+    "baseline": "6d4364b1863a5a581a44eee86cf30083124dbedf"
+  }
+}

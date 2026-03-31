@@ -6,26 +6,44 @@
 
 ---
 
-## 当前阶段：架构设计与 KV 编码
-
-**核心任务**：
-1. 确定系统架构
-2. 设计底层 KV 存储的编码格式（为实现图语义）
+## 当前阶段：阶段一 基础框架 (MVP) — 进行中
 
 **详细设计文档**：[architecture.md](./architecture.md)
 
-**当前状态**：架构设计和 KV 编码方案已初步完成，详见 architecture.md 第七节「KV 编码设计」
+### 任务进度
+
+| # | 任务 | 状态 |
+|---|------|------|
+| 1.1 | 项目骨架搭建（CMake、目录结构、基础类型） | ✅ 已完成 |
+| 1.2 | WiredTiger 集成（WiredTigerStore、KeyCodec、ValueCodec） | ✅ 编码完成，编译通过，运行时段错误待排查 |
+| 1.3 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | 待开始 |
+| 1.4 | 图存储服务（Vertex/Edge CRUD） | 待开始 |
+| 1.5 | 基础事务支持（MVCC） | 待开始 |
+
+### 已完成的工作
+
+#### 1.1 项目骨架搭建 ✅
+- CMakeLists.txt 配置（vcpkg 依赖管理：wiredtiger, gtest, spdlog, lz4, zlib, zstd）
+- src/ 目录结构创建
+- 基础类型定义（graph_types.hpp, error.hpp, constants.hpp）
+
+#### 1.2 WiredTiger 集成 ✅（编码完成）
+- WiredTigerStore 类（连接管理、put/get/del、cursor scan、事务）
+- KeyCodec（各类型 Key 的编解码：L/I/P/R/X/E/D 前缀）
+- ValueCodec（PropertyValue 的序列化/反序列化，支持所有类型及压缩）
+- 单元测试（test_key_codec.cpp, test_value_codec.cpp, test_wiredtiger_store.cpp）
+- **已知问题**：测试运行时段错误（segfault），待排查
+
+### 构建方式
+```bash
+cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=/home/dodo/code/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake --build build
+./build/eugraph_tests
+```
 
 ---
 
 ## 后续阶段（待规划）
-
-### 阶段二：基础框架 (MVP)
-- 项目骨架搭建
-- WiredTiger 集成
-- 元数据服务实现
-- 图存储服务实现
-- 基础事务支持
 
 ### 阶段三：查询能力
 - GSQL 解析器
