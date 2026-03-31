@@ -104,7 +104,7 @@
 │                                                                 │
 │  id: uint64                    ← 系统生成的唯一数字 ID            │
 │  labels: Set<LabelId>         ← 多个标签 ID (通过索引维护)        │
-│  properties: Map<string, Value>← 属性集合                        │
+│  properties: [Value?]         ← 属性数组（按 prop_id 索引）        │
 │                                                                 │
 │  主键 (用户定义): 如 email, user_id 等 (全局唯一)               │
 └─────────────────────────────────────────────────────────────────┘
@@ -118,7 +118,7 @@
 │  label_id: uint16              ← 边类型 ID                       │
 │  direction: uint8              ← 方向 (OUT=0x00, IN=0x01)        │
 │                                 仅存在于内存对象，不持久化         │
-│  properties: Map<string, Value>← 属性集合                        │
+│  properties: [Value?]         ← 属性数组（按 prop_id 索引）        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -452,6 +452,7 @@ enum class PropertyType {
 };
 
 struct PropertyDef {
+    uint16_t id = 0;                    // 属性 ID（在 Label/EdgeLabel 内独立编号）
     std::string name;
     PropertyType type;
     bool required = false;
@@ -463,11 +464,11 @@ struct LabelDef {
     LabelId id = INVALID_LABEL_ID;
     LabelName name;
     std::vector<PropertyDef> properties;
-    std::optional<std::string> primary_key;
+    std::optional<uint16_t> primary_key_prop_id;  // 主键属性的 prop_id
 
     struct IndexDef {
         std::string name;
-        std::vector<std::string> properties;
+        std::vector<uint16_t> prop_ids;  // 索引包含的属性 ID 列表
         bool unique = false;
     };
     std::vector<IndexDef> indexes;
