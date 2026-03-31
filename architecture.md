@@ -228,19 +228,40 @@ Value: {vertex_id:uint64 BE}
 
 #### 属性存储
 ```
-Key:   X|{label_id:uint16 BE}|{vertex_id:uint64 BE}|{property_name:string}
+Key:   X|{label_id:uint16 BE}|{vertex_id:uint64 BE}|{prop_id:uint16 BE}
 Value: {encoded_value}
 
-说明: 存储顶点的属性值，通过标签和顶点ID组织
+说明:
+  - prop_id 在每个 Label 内独立编号
+  - Key 中使用 prop_id 而非属性名，字段改名只需修改元数据，无需修改数据存储
+
+  - 支持部分属性查询
+
+  - 同一 label 下的不同顶点可以使用相同的 prop_id（但字段可能不同）
+
+  - 同一顶点可以有多个标签，因此可能有多组属性存储记录
+
+    - X 格式： X|{label_id}|{vertex_id}|{prop_id}， prop_id 在各自 Label 内独立编号
+
+    - 每组属性一条记录，便于部分查询
+
+    - 支持字段改名（只改元数据）
+
+  - 与 Edge 数据共享相同的 prop_id 空间
 
 示例:
-  X|0x0001|0x0000000000000001|name → "Alice"
-  X|0x0001|0x0000000000000001|age → 30
-  X|0x0001|0x0000000000000002|city → "Beijing"
+  X|0x0001|0x0000000000000001|0x0001 → "Alice"   // Person(id=1) 的顶点1 的属性1 (name)
+  X|0x0001|0x0000000000000001|0x0002 → 30        // Person(id=1) 的顶点1 的属性2 (age)
+  X|0x0001|0x0000000000000002|0x0001 → "Beijing"   // Person(id=1) 的顶点2 的属性1 (city)
+
+  // 同一顶点1 也可以属于另一个标签，因此有两条属性存储记录
+  X|0x0002|0x0000000000000002|0x0001 → "Bob"     // Company(id=2) 的顶点2 的属性1 (name)
+
+  X|0x0002|0x0000000000000002|0x0002 → "Beijing"   // 公司(id=2) 的顶点2 的属性2 (city)
 
 前缀查询:
   X|{label_id}|{vertex_id}|           → 获取某标签下某顶点的所有属性
-  X|{label_id}|{vertex_id}|{prop}|   → 获取某标签下某顶点的指定属性
+  X|{label_id}|{vertex_id}|{prop_id}   → 获取某标签下某顶点的指定属性
 ```
 
 #### Edge 索引 (邻接查询)
