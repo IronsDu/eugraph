@@ -405,7 +405,9 @@ using PropertyValue = std::variant<
     std::vector<std::string>
 >;
 
-using Properties = std::unordered_map<std::string, PropertyValue>;
+// 属性值按 prop_id 索引存储，prop_id 作为数组下标
+// 示例：properties[1] 存储 prop_id=1 的属性值
+using Properties = std::vector<std::optional<PropertyValue>>;
 
 // ==================== 顶点 ====================
 struct Vertex {

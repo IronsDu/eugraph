@@ -43,8 +43,10 @@
 
 | 日期 | 修改内容 | 原因 |
 |------|----------|------|
-| 2025-03-31 | Edge 数据（D\|edge_id）去掉 src_id、dst_id、edge_label_id，只保留 properties | 这些信息可从边索引查询中获取，避免冗余 |
-| 2025-03-31 | 核心概念 Edge 结构添加 direction 属性（仅内存对象，不持久化） | 一条逻辑边存储两条索引记录（OUT/IN），direction 从索引 key 解析 |
+| 2025-03-31 | 属性存储（X\|）Key 改用 prop_id 代替 property_name | 支持部分属性查询，字段改名无需修改数据存储 |
+| 2025-03-31 | Edge 数据（D\|）改为 D\|{edge_label_id}\|{edge_id}\|{prop_id}，属性分开存储 | 支持部分属性查询，支持遍历某关系类型下所有边 |
+| 2025-03-31 | 元数据 properties 改为数组，包含 prop_id 映射 | 支持属性名与 prop_id 的双向查找 |
+| 2025-03-31 | 内存结构 Properties 改为按 prop_id 索引的数组 | 与 KV 存储设计一致，内存更紧凑，访问更快 |
 
 ---
 
