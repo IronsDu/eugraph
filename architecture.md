@@ -11,13 +11,13 @@
 
 ## 二、核心特性
 
-| 特性 | 说明 |
-|------|------|
-| 查询语言 | GSQL (类 SQL 的图查询语言) |
-| 事务模型 | MVCC + 2PC (分布式) |
+| 特性   | 说明                     |
+| ---- | ---------------------- |
+| 查询语言 | GSQL (类 SQL 的图查询语言)    |
+| 事务模型 | MVCC + 2PC (分布式)       |
 | 隔离级别 | 可重复读 (REPEATABLE_READ) |
-| 部署模式 | 单机 → 分布式 |
-| 架构模式 | 模块化、服务化 |
+| 部署模式 | 单机 → 分布式               |
+| 架构模式 | 模块化、服务化                |
 
 ## 三、系统架构
 
@@ -61,38 +61,38 @@
 
 ### 4.1 Storage Service (存储服务)
 
-| 职责 | 说明 |
-|------|------|
-| 图数据存储 | Vertex / Edge 的 CRUD |
-| KV 存储封装 | WiredTiger 接口封装 |
-| 本地事务 | 单节点 MVCC 事务 |
-| 数据持久化 | WAL + Checkpoint |
+| 职责      | 说明                   |
+| ------- | -------------------- |
+| 图数据存储   | Vertex / Edge 的 CRUD |
+| KV 存储封装 | WiredTiger 接口封装      |
+| 本地事务    | 单节点 MVCC 事务          |
+| 数据持久化   | WAL + Checkpoint     |
 
 ### 4.2 Compute Service (计算服务)
-| 职责 | 说明 |
-|------|------|
-| GSQL 解析 | 词法/语法分析 |
-| 查询规划 | 生成执行计划 |
-| 查询优化 | 基于规则/代价优化 |
-| 查询执行 | 执行查询计划 |
+| 职责      | 说明        |
+| ------- | --------- |
+| GSQL 解析 | 词法/语法分析   |
+| 查询规划    | 生成执行计划    |
+| 查询优化    | 基于规则/代价优化 |
+| 查询执行    | 执行查询计划    |
 
 ### 4.3 Metadata Service (元数据服务)
-| 职责 | 说明 |
-|------|------|
-| Schema 管理 | Label/EdgeLabel 类型定义 |
-| ID 映射 | Label名称↔ID, EdgeLabel名称↔ID |
-| 统计信息 | 数据分布、基数估计 |
-| ID 分配 | 全局唯一 ID 生成 |
+| 职责        | 说明                         |
+| --------- | -------------------------- |
+| Schema 管理 | Label/EdgeLabel 类型定义       |
+| ID 映射     | Label名称↔ID, EdgeLabel名称↔ID |
+| 统计信息      | 数据分布、基数估计                  |
+| ID 分配     | 全局唯一 ID 生成                 |
 
 ## 五、服务组合模式
 
-| 模式 | 开启的服务 | 说明 |
-|------|-----------|------|
-| 纯存储节点 | Storage | 只负责数据存储 |
-| 纯计算节点 | Compute | 无状态计算，连接存储节点 |
-| 存算一体 | Storage + Compute | 单机部署，本地计算，零 RPC 开销 |
-| 全功能节点 | Storage + Compute + Metadata | 单机全功能 / 分布式协调节点 |
-| 纯元数据节点 | Metadata | 独立的元数据中心 |
+| 模式     | 开启的服务                        | 说明                 |
+| ------ | ---------------------------- | ------------------ |
+| 纯存储节点  | Storage                      | 只负责数据存储            |
+| 纯计算节点  | Compute                      | 无状态计算，连接存储节点       |
+| 存算一体   | Storage + Compute            | 单机部署，本地计算，零 RPC 开销 |
+| 全功能节点  | Storage + Compute + Metadata | 单机全功能 / 分布式协调节点    |
+| 纯元数据节点 | Metadata                     | 独立的元数据中心           |
 
 ## 六、数据模型
 
@@ -106,7 +106,7 @@
 │  labels: Set<LabelId>         ← 多个标签 ID (通过索引维护)        │
 │  properties: [Value?]         ← 属性数组（按 prop_id 索引）        │
 │                                                                 │
-│  主键 (用户定义): 如 email, user_id 等 (全局唯一)               │
+│  主键 (用户定义): 如 email, user_id 等 (全局唯一，每顶点一个)   │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
@@ -117,7 +117,6 @@
 │  dst_id: uint64                ← 目标点 ID (与标签无关)          │
 │  label_id: uint16              ← 边类型 ID                       │
 │  direction: uint8              ← 方向 (OUT=0x00, IN=0x01)        │
-│                                 仅存在于内存对象，不持久化         │
 │  properties: [Value?]         ← 属性数组（按 prop_id 索引）        │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -167,10 +166,11 @@
 ├──────────┼────────────────────────────────────┤
 │ 'L' 0x4C │ Label 反向索引 (Vertex → Labels)   │
 │ 'I' 0x49 │ Label 正向索引 (Label → Vertex)    │
-│ 'P' 0x50 │ 主键索引 (Primary Key)             │
+│ 'P' 0x50 │ 主键正向索引 (pk → vertex_id)      │
+│ 'R' 0x52 │ 主键反向索引 (vertex_id → pk)       │
 │ 'X' 0x58 │ 属性存储 (Property Storage)        │
 │ 'E' 0x45 │ Edge 索引 (邻接查询)               │
-│ 'D' 0x44 │ Edge 数据 (完整属性)               │
+│ 'D' 0x44 │ Edge 属性存储 (Property Storage)    │
 │ 'M' 0x4D │ 元数据 (Metadata)                  │
 │ 'T' 0x54 │ 事务 (Transaction)                 │
 │ 'W' 0x57 │ WAL                                │
@@ -211,19 +211,33 @@ Value: (empty)
   I|{label_id}|  → 获取该标签下的所有顶点 ID
 ```
 
-#### 主键索引
+#### 主键正向索引 (pk → vertex_id)
 ```
 Key:   P|{pk_value:encoded}
 Value: {vertex_id:uint64 BE}
 
-说明: 不包含 label_id，pk_value 是全局唯一的主键值
+说明:
+  - 全局主键，每个顶点只有一个主键值，用于唯一标识该顶点
+  - pk_value 在全局范围内唯一
+  - 主键是顶点的全局标识，不属于任何特定标签
 
-示例 (假设 Person 的主键是 email，User 的主键是 user_id):
+示例:
   P|"alice@example.com" → 0x0000000000000001
-  P|"user_001"           → 0x0000000000000001
   P|"bob@example.com"   → 0x0000000000000002
+```
 
-注意: 同一个 vertex 可能有多个主键索引项 (属于不同 label)
+#### 主键反向索引 (vertex_id → pk)
+```
+Key:   R|{vertex_id:uint64 BE}
+Value: {pk_value:encoded}
+
+说明:
+  - 与 P| 互为反向索引，通过 vertex_id 反查全局主键值
+  - 每个顶点一条记录
+
+示例:
+  R|0x0000000000000001 → "alice@example.com"
+  R|0x0000000000000002 → "bob@example.com"
 ```
 
 #### 属性存储
@@ -291,20 +305,29 @@ Value: {edge_id:uint64 BE}
   E|{vertex_id}|OUT|{label_id}|{neighbor_id}|{附加id} → 某点到某点的某类型特定边
 ```
 
-#### Edge 数据 (完整属性)
+#### Edge 属性存储
 ```
-Key:   D|{edge_id:uint64 BE}
-Value: {properties:encoded}
+Key:   D|{edge_label_id:uint16 BE}|{edge_id:uint64 BE}|{prop_id:uint16 BE}
+Value: {encoded_value}
 
 说明:
+  - prop_id 在每个 EdgeLabel 内独立编号，与 Vertex 属性存储 (X|) 设计一致
+  - Key 中使用 prop_id，字段改名只需修改元数据，无需修改数据存储
+  - 支持部分属性查询，无需读取所有属性
   - 仅存储边的属性，src_id/dst_id/edge_label_id/direction 可从边索引查询中获取
   - 一条逻辑边（如 A follows B）会产生两条索引记录：
     - E|A|OUT|follows|B|{seq} → edge_id
     - E|B|IN|follows|A|{seq} → edge_id
-  - 两条索引指向同一个 edge_id，共享同一份 properties
+  - 两条索引指向同一个 edge_id，共享同一份属性存储
 
 示例:
-  D|0x0000000000000064 → {since: 2020, weight: 0.8}
+  // edge_label_id=1 (follows), edge_id=100 的边
+  D|0x0001|0x0000000000000064|0x0001 → 2020     // follows 的属性1 (since)
+  D|0x0001|0x0000000000000064|0x0002 → 0.8       // follows 的属性2 (weight)
+
+前缀查询:
+  D|{edge_label_id}|{edge_id}|           → 获取某条边的所有属性
+  D|{edge_label_id}|{edge_id}|{prop_id}   → 获取某条边的指定属性
 ```
 
 #### 元数据
@@ -338,6 +361,7 @@ Value: {next_vertex_id:uint64}|{next_edge_id:uint64}|{next_label_id:uint16}|{nex
 │  • 通过 vertex_id 获取标签          L|{vertex_id}|*  (前缀扫描)              │
 │  • 通过 label_id 扫描顶点          I|{label_id}|*  (前缀扫描)              │
 │  • 通过主键获取 vertex_id          P|{pk_value}                               │
+│  • 通过 vertex_id 获取主键          R|{vertex_id}                               │
 │  • 通过属性值扫描顶点              (待设计二级索引)                           │
 
 │                                                                                │
@@ -349,7 +373,7 @@ Value: {next_vertex_id:uint64}|{next_edge_id:uint64}|{next_label_id:uint16}|{nex
 │  • 查询某点某类型入边                E|{vid}|IN|{label_id}|*                  │
 │  • 查询两点之间某类型所有边        E|{src}|OUT|{label}|{dst}|*                 │
 
-│  • 通过 edge_id 获取边详情           D|{edge_id}                                │
+│  • 通过 edge_id 获取边详情           D|{edge_label_id}|{edge_id}|*  (前缀扫描)   │
 │                                                                                │
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -464,7 +488,6 @@ struct LabelDef {
     LabelId id = INVALID_LABEL_ID;
     LabelName name;
     std::vector<PropertyDef> properties;
-    std::optional<uint16_t> primary_key_prop_id;  // 主键属性的 prop_id
 
     struct IndexDef {
         std::string name;
@@ -1638,11 +1661,11 @@ protected:
 - 测试覆盖率目标: 80%+
 
 ## 十三、依赖库
-| 组件 | 选择 | 说明 |
-|------|------|------|
-| 构建系统 | CMake | C++ 标准选择 |
-| 协程库 | folly | Meta 成熟协程库 |
-| RPC | fbthrift | folly 原生支持 |
-| KV 存储 | WiredTiger | 成熟、高性能、支持事务 |
-| 日志库 | spdlog | 高性能、C++20 友好 |
-| 测试框架 | GoogleTest | 成熟稳定 |
+| 组件    | 选择         | 说明           |
+| ----- | ---------- | ------------ |
+| 构建系统  | CMake      | C++ 标准选择     |
+| 协程库   | folly      | Meta 成熟协程库   |
+| RPC   | fbthrift   | folly 原生支持   |
+| KV 存储 | WiredTiger | 成熟、高性能、支持事务  |
+| 日志库   | spdlog     | 高性能、C++20 友好 |
+| 测试框架  | GoogleTest | 成熟稳定         |

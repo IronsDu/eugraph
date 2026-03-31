@@ -47,6 +47,10 @@
 | 2025-03-31 | Edge 数据（D\|）改为 D\|{edge_label_id}\|{edge_id}\|{prop_id}，属性分开存储 | 支持部分属性查询，支持遍历某关系类型下所有边 |
 | 2025-03-31 | 元数据 properties 改为数组，包含 prop_id 映射 | 支持属性名与 prop_id 的双向查找 |
 | 2025-03-31 | 内存结构 Properties 改为按 prop_id 索引的数组 | 与 KV 存储设计一致，内存更紧凑，访问更快 |
+| 2025-03-31 | Edge 数据（D\|）改为 D\|{edge_label_id}\|{edge_id}\|{prop_id}，属性分开存储 | 与 Vertex 属性存储（X\|）设计一致，支持部分属性查询 |
+| 2025-03-31 | 主键明确定义为全局唯一标识，每顶点一个 | 主键是顶点的全局标识，不属于任何标签 |
+| 2025-03-31 | 新增主键反向索引 R\|{vertex_id} → {pk_value} | 支持从 vertex_id 反查全局主键 |
+| 2025-03-31 | 移除 LabelDef 中的 primary_key_prop_id 字段 | 标签内唯一约束由 IndexDef(unique=true) 表达 |
 
 ---
 
