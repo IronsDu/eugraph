@@ -1,0 +1,13 @@
+{
+  "name": "eugraph",
+  "version-string": "0.1.0",
+  "description": "A distributed graph database supporting GSQL query language",
+  "dependencies": [
+    "rocksdb",
+    "gtest",
+    "spdlog",
+    "lz4",
+    "zlib",
+    "zstd"
+  ]
+}
