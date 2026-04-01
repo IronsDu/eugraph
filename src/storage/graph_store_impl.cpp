@@ -180,6 +180,20 @@ bool GraphStoreImpl::deleteVertexProperty(
     return doDel(txn, key);
 }
 
+bool GraphStoreImpl::putVertexProperties(
+    GraphTxnHandle txn, VertexId vid, LabelId label_id,
+    const Properties& props) {
+
+    for (uint16_t prop_id = 0; prop_id < props.size(); ++prop_id) {
+        if (props[prop_id].has_value()) {
+            auto key = KeyCodec::encodePropertyKey(label_id, vid, prop_id);
+            auto val = ValueCodec::encode(props[prop_id].value());
+            if (!doPut(txn, key, val)) return false;
+        }
+    }
+    return true;
+}
+
 // ==================== Vertex Labels ====================
 
 LabelIdSet GraphStoreImpl::getVertexLabels(GraphTxnHandle txn, VertexId vid) {

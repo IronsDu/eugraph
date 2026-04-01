@@ -15,28 +15,40 @@
 | # | 任务 | 状态 |
 |---|------|------|
 | 1.1 | 项目骨架搭建（CMake、目录结构、基础类型） | ✅ 已完成 |
-| 1.2 | WiredTiger 集成（WiredTigerStore、KeyCodec、ValueCodec） | ✅ 编码完成，编译通过，运行时段错误待排查 |
-| 1.3 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | 待开始 |
-| 1.4 | 图存储服务（Vertex/Edge CRUD） | 待开始 |
+| 1.2 | KV 存储引擎集成（IKVEngine、RocksDBStore、KeyCodec、ValueCodec） | ✅ 已完成 |
+| 1.3 | 图存储层（IGraphStore、GraphStoreImpl、Vertex/Edge CRUD） | ✅ 已完成 |
+| 1.4 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | 待开始 |
 | 1.5 | 基础事务支持（MVCC） | 待开始 |
 
 ### 已完成的工作
 
 #### 1.1 项目骨架搭建 ✅
-- CMakeLists.txt 配置（vcpkg 依赖管理：wiredtiger, gtest, spdlog, lz4, zlib, zstd）
+- CMakeLists.txt 配置（vcpkg 依赖管理：rocksdb, gtest, spdlog, lz4, zlib, zstd）
 - src/ 目录结构创建
 - 基础类型定义（graph_types.hpp, error.hpp, constants.hpp）
 
-#### 1.2 WiredTiger 集成 ✅（编码完成）
-- WiredTigerStore 类（连接管理、put/get/del、cursor scan、事务）
+#### 1.2 KV 存储引擎集成 ✅
+- IKVEngine 抽象接口（put/get/del、prefix scan、事务）
+- RocksDBStore 实现（基于 RocksDB 的 IKVEngine 实现）
 - KeyCodec（各类型 Key 的编解码：L/I/P/R/X/E/D 前缀）
 - ValueCodec（PropertyValue 的序列化/反序列化，支持所有类型及压缩）
-- 单元测试（test_key_codec.cpp, test_value_codec.cpp, test_wiredtiger_store.cpp）
-- **已知问题**：测试运行时段错误（segfault），待排查
+- 单元测试（test_key_codec.cpp, test_value_codec.cpp）
+
+#### 1.3 图存储层 ✅
+- IGraphStore 抽象接口（Vertex/Edge CRUD、标签管理、边遍历、主键查询、统计）
+- GraphStoreImpl 实现（基于 IKVEngine 的图语义存储）
+- 支持功能：
+  - 顶点增删、属性读写（单个/批量）、标签增删
+  - 边增删、属性读写、双向索引
+  - 主键正反向查询
+  - 按标签扫描顶点、边遍历
+  - 事务支持（提交/回滚）
+- 单元测试（test_graph_store.cpp）
+- **设计决策**：`insertVertex` 允许不指定标签（后续可通过 `addVertexLabel` + `putVertexProperties` 补充）
 
 ### 构建方式
 ```bash
-cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=/home/dodo/code/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=/mnt/f/code/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build
 ./build/eugraph_tests
 ```
@@ -69,6 +81,10 @@ cmake --build build
 | 2025-03-31 | 主键明确定义为全局唯一标识，每顶点一个 | 主键是顶点的全局标识，不属于任何标签 |
 | 2025-03-31 | 新增主键反向索引 R\|{vertex_id} → {pk_value} | 支持从 vertex_id 反查全局主键 |
 | 2025-03-31 | 移除 LabelDef 中的 primary_key_prop_id 字段 | 标签内唯一约束由 IndexDef(unique=true) 表达 |
+| 2026-04-01 | KV 存储引擎从 WiredTiger 切换为 RocksDB | WiredTiger 在 GCC 15 下存在 DT_INIT 链接问题，RocksDB 更成熟且 vcpkg 支持更好 |
+| 2026-04-01 | 引入 IKVEngine 抽象接口 + IGraphStore 图语义层 | 解耦存储引擎与图操作，支持后续替换底层引擎 |
+| 2026-04-01 | 新增 putVertexProperties 批量属性设置接口 | 一次写入某标签下所有属性，减少多次单独调用 |
+| 2026-04-01 | insertVertex 允许不指定标签 | 支持先创建顶点再逐步补充标签和属性的场景 |
 
 ---
 

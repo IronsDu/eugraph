@@ -44,6 +44,10 @@ public:
         GraphTxnHandle txn, VertexId vid, LabelId label_id,
         uint16_t prop_id, const PropertyValue& value) override;
 
+    bool putVertexProperties(
+        GraphTxnHandle txn, VertexId vid, LabelId label_id,
+        const Properties& props) override;
+
     bool deleteVertexProperty(
         GraphTxnHandle txn, VertexId vid, LabelId label_id, uint16_t prop_id) override;
 

@@ -63,6 +63,12 @@ public:
         GraphTxnHandle txn, VertexId vid, LabelId label_id,
         uint16_t prop_id, const PropertyValue& value) = 0;
 
+    /// Batch-set all properties for a vertex under a given label.
+    /// Overwrites existing properties with the same (label, vid, prop_id) key.
+    virtual bool putVertexProperties(
+        GraphTxnHandle txn, VertexId vid, LabelId label_id,
+        const Properties& props) = 0;
+
     virtual bool deleteVertexProperty(
         GraphTxnHandle txn, VertexId vid, LabelId label_id, uint16_t prop_id) = 0;
 

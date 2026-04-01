@@ -231,6 +231,91 @@ TEST_F(GraphStoreTest, MultiLabelProperties) {
     EXPECT_EQ(std::get<int64_t>((*r2)[0].value()), 999);
 }
 
+TEST_F(GraphStoreTest, InsertVertexWithoutLabels) {
+    VertexId vid = 199;
+    PropertyValue pk = std::string("bare@example.com");
+
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(txn, vid, {}, &pk));
+    commit(txn);
+
+    // No labels
+    auto labels = store_->getVertexLabels(INVALID_GRAPH_TXN, vid);
+    EXPECT_TRUE(labels.empty());
+
+    // No properties
+    auto props = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, 1);
+    EXPECT_FALSE(props.has_value());
+
+    // Primary key still works
+    auto found_vid = store_->getVertexIdByPk(pk);
+    ASSERT_TRUE(found_vid.has_value());
+    EXPECT_EQ(*found_vid, vid);
+
+    // Can add label afterwards
+    auto txn2 = writeTxn();
+    ASSERT_TRUE(store_->addVertexLabel(txn2, vid, 1));
+    ASSERT_TRUE(store_->putVertexProperty(txn2, vid, 1, 0, std::string("late_prop")));
+    commit(txn2);
+
+    labels = store_->getVertexLabels(INVALID_GRAPH_TXN, vid);
+    EXPECT_EQ(labels.size(), 1u);
+    EXPECT_TRUE(labels.contains(1));
+
+    auto val = store_->getVertexProperty(INVALID_GRAPH_TXN, vid, 1, 0);
+    ASSERT_TRUE(val.has_value());
+    EXPECT_EQ(std::get<std::string>(*val), "late_prop");
+}
+
+TEST_F(GraphStoreTest, PutVertexProperties) {
+    VertexId vid = 310;
+    LabelId label_id = 1;
+
+    // Insert with label but no properties
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, vid,
+        std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}},
+        nullptr));
+    // Batch-set properties
+    auto props = makeProps({{0, std::string("Eve")}, {1, int64_t(28)}, {2, 3.14}});
+    ASSERT_TRUE(store_->putVertexProperties(txn, vid, label_id, props));
+    commit(txn);
+
+    auto result = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label_id);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->size(), 3u);
+    ASSERT_TRUE((*result)[0].has_value());
+    EXPECT_EQ(std::get<std::string>((*result)[0].value()), "Eve");
+    ASSERT_TRUE((*result)[1].has_value());
+    EXPECT_EQ(std::get<int64_t>((*result)[1].value()), 28);
+    ASSERT_TRUE((*result)[2].has_value());
+    EXPECT_DOUBLE_EQ(std::get<double>((*result)[2].value()), 3.14);
+}
+
+TEST_F(GraphStoreTest, PutVertexPropertiesOverwrite) {
+    VertexId vid = 311;
+    LabelId label_id = 1;
+    auto orig = makeProps({{0, std::string("old_name")}, {1, int64_t(10)}});
+
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(
+        txn, vid,
+        std::vector<std::pair<LabelId, Properties>>{{label_id, orig}},
+        nullptr));
+    // Overwrite with new values
+    auto updated = makeProps({{0, std::string("new_name")}, {1, int64_t(99)}});
+    ASSERT_TRUE(store_->putVertexProperties(txn, vid, label_id, updated));
+    commit(txn);
+
+    auto result = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label_id);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE((*result)[0].has_value());
+    EXPECT_EQ(std::get<std::string>((*result)[0].value()), "new_name");
+    ASSERT_TRUE((*result)[1].has_value());
+    EXPECT_EQ(std::get<int64_t>((*result)[1].value()), 99);
+}
+
 // ==================== Vertex Labels ====================
 
 TEST_F(GraphStoreTest, GetVertexLabels) {

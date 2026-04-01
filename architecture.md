@@ -5,7 +5,7 @@
 - **名称**: EuGraph
 - **定位**: 分布式图数据库，支持 GSQL 查询语言
 - **语言**: C++20
-- **存储引擎**: WiredTiger (KV 存储)
+- **存储引擎**: RocksDB (KV 存储)
 - **协程库**: folly
 - **RPC 框架**: fbthrift
 
@@ -52,7 +52,7 @@
 │         └──────────────────┘            └──────────────────────┘          │
 │                                                                             │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │                        WiredTiger KV Store                              │  │
+│  │                        RocksDB KV Store                                  │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -64,7 +64,7 @@
 | 职责      | 说明                   |
 | ------- | -------------------- |
 | 图数据存储   | Vertex / Edge 的 CRUD |
-| KV 存储封装 | WiredTiger 接口封装      |
+| KV 存储封装 | RocksDB 接口封装        |
 | 本地事务    | 单节点 MVCC 事务          |
 | 数据持久化   | WAL + Checkpoint     |
 
@@ -859,7 +859,8 @@ eugraph/
 │   │   ├── graph_operations.hpp      # 图操作实现
 │   │   ├── transaction_manager.hpp   # 事务管理
 │   │   └── kv/
-│   │       ├── wiredtiger_store.hpp  # WiredTiger 封装
+│   │       ├── kv_engine.hpp         # IKVEngine 抽象接口
+│   │       ├── rocksdb_store.hpp     # RocksDB 实现
 │   │       ├── key_codec.hpp         # Key 编解码
 │   │       └── value_codec.hpp       # Value 编解码
 │   │
@@ -936,18 +937,17 @@ TEST(ProjectSkeleton, BasicExecutable) {
 
 ---
 
-#### 1.2 WiredTiger 集成
-**目标**: 封装 WiredTiger，提供基础 KV 操作接口
+#### 1.2 KV 存储引擎集成
+**目标**: 封装 RocksDB，提供基础 KV 操作接口
 
 **内容**:
-- WiredTiger 连接管理 (WiredTigerStore 类)
-- 基础读写操作 (put/get/del)
-- 游标操作 (scan/prefix scan)
-- 事务支持 (begin/commit/rollback)
+- IKVEngine 抽象接口
+- RocksDBStore 实现（连接管理、put/get/del、prefix scan、事务）
 - Key/Value 编解码工具 (KeyCodec/ValueCodec)
 
 **完成标准**:
-- WiredTigerStore 类实现完成
+- IKVEngine 接口定义完成
+- RocksDBStore 类实现完成
 - KeyCodec/ValueCodec 实现完成
 - 所有操作通过单元测试
 
@@ -1087,7 +1087,26 @@ protected:
 
 ---
 
-#### 1.3 元数据服务
+#### 1.3 图存储层
+**目标**: 实现图语义的 Vertex/Edge CRUD 操作
+
+**内容**:
+- IGraphStore 抽象接口（Vertex/Edge CRUD、标签管理、边遍历、主键查询、统计）
+- GraphStoreImpl 实现（基于 IKVEngine 的图语义存储）
+- Vertex 操作（增删、属性读写单个/批量、标签增删）
+- Edge 操作（增删、属性读写、双向索引维护）
+- 主键正反向查询
+- 按标签扫描顶点、边遍历
+- 事务支持
+
+**完成标准**:
+- IGraphStore 接口定义完成
+- GraphStoreImpl 实现完成
+- 所有操作通过单元测试
+
+---
+
+#### 1.4 元数据服务
 **目标**: 实现 Label/EdgeLabel 的 ID 映射和分配
 
 **内容**:
@@ -1213,7 +1232,7 @@ protected:
 
 ---
 
-#### 1.4 图存储服务
+#### 1.5 图存储服务
 **目标**: 实现 Vertex/Edge 的 CRUD 操作
 
 **内容**:
@@ -1467,7 +1486,7 @@ protected:
 
 ---
 
-#### 1.5 基础事务支持
+#### 1.6 基础事务支持
 **目标**: 实现单机 MVCC 事务
 
 **内容**:
@@ -1656,7 +1675,7 @@ protected:
 - 使用 GoogleTest 框架
 - 每个功能模块有对应的单元测试
 - 集成测试覆盖主要使用场景
-- 使用内存数据库进行测试 (WiredTiger 测试模式)
+- 使用临时目录进行测试 (RocksDB)
 - 性能测试后期考虑
 - 测试覆盖率目标: 80%+
 
@@ -1666,6 +1685,6 @@ protected:
 | 构建系统  | CMake      | C++ 标准选择     |
 | 协程库   | folly      | Meta 成熟协程库   |
 | RPC   | fbthrift   | folly 原生支持   |
-| KV 存储 | WiredTiger | 成熟、高性能、支持事务  |
+| KV 存储 | RocksDB | 成熟、高性能、支持事务  |
 | 日志库   | spdlog     | 高性能、C++20 友好 |
 | 测试框架  | GoogleTest | 成熟稳定         |
