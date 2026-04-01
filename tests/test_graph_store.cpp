@@ -3,10 +3,10 @@
 #include "storage/graph_store_impl.hpp"
 #include "storage/kv/rocksdb_store.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <vector>
-#include <algorithm>
 
 using namespace eugraph;
 
@@ -31,7 +31,8 @@ protected:
     static Properties makeProps(std::initializer_list<std::pair<uint16_t, PropertyValue>> items) {
         Properties props;
         for (auto& [id, val] : items) {
-            if (id >= props.size()) props.resize(id + 1);
+            if (id >= props.size())
+                props.resize(id + 1);
             props[id] = val;
         }
         return props;
@@ -57,10 +58,8 @@ TEST_F(GraphStoreTest, InsertAndGetVertex) {
     auto props = makeProps({{0, std::string("Alice")}, {1, int64_t(30)}});
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{label_id, props}},
-        nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, props}}, nullptr));
     commit(txn);
 
     auto result = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label_id);
@@ -77,10 +76,7 @@ TEST_F(GraphStoreTest, InsertVertexWithPrimaryKey) {
     PropertyValue pk = std::string("alice@example.com");
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}},
-        &pk));
+    ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}, &pk));
     commit(txn);
 
     auto found_vid = store_->getVertexIdByPk(pk);
@@ -94,10 +90,8 @@ TEST_F(GraphStoreTest, InsertVertexWithPrimaryKey) {
 
 TEST_F(GraphStoreTest, InsertVertexWithoutPrimaryKey) {
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, 102,
-        std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}},
-        nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, 102, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}, nullptr));
     commit(txn);
 
     auto result = store_->getVertexIdByPk(std::string("nonexistent"));
@@ -110,10 +104,8 @@ TEST_F(GraphStoreTest, DeleteVertex) {
     auto props = makeProps({{0, std::string("Bob")}});
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{label_id, props}},
-        nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, props}}, nullptr));
     commit(txn);
 
     auto txn2 = writeTxn();
@@ -132,10 +124,8 @@ TEST_F(GraphStoreTest, DeleteVertexWithLabels) {
     VertexId vid = 201;
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}},
-        nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}, nullptr));
     commit(txn);
 
     auto txn2 = writeTxn();
@@ -157,10 +147,8 @@ TEST_F(GraphStoreTest, PutAndGetVertexProperty) {
     LabelId label_id = 1;
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}},
-        nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}, nullptr));
     ASSERT_TRUE(store_->putVertexProperty(txn, vid, label_id, 0, std::string("Charlie")));
     commit(txn);
 
@@ -175,10 +163,8 @@ TEST_F(GraphStoreTest, DeleteVertexProperty) {
     auto props = makeProps({{0, std::string("Dave")}, {1, int64_t(25)}});
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{label_id, props}},
-        nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, props}}, nullptr));
     commit(txn);
 
     auto txn2 = writeTxn();
@@ -215,9 +201,7 @@ TEST_F(GraphStoreTest, MultiLabelProperties) {
 
     auto txn = writeTxn();
     ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{label1, props1}, {label2, props2}},
-        nullptr));
+        txn, vid, std::vector<std::pair<LabelId, Properties>>{{label1, props1}, {label2, props2}}, nullptr));
     commit(txn);
 
     auto r1 = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label1);
@@ -273,10 +257,8 @@ TEST_F(GraphStoreTest, PutVertexProperties) {
 
     // Insert with label but no properties
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}},
-        nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}, nullptr));
     // Batch-set properties
     auto props = makeProps({{0, std::string("Eve")}, {1, int64_t(28)}, {2, 3.14}});
     ASSERT_TRUE(store_->putVertexProperties(txn, vid, label_id, props));
@@ -299,10 +281,7 @@ TEST_F(GraphStoreTest, PutVertexPropertiesOverwrite) {
     auto orig = makeProps({{0, std::string("old_name")}, {1, int64_t(10)}});
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{label_id, orig}},
-        nullptr));
+    ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, orig}}, nullptr));
     // Overwrite with new values
     auto updated = makeProps({{0, std::string("new_name")}, {1, int64_t(99)}});
     ASSERT_TRUE(store_->putVertexProperties(txn, vid, label_id, updated));
@@ -323,9 +302,7 @@ TEST_F(GraphStoreTest, GetVertexLabels) {
 
     auto txn = writeTxn();
     ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}, {2, Properties{}}},
-        nullptr));
+        txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}, {2, Properties{}}}, nullptr));
     commit(txn);
 
     auto labels = store_->getVertexLabels(INVALID_GRAPH_TXN, vid);
@@ -338,10 +315,8 @@ TEST_F(GraphStoreTest, AddVertexLabel) {
     VertexId vid = 401;
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}},
-        nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}, nullptr));
     ASSERT_TRUE(store_->addVertexLabel(txn, vid, 2));
     commit(txn);
 
@@ -358,9 +333,7 @@ TEST_F(GraphStoreTest, RemoveVertexLabel) {
 
     auto txn = writeTxn();
     ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{label1, props1}, {label2, props2}},
-        nullptr));
+        txn, vid, std::vector<std::pair<LabelId, Properties>>{{label1, props1}, {label2, props2}}, nullptr));
     commit(txn);
 
     auto txn2 = writeTxn();
@@ -384,12 +357,12 @@ TEST_F(GraphStoreTest, ScanVerticesByLabel) {
     LabelId label_id = 10;
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, 500, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}, nullptr));
-    ASSERT_TRUE(store_->insertVertex(
-        txn, 501, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}, nullptr));
-    ASSERT_TRUE(store_->insertVertex(
-        txn, 502, std::vector<std::pair<LabelId, Properties>>{{11, Properties{}}}, nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, 500, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}, nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, 501, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}, nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, 502, std::vector<std::pair<LabelId, Properties>>{{11, Properties{}}}, nullptr));
     commit(txn);
 
     std::vector<VertexId> found;
@@ -510,8 +483,8 @@ TEST_F(GraphStoreTest, ScanInEdges) {
 
 TEST_F(GraphStoreTest, ScanEdgesWithLabelFilter) {
     auto txn = writeTxn();
-    store_->insertEdge(txn, 300, 1, 2, 1, 0, Properties{});  // label 1
-    store_->insertEdge(txn, 301, 1, 3, 2, 0, Properties{});  // label 2
+    store_->insertEdge(txn, 300, 1, 2, 1, 0, Properties{}); // label 1
+    store_->insertEdge(txn, 301, 1, 3, 2, 0, Properties{}); // label 2
     commit(txn);
 
     std::vector<EdgeId> found;
@@ -528,9 +501,9 @@ TEST_F(GraphStoreTest, MultipleEdgesSamePair) {
     EdgeLabelId label_id = 1;
 
     auto txn = writeTxn();
-    store_->insertEdge(txn, 400, 1, 2, label_id, 1, Properties{});  // seq=1
-    store_->insertEdge(txn, 401, 1, 2, label_id, 2, Properties{});  // seq=2
-    store_->insertEdge(txn, 402, 1, 2, label_id, 3, Properties{});  // seq=3
+    store_->insertEdge(txn, 400, 1, 2, label_id, 1, Properties{}); // seq=1
+    store_->insertEdge(txn, 401, 1, 2, label_id, 2, Properties{}); // seq=2
+    store_->insertEdge(txn, 402, 1, 2, label_id, 3, Properties{}); // seq=3
     commit(txn);
 
     std::vector<EdgeId> found;
@@ -577,8 +550,7 @@ TEST_F(GraphStoreTest, TxnCommit) {
 
     auto txn = writeTxn();
     ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("txn_test")}})}},
+        txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("txn_test")}})}},
         nullptr));
     commit(txn);
 
@@ -592,8 +564,7 @@ TEST_F(GraphStoreTest, TxnRollback) {
 
     auto txn = writeTxn();
     ASSERT_TRUE(store_->insertVertex(
-        txn, vid,
-        std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("rollback_test")}})}},
+        txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, makeProps({{0, std::string("rollback_test")}})}},
         nullptr));
     ASSERT_TRUE(store_->rollbackTransaction(txn));
 
@@ -603,8 +574,7 @@ TEST_F(GraphStoreTest, TxnRollback) {
 
 TEST_F(GraphStoreTest, TxnVisibility) {
     VertexId vid = 702;
-    ASSERT_TRUE(store_->putVertexProperty(
-        INVALID_GRAPH_TXN, vid, 1, 0, std::string("no_txn")));
+    ASSERT_TRUE(store_->putVertexProperty(INVALID_GRAPH_TXN, vid, 1, 0, std::string("no_txn")));
 
     auto val = store_->getVertexProperty(INVALID_GRAPH_TXN, vid, 1, 0);
     ASSERT_TRUE(val.has_value());

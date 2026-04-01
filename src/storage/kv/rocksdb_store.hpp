@@ -1,12 +1,12 @@
 #pragma once
 
 #include "storage/kv/kv_engine.hpp"
-#include <rocksdb/db.h>
-#include <rocksdb/options.h>
-#include <rocksdb/utilities/transaction_db.h>
-#include <rocksdb/utilities/transaction.h>
 #include <memory>
 #include <mutex>
+#include <rocksdb/db.h>
+#include <rocksdb/options.h>
+#include <rocksdb/utilities/transaction.h>
+#include <rocksdb/utilities/transaction_db.h>
 #include <unordered_map>
 
 namespace eugraph {
@@ -32,13 +32,11 @@ public:
     bool del(std::string_view key) override;
 
     // ==================== Batch Write ====================
-    bool putBatch(
-        const std::vector<std::pair<std::string, std::string>>& kv_pairs) override;
+    bool putBatch(const std::vector<std::pair<std::string, std::string>>& kv_pairs) override;
     // ==================== Prefix Scan ====================
     std::vector<KeyValuePair> prefixScan(std::string_view prefix) override;
-    void prefixScan(
-        std::string_view prefix,
-        const std::function<bool(std::string_view key, std::string_view value)>& callback) override;
+    void prefixScan(std::string_view prefix,
+                    const std::function<bool(std::string_view key, std::string_view value)>& callback) override;
 
     // ==================== Transaction ====================
 

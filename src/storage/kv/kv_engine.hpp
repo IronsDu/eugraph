@@ -1,16 +1,16 @@
 #pragma once
 
+#include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
-#include <optional>
 #include <vector>
-#include <functional>
 
 namespace eugraph {
 
 // Abstract KV storage engine interface.
 // Provides the minimal set of KV operations required by the graph storage layer.
-  // Implementations: RocksDBStore, WiredTigerStore (future).
+// Implementations: RocksDBStore, WiredTigerStore (future).
 class IKVEngine {
 public:
     virtual ~IKVEngine() = default;
@@ -25,8 +25,7 @@ public:
     virtual std::optional<std::string> get(std::string_view key) = 0;
     virtual bool del(std::string_view key) = 0;
     // ==================== Batch Write ====================
-    virtual bool putBatch(
-        const std::vector<std::pair<std::string, std::string>>& kv_pairs) = 0;
+    virtual bool putBatch(const std::vector<std::pair<std::string, std::string>>& kv_pairs) = 0;
 
     // ==================== Prefix Scan ====================
     struct KeyValuePair {
@@ -35,9 +34,8 @@ public:
     };
 
     virtual std::vector<KeyValuePair> prefixScan(std::string_view prefix) = 0;
-    virtual void prefixScan(
-        std::string_view prefix,
-        const std::function<bool(std::string_view key, std::string_view value)>& callback) = 0;
+    virtual void prefixScan(std::string_view prefix,
+                            const std::function<bool(std::string_view key, std::string_view value)>& callback) = 0;
 
     // ==================== Transaction ====================
     using TxnHandle = void*;

@@ -1,7 +1,7 @@
 #include "storage/kv/rocksdb_store.hpp"
 
-#include <spdlog/spdlog.h>
 #include <filesystem>
+#include <spdlog/spdlog.h>
 
 namespace eugraph {
 
@@ -10,7 +10,8 @@ RocksDBStore::~RocksDBStore() {
 }
 
 bool RocksDBStore::open(const std::string& db_path) {
-    if (txnDB_) return true;
+    if (txnDB_)
+        return true;
 
     std::error_code ec;
     std::filesystem::create_directories(db_path, ec);
@@ -58,7 +59,8 @@ bool RocksDBStore::isOpen() const {
 // ==================== Basic KV ====================
 
 bool RocksDBStore::put(std::string_view key, std::string_view value) {
-    if (!txnDB_) return false;
+    if (!txnDB_)
+        return false;
     auto s = txnDB_->Put(rocksdb::WriteOptions(), key, value);
     if (!s.ok()) {
         spdlog::error("RocksDB put failed: {}", s.ToString());
@@ -68,15 +70,18 @@ bool RocksDBStore::put(std::string_view key, std::string_view value) {
 }
 
 std::optional<std::string> RocksDBStore::get(std::string_view key) {
-    if (!txnDB_) return std::nullopt;
+    if (!txnDB_)
+        return std::nullopt;
     std::string value;
     auto s = txnDB_->Get(rocksdb::ReadOptions(), key, &value);
-    if (!s.ok()) return std::nullopt;
+    if (!s.ok())
+        return std::nullopt;
     return value;
 }
 
 bool RocksDBStore::del(std::string_view key) {
-    if (!txnDB_) return false;
+    if (!txnDB_)
+        return false;
     auto s = txnDB_->Delete(rocksdb::WriteOptions(), key);
     if (!s.ok()) {
         spdlog::error("RocksDB delete failed: {}", s.ToString());
@@ -87,10 +92,11 @@ bool RocksDBStore::del(std::string_view key) {
 
 // ==================== Batch Write ====================
 
-bool RocksDBStore::putBatch(
-    const std::vector<std::pair<std::string, std::string>>& kv_pairs) {
-    if (!txnDB_) return false;
-    if (kv_pairs.empty()) return true;
+bool RocksDBStore::putBatch(const std::vector<std::pair<std::string, std::string>>& kv_pairs) {
+    if (!txnDB_)
+        return false;
+    if (kv_pairs.empty())
+        return true;
 
     rocksdb::WriteBatch batch;
     for (const auto& [k, v] : kv_pairs) {
@@ -115,10 +121,10 @@ std::vector<IKVEngine::KeyValuePair> RocksDBStore::prefixScan(std::string_view p
     return results;
 }
 
-void RocksDBStore::prefixScan(
-    std::string_view prefix,
-    const std::function<bool(std::string_view, std::string_view)>& callback) {
-    if (!txnDB_) return;
+void RocksDBStore::prefixScan(std::string_view prefix,
+                              const std::function<bool(std::string_view, std::string_view)>& callback) {
+    if (!txnDB_)
+        return;
 
     rocksdb::ReadOptions opts;
     opts.total_order_seek = true;
@@ -137,7 +143,8 @@ void RocksDBStore::prefixScan(
                 byte = '\0';
             }
         }
-        if (carry) ub.clear(); // all 0xFF, no upper bound
+        if (carry)
+            ub.clear(); // all 0xFF, no upper bound
     }
 
     rocksdb::Slice upper;
@@ -152,10 +159,12 @@ void RocksDBStore::prefixScan(
 
     while (iter->Valid()) {
         auto key = iter->key();
-        if (!key.starts_with(prefix)) break;
+        if (!key.starts_with(prefix))
+            break;
 
         auto val = iter->value();
-        if (!callback(key.ToStringView(), val.ToStringView())) break;
+        if (!callback(key.ToStringView(), val.ToStringView()))
+            break;
 
         iter->Next();
     }
@@ -164,7 +173,8 @@ void RocksDBStore::prefixScan(
 // ==================== Transaction ====================
 
 IKVEngine::TxnHandle RocksDBStore::beginTransaction() {
-    if (!txnDB_) return INVALID_TXN;
+    if (!txnDB_)
+        return INVALID_TXN;
 
     rocksdb::TransactionOptions txnOpts;
     auto txn = txnDB_->BeginTransaction(rocksdb::WriteOptions(), txnOpts);
@@ -181,7 +191,8 @@ IKVEngine::TxnHandle RocksDBStore::beginTransaction() {
 
 bool RocksDBStore::commitTransaction(TxnHandle txn) {
     auto rocksTxn = getTxn(txn);
-    if (!rocksTxn) return false;
+    if (!rocksTxn)
+        return false;
 
     auto s = rocksTxn->Commit();
     removeTxn(txn);
@@ -195,7 +206,8 @@ bool RocksDBStore::commitTransaction(TxnHandle txn) {
 
 bool RocksDBStore::rollbackTransaction(TxnHandle txn) {
     auto rocksTxn = getTxn(txn);
-    if (!rocksTxn) return false;
+    if (!rocksTxn)
+        return false;
 
     auto s = rocksTxn->Rollback();
     removeTxn(txn);
@@ -209,7 +221,8 @@ bool RocksDBStore::rollbackTransaction(TxnHandle txn) {
 
 bool RocksDBStore::put(TxnHandle txn, std::string_view key, std::string_view value) {
     auto rocksTxn = getTxn(txn);
-    if (!rocksTxn) return false;
+    if (!rocksTxn)
+        return false;
 
     auto s = rocksTxn->Put(key, value);
     if (!s.ok()) {
@@ -221,17 +234,20 @@ bool RocksDBStore::put(TxnHandle txn, std::string_view key, std::string_view val
 
 std::optional<std::string> RocksDBStore::get(TxnHandle txn, std::string_view key) {
     auto rocksTxn = getTxn(txn);
-    if (!rocksTxn) return std::nullopt;
+    if (!rocksTxn)
+        return std::nullopt;
 
     std::string value;
     auto s = rocksTxn->Get(rocksdb::ReadOptions(), key, &value);
-    if (!s.ok()) return std::nullopt;
+    if (!s.ok())
+        return std::nullopt;
     return value;
 }
 
 bool RocksDBStore::del(TxnHandle txn, std::string_view key) {
     auto rocksTxn = getTxn(txn);
-    if (!rocksTxn) return false;
+    if (!rocksTxn)
+        return false;
 
     auto s = rocksTxn->Delete(key);
     if (!s.ok()) {
@@ -246,7 +262,8 @@ bool RocksDBStore::del(TxnHandle txn, std::string_view key) {
 rocksdb::Transaction* RocksDBStore::getTxn(TxnHandle handle) {
     std::lock_guard<std::mutex> lock(txnMutex_);
     auto it = txns_.find(handle);
-    if (it == txns_.end()) return nullptr;
+    if (it == txns_.end())
+        return nullptr;
     return it->second.get();
 }
 

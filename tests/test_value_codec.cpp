@@ -85,8 +85,7 @@ TEST_F(ValueCodecTest, EncodeDecodeInt64Array) {
     auto encoded = ValueCodec::encode(val);
     auto decoded = ValueCodec::decode(encoded);
     ASSERT_TRUE(std::holds_alternative<std::vector<int64_t>>(decoded));
-    EXPECT_EQ(std::get<std::vector<int64_t>>(decoded),
-              (std::vector<int64_t>{1, 2, 3, -10, 100}));
+    EXPECT_EQ(std::get<std::vector<int64_t>>(decoded), (std::vector<int64_t>{1, 2, 3, -10, 100}));
 }
 
 TEST_F(ValueCodecTest, EncodeDecodeDoubleArray) {
@@ -105,8 +104,7 @@ TEST_F(ValueCodecTest, EncodeDecodeStringArray) {
     auto encoded = ValueCodec::encode(val);
     auto decoded = ValueCodec::decode(encoded);
     ASSERT_TRUE(std::holds_alternative<std::vector<std::string>>(decoded));
-    EXPECT_EQ(std::get<std::vector<std::string>>(decoded),
-              (std::vector<std::string>{"foo", "bar", "baz"}));
+    EXPECT_EQ(std::get<std::vector<std::string>>(decoded), (std::vector<std::string>{"foo", "bar", "baz"}));
 }
 
 TEST_F(ValueCodecTest, EncodeDecodeEmptyArray) {
