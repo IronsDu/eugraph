@@ -1,7 +1,6 @@
 {
   "default-registry": {
-    "kind": "git",
-    "repository": "/mnt/f/code/vcpkg",
-    "baseline": "1a82cb06a64163a6ac17fd2ae01fd35e5ded9364"
+    "kind": "builtin",
+    "baseline": ""
   }
 }
