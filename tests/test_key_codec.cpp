@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
-#include "storage/kv/key_codec.hpp"
 #include "common/types/constants.hpp"
+#include "storage/kv/key_codec.hpp"
 
 using namespace eugraph;
 

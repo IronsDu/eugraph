@@ -1,10 +1,10 @@
 #pragma once
 
-#include <string>
 #include <cstdint>
 #include <optional>
-#include <variant>
 #include <set>
+#include <string>
+#include <variant>
 #include <vector>
 
 namespace eugraph {
@@ -30,16 +30,8 @@ constexpr EdgeLabelId INVALID_EDGE_LABEL_ID = 0;
 using LabelIdSet = std::set<LabelId>;
 
 // ==================== Property Value Type ====================
-using PropertyValue = std::variant<
-    std::monostate,
-    bool,
-    int64_t,
-    double,
-    std::string,
-    std::vector<int64_t>,
-    std::vector<double>,
-    std::vector<std::string>
->;
+using PropertyValue = std::variant<std::monostate, bool, int64_t, double, std::string, std::vector<int64_t>,
+                                   std::vector<double>, std::vector<std::string>>;
 
 // Properties indexed by prop_id
 using Properties = std::vector<std::optional<PropertyValue>>;
@@ -47,7 +39,7 @@ using Properties = std::vector<std::optional<PropertyValue>>;
 // ==================== Direction ====================
 enum class Direction : uint8_t {
     OUT = 0x00,
-    IN  = 0x01,
+    IN = 0x01,
     BOTH = 0x02
 };
 

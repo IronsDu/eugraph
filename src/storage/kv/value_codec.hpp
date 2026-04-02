@@ -32,12 +32,12 @@ public:
     static uint64_t decodeU64(std::string_view data);
 
 private:
-    static constexpr uint8_t TAG_NULL         = 0x00;
-    static constexpr uint8_t TAG_BOOL         = 0x01;
-    static constexpr uint8_t TAG_INT64        = 0x02;
-    static constexpr uint8_t TAG_DOUBLE       = 0x03;
-    static constexpr uint8_t TAG_STRING       = 0x04;
-    static constexpr uint8_t TAG_INT64_ARRAY  = 0x05;
+    static constexpr uint8_t TAG_NULL = 0x00;
+    static constexpr uint8_t TAG_BOOL = 0x01;
+    static constexpr uint8_t TAG_INT64 = 0x02;
+    static constexpr uint8_t TAG_DOUBLE = 0x03;
+    static constexpr uint8_t TAG_STRING = 0x04;
+    static constexpr uint8_t TAG_INT64_ARRAY = 0x05;
     static constexpr uint8_t TAG_DOUBLE_ARRAY = 0x06;
     static constexpr uint8_t TAG_STRING_ARRAY = 0x07;
 };

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <string>
 #include <cstdint>
+#include <string>
 
 namespace eugraph {
 
@@ -17,11 +17,14 @@ enum class ErrorCode : uint8_t {
 
 class Error {
 public:
-    Error(ErrorCode code, std::string message)
-        : code_(code), message_(std::move(message)) {}
+    Error(ErrorCode code, std::string message) : code_(code), message_(std::move(message)) {}
 
-    ErrorCode code() const { return code_; }
-    const std::string& message() const { return message_; }
+    ErrorCode code() const {
+        return code_;
+    }
+    const std::string& message() const {
+        return message_;
+    }
 
 private:
     ErrorCode code_;

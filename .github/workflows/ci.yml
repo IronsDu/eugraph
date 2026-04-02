@@ -1,0 +1,206 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  # Ubuntu with GCC
+  build-gcc:
+    name: Ubuntu (GCC)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake \
+          build-essential \
+          git \
+          pkg-config \
+          wget
+
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@v7
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+    - name: Setup vcpkg with binary caching
+      uses: lukka/run-vcpkg@v11
+      env:
+        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+      with:
+        vcpkgDirectory: '${{ github.workspace }}/vcpkg'
+        vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
+        runVcpkgInstall: true
+        doNotCache: false
+        vcpkgJsonGlob: vcpkg.json
+        vcpkgJsonIgnores: ['**/vcpkg/**']
+        runVcpkgFormatString: ['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']
+
+    - name: Debug vcpkg environment
+      run: |
+        echo "=== VCPKG Environment Variables ==="
+        env | grep VCPKG || echo "No VCPKG environment variables found"
+        echo ""
+        echo "=== VCPKG Binary Cache Directory ==="
+        ls -la ~/.cache/vcpkg/archives/ 2>/dev/null || echo "Cache directory not found"
+        echo ""
+        echo "=== VCPKG Version ==="
+        ${{ github.workspace }}/vcpkg/vcpkg version
+
+    - name: Configure CMake
+      run: cmake --preset=release
+
+    - name: Build
+      run: cmake --build --preset=release
+
+    - name: Run tests
+      run: ctest --preset=release --verbose
+
+    - name: Check library linking
+      working-directory: build/release
+      run: |
+        ldd eugraph_tests
+        ldd libeugraph_lib.a || true
+
+  # Code Coverage
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake \
+          build-essential \
+          git \
+          pkg-config \
+          wget \
+          gcovr
+
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@v7
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+    - name: Setup vcpkg with binary caching
+      uses: lukka/run-vcpkg@v11
+      env:
+        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+      with:
+        vcpkgDirectory: '${{ github.workspace }}/vcpkg'
+        vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
+        runVcpkgInstall: true
+        doNotCache: false
+        vcpkgJsonGlob: vcpkg.json
+        vcpkgJsonIgnores: ['**/vcpkg/**']
+        runVcpkgFormatString: ['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']
+
+    - name: Configure CMake with Coverage
+      run: cmake --preset=coverage
+
+    - name: Build
+      run: cmake --build --preset=coverage
+
+    - name: Run tests
+      run: ctest --preset=coverage
+
+    - name: Generate coverage report
+      working-directory: build/coverage
+      run: |
+        gcovr --xml-pretty --exclude-unreachable-branches --print-summary \
+          --output coverage.xml \
+          --root ${{ github.workspace }} \
+          --filter ${{ github.workspace }}/src
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: build/coverage/coverage.xml
+        flags: unittests
+        name: eugraph-coverage
+        fail_ci_if_error: false
+        verbose: true
+
+  # Ubuntu with Clang
+  build-clang:
+    name: Ubuntu (Clang)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake \
+          clang \
+          build-essential \
+          git \
+          pkg-config \
+          wget
+
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@v7
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+    - name: Setup vcpkg with binary caching
+      uses: lukka/run-vcpkg@v11
+      env:
+        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+      with:
+        vcpkgDirectory: '${{ github.workspace }}/vcpkg'
+        vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
+        runVcpkgInstall: true
+        doNotCache: false
+        vcpkgJsonGlob: vcpkg.json
+        vcpkgJsonIgnores: ['**/vcpkg/**']
+        runVcpkgFormatString: ['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']
+
+    - name: Debug vcpkg environment
+      run: |
+        echo "=== VCPKG Environment Variables ==="
+        env | grep VCPKG || echo "No VCPKG environment variables found"
+        echo ""
+        echo "=== VCPKG Binary Cache Directory ==="
+        ls -la ~/.cache/vcpkg/archives/ 2>/dev/null || echo "Cache directory not found"
+        echo ""
+        echo "=== VCPKG Version ==="
+        ${{ github.workspace }}/vcpkg/vcpkg version
+
+    - name: Configure CMake with Clang
+      run: cmake --preset=clang-release
+
+    - name: Build
+      run: cmake --build --preset=clang-release
+
+    - name: Run tests
+      run: ctest --preset=clang-release --verbose

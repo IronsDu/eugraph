@@ -22,8 +22,7 @@ uint64_t KeyCodec::decodeU64BE(std::string_view data, size_t offset) {
 }
 
 uint16_t KeyCodec::decodeU16BE(std::string_view data, size_t offset) {
-    return (static_cast<uint8_t>(data[offset]) << 8) |
-           static_cast<uint8_t>(data[offset + 1]);
+    return (static_cast<uint8_t>(data[offset]) << 8) | static_cast<uint8_t>(data[offset + 1]);
 }
 
 // ==================== Label Reverse Index (L|) ====================
@@ -141,10 +140,14 @@ std::string KeyCodec::encodeEdgeIndexKey(const EdgeIndexKey& k) {
 KeyCodec::EdgeIndexKey KeyCodec::decodeEdgeIndexKey(std::string_view key) {
     EdgeIndexKey k;
     size_t off = 1;
-    k.vertex_id = decodeU64BE(key, off); off += 8;
-    k.direction = static_cast<Direction>(static_cast<uint8_t>(key[off])); off += 1;
-    k.edge_label_id = decodeU16BE(key, off); off += 2;
-    k.neighbor_id = decodeU64BE(key, off); off += 8;
+    k.vertex_id = decodeU64BE(key, off);
+    off += 8;
+    k.direction = static_cast<Direction>(static_cast<uint8_t>(key[off]));
+    off += 1;
+    k.edge_label_id = decodeU16BE(key, off);
+    off += 2;
+    k.neighbor_id = decodeU64BE(key, off);
+    off += 8;
     k.seq = decodeU64BE(key, off);
     return k;
 }
@@ -168,7 +171,8 @@ std::string KeyCodec::encodeEdgeIndexPrefix(VertexId vertex_id, Direction direct
     return key;
 }
 
-std::string KeyCodec::encodeEdgeIndexPrefix(VertexId vertex_id, Direction direction, EdgeLabelId label_id, VertexId neighbor_id) {
+std::string KeyCodec::encodeEdgeIndexPrefix(VertexId vertex_id, Direction direction, EdgeLabelId label_id,
+                                            VertexId neighbor_id) {
     std::string key;
     key.reserve(1 + 8 + 1 + 2 + 8);
     key.push_back(static_cast<char>(PREFIX_EDGE_INDEX));

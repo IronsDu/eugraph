@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/types/graph_types.hpp"
 #include "common/types/constants.hpp"
+#include "common/types/graph_types.hpp"
 
 #include <cstdint>
 #include <string>
@@ -62,7 +62,8 @@ public:
     // Prefix scans
     static std::string encodeEdgeIndexPrefix(VertexId vertex_id, Direction direction);
     static std::string encodeEdgeIndexPrefix(VertexId vertex_id, Direction direction, EdgeLabelId label_id);
-    static std::string encodeEdgeIndexPrefix(VertexId vertex_id, Direction direction, EdgeLabelId label_id, VertexId neighbor_id);
+    static std::string encodeEdgeIndexPrefix(VertexId vertex_id, Direction direction, EdgeLabelId label_id,
+                                             VertexId neighbor_id);
 
     // ==================== Edge Property Storage (D|) ====================
     // Key: D|{edge_label_id:uint16 BE}|{edge_id:uint64 BE}|{prop_id:uint16 BE}
