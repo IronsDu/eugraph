@@ -65,6 +65,23 @@ public:
     static std::string encodeEdgeIndexPrefix(VertexId vertex_id, Direction direction, EdgeLabelId label_id,
                                              VertexId neighbor_id);
 
+    // ==================== Edge Type Index (G|) ====================
+    // Key: G|{edge_label_id:uint16 BE}|{src_vertex_id:uint64 BE}|{dst_vertex_id:uint64 BE}|{seq:uint64 BE}
+    struct EdgeTypeIndexKey {
+        EdgeLabelId edge_label_id;
+        VertexId src_vertex_id;
+        VertexId dst_vertex_id;
+        uint64_t seq;
+    };
+
+    static std::string encodeEdgeTypeIndexKey(const EdgeTypeIndexKey& key);
+    static EdgeTypeIndexKey decodeEdgeTypeIndexKey(std::string_view key);
+
+    // Prefix scans
+    static std::string encodeEdgeTypeIndexPrefix(EdgeLabelId label_id);
+    static std::string encodeEdgeTypeIndexPrefix(EdgeLabelId label_id, VertexId src_id);
+    static std::string encodeEdgeTypeIndexPrefix(EdgeLabelId label_id, VertexId src_id, VertexId dst_id);
+
     // ==================== Edge Property Storage (D|) ====================
     // Key: D|{edge_label_id:uint16 BE}|{edge_id:uint64 BE}|{prop_id:uint16 BE}
     static std::string encodeEdgePropertyKey(EdgeLabelId label_id, EdgeId edge_id, uint16_t prop_id);

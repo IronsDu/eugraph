@@ -170,6 +170,7 @@
 │ 'R' 0x52 │ 主键反向索引 (vertex_id → pk)       │
 │ 'X' 0x58 │ 属性存储 (Property Storage)        │
 │ 'E' 0x45 │ Edge 索引 (邻接查询)               │
+│ 'G' 0x47 │ Edge 类型索引 (按关系类型扫描)       │
 │ 'D' 0x44 │ Edge 属性存储 (Property Storage)    │
 │ 'M' 0x4D │ 元数据 (Metadata)                  │
 │ 'T' 0x54 │ 事务 (Transaction)                 │
@@ -290,6 +291,11 @@ Value: {edge_id:uint64 BE}
 说明:
   - 附加id 用于区分两点间同类型的多条边（由业务层决定）
   - edge_id 存储在 value 中，用于获取边的完整信息
+  - 一条逻辑边（如 A follows B）会产生两条 E| 索引记录：
+    - E|A|OUT|follows|B|{seq} → edge_id  （出边索引，A 为起点）
+    - E|B|IN|follows|A|{seq} → edge_id   （入边索引，B 为终点）
+  - 两条索引指向同一个 edge_id，共享同一份属性存储（D|）
+  - 插入/删除边时需同时维护这两条索引记录
 
 示例:
   // 公司A(id=1) 向 公司B(id=2) 开了3张发票
@@ -303,6 +309,36 @@ Value: {edge_id:uint64 BE}
   E|{vertex_id}|OUT|{label_id}                   → 某点某类型出边
   E|{vertex_id}|OUT|{label_id}|{neighbor_id}     → 某点到某点的某类型所有边
   E|{vertex_id}|OUT|{label_id}|{neighbor_id}|{附加id} → 某点到某点的某类型特定边
+```
+
+#### Edge 类型索引 (按关系类型扫描)
+```
+Key:   G|{edge_label_id:uint16 BE}|{src_vertex_id:uint64 BE}|{dst_vertex_id:uint64 BE}|{附加id:uint64 BE}
+Value: {edge_id:uint64 BE}
+
+说明:
+  - 以 edge_label_id 为前缀，支持按关系类型扫描所有边
+  - 仅存储出边方向，每条逻辑边只产生一条 G| 记录（与 E| 的双向索引不同）
+  - 与 E| 索引的定位区分：
+    - E| = 邻接查询（从某个顶点出发扫描边）
+    - G| = 类型扫描（从某种关系类型出发扫描所有边）
+  - 附加id 含义与 E| 一致，用于区分两点间同类型的多条边
+
+示例:
+  // edge_label_id=1 (follows), Alice(1) follows Bob(2), 附加id=0
+  G|0x0001|0x0000000000000001|0x0000000000000002|0x0000000000000000 → 100
+
+  // edge_label_id=1 (follows), Alice(1) follows Charlie(3), 附加id=0
+  G|0x0001|0x0000000000000001|0x0000000000000003|0x0000000000000000 → 101
+
+  // edge_label_id=2 (likes), Bob(2) likes Product(4), 附加id=0
+  G|0x0002|0x0000000000000002|0x0000000000000004|0x0000000000000000 → 200
+
+前缀查询能力:
+  G|{edge_label_id}                                        → 扫描某关系类型的所有边
+  G|{edge_label_id}|{src_id}                               → 某关系类型下某起点发出的所有边
+  G|{edge_label_id}|{src_id}|{dst_id}                      → 某关系类型下两点间的所有边
+  G|{edge_label_id}|{src_id}|{dst_id}|{附加id}              → 某关系类型下两点间的特定边
 ```
 
 #### Edge 属性存储
@@ -372,7 +408,11 @@ Value: {next_vertex_id:uint64}|{next_edge_id:uint64}|{next_label_id:uint16}|{nex
 │  • 查询某点某类型出边                E|{vid}|OUT|{label_id}|*                 │
 │  • 查询某点某类型入边                E|{vid}|IN|{label_id}|*                  │
 │  • 查询两点之间某类型所有边        E|{src}|OUT|{label}|{dst}|*                 │
-
+│                                                                                │
+│  • 按关系类型扫描所有边              G|{edge_label_id}|*                         │
+│  • 某关系类型下某起点的所有边        G|{edge_label_id}|{src_id}|*                │
+│  • 某关系类型下两点间所有边          G|{edge_label_id}|{src_id}|{dst_id}|*       │
+│
 │  • 通过 edge_id 获取边详情           D|{edge_label_id}|{edge_id}|*  (前缀扫描)   │
 │                                                                                │
 └────────────────────────────────────────────────────────────────────────────────┘
