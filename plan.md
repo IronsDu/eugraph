@@ -8,7 +8,17 @@
 
 ## 当前阶段：阶段一 基础框架 (MVP) — 进行中
 
-**详细设计文档**：[architecture.md](./architecture.md)
+**设计文档**：参见 [docs/overview.md](docs/overview.md)
+
+| 主题 | 文档 |
+|------|------|
+| 系统架构 | [docs/system-architecture.md](docs/system-architecture.md) |
+| 数据模型 | [docs/data-model.md](docs/data-model.md) |
+| KV 编码 | [docs/kv-encoding.md](docs/kv-encoding.md) |
+| 类型定义 | [docs/type-definitions.md](docs/type-definitions.md) |
+| 接口设计 | [docs/interfaces.md](docs/interfaces.md) |
+| 目录结构 | [docs/directory-structure.md](docs/directory-structure.md) |
+| 开发阶段 | [docs/development-phases.md](docs/development-phases.md) |
 
 ### 任务进度
 
@@ -69,7 +79,7 @@ cmake --build build
 
 ## 设计调整记录
 
-此处记录对 architecture.md 的修改和调整决策。
+此处记录对设计文档的修改和调整决策。
 
 | 日期 | 修改内容 | 原因 |
 |------|----------|------|
