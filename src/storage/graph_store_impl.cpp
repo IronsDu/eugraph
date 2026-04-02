@@ -64,6 +64,7 @@ bool GraphStoreImpl::doDel(GraphTxnHandle txn, std::string_view key) {
 void GraphStoreImpl::doPrefixScan(GraphTxnHandle txn, std::string_view prefix,
                                   const std::function<bool(std::string_view, std::string_view)>& callback) {
     // TODO: add txn-scoped prefix scan to IKVEngine for repeatable-read.
+    (void)txn;
     engine_->prefixScan(prefix, callback);
 }
 
