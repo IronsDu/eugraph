@@ -73,6 +73,10 @@ public:
     void scanEdges(GraphTxnHandle txn, VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter,
                    const std::function<bool(const EdgeIndexEntry&)>& callback) override;
 
+    void scanEdgesByType(GraphTxnHandle txn, EdgeLabelId label_id, std::optional<VertexId> src_filter,
+                         std::optional<VertexId> dst_filter,
+                         const std::function<bool(const EdgeTypeIndexEntry&)>& callback) override;
+
     uint64_t countVerticesByLabel(GraphTxnHandle txn, LabelId label_id) override;
 
     uint64_t countDegree(GraphTxnHandle txn, VertexId vid, Direction direction,

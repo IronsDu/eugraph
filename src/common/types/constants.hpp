@@ -11,6 +11,7 @@ constexpr uint8_t PREFIX_PK_FORWARD = 0x50;    // 'P' - pk -> vertex_id
 constexpr uint8_t PREFIX_PK_REVERSE = 0x52;    // 'R' - vertex_id -> pk
 constexpr uint8_t PREFIX_PROPERTY = 0x58;      // 'X' - Vertex property storage
 constexpr uint8_t PREFIX_EDGE_INDEX = 0x45;    // 'E' - Edge adjacency index
+constexpr uint8_t PREFIX_EDGE_TYPE_INDEX = 0x47; // 'G' - Edge type index (scan by relationship type)
 constexpr uint8_t PREFIX_EDGE_PROPERTY = 0x44; // 'D' - Edge property storage
 constexpr uint8_t PREFIX_METADATA = 0x4D;      // 'M' - Metadata
 

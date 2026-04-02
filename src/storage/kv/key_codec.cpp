@@ -183,6 +183,55 @@ std::string KeyCodec::encodeEdgeIndexPrefix(VertexId vertex_id, Direction direct
     return key;
 }
 
+// ==================== Edge Type Index (G|) ====================
+
+std::string KeyCodec::encodeEdgeTypeIndexKey(const EdgeTypeIndexKey& k) {
+    std::string key;
+    key.reserve(1 + 2 + 8 + 8 + 8);
+    key.push_back(static_cast<char>(PREFIX_EDGE_TYPE_INDEX));
+    encodeU16BE(key, k.edge_label_id);
+    encodeU64BE(key, k.src_vertex_id);
+    encodeU64BE(key, k.dst_vertex_id);
+    encodeU64BE(key, k.seq);
+    return key;
+}
+
+KeyCodec::EdgeTypeIndexKey KeyCodec::decodeEdgeTypeIndexKey(std::string_view key) {
+    EdgeTypeIndexKey k;
+    k.edge_label_id = decodeU16BE(key, 1);
+    k.src_vertex_id = decodeU64BE(key, 3);
+    k.dst_vertex_id = decodeU64BE(key, 11);
+    k.seq = decodeU64BE(key, 19);
+    return k;
+}
+
+std::string KeyCodec::encodeEdgeTypeIndexPrefix(EdgeLabelId label_id) {
+    std::string key;
+    key.reserve(1 + 2);
+    key.push_back(static_cast<char>(PREFIX_EDGE_TYPE_INDEX));
+    encodeU16BE(key, label_id);
+    return key;
+}
+
+std::string KeyCodec::encodeEdgeTypeIndexPrefix(EdgeLabelId label_id, VertexId src_id) {
+    std::string key;
+    key.reserve(1 + 2 + 8);
+    key.push_back(static_cast<char>(PREFIX_EDGE_TYPE_INDEX));
+    encodeU16BE(key, label_id);
+    encodeU64BE(key, src_id);
+    return key;
+}
+
+std::string KeyCodec::encodeEdgeTypeIndexPrefix(EdgeLabelId label_id, VertexId src_id, VertexId dst_id) {
+    std::string key;
+    key.reserve(1 + 2 + 8 + 8);
+    key.push_back(static_cast<char>(PREFIX_EDGE_TYPE_INDEX));
+    encodeU16BE(key, label_id);
+    encodeU64BE(key, src_id);
+    encodeU64BE(key, dst_id);
+    return key;
+}
+
 // ==================== Edge Property Storage (D|) ====================
 
 std::string KeyCodec::encodeEdgePropertyKey(EdgeLabelId label_id, EdgeId edge_id, uint16_t prop_id) {

@@ -152,6 +152,61 @@ TEST_F(KeyCodecTest, EdgeIndexPrefixWithNeighbor) {
     EXPECT_EQ(prefix.size(), 20u); // 1 + 8 + 1 + 2 + 8
 }
 
+// ==================== Edge Type Index (G|) ====================
+
+TEST_F(KeyCodecTest, EncodeDecodeEdgeTypeIndexKey) {
+    KeyCodec::EdgeTypeIndexKey input{1, 10, 20, 5};
+
+    auto key = KeyCodec::encodeEdgeTypeIndexKey(input);
+    EXPECT_EQ(static_cast<uint8_t>(key[0]), PREFIX_EDGE_TYPE_INDEX);
+    EXPECT_EQ(key.size(), 27u); // 1 + 2 + 8 + 8 + 8
+
+    auto decoded = KeyCodec::decodeEdgeTypeIndexKey(key);
+    EXPECT_EQ(decoded.edge_label_id, 1u);
+    EXPECT_EQ(decoded.src_vertex_id, 10u);
+    EXPECT_EQ(decoded.dst_vertex_id, 20u);
+    EXPECT_EQ(decoded.seq, 5u);
+}
+
+TEST_F(KeyCodecTest, EdgeTypeIndexPrefixByLabel) {
+    auto prefix = KeyCodec::encodeEdgeTypeIndexPrefix(3);
+    EXPECT_EQ(prefix.size(), 3u); // 1 + 2
+
+    auto full_key = KeyCodec::encodeEdgeTypeIndexKey({3, 10, 20, 0});
+    EXPECT_EQ(full_key.substr(0, 3), prefix);
+}
+
+TEST_F(KeyCodecTest, EdgeTypeIndexPrefixByLabelSrc) {
+    auto prefix = KeyCodec::encodeEdgeTypeIndexPrefix(3, 10);
+    EXPECT_EQ(prefix.size(), 11u); // 1 + 2 + 8
+
+    auto full_key = KeyCodec::encodeEdgeTypeIndexKey({3, 10, 20, 0});
+    EXPECT_EQ(full_key.substr(0, 11), prefix);
+
+    auto other_key = KeyCodec::encodeEdgeTypeIndexKey({3, 99, 20, 0});
+    EXPECT_NE(other_key.substr(0, 11), prefix);
+}
+
+TEST_F(KeyCodecTest, EdgeTypeIndexPrefixByLabelSrcDst) {
+    auto prefix = KeyCodec::encodeEdgeTypeIndexPrefix(3, 10, 20);
+    EXPECT_EQ(prefix.size(), 19u); // 1 + 2 + 8 + 8
+
+    auto full_key = KeyCodec::encodeEdgeTypeIndexKey({3, 10, 20, 0});
+    EXPECT_EQ(full_key.substr(0, 19), prefix);
+}
+
+TEST_F(KeyCodecTest, EdgeTypeIndexKeysSortBySrc) {
+    auto key1 = KeyCodec::encodeEdgeTypeIndexKey({1, 10, 20, 0});
+    auto key2 = KeyCodec::encodeEdgeTypeIndexKey({1, 20, 10, 0});
+    EXPECT_LT(key1, key2);
+}
+
+TEST_F(KeyCodecTest, EdgeTypeIndexKeysSortByDst) {
+    auto key1 = KeyCodec::encodeEdgeTypeIndexKey({1, 10, 20, 0});
+    auto key2 = KeyCodec::encodeEdgeTypeIndexKey({1, 10, 30, 0});
+    EXPECT_LT(key1, key2);
+}
+
 // ==================== Edge Property Storage (D|) ====================
 
 TEST_F(KeyCodecTest, EncodeDecodeEdgePropertyKey) {

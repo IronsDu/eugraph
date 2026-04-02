@@ -121,10 +121,25 @@ public:
         EdgeId edge_id;
     };
 
+    /// Entry returned by G| edge type index scan.
+    struct EdgeTypeIndexEntry {
+        VertexId src_vertex_id;
+        VertexId dst_vertex_id;
+        uint64_t seq;
+        EdgeId edge_id;
+    };
+
     /// Scan edges from a vertex by direction, optionally filtered by edge label.
     virtual void scanEdges(GraphTxnHandle txn, VertexId vid, Direction direction,
                            std::optional<EdgeLabelId> label_filter,
                            const std::function<bool(const EdgeIndexEntry&)>& callback) = 0;
+
+    /// Scan edges by relationship type (G| prefix scan), optionally filtered by src/dst.
+    /// Only scans outgoing edges — each logical edge appears exactly once.
+    virtual void scanEdgesByType(GraphTxnHandle txn, EdgeLabelId label_id,
+                                 std::optional<VertexId> src_filter,
+                                 std::optional<VertexId> dst_filter,
+                                 const std::function<bool(const EdgeTypeIndexEntry&)>& callback) = 0;
 
     // ==================== Statistics ====================
 

@@ -271,6 +271,11 @@ bool GraphStoreImpl::insertEdge(GraphTxnHandle txn, EdgeId eid, VertexId src_id,
     if (!doPut(txn, KeyCodec::encodeEdgeIndexKey(in_key), edge_id_val))
         return false;
 
+    // G| edge type index (out-edges only)
+    KeyCodec::EdgeTypeIndexKey type_key{label_id, src_id, dst_id, seq};
+    if (!doPut(txn, KeyCodec::encodeEdgeTypeIndexKey(type_key), edge_id_val))
+        return false;
+
     // D| edge properties
     for (uint16_t prop_id = 0; prop_id < props.size(); ++prop_id) {
         if (props[prop_id].has_value()) {
@@ -292,6 +297,10 @@ bool GraphStoreImpl::deleteEdge(GraphTxnHandle txn, EdgeId eid, EdgeLabelId labe
 
     KeyCodec::EdgeIndexKey in_key{dst_id, Direction::IN, label_id, src_id, seq};
     doDel(txn, KeyCodec::encodeEdgeIndexKey(in_key));
+
+    // Delete G| edge type index
+    KeyCodec::EdgeTypeIndexKey type_key{label_id, src_id, dst_id, seq};
+    doDel(txn, KeyCodec::encodeEdgeTypeIndexKey(type_key));
 
     // Delete D| properties
     auto prefix = KeyCodec::encodeEdgePropertyPrefix(label_id, eid);
@@ -360,6 +369,27 @@ void GraphStoreImpl::scanEdges(GraphTxnHandle txn, VertexId vid, Direction direc
     doPrefixScan(txn, prefix, [&](std::string_view key, std::string_view value) {
         auto decoded = KeyCodec::decodeEdgeIndexKey(key);
         EdgeIndexEntry entry{decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(value)};
+        return callback(entry);
+    });
+}
+
+void GraphStoreImpl::scanEdgesByType(GraphTxnHandle txn, EdgeLabelId label_id,
+                                     std::optional<VertexId> src_filter,
+                                     std::optional<VertexId> dst_filter,
+                                     const std::function<bool(const EdgeTypeIndexEntry&)>& callback) {
+    std::string prefix;
+    if (dst_filter && src_filter) {
+        prefix = KeyCodec::encodeEdgeTypeIndexPrefix(label_id, *src_filter, *dst_filter);
+    } else if (src_filter) {
+        prefix = KeyCodec::encodeEdgeTypeIndexPrefix(label_id, *src_filter);
+    } else {
+        prefix = KeyCodec::encodeEdgeTypeIndexPrefix(label_id);
+    }
+
+    doPrefixScan(txn, prefix, [&](std::string_view key, std::string_view value) {
+        auto decoded = KeyCodec::decodeEdgeTypeIndexKey(key);
+        EdgeTypeIndexEntry entry{decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq,
+                                 ValueCodec::decodeU64(value)};
         return callback(entry);
     });
 }

@@ -581,6 +581,113 @@ TEST_F(GraphStoreTest, TxnVisibility) {
     EXPECT_EQ(std::get<std::string>(*val), "no_txn");
 }
 
+// ==================== Edge Type Index Scan (G|) ====================
+
+TEST_F(GraphStoreTest, ScanEdgesByType) {
+    EdgeLabelId label1 = 1, label2 = 2;
+
+    auto txn = writeTxn();
+    store_->insertEdge(txn, 700, 1, 2, label1, 0, Properties{});
+    store_->insertEdge(txn, 701, 3, 4, label1, 0, Properties{});
+    store_->insertEdge(txn, 702, 5, 6, label2, 0, Properties{});
+    commit(txn);
+
+    std::vector<EdgeId> found;
+    store_->scanEdgesByType(INVALID_GRAPH_TXN, label1, std::nullopt, std::nullopt,
+                            [&](const IGraphStore::EdgeTypeIndexEntry& e) {
+                                found.push_back(e.edge_id);
+                                return true;
+                            });
+
+    EXPECT_EQ(found.size(), 2u);
+    EXPECT_NE(std::find(found.begin(), found.end(), 700), found.end());
+    EXPECT_NE(std::find(found.begin(), found.end(), 701), found.end());
+}
+
+TEST_F(GraphStoreTest, ScanEdgesByTypeWithSrcFilter) {
+    EdgeLabelId label_id = 1;
+
+    auto txn = writeTxn();
+    store_->insertEdge(txn, 800, 10, 20, label_id, 0, Properties{});
+    store_->insertEdge(txn, 801, 10, 30, label_id, 0, Properties{});
+    store_->insertEdge(txn, 802, 40, 50, label_id, 0, Properties{});
+    commit(txn);
+
+    std::vector<IGraphStore::EdgeTypeIndexEntry> found;
+    store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, VertexId(10), std::nullopt,
+                            [&](const IGraphStore::EdgeTypeIndexEntry& e) {
+                                found.push_back(e);
+                                return true;
+                            });
+
+    EXPECT_EQ(found.size(), 2u);
+    for (auto& e : found) {
+        EXPECT_EQ(e.src_vertex_id, 10u);
+    }
+}
+
+TEST_F(GraphStoreTest, ScanEdgesByTypeWithSrcDstFilter) {
+    EdgeLabelId label_id = 1;
+
+    auto txn = writeTxn();
+    store_->insertEdge(txn, 900, 10, 20, label_id, 1, Properties{});
+    store_->insertEdge(txn, 901, 10, 20, label_id, 2, Properties{});
+    store_->insertEdge(txn, 902, 10, 30, label_id, 0, Properties{});
+    commit(txn);
+
+    std::vector<EdgeId> found;
+    store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, VertexId(10), VertexId(20),
+                            [&](const IGraphStore::EdgeTypeIndexEntry& e) {
+                                found.push_back(e.edge_id);
+                                return true;
+                            });
+
+    EXPECT_EQ(found.size(), 2u);
+    EXPECT_NE(std::find(found.begin(), found.end(), 900), found.end());
+    EXPECT_NE(std::find(found.begin(), found.end(), 901), found.end());
+}
+
+TEST_F(GraphStoreTest, ScanEdgesByTypeAfterDelete) {
+    EdgeLabelId label_id = 1;
+
+    auto txn = writeTxn();
+    store_->insertEdge(txn, 950, 1, 2, label_id, 0, Properties{});
+    commit(txn);
+
+    auto txn2 = writeTxn();
+    ASSERT_TRUE(store_->deleteEdge(txn2, 950, label_id, 1, 2, 0));
+    commit(txn2);
+
+    std::vector<EdgeId> found;
+    store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, std::nullopt, std::nullopt,
+                            [&](const IGraphStore::EdgeTypeIndexEntry& e) {
+                                found.push_back(e.edge_id);
+                                return true;
+                            });
+    EXPECT_TRUE(found.empty());
+}
+
+TEST_F(GraphStoreTest, ScanEdgesByTypeReturnsEntryInfo) {
+    EdgeLabelId label_id = 1;
+
+    auto txn = writeTxn();
+    store_->insertEdge(txn, 960, 10, 20, label_id, 5, Properties{});
+    commit(txn);
+
+    std::vector<IGraphStore::EdgeTypeIndexEntry> found;
+    store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, std::nullopt, std::nullopt,
+                            [&](const IGraphStore::EdgeTypeIndexEntry& e) {
+                                found.push_back(e);
+                                return true;
+                            });
+
+    ASSERT_EQ(found.size(), 1u);
+    EXPECT_EQ(found[0].src_vertex_id, 10u);
+    EXPECT_EQ(found[0].dst_vertex_id, 20u);
+    EXPECT_EQ(found[0].seq, 5u);
+    EXPECT_EQ(found[0].edge_id, 960u);
+}
+
 // ==================== Edge Traversal Neighbor Info ====================
 
 TEST_F(GraphStoreTest, ScanEdgesReturnsNeighborInfo) {
