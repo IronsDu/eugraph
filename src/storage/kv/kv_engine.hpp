@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -36,6 +37,22 @@ public:
     virtual std::vector<KeyValuePair> prefixScan(std::string_view prefix) = 0;
     virtual void prefixScan(std::string_view prefix,
                             const std::function<bool(std::string_view key, std::string_view value)>& callback) = 0;
+
+    // ==================== Scan Cursor ====================
+
+    /// Resumable prefix scan cursor. Holds underlying iterator resources.
+    /// key()/value() return views valid until next() is called.
+    class IScanCursor {
+    public:
+        virtual ~IScanCursor() = default;
+        virtual bool valid() const = 0;
+        virtual std::string_view key() const = 0;
+        virtual std::string_view value() const = 0;
+        virtual void next() = 0;
+    };
+
+    /// Create a resumable scan cursor for the given prefix.
+    virtual std::unique_ptr<IScanCursor> createScanCursor(std::string_view prefix) = 0;
 
     // ==================== Transaction ====================
     using TxnHandle = void*;

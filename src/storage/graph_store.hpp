@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -80,11 +81,60 @@ public:
     virtual std::optional<VertexId> getVertexIdByPk(const PropertyValue& pk_value) = 0;
     virtual std::optional<PropertyValue> getPkByVertexId(VertexId vid) = 0;
 
+    // ==================== Edge Traversal Types ====================
+
+    struct EdgeIndexEntry {
+        VertexId neighbor_id;
+        EdgeLabelId edge_label_id;
+        uint64_t seq;
+        EdgeId edge_id;
+    };
+
+    /// Entry returned by G| edge type index scan.
+    struct EdgeTypeIndexEntry {
+        VertexId src_vertex_id;
+        VertexId dst_vertex_id;
+        uint64_t seq;
+        EdgeId edge_id;
+    };
+
+    // ==================== Scan Cursors ====================
+
+    /// Resumable cursor for label-index vertex scan.
+    class IVertexScanCursor {
+    public:
+        virtual ~IVertexScanCursor() = default;
+        virtual bool valid() const = 0;
+        virtual VertexId vertexId() const = 0;
+        virtual void next() = 0;
+    };
+
+    /// Resumable cursor for edge traversal scan.
+    class IEdgeScanCursor {
+    public:
+        virtual ~IEdgeScanCursor() = default;
+        virtual bool valid() const = 0;
+        virtual const EdgeIndexEntry& entry() const = 0;
+        virtual void next() = 0;
+    };
+
+    /// Resumable cursor for edge type index scan.
+    class IEdgeTypeScanCursor {
+    public:
+        virtual ~IEdgeTypeScanCursor() = default;
+        virtual bool valid() const = 0;
+        virtual const EdgeTypeIndexEntry& entry() const = 0;
+        virtual void next() = 0;
+    };
+
     // ==================== Label Index Scan ====================
 
     /// Scan all vertex IDs with the given label (I| prefix scan).
     virtual void scanVerticesByLabel(GraphTxnHandle txn, LabelId label_id,
                                      const std::function<bool(VertexId)>& callback) = 0;
+
+    /// Create a resumable cursor for scanning vertices by label.
+    virtual std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphTxnHandle txn, LabelId label_id) = 0;
 
     // ==================== Edge ====================
 
@@ -114,31 +164,26 @@ public:
 
     // ==================== Edge Traversal ====================
 
-    struct EdgeIndexEntry {
-        VertexId neighbor_id;
-        EdgeLabelId edge_label_id;
-        uint64_t seq;
-        EdgeId edge_id;
-    };
-
-    /// Entry returned by G| edge type index scan.
-    struct EdgeTypeIndexEntry {
-        VertexId src_vertex_id;
-        VertexId dst_vertex_id;
-        uint64_t seq;
-        EdgeId edge_id;
-    };
-
     /// Scan edges from a vertex by direction, optionally filtered by edge label.
     virtual void scanEdges(GraphTxnHandle txn, VertexId vid, Direction direction,
                            std::optional<EdgeLabelId> label_filter,
                            const std::function<bool(const EdgeIndexEntry&)>& callback) = 0;
+
+    /// Create a resumable cursor for scanning edges from a vertex.
+    virtual std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphTxnHandle txn, VertexId vid,
+                                                                   Direction direction,
+                                                                   std::optional<EdgeLabelId> label_filter) = 0;
 
     /// Scan edges by relationship type (G| prefix scan), optionally filtered by src/dst.
     /// Only scans outgoing edges — each logical edge appears exactly once.
     virtual void scanEdgesByType(GraphTxnHandle txn, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                                  std::optional<VertexId> dst_filter,
                                  const std::function<bool(const EdgeTypeIndexEntry&)>& callback) = 0;
+
+    /// Create a resumable cursor for scanning edges by type.
+    virtual std::unique_ptr<IEdgeTypeScanCursor> createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId label_id,
+                                                                           std::optional<VertexId> src_filter,
+                                                                           std::optional<VertexId> dst_filter) = 0;
 
     // ==================== Statistics ====================
 

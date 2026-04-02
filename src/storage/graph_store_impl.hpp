@@ -54,6 +54,8 @@ public:
     void scanVerticesByLabel(GraphTxnHandle txn, LabelId label_id,
                              const std::function<bool(VertexId)>& callback) override;
 
+    std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphTxnHandle txn, LabelId label_id) override;
+
     bool insertEdge(GraphTxnHandle txn, EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
                     uint64_t seq, const Properties& props) override;
 
@@ -73,9 +75,16 @@ public:
     void scanEdges(GraphTxnHandle txn, VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter,
                    const std::function<bool(const EdgeIndexEntry&)>& callback) override;
 
+    std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphTxnHandle txn, VertexId vid, Direction direction,
+                                                           std::optional<EdgeLabelId> label_filter) override;
+
     void scanEdgesByType(GraphTxnHandle txn, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                          std::optional<VertexId> dst_filter,
                          const std::function<bool(const EdgeTypeIndexEntry&)>& callback) override;
+
+    std::unique_ptr<IEdgeTypeScanCursor> createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId label_id,
+                                                                   std::optional<VertexId> src_filter,
+                                                                   std::optional<VertexId> dst_filter) override;
 
     uint64_t countVerticesByLabel(GraphTxnHandle txn, LabelId label_id) override;
 
@@ -90,6 +99,45 @@ private:
                       const std::function<bool(std::string_view, std::string_view)>& callback);
 
     std::unique_ptr<IKVEngine> engine_;
+};
+
+/// Vertex scan cursor wrapping IKVEngine::IScanCursor with KeyCodec decoding.
+class VertexScanCursorImpl : public IGraphStore::IVertexScanCursor {
+public:
+    VertexScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor);
+    bool valid() const override;
+    VertexId vertexId() const override;
+    void next() override;
+
+private:
+    std::unique_ptr<IKVEngine::IScanCursor> cursor_;
+    VertexId current_vid_ = 0;
+};
+
+/// Edge scan cursor wrapping IKVEngine::IScanCursor with KeyCodec decoding.
+class EdgeScanCursorImpl : public IGraphStore::IEdgeScanCursor {
+public:
+    EdgeScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor);
+    bool valid() const override;
+    const IGraphStore::EdgeIndexEntry& entry() const override;
+    void next() override;
+
+private:
+    std::unique_ptr<IKVEngine::IScanCursor> cursor_;
+    IGraphStore::EdgeIndexEntry current_;
+};
+
+/// Edge type scan cursor wrapping IKVEngine::IScanCursor with KeyCodec decoding.
+class EdgeTypeScanCursorImpl : public IGraphStore::IEdgeTypeScanCursor {
+public:
+    EdgeTypeScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor);
+    bool valid() const override;
+    const IGraphStore::EdgeTypeIndexEntry& entry() const override;
+    void next() override;
+
+private:
+    std::unique_ptr<IKVEngine::IScanCursor> cursor_;
+    IGraphStore::EdgeTypeIndexEntry current_;
 };
 
 } // namespace eugraph

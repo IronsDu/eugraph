@@ -414,4 +414,132 @@ uint64_t GraphStoreImpl::countDegree(GraphTxnHandle txn, VertexId vid, Direction
     return count;
 }
 
+// ==================== Scan Cursor Factories ====================
+
+std::unique_ptr<IGraphStore::IVertexScanCursor> GraphStoreImpl::createVertexScanCursor(GraphTxnHandle txn,
+                                                                                        LabelId label_id) {
+    (void)txn;
+    auto prefix = KeyCodec::encodeLabelForwardPrefix(label_id);
+    auto kv_cursor = engine_->createScanCursor(prefix);
+    if (!kv_cursor)
+        return nullptr;
+    return std::make_unique<VertexScanCursorImpl>(std::move(kv_cursor));
+}
+
+std::unique_ptr<IGraphStore::IEdgeScanCursor> GraphStoreImpl::createEdgeScanCursor(GraphTxnHandle txn, VertexId vid,
+                                                                                    Direction direction,
+                                                                                    std::optional<EdgeLabelId> label_filter) {
+    (void)txn;
+    std::string prefix;
+    if (label_filter) {
+        prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter);
+    } else {
+        prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction);
+    }
+    auto kv_cursor = engine_->createScanCursor(prefix);
+    if (!kv_cursor)
+        return nullptr;
+    return std::make_unique<EdgeScanCursorImpl>(std::move(kv_cursor));
+}
+
+std::unique_ptr<IGraphStore::IEdgeTypeScanCursor>
+GraphStoreImpl::createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId label_id, std::optional<VertexId> src_filter,
+                                          std::optional<VertexId> dst_filter) {
+    (void)txn;
+    std::string prefix;
+    if (dst_filter && src_filter) {
+        prefix = KeyCodec::encodeEdgeTypeIndexPrefix(label_id, *src_filter, *dst_filter);
+    } else if (src_filter) {
+        prefix = KeyCodec::encodeEdgeTypeIndexPrefix(label_id, *src_filter);
+    } else {
+        prefix = KeyCodec::encodeEdgeTypeIndexPrefix(label_id);
+    }
+    auto kv_cursor = engine_->createScanCursor(prefix);
+    if (!kv_cursor)
+        return nullptr;
+    return std::make_unique<EdgeTypeScanCursorImpl>(std::move(kv_cursor));
+}
+
+// ==================== VertexScanCursorImpl ====================
+
+VertexScanCursorImpl::VertexScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor)
+    : cursor_(std::move(cursor)) {
+    if (cursor_ && cursor_->valid()) {
+        auto [_, vid] = KeyCodec::decodeLabelForwardKey(cursor_->key());
+        current_vid_ = vid;
+    }
+}
+
+bool VertexScanCursorImpl::valid() const {
+    return cursor_ && cursor_->valid();
+}
+
+VertexId VertexScanCursorImpl::vertexId() const {
+    return current_vid_;
+}
+
+void VertexScanCursorImpl::next() {
+    cursor_->next();
+    if (cursor_->valid()) {
+        auto [_, vid] = KeyCodec::decodeLabelForwardKey(cursor_->key());
+        current_vid_ = vid;
+    }
+}
+
+// ==================== EdgeScanCursorImpl ====================
+
+EdgeScanCursorImpl::EdgeScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor)
+    : cursor_(std::move(cursor)) {
+    if (cursor_ && cursor_->valid()) {
+        auto decoded = KeyCodec::decodeEdgeIndexKey(cursor_->key());
+        current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.seq,
+                     ValueCodec::decodeU64(cursor_->value())};
+    }
+}
+
+bool EdgeScanCursorImpl::valid() const {
+    return cursor_ && cursor_->valid();
+}
+
+const IGraphStore::EdgeIndexEntry& EdgeScanCursorImpl::entry() const {
+    return current_;
+}
+
+void EdgeScanCursorImpl::next() {
+    cursor_->next();
+    if (cursor_->valid()) {
+        auto decoded = KeyCodec::decodeEdgeIndexKey(cursor_->key());
+        current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.seq,
+                     ValueCodec::decodeU64(cursor_->value())};
+    }
+}
+
+// ==================== EdgeTypeScanCursorImpl ====================
+
+EdgeTypeScanCursorImpl::EdgeTypeScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor)
+    : cursor_(std::move(cursor)) {
+    if (cursor_ && cursor_->valid()) {
+        auto decoded = KeyCodec::decodeEdgeTypeIndexKey(cursor_->key());
+        current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq,
+                     ValueCodec::decodeU64(cursor_->value())};
+    }
+}
+
+bool EdgeTypeScanCursorImpl::valid() const {
+    return cursor_ && cursor_->valid();
+}
+
+const IGraphStore::EdgeTypeIndexEntry& EdgeTypeScanCursorImpl::entry() const {
+    return current_;
+}
+
+void EdgeTypeScanCursorImpl::next() {
+    cursor_->next();
+    if (cursor_->valid()) {
+        auto decoded = KeyCodec::decodeEdgeTypeIndexKey(cursor_->key());
+        current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq,
+                     ValueCodec::decodeU64(cursor_->value())};
+    }
+}
+
 } // namespace eugraph
