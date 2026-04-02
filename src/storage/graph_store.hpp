@@ -136,8 +136,7 @@ public:
 
     /// Scan edges by relationship type (G| prefix scan), optionally filtered by src/dst.
     /// Only scans outgoing edges — each logical edge appears exactly once.
-    virtual void scanEdgesByType(GraphTxnHandle txn, EdgeLabelId label_id,
-                                 std::optional<VertexId> src_filter,
+    virtual void scanEdgesByType(GraphTxnHandle txn, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                                  std::optional<VertexId> dst_filter,
                                  const std::function<bool(const EdgeTypeIndexEntry&)>& callback) = 0;
 

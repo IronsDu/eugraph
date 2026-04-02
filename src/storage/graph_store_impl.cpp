@@ -373,8 +373,7 @@ void GraphStoreImpl::scanEdges(GraphTxnHandle txn, VertexId vid, Direction direc
     });
 }
 
-void GraphStoreImpl::scanEdgesByType(GraphTxnHandle txn, EdgeLabelId label_id,
-                                     std::optional<VertexId> src_filter,
+void GraphStoreImpl::scanEdgesByType(GraphTxnHandle txn, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                                      std::optional<VertexId> dst_filter,
                                      const std::function<bool(const EdgeTypeIndexEntry&)>& callback) {
     std::string prefix;
