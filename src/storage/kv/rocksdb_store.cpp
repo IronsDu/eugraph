@@ -272,4 +272,76 @@ void RocksDBStore::removeTxn(TxnHandle handle) {
     txns_.erase(handle);
 }
 
+// ==================== Scan Cursor ====================
+
+std::unique_ptr<IKVEngine::IScanCursor> RocksDBStore::createScanCursor(std::string_view prefix) {
+    if (!txnDB_)
+        return nullptr;
+    return std::make_unique<RocksDBScanCursor>(txnDB_.get(), std::string(prefix));
+}
+
+namespace {
+
+std::string computeUpperBound(std::string_view prefix) {
+    std::string ub(prefix);
+    bool carry = true;
+    for (int i = static_cast<int>(ub.size()) - 1; i >= 0 && carry; --i) {
+        auto& byte = ub[static_cast<size_t>(i)];
+        if (static_cast<uint8_t>(byte) < 0xFF) {
+            ++byte;
+            carry = false;
+        } else {
+            byte = '\0';
+        }
+    }
+    if (carry)
+        ub.clear();
+    return ub;
+}
+
+} // anonymous namespace
+
+RocksDBScanCursor::RocksDBScanCursor(rocksdb::TransactionDB* db, std::string prefix) : prefix_(std::move(prefix)) {
+    rocksdb::ReadOptions opts;
+    opts.total_order_seek = true;
+
+    upper_bound_str_ = computeUpperBound(prefix_);
+    if (!upper_bound_str_.empty()) {
+        upper_bound_slice_ = rocksdb::Slice(upper_bound_str_);
+        opts.iterate_upper_bound = &upper_bound_slice_;
+    }
+
+    iter_.reset(db->NewIterator(opts));
+    iter_->Seek(prefix_);
+
+    valid_ = iter_->Valid();
+    if (valid_) {
+        auto k = iter_->key();
+        valid_ = k.starts_with(prefix_);
+    }
+}
+
+RocksDBScanCursor::~RocksDBScanCursor() = default;
+
+bool RocksDBScanCursor::valid() const {
+    return valid_;
+}
+
+std::string_view RocksDBScanCursor::key() const {
+    return iter_->key().ToStringView();
+}
+
+std::string_view RocksDBScanCursor::value() const {
+    return iter_->value().ToStringView();
+}
+
+void RocksDBScanCursor::next() {
+    iter_->Next();
+    valid_ = iter_->Valid();
+    if (valid_) {
+        auto k = iter_->key();
+        valid_ = k.starts_with(prefix_);
+    }
+}
+
 } // namespace eugraph

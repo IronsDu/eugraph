@@ -38,6 +38,9 @@ public:
     void prefixScan(std::string_view prefix,
                     const std::function<bool(std::string_view key, std::string_view value)>& callback) override;
 
+    // ==================== Scan Cursor ====================
+    std::unique_ptr<IScanCursor> createScanCursor(std::string_view prefix) override;
+
     // ==================== Transaction ====================
 
     TxnHandle beginTransaction() override;
@@ -55,4 +58,28 @@ private:
     std::mutex txnMutex_;
     std::unordered_map<TxnHandle, std::unique_ptr<rocksdb::Transaction>> txns_;
 };
+
+/// IScanCursor implementation backed by a RocksDB iterator.
+/// Member order ensures iter_ is destroyed before upper_bound_str_.
+class RocksDBScanCursor : public IKVEngine::IScanCursor {
+public:
+    RocksDBScanCursor(rocksdb::TransactionDB* db, std::string prefix);
+    ~RocksDBScanCursor() override;
+
+    RocksDBScanCursor(const RocksDBScanCursor&) = delete;
+    RocksDBScanCursor& operator=(const RocksDBScanCursor&) = delete;
+
+    bool valid() const override;
+    std::string_view key() const override;
+    std::string_view value() const override;
+    void next() override;
+
+private:
+    std::string prefix_;
+    std::string upper_bound_str_;
+    rocksdb::Slice upper_bound_slice_;
+    std::unique_ptr<rocksdb::Iterator> iter_;
+    bool valid_ = false;
+};
+
 } // namespace eugraph
