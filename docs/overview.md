@@ -29,4 +29,6 @@
 | [类型定义](type-definitions.md) | C++ 核心类型（ID、属性值、Vertex、Edge 等） |
 | [接口设计](interfaces.md) | 抽象接口（IGraphOperations、IMetadataService、IComputeService） |
 | [目录结构](directory-structure.md) | 源码目录规划 |
+| [多图支持](multi-graph.md) | 列簇隔离、图创建/删除、启动恢复、列簇句柄管理 |
+| [DDL 设计](ddl.md) | 删除标签类型、删除关系类型、列的增删改 |
 | [开发阶段](development-phases.md) | 里程碑规划、任务拆解、测试用例、依赖库 |
