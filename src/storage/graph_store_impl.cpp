@@ -417,7 +417,7 @@ uint64_t GraphStoreImpl::countDegree(GraphTxnHandle txn, VertexId vid, Direction
 // ==================== Scan Cursor Factories ====================
 
 std::unique_ptr<IGraphStore::IVertexScanCursor> GraphStoreImpl::createVertexScanCursor(GraphTxnHandle txn,
-                                                                                        LabelId label_id) {
+                                                                                       LabelId label_id) {
     (void)txn;
     auto prefix = KeyCodec::encodeLabelForwardPrefix(label_id);
     auto kv_cursor = engine_->createScanCursor(prefix);
@@ -426,9 +426,9 @@ std::unique_ptr<IGraphStore::IVertexScanCursor> GraphStoreImpl::createVertexScan
     return std::make_unique<VertexScanCursorImpl>(std::move(kv_cursor));
 }
 
-std::unique_ptr<IGraphStore::IEdgeScanCursor> GraphStoreImpl::createEdgeScanCursor(GraphTxnHandle txn, VertexId vid,
-                                                                                    Direction direction,
-                                                                                    std::optional<EdgeLabelId> label_filter) {
+std::unique_ptr<IGraphStore::IEdgeScanCursor>
+GraphStoreImpl::createEdgeScanCursor(GraphTxnHandle txn, VertexId vid, Direction direction,
+                                     std::optional<EdgeLabelId> label_filter) {
     (void)txn;
     std::string prefix;
     if (label_filter) {
@@ -444,7 +444,7 @@ std::unique_ptr<IGraphStore::IEdgeScanCursor> GraphStoreImpl::createEdgeScanCurs
 
 std::unique_ptr<IGraphStore::IEdgeTypeScanCursor>
 GraphStoreImpl::createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId label_id, std::optional<VertexId> src_filter,
-                                          std::optional<VertexId> dst_filter) {
+                                         std::optional<VertexId> dst_filter) {
     (void)txn;
     std::string prefix;
     if (dst_filter && src_filter) {
@@ -488,12 +488,10 @@ void VertexScanCursorImpl::next() {
 
 // ==================== EdgeScanCursorImpl ====================
 
-EdgeScanCursorImpl::EdgeScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor)
-    : cursor_(std::move(cursor)) {
+EdgeScanCursorImpl::EdgeScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor) : cursor_(std::move(cursor)) {
     if (cursor_ && cursor_->valid()) {
         auto decoded = KeyCodec::decodeEdgeIndexKey(cursor_->key());
-        current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.seq,
-                     ValueCodec::decodeU64(cursor_->value())};
+        current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(cursor_->value())};
     }
 }
 
@@ -509,8 +507,7 @@ void EdgeScanCursorImpl::next() {
     cursor_->next();
     if (cursor_->valid()) {
         auto decoded = KeyCodec::decodeEdgeIndexKey(cursor_->key());
-        current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.seq,
-                     ValueCodec::decodeU64(cursor_->value())};
+        current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(cursor_->value())};
     }
 }
 
@@ -520,8 +517,7 @@ EdgeTypeScanCursorImpl::EdgeTypeScanCursorImpl(std::unique_ptr<IKVEngine::IScanC
     : cursor_(std::move(cursor)) {
     if (cursor_ && cursor_->valid()) {
         auto decoded = KeyCodec::decodeEdgeTypeIndexKey(cursor_->key());
-        current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq,
-                     ValueCodec::decodeU64(cursor_->value())};
+        current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq, ValueCodec::decodeU64(cursor_->value())};
     }
 }
 
@@ -537,8 +533,7 @@ void EdgeTypeScanCursorImpl::next() {
     cursor_->next();
     if (cursor_->valid()) {
         auto decoded = KeyCodec::decodeEdgeTypeIndexKey(cursor_->key());
-        current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq,
-                     ValueCodec::decodeU64(cursor_->value())};
+        current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq, ValueCodec::decodeU64(cursor_->value())};
     }
 }
 

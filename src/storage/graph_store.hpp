@@ -170,9 +170,8 @@ public:
                            const std::function<bool(const EdgeIndexEntry&)>& callback) = 0;
 
     /// Create a resumable cursor for scanning edges from a vertex.
-    virtual std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphTxnHandle txn, VertexId vid,
-                                                                   Direction direction,
-                                                                   std::optional<EdgeLabelId> label_filter) = 0;
+    virtual std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphTxnHandle txn, VertexId vid, Direction direction,
+                                                                  std::optional<EdgeLabelId> label_filter) = 0;
 
     /// Scan edges by relationship type (G| prefix scan), optionally filtered by src/dst.
     /// Only scans outgoing edges — each logical edge appears exactly once.
@@ -182,8 +181,8 @@ public:
 
     /// Create a resumable cursor for scanning edges by type.
     virtual std::unique_ptr<IEdgeTypeScanCursor> createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId label_id,
-                                                                           std::optional<VertexId> src_filter,
-                                                                           std::optional<VertexId> dst_filter) = 0;
+                                                                          std::optional<VertexId> src_filter,
+                                                                          std::optional<VertexId> dst_filter) = 0;
 
     // ==================== Statistics ====================
 

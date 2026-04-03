@@ -76,15 +76,15 @@ public:
                    const std::function<bool(const EdgeIndexEntry&)>& callback) override;
 
     std::unique_ptr<IEdgeScanCursor> createEdgeScanCursor(GraphTxnHandle txn, VertexId vid, Direction direction,
-                                                           std::optional<EdgeLabelId> label_filter) override;
+                                                          std::optional<EdgeLabelId> label_filter) override;
 
     void scanEdgesByType(GraphTxnHandle txn, EdgeLabelId label_id, std::optional<VertexId> src_filter,
                          std::optional<VertexId> dst_filter,
                          const std::function<bool(const EdgeTypeIndexEntry&)>& callback) override;
 
     std::unique_ptr<IEdgeTypeScanCursor> createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId label_id,
-                                                                   std::optional<VertexId> src_filter,
-                                                                   std::optional<VertexId> dst_filter) override;
+                                                                  std::optional<VertexId> src_filter,
+                                                                  std::optional<VertexId> dst_filter) override;
 
     uint64_t countVerticesByLabel(GraphTxnHandle txn, LabelId label_id) override;
 
