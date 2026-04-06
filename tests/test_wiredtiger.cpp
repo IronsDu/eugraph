@@ -217,10 +217,18 @@ TEST_F(WiredTigerBasicTest, PrefixScan) {
     ASSERT_EQ(ret, 0);
 
     // Insert keys with different prefixes
-    cursor->set_key(cursor, "A|1"); cursor->set_value(cursor, "val_a1"); cursor->insert(cursor);
-    cursor->set_key(cursor, "A|2"); cursor->set_value(cursor, "val_a2"); cursor->insert(cursor);
-    cursor->set_key(cursor, "A|3"); cursor->set_value(cursor, "val_a3"); cursor->insert(cursor);
-    cursor->set_key(cursor, "B|1"); cursor->set_value(cursor, "val_b1"); cursor->insert(cursor);
+    cursor->set_key(cursor, "A|1");
+    cursor->set_value(cursor, "val_a1");
+    cursor->insert(cursor);
+    cursor->set_key(cursor, "A|2");
+    cursor->set_value(cursor, "val_a2");
+    cursor->insert(cursor);
+    cursor->set_key(cursor, "A|3");
+    cursor->set_value(cursor, "val_a3");
+    cursor->insert(cursor);
+    cursor->set_key(cursor, "B|1");
+    cursor->set_value(cursor, "val_b1");
+    cursor->insert(cursor);
 
     // Scan all keys with prefix "A|"
     std::string prefix = "A|";
