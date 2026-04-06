@@ -43,6 +43,10 @@ ExternalProject_Add(wiredtiger_ext
         "<INSTALL_DIR>/lib64/libwiredtiger.a"
 )
 
+# Create placeholder directories so CMake doesn't fail on IMPORTED target validation
+# at configure time (before ExternalProject has built WiredTiger).
+file(MAKE_DIRECTORY "${WT_INSTALL_DIR}/include")
+
 # Imported static library target for WiredTiger
 add_library(wiredtiger_imported STATIC IMPORTED)
 set_target_properties(wiredtiger_imported PROPERTIES
