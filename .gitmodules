@@ -1,3 +1,7 @@
 [submodule "vcpkg"]
 	path = vcpkg
 	url = https://github.com/Microsoft/vcpkg.git
+[submodule "wiredtiger"]
+	path = third_party/wiredtiger
+	url = https://github.com/wiredtiger/wiredtiger.git
+	branch = mongodb-8.2.7
