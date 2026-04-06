@@ -35,6 +35,8 @@ ExternalProject_Add(wiredtiger_ext
         -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DCMAKE_C_FLAGS=-Wno-error=array-bounds\ -Wno-array-bounds
         -DCMAKE_CXX_FLAGS=-Wno-error=array-bounds\ -Wno-array-bounds
+        -DENABLE_STATIC=ON
+        -DENABLE_SHARED=OFF
     BUILD_BYPRODUCTS
         "${WT_LIB}"
 )
