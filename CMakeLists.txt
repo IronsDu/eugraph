@@ -22,8 +22,8 @@ find_package(RocksDB CONFIG REQUIRED)
 # WiredTiger: build as independent CMake project via ExternalProject.
 # This avoids CMAKE_SOURCE_DIR conflicts from WiredTiger's internal scripts.
 include(ExternalProject)
-set(WT_BUILD_DIR "${CMAKE_BINARY_DIR}/wiredtiger-build")
 set(WT_INSTALL_DIR "${CMAKE_BINARY_DIR}/wiredtiger-install")
+set(WT_LIB "${WT_INSTALL_DIR}/lib64/libwiredtiger.a")
 
 ExternalProject_Add(wiredtiger_ext
     SOURCE_DIR "${PROJECT_SOURCE_DIR}/third_party/wiredtiger"
@@ -31,29 +31,16 @@ ExternalProject_Add(wiredtiger_ext
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-        -DENABLE_STATIC=ON
-        -DENABLE_SHARED=OFF
-        -DHAVE_UNITTEST=OFF
-        -DENABLE_PYTHON=OFF
         -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DCMAKE_C_FLAGS=-Wno-error=array-bounds\ -Wno-array-bounds
         -DCMAKE_CXX_FLAGS=-Wno-error=array-bounds\ -Wno-array-bounds
     BUILD_BYPRODUCTS
-        "<INSTALL_DIR>/lib64/libwiredtiger.a"
+        "${WT_LIB}"
 )
 
-# Create placeholder directories so CMake doesn't fail on IMPORTED target validation
-# at configure time (before ExternalProject has built WiredTiger).
+# Ensure include dir exists at configure time for CMake validation
 file(MAKE_DIRECTORY "${WT_INSTALL_DIR}/include")
-
-# Imported static library target for WiredTiger
-add_library(wiredtiger_imported STATIC IMPORTED)
-set_target_properties(wiredtiger_imported PROPERTIES
-    IMPORTED_LOCATION "${WT_INSTALL_DIR}/lib64/libwiredtiger.a"
-    INTERFACE_INCLUDE_DIRECTORIES "${WT_INSTALL_DIR}/include"
-)
-add_dependencies(wiredtiger_imported wiredtiger_ext)
 
 # Library target (RocksDB backend)
 add_library(eugraph_lib STATIC
@@ -90,7 +77,7 @@ target_include_directories(eugraph_wt_lib PUBLIC
 )
 
 target_link_libraries(eugraph_wt_lib PUBLIC
-    wiredtiger_imported
+    "${WT_LIB}"
     lz4::lz4
     ZLIB::ZLIB
     zstd::libzstd
@@ -130,10 +117,11 @@ if(EUGRAPH_BUILD_TESTS)
 
     target_include_directories(wiredtiger_tests PRIVATE
         "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
     )
 
     target_link_libraries(wiredtiger_tests PRIVATE
-        wiredtiger_imported
+        "${WT_LIB}"
         GTest::gtest
         GTest::gtest_main
         Threads::Threads
