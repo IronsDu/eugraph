@@ -23,7 +23,7 @@ find_package(RocksDB CONFIG REQUIRED)
 # This avoids CMAKE_SOURCE_DIR conflicts from WiredTiger's internal scripts.
 include(ExternalProject)
 set(WT_INSTALL_DIR "${CMAKE_BINARY_DIR}/wiredtiger-install")
-set(WT_LIB "${WT_INSTALL_DIR}/lib64/libwiredtiger.a")
+set(WT_LIB "${WT_INSTALL_DIR}/lib/libwiredtiger.a")
 
 ExternalProject_Add(wiredtiger_ext
     SOURCE_DIR "${PROJECT_SOURCE_DIR}/third_party/wiredtiger"
