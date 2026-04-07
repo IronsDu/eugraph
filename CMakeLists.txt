@@ -22,14 +22,16 @@ find_package(RocksDB CONFIG REQUIRED)
 # WiredTiger: build as independent CMake project via ExternalProject.
 # This avoids CMAKE_SOURCE_DIR conflicts from WiredTiger's internal scripts.
 include(ExternalProject)
+include(GNUInstallDirs)
 set(WT_INSTALL_DIR "${CMAKE_BINARY_DIR}/wiredtiger-install")
-set(WT_LIB "${WT_INSTALL_DIR}/lib/libwiredtiger.a")
+set(WT_LIB "${WT_INSTALL_DIR}/${CMAKE_INSTALL_LIBDIR}/libwiredtiger.a")
 
 ExternalProject_Add(wiredtiger_ext
     SOURCE_DIR "${PROJECT_SOURCE_DIR}/third_party/wiredtiger"
     INSTALL_DIR "${WT_INSTALL_DIR}"
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+        -DCMAKE_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
         -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
