@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(eugraph CXX)
+project(eugraph C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -19,7 +19,34 @@ find_package(ZLIB REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(RocksDB CONFIG REQUIRED)
 
-# Library target
+# WiredTiger: build as independent CMake project via ExternalProject.
+# This avoids CMAKE_SOURCE_DIR conflicts from WiredTiger's internal scripts.
+include(ExternalProject)
+include(GNUInstallDirs)
+set(WT_INSTALL_DIR "${CMAKE_BINARY_DIR}/wiredtiger-install")
+set(WT_LIB "${WT_INSTALL_DIR}/${CMAKE_INSTALL_LIBDIR}/libwiredtiger.a")
+
+ExternalProject_Add(wiredtiger_ext
+    SOURCE_DIR "${PROJECT_SOURCE_DIR}/third_party/wiredtiger"
+    INSTALL_DIR "${WT_INSTALL_DIR}"
+    CMAKE_ARGS
+        -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+        -DCMAKE_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}
+        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        -DCMAKE_C_FLAGS=-Wno-error=array-bounds\ -Wno-array-bounds
+        -DCMAKE_CXX_FLAGS=-Wno-error=array-bounds\ -Wno-array-bounds
+        -DENABLE_STATIC=ON
+        -DENABLE_SHARED=OFF
+    BUILD_BYPRODUCTS
+        "${WT_LIB}"
+)
+
+# Ensure include dir exists at configure time for CMake validation
+file(MAKE_DIRECTORY "${WT_INSTALL_DIR}/include")
+
+# Library target (RocksDB backend)
 add_library(eugraph_lib STATIC
     src/storage/kv/rocksdb_store.cpp
     src/storage/kv/key_codec.cpp
@@ -39,6 +66,30 @@ target_link_libraries(eugraph_lib PUBLIC
     spdlog::spdlog
     Threads::Threads
 )
+
+# WiredTiger KV engine library
+add_library(eugraph_wt_lib STATIC
+    src/storage/kv/wiredtiger_store.cpp
+    src/storage/kv/key_codec.cpp
+    src/storage/kv/value_codec.cpp
+    src/storage/graph_store_impl.cpp
+)
+
+target_include_directories(eugraph_wt_lib PUBLIC
+    "${PROJECT_SOURCE_DIR}/src"
+    "${WT_INSTALL_DIR}/include"
+)
+
+target_link_libraries(eugraph_wt_lib PUBLIC
+    "${WT_LIB}"
+    lz4::lz4
+    ZLIB::ZLIB
+    zstd::libzstd
+    spdlog::spdlog
+    Threads::Threads
+)
+
+add_dependencies(eugraph_wt_lib wiredtiger_ext)
 
 # Test target
 if(EUGRAPH_BUILD_TESTS)
@@ -62,4 +113,44 @@ if(EUGRAPH_BUILD_TESTS)
 
     include(GoogleTest)
     gtest_add_tests(TARGET eugraph_tests)
+
+    # WiredTiger integration test
+    add_executable(wiredtiger_tests
+        tests/test_wiredtiger.cpp
+    )
+
+    target_include_directories(wiredtiger_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(wiredtiger_tests PRIVATE
+        "${WT_LIB}"
+        GTest::gtest
+        GTest::gtest_main
+        Threads::Threads
+        dl
+    )
+
+    add_dependencies(wiredtiger_tests wiredtiger_ext)
+    gtest_add_tests(TARGET wiredtiger_tests)
+
+    # WiredTiger graph store test (reuse graph store tests with WT backend)
+    add_executable(wt_graph_tests
+        tests/test_graph_store_wt.cpp
+    )
+
+    target_include_directories(wt_graph_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+    )
+
+    target_link_libraries(wt_graph_tests PRIVATE
+        eugraph_wt_lib
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(wt_graph_tests wiredtiger_ext)
+    gtest_add_tests(TARGET wt_graph_tests)
 endif()

@@ -27,8 +27,9 @@
 | 1.1 | 项目骨架搭建（CMake、目录结构、基础类型） | ✅ 已完成 |
 | 1.2 | KV 存储引擎集成（IKVEngine、RocksDBStore、KeyCodec、ValueCodec） | ✅ 已完成 |
 | 1.3 | 图存储层（IGraphStore、GraphStoreImpl、Vertex/Edge CRUD） | ✅ 已完成 |
-| 1.4 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | 待开始 |
-| 1.5 | 基础事务支持（MVCC） | 待开始 |
+| 1.4 | WiredTiger 存储引擎集成（WiredTigerStore、IKVEngine 兼容验证） | ✅ 已完成 |
+| 1.5 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | 待开始 |
+| 1.6 | 基础事务支持（MVCC） | 待开始 |
 
 ### 已完成的工作
 
@@ -56,11 +57,26 @@
 - 单元测试（test_graph_store.cpp）
 - **设计决策**：`insertVertex` 允许不指定标签（后续可通过 `addVertexLabel` + `putVertexProperties` 补充）
 
+#### 1.4 WiredTiger 存储引擎集成 ✅
+- WiredTiger (mongodb-8.2.7) 作为 git submodule 引入 `third_party/wiredtiger`
+- 通过 ExternalProject_Add 独立构建（规避 WT 内部 CMAKE_SOURCE_DIR 硬编码问题）
+- GCC 15 兼容性通过 `-Wno-error=array-bounds` 解决
+- WiredTigerStore 实现 IKVEngine 全部接口：
+  - open/close、put/get/del、putBatch、prefixScan、createScanCursor
+  - 事务支持（begin/commit/rollback，snapshot isolation）
+- 使用 `key_format=u,value_format=u` 存储 raw bytes
+- 验证测试：
+  - test_wiredtiger.cpp：WiredTiger 原生 API 验证（7 项测试，6 通过）
+  - test_graph_store_wt.cpp：WiredTiger 后端 GraphStoreImpl 兼容性测试（8 项测试，全部通过）
+- **设计决策**：引入 WiredTiger 作为可选存储引擎，为后续 MVCC 实现提供引擎级快照隔离能力
+
 ### 构建方式
 ```bash
 cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=/mnt/f/code/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build
-./build/eugraph_tests
+./build/eugraph_tests        # RocksDB 后端测试
+./build/wiredtiger_tests     # WiredTiger 原生 API 测试
+./build/wt_graph_tests       # WiredTiger 后端图存储测试
 ```
 
 ---
@@ -99,6 +115,10 @@ cmake --build build
 ---
 
 ## 待开发需求列表
+
+（按优先级排列，逐个对齐设计与实现方案后开始开发）
+
+）
 
 以下需求按优先级排列，逐个对齐设计与实现方案后开始开发。
 
