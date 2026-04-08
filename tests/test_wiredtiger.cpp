@@ -74,8 +74,10 @@ TEST_F(WiredTigerBasicTest, PutAndGetRawBytes) {
     ASSERT_EQ(ret, 0);
 
     // Insert
-    WT_ITEM key_item = makeItem("hello");
-    WT_ITEM val_item = makeItem("world");
+    std::string key_str = "hello";
+    std::string val_str = "world";
+    WT_ITEM key_item = makeItem(key_str);
+    WT_ITEM val_item = makeItem(val_str);
     cursor->set_key(cursor, &key_item);
     cursor->set_value(cursor, &val_item);
     ret = cursor->insert(cursor);
