@@ -1,18 +1,28 @@
 #pragma once
 
+#include "common/types/graph_types.hpp"
+
 #include <cstdint>
+#include <string>
 
 namespace eugraph {
 
-// KV Key Prefix definitions (single byte)
-constexpr uint8_t PREFIX_LABEL_REVERSE = 0x4C;   // 'L' - Vertex -> Labels
-constexpr uint8_t PREFIX_LABEL_FORWARD = 0x49;   // 'I' - Label -> Vertices
-constexpr uint8_t PREFIX_PK_FORWARD = 0x50;      // 'P' - pk -> vertex_id
-constexpr uint8_t PREFIX_PK_REVERSE = 0x52;      // 'R' - vertex_id -> pk
-constexpr uint8_t PREFIX_PROPERTY = 0x58;        // 'X' - Vertex property storage
-constexpr uint8_t PREFIX_EDGE_INDEX = 0x45;      // 'E' - Edge adjacency index
-constexpr uint8_t PREFIX_EDGE_TYPE_INDEX = 0x47; // 'G' - Edge type index (scan by relationship type)
-constexpr uint8_t PREFIX_EDGE_PROPERTY = 0x44;   // 'D' - Edge property storage
-constexpr uint8_t PREFIX_METADATA = 0x4D;        // 'M' - Metadata
+// WiredTiger 全局表名常量
+constexpr const char* TABLE_LABEL_REVERSE = "table:label_reverse";
+constexpr const char* TABLE_PK_FORWARD    = "table:pk_forward";
+constexpr const char* TABLE_PK_REVERSE    = "table:pk_reverse";
+constexpr const char* TABLE_EDGE_INDEX    = "table:edge_index";
+constexpr const char* TABLE_METADATA      = "table:metadata";
+
+// 按 label_id 分表（dropLabel 时 drop）
+inline std::string labelFwdTable(LabelId id) { return "table:label_fwd_" + std::to_string(id); }
+inline std::string vpropTable(LabelId id)    { return "table:vprop_" + std::to_string(id); }
+
+// 按 edge_label_id 分表（dropEdgeLabel 时 drop）
+inline std::string etypeTable(EdgeLabelId id) { return "table:etype_" + std::to_string(id); }
+inline std::string epropTable(EdgeLabelId id) { return "table:eprop_" + std::to_string(id); }
+
+// WiredTiger 表配置
+constexpr const char* WT_TABLE_CONFIG = "key_format=u,value_format=u";
 
 } // namespace eugraph

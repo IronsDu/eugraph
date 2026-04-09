@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include "storage/graph_store_impl.hpp"
-#include "storage/kv/wiredtiger_store.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -18,9 +17,16 @@ protected:
     void SetUp() override {
         db_path_ = "/tmp/eugraph_wt_graph_test_" + std::to_string(::getpid()) + "_" +
                    ::testing::UnitTest::GetInstance()->current_test_info()->name();
-        auto engine = std::make_unique<WiredTigerStore>();
-        store_ = std::make_unique<GraphStoreImpl>(std::move(engine));
+        store_ = std::make_unique<GraphStoreImpl>();
         ASSERT_TRUE(store_->open(db_path_));
+
+        // Pre-create commonly used labels and edge labels
+        ASSERT_TRUE(store_->createLabel(1));
+        ASSERT_TRUE(store_->createLabel(2));
+        ASSERT_TRUE(store_->createLabel(10));
+        ASSERT_TRUE(store_->createLabel(11));
+        ASSERT_TRUE(store_->createEdgeLabel(1));
+        ASSERT_TRUE(store_->createEdgeLabel(2));
     }
 
     void TearDown() override {
@@ -48,6 +54,95 @@ protected:
         EXPECT_TRUE(store_->commitTransaction(txn));
     }
 };
+
+// ==================== DDL ====================
+
+TEST_F(WTGraphStoreTest, CreateAndDropLabel) {
+    LabelId label_id = 100;
+    ASSERT_TRUE(store_->createLabel(label_id));
+
+    // Insert a vertex with this label
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertVertex(txn, 1000, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}},
+                                     nullptr));
+    commit(txn);
+
+    // Verify vertex is visible
+    EXPECT_EQ(store_->countVerticesByLabel(INVALID_GRAPH_TXN, label_id), 1u);
+
+    // Drop the label
+    ASSERT_TRUE(store_->dropLabel(label_id));
+
+    // Verify vertex scan returns empty (table dropped)
+    EXPECT_EQ(store_->countVerticesByLabel(INVALID_GRAPH_TXN, label_id), 0u);
+
+    // Re-create label should work
+    ASSERT_TRUE(store_->createLabel(label_id));
+    EXPECT_EQ(store_->countVerticesByLabel(INVALID_GRAPH_TXN, label_id), 0u);
+}
+
+TEST_F(WTGraphStoreTest, CreateAndDropEdgeLabel) {
+    EdgeLabelId elabel_id = 100;
+    ASSERT_TRUE(store_->createEdgeLabel(elabel_id));
+
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertEdge(txn, 2000, 1, 2, elabel_id, 0, Properties{}));
+    commit(txn);
+
+    // Drop the edge label
+    ASSERT_TRUE(store_->dropEdgeLabel(elabel_id));
+
+    // Edge properties and type index should be gone
+    auto props = store_->getEdgeProperties(INVALID_GRAPH_TXN, elabel_id, 2000);
+    EXPECT_FALSE(props.has_value());
+}
+
+TEST_F(WTGraphStoreTest, InsertFailsWithoutLabelCreation) {
+    // Try to insert a vertex with a label that was never created
+    auto txn = writeTxn();
+    bool result = store_->insertVertex(txn, 9999, std::vector<std::pair<LabelId, Properties>>{{200, Properties{}}},
+                                       nullptr);
+    // Should fail because table doesn't exist
+    EXPECT_FALSE(result);
+    store_->rollbackTransaction(txn);
+}
+
+TEST_F(WTGraphStoreTest, DropLabelDoesNotAffectOtherLabels) {
+    auto txn = writeTxn();
+    auto props1 = makeProps({{0, std::string("under_label_1")}});
+    auto props2 = makeProps({{0, std::string("under_label_2")}});
+
+    ASSERT_TRUE(store_->insertVertex(txn, 500,
+                                     std::vector<std::pair<LabelId, Properties>>{{1, props1}, {2, props2}}, nullptr));
+    commit(txn);
+
+    // Drop label 1
+    ASSERT_TRUE(store_->dropLabel(1));
+
+    // Vertex properties under label 2 should still be accessible
+    auto result = store_->getVertexProperties(INVALID_GRAPH_TXN, 500, 2);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE((*result)[0].has_value());
+    EXPECT_EQ(std::get<std::string>((*result)[0].value()), "under_label_2");
+
+    // Vertex properties under label 1 should be gone
+    auto result1 = store_->getVertexProperties(INVALID_GRAPH_TXN, 500, 1);
+    EXPECT_FALSE(result1.has_value());
+}
+
+TEST_F(WTGraphStoreTest, DropLabelTombstoneFiltering) {
+    auto txn = writeTxn();
+    auto props = makeProps({{0, std::string("test")}});
+    ASSERT_TRUE(store_->insertVertex(txn, 600, std::vector<std::pair<LabelId, Properties>>{{1, props}}, nullptr));
+    commit(txn);
+
+    // Drop label 1 (adds to deletedLabels_)
+    ASSERT_TRUE(store_->dropLabel(1));
+
+    // getVertexLabels should filter out label 1 (L| entry remains but is filtered)
+    auto labels = store_->getVertexLabels(INVALID_GRAPH_TXN, 600);
+    EXPECT_EQ(labels.size(), 0u);
+}
 
 // ==================== Vertex CRUD ====================
 

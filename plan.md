@@ -28,6 +28,7 @@
 | 1.2 | KV 存储引擎集成（IKVEngine、RocksDBStore、KeyCodec、ValueCodec） | ✅ 已完成 |
 | 1.3 | 图存储层（IGraphStore、GraphStoreImpl、Vertex/Edge CRUD） | ✅ 已完成 |
 | 1.4 | WiredTiger 存储引擎集成（WiredTigerStore、IKVEngine 兼容验证） | ✅ 已完成 |
+| 1.4a | 存储层重构：去除 IKVEngine，WiredTiger 多表架构，DDL 支持 | ✅ 已完成 |
 | 1.5 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | 待开始 |
 | 1.6 | 基础事务支持（MVCC） | 待开始 |
 

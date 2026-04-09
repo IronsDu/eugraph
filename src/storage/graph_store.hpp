@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -17,8 +18,7 @@ using GraphTxnHandle = void*;
 static constexpr GraphTxnHandle INVALID_GRAPH_TXN = nullptr;
 
 /// Graph-semantic storage interface.
-/// Provides vertex/edge CRUD, label management, edge traversal, and primary key lookup.
-/// Implementations translate these operations into KV reads/writes via IKVEngine.
+/// Provides vertex/edge CRUD, label management, edge traversal, primary key lookup, and DDL.
 class IGraphStore {
 public:
     virtual ~IGraphStore() = default;
@@ -28,6 +28,30 @@ public:
     virtual bool open(const std::string& db_path) = 0;
     virtual void close() = 0;
     virtual bool isOpen() const = 0;
+
+    // ==================== DDL ====================
+
+    /// Create storage tables for a new label. Must be called before inserting vertices with this label.
+    virtual bool createLabel(LabelId label_id) = 0;
+
+    /// Drop storage tables for a label. Near O(1) via table drop.
+    /// L| entries in label_reverse remain; set deleted label IDs for read filtering.
+    virtual bool dropLabel(LabelId label_id) = 0;
+
+    /// Create storage tables for a new edge label. Must be called before inserting edges with this label.
+    virtual bool createEdgeLabel(EdgeLabelId edge_label_id) = 0;
+
+    /// Drop storage tables for an edge label. Near O(1) via table drop.
+    /// E| entries in edge_index remain; set deleted edge label IDs for read filtering.
+    virtual bool dropEdgeLabel(EdgeLabelId edge_label_id) = 0;
+
+    // ==================== Tombstone Filtering ====================
+
+    /// Set deleted label IDs for filtering during reads (getVertexLabels, scanVerticesByLabel).
+    virtual void setDeletedLabelIds(std::set<LabelId> ids) = 0;
+
+    /// Set deleted edge label IDs for filtering during reads (scanEdges).
+    virtual void setDeletedEdgeLabelIds(std::set<EdgeLabelId> ids) = 0;
 
     // ==================== Transaction ====================
 

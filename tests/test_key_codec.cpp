@@ -1,24 +1,19 @@
 #include <gtest/gtest.h>
 
-#include "common/types/constants.hpp"
 #include "storage/kv/key_codec.hpp"
 
 using namespace eugraph;
 
 class KeyCodecTest : public ::testing::Test {};
 
-// ==================== Label Reverse Index (L|) ====================
+// ==================== Label Reverse Index (table:label_reverse) ====================
 
 TEST_F(KeyCodecTest, EncodeDecodeLabelReverseKey) {
     auto key = KeyCodec::encodeLabelReverseKey(1, 100);
 
-    // Check prefix byte
-    EXPECT_EQ(static_cast<uint8_t>(key[0]), PREFIX_LABEL_REVERSE);
+    // No prefix byte: 8 + 2 = 10 bytes
+    EXPECT_EQ(key.size(), 10u);
 
-    // Check total length: 1 + 8 + 2 = 11
-    EXPECT_EQ(key.size(), 11u);
-
-    // Decode and verify
     auto [vertex_id, label_id] = KeyCodec::decodeLabelReverseKey(key);
     EXPECT_EQ(vertex_id, 1u);
     EXPECT_EQ(label_id, 100u);
@@ -33,87 +28,81 @@ TEST_F(KeyCodecTest, LabelReverseKeyLargeValues) {
 
 TEST_F(KeyCodecTest, LabelReversePrefix) {
     auto prefix = KeyCodec::encodeLabelReversePrefix(42);
-    EXPECT_EQ(prefix.size(), 9u); // 1 + 8
-    EXPECT_EQ(static_cast<uint8_t>(prefix[0]), PREFIX_LABEL_REVERSE);
+    EXPECT_EQ(prefix.size(), 8u);
 
-    // Prefix should be a prefix of the full key
     auto full_key = KeyCodec::encodeLabelReverseKey(42, 5);
-    EXPECT_EQ(full_key.substr(0, 9), prefix);
+    EXPECT_EQ(full_key.substr(0, 8), prefix);
 }
 
-// ==================== Label Forward Index (I|) ====================
+// ==================== Label Forward Index (table:label_fwd_{id}) ====================
 
 TEST_F(KeyCodecTest, EncodeDecodeLabelForwardKey) {
-    auto key = KeyCodec::encodeLabelForwardKey(3, 999);
+    auto key = KeyCodec::encodeLabelForwardKey(999);
 
-    EXPECT_EQ(static_cast<uint8_t>(key[0]), PREFIX_LABEL_FORWARD);
-    EXPECT_EQ(key.size(), 11u); // 1 + 2 + 8
+    // No prefix, no label_id: just 8 bytes
+    EXPECT_EQ(key.size(), 8u);
 
-    auto [label_id, vertex_id] = KeyCodec::decodeLabelForwardKey(key);
-    EXPECT_EQ(label_id, 3u);
+    auto vertex_id = KeyCodec::decodeLabelForwardKey(key);
     EXPECT_EQ(vertex_id, 999u);
 }
 
-TEST_F(KeyCodecTest, LabelForwardPrefix) {
-    auto prefix = KeyCodec::encodeLabelForwardPrefix(7);
-    EXPECT_EQ(prefix.size(), 3u); // 1 + 2
-
-    auto full_key = KeyCodec::encodeLabelForwardKey(7, 100);
-    EXPECT_EQ(full_key.substr(0, 3), prefix);
+TEST_F(KeyCodecTest, LabelForwardKeySortOrder) {
+    auto key1 = KeyCodec::encodeLabelForwardKey(100);
+    auto key2 = KeyCodec::encodeLabelForwardKey(200);
+    EXPECT_LT(key1, key2);
 }
 
-// ==================== Primary Key Forward Index (P|) ====================
+// ==================== Primary Key Forward Index (table:pk_forward) ====================
 
 TEST_F(KeyCodecTest, EncodePkForwardKey) {
     auto key = KeyCodec::encodePkForwardKey("alice@example.com");
-    EXPECT_EQ(static_cast<uint8_t>(key[0]), PREFIX_PK_FORWARD);
-    EXPECT_EQ(key.substr(1), "alice@example.com");
+    EXPECT_EQ(key, "alice@example.com");
 }
 
 TEST_F(KeyCodecTest, EncodePkForwardKeyEmpty) {
     auto key = KeyCodec::encodePkForwardKey("");
-    EXPECT_EQ(key.size(), 1u);
-    EXPECT_EQ(static_cast<uint8_t>(key[0]), PREFIX_PK_FORWARD);
+    EXPECT_EQ(key.size(), 0u);
 }
 
-// ==================== Primary Key Reverse Index (R|) ====================
+// ==================== Primary Key Reverse Index (table:pk_reverse) ====================
 
-TEST_F(KeyCodecTest, EncodePkReverseKey) {
+TEST_F(KeyCodecTest, EncodeDecodePkReverseKey) {
     auto key = KeyCodec::encodePkReverseKey(12345);
-    EXPECT_EQ(static_cast<uint8_t>(key[0]), PREFIX_PK_REVERSE);
-    EXPECT_EQ(key.size(), 9u); // 1 + 8
+    EXPECT_EQ(key.size(), 8u);
+
+    auto vid = KeyCodec::decodePkReverseKey(key);
+    EXPECT_EQ(vid, 12345u);
 }
 
-// ==================== Vertex Property Storage (X|) ====================
+// ==================== Vertex Property Storage (table:vprop_{id}) ====================
 
-TEST_F(KeyCodecTest, EncodeDecodePropertyKey) {
-    auto key = KeyCodec::encodePropertyKey(1, 42, 5);
+TEST_F(KeyCodecTest, EncodeDecodeVPropKey) {
+    auto key = KeyCodec::encodeVPropKey(42, 5);
 
-    EXPECT_EQ(static_cast<uint8_t>(key[0]), PREFIX_PROPERTY);
-    EXPECT_EQ(key.size(), 13u); // 1 + 2 + 8 + 2
+    // No prefix, no label_id: 8 + 2 = 10 bytes
+    EXPECT_EQ(key.size(), 10u);
 
-    auto [label_id, vertex_id, prop_id] = KeyCodec::decodePropertyKey(key);
-    EXPECT_EQ(label_id, 1u);
+    auto [vertex_id, prop_id] = KeyCodec::decodeVPropKey(key);
     EXPECT_EQ(vertex_id, 42u);
     EXPECT_EQ(prop_id, 5u);
 }
 
-TEST_F(KeyCodecTest, PropertyPrefix) {
-    auto prefix = KeyCodec::encodePropertyPrefix(2, 100);
-    EXPECT_EQ(prefix.size(), 11u); // 1 + 2 + 8
+TEST_F(KeyCodecTest, VPropPrefix) {
+    auto prefix = KeyCodec::encodeVPropPrefix(100);
+    EXPECT_EQ(prefix.size(), 8u);
 
-    auto full_key = KeyCodec::encodePropertyKey(2, 100, 3);
-    EXPECT_EQ(full_key.substr(0, 11), prefix);
+    auto full_key = KeyCodec::encodeVPropKey(100, 3);
+    EXPECT_EQ(full_key.substr(0, 8), prefix);
 }
 
-// ==================== Edge Index (E|) ====================
+// ==================== Edge Index (table:edge_index) ====================
 
 TEST_F(KeyCodecTest, EncodeDecodeEdgeIndexKey) {
     KeyCodec::EdgeIndexKey input{1, Direction::OUT, 2, 3, 100};
 
     auto key = KeyCodec::encodeEdgeIndexKey(input);
-    EXPECT_EQ(static_cast<uint8_t>(key[0]), PREFIX_EDGE_INDEX);
-    EXPECT_EQ(key.size(), 28u); // 1 + 8 + 1 + 2 + 8 + 8
+    // No prefix: 8 + 1 + 2 + 8 + 8 = 27 bytes
+    EXPECT_EQ(key.size(), 27u);
 
     auto decoded = KeyCodec::decodeEdgeIndexKey(key);
     EXPECT_EQ(decoded.vertex_id, 1u);
@@ -136,117 +125,95 @@ TEST_F(KeyCodecTest, EdgeIndexKeyDirection) {
 
 TEST_F(KeyCodecTest, EdgeIndexPrefixVertexDirection) {
     auto prefix = KeyCodec::encodeEdgeIndexPrefix(1, Direction::OUT);
-    EXPECT_EQ(prefix.size(), 10u); // 1 + 8 + 1
+    EXPECT_EQ(prefix.size(), 9u); // 8 + 1
 
     auto full_key = KeyCodec::encodeEdgeIndexKey({1, Direction::OUT, 2, 3, 0});
-    EXPECT_EQ(full_key.substr(0, 10), prefix);
+    EXPECT_EQ(full_key.substr(0, 9), prefix);
 }
 
 TEST_F(KeyCodecTest, EdgeIndexPrefixWithLabel) {
     auto prefix = KeyCodec::encodeEdgeIndexPrefix(1, Direction::OUT, 5);
-    EXPECT_EQ(prefix.size(), 12u); // 1 + 8 + 1 + 2
+    EXPECT_EQ(prefix.size(), 11u); // 8 + 1 + 2
 }
 
 TEST_F(KeyCodecTest, EdgeIndexPrefixWithNeighbor) {
     auto prefix = KeyCodec::encodeEdgeIndexPrefix(1, Direction::OUT, 5, 10);
-    EXPECT_EQ(prefix.size(), 20u); // 1 + 8 + 1 + 2 + 8
+    EXPECT_EQ(prefix.size(), 19u); // 8 + 1 + 2 + 8
 }
 
-// ==================== Edge Type Index (G|) ====================
+// ==================== Edge Type Index (table:etype_{id}) ====================
 
 TEST_F(KeyCodecTest, EncodeDecodeEdgeTypeIndexKey) {
-    KeyCodec::EdgeTypeIndexKey input{1, 10, 20, 5};
+    KeyCodec::EdgeTypeIndexKey input{10, 20, 5};
 
     auto key = KeyCodec::encodeEdgeTypeIndexKey(input);
-    EXPECT_EQ(static_cast<uint8_t>(key[0]), PREFIX_EDGE_TYPE_INDEX);
-    EXPECT_EQ(key.size(), 27u); // 1 + 2 + 8 + 8 + 8
+    // No prefix, no edge_label_id: 8 + 8 + 8 = 24 bytes
+    EXPECT_EQ(key.size(), 24u);
 
     auto decoded = KeyCodec::decodeEdgeTypeIndexKey(key);
-    EXPECT_EQ(decoded.edge_label_id, 1u);
     EXPECT_EQ(decoded.src_vertex_id, 10u);
     EXPECT_EQ(decoded.dst_vertex_id, 20u);
     EXPECT_EQ(decoded.seq, 5u);
 }
 
-TEST_F(KeyCodecTest, EdgeTypeIndexPrefixByLabel) {
-    auto prefix = KeyCodec::encodeEdgeTypeIndexPrefix(3);
-    EXPECT_EQ(prefix.size(), 3u); // 1 + 2
-
-    auto full_key = KeyCodec::encodeEdgeTypeIndexKey({3, 10, 20, 0});
-    EXPECT_EQ(full_key.substr(0, 3), prefix);
+TEST_F(KeyCodecTest, EdgeTypeIndexPrefixEmpty) {
+    auto prefix = KeyCodec::encodeEdgeTypeIndexPrefix();
+    EXPECT_EQ(prefix.size(), 0u);
 }
 
-TEST_F(KeyCodecTest, EdgeTypeIndexPrefixByLabelSrc) {
-    auto prefix = KeyCodec::encodeEdgeTypeIndexPrefix(3, 10);
-    EXPECT_EQ(prefix.size(), 11u); // 1 + 2 + 8
+TEST_F(KeyCodecTest, EdgeTypeIndexPrefixBySrc) {
+    auto prefix = KeyCodec::encodeEdgeTypeIndexPrefix(10);
+    EXPECT_EQ(prefix.size(), 8u);
 
-    auto full_key = KeyCodec::encodeEdgeTypeIndexKey({3, 10, 20, 0});
-    EXPECT_EQ(full_key.substr(0, 11), prefix);
+    auto full_key = KeyCodec::encodeEdgeTypeIndexKey({10, 20, 0});
+    EXPECT_EQ(full_key.substr(0, 8), prefix);
 
-    auto other_key = KeyCodec::encodeEdgeTypeIndexKey({3, 99, 20, 0});
-    EXPECT_NE(other_key.substr(0, 11), prefix);
+    auto other_key = KeyCodec::encodeEdgeTypeIndexKey({99, 20, 0});
+    EXPECT_NE(other_key.substr(0, 8), prefix);
 }
 
-TEST_F(KeyCodecTest, EdgeTypeIndexPrefixByLabelSrcDst) {
-    auto prefix = KeyCodec::encodeEdgeTypeIndexPrefix(3, 10, 20);
-    EXPECT_EQ(prefix.size(), 19u); // 1 + 2 + 8 + 8
+TEST_F(KeyCodecTest, EdgeTypeIndexPrefixBySrcDst) {
+    auto prefix = KeyCodec::encodeEdgeTypeIndexPrefix(10, 20);
+    EXPECT_EQ(prefix.size(), 16u);
 
-    auto full_key = KeyCodec::encodeEdgeTypeIndexKey({3, 10, 20, 0});
-    EXPECT_EQ(full_key.substr(0, 19), prefix);
+    auto full_key = KeyCodec::encodeEdgeTypeIndexKey({10, 20, 0});
+    EXPECT_EQ(full_key.substr(0, 16), prefix);
 }
 
 TEST_F(KeyCodecTest, EdgeTypeIndexKeysSortBySrc) {
-    auto key1 = KeyCodec::encodeEdgeTypeIndexKey({1, 10, 20, 0});
-    auto key2 = KeyCodec::encodeEdgeTypeIndexKey({1, 20, 10, 0});
+    auto key1 = KeyCodec::encodeEdgeTypeIndexKey({10, 20, 0});
+    auto key2 = KeyCodec::encodeEdgeTypeIndexKey({20, 10, 0});
     EXPECT_LT(key1, key2);
 }
 
 TEST_F(KeyCodecTest, EdgeTypeIndexKeysSortByDst) {
-    auto key1 = KeyCodec::encodeEdgeTypeIndexKey({1, 10, 20, 0});
-    auto key2 = KeyCodec::encodeEdgeTypeIndexKey({1, 10, 30, 0});
+    auto key1 = KeyCodec::encodeEdgeTypeIndexKey({10, 20, 0});
+    auto key2 = KeyCodec::encodeEdgeTypeIndexKey({10, 30, 0});
     EXPECT_LT(key1, key2);
 }
 
-// ==================== Edge Property Storage (D|) ====================
+// ==================== Edge Property Storage (table:eprop_{id}) ====================
 
-TEST_F(KeyCodecTest, EncodeDecodeEdgePropertyKey) {
-    auto key = KeyCodec::encodeEdgePropertyKey(1, 100, 3);
+TEST_F(KeyCodecTest, EncodeDecodeEPropKey) {
+    auto key = KeyCodec::encodeEPropKey(100, 3);
 
-    EXPECT_EQ(static_cast<uint8_t>(key[0]), PREFIX_EDGE_PROPERTY);
-    EXPECT_EQ(key.size(), 13u); // 1 + 2 + 8 + 2
+    // No prefix, no edge_label_id: 8 + 2 = 10 bytes
+    EXPECT_EQ(key.size(), 10u);
 
-    auto [label_id, edge_id, prop_id] = KeyCodec::decodeEdgePropertyKey(key);
-    EXPECT_EQ(label_id, 1u);
+    auto [edge_id, prop_id] = KeyCodec::decodeEPropKey(key);
     EXPECT_EQ(edge_id, 100u);
     EXPECT_EQ(prop_id, 3u);
 }
 
-TEST_F(KeyCodecTest, EdgePropertyPrefix) {
-    auto prefix = KeyCodec::encodeEdgePropertyPrefix(2, 500);
-    EXPECT_EQ(prefix.size(), 11u); // 1 + 2 + 8
+TEST_F(KeyCodecTest, EPropPrefix) {
+    auto prefix = KeyCodec::encodeEPropPrefix(500);
+    EXPECT_EQ(prefix.size(), 8u);
 
-    auto full_key = KeyCodec::encodeEdgePropertyKey(2, 500, 1);
-    EXPECT_EQ(full_key.substr(0, 11), prefix);
+    auto full_key = KeyCodec::encodeEPropKey(500, 1);
+    EXPECT_EQ(full_key.substr(0, 8), prefix);
 }
 
 // ==================== Key Ordering / Sorting ====================
-
-TEST_F(KeyCodecTest, DifferentPrefixesSortCorrectly) {
-    // Verify that different prefixes don't collide
-    auto l_key = KeyCodec::encodeLabelReversePrefix(1);
-    auto i_key = KeyCodec::encodeLabelForwardPrefix(1);
-    auto p_key = KeyCodec::encodePkForwardKey("test");
-    auto r_key = KeyCodec::encodePkReverseKey(1);
-    auto x_key = KeyCodec::encodePropertyPrefix(1, 1);
-    auto e_key = KeyCodec::encodeEdgeIndexPrefix(1, Direction::OUT);
-    auto d_key = KeyCodec::encodeEdgePropertyPrefix(1, 1);
-
-    // All prefixes should be different
-    EXPECT_NE(l_key[0], i_key[0]);
-    EXPECT_NE(p_key[0], r_key[0]);
-    EXPECT_NE(x_key[0], e_key[0]);
-    EXPECT_NE(x_key[0], d_key[0]);
-}
 
 TEST_F(KeyCodecTest, EdgeIndexKeysSortByVertex) {
     auto key1 = KeyCodec::encodeEdgeIndexKey({1, Direction::OUT, 1, 1, 0});
