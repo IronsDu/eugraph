@@ -1,31 +1,57 @@
 #pragma once
 
+#include "common/types/constants.hpp"
 #include "storage/graph_store.hpp"
-#include "storage/kv/kv_engine.hpp"
+#include "storage/kv/key_codec.hpp"
+#include "storage/kv/value_codec.hpp"
 
 #include <memory>
+#include <mutex>
+#include <set>
+#include <string>
+#include <unordered_map>
+
+#include <wiredtiger.h>
 
 namespace eugraph {
 
-/// IGraphStore implementation backed by any IKVEngine.
-/// Uses KeyCodec for key encoding and ValueCodec for property serialization.
+/// IGraphStore implementation using WiredTiger multi-table storage directly.
+/// Each label gets its own tables (label_fwd_{id}, vprop_{id}).
+/// Each edge label gets its own tables (etype_{id}, eprop_{id}).
+/// DDL drop operations are implemented by dropping tables (near O(1)).
 class GraphStoreImpl : public IGraphStore {
 public:
-    explicit GraphStoreImpl(std::unique_ptr<IKVEngine> engine);
+    GraphStoreImpl() = default;
     ~GraphStoreImpl() override;
 
     GraphStoreImpl(const GraphStoreImpl&) = delete;
     GraphStoreImpl& operator=(const GraphStoreImpl&) = delete;
 
-    // ==================== IGraphStore ====================
+    // ==================== Lifecycle ====================
 
     bool open(const std::string& db_path) override;
     void close() override;
     bool isOpen() const override;
 
+    // ==================== DDL ====================
+
+    bool createLabel(LabelId label_id) override;
+    bool dropLabel(LabelId label_id) override;
+    bool createEdgeLabel(EdgeLabelId edge_label_id) override;
+    bool dropEdgeLabel(EdgeLabelId edge_label_id) override;
+
+    // ==================== Tombstone Filtering ====================
+
+    void setDeletedLabelIds(std::set<LabelId> ids) override;
+    void setDeletedEdgeLabelIds(std::set<EdgeLabelId> ids) override;
+
+    // ==================== Transaction ====================
+
     GraphTxnHandle beginTransaction() override;
     bool commitTransaction(GraphTxnHandle txn) override;
     bool rollbackTransaction(GraphTxnHandle txn) override;
+
+    // ==================== Vertex ====================
 
     bool insertVertex(GraphTxnHandle txn, VertexId vid, std::span<const std::pair<LabelId, Properties>> label_props,
                       const PropertyValue* pk_value) override;
@@ -55,6 +81,8 @@ public:
                              const std::function<bool(VertexId)>& callback) override;
 
     std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphTxnHandle txn, LabelId label_id) override;
+
+    // ==================== Edge ====================
 
     bool insertEdge(GraphTxnHandle txn, EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
                     uint64_t seq, const Properties& props) override;
@@ -92,52 +120,105 @@ public:
                          std::optional<EdgeLabelId> label_filter) override;
 
 private:
-    bool doPut(GraphTxnHandle txn, std::string_view key, std::string_view value);
-    std::optional<std::string> doGet(GraphTxnHandle txn, std::string_view key);
-    bool doDel(GraphTxnHandle txn, std::string_view key);
-    void doPrefixScan(GraphTxnHandle txn, std::string_view prefix,
-                      const std::function<bool(std::string_view, std::string_view)>& callback);
+    // Per-transaction state: own session + cursor cache
+    struct TxnState {
+        WT_SESSION* session = nullptr;
+        std::unordered_map<std::string, WT_CURSOR*> cursors;
+    };
 
-    std::unique_ptr<IKVEngine> engine_;
+    // Get WT_SESSION for a transaction (or default session)
+    WT_SESSION* getSession(GraphTxnHandle txn);
+
+    // Get or create a cursor on a specific table for a session
+    WT_CURSOR* getCursor(WT_SESSION* session, const std::string& table_name);
+
+    // Table-level put/get/del helpers
+    bool tablePut(WT_SESSION* session, const std::string& table, std::string_view key, std::string_view value);
+    std::optional<std::string> tableGet(WT_SESSION* session, const std::string& table, std::string_view key);
+    bool tableDel(WT_SESSION* session, const std::string& table, std::string_view key);
+
+    // Table prefix scan
+    void tableScan(WT_SESSION* session, const std::string& table, std::string_view prefix,
+                   const std::function<bool(std::string_view, std::string_view)>& callback);
+
+    // Close all cached cursors in a TxnState
+    void closeTxnCursors(TxnState* state);
+
+    // Ensure a global table exists
+    bool ensureGlobalTable(WT_SESSION* session, const char* table_name);
+
+    WT_CONNECTION* conn_ = nullptr;
+    WT_SESSION* defaultSession_ = nullptr;
+
+    std::mutex txnMutex_;
+    std::unordered_map<GraphTxnHandle, std::unique_ptr<TxnState>> txns_;
+
+    // Tombstone filter sets
+    std::set<LabelId> deletedLabels_;
+    std::set<EdgeLabelId> deletedEdgeLabels_;
 };
 
-/// Vertex scan cursor wrapping IKVEngine::IScanCursor with KeyCodec decoding.
+// Scan cursor implementations directly using WT_CURSOR
+
 class VertexScanCursorImpl : public IGraphStore::IVertexScanCursor {
 public:
-    VertexScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor);
+    VertexScanCursorImpl(WT_SESSION* session, const std::string& table_name);
+    ~VertexScanCursorImpl() override;
+
     bool valid() const override;
     VertexId vertexId() const override;
     void next() override;
 
 private:
-    std::unique_ptr<IKVEngine::IScanCursor> cursor_;
+    void readCurrent();
+
+    WT_CURSOR* cursor_ = nullptr;
+    WT_SESSION* session_ = nullptr;
+    bool valid_ = false;
     VertexId current_vid_ = 0;
+    std::string currentKey_;
 };
 
-/// Edge scan cursor wrapping IKVEngine::IScanCursor with KeyCodec decoding.
 class EdgeScanCursorImpl : public IGraphStore::IEdgeScanCursor {
 public:
-    EdgeScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor);
+    EdgeScanCursorImpl(WT_SESSION* session, std::string_view prefix);
+    ~EdgeScanCursorImpl() override;
+
     bool valid() const override;
     const IGraphStore::EdgeIndexEntry& entry() const override;
     void next() override;
 
 private:
-    std::unique_ptr<IKVEngine::IScanCursor> cursor_;
+    void readCurrent();
+
+    WT_CURSOR* cursor_ = nullptr;
+    WT_SESSION* session_ = nullptr;
+    std::string prefix_;
+    bool valid_ = false;
     IGraphStore::EdgeIndexEntry current_;
+    std::string currentKey_;
+    std::string currentValue_;
 };
 
-/// Edge type scan cursor wrapping IKVEngine::IScanCursor with KeyCodec decoding.
 class EdgeTypeScanCursorImpl : public IGraphStore::IEdgeTypeScanCursor {
 public:
-    EdgeTypeScanCursorImpl(std::unique_ptr<IKVEngine::IScanCursor> cursor);
+    EdgeTypeScanCursorImpl(WT_SESSION* session, const std::string& table_name, std::string_view prefix);
+    ~EdgeTypeScanCursorImpl() override;
+
     bool valid() const override;
     const IGraphStore::EdgeTypeIndexEntry& entry() const override;
     void next() override;
 
 private:
-    std::unique_ptr<IKVEngine::IScanCursor> cursor_;
+    void readCurrent();
+
+    WT_CURSOR* cursor_ = nullptr;
+    WT_SESSION* session_ = nullptr;
+    std::string prefix_;
+    bool valid_ = false;
     IGraphStore::EdgeTypeIndexEntry current_;
+    std::string currentKey_;
+    std::string currentValue_;
 };
 
 } // namespace eugraph
