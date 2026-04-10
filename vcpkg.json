@@ -3,6 +3,7 @@
   "version-string": "0.1.0",
   "description": "A distributed graph database supporting GSQL query language",
   "dependencies": [
+    "antlr4",
     "rocksdb",
     "gtest",
     "spdlog",
