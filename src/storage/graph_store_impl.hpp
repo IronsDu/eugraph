@@ -1,9 +1,9 @@
 #pragma once
 
+#include "common/types/constants.hpp"
 #include "storage/graph_store.hpp"
 #include "storage/kv/key_codec.hpp"
 #include "storage/kv/value_codec.hpp"
-#include "common/types/constants.hpp"
 
 #include <memory>
 #include <mutex>
@@ -53,8 +53,7 @@ public:
 
     // ==================== Vertex ====================
 
-    bool insertVertex(GraphTxnHandle txn, VertexId vid,
-                      std::span<const std::pair<LabelId, Properties>> label_props,
+    bool insertVertex(GraphTxnHandle txn, VertexId vid, std::span<const std::pair<LabelId, Properties>> label_props,
                       const PropertyValue* pk_value) override;
 
     bool deleteVertex(GraphTxnHandle txn, VertexId vid) override;

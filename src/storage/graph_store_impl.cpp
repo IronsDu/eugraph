@@ -77,8 +77,7 @@ bool GraphStoreImpl::open(const std::string& db_path) {
     if (!ensureGlobalTable(defaultSession_, TABLE_LABEL_REVERSE) ||
         !ensureGlobalTable(defaultSession_, TABLE_PK_FORWARD) ||
         !ensureGlobalTable(defaultSession_, TABLE_PK_REVERSE) ||
-        !ensureGlobalTable(defaultSession_, TABLE_EDGE_INDEX) ||
-        !ensureGlobalTable(defaultSession_, TABLE_METADATA)) {
+        !ensureGlobalTable(defaultSession_, TABLE_EDGE_INDEX) || !ensureGlobalTable(defaultSession_, TABLE_METADATA)) {
         close();
         return false;
     }
@@ -980,8 +979,7 @@ GraphStoreImpl::createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId label_i
 
 // ==================== VertexScanCursorImpl ====================
 
-VertexScanCursorImpl::VertexScanCursorImpl(WT_SESSION* session, const std::string& table_name)
-    : session_(session) {
+VertexScanCursorImpl::VertexScanCursorImpl(WT_SESSION* session, const std::string& table_name) : session_(session) {
     int ret = session_->open_cursor(session_, table_name.c_str(), nullptr, nullptr, &cursor_);
     if (ret != 0) {
         spdlog::error("Failed to open vertex scan cursor on {}: error {}", table_name, ret);

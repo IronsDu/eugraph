@@ -100,8 +100,8 @@ TEST_F(WTGraphStoreTest, CreateAndDropEdgeLabel) {
 TEST_F(WTGraphStoreTest, InsertFailsWithoutLabelCreation) {
     // Try to insert a vertex with a label that was never created
     auto txn = writeTxn();
-    bool result = store_->insertVertex(txn, 9999, std::vector<std::pair<LabelId, Properties>>{{200, Properties{}}},
-                                       nullptr);
+    bool result =
+        store_->insertVertex(txn, 9999, std::vector<std::pair<LabelId, Properties>>{{200, Properties{}}}, nullptr);
     // Should fail because table doesn't exist
     EXPECT_FALSE(result);
     store_->rollbackTransaction(txn);
@@ -112,8 +112,8 @@ TEST_F(WTGraphStoreTest, DropLabelDoesNotAffectOtherLabels) {
     auto props1 = makeProps({{0, std::string("under_label_1")}});
     auto props2 = makeProps({{0, std::string("under_label_2")}});
 
-    ASSERT_TRUE(store_->insertVertex(txn, 500,
-                                     std::vector<std::pair<LabelId, Properties>>{{1, props1}, {2, props2}}, nullptr));
+    ASSERT_TRUE(
+        store_->insertVertex(txn, 500, std::vector<std::pair<LabelId, Properties>>{{1, props1}, {2, props2}}, nullptr));
     commit(txn);
 
     // Drop label 1
