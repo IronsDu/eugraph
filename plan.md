@@ -2,7 +2,7 @@
 
 ## 项目目标
 
-实现一个分布式图数据库，支持 GSQL 查询语言。
+实现一个分布式图数据库，支持 Cypher 查询语言。
 
 ---
 
@@ -29,8 +29,13 @@
 | 1.3 | 图存储层（IGraphStore、GraphStoreImpl、Vertex/Edge CRUD） | ✅ 已完成 |
 | 1.4 | WiredTiger 存储引擎集成（WiredTigerStore、IKVEngine 兼容验证） | ✅ 已完成 |
 | 1.4a | 存储层重构：去除 IKVEngine，WiredTiger 多表架构，DDL 支持 | ✅ 已完成 |
-| 1.5 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | 待开始 |
-| 1.6 | 基础事务支持（MVCC） | 待开始 |
+| 1.5 | Cypher Parser + AST（ANTLR4 语法、AST 节点定义、32 测试通过） | ✅ 已完成 |
+| 1.6 | 逻辑计划（AST → LogicalPlan 翻译） | 设计完成，待编码 |
+| 1.7 | 物理计划 + 协程基础设施（folly coroutines、IO 线程池） | 待开始 |
+| 1.8 | 基础读执行器（Pull-based 管道、AsyncGenerator<Row>） | 待开始 |
+| 1.9 | 写操作 + ComputeService 组装 | 待开始 |
+| 1.10 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | 待开始 |
+| 1.11 | 基础事务支持（MVCC） | 待开始 |
 
 ### 已完成的工作
 
@@ -71,22 +76,61 @@
   - test_graph_store_wt.cpp：WiredTiger 后端 GraphStoreImpl 兼容性测试（8 项测试，全部通过）
 - **设计决策**：引入 WiredTiger 作为可选存储引擎，为后续 MVCC 实现提供引擎级快照隔离能力
 
+#### 1.5 Cypher Parser + AST ✅
+
+- **设计文档**：[docs/cypher-parser-design.md](docs/cypher-parser-design.md)
+- ANTLR4 语法（从 grammars-v4/cypher 获取，BSD 许可证）预生成 C++ 代码提交到仓库
+- 自定义 AstBuilder 直接遍历 ANTLR Parse Tree（不继承 BaseVisitor，避免 std::any 与 move-only 类型冲突）
+- AST 节点定义（`ast.hpp`）：Expression（19 种）、Clause（10 种）、Pattern 类型、Statement
+- CypherQueryParser 类（`cypher_parser.hpp/cpp`）：`parse(string) → variant<Statement, ParseError>`
+- 32 个单元测试全部通过（解析正确性、AST 结构验证、错误报告、边界情况）
+- 分支：`feat/cypher-parser-m1`
+
+#### 1.6 逻辑计划 — 设计完成，待编码
+
+- **目标**：将 AST 翻译为逻辑算子树（LogicalPlan）
+- **文件结构**：
+  ```
+  src/compute_service/logical_plan/
+    logical_operator.hpp       -- 24 种算子（variant<unique_ptr<XxxOp>>）
+    logical_plan.hpp           -- LogicalPlan 容器 + toString
+    logical_plan_visitor.hpp   -- Visitor 接口（优化器插入点）
+    logical_plan_builder.hpp/cpp -- AST → LogicalPlan 翻译
+  tests/test_logical_plan.cpp
+  ```
+- **核心算子**：AllNodeScan, LabelScan, Expand, Filter, Project, Sort, Limit, Skip, Distinct, Aggregate, HashJoin, CrossJoin, Union, Apply, CreateNode, CreateEdge, DeleteNode, DeleteEdge, SetProperty, SetProperties, SetLabel, RemoveProperty, RemoveLabel, Unwind
+- **关键设计**：
+  - 算子持有 `vector<unique_ptr<LogicalOperator>> children`，火山模型
+  - 保持字符串名称（label/rel_type），name→ID 解析推迟到 M3
+  - WITH 子句作为流水线断点，重置变量作用域
+  - 聚合检测：识别 count/sum/avg/min/max/collect 等
+- **测试**：~25 个测试覆盖所有算子类型和翻译路径
+
+#### 查询引擎流水线
+
+```
+Cypher → ANTLR Parser → AST → LogicalPlanBuilder → LogicalPlan
+  → [Optimizer 占位] → PhysicalPlanner → PhysicalPlan → QueryExecutor → AsyncGenerator<Row>
+```
+
 ### 构建方式
 ```bash
 cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=/mnt/f/code/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build
-./build/eugraph_tests        # RocksDB 后端测试
-./build/wiredtiger_tests     # WiredTiger 原生 API 测试
-./build/wt_graph_tests       # WiredTiger 后端图存储测试
+./build/eugraph_tests          # RocksDB 后端测试
+./build/wt_tests               # WiredTiger 原生 API 测试
+./build/cypher_parser_tests    # Cypher 解析器测试（32 个）
+./build/logical_plan_tests     # 逻辑计划测试（待实现）
 ```
 
 ---
 
 ## 后续阶段（待规划）
 
-### 阶段三：查询能力
-- GSQL 解析器
-- 查询规划与执行
+### 阶段三：查询能力（进行中）
+- Cypher 解析器（ANTLR4）✅
+- 逻辑计划（进行中）
+- 物理计划 + 协程执行器（待开始）
 
 ### 阶段四：分布式扩展
 - RPC 通信（fbthrift）
@@ -112,6 +156,9 @@ cmake --build build
 | 2026-04-01 | 引入 IKVEngine 抽象接口 + IGraphStore 图语义层 | 解耦存储引擎与图操作，支持后续替换底层引擎 |
 | 2026-04-01 | 新增 putVertexProperties 批量属性设置接口 | 一次写入某标签下所有属性，减少多次单独调用 |
 | 2026-04-01 | insertVertex 允许不指定标签 | 支持先创建顶点再逐步补充标签和属性的场景 |
+| 2026-04-10 | 查询语言从 GSQL 切换为 Cypher（OpenCypher） | Cypher 生态更成熟，ANTLR4 语法可直接复用 |
+| 2026-04-10 | 采用 ANTLR4 预生成 C++ 代码（不依赖 Java 构建） | 避免构建复杂性，预生成代码提交到仓库 |
+| 2026-04-10 | AstBuilder 直接遍历 Parse Tree（不继承 BaseVisitor） | ANTLR BaseVisitor 返回 std::any，与 move-only AST 类型不兼容 |
 
 ---
 
