@@ -71,13 +71,13 @@ add_dependencies(eugraph_lib wiredtiger_ext)
 
 # ==================== Compute Service (Cypher Parser + Query Engine) ====================
 
-set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated/cypher/grammar")
-set(GRAMMAR_DIR "${PROJECT_SOURCE_DIR}/grammar")
+# Pre-generated ANTLR4 C++ sources (committed to repo, no Java build dependency)
+set(ANTLR_GENERATED_DIR "${PROJECT_SOURCE_DIR}/src/compute_service/parser/generated")
 set(ANTLR_GENERATED_SOURCES
-    "${GENERATED_DIR}/CypherLexer.cpp"
-    "${GENERATED_DIR}/CypherParser.cpp"
-    "${GENERATED_DIR}/CypherParserBaseVisitor.cpp"
-    "${GENERATED_DIR}/CypherParserVisitor.cpp"
+    "${ANTLR_GENERATED_DIR}/CypherLexer.cpp"
+    "${ANTLR_GENERATED_DIR}/CypherParser.cpp"
+    "${ANTLR_GENERATED_DIR}/CypherParserBaseVisitor.cpp"
+    "${ANTLR_GENERATED_DIR}/CypherParserVisitor.cpp"
 )
 
 add_library(eugraph_compute STATIC
@@ -87,7 +87,7 @@ add_library(eugraph_compute STATIC
 
 target_include_directories(eugraph_compute PUBLIC
     "${PROJECT_SOURCE_DIR}/src"
-    "${GENERATED_DIR}"
+    "${ANTLR_GENERATED_DIR}"
 )
 
 target_link_libraries(eugraph_compute PUBLIC
@@ -151,7 +151,7 @@ if(EUGRAPH_BUILD_TESTS)
 
     target_include_directories(cypher_parser_tests PRIVATE
         "${PROJECT_SOURCE_DIR}/src"
-        "${GENERATED_DIR}"
+        "${ANTLR_GENERATED_DIR}"
     )
 
     target_link_libraries(cypher_parser_tests PRIVATE
