@@ -457,15 +457,77 @@ std::vector<Row> executeSync(const string& cypher_query) {
 
 ### 7.2 查询执行器测试（test_query_executor.cpp）
 
-端到端测试，使用 WiredTiger 后端：
+端到端测试，使用 WiredTiger 后端，约 40 个测试用例：
+
+#### 7.2.1 扫描测试
 
 | 测试 | 查询 | 验证点 |
 |------|------|--------|
 | `LabelScanReturnVertex` | `MATCH (n:Person) RETURN n` | 按标签扫描，返回 5 个顶点 |
-| `AllNodeScanWithLimit` | `MATCH (n) RETURN n LIMIT 3` | 全节点扫描 + LIMIT，返回 3 行 |
-| `ExpandNeighbors` | `MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b` | 展开邻居，返回 2 条边 |
+| `LabelScanSpecificLabel` | `MATCH (n:Person) RETURN n` | 指定标签扫描 |
+| `LabelScanOtherLabelEmpty` | `MATCH (n:City) RETURN n` | 不存在的标签返回 0 行 |
+| `LabelScanWithWhereTrueAndLimit` | `MATCH (n:Person) WHERE true RETURN n LIMIT 3` | WHERE + LIMIT 组合 |
+| `LabelScanMultipleLabelsIndependently` | 多标签插入 + 独立扫描 | Person、City、AllNodeScan 分别正确 |
+| `AllNodeScanWithLimit` | `MATCH (n) RETURN n LIMIT 3` | 全节点扫描 + LIMIT |
+| `AllNodeScanAllVertices` | `MATCH (n) RETURN n` | 全节点扫描所有标签 |
+| `AllNodeScanNoData` | `MATCH (n) RETURN n` | 空图全节点扫描 |
+| `AllNodeScanLimitZero` | `MATCH (n) RETURN n LIMIT 0` | LIMIT 0 返回 0 行 |
+| `AllNodeScanLimitOne` | `MATCH (n) RETURN n LIMIT 1` | LIMIT 1 返回 1 行 |
+
+#### 7.2.2 WHERE 过滤测试
+
+| 测试 | 查询 | 验证点 |
+|------|------|--------|
+| `WhereTruePassesAllRows` | `WHERE true` | 全部通过 |
+| `WhereFalseFiltersAllRows` | `WHERE false` | 全部过滤 |
+| `WhereTrueWithLimit` | `WHERE true ... LIMIT 2` | WHERE + LIMIT 组合 |
+| `WhereAndTrueTrue` | `WHERE true AND true` | AND 逻辑 |
+| `WhereAndTrueFalse` | `WHERE true AND false` | AND 过滤 |
+| `WhereOrFalseTrue` | `WHERE false OR true` | OR 通过 |
+| `WhereOrFalseFalse` | `WHERE false OR false` | OR 过滤 |
+| `WhereNotTrue` | `WHERE NOT false` | NOT 取反 |
+| `WhereNotFalse` | `WHERE NOT true` | NOT 过滤 |
+| `WhereComplexExpression` | `WHERE (true AND true) OR false` | 复合表达式 |
+| `WhereComplexExpressionFiltersAll` | `WHERE (true AND false) OR false` | 复合过滤 |
+| `WhereOnEmptyData` | 空图 `WHERE true` | 空数据 WHERE |
+
+#### 7.2.3 展开测试
+
+| 测试 | 查询 | 验证点 |
+|------|------|--------|
+| `ExpandOutgoingEdges` | `MATCH (a)-[:KNOWS]->(b) RETURN a, b` | 出边展开 |
+| `ExpandNoEdgesReturnsEmpty` | 无边时展开 | 返回 0 行 |
+| `ExpandMultipleEdgesFromSameSource` | 同一源点 4 条出边 | 返回 4 行 |
+| `ExpandWithWhereFilter` | `... WHERE true RETURN a, b` | 展开后 WHERE 过滤 |
+| `ExpandWithWhereFalseFiltersAll` | `... WHERE false RETURN a, b` | 展开后 WHERE 全过滤 |
+| `ExpandWithLimit` | 展开 4 条边 + LIMIT 2 | 返回 2 行 |
+
+#### 7.2.4 创建测试
+
+| 测试 | 查询 | 验证点 |
+|------|------|--------|
 | `CreateNode` | `CREATE (n:Person)` | 创建顶点，验证写入 |
-| `EmptyScan` | `MATCH (n:Person) RETURN n` | 空表扫描，返回 0 行 |
+| `CreateNodeReturnsId` | `CREATE (n:Person)` | 返回值为 int64_t 类型的顶点 ID |
+| `CreateMultipleNodesSequentially` | 连续两次 CREATE | ID 递增，scan 验证 |
+| `CreateNodeVerifyInStore` | `CREATE` + cursor 扫描 | 存储层直接验证 |
+| `CreateNodeDifferentLabels` | `CREATE Person` + `CREATE City` | 不同标签独立计数 |
+| `CreateEdgeReturnsId` | `CREATE (a)-[:KNOWS]->(b)` | 返回边 ID |
+| `CreateEdgeVerifyInStore` | 创建边后 scan + expand 验证 | 顶点和边都正确创建 |
+| `CreateEdgeThenExpand` | 创建边后 MATCH 展开 | 端到端验证 |
+
+#### 7.2.5 组合与边界测试
+
+| 测试 | 查询 | 验证点 |
+|------|------|--------|
+| `EmptyScan` | 空图 `MATCH (n:Person) RETURN n` | 返回 0 行 |
+| `EmptyGraphAllOperations` | 空图多种查询 | 全部返回 0 行 |
+| `CreateThenScanThenFilter` | 3 次 CREATE + WHERE true | 创建后查询 |
+| `CreateThenScanWithLimit` | 5 次 CREATE + LIMIT 2 | 创建后 LIMIT |
+| `LimitGreaterThanRowCount` | 5 行 LIMIT 100 | 返回 5 行 |
+| `LimitExactlyRowCount` | 5 行 LIMIT 5 | 返回 5 行 |
+| `LimitOne` | 5 行 LIMIT 1 | 返回 1 行 |
+| `ReturnStar` | `RETURN *` | 全列返回 |
+| `ReturnStarWithLimit` | `RETURN * LIMIT 2` | 全列 + LIMIT |
 
 ---
 

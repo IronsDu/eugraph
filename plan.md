@@ -33,7 +33,7 @@
 | 1.6 | 逻辑计划（AST → LogicalPlan 翻译，8 种算子，~25 测试） | ✅ 已完成 |
 | 1.7 | 物理计划 + 协程基础设施（folly coroutines、IO 线程池、AsyncGraphStore） | ✅ 已完成 |
 | 1.8 | 基础读执行器（Pull-based 管道、AsyncGenerator<RowBatch>） | ✅ 已完成 |
-| 1.9 | 写操作 + QueryExecutor 组装（CREATE 支持，5 端到端测试通过） | ✅ 已完成 |
+| 1.9 | 写操作 + QueryExecutor 组装（CREATE 支持，~40 端到端测试通过） | ✅ 已完成 |
 | 1.10 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | 待开始 |
 | 1.11 | 基础事务支持（MVCC） | 待开始 |
 
@@ -117,6 +117,14 @@
 - `QueryExecutor`：编排 parse → logical plan → physical plan → execute 完流程
 - 事务管理：每次查询在独立事务中执行
 - `executeSync`：通过 `co_withExecutor(compute_pool_)` 确保协程链在 compute executor 上启动
+- 端到端测试覆盖（~40 个测试用例）：
+  - LabelScan / AllNodeScan：多标签扫描、空标签、独立扫描
+  - Expand：出边展开、无边空结果、多边展开、WHERE 过滤、LIMIT
+  - WHERE 过滤：true/false 字面量、AND/OR/NOT 逻辑运算、组合表达式
+  - CREATE：创建顶点返回 ID、连续创建、不同标签、创建边验证、创建后展开
+  - LIMIT：边界情况（0、1、等于行数、大于行数）
+  - RETURN *：全列返回、带 LIMIT
+  - 组合场景：创建后扫描过滤、空图全操作、多标签混合
 
 #### 查询引擎流水线
 
