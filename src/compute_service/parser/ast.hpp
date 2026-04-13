@@ -4,9 +4,9 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
-#include <utility>
 
 namespace eugraph {
 namespace cypher {
@@ -36,27 +36,13 @@ struct SingleExpr;
 // ==================== Expression ====================
 // 递归类型用 unique_ptr 包装
 
-using Expression = std::variant<
-    std::unique_ptr<Literal>,
-    std::unique_ptr<Variable>,
-    std::unique_ptr<Parameter>,
-    std::unique_ptr<BinaryOp>,
-    std::unique_ptr<UnaryOp>,
-    std::unique_ptr<FunctionCall>,
-    std::unique_ptr<PropertyAccess>,
-    std::unique_ptr<ListExpr>,
-    std::unique_ptr<MapExpr>,
-    std::unique_ptr<CaseExpr>,
-    std::unique_ptr<ListComprehension>,
-    std::unique_ptr<PatternComprehension>,
-    std::unique_ptr<SubscriptExpr>,
-    std::unique_ptr<SliceExpr>,
-    std::unique_ptr<ExistsExpr>,
-    std::unique_ptr<AllExpr>,
-    std::unique_ptr<AnyExpr>,
-    std::unique_ptr<NoneExpr>,
-    std::unique_ptr<SingleExpr>
->;
+using Expression = std::variant<std::unique_ptr<Literal>, std::unique_ptr<Variable>, std::unique_ptr<Parameter>,
+                                std::unique_ptr<BinaryOp>, std::unique_ptr<UnaryOp>, std::unique_ptr<FunctionCall>,
+                                std::unique_ptr<PropertyAccess>, std::unique_ptr<ListExpr>, std::unique_ptr<MapExpr>,
+                                std::unique_ptr<CaseExpr>, std::unique_ptr<ListComprehension>,
+                                std::unique_ptr<PatternComprehension>, std::unique_ptr<SubscriptExpr>,
+                                std::unique_ptr<SliceExpr>, std::unique_ptr<ExistsExpr>, std::unique_ptr<AllExpr>,
+                                std::unique_ptr<AnyExpr>, std::unique_ptr<NoneExpr>, std::unique_ptr<SingleExpr>>;
 
 // ==================== Literal ====================
 
@@ -75,17 +61,31 @@ struct Variable {
 // ==================== Parameter ====================
 
 struct Parameter {
-    std::string name;  // $param_name
+    std::string name; // $param_name
 };
 
 // ==================== BinaryOp ====================
 
 enum class BinaryOperator {
-    ADD, SUB, MUL, DIV, MOD, POW,
-    EQ, NEQ, LT, GT, LTE, GTE,
-    STARTS_WITH, ENDS_WITH, CONTAINS,
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    MOD,
+    POW,
+    EQ,
+    NEQ,
+    LT,
+    GT,
+    LTE,
+    GTE,
+    STARTS_WITH,
+    ENDS_WITH,
+    CONTAINS,
     IN,
-    AND, OR, XOR,
+    AND,
+    OR,
+    XOR,
     LIST_CONCAT,
 };
 
@@ -98,7 +98,11 @@ struct BinaryOp {
 // ==================== UnaryOp ====================
 
 enum class UnaryOperator {
-    NOT, NEGATE, PLUS, IS_NULL, IS_NOT_NULL
+    NOT,
+    NEGATE,
+    PLUS,
+    IS_NULL,
+    IS_NOT_NULL
 };
 
 struct UnaryOp {
@@ -223,9 +227,9 @@ struct NodePattern {
 };
 
 enum class RelationshipDirection {
-    LEFT_TO_RIGHT,  // -[]->
-    RIGHT_TO_LEFT,  // <-[]-
-    UNDIRECTED      // -[]-
+    LEFT_TO_RIGHT, // -[]->
+    RIGHT_TO_LEFT, // <-[]-
+    UNDIRECTED     // -[]-
 };
 
 struct RelationshipPattern {
@@ -233,7 +237,7 @@ struct RelationshipPattern {
     std::vector<std::string> rel_types;
     std::optional<PropertiesMap> properties;
     RelationshipDirection direction = RelationshipDirection::LEFT_TO_RIGHT;
-    std::optional<std::pair<Expression, Expression>> range;  // *min..max
+    std::optional<std::pair<Expression, Expression>> range; // *min..max
 };
 
 struct PatternElement {
@@ -242,14 +246,17 @@ struct PatternElement {
 };
 
 struct PatternPart {
-    std::optional<std::string> variable;  // named path: p = (a)-->(b)
+    std::optional<std::string> variable; // named path: p = (a)-->(b)
     PatternElement element;
 };
 
 // ==================== Clause ====================
 
 struct OrderBy {
-    enum class Direction { ASC, DESC };
+    enum class Direction {
+        ASC,
+        DESC
+    };
     struct SortItem {
         Expression expr;
         Direction direction = Direction::ASC;
@@ -298,7 +305,10 @@ struct SetItem {
 };
 
 struct RemoveItem {
-    enum class Kind { PROPERTY, LABEL };
+    enum class Kind {
+        PROPERTY,
+        LABEL
+    };
     Kind kind;
     Expression target;
     std::string name;
@@ -315,7 +325,7 @@ struct UnwindClause {
 
 struct ReturnClause {
     bool distinct = false;
-    bool return_all = false;  // RETURN *
+    bool return_all = false; // RETURN *
     std::vector<ReturnItem> items;
     std::optional<OrderBy> order_by;
     std::optional<Expression> skip;
@@ -324,7 +334,7 @@ struct ReturnClause {
 
 struct WithClause {
     bool distinct = false;
-    bool return_all = false;  // WITH *
+    bool return_all = false; // WITH *
     std::vector<ReturnItem> items;
     std::optional<OrderBy> order_by;
     std::optional<Expression> skip;
@@ -344,18 +354,10 @@ struct CallClause {
 };
 
 // Clause variant
-using Clause = std::variant<
-    std::unique_ptr<MatchClause>,
-    std::unique_ptr<UnwindClause>,
-    std::unique_ptr<CallClause>,
-    std::unique_ptr<CreateClause>,
-    std::unique_ptr<MergeClause>,
-    std::unique_ptr<DeleteClause>,
-    std::unique_ptr<SetClause>,
-    std::unique_ptr<RemoveClause>,
-    std::unique_ptr<ReturnClause>,
-    std::unique_ptr<WithClause>
->;
+using Clause = std::variant<std::unique_ptr<MatchClause>, std::unique_ptr<UnwindClause>, std::unique_ptr<CallClause>,
+                            std::unique_ptr<CreateClause>, std::unique_ptr<MergeClause>, std::unique_ptr<DeleteClause>,
+                            std::unique_ptr<SetClause>, std::unique_ptr<RemoveClause>, std::unique_ptr<ReturnClause>,
+                            std::unique_ptr<WithClause>>;
 
 // ==================== Query ====================
 
@@ -381,10 +383,7 @@ struct StandaloneCall {
 
 // ==================== 顶层 Statement ====================
 
-using Statement = std::variant<
-    std::unique_ptr<RegularQuery>,
-    std::unique_ptr<StandaloneCall>
->;
+using Statement = std::variant<std::unique_ptr<RegularQuery>, std::unique_ptr<StandaloneCall>>;
 
 // ==================== 辅助：创建 Expression 的便捷函数 ====================
 

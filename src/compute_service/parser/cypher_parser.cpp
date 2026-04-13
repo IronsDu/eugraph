@@ -15,16 +15,19 @@ using AP = ::CypherParser;
 
 class ParseErrorListener : public antlr4::BaseErrorListener {
 public:
-    void syntaxError(antlr4::Recognizer*, antlr4::Token*,
-                     size_t line, size_t charPositionInLine,
+    void syntaxError(antlr4::Recognizer*, antlr4::Token*, size_t line, size_t charPositionInLine,
                      const std::string& msg, std::exception_ptr) override {
         has_error_ = true;
         error_.message = msg;
         error_.line = static_cast<int>(line);
         error_.column = static_cast<int>(charPositionInLine);
     }
-    bool hasError() const { return has_error_; }
-    ParseError getError() const { return error_; }
+    bool hasError() const {
+        return has_error_;
+    }
+    ParseError getError() const {
+        return error_;
+    }
 
 private:
     bool has_error_ = false;
@@ -45,7 +48,8 @@ private:
     // === Query ===
 
     Statement buildQuery(AP::QueryContext* ctx) {
-        if (ctx->regularQuery()) return Statement(buildRegularQuery(ctx->regularQuery()));
+        if (ctx->regularQuery())
+            return Statement(buildRegularQuery(ctx->regularQuery()));
         return Statement(buildStandaloneCall(ctx->standaloneCall()));
     }
 
@@ -73,7 +77,8 @@ private:
     // === SingleQuery ===
 
     SingleQuery buildSingleQuery(AP::SingleQueryContext* ctx) {
-        if (ctx->singlePartQ()) return buildSinglePartQ(ctx->singlePartQ());
+        if (ctx->singlePartQ())
+            return buildSinglePartQ(ctx->singlePartQ());
         return buildMultiPartQ(ctx->multiPartQ());
     }
 
@@ -102,9 +107,12 @@ private:
                 reading.push_back(std::move(c));
         }
         sq.clauses.clear();
-        for (auto& c : reading) sq.clauses.push_back(std::move(c));
-        for (auto& c : updating) sq.clauses.push_back(std::move(c));
-        for (auto& c : returning) sq.clauses.push_back(std::move(c));
+        for (auto& c : reading)
+            sq.clauses.push_back(std::move(c));
+        for (auto& c : updating)
+            sq.clauses.push_back(std::move(c));
+        for (auto& c : returning)
+            sq.clauses.push_back(std::move(c));
         return sq;
     }
 
@@ -125,16 +133,22 @@ private:
     // === Clause Dispatch ===
 
     Clause buildReadingStatement(AP::ReadingStatementContext* ctx) {
-        if (ctx->matchSt()) return Clause(buildMatchClause(ctx->matchSt()));
-        if (ctx->unwindSt()) return Clause(buildUnwindClause(ctx->unwindSt()));
+        if (ctx->matchSt())
+            return Clause(buildMatchClause(ctx->matchSt()));
+        if (ctx->unwindSt())
+            return Clause(buildUnwindClause(ctx->unwindSt()));
         return Clause(buildCallClause(ctx->queryCallSt()));
     }
 
     Clause buildUpdatingStatement(AP::UpdatingStatementContext* ctx) {
-        if (ctx->createSt()) return Clause(buildCreateClause(ctx->createSt()));
-        if (ctx->mergeSt()) return Clause(buildMergeClause(ctx->mergeSt()));
-        if (ctx->deleteSt()) return Clause(buildDeleteClause(ctx->deleteSt()));
-        if (ctx->setSt()) return Clause(buildSetClauseFromSetSt(ctx->setSt()));
+        if (ctx->createSt())
+            return Clause(buildCreateClause(ctx->createSt()));
+        if (ctx->mergeSt())
+            return Clause(buildMergeClause(ctx->mergeSt()));
+        if (ctx->deleteSt())
+            return Clause(buildDeleteClause(ctx->deleteSt()));
+        if (ctx->setSt())
+            return Clause(buildSetClauseFromSetSt(ctx->setSt()));
         return Clause(buildRemoveClause(ctx->removeSt()));
     }
 
@@ -179,8 +193,10 @@ private:
         m->pattern = buildPatternPart(ctx->patternPart());
         for (auto* action : ctx->mergeAction()) {
             auto items = buildSetItems(action->setSt());
-            if (action->MATCH()) m->on_match = std::move(items);
-            else m->on_create = std::move(items);
+            if (action->MATCH())
+                m->on_match = std::move(items);
+            else
+                m->on_create = std::move(items);
         }
         return m;
     }
@@ -205,13 +221,15 @@ private:
             if (item->symbol() && item->nodeLabels()) {
                 ri.kind = RemoveItem::Kind::LABEL;
                 ri.target = makeVariable(item->symbol()->getText());
-                for (auto* n : item->nodeLabels()->name()) ri.name = n->getText();
+                for (auto* n : item->nodeLabels()->name())
+                    ri.name = n->getText();
             } else {
                 ri.kind = RemoveItem::Kind::PROPERTY;
                 ri.target = buildPropertyExpression(item->propertyExpression());
                 if (auto* prop = std::get_if<std::unique_ptr<PropertyAccess>>(&ri.target)) {
                     ri.name = (*prop)->property;
-                    ri.target = std::move((*prop)->object);
+                    auto obj = std::move((*prop)->object);
+                    ri.target = std::move(obj);
                 }
             }
             r->items.push_back(std::move(ri));
@@ -236,7 +254,8 @@ private:
 
     Expression buildExpression(AP::ExpressionContext* ctx) {
         auto xors = ctx->xorExpression();
-        if (xors.size() == 1) return buildXorExpr(xors[0]);
+        if (xors.size() == 1)
+            return buildXorExpr(xors[0]);
         Expression r = buildXorExpr(xors[0]);
         for (size_t i = 1; i < xors.size(); i++)
             r = makeBinaryOp(BinaryOperator::OR, std::move(r), buildXorExpr(xors[i]));
@@ -245,7 +264,8 @@ private:
 
     Expression buildXorExpr(AP::XorExpressionContext* ctx) {
         auto ands = ctx->andExpression();
-        if (ands.size() == 1) return buildAndExpr(ands[0]);
+        if (ands.size() == 1)
+            return buildAndExpr(ands[0]);
         Expression r = buildAndExpr(ands[0]);
         for (size_t i = 1; i < ands.size(); i++)
             r = makeBinaryOp(BinaryOperator::XOR, std::move(r), buildAndExpr(ands[i]));
@@ -254,7 +274,8 @@ private:
 
     Expression buildAndExpr(AP::AndExpressionContext* ctx) {
         auto nots = ctx->notExpression();
-        if (nots.size() == 1) return buildNotExpr(nots[0]);
+        if (nots.size() == 1)
+            return buildNotExpr(nots[0]);
         Expression r = buildNotExpr(nots[0]);
         for (size_t i = 1; i < nots.size(); i++)
             r = makeBinaryOp(BinaryOperator::AND, std::move(r), buildNotExpr(nots[i]));
@@ -263,48 +284,58 @@ private:
 
     Expression buildNotExpr(AP::NotExpressionContext* ctx) {
         auto e = buildComparisonExpr(ctx->comparisonExpression());
-        if (ctx->NOT()) return makeUnaryOp(UnaryOperator::NOT, std::move(e));
+        if (ctx->NOT())
+            return makeUnaryOp(UnaryOperator::NOT, std::move(e));
         return e;
     }
 
     Expression buildComparisonExpr(AP::ComparisonExpressionContext* ctx) {
         auto adds = ctx->addSubExpression();
         auto signs = ctx->comparisonSigns();
-        if (adds.size() == 1) return buildAddSubExpr(adds[0]);
+        if (adds.size() == 1)
+            return buildAddSubExpr(adds[0]);
         Expression r = buildAddSubExpr(adds[0]);
         for (size_t i = 0; i < signs.size(); i++)
-            r = makeBinaryOp(parseCompSign(signs[i]), std::move(r), buildAddSubExpr(adds[i+1]));
+            r = makeBinaryOp(parseCompSign(signs[i]), std::move(r), buildAddSubExpr(adds[i + 1]));
         return r;
     }
 
     BinaryOperator parseCompSign(AP::ComparisonSignsContext* ctx) {
-        if (ctx->ASSIGN()) return BinaryOperator::EQ;
-        if (ctx->LE()) return BinaryOperator::LTE;
-        if (ctx->GE()) return BinaryOperator::GTE;
-        if (ctx->GT()) return BinaryOperator::GT;
-        if (ctx->LT()) return BinaryOperator::LT;
-        if (ctx->NOT_EQUAL()) return BinaryOperator::NEQ;
+        if (ctx->ASSIGN())
+            return BinaryOperator::EQ;
+        if (ctx->LE())
+            return BinaryOperator::LTE;
+        if (ctx->GE())
+            return BinaryOperator::GTE;
+        if (ctx->GT())
+            return BinaryOperator::GT;
+        if (ctx->LT())
+            return BinaryOperator::LT;
+        if (ctx->NOT_EQUAL())
+            return BinaryOperator::NEQ;
         return BinaryOperator::EQ;
     }
 
     Expression buildAddSubExpr(AP::AddSubExpressionContext* ctx) {
         auto muls = ctx->multDivExpression();
-        if (muls.size() == 1) return buildMulDivExpr(muls[0]);
+        if (muls.size() == 1)
+            return buildMulDivExpr(muls[0]);
         Expression r = buildMulDivExpr(muls[0]);
         for (size_t i = 1; i < muls.size(); i++)
-            r = makeBinaryOp(ctx->PLUS(i-1) ? BinaryOperator::ADD : BinaryOperator::SUB,
-                             std::move(r), buildMulDivExpr(muls[i]));
+            r = makeBinaryOp(ctx->PLUS(i - 1) ? BinaryOperator::ADD : BinaryOperator::SUB, std::move(r),
+                             buildMulDivExpr(muls[i]));
         return r;
     }
 
     Expression buildMulDivExpr(AP::MultDivExpressionContext* ctx) {
         auto pows = ctx->powerExpression();
-        if (pows.size() == 1) return buildPowerExpr(pows[0]);
+        if (pows.size() == 1)
+            return buildPowerExpr(pows[0]);
         Expression r = buildPowerExpr(pows[0]);
         for (size_t i = 1; i < pows.size(); i++) {
-            BinaryOperator op = ctx->MULT(i-1) ? BinaryOperator::MUL
-                               : ctx->DIV(i-1)  ? BinaryOperator::DIV
-                                                 : BinaryOperator::MOD;
+            BinaryOperator op = ctx->MULT(i - 1)  ? BinaryOperator::MUL
+                                : ctx->DIV(i - 1) ? BinaryOperator::DIV
+                                                  : BinaryOperator::MOD;
             r = makeBinaryOp(op, std::move(r), buildPowerExpr(pows[i]));
         }
         return r;
@@ -312,7 +343,8 @@ private:
 
     Expression buildPowerExpr(AP::PowerExpressionContext* ctx) {
         auto us = ctx->unaryAddSubExpression();
-        if (us.size() == 1) return buildUnaryExpr(us[0]);
+        if (us.size() == 1)
+            return buildUnaryExpr(us[0]);
         Expression r = buildUnaryExpr(us[0]);
         for (size_t i = 1; i < us.size(); i++)
             r = makeBinaryOp(BinaryOperator::POW, std::move(r), buildUnaryExpr(us[i]));
@@ -321,7 +353,8 @@ private:
 
     Expression buildUnaryExpr(AP::UnaryAddSubExpressionContext* ctx) {
         auto e = buildAtomicExpr(ctx->atomicExpression());
-        if (ctx->SUB()) return makeUnaryOp(UnaryOperator::NEGATE, std::move(e));
+        if (ctx->SUB())
+            return makeUnaryOp(UnaryOperator::NEGATE, std::move(e));
         return e;
     }
 
@@ -332,8 +365,8 @@ private:
             auto right = buildPropOrLabelExpr(se->propertyOrLabelExpression());
             auto* p = se->stringExpPrefix();
             BinaryOperator op = p->STARTS() ? BinaryOperator::STARTS_WITH
-                              : p->ENDS()   ? BinaryOperator::ENDS_WITH
-                                             : BinaryOperator::CONTAINS;
+                                : p->ENDS() ? BinaryOperator::ENDS_WITH
+                                            : BinaryOperator::CONTAINS;
             r = makeBinaryOp(op, std::move(r), std::move(right));
         }
 
@@ -346,13 +379,16 @@ private:
                     auto slice = std::make_unique<SliceExpr>();
                     slice->list = std::move(r);
                     auto exprs = le->expression();
-                    if (exprs.size() >= 1) slice->from = buildExpression(exprs[0]);
-                    if (exprs.size() >= 2) slice->to = buildExpression(exprs.back());
+                    if (exprs.size() >= 1)
+                        slice->from = buildExpression(exprs[0]);
+                    if (exprs.size() >= 2)
+                        slice->to = buildExpression(exprs.back());
                     r = Expression(std::move(slice));
                 } else {
                     auto sub = std::make_unique<SubscriptExpr>();
                     sub->list = std::move(r);
-                    if (!le->expression().empty()) sub->index = buildExpression(le->expression(0));
+                    if (!le->expression().empty())
+                        sub->index = buildExpression(le->expression(0));
                     r = Expression(std::move(sub));
                 }
             }
@@ -378,23 +414,60 @@ private:
     }
 
     Expression buildAtomNode(AP::AtomContext* ctx) {
-        if (ctx->literal()) return buildLiteral(ctx->literal());
-        if (ctx->parameter()) return buildParameter(ctx->parameter());
-        if (ctx->caseExpression()) return buildCaseExpr(ctx->caseExpression());
-        if (ctx->countAll()) return makeFunctionCall("count", {}, false);
-        if (ctx->listComprehension()) return buildListComprehension(ctx->listComprehension());
-        if (ctx->patternComprehension()) return buildPatternComprehension(ctx->patternComprehension());
-        if (ctx->filterWith()) return buildFilterWith(ctx->filterWith());
-        if (ctx->parenthesizedExpression()) return buildExpression(ctx->parenthesizedExpression()->expression());
-        if (ctx->functionInvocation()) return buildFuncInvocation(ctx->functionInvocation());
-        if (ctx->subqueryExist()) return buildExistsExpr(ctx->subqueryExist());
-        if (ctx->symbol()) return makeVariable(ctx->symbol()->getText());
+        if (ctx->literal())
+            return buildLiteral(ctx->literal());
+        if (ctx->parameter())
+            return buildParameter(ctx->parameter());
+        if (ctx->caseExpression())
+            return buildCaseExpr(ctx->caseExpression());
+        if (ctx->countAll())
+            return makeFunctionCall("count", {}, false);
+        if (ctx->listComprehension())
+            return buildListComprehension(ctx->listComprehension());
+        if (ctx->patternComprehension())
+            return buildPatternComprehension(ctx->patternComprehension());
+        if (ctx->filterWith())
+            return buildFilterWith(ctx->filterWith());
+        if (ctx->parenthesizedExpression())
+            return buildExpression(ctx->parenthesizedExpression()->expression());
+        if (ctx->functionInvocation())
+            return buildFuncInvocation(ctx->functionInvocation());
+        if (ctx->subqueryExist())
+            return buildExistsExpr(ctx->subqueryExist());
+
+        // ANTLR's adaptive prediction may route numeric literals (emitted as ID tokens)
+        // to the symbol alternative instead of the literal alternative.
+        if (ctx->symbol()) {
+            auto text = ctx->symbol()->getText();
+            return parseNumericOrVariable(text);
+        }
         return makeVariable(ctx->getText());
     }
 
+    // When the lexer emits a pure number as an ID token, convert it to a Literal.
+    Expression parseNumericOrVariable(const std::string& text) {
+        if (text.empty())
+            return makeVariable(text);
+        // Check if text looks like a number (starts with digit, '.', or '-')
+        char c = text[0];
+        if ((c >= '0' && c <= '9') || c == '.' || (c == '-' && text.size() > 1 && text[1] >= '0' && text[1] <= '9')) {
+            try {
+                if (text.find('.') != std::string::npos || text.find('e') != std::string::npos ||
+                    text.find('E') != std::string::npos)
+                    return makeLiteral(std::stod(text));
+                return makeLiteral(static_cast<int64_t>(std::stoll(text)));
+            } catch (...) {
+                // Not actually a number, fall through
+            }
+        }
+        return makeVariable(text);
+    }
+
     Expression buildLiteral(AP::LiteralContext* ctx) {
-        if (ctx->boolLit()) return makeLiteral(ctx->boolLit()->getText() == "TRUE");
-        if (ctx->NULL_W()) return makeLiteral(NullValue{});
+        if (ctx->boolLit())
+            return makeLiteral(ctx->boolLit()->getText() == "TRUE");
+        if (ctx->NULL_W())
+            return makeLiteral(NullValue{});
         if (ctx->stringLit()) {
             auto t = ctx->stringLit()->getText();
             return makeLiteral(t.substr(1, t.size() - 2));
@@ -405,7 +478,8 @@ private:
         }
         if (ctx->numLit()) {
             auto t = ctx->numLit()->getText();
-            if (t.find('.') != std::string::npos || t.find('e') != std::string::npos || t.find('E') != std::string::npos)
+            if (t.find('.') != std::string::npos || t.find('e') != std::string::npos ||
+                t.find('E') != std::string::npos)
                 return makeLiteral(std::stod(t));
             return makeLiteral(static_cast<int64_t>(std::stoll(t)));
         }
@@ -426,8 +500,10 @@ private:
 
     Expression buildParameter(AP::ParameterContext* ctx) {
         auto p = std::make_unique<Parameter>();
-        if (ctx->symbol()) p->name = ctx->symbol()->getText();
-        else if (ctx->numLit()) p->name = ctx->numLit()->getText();
+        if (ctx->symbol())
+            p->name = ctx->symbol()->getText();
+        else if (ctx->numLit())
+            p->name = ctx->numLit()->getText();
         return Expression(std::move(p));
     }
 
@@ -436,10 +512,12 @@ private:
         auto whenCount = ctx->WHEN().size();
         auto totalExprs = ctx->expression().size();
         auto expected = whenCount * 2 + (ctx->ELSE() ? 1 : 0);
-        if (totalExprs > expected) c->subject = buildExpression(ctx->expression(0));
+        if (totalExprs > expected)
+            c->subject = buildExpression(ctx->expression(0));
         for (size_t i = 0; i < whenCount; i++) {
             size_t base = (c->subject ? 1 : 0) + i * 2;
-            c->when_thens.push_back({buildExpression(ctx->expression(base)), buildExpression(ctx->expression(base+1))});
+            c->when_thens.push_back(
+                {buildExpression(ctx->expression(base)), buildExpression(ctx->expression(base + 1))});
         }
         if (ctx->ELSE()) {
             size_t idx = (c->subject ? 1 : 0) + whenCount * 2;
@@ -453,20 +531,26 @@ private:
         auto fe = ctx->filterExpression();
         lc->variable = fe->symbol()->getText();
         lc->list_expr = buildExpression(fe->expression());
-        if (fe->where()) lc->where_pred = buildExpression(fe->where()->expression());
-        if (ctx->expression()) lc->projection = buildExpression(ctx->expression());
+        if (fe->where())
+            lc->where_pred = buildExpression(fe->where()->expression());
+        if (ctx->expression())
+            lc->projection = buildExpression(ctx->expression());
         return Expression(std::move(lc));
     }
 
     Expression buildPatternComprehension(AP::PatternComprehensionContext* ctx) {
         auto pc = std::make_unique<PatternComprehension>();
-        if (ctx->lhs()) pc->variable = ctx->lhs()->symbol()->getText();
+        if (ctx->lhs())
+            pc->variable = ctx->lhs()->symbol()->getText();
         if (auto* chain = ctx->relationshipsChainPattern()) {
-            PatternPart pp; pp.element = buildPatternElemFromChain(chain);
+            PatternPart pp;
+            pp.element = buildPatternElemFromChain(chain);
             pc->patterns.push_back(std::move(pp));
         }
-        if (ctx->where()) pc->where_pred = buildExpression(ctx->where()->expression());
-        if (ctx->expression()) pc->projection = buildExpression(ctx->expression());
+        if (ctx->where())
+            pc->where_pred = buildExpression(ctx->where()->expression());
+        if (ctx->expression())
+            pc->projection = buildExpression(ctx->expression());
         return Expression(std::move(pc));
     }
 
@@ -475,19 +559,43 @@ private:
         std::string var = fe->symbol()->getText();
         Expression listExpr = buildExpression(fe->expression());
         std::optional<Expression> wp;
-        if (fe->where()) wp = buildExpression(fe->where()->expression());
+        if (fe->where())
+            wp = buildExpression(fe->where()->expression());
 
-        if (ctx->ALL())  { auto e=std::make_unique<AllExpr>();  e->variable=var;e->list_expr=std::move(listExpr);e->where_pred=std::move(wp);return Expression(std::move(e)); }
-        if (ctx->ANY())  { auto e=std::make_unique<AnyExpr>();  e->variable=var;e->list_expr=std::move(listExpr);e->where_pred=std::move(wp);return Expression(std::move(e)); }
-        if (ctx->NONE()) { auto e=std::make_unique<NoneExpr>(); e->variable=var;e->list_expr=std::move(listExpr);e->where_pred=std::move(wp);return Expression(std::move(e)); }
-        auto e=std::make_unique<SingleExpr>(); e->variable=var;e->list_expr=std::move(listExpr);e->where_pred=std::move(wp);return Expression(std::move(e));
+        if (ctx->ALL()) {
+            auto e = std::make_unique<AllExpr>();
+            e->variable = var;
+            e->list_expr = std::move(listExpr);
+            e->where_pred = std::move(wp);
+            return Expression(std::move(e));
+        }
+        if (ctx->ANY()) {
+            auto e = std::make_unique<AnyExpr>();
+            e->variable = var;
+            e->list_expr = std::move(listExpr);
+            e->where_pred = std::move(wp);
+            return Expression(std::move(e));
+        }
+        if (ctx->NONE()) {
+            auto e = std::make_unique<NoneExpr>();
+            e->variable = var;
+            e->list_expr = std::move(listExpr);
+            e->where_pred = std::move(wp);
+            return Expression(std::move(e));
+        }
+        auto e = std::make_unique<SingleExpr>();
+        e->variable = var;
+        e->list_expr = std::move(listExpr);
+        e->where_pred = std::move(wp);
+        return Expression(std::move(e));
     }
 
     Expression buildFuncInvocation(AP::FunctionInvocationContext* ctx) {
         auto fn = std::make_unique<FunctionCall>();
         fn->name = buildInvocationName(ctx->invocationName());
         fn->distinct = (ctx->DISTINCT() != nullptr);
-        if (ctx->expressionChain()) fn->args = buildExprChain(ctx->expressionChain());
+        if (ctx->expressionChain())
+            fn->args = buildExprChain(ctx->expressionChain());
         return Expression(std::move(fn));
     }
 
@@ -505,19 +613,22 @@ private:
 
     std::vector<PatternPart> buildPattern(AP::PatternContext* ctx) {
         std::vector<PatternPart> parts;
-        for (auto* pp : ctx->patternPart()) parts.push_back(buildPatternPart(pp));
+        for (auto* pp : ctx->patternPart())
+            parts.push_back(buildPatternPart(pp));
         return parts;
     }
 
     PatternPart buildPatternPart(AP::PatternPartContext* ctx) {
         PatternPart pp;
-        if (ctx->symbol() && ctx->ASSIGN()) pp.variable = ctx->symbol()->getText();
+        if (ctx->symbol() && ctx->ASSIGN())
+            pp.variable = ctx->symbol()->getText();
         pp.element = buildPatternElem(ctx->patternElem());
         return pp;
     }
 
     PatternElement buildPatternElem(AP::PatternElemContext* ctx) {
-        if (ctx->LPAREN()) return buildPatternElem(ctx->patternElem());
+        if (ctx->LPAREN())
+            return buildPatternElem(ctx->patternElem());
         PatternElement pe;
         pe.node = buildNodePattern(ctx->nodePattern());
         for (auto* chain : ctx->patternElemChain())
@@ -535,27 +646,39 @@ private:
 
     NodePattern buildNodePattern(AP::NodePatternContext* ctx) {
         NodePattern np;
-        if (ctx->symbol()) np.variable = ctx->symbol()->getText();
-        if (ctx->nodeLabels()) for (auto* n : ctx->nodeLabels()->name()) np.labels.push_back(n->getText());
-        if (ctx->properties()) np.properties = buildProperties(ctx->properties());
+        if (ctx->symbol())
+            np.variable = ctx->symbol()->getText();
+        if (ctx->nodeLabels())
+            for (auto* n : ctx->nodeLabels()->name())
+                np.labels.push_back(n->getText());
+        if (ctx->properties())
+            np.properties = buildProperties(ctx->properties());
         return np;
     }
 
     RelationshipPattern buildRelPattern(AP::RelationshipPatternContext* ctx) {
         RelationshipPattern rp;
-        if (ctx->LT()) rp.direction = RelationshipDirection::RIGHT_TO_LEFT;
-        else if (ctx->GT()) rp.direction = RelationshipDirection::LEFT_TO_RIGHT;
-        else rp.direction = RelationshipDirection::UNDIRECTED;
+        if (ctx->LT())
+            rp.direction = RelationshipDirection::RIGHT_TO_LEFT;
+        else if (ctx->GT())
+            rp.direction = RelationshipDirection::LEFT_TO_RIGHT;
+        else
+            rp.direction = RelationshipDirection::UNDIRECTED;
         if (auto* d = ctx->relationDetail()) {
-            if (d->symbol()) rp.variable = d->symbol()->getText();
-            if (d->relationshipTypes()) for (auto* n : d->relationshipTypes()->name()) rp.rel_types.push_back(n->getText());
-            if (d->properties()) rp.properties = buildProperties(d->properties());
+            if (d->symbol())
+                rp.variable = d->symbol()->getText();
+            if (d->relationshipTypes())
+                for (auto* n : d->relationshipTypes()->name())
+                    rp.rel_types.push_back(n->getText());
+            if (d->properties())
+                rp.properties = buildProperties(d->properties());
         }
         return rp;
     }
 
     std::optional<PropertiesMap> buildProperties(AP::PropertiesContext* ctx) {
-        if (!ctx->mapLit()) return std::nullopt;
+        if (!ctx->mapLit())
+            return std::nullopt;
         PropertiesMap pm;
         for (auto* pair : ctx->mapLit()->mapPair())
             pm.entries.push_back({pair->name()->getText(), buildExpression(pair->expression())});
@@ -574,13 +697,17 @@ private:
             for (auto* item : items->projectionItem()) {
                 ReturnItem ri;
                 ri.expr = buildExpression(item->expression());
-                if (item->AS() && item->symbol()) ri.alias = item->symbol()->getText();
+                if (item->AS() && item->symbol())
+                    ri.alias = item->symbol()->getText();
                 ret->items.push_back(std::move(ri));
             }
         }
-        if (ctx->orderSt()) ret->order_by = buildOrderBy(ctx->orderSt());
-        if (ctx->skipSt()) ret->skip = buildExpression(ctx->skipSt()->expression());
-        if (ctx->limitSt()) ret->limit = buildExpression(ctx->limitSt()->expression());
+        if (ctx->orderSt())
+            ret->order_by = buildOrderBy(ctx->orderSt());
+        if (ctx->skipSt())
+            ret->skip = buildExpression(ctx->skipSt()->expression());
+        if (ctx->limitSt())
+            ret->limit = buildExpression(ctx->limitSt()->expression());
         return ret;
     }
 
@@ -594,13 +721,17 @@ private:
             for (auto* item : items->projectionItem()) {
                 ReturnItem ri;
                 ri.expr = buildExpression(item->expression());
-                if (item->AS() && item->symbol()) ri.alias = item->symbol()->getText();
+                if (item->AS() && item->symbol())
+                    ri.alias = item->symbol()->getText();
                 w->items.push_back(std::move(ri));
             }
         }
-        if (ctx->orderSt()) w->order_by = buildOrderBy(ctx->orderSt());
-        if (ctx->skipSt()) w->skip = buildExpression(ctx->skipSt()->expression());
-        if (ctx->limitSt()) w->limit = buildExpression(ctx->limitSt()->expression());
+        if (ctx->orderSt())
+            w->order_by = buildOrderBy(ctx->orderSt());
+        if (ctx->skipSt())
+            w->skip = buildExpression(ctx->skipSt()->expression());
+        if (ctx->limitSt())
+            w->limit = buildExpression(ctx->limitSt()->expression());
         return w;
     }
 
@@ -609,7 +740,8 @@ private:
         for (auto* item : ctx->orderItem()) {
             OrderBy::SortItem si;
             si.expr = buildExpression(item->expression());
-            if (item->DESC() || item->DESCENDING()) si.direction = OrderBy::Direction::DESC;
+            if (item->DESC() || item->DESCENDING())
+                si.direction = OrderBy::Direction::DESC;
             ob.items.push_back(std::move(si));
         }
         return ob;
@@ -628,7 +760,8 @@ private:
             } else if (si->symbol() && si->nodeLabels()) {
                 item.kind = SetItemKind::SET_LABELS;
                 item.target = makeVariable(si->symbol()->getText());
-                for (auto* n : si->nodeLabels()->name()) item.label = n->getText();
+                for (auto* n : si->nodeLabels()->name())
+                    item.label = n->getText();
             } else if (si->symbol() && (si->ASSIGN() || si->ADD_ASSIGN())) {
                 item.kind = SetItemKind::SET_PROPERTIES;
                 item.target = makeVariable(si->symbol()->getText());
@@ -643,13 +776,17 @@ private:
 
     std::vector<Expression> buildExprChain(AP::ExpressionChainContext* ctx) {
         std::vector<Expression> r;
-        if (ctx) for (auto* e : ctx->expression()) r.push_back(buildExpression(e));
+        if (ctx)
+            for (auto* e : ctx->expression())
+                r.push_back(buildExpression(e));
         return r;
     }
 
     std::vector<Expression> buildExprChainFromParen(AP::ParenExpressionChainContext* ctx) {
         std::vector<Expression> r;
-        if (ctx && ctx->expressionChain()) for (auto* e : ctx->expressionChain()->expression()) r.push_back(buildExpression(e));
+        if (ctx && ctx->expressionChain())
+            for (auto* e : ctx->expressionChain()->expression())
+                r.push_back(buildExpression(e));
         return r;
     }
 
@@ -658,8 +795,12 @@ private:
         for (auto* yi : ctx->yieldItem()) {
             ReturnItem ri;
             auto syms = yi->symbol();
-            if (syms.size() == 2) { ri.expr = makeVariable(syms[0]->getText()); ri.alias = syms[1]->getText(); }
-            else if (syms.size() == 1) { ri.expr = makeVariable(syms[0]->getText()); }
+            if (syms.size() == 2) {
+                ri.expr = makeVariable(syms[0]->getText());
+                ri.alias = syms[1]->getText();
+            } else if (syms.size() == 1) {
+                ri.expr = makeVariable(syms[0]->getText());
+            }
             items.push_back(std::move(ri));
         }
         return items;
@@ -668,7 +809,11 @@ private:
     std::string buildInvocationName(AP::InvocationNameContext* ctx) {
         std::string r;
         auto syms = ctx->symbol();
-        for (size_t i = 0; i < syms.size(); i++) { if (i) r += "."; r += syms[i]->getText(); }
+        for (size_t i = 0; i < syms.size(); i++) {
+            if (i)
+                r += ".";
+            r += syms[i]->getText();
+        }
         return r;
     }
 };
@@ -691,7 +836,8 @@ std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& 
     antlr4::CommonTokenStream tokens(&lexer);
     tokens.fill();
 
-    if (error_listener.hasError()) return error_listener.getError();
+    if (error_listener.hasError())
+        return error_listener.getError();
 
     ::CypherParser antlrParser(&tokens);
     antlrParser.removeErrorListeners();
@@ -699,7 +845,8 @@ std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& 
 
     auto* tree = antlrParser.script();
 
-    if (error_listener.hasError()) return error_listener.getError();
+    if (error_listener.hasError())
+        return error_listener.getError();
 
     AstBuilder builder;
     return builder.build(tree);
