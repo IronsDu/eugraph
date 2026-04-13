@@ -34,7 +34,7 @@ struct EdgeValue {
 // the recursion.
 struct ListValue {
     std::vector<struct ValueStorage> elements;
-    bool operator==(const ListValue& o) const { return true; /* simplified */ }
+    bool operator==(const ListValue& /*o*/) const { return true; /* simplified */ }
 };
 
 // Forward-declare the storage variant.

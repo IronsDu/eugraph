@@ -172,7 +172,7 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
         nodeVar = dstVar;
     }
 
-    return std::move(current);
+    return current;
 }
 
 // ==================== RETURN ====================
@@ -217,7 +217,7 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildReturn(cyphe
         current = std::move(limitOp);
     }
 
-    return std::move(current);
+    return current;
 }
 
 // ==================== CREATE ====================
@@ -299,7 +299,7 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildFilter(cyphe
     auto filter = std::make_unique<FilterOp>();
     filter->predicate = std::move(predicate);
     filter->children.push_back(std::move(input));
-    return std::move(filter);
+    return filter;
 }
 
 // ==================== toString ====================
