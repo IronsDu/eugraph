@@ -3,9 +3,9 @@
 ## 项目概述
 
 - **名称**: EuGraph
-- **定位**: 分布式图数据库，支持 GSQL 查询语言
+- **定位**: 分布式图数据库，支持 Cypher 查询语言
 - **语言**: C++20
-- **存储引擎**: RocksDB (KV 存储)
+- **存储引擎**: WiredTiger
 - **协程库**: folly
 - **RPC 框架**: fbthrift
 
@@ -13,7 +13,7 @@
 
 | 特性   | 说明                     |
 | ---- | ---------------------- |
-| 查询语言 | GSQL (类 SQL 的图查询语言)    |
+| 查询语言 | Cypher (OpenCypher)         |
 | 事务模型 | MVCC + 2PC (分布式)       |
 | 隔离级别 | 可重复读 (REPEATABLE_READ) |
 | 部署模式 | 单机 → 分布式               |
@@ -31,4 +31,6 @@
 | [目录结构](directory-structure.md) | 源码目录规划 |
 | [多图支持](multi-graph.md) | 列簇隔离、图创建/删除、启动恢复、列簇句柄管理 |
 | [DDL 设计](ddl.md) | 删除标签类型、删除关系类型、列的增删改 |
+| [Cypher 解析器](cypher-parser-design.md) | ANTLR4 语法、AST 节点定义、解析器 API |
+| [查询引擎](query-engine-design.md) | 逻辑计划、物理计划、协程执行模型、IO/计算分离 |
 | [开发阶段](development-phases.md) | 里程碑规划、任务拆解、测试用例、依赖库 |

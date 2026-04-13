@@ -30,10 +30,10 @@
 | 1.4 | WiredTiger 存储引擎集成（WiredTigerStore、IKVEngine 兼容验证） | ✅ 已完成 |
 | 1.4a | 存储层重构：去除 IKVEngine，WiredTiger 多表架构，DDL 支持 | ✅ 已完成 |
 | 1.5 | Cypher Parser + AST（ANTLR4 语法、AST 节点定义、32 测试通过） | ✅ 已完成 |
-| 1.6 | 逻辑计划（AST → LogicalPlan 翻译） | 设计完成，待编码 |
-| 1.7 | 物理计划 + 协程基础设施（folly coroutines、IO 线程池） | 待开始 |
-| 1.8 | 基础读执行器（Pull-based 管道、AsyncGenerator<Row>） | 待开始 |
-| 1.9 | 写操作 + ComputeService 组装 | 待开始 |
+| 1.6 | 逻辑计划（AST → LogicalPlan 翻译，8 种算子，~25 测试） | ✅ 已完成 |
+| 1.7 | 物理计划 + 协程基础设施（folly coroutines、IO 线程池、AsyncGraphStore） | ✅ 已完成 |
+| 1.8 | 基础读执行器（Pull-based 管道、AsyncGenerator<RowBatch>） | ✅ 已完成 |
+| 1.9 | 写操作 + QueryExecutor 组装（CREATE 支持，5 端到端测试通过） | ✅ 已完成 |
 | 1.10 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | 待开始 |
 | 1.11 | 基础事务支持（MVCC） | 待开始 |
 
@@ -86,25 +86,37 @@
 - 32 个单元测试全部通过（解析正确性、AST 结构验证、错误报告、边界情况）
 - 分支：`feat/cypher-parser-m1`
 
-#### 1.6 逻辑计划 — 设计完成，待编码
+#### 1.6 逻辑计划 ✅
 
-- **目标**：将 AST 翻译为逻辑算子树（LogicalPlan）
-- **文件结构**：
-  ```
-  src/compute_service/logical_plan/
-    logical_operator.hpp       -- 24 种算子（variant<unique_ptr<XxxOp>>）
-    logical_plan.hpp           -- LogicalPlan 容器 + toString
-    logical_plan_visitor.hpp   -- Visitor 接口（优化器插入点）
-    logical_plan_builder.hpp/cpp -- AST → LogicalPlan 翻译
-  tests/test_logical_plan.cpp
-  ```
-- **核心算子**：AllNodeScan, LabelScan, Expand, Filter, Project, Sort, Limit, Skip, Distinct, Aggregate, HashJoin, CrossJoin, Union, Apply, CreateNode, CreateEdge, DeleteNode, DeleteEdge, SetProperty, SetProperties, SetLabel, RemoveProperty, RemoveLabel, Unwind
-- **关键设计**：
-  - 算子持有 `vector<unique_ptr<LogicalOperator>> children`，火山模型
-  - 保持字符串名称（label/rel_type），name→ID 解析推迟到 M3
-  - WITH 子句作为流水线断点，重置变量作用域
-  - 聚合检测：识别 count/sum/avg/min/max/collect 等
-- **测试**：~25 个测试覆盖所有算子类型和翻译路径
+- **设计文档**：[docs/query-engine-design.md](docs/query-engine-design.md)
+- 8 种逻辑算子：AllNodeScan, LabelScan, Expand, Filter, Project, Limit, CreateNode, CreateEdge
+- 使用 `variant<unique_ptr<XxxOp>>` 模式（与 AST 一致）
+- 保持字符串名称，name→ID 解析推迟到物理计划阶段
+- 符号表跟踪变量→列索引映射
+- ~25 个测试覆盖所有算子类型和翻译路径
+
+#### 1.7 物理计划 + 协程基础设施 ✅
+
+- **设计文档**：[docs/query-engine-design.md](docs/query-engine-design.md)
+- 物理算子与逻辑算子一一对应，增加 `AsyncGraphStore&` 引用和解析后的 ID
+- `IoScheduler`：封装 folly IOThreadPoolExecutor，提供 `dispatch` / `dispatchVoid` 方法
+- `AsyncGraphStore`：IGraphStore 的异步包装，所有存储调用通过 IO 线程池异步执行
+- `PlanContext`：携带 label/edge_label name→ID 映射、预分配的 VertexId/EdgeId
+- Pull-based 火山模型，`AsyncGenerator<RowBatch>`（批量 1024 行）
+
+#### 1.8 基础读执行器 ✅
+
+- 已实现算子：AllNodeScan, LabelScan, Expand, Filter, Project, Limit
+- `ExpressionEvaluator`：运行时表达式求值（Literal, Variable, BinaryOp, UnaryOp, PropertyAccess, FunctionCall）
+- 协程管道：Compute 线程执行逻辑运算，IO 请求通过 `co_await` 异步调度
+- 5 个端到端测试通过（WiredTiger 后端）
+
+#### 1.9 写操作 + QueryExecutor 组装 ✅
+
+- 已实现算子：CreateNode, CreateEdge
+- `QueryExecutor`：编排 parse → logical plan → physical plan → execute 完流程
+- 事务管理：每次查询在独立事务中执行
+- `executeSync`：通过 `co_withExecutor(compute_pool_)` 确保协程链在 compute executor 上启动
 
 #### 查询引擎流水线
 
