@@ -18,6 +18,7 @@ find_package(lz4 CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(antlr4-runtime CONFIG REQUIRED)
+find_package(folly CONFIG REQUIRED)
 
 # WiredTiger: build as independent CMake project via ExternalProject.
 # This avoids CMAKE_SOURCE_DIR conflicts from WiredTiger's internal scripts.
@@ -95,6 +96,30 @@ target_link_libraries(eugraph_compute PUBLIC
     spdlog::spdlog
 )
 
+# ==================== Query Engine (Logical Plan + Physical Plan + Executor) ====================
+
+add_library(eugraph_query_engine STATIC
+    src/compute_service/logical_plan/logical_plan_builder.cpp
+    src/compute_service/executor/async_graph_store.cpp
+    src/compute_service/executor/expression_evaluator.cpp
+    src/compute_service/physical_plan/physical_operator.cpp
+    src/compute_service/physical_plan/physical_planner.cpp
+    src/compute_service/executor/query_executor.cpp
+)
+
+target_include_directories(eugraph_query_engine PUBLIC
+    "${PROJECT_SOURCE_DIR}/src"
+    "${ANTLR_GENERATED_DIR}"
+)
+
+target_link_libraries(eugraph_query_engine PUBLIC
+    eugraph_compute
+    eugraph_lib
+    Folly::folly
+    Folly::folly_deps
+    spdlog::spdlog
+)
+
 # Test targets
 if(EUGRAPH_BUILD_TESTS)
     enable_testing()
@@ -161,4 +186,42 @@ if(EUGRAPH_BUILD_TESTS)
     )
 
     gtest_add_tests(TARGET cypher_parser_tests)
+
+    # Logical plan tests
+    add_executable(logical_plan_tests
+        tests/test_logical_plan.cpp
+    )
+
+    target_include_directories(logical_plan_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${ANTLR_GENERATED_DIR}"
+    )
+
+    target_link_libraries(logical_plan_tests PRIVATE
+        eugraph_query_engine
+        GTest::gtest
+        GTest::gtest_main
+    )
+
+    gtest_add_tests(TARGET logical_plan_tests)
+
+    # Query executor end-to-end tests
+    add_executable(query_executor_tests
+        tests/test_query_executor.cpp
+    )
+
+    target_include_directories(query_executor_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(query_executor_tests PRIVATE
+        eugraph_query_engine
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(query_executor_tests wiredtiger_ext)
+    gtest_add_tests(TARGET query_executor_tests)
 endif()

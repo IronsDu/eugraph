@@ -1,7 +1,7 @@
 {
   "name": "eugraph",
   "version-string": "0.1.0",
-  "description": "A distributed graph database supporting GSQL query language",
+  "description": "A distributed graph database supporting Cypher query language",
   "dependencies": [
     "antlr4",
     "rocksdb",
@@ -9,7 +9,8 @@
     "spdlog",
     "lz4",
     "zlib",
-    "zstd"
+    "zstd",
+    "folly"
   ],
   "builtin-baseline": "2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec"
 }
