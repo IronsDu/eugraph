@@ -178,7 +178,7 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
 // ==================== RETURN ====================
 
 std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildReturn(cypher::ReturnClause& ret,
-                                                                            LogicalOperator input) {
+                                                                           LogicalOperator input) {
     auto project = std::make_unique<ProjectOp>();
 
     if (ret.return_all) {
@@ -295,7 +295,7 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildCreate(cyphe
 // ==================== Filter ====================
 
 std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildFilter(cypher::Expression predicate,
-                                                                            LogicalOperator input) {
+                                                                           LogicalOperator input) {
     auto filter = std::make_unique<FilterOp>();
     filter->predicate = std::move(predicate);
     filter->children.push_back(std::move(input));
@@ -316,37 +316,46 @@ struct OperatorPrinter {
 
     void operator()(const std::unique_ptr<AllNodeScanOp>& op) {
         os << indentStr(level) << "AllNodeScan(variable=" << op->variable << ")\n";
-        for (const auto& child : op->children) printChild(child);
+        for (const auto& child : op->children)
+            printChild(child);
     }
     void operator()(const std::unique_ptr<LabelScanOp>& op) {
         os << indentStr(level) << "LabelScan(variable=" << op->variable << ", label=" << op->label << ")\n";
-        for (const auto& child : op->children) printChild(child);
+        for (const auto& child : op->children)
+            printChild(child);
     }
     void operator()(const std::unique_ptr<ExpandOp>& op) {
         os << indentStr(level) << "Expand(src=" << op->src_variable << ", dst=" << op->dst_variable;
-        if (!op->edge_variable.empty()) os << ", edge=" << op->edge_variable;
+        if (!op->edge_variable.empty())
+            os << ", edge=" << op->edge_variable;
         os << ")\n";
-        for (const auto& child : op->children) printChild(child);
+        for (const auto& child : op->children)
+            printChild(child);
     }
     void operator()(const std::unique_ptr<FilterOp>& op) {
         os << indentStr(level) << "Filter\n";
-        for (const auto& child : op->children) printChild(child);
+        for (const auto& child : op->children)
+            printChild(child);
     }
     void operator()(const std::unique_ptr<ProjectOp>& op) {
         os << indentStr(level) << "Project(distinct=" << (op->distinct ? "true" : "false") << ")\n";
-        for (const auto& child : op->children) printChild(child);
+        for (const auto& child : op->children)
+            printChild(child);
     }
     void operator()(const std::unique_ptr<LimitOp>& op) {
         os << indentStr(level) << "Limit(" << op->limit << ")\n";
-        for (const auto& child : op->children) printChild(child);
+        for (const auto& child : op->children)
+            printChild(child);
     }
     void operator()(const std::unique_ptr<CreateNodeOp>& op) {
         os << indentStr(level) << "CreateNode(variable=" << op->variable << ")\n";
-        for (const auto& child : op->children) printChild(child);
+        for (const auto& child : op->children)
+            printChild(child);
     }
     void operator()(const std::unique_ptr<CreateEdgeOp>& op) {
         os << indentStr(level) << "CreateEdge(src=" << op->src_variable << ", dst=" << op->dst_variable << ")\n";
-        for (const auto& child : op->children) printChild(child);
+        for (const auto& child : op->children)
+            printChild(child);
     }
 
     void printChild(const LogicalOperator& child) {

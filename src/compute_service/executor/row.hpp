@@ -16,7 +16,9 @@ struct VertexValue {
     VertexId id = INVALID_VERTEX_ID;
     std::optional<Properties> properties;
     std::optional<LabelIdSet> labels;
-    bool operator==(const VertexValue& o) const { return id == o.id; }
+    bool operator==(const VertexValue& o) const {
+        return id == o.id;
+    }
 };
 
 struct EdgeValue {
@@ -25,7 +27,9 @@ struct EdgeValue {
     VertexId dst_id = INVALID_VERTEX_ID;
     EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
     std::optional<Properties> properties;
-    bool operator==(const EdgeValue& o) const { return id == o.id; }
+    bool operator==(const EdgeValue& o) const {
+        return id == o.id;
+    }
 };
 
 // Runtime value produced by expression evaluation and query execution.
@@ -34,7 +38,9 @@ struct EdgeValue {
 // the recursion.
 struct ListValue {
     std::vector<struct ValueStorage> elements;
-    bool operator==(const ListValue& /*o*/) const { return true; /* simplified */ }
+    bool operator==(const ListValue& /*o*/) const {
+        return true; /* simplified */
+    }
 };
 
 // Forward-declare the storage variant.
@@ -43,8 +49,7 @@ struct ValueStorage;
 // The actual runtime value type.
 // VertexId and EdgeId are both uint64_t — use VertexValue/EdgeValue to distinguish,
 // or just use int64_t for IDs in the runtime Value.
-using Value = std::variant<std::monostate, bool, int64_t, double, std::string, VertexValue,
-                           EdgeValue, ListValue>;
+using Value = std::variant<std::monostate, bool, int64_t, double, std::string, VertexValue, EdgeValue, ListValue>;
 
 struct ValueStorage {
     Value value;
@@ -73,14 +78,26 @@ struct RowBatch {
 
     std::vector<Row> rows;
 
-    RowBatch() { rows.reserve(CAPACITY); }
+    RowBatch() {
+        rows.reserve(CAPACITY);
+    }
 
-    size_t size() const { return rows.size(); }
-    bool empty() const { return rows.empty(); }
-    void clear() { rows.clear(); }
+    size_t size() const {
+        return rows.size();
+    }
+    bool empty() const {
+        return rows.empty();
+    }
+    void clear() {
+        rows.clear();
+    }
 
-    void push_back(Row&& row) { rows.push_back(std::move(row)); }
-    void push_back(const Row& row) { rows.push_back(row); }
+    void push_back(Row&& row) {
+        rows.push_back(std::move(row));
+    }
+    void push_back(const Row& row) {
+        rows.push_back(row);
+    }
 };
 
 // Convenience: check if a Value holds a ListValue
