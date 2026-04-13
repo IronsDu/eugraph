@@ -23,8 +23,6 @@ folly::coro::AsyncGenerator<RowBatch> QueryExecutor::execute(const std::string& 
     cypher::CypherQueryParser parser;
     auto parse_result = parser.parse(cypher_query);
     if (std::holds_alternative<cypher::ParseError>(parse_result)) {
-        const auto& err = std::get<cypher::ParseError>(parse_result);
-        // Yield an empty result on parse error — in production, propagate error
         co_return;
     }
     auto stmt = std::move(std::get<cypher::Statement>(parse_result));
@@ -53,7 +51,7 @@ folly::coro::AsyncGenerator<RowBatch> QueryExecutor::execute(const std::string& 
     }
     auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
 
-    // 4. Execute: run the physical operator tree via compute executor
+    // 4. Execute: run the physical operator tree
     auto gen = phys_op->execute();
     while (auto batch = co_await gen.next()) {
         co_yield std::move(*batch);
@@ -66,14 +64,17 @@ folly::coro::AsyncGenerator<RowBatch> QueryExecutor::execute(const std::string& 
 std::vector<Row> QueryExecutor::executeSync(const std::string& cypher_query) {
     std::vector<Row> all_rows;
 
-    folly::coro::blockingWait(folly::coro::co_invoke([this, &cypher_query, &all_rows]() -> folly::coro::Task<void> {
+    auto task = folly::coro::co_invoke([this, &cypher_query, &all_rows]() -> folly::coro::Task<void> {
         auto gen = execute(cypher_query);
         while (auto batch = co_await gen.next()) {
             for (auto& row : batch->rows) {
                 all_rows.push_back(std::move(row));
             }
         }
-    }));
+    });
+
+    // Run on the compute executor so IO dispatch has a valid executor context
+    folly::coro::blockingWait(folly::coro::co_withExecutor(compute_pool_.get(), std::move(task)));
 
     return all_rows;
 }

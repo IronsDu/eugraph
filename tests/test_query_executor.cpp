@@ -115,6 +115,8 @@ TEST_F(QueryExecutorTest, CreateNode) {
         ++count;
         cursor->next();
     }
+    // Cursor must be destroyed before committing (commit closes the WT session)
+    cursor.reset();
     store_->commitTransaction(txn);
     EXPECT_EQ(count, 1);
 }

@@ -146,6 +146,9 @@ folly::coro::AsyncGenerator<RowBatch> LimitPhysicalOp::execute() {
         RowBatch output;
         for (auto& row : batch->rows) {
             if (remaining <= 0) {
+                if (!output.empty()) {
+                    co_yield std::move(output);
+                }
                 co_return;
             }
             output.push_back(std::move(row));
