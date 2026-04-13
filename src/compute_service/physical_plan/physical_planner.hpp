@@ -31,14 +31,12 @@ class PhysicalPlanner {
 public:
     /// Plan a logical plan into physical operators.
     /// Returns the physical operator tree root on success, or an error string.
-    std::variant<std::unique_ptr<PhysicalOperator>, std::string> plan(LogicalPlan& logical_plan,
-                                                                       AsyncGraphStore& store,
-                                                                       PlanContext& ctx);
+    std::variant<std::unique_ptr<PhysicalOperator>, std::string> plan(LogicalPlan& logical_plan, AsyncGraphStore& store,
+                                                                      PlanContext& ctx);
 
 private:
-    std::variant<std::unique_ptr<PhysicalOperator>, std::string> planOperator(
-        LogicalOperator& op, AsyncGraphStore& store, PlanContext& ctx,
-        Schema input_schema);
+    std::variant<std::unique_ptr<PhysicalOperator>, std::string>
+    planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanContext& ctx, Schema input_schema);
 };
 
 } // namespace compute

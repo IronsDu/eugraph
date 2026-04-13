@@ -208,8 +208,7 @@ Value ExpressionEvaluator::evalUnaryOp(const cypher::UnaryOp& op, const Row& row
     }
 }
 
-Value ExpressionEvaluator::evalPropertyAccess(const cypher::PropertyAccess& pa, const Row& row,
-                                               const Schema& schema) {
+Value ExpressionEvaluator::evalPropertyAccess(const cypher::PropertyAccess& pa, const Row& row, const Schema& schema) {
     Value obj = evaluate(pa.object, row, schema);
 
     // Property access on VertexValue

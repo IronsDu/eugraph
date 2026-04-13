@@ -12,11 +12,9 @@ PhysicalPlanner::plan(LogicalPlan& logical_plan, AsyncGraphStore& store, PlanCon
 }
 
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
-PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanContext& ctx,
-                               Schema input_schema) {
+PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanContext& ctx, Schema input_schema) {
     return std::visit(
-        [this, &store, &ctx, &input_schema](auto& ptr)
-            -> std::variant<std::unique_ptr<PhysicalOperator>, std::string> {
+        [this, &store, &ctx, &input_schema](auto& ptr) -> std::variant<std::unique_ptr<PhysicalOperator>, std::string> {
             using T = std::decay_t<decltype(ptr)>;
             using OpType = typename T::element_type;
 
@@ -50,9 +48,9 @@ PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanC
                     }
                 }
 
-                auto result = std::make_unique<ExpandPhysicalOp>(
-                    ptr->src_variable, ptr->dst_variable, ptr->edge_variable,
-                    label_filter, ptr->direction, store, std::move(child_op));
+                auto result =
+                    std::make_unique<ExpandPhysicalOp>(ptr->src_variable, ptr->dst_variable, ptr->edge_variable,
+                                                       label_filter, ptr->direction, store, std::move(child_op));
                 return std::move(result);
 
             } else if constexpr (std::is_same_v<OpType, FilterOp>) {
@@ -65,10 +63,8 @@ PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanC
                 }
                 auto child_op = std::move(std::get<std::unique_ptr<PhysicalOperator>>(child_result));
 
-                auto result = std::make_unique<FilterPhysicalOp>(
-                    std::move(ptr->predicate),
-                    Schema(input_schema),
-                    std::move(child_op));
+                auto result = std::make_unique<FilterPhysicalOp>(std::move(ptr->predicate), Schema(input_schema),
+                                                                 std::move(child_op));
                 return std::move(result);
 
             } else if constexpr (std::is_same_v<OpType, ProjectOp>) {
@@ -89,8 +85,8 @@ PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanC
                     items.push_back(std::move(pi));
                 }
 
-                auto result = std::make_unique<ProjectPhysicalOp>(
-                    std::move(items), Schema(input_schema), std::move(child_op));
+                auto result =
+                    std::make_unique<ProjectPhysicalOp>(std::move(items), Schema(input_schema), std::move(child_op));
                 return std::move(result);
 
             } else if constexpr (std::is_same_v<OpType, LimitOp>) {
@@ -132,8 +128,7 @@ PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanC
                 }
 
                 auto result = std::make_unique<CreateNodePhysicalOp>(
-                    ptr->variable, std::move(label_ids), std::move(label_props),
-                    store, vid, std::move(child_op));
+                    ptr->variable, std::move(label_ids), std::move(label_props), store, vid, std::move(child_op));
                 return std::move(result);
 
             } else if constexpr (std::is_same_v<OpType, CreateEdgeOp>) {
@@ -174,8 +169,8 @@ PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanC
                     return "Cannot resolve edge label";
                 }
 
-                auto result = std::make_unique<CreateEdgePhysicalOp>(
-                    ptr->variable, src_id, dst_id, label_id, eid, store, std::move(child_op));
+                auto result = std::make_unique<CreateEdgePhysicalOp>(ptr->variable, src_id, dst_id, label_id, eid,
+                                                                     store, std::move(child_op));
                 return std::move(result);
 
             } else {

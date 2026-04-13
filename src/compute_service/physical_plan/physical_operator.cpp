@@ -174,10 +174,8 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
         }
     }
 
-    bool ok = co_await store_.insertVertex(
-        assigned_vid_,
-        label_props_,
-        nullptr // no primary key in Phase 1
+    bool ok = co_await store_.insertVertex(assigned_vid_, label_props_,
+                                           nullptr // no primary key in Phase 1
     );
 
     RowBatch output;
@@ -202,13 +200,9 @@ folly::coro::AsyncGenerator<RowBatch> CreateEdgePhysicalOp::execute() {
         }
     }
 
-    bool ok = co_await store_.insertEdge(
-        assigned_eid_,
-        src_id_,
-        dst_id_,
-        label_id_,
-        0,    // seq = 0 for first edge between this pair
-        {}    // no properties in Phase 1
+    bool ok = co_await store_.insertEdge(assigned_eid_, src_id_, dst_id_, label_id_,
+                                         0, // seq = 0 for first edge between this pair
+                                         {} // no properties in Phase 1
     );
 
     RowBatch output;

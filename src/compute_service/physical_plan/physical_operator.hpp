@@ -38,7 +38,9 @@ public:
         : variable_(std::move(variable)), store_(store), label_map_(label_map) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
-    std::string toString() const override { return "AllNodeScan"; }
+    std::string toString() const override {
+        return "AllNodeScan";
+    }
 
 private:
     std::string variable_;
@@ -52,7 +54,9 @@ public:
         : variable_(std::move(variable)), label_id_(label_id), store_(store) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
-    std::string toString() const override { return "LabelScan"; }
+    std::string toString() const override {
+        return "LabelScan";
+    }
 
 private:
     std::string variable_;
@@ -68,11 +72,12 @@ public:
                      std::optional<EdgeLabelId> label_filter, cypher::RelationshipDirection direction,
                      AsyncGraphStore& store, std::unique_ptr<PhysicalOperator> child)
         : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)),
-          label_filter_(label_filter), direction_(direction), store_(store),
-          child_(std::move(child)) {}
+          label_filter_(label_filter), direction_(direction), store_(store), child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
-    std::string toString() const override { return "Expand"; }
+    std::string toString() const override {
+        return "Expand";
+    }
 
 private:
     std::string src_var_;
@@ -89,11 +94,12 @@ private:
 class FilterPhysicalOp : public PhysicalOperator {
 public:
     FilterPhysicalOp(cypher::Expression predicate, Schema schema, std::unique_ptr<PhysicalOperator> child)
-        : predicate_(std::move(predicate)), schema_(std::move(schema)),
-          child_(std::move(child)) {}
+        : predicate_(std::move(predicate)), schema_(std::move(schema)), child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
-    std::string toString() const override { return "Filter"; }
+    std::string toString() const override {
+        return "Filter";
+    }
 
 private:
     cypher::Expression predicate_;
@@ -111,15 +117,17 @@ public:
         std::string name; // output column name
     };
 
-    ProjectPhysicalOp(std::vector<ProjectItem> items, Schema input_schema,
-                      std::unique_ptr<PhysicalOperator> child)
-        : items_(std::move(items)), input_schema_(std::move(input_schema)),
-          child_(std::move(child)) {}
+    ProjectPhysicalOp(std::vector<ProjectItem> items, Schema input_schema, std::unique_ptr<PhysicalOperator> child)
+        : items_(std::move(items)), input_schema_(std::move(input_schema)), child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
-    std::string toString() const override { return "Project"; }
+    std::string toString() const override {
+        return "Project";
+    }
 
-    const std::vector<ProjectItem>& items() const { return items_; }
+    const std::vector<ProjectItem>& items() const {
+        return items_;
+    }
 
 private:
     std::vector<ProjectItem> items_;
@@ -132,11 +140,12 @@ private:
 
 class LimitPhysicalOp : public PhysicalOperator {
 public:
-    LimitPhysicalOp(int64_t limit, std::unique_ptr<PhysicalOperator> child)
-        : limit_(limit), child_(std::move(child)) {}
+    LimitPhysicalOp(int64_t limit, std::unique_ptr<PhysicalOperator> child) : limit_(limit), child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
-    std::string toString() const override { return "Limit"; }
+    std::string toString() const override {
+        return "Limit";
+    }
 
 private:
     int64_t limit_;
@@ -148,15 +157,15 @@ private:
 class CreateNodePhysicalOp : public PhysicalOperator {
 public:
     CreateNodePhysicalOp(std::string variable, std::vector<LabelId> label_ids,
-                         std::vector<std::pair<LabelId, Properties>> label_props,
-                         AsyncGraphStore& store, VertexId assigned_vid,
-                         std::unique_ptr<PhysicalOperator> child = nullptr)
-        : variable_(std::move(variable)), label_ids_(std::move(label_ids)),
-          label_props_(std::move(label_props)), store_(store), assigned_vid_(assigned_vid),
-          child_(std::move(child)) {}
+                         std::vector<std::pair<LabelId, Properties>> label_props, AsyncGraphStore& store,
+                         VertexId assigned_vid, std::unique_ptr<PhysicalOperator> child = nullptr)
+        : variable_(std::move(variable)), label_ids_(std::move(label_ids)), label_props_(std::move(label_props)),
+          store_(store), assigned_vid_(assigned_vid), child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
-    std::string toString() const override { return "CreateNode"; }
+    std::string toString() const override {
+        return "CreateNode";
+    }
 
 private:
     std::string variable_;
@@ -169,15 +178,15 @@ private:
 
 class CreateEdgePhysicalOp : public PhysicalOperator {
 public:
-    CreateEdgePhysicalOp(std::string variable, VertexId src_id, VertexId dst_id,
-                         EdgeLabelId label_id, EdgeId assigned_eid,
-                         AsyncGraphStore& store, std::unique_ptr<PhysicalOperator> child)
-        : variable_(std::move(variable)), src_id_(src_id), dst_id_(dst_id),
-          label_id_(label_id), assigned_eid_(assigned_eid), store_(store),
-          child_(std::move(child)) {}
+    CreateEdgePhysicalOp(std::string variable, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
+                         EdgeId assigned_eid, AsyncGraphStore& store, std::unique_ptr<PhysicalOperator> child)
+        : variable_(std::move(variable)), src_id_(src_id), dst_id_(dst_id), label_id_(label_id),
+          assigned_eid_(assigned_eid), store_(store), child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
-    std::string toString() const override { return "CreateEdge"; }
+    std::string toString() const override {
+        return "CreateEdge";
+    }
 
 private:
     std::string variable_;

@@ -41,9 +41,8 @@ protected:
 
         // Create executor with label mappings
         executor_ = std::make_unique<QueryExecutor>(*store_);
-        executor_->setLabelMappings(
-            {{"Person", PERSON_LABEL}, {"City", CITY_LABEL}},
-            {{"KNOWS", KNOWS_LABEL}, {"LIVES_IN", LIVES_IN_LABEL}});
+        executor_->setLabelMappings({{"Person", PERSON_LABEL}, {"City", CITY_LABEL}},
+                                    {{"KNOWS", KNOWS_LABEL}, {"LIVES_IN", LIVES_IN_LABEL}});
     }
 
     void TearDown() override {

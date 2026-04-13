@@ -39,15 +39,13 @@ private:
     std::variant<LogicalOperator, std::string> buildPatternElement(cypher::PatternElement& elem);
 
     // Build operators for a RETURN clause.
-    std::variant<LogicalOperator, std::string> buildReturn(cypher::ReturnClause& ret,
-                                                            LogicalOperator input);
+    std::variant<LogicalOperator, std::string> buildReturn(cypher::ReturnClause& ret, LogicalOperator input);
 
     // Build operators for a CREATE clause.
     std::variant<LogicalOperator, std::string> buildCreate(cypher::CreateClause& create);
 
     // Build operators for a WHERE predicate (wraps input in FilterOp).
-    std::variant<LogicalOperator, std::string> buildFilter(cypher::Expression predicate,
-                                                            LogicalOperator input);
+    std::variant<LogicalOperator, std::string> buildFilter(cypher::Expression predicate, LogicalOperator input);
 
     // Get the last (topmost) operator in a chain (the rightmost child).
     static LogicalOperator& topOperator(LogicalOperator& op);

@@ -13,7 +13,7 @@ QueryExecutor::QueryExecutor(IGraphStore& store, Config config)
 QueryExecutor::~QueryExecutor() = default;
 
 void QueryExecutor::setLabelMappings(std::unordered_map<std::string, LabelId> label_name_to_id,
-                                      std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id) {
+                                     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id) {
     label_name_to_id_ = std::move(label_name_to_id);
     edge_label_name_to_id_ = std::move(edge_label_name_to_id);
 }

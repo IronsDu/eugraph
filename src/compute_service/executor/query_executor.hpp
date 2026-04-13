@@ -4,9 +4,9 @@
 #include "compute_service/executor/io_scheduler.hpp"
 #include "compute_service/executor/row.hpp"
 #include "compute_service/logical_plan/logical_plan_builder.hpp"
+#include "compute_service/parser/cypher_parser.hpp"
 #include "compute_service/physical_plan/physical_operator.hpp"
 #include "compute_service/physical_plan/physical_planner.hpp"
-#include "compute_service/parser/cypher_parser.hpp"
 #include "storage/graph_store.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
