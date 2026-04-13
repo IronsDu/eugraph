@@ -17,6 +17,7 @@ find_package(GTest CONFIG REQUIRED)
 find_package(lz4 CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(zstd CONFIG REQUIRED)
+find_package(antlr4-runtime CONFIG REQUIRED)
 
 # WiredTiger: build as independent CMake project via ExternalProject.
 # This avoids CMAKE_SOURCE_DIR conflicts from WiredTiger's internal scripts.
@@ -68,6 +69,32 @@ target_link_libraries(eugraph_lib PUBLIC
 
 add_dependencies(eugraph_lib wiredtiger_ext)
 
+# ==================== Compute Service (Cypher Parser + Query Engine) ====================
+
+# Pre-generated ANTLR4 C++ sources (committed to repo, no Java build dependency)
+set(ANTLR_GENERATED_DIR "${PROJECT_SOURCE_DIR}/src/compute_service/parser/generated")
+set(ANTLR_GENERATED_SOURCES
+    "${ANTLR_GENERATED_DIR}/CypherLexer.cpp"
+    "${ANTLR_GENERATED_DIR}/CypherParser.cpp"
+    "${ANTLR_GENERATED_DIR}/CypherParserBaseVisitor.cpp"
+    "${ANTLR_GENERATED_DIR}/CypherParserVisitor.cpp"
+)
+
+add_library(eugraph_compute STATIC
+    ${ANTLR_GENERATED_SOURCES}
+    src/compute_service/parser/cypher_parser.cpp
+)
+
+target_include_directories(eugraph_compute PUBLIC
+    "${PROJECT_SOURCE_DIR}/src"
+    "${ANTLR_GENERATED_DIR}"
+)
+
+target_link_libraries(eugraph_compute PUBLIC
+    antlr4_static
+    spdlog::spdlog
+)
+
 # Test targets
 if(EUGRAPH_BUILD_TESTS)
     enable_testing()
@@ -116,4 +143,22 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(wt_tests wiredtiger_ext)
     gtest_add_tests(TARGET wt_tests)
+
+    # Cypher parser tests
+    add_executable(cypher_parser_tests
+        tests/test_cypher_parser.cpp
+    )
+
+    target_include_directories(cypher_parser_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${ANTLR_GENERATED_DIR}"
+    )
+
+    target_link_libraries(cypher_parser_tests PRIVATE
+        eugraph_compute
+        GTest::gtest
+        GTest::gtest_main
+    )
+
+    gtest_add_tests(TARGET cypher_parser_tests)
 endif()
