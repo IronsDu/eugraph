@@ -52,6 +52,8 @@ private:
     std::shared_ptr<IoScheduler> io_scheduler_;
     std::unordered_map<std::string, LabelId> label_name_to_id_;
     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id_;
+    VertexId next_vertex_id_ = 1;
+    EdgeId next_edge_id_ = 1;
 };
 
 } // namespace compute

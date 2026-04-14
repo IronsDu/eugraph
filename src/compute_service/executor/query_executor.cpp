@@ -42,6 +42,8 @@ folly::coro::AsyncGenerator<RowBatch> QueryExecutor::execute(const std::string& 
     PlanContext ctx;
     ctx.label_name_to_id = label_name_to_id_;
     ctx.edge_label_name_to_id = edge_label_name_to_id_;
+    ctx.next_vertex_id = next_vertex_id_;
+    ctx.next_edge_id = next_edge_id_;
 
     PhysicalPlanner physical_planner;
     auto phys_result = physical_planner.plan(logical_plan, async_store, ctx);
@@ -59,6 +61,10 @@ folly::coro::AsyncGenerator<RowBatch> QueryExecutor::execute(const std::string& 
 
     // Commit transaction
     store_.commitTransaction(txn);
+
+    // Persist ID counters for subsequent queries
+    next_vertex_id_ = ctx.next_vertex_id;
+    next_edge_id_ = ctx.next_edge_id;
 }
 
 std::vector<Row> QueryExecutor::executeSync(const std::string& cypher_query) {
