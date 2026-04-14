@@ -4,6 +4,7 @@
 #include "CypherLexer.h"
 #include "CypherParser.h"
 
+#include <algorithm>
 #include <antlr4-runtime.h>
 
 namespace eugraph {
@@ -464,8 +465,12 @@ private:
     }
 
     Expression buildLiteral(AP::LiteralContext* ctx) {
-        if (ctx->boolLit())
-            return makeLiteral(ctx->boolLit()->getText() == "TRUE");
+        if (ctx->boolLit()) {
+            auto text = ctx->boolLit()->getText();
+            // Grammar is case-insensitive, so getText() may be "true"/"True"/"TRUE" etc.
+            std::transform(text.begin(), text.end(), text.begin(), ::toupper);
+            return makeLiteral(text == "TRUE");
+        }
         if (ctx->NULL_W())
             return makeLiteral(NullValue{});
         if (ctx->stringLit()) {
