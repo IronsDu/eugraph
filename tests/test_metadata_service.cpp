@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
-#include "metadata_service/metadata_service.hpp"
 #include "metadata_service/metadata_codec.hpp"
+#include "metadata_service/metadata_service.hpp"
 #include "storage/graph_store_impl.hpp"
 
 #include <filesystem>
@@ -52,10 +52,8 @@ protected:
 // ==================== Label CRUD ====================
 
 TEST_F(MetadataServiceTest, CreateAndGetLabel) {
-    auto label_id = blockingWait(meta_->createLabel("Person", {
-        prop("name", PropertyType::STRING, true),
-        prop("age", PropertyType::INT64, false)
-    }));
+    auto label_id = blockingWait(meta_->createLabel(
+        "Person", {prop("name", PropertyType::STRING, true), prop("age", PropertyType::INT64, false)}));
     EXPECT_NE(label_id, INVALID_LABEL_ID);
 
     auto result = blockingWait(meta_->getLabelId("Person"));
@@ -84,10 +82,8 @@ TEST_F(MetadataServiceTest, GetLabelNonexistent) {
 }
 
 TEST_F(MetadataServiceTest, GetLabelDef) {
-    auto label_id = blockingWait(meta_->createLabel("Person", {
-        prop("name", PropertyType::STRING, true),
-        prop("age", PropertyType::INT64, false)
-    }));
+    auto label_id = blockingWait(meta_->createLabel(
+        "Person", {prop("name", PropertyType::STRING, true), prop("age", PropertyType::INT64, false)}));
 
     auto def = blockingWait(meta_->getLabelDef("Person"));
     ASSERT_TRUE(def.has_value());
@@ -127,9 +123,7 @@ TEST_F(MetadataServiceTest, ListLabels) {
 // ==================== EdgeLabel CRUD ====================
 
 TEST_F(MetadataServiceTest, CreateAndGetEdgeLabel) {
-    auto elabel_id = blockingWait(meta_->createEdgeLabel("KNOWS", {
-        prop("since", PropertyType::INT64, false)
-    }));
+    auto elabel_id = blockingWait(meta_->createEdgeLabel("KNOWS", {prop("since", PropertyType::INT64, false)}));
     EXPECT_NE(elabel_id, INVALID_EDGE_LABEL_ID);
 
     auto result = blockingWait(meta_->getEdgeLabelId("KNOWS"));
@@ -150,10 +144,8 @@ TEST_F(MetadataServiceTest, CreateEdgeLabelDuplicateFails) {
 }
 
 TEST_F(MetadataServiceTest, GetEdgeLabelDef) {
-    auto elabel_id = blockingWait(meta_->createEdgeLabel("KNOWS", {
-        prop("since", PropertyType::INT64, false),
-        prop("weight", PropertyType::DOUBLE, false)
-    }));
+    auto elabel_id = blockingWait(meta_->createEdgeLabel(
+        "KNOWS", {prop("since", PropertyType::INT64, false), prop("weight", PropertyType::DOUBLE, false)}));
 
     auto def = blockingWait(meta_->getEdgeLabelDef("KNOWS"));
     ASSERT_TRUE(def.has_value());
@@ -213,13 +205,9 @@ TEST_F(MetadataServiceTest, IdAllocationMany) {
 
 TEST_F(MetadataServiceTest, PersistenceAcrossRestart) {
     // Create some data
-    auto person_id = blockingWait(meta_->createLabel("Person", {
-        prop("name", PropertyType::STRING, true),
-        prop("age", PropertyType::INT64, false)
-    }));
-    auto knows_id = blockingWait(meta_->createEdgeLabel("KNOWS", {
-        prop("since", PropertyType::INT64, false)
-    }));
+    auto person_id = blockingWait(meta_->createLabel(
+        "Person", {prop("name", PropertyType::STRING, true), prop("age", PropertyType::INT64, false)}));
+    auto knows_id = blockingWait(meta_->createEdgeLabel("KNOWS", {prop("since", PropertyType::INT64, false)}));
 
     // Allocate some IDs
     auto vid = blockingWait(meta_->nextVertexId());
@@ -262,13 +250,12 @@ TEST_F(MetadataServiceTest, PersistenceAcrossRestart) {
 // ==================== PropertyValue serialization ====================
 
 TEST_F(MetadataServiceTest, PropertyDefWithDefaultValue) {
-    auto label_id = blockingWait(meta_->createLabel("Config", {
-        prop("key", PropertyType::STRING, true),
-        prop("value", PropertyType::STRING, false, PropertyValue(std::string("default"))),
-        prop("count", PropertyType::INT64, false, PropertyValue(int64_t(42))),
-        prop("enabled", PropertyType::BOOL, false, PropertyValue(true)),
-        prop("score", PropertyType::DOUBLE, false, PropertyValue(3.14))
-    }));
+    blockingWait(
+        meta_->createLabel("Config", {prop("key", PropertyType::STRING, true),
+                                      prop("value", PropertyType::STRING, false, PropertyValue(std::string("default"))),
+                                      prop("count", PropertyType::INT64, false, PropertyValue(int64_t(42))),
+                                      prop("enabled", PropertyType::BOOL, false, PropertyValue(true)),
+                                      prop("score", PropertyType::DOUBLE, false, PropertyValue(3.14))}));
 
     auto def = blockingWait(meta_->getLabelDef("Config"));
     ASSERT_TRUE(def.has_value());
@@ -303,11 +290,9 @@ TEST(MetadataCodecTest, LabelDefRoundTrip) {
     LabelDef original;
     original.id = 5;
     original.name = "TestLabel";
-    original.properties = {
-        PropertyDef{1, "name", PropertyType::STRING, true, std::nullopt},
-        PropertyDef{2, "age", PropertyType::INT64, false, PropertyValue(int64_t(0))},
-        PropertyDef{3, "tags", PropertyType::STRING_ARRAY, false, std::nullopt}
-    };
+    original.properties = {PropertyDef{1, "name", PropertyType::STRING, true, std::nullopt},
+                           PropertyDef{2, "age", PropertyType::INT64, false, PropertyValue(int64_t(0))},
+                           PropertyDef{3, "tags", PropertyType::STRING_ARRAY, false, std::nullopt}};
 
     auto encoded = MetadataCodec::encodeLabelDef(original);
     auto decoded = MetadataCodec::decodeLabelDef(encoded);
@@ -333,9 +318,7 @@ TEST(MetadataCodecTest, EdgeLabelDefRoundTrip) {
     original.id = 10;
     original.name = "FOLLOWS";
     original.directed = true;
-    original.properties = {
-        PropertyDef{1, "since", PropertyType::INT64, false, std::nullopt}
-    };
+    original.properties = {PropertyDef{1, "since", PropertyType::INT64, false, std::nullopt}};
 
     auto encoded = MetadataCodec::encodeEdgeLabelDef(original);
     auto decoded = MetadataCodec::decodeEdgeLabelDef(encoded);
@@ -349,7 +332,10 @@ TEST(MetadataCodecTest, EdgeLabelDefRoundTrip) {
 
 TEST(MetadataCodecTest, NextIdsRoundTrip) {
     auto encoded = MetadataCodec::encodeNextIds(100, 200, 5, 3);
-    VertexId vid; EdgeId eid; LabelId lid; EdgeLabelId elid;
+    VertexId vid;
+    EdgeId eid;
+    LabelId lid;
+    EdgeLabelId elid;
     MetadataCodec::decodeNextIds(encoded, vid, eid, lid, elid);
     EXPECT_EQ(vid, 100u);
     EXPECT_EQ(eid, 200u);

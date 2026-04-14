@@ -27,7 +27,7 @@ public:
     // ==================== Label management ====================
 
     virtual folly::coro::Task<LabelId> createLabel(const std::string& name,
-                                                    const std::vector<PropertyDef>& properties = {}) = 0;
+                                                   const std::vector<PropertyDef>& properties = {}) = 0;
 
     virtual folly::coro::Task<std::optional<LabelId>> getLabelId(const std::string& name) = 0;
     virtual folly::coro::Task<std::optional<std::string>> getLabelName(LabelId id) = 0;
@@ -38,7 +38,7 @@ public:
     // ==================== EdgeLabel management ====================
 
     virtual folly::coro::Task<EdgeLabelId> createEdgeLabel(const std::string& name,
-                                                            const std::vector<PropertyDef>& properties = {}) = 0;
+                                                           const std::vector<PropertyDef>& properties = {}) = 0;
 
     virtual folly::coro::Task<std::optional<EdgeLabelId>> getEdgeLabelId(const std::string& name) = 0;
     virtual folly::coro::Task<std::optional<std::string>> getEdgeLabelName(EdgeLabelId id) = 0;
@@ -81,7 +81,7 @@ public:
     folly::coro::Task<void> close() override;
 
     folly::coro::Task<LabelId> createLabel(const std::string& name,
-                                            const std::vector<PropertyDef>& properties = {}) override;
+                                           const std::vector<PropertyDef>& properties = {}) override;
     folly::coro::Task<std::optional<LabelId>> getLabelId(const std::string& name) override;
     folly::coro::Task<std::optional<std::string>> getLabelName(LabelId id) override;
     folly::coro::Task<std::optional<LabelDef>> getLabelDef(const std::string& name) override;
@@ -89,7 +89,7 @@ public:
     folly::coro::Task<std::vector<LabelDef>> listLabels() override;
 
     folly::coro::Task<EdgeLabelId> createEdgeLabel(const std::string& name,
-                                                    const std::vector<PropertyDef>& properties = {}) override;
+                                                   const std::vector<PropertyDef>& properties = {}) override;
     folly::coro::Task<std::optional<EdgeLabelId>> getEdgeLabelId(const std::string& name) override;
     folly::coro::Task<std::optional<std::string>> getEdgeLabelName(EdgeLabelId id) override;
     folly::coro::Task<std::optional<EdgeLabelDef>> getEdgeLabelDef(const std::string& name) override;

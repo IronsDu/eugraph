@@ -69,52 +69,58 @@ void MetadataCodec::encodePropertyValue(std::string& buf, const PropertyValue& v
     // type_tag: variant index
     encodeU8(buf, static_cast<uint8_t>(value.index()));
 
-    std::visit([&buf](auto&& arg) {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, std::monostate>) {
-            // null — no data
-        } else if constexpr (std::is_same_v<T, bool>) {
-            encodeU8(buf, arg ? 1 : 0);
-        } else if constexpr (std::is_same_v<T, int64_t>) {
-            encodeU64(buf, static_cast<uint64_t>(arg));
-        } else if constexpr (std::is_same_v<T, double>) {
-            uint64_t bits;
-            std::memcpy(&bits, &arg, sizeof(double));
-            encodeU64(buf, bits);
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            encodeString(buf, arg);
-        } else if constexpr (std::is_same_v<T, std::vector<int64_t>>) {
-            encodeU16(buf, static_cast<uint16_t>(arg.size()));
-            for (auto v : arg)
-                encodeU64(buf, static_cast<uint64_t>(v));
-        } else if constexpr (std::is_same_v<T, std::vector<double>>) {
-            encodeU16(buf, static_cast<uint16_t>(arg.size()));
-            for (auto v : arg) {
+    std::visit(
+        [&buf](auto&& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, std::monostate>) {
+                // null — no data
+            } else if constexpr (std::is_same_v<T, bool>) {
+                encodeU8(buf, arg ? 1 : 0);
+            } else if constexpr (std::is_same_v<T, int64_t>) {
+                encodeU64(buf, static_cast<uint64_t>(arg));
+            } else if constexpr (std::is_same_v<T, double>) {
                 uint64_t bits;
-                std::memcpy(&bits, &v, sizeof(double));
+                std::memcpy(&bits, &arg, sizeof(double));
                 encodeU64(buf, bits);
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                encodeString(buf, arg);
+            } else if constexpr (std::is_same_v<T, std::vector<int64_t>>) {
+                encodeU16(buf, static_cast<uint16_t>(arg.size()));
+                for (auto v : arg)
+                    encodeU64(buf, static_cast<uint64_t>(v));
+            } else if constexpr (std::is_same_v<T, std::vector<double>>) {
+                encodeU16(buf, static_cast<uint16_t>(arg.size()));
+                for (auto v : arg) {
+                    uint64_t bits;
+                    std::memcpy(&bits, &v, sizeof(double));
+                    encodeU64(buf, bits);
+                }
+            } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+                encodeU16(buf, static_cast<uint16_t>(arg.size()));
+                for (const auto& s : arg)
+                    encodeString(buf, s);
             }
-        } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
-            encodeU16(buf, static_cast<uint16_t>(arg.size()));
-            for (const auto& s : arg)
-                encodeString(buf, s);
-        }
-    }, value);
+        },
+        value);
 }
 
 PropertyValue MetadataCodec::decodePropertyValue(std::string_view data, size_t& offset) {
     auto tag = decodeU8(data, offset);
     switch (tag) {
-    case 0: return std::monostate{};
-    case 1: return decodeU8(data, offset) != 0;
-    case 2: return static_cast<int64_t>(decodeU64(data, offset));
+    case 0:
+        return std::monostate{};
+    case 1:
+        return decodeU8(data, offset) != 0;
+    case 2:
+        return static_cast<int64_t>(decodeU64(data, offset));
     case 3: {
         uint64_t bits = decodeU64(data, offset);
         double val;
         std::memcpy(&val, &bits, sizeof(double));
         return val;
     }
-    case 4: return decodeString(data, offset);
+    case 4:
+        return decodeString(data, offset);
     case 5: {
         auto count = decodeU16(data, offset);
         std::vector<int64_t> vec(count);

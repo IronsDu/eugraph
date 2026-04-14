@@ -1,6 +1,6 @@
 #include "metadata_service/metadata_service.hpp"
-#include "metadata_service/metadata_codec.hpp"
 #include "common/types/constants.hpp"
+#include "metadata_service/metadata_codec.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -38,13 +38,13 @@ folly::coro::Task<bool> MetadataServiceImpl::open(IGraphStore& store) {
     // Load ID counters
     auto ids_data = store_->metadataGet("M|next_ids");
     if (ids_data) {
-        MetadataCodec::decodeNextIds(*ids_data, cache_.next_vertex_id, cache_.next_edge_id,
-                                     cache_.next_label_id, cache_.next_edge_label_id);
+        MetadataCodec::decodeNextIds(*ids_data, cache_.next_vertex_id, cache_.next_edge_id, cache_.next_label_id,
+                                     cache_.next_edge_label_id);
     }
 
     spdlog::info("MetadataService opened: {} labels, {} edge labels, next_vid={}, next_eid={}",
-                 cache_.label_by_name.size(), cache_.edge_label_by_name.size(),
-                 cache_.next_vertex_id, cache_.next_edge_id);
+                 cache_.label_by_name.size(), cache_.edge_label_by_name.size(), cache_.next_vertex_id,
+                 cache_.next_edge_id);
 
     co_return true;
 }
@@ -58,7 +58,7 @@ folly::coro::Task<void> MetadataServiceImpl::close() {
 // ==================== Label management ====================
 
 folly::coro::Task<LabelId> MetadataServiceImpl::createLabel(const std::string& name,
-                                                             const std::vector<PropertyDef>& properties) {
+                                                            const std::vector<PropertyDef>& properties) {
     if (cache_.label_by_name.count(name)) {
         spdlog::error("Label '{}' already exists", name);
         co_return INVALID_LABEL_ID;
@@ -140,7 +140,7 @@ folly::coro::Task<std::vector<LabelDef>> MetadataServiceImpl::listLabels() {
 // ==================== EdgeLabel management ====================
 
 folly::coro::Task<EdgeLabelId> MetadataServiceImpl::createEdgeLabel(const std::string& name,
-                                                                     const std::vector<PropertyDef>& properties) {
+                                                                    const std::vector<PropertyDef>& properties) {
     if (cache_.edge_label_by_name.count(name)) {
         spdlog::error("EdgeLabel '{}' already exists", name);
         co_return INVALID_EDGE_LABEL_ID;
@@ -232,8 +232,8 @@ folly::coro::Task<EdgeId> MetadataServiceImpl::nextEdgeId() {
 // ==================== Private ====================
 
 void MetadataServiceImpl::saveNextIds() {
-    auto encoded = MetadataCodec::encodeNextIds(cache_.next_vertex_id, cache_.next_edge_id,
-                                                 cache_.next_label_id, cache_.next_edge_label_id);
+    auto encoded = MetadataCodec::encodeNextIds(cache_.next_vertex_id, cache_.next_edge_id, cache_.next_label_id,
+                                                cache_.next_edge_label_id);
     store_->metadataPut("M|next_ids", encoded);
 }
 
