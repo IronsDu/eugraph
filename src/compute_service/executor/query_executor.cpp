@@ -5,18 +5,12 @@
 namespace eugraph {
 namespace compute {
 
-QueryExecutor::QueryExecutor(IGraphStore& store, Config config)
-    : store_(store), config_(config),
+QueryExecutor::QueryExecutor(IGraphStore& store, IMetadataService& meta, Config config)
+    : store_(store), meta_(meta), config_(config),
       compute_pool_(std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads)),
       io_scheduler_(std::make_shared<IoScheduler>(config.io_threads)) {}
 
 QueryExecutor::~QueryExecutor() = default;
-
-void QueryExecutor::setLabelMappings(std::unordered_map<std::string, LabelId> label_name_to_id,
-                                     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id) {
-    label_name_to_id_ = std::move(label_name_to_id);
-    edge_label_name_to_id_ = std::move(edge_label_name_to_id);
-}
 
 folly::coro::AsyncGenerator<RowBatch> QueryExecutor::execute(const std::string& cypher_query) {
     // 1. Parse
@@ -35,15 +29,30 @@ folly::coro::AsyncGenerator<RowBatch> QueryExecutor::execute(const std::string& 
     }
     auto& logical_plan = std::get<LogicalPlan>(logical_result);
 
-    // 3. Plan physical operators
+    // 3. Load label/edge_label mappings from metadata service
+    auto labels = co_await meta_.listLabels();
+    auto edge_labels = co_await meta_.listEdgeLabels();
+
+    std::unordered_map<std::string, LabelId> label_name_to_id;
+    for (const auto& l : labels)
+        label_name_to_id[l.name] = l.id;
+
+    std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
+    for (const auto& el : edge_labels)
+        edge_label_name_to_id[el.name] = el.id;
+
+    // 4. Plan physical operators
     GraphTxnHandle txn = store_.beginTransaction();
     AsyncGraphStore async_store(store_, *io_scheduler_, txn);
 
     PlanContext ctx;
-    ctx.label_name_to_id = label_name_to_id_;
-    ctx.edge_label_name_to_id = edge_label_name_to_id_;
-    ctx.next_vertex_id = next_vertex_id_;
-    ctx.next_edge_id = next_edge_id_;
+    ctx.label_name_to_id = std::move(label_name_to_id);
+    ctx.edge_label_name_to_id = std::move(edge_label_name_to_id);
+
+    // Pre-allocate IDs for CREATE operations
+    // Allocate a batch of IDs upfront; individual create ops consume them
+    ctx.next_vertex_id = co_await meta_.nextVertexId();
+    ctx.next_edge_id = co_await meta_.nextEdgeId();
 
     PhysicalPlanner physical_planner;
     auto phys_result = physical_planner.plan(logical_plan, async_store, ctx);
@@ -53,7 +62,7 @@ folly::coro::AsyncGenerator<RowBatch> QueryExecutor::execute(const std::string& 
     }
     auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
 
-    // 4. Execute: run the physical operator tree
+    // 5. Execute
     auto gen = phys_op->execute();
     while (auto batch = co_await gen.next()) {
         co_yield std::move(*batch);
@@ -61,10 +70,6 @@ folly::coro::AsyncGenerator<RowBatch> QueryExecutor::execute(const std::string& 
 
     // Commit transaction
     store_.commitTransaction(txn);
-
-    // Persist ID counters for subsequent queries
-    next_vertex_id_ = ctx.next_vertex_id;
-    next_edge_id_ = ctx.next_edge_id;
 }
 
 std::vector<Row> QueryExecutor::executeSync(const std::string& cypher_query) {
@@ -79,7 +84,6 @@ std::vector<Row> QueryExecutor::executeSync(const std::string& cypher_query) {
         }
     });
 
-    // Run on the compute executor so IO dispatch has a valid executor context
     folly::coro::blockingWait(folly::coro::co_withExecutor(compute_pool_.get(), std::move(task)));
 
     return all_rows;

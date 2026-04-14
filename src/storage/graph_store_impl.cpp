@@ -1143,4 +1143,19 @@ void EdgeTypeScanCursorImpl::next() {
     readCurrent();
 }
 
+// ==================== Metadata Raw KV ====================
+
+bool GraphStoreImpl::metadataPut(std::string_view key, std::string_view value) {
+    return tablePut(defaultSession_, TABLE_METADATA, key, value);
+}
+
+std::optional<std::string> GraphStoreImpl::metadataGet(std::string_view key) {
+    return tableGet(defaultSession_, TABLE_METADATA, key);
+}
+
+void GraphStoreImpl::metadataScan(std::string_view prefix,
+                                  const std::function<bool(std::string_view, std::string_view)>& callback) {
+    tableScan(defaultSession_, TABLE_METADATA, prefix, callback);
+}
+
 } // namespace eugraph
