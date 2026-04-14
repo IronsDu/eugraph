@@ -119,6 +119,13 @@ public:
     uint64_t countDegree(GraphTxnHandle txn, VertexId vid, Direction direction,
                          std::optional<EdgeLabelId> label_filter) override;
 
+    // ==================== Metadata Raw KV ====================
+
+    bool metadataPut(std::string_view key, std::string_view value) override;
+    std::optional<std::string> metadataGet(std::string_view key) override;
+    void metadataScan(std::string_view prefix,
+                      const std::function<bool(std::string_view, std::string_view)>& callback) override;
+
 private:
     // Per-transaction state: own session + cursor cache
     struct TxnState {

@@ -96,6 +96,23 @@ target_link_libraries(eugraph_compute PUBLIC
     spdlog::spdlog
 )
 
+# ==================== Metadata Service ====================
+
+add_library(eugraph_metadata STATIC
+    src/metadata_service/metadata_codec.cpp
+    src/metadata_service/metadata_service.cpp
+)
+
+target_include_directories(eugraph_metadata PUBLIC
+    "${PROJECT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(eugraph_metadata PUBLIC
+    eugraph_lib
+    Folly::folly
+    spdlog::spdlog
+)
+
 # ==================== Query Engine (Logical Plan + Physical Plan + Executor) ====================
 
 add_library(eugraph_query_engine STATIC
@@ -217,6 +234,7 @@ if(EUGRAPH_BUILD_TESTS)
 
     target_link_libraries(query_executor_tests PRIVATE
         eugraph_query_engine
+        eugraph_metadata
         GTest::gtest
         GTest::gtest_main
         dl
@@ -224,4 +242,24 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(query_executor_tests wiredtiger_ext)
     gtest_add_tests(TARGET query_executor_tests)
+
+    # Metadata service tests
+    add_executable(metadata_tests
+        tests/test_metadata_service.cpp
+    )
+
+    target_include_directories(metadata_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(metadata_tests PRIVATE
+        eugraph_metadata
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(metadata_tests wiredtiger_ext)
+    gtest_add_tests(TARGET metadata_tests)
 endif()

@@ -7,6 +7,7 @@
 #include "compute_service/parser/cypher_parser.hpp"
 #include "compute_service/physical_plan/physical_operator.hpp"
 #include "compute_service/physical_plan/physical_planner.hpp"
+#include "metadata_service/metadata_service.hpp"
 #include "storage/graph_store.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
@@ -31,8 +32,7 @@ public:
         Config() = default;
     };
 
-    QueryExecutor(IGraphStore& store) : QueryExecutor(store, Config{}) {}
-    QueryExecutor(IGraphStore& store, Config config);
+    QueryExecutor(IGraphStore& store, IMetadataService& meta, Config config);
     ~QueryExecutor();
 
     /// Execute a Cypher query string. Returns batches of result rows.
@@ -41,19 +41,12 @@ public:
     /// Execute a Cypher query synchronously (blocking). For testing convenience.
     std::vector<Row> executeSync(const std::string& cypher_query);
 
-    /// Set label name → ID mappings. Must be called before queries.
-    void setLabelMappings(std::unordered_map<std::string, LabelId> label_name_to_id,
-                          std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id);
-
 private:
     IGraphStore& store_;
+    IMetadataService& meta_;
     Config config_;
     std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool_;
     std::shared_ptr<IoScheduler> io_scheduler_;
-    std::unordered_map<std::string, LabelId> label_name_to_id_;
-    std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id_;
-    VertexId next_vertex_id_ = 1;
-    EdgeId next_edge_id_ = 1;
 };
 
 } // namespace compute

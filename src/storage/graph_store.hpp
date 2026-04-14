@@ -214,6 +214,16 @@ public:
 
     virtual uint64_t countDegree(GraphTxnHandle txn, VertexId vid, Direction direction,
                                  std::optional<EdgeLabelId> label_filter) = 0;
+
+    // ==================== Metadata Raw KV ====================
+    // Low-level put/get/scan on the metadata table for use by MetadataService.
+    // The metadata table (table:metadata) is a global key-value table with
+    // M|-prefixed keys for Label/EdgeLabel definitions and ID counters.
+
+    virtual bool metadataPut(std::string_view key, std::string_view value) = 0;
+    virtual std::optional<std::string> metadataGet(std::string_view key) = 0;
+    virtual void metadataScan(std::string_view prefix,
+                              const std::function<bool(std::string_view, std::string_view)>& callback) = 0;
 };
 
 } // namespace eugraph
