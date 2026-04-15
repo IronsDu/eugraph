@@ -12,8 +12,13 @@ folly::coro::AsyncGenerator<RowBatch> AllNodeScanPhysicalOp::execute() {
         while (auto batch = co_await gen.next()) {
             RowBatch output;
             for (VertexId vid : *batch) {
+                // Load properties for this vertex
+                auto props = co_await store_.getVertexProperties(vid, label_id);
+                VertexValue vv;
+                vv.id = vid;
+                vv.properties = std::move(props);
                 Row row;
-                row.push_back(Value(static_cast<int64_t>(vid)));
+                row.push_back(Value(std::move(vv)));
                 output.push_back(std::move(row));
             }
             if (!output.empty()) {
@@ -30,8 +35,13 @@ folly::coro::AsyncGenerator<RowBatch> LabelScanPhysicalOp::execute() {
     while (auto batch = co_await gen.next()) {
         RowBatch output;
         for (VertexId vid : *batch) {
+            // Load properties for this vertex
+            auto props = co_await store_.getVertexProperties(vid, label_id_);
+            VertexValue vv;
+            vv.id = vid;
+            vv.properties = std::move(props);
             Row row;
-            row.push_back(Value(static_cast<int64_t>(vid)));
+            row.push_back(Value(std::move(vv)));
             output.push_back(std::move(row));
         }
         if (!output.empty()) {
@@ -55,6 +65,9 @@ folly::coro::AsyncGenerator<RowBatch> ExpandPhysicalOp::execute() {
                 if (std::holds_alternative<int64_t>(val)) {
                     src_id = static_cast<VertexId>(std::get<int64_t>(val));
                     break;
+                } else if (std::holds_alternative<VertexValue>(val)) {
+                    src_id = std::get<VertexValue>(val).id;
+                    break;
                 }
             }
             if (src_id == INVALID_VERTEX_ID) {
@@ -72,11 +85,37 @@ folly::coro::AsyncGenerator<RowBatch> ExpandPhysicalOp::execute() {
             while (auto edge_batch = co_await edge_gen.next()) {
                 for (const auto& entry : *edge_batch) {
                     Row new_row = row; // copy original columns
-                    // Add destination vertex ID
-                    new_row.push_back(Value(static_cast<int64_t>(entry.neighbor_id)));
-                    // Add edge ID if edge variable is bound
+
+                    // Load destination vertex labels and properties
+                    auto dst_labels = co_await store_.getVertexLabels(entry.neighbor_id);
+                    VertexValue dst_vv;
+                    dst_vv.id = entry.neighbor_id;
+                    dst_vv.labels = dst_labels;
+                    Properties merged_props;
+                    for (LabelId lid : dst_labels) {
+                        auto props = co_await store_.getVertexProperties(entry.neighbor_id, lid);
+                        if (props) {
+                            if (merged_props.size() < props->size()) {
+                                merged_props.resize(props->size());
+                            }
+                            for (size_t i = 0; i < props->size(); i++) {
+                                if ((*props)[i].has_value()) {
+                                    merged_props[i] = std::move((*props)[i]);
+                                }
+                            }
+                        }
+                    }
+                    dst_vv.properties = std::move(merged_props);
+                    new_row.push_back(Value(std::move(dst_vv)));
+
+                    // Add edge value if edge variable is bound
                     if (!edge_var_.empty()) {
-                        new_row.push_back(Value(static_cast<int64_t>(entry.edge_id)));
+                        EdgeValue ev;
+                        ev.id = entry.edge_id;
+                        ev.src_id = src_id;
+                        ev.dst_id = entry.neighbor_id;
+                        ev.label_id = entry.edge_label_id;
+                        new_row.push_back(Value(std::move(ev)));
                     }
                     output.push_back(std::move(new_row));
 

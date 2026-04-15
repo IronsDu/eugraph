@@ -3,6 +3,7 @@
 #include "compute_service/executor/async_graph_store.hpp"
 #include "compute_service/executor/io_scheduler.hpp"
 #include "compute_service/executor/row.hpp"
+#include "compute_service/parser/ast.hpp"
 #include "compute_service/logical_plan/logical_plan_builder.hpp"
 #include "compute_service/parser/cypher_parser.hpp"
 #include "compute_service/physical_plan/physical_operator.hpp"
@@ -38,8 +39,8 @@ public:
     /// Execute a Cypher query string. Returns batches of result rows.
     folly::coro::AsyncGenerator<RowBatch> execute(const std::string& cypher_query);
 
-    /// Execute a Cypher query synchronously (blocking). For testing convenience.
-    std::vector<Row> executeSync(const std::string& cypher_query);
+    /// Execute a Cypher query synchronously (blocking). Returns result with columns, rows, and error.
+    ExecutionResult executeSync(const std::string& cypher_query);
 
 private:
     IGraphStore& store_;
@@ -47,6 +48,8 @@ private:
     Config config_;
     std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool_;
     std::shared_ptr<IoScheduler> io_scheduler_;
+
+    void extractColumnsFromLogicalPlan(const LogicalOperator& op, Schema& columns);
 };
 
 } // namespace compute

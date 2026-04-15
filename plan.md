@@ -35,7 +35,9 @@
 | 1.8 | 基础读执行器（Pull-based 管道、AsyncGenerator<RowBatch>） | ✅ 已完成 |
 | 1.9 | 写操作 + QueryExecutor 组装（CREATE 支持，~40 端到端测试通过） | ✅ 已完成 |
 | 1.10 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | ✅ 已完成 |
-| 1.11 | 基础事务支持（MVCC） | 待开始 |
+| 1.11 | eugraph-shell（REPL 交互式 CLI，embedded 模式） | ✅ 已完成 |
+| 1.12 | fbthrift 服务层（RPC） | 进行中 |
+| 1.13 | 基础事务支持（MVCC） | 待开始 |
 
 ### 已完成的工作
 

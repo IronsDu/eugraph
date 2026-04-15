@@ -211,15 +211,38 @@ Value ExpressionEvaluator::evalUnaryOp(const cypher::UnaryOp& op, const Row& row
 Value ExpressionEvaluator::evalPropertyAccess(const cypher::PropertyAccess& pa, const Row& row, const Schema& schema) {
     Value obj = evaluate(pa.object, row, schema);
 
+    // Helper: convert PropertyValue → Value
+    auto propToValue = [](const PropertyValue& pv) -> Value {
+        if (std::holds_alternative<std::monostate>(pv))
+            return Value{};
+        if (std::holds_alternative<bool>(pv))
+            return Value(std::get<bool>(pv));
+        if (std::holds_alternative<int64_t>(pv))
+            return Value(std::get<int64_t>(pv));
+        if (std::holds_alternative<double>(pv))
+            return Value(std::get<double>(pv));
+        if (std::holds_alternative<std::string>(pv))
+            return Value(std::get<std::string>(pv));
+        return Value{};
+    };
+
     // Property access on VertexValue
     if (std::holds_alternative<VertexValue>(obj)) {
         const auto& vertex = std::get<VertexValue>(obj);
         if (pa.property == "id") {
             return Value(static_cast<int64_t>(vertex.id));
         }
-        if (vertex.properties.has_value()) {
-            // Properties are indexed by prop_id. For now, property access by name
-            // requires metadata resolution (Phase 2). Return null for unknown props.
+        if (vertex.properties.has_value() && label_defs_) {
+            for (const auto& [lid, ldef] : *label_defs_) {
+                for (const auto& pd : ldef.properties) {
+                    if (pd.name == pa.property && pd.id < vertex.properties->size()) {
+                        const auto& val = (*vertex.properties)[pd.id];
+                        if (val.has_value()) {
+                            return propToValue(*val);
+                        }
+                    }
+                }
+            }
         }
         return Value{};
     }
@@ -229,6 +252,18 @@ Value ExpressionEvaluator::evalPropertyAccess(const cypher::PropertyAccess& pa, 
         const auto& edge = std::get<EdgeValue>(obj);
         if (pa.property == "id") {
             return Value(static_cast<int64_t>(edge.id));
+        }
+        if (edge.properties.has_value() && label_defs_) {
+            for (const auto& [lid, ldef] : *label_defs_) {
+                for (const auto& pd : ldef.properties) {
+                    if (pd.name == pa.property && pd.id < edge.properties->size()) {
+                        const auto& val = (*edge.properties)[pd.id];
+                        if (val.has_value()) {
+                            return propToValue(*val);
+                        }
+                    }
+                }
+            }
         }
         return Value{};
     }

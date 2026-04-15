@@ -4,6 +4,7 @@
 #include "compute_service/parser/ast.hpp"
 
 #include <string>
+#include <unordered_map>
 
 namespace eugraph {
 namespace compute {
@@ -14,6 +15,11 @@ public:
     /// Evaluate an expression given the current row and its schema (column names).
     Value evaluate(const cypher::Expression& expr, const Row& row, const Schema& schema);
 
+    /// Set label definitions for property name→prop_id resolution.
+    void setLabelDefs(const std::unordered_map<LabelId, LabelDef>* defs) {
+        label_defs_ = defs;
+    }
+
 private:
     Value evalLiteral(const cypher::Literal& lit);
     Value evalVariable(const cypher::Variable& var, const Row& row, const Schema& schema);
@@ -21,6 +27,8 @@ private:
     Value evalUnaryOp(const cypher::UnaryOp& op, const Row& row, const Schema& schema);
     Value evalPropertyAccess(const cypher::PropertyAccess& pa, const Row& row, const Schema& schema);
     Value evalFunctionCall(const cypher::FunctionCall& fc, const Row& row, const Schema& schema);
+
+    const std::unordered_map<LabelId, LabelDef>* label_defs_ = nullptr;
 };
 
 } // namespace compute

@@ -19,6 +19,7 @@ find_package(ZLIB REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(antlr4-runtime CONFIG REQUIRED)
 find_package(folly CONFIG REQUIRED)
+find_package(FBThrift CONFIG REQUIRED)
 
 # WiredTiger: build as independent CMake project via ExternalProject.
 # This avoids CMAKE_SOURCE_DIR conflicts from WiredTiger's internal scripts.
@@ -135,6 +136,91 @@ target_link_libraries(eugraph_query_engine PUBLIC
     Folly::folly
     Folly::folly_deps
     spdlog::spdlog
+)
+
+# ==================== Thrift Generated Code ====================
+
+set(GEN_CPP2_DIR "${PROJECT_SOURCE_DIR}/src/gen-cpp2")
+
+add_library(eugraph_thrift STATIC
+    ${GEN_CPP2_DIR}/eugraph_types.cpp
+    ${GEN_CPP2_DIR}/eugraph_data.cpp
+    ${GEN_CPP2_DIR}/eugraph_constants.cpp
+    ${GEN_CPP2_DIR}/eugraph_metadata.cpp
+    ${GEN_CPP2_DIR}/eugraph_types_binary.cpp
+    ${GEN_CPP2_DIR}/eugraph_types_compact.cpp
+    ${GEN_CPP2_DIR}/EuGraphService.cpp
+    ${GEN_CPP2_DIR}/EuGraphServiceAsyncClient.cpp
+    ${GEN_CPP2_DIR}/EuGraphService_processmap_binary.cpp
+    ${GEN_CPP2_DIR}/EuGraphService_processmap_compact.cpp
+)
+
+target_include_directories(eugraph_thrift PUBLIC
+    "${PROJECT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(eugraph_thrift PUBLIC
+    FBThrift::thriftcpp2
+    FBThrift::async
+    Folly::folly
+)
+
+# ==================== Shell (REPL) ====================
+
+add_library(eugraph_shell_lib STATIC
+    src/shell/shell_repl.cpp
+    src/shell/rpc_client.cpp
+    src/server/eugraph_handler.cpp
+)
+
+target_include_directories(eugraph_shell_lib PUBLIC
+    "${PROJECT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(eugraph_shell_lib PUBLIC
+    eugraph_query_engine
+    eugraph_metadata
+    eugraph_thrift
+    Folly::folly
+    Folly::folly_deps
+    spdlog::spdlog
+)
+
+# ==================== Server + Shell executables ====================
+
+add_executable(eugraph-server
+    src/server/eugraph_server_main.cpp
+)
+
+target_include_directories(eugraph-server PRIVATE
+    "${PROJECT_SOURCE_DIR}/src"
+    "${WT_INSTALL_DIR}/include"
+)
+
+target_link_libraries(eugraph-server PRIVATE
+    eugraph_shell_lib
+    eugraph_query_engine
+    eugraph_metadata
+    eugraph_thrift
+    Folly::folly
+    Folly::folly_deps
+    spdlog::spdlog
+    dl
+)
+
+add_dependencies(eugraph-server wiredtiger_ext)
+
+add_executable(eugraph-shell
+    src/shell/shell_main.cpp
+)
+
+target_include_directories(eugraph-shell PRIVATE
+    "${PROJECT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(eugraph-shell PRIVATE
+    eugraph_shell_lib
+    dl
 )
 
 # Test targets
@@ -262,4 +348,29 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(metadata_tests wiredtiger_ext)
     gtest_add_tests(TARGET metadata_tests)
+
+    # RPC integration tests (handler + thrift types)
+    add_executable(rpc_integration_tests
+        tests/test_rpc_integration.cpp
+    )
+
+    target_include_directories(rpc_integration_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(rpc_integration_tests PRIVATE
+        eugraph_shell_lib
+        eugraph_query_engine
+        eugraph_metadata
+        eugraph_thrift
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(rpc_integration_tests wiredtiger_ext)
+    gtest_add_tests(TARGET rpc_integration_tests)
 endif()

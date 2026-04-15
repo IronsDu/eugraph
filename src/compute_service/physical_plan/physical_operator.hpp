@@ -34,8 +34,9 @@ public:
 class AllNodeScanPhysicalOp : public PhysicalOperator {
 public:
     AllNodeScanPhysicalOp(std::string variable, AsyncGraphStore& store,
-                          const std::unordered_map<std::string, LabelId>& label_map)
-        : variable_(std::move(variable)), store_(store), label_map_(label_map) {}
+                          const std::unordered_map<std::string, LabelId>& label_map,
+                          std::unordered_map<LabelId, LabelDef> label_defs)
+        : variable_(std::move(variable)), store_(store), label_map_(label_map), label_defs_(std::move(label_defs)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
@@ -46,12 +47,14 @@ private:
     std::string variable_;
     AsyncGraphStore& store_;
     const std::unordered_map<std::string, LabelId>& label_map_;
+    std::unordered_map<LabelId, LabelDef> label_defs_;
 };
 
 class LabelScanPhysicalOp : public PhysicalOperator {
 public:
-    LabelScanPhysicalOp(std::string variable, LabelId label_id, AsyncGraphStore& store)
-        : variable_(std::move(variable)), label_id_(label_id), store_(store) {}
+    LabelScanPhysicalOp(std::string variable, LabelId label_id, AsyncGraphStore& store,
+                        std::unordered_map<LabelId, LabelDef> label_defs)
+        : variable_(std::move(variable)), label_id_(label_id), store_(store), label_defs_(std::move(label_defs)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
@@ -62,6 +65,7 @@ private:
     std::string variable_;
     LabelId label_id_;
     AsyncGraphStore& store_;
+    std::unordered_map<LabelId, LabelDef> label_defs_;
 };
 
 // ==================== Expand ====================
@@ -93,8 +97,11 @@ private:
 
 class FilterPhysicalOp : public PhysicalOperator {
 public:
-    FilterPhysicalOp(cypher::Expression predicate, Schema schema, std::unique_ptr<PhysicalOperator> child)
-        : predicate_(std::move(predicate)), schema_(std::move(schema)), child_(std::move(child)) {}
+    FilterPhysicalOp(cypher::Expression predicate, Schema schema, std::unique_ptr<PhysicalOperator> child,
+                     const std::unordered_map<LabelId, LabelDef>* label_defs)
+        : predicate_(std::move(predicate)), schema_(std::move(schema)), child_(std::move(child)) {
+        evaluator_.setLabelDefs(label_defs);
+    }
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
@@ -117,8 +124,11 @@ public:
         std::string name; // output column name
     };
 
-    ProjectPhysicalOp(std::vector<ProjectItem> items, Schema input_schema, std::unique_ptr<PhysicalOperator> child)
-        : items_(std::move(items)), input_schema_(std::move(input_schema)), child_(std::move(child)) {}
+    ProjectPhysicalOp(std::vector<ProjectItem> items, Schema input_schema, std::unique_ptr<PhysicalOperator> child,
+                      const std::unordered_map<LabelId, LabelDef>* label_defs)
+        : items_(std::move(items)), input_schema_(std::move(input_schema)), child_(std::move(child)) {
+        evaluator_.setLabelDefs(label_defs);
+    }
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {

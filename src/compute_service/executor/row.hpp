@@ -105,4 +105,12 @@ inline bool isList(const Value& v) {
     return std::holds_alternative<ListValue>(v);
 }
 
+// ==================== Execution Result ====================
+
+struct ExecutionResult {
+    Schema columns;        // column names
+    std::vector<Row> rows; // data rows
+    std::string error;     // error message (empty if success)
+};
+
 } // namespace eugraph

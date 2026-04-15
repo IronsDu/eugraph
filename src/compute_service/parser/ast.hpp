@@ -411,5 +411,43 @@ inline Expression makeFunctionCall(std::string name, std::vector<Expression> arg
     return std::make_unique<FunctionCall>(FunctionCall{std::move(name), distinct, std::move(args)});
 }
 
+// ==================== 辅助：Expression → 字符串（用于生成默认列名）====================
+
+inline std::string expressionToString(const Expression& expr);
+
+inline std::string expressionToString(const Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> std::string {
+            using T = std::decay_t<decltype(ptr)>;
+            using OpType = typename T::element_type;
+            if constexpr (std::is_same_v<OpType, Variable>) {
+                return ptr->name;
+            } else if constexpr (std::is_same_v<OpType, PropertyAccess>) {
+                return expressionToString(ptr->object) + "." + ptr->property;
+            } else if constexpr (std::is_same_v<OpType, Literal>) {
+                if (std::holds_alternative<std::string>(ptr->value))
+                    return std::get<std::string>(ptr->value);
+                if (std::holds_alternative<int64_t>(ptr->value))
+                    return std::to_string(std::get<int64_t>(ptr->value));
+                if (std::holds_alternative<double>(ptr->value))
+                    return std::to_string(std::get<double>(ptr->value));
+                if (std::holds_alternative<bool>(ptr->value))
+                    return std::get<bool>(ptr->value) ? "true" : "false";
+                return "null";
+            } else if constexpr (std::is_same_v<OpType, FunctionCall>) {
+                std::string r = ptr->name + "(";
+                for (size_t i = 0; i < ptr->args.size(); i++) {
+                    if (i > 0)
+                        r += ", ";
+                    r += expressionToString(ptr->args[i]);
+                }
+                return r + ")";
+            } else {
+                return "?";
+            }
+        },
+        expr);
+}
+
 } // namespace cypher
 } // namespace eugraph
