@@ -23,12 +23,11 @@ public:
     bool connect();
 
     // DDL
-    thrift::LabelInfo createLabel(const std::string& name,
-                                  const std::vector<thrift::PropertyDefThrift>& properties);
+    thrift::LabelInfo createLabel(const std::string& name, const std::vector<thrift::PropertyDefThrift>& properties);
     std::vector<thrift::LabelInfo> listLabels();
 
     thrift::EdgeLabelInfo createEdgeLabel(const std::string& name,
-                                           const std::vector<thrift::PropertyDefThrift>& properties);
+                                          const std::vector<thrift::PropertyDefThrift>& properties);
     std::vector<thrift::EdgeLabelInfo> listEdgeLabels();
 
     // DML

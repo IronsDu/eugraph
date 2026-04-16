@@ -1,10 +1,10 @@
 #include <gtest/gtest.h>
 
 #include "compute_service/executor/query_executor.hpp"
+#include "gen-cpp2/eugraph_types.h"
 #include "metadata_service/metadata_service.hpp"
 #include "server/eugraph_handler.hpp"
 #include "storage/graph_store_impl.hpp"
-#include "gen-cpp2/eugraph_types.h"
 
 #include <chrono>
 #include <filesystem>
@@ -71,14 +71,14 @@ protected:
     LabelInfo createLabel(const std::string& name, std::vector<PropertyDefThrift> props = {}) {
         LabelInfo info;
         handler_->sync_createLabel(info, std::make_unique<std::string>(name),
-                                    std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
+                                   std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
         return info;
     }
 
     EdgeLabelInfo createEdgeLabel(const std::string& name, std::vector<PropertyDefThrift> props = {}) {
         EdgeLabelInfo info;
         handler_->sync_createEdgeLabel(info, std::make_unique<std::string>(name),
-                                        std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
+                                       std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
         return info;
     }
 };
@@ -86,7 +86,8 @@ protected:
 // ==================== DDL Tests ====================
 
 TEST_F(RpcIntegrationTest, CreateAndListLabels) {
-    auto info = createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING), makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    auto info = createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
+                                       makePropDef("age", eugraph::thrift::PropertyType::INT64)});
     EXPECT_EQ(info.id().value(), 1);
     EXPECT_EQ(info.name().value(), "Person");
 
@@ -108,7 +109,8 @@ TEST_F(RpcIntegrationTest, CreateAndListEdgeLabels) {
 // ==================== Vertex CRUD ====================
 
 TEST_F(RpcIntegrationTest, CreateVerticesWithPropertiesAndQuery) {
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING), makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
 
     auto r1 = execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})");
     EXPECT_TRUE(r1.error().value().empty()) << "CREATE error: " << r1.error().value();
@@ -129,7 +131,8 @@ TEST_F(RpcIntegrationTest, CreateVerticesWithPropertiesAndQuery) {
 
 TEST_F(RpcIntegrationTest, CreateEdgeInSingleStatementAndExpand) {
     // Create label and edge label with properties
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING), makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
 
     // Create alice->bob in one statement
@@ -148,7 +151,8 @@ TEST_F(RpcIntegrationTest, CreateEdgeInSingleStatementAndExpand) {
 }
 
 TEST_F(RpcIntegrationTest, FullAdjacencyScenario) {
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING), makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
 
     // Create all vertices and edges in single CREATE statements
@@ -184,55 +188,49 @@ TEST_F(RpcIntegrationTest, PerformanceBenchmark) {
                            makePropDef("age", eugraph::thrift::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
     auto t1 = Clock::now();
-    std::cout << "[PERF] DDL (createLabel + createEdgeLabel): "
-              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms\n";
+    std::cout << "[PERF] DDL (createLabel + createEdgeLabel): " << std::chrono::duration_cast<ms>(t1 - t0).count()
+              << " ms\n";
 
     // CREATE with properties
     t0 = Clock::now();
-    auto r1 = execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})-[:KNOWS]->(bob:Person {name: \"Bob\", age: 25})");
+    auto r1 =
+        execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})-[:KNOWS]->(bob:Person {name: \"Bob\", age: 25})");
     t1 = Clock::now();
-    std::cout << "[PERF] CREATE (vertex+edge): "
-              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
+    std::cout << "[PERF] CREATE (vertex+edge): " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
               << " error=" << r1.error().value() << "\n";
 
     // Simple MATCH scan
     t0 = Clock::now();
     auto r2 = execCypher("MATCH (n:Person) RETURN n.name, n.age");
     t1 = Clock::now();
-    std::cout << "[PERF] MATCH scan (2 vertices): "
-              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
+    std::cout << "[PERF] MATCH scan (2 vertices): " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
               << " rows=" << r2.rows()->size() << "\n";
 
     // MATCH with property filter
     t0 = Clock::now();
     auto r3 = execCypher("MATCH (n:Person {name: \"Alice\"}) RETURN n.name, n.age");
     t1 = Clock::now();
-    std::cout << "[PERF] MATCH filter: "
-              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
+    std::cout << "[PERF] MATCH filter: " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
               << " rows=" << r3.rows()->size() << "\n";
 
     // Expand query
     t0 = Clock::now();
     auto r4 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name, b.age");
     t1 = Clock::now();
-    std::cout << "[PERF] MATCH expand: "
-              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
-              << " rows=" << r4.rows()->size()
-              << " error=" << r4.error().value() << "\n";
+    std::cout << "[PERF] MATCH expand: " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
+              << " rows=" << r4.rows()->size() << " error=" << r4.error().value() << "\n";
 
     // Repeat expand to see if there's per-query overhead
     t0 = Clock::now();
     auto r5 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name");
     t1 = Clock::now();
-    std::cout << "[PERF] MATCH expand (repeat): "
-              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms\n";
+    std::cout << "[PERF] MATCH expand (repeat): " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms\n";
 
     // Simple MATCH repeat
     t0 = Clock::now();
     auto r6 = execCypher("MATCH (n:Person) RETURN n.name");
     t1 = Clock::now();
-    std::cout << "[PERF] MATCH scan (repeat): "
-              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms\n";
+    std::cout << "[PERF] MATCH scan (repeat): " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms\n";
 }
 
 TEST_F(RpcIntegrationTest, ExecuteSyncDetailedTiming) {
@@ -278,7 +276,8 @@ TEST_F(RpcIntegrationTest, ExecuteSyncDetailedTiming) {
 
     auto avg = [](const std::vector<long>& v) -> long {
         long sum = 0;
-        for (auto x : v) sum += x;
+        for (auto x : v)
+            sum += x;
         return sum / (long)v.size();
     };
 
@@ -328,16 +327,17 @@ TEST_F(RpcIntegrationTest, MetadataOverheadAnalysis) {
 
     auto avg = [](const std::vector<long>& v) -> long {
         long sum = 0;
-        for (auto x : v) sum += x;
+        for (auto x : v)
+            sum += x;
         return sum / (long)v.size();
     };
 
     std::cout << "\n====== Scan Scaling Analysis ======\n";
     std::cout << "Scan ~52 vertices:  " << avg(scan_small) << " us\n";
     std::cout << "Scan ~102 vertices: " << avg(scan_large) << " us\n";
-    std::cout << "Per-vertex overhead: "
-              << (avg(scan_large) - avg(scan_small)) / 50 << " us/vertex\n";
-    std::cout << "Fixed overhead (approx): " << avg(scan_small) - 52 * ((avg(scan_large) - avg(scan_small)) / 50) << " us\n";
+    std::cout << "Per-vertex overhead: " << (avg(scan_large) - avg(scan_small)) / 50 << " us/vertex\n";
+    std::cout << "Fixed overhead (approx): " << avg(scan_small) - 52 * ((avg(scan_large) - avg(scan_small)) / 50)
+              << " us\n";
 }
 
 } // anonymous namespace

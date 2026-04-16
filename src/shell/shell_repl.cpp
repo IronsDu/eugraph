@@ -1,11 +1,11 @@
 #include "shell/shell_repl.hpp"
-#include "shell/rpc_client.hpp"
 #include "server/eugraph_handler.hpp"
+#include "shell/rpc_client.hpp"
 
 #include "compute_service/executor/query_executor.hpp"
+#include "gen-cpp2/eugraph_types.h"
 #include "metadata_service/metadata_service.hpp"
 #include "storage/graph_store_impl.hpp"
-#include "gen-cpp2/eugraph_types.h"
 
 #include <folly/coro/BlockingWait.h>
 #include <spdlog/spdlog.h>
@@ -47,8 +47,7 @@ std::string resultValueToString(const ResultValue& rv) {
     return "?";
 }
 
-std::string formatTable(const std::vector<std::string>& columns,
-                        const std::vector<std::vector<std::string>>& rows) {
+std::string formatTable(const std::vector<std::string>& columns, const std::vector<std::vector<std::string>>& rows) {
     if (columns.empty()) {
         return "(no results)\n";
     }
@@ -156,9 +155,12 @@ bool isCompleteCypher(const std::string& input) {
 thrift::PropertyType parsePropertyType(const std::string& type_str) {
     std::string upper = type_str;
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-    if (upper == "BOOL") return thrift::PropertyType::BOOL;
-    if (upper == "INT64" || upper == "INT" || upper == "INTEGER") return thrift::PropertyType::INT64;
-    if (upper == "DOUBLE" || upper == "FLOAT") return thrift::PropertyType::DOUBLE;
+    if (upper == "BOOL")
+        return thrift::PropertyType::BOOL;
+    if (upper == "INT64" || upper == "INT" || upper == "INTEGER")
+        return thrift::PropertyType::INT64;
+    if (upper == "DOUBLE" || upper == "FLOAT")
+        return thrift::PropertyType::DOUBLE;
     return thrift::PropertyType::STRING;
 }
 
@@ -186,8 +188,8 @@ std::vector<PropertyDefThrift> parsePropertyDefs(const std::string& args) {
 
 // Common REPL loop for both embedded and RPC modes.
 // The handler_func callback processes each command.
-using CommandHandler = std::function<void(const std::string& cmd, const std::string& args,
-                                          const std::string& accumulated)>;
+using CommandHandler =
+    std::function<void(const std::string& cmd, const std::string& args, const std::string& accumulated)>;
 
 static void runReplLoop(const std::string& mode_label, CommandHandler handler) {
     std::cout << "EuGraph Shell (" << mode_label << " mode)" << std::endl;
@@ -268,8 +270,7 @@ static void runEmbeddedRepl(const ShellConfig& config) {
 
     std::cout << "Database: " << db_path << std::endl;
 
-    auto cmd_handler = [&handler](const std::string& cmd, const std::string& args,
-                                   const std::string& accumulated) {
+    auto cmd_handler = [&handler](const std::string& cmd, const std::string& args, const std::string& accumulated) {
         if (cmd == ":help") {
             std::cout << "Available commands:" << std::endl;
             std::cout << "  :create-label <name> [prop1:type1 prop2:type2 ...]" << std::endl;
@@ -293,7 +294,7 @@ static void runEmbeddedRepl(const ShellConfig& config) {
             auto props = parsePropertyDefs(rest);
             LabelInfo resp;
             handler.sync_createLabel(resp, std::make_unique<std::string>(name),
-                                      std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
+                                     std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
             std::cout << formatLabelCreated(resp.name().value(), resp.id().value());
         } else if (cmd == ":create-edge-label") {
             if (args.empty()) {
@@ -308,7 +309,7 @@ static void runEmbeddedRepl(const ShellConfig& config) {
             auto props = parsePropertyDefs(rest);
             EdgeLabelInfo resp;
             handler.sync_createEdgeLabel(resp, std::make_unique<std::string>(name),
-                                          std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
+                                         std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
             std::cout << formatEdgeLabelCreated(resp.name().value(), resp.id().value());
         } else if (cmd == ":list-labels") {
             std::vector<LabelInfo> labels;
@@ -320,10 +321,12 @@ static void runEmbeddedRepl(const ShellConfig& config) {
                 for (const auto& l : labels) {
                     std::string props_str;
                     for (size_t i = 0; i < l.properties()->size(); i++) {
-                        if (i > 0) props_str += ", ";
+                        if (i > 0)
+                            props_str += ", ";
                         props_str += l.properties()->at(i).name().value();
                     }
-                    if (props_str.empty()) props_str = "(none)";
+                    if (props_str.empty())
+                        props_str = "(none)";
                     rows.push_back({l.id().value(), l.name().value(), props_str});
                 }
                 std::cout << formatLabelList(rows);
@@ -368,8 +371,7 @@ static void runEmbeddedRepl(const ShellConfig& config) {
                     rows.push_back(std::move(cells));
                 }
                 std::cout << formatTable(*resp.columns(), rows);
-                std::cout << resp.rows()->size() << " row"
-                          << (resp.rows()->size() == 1 ? "" : "s") << std::endl;
+                std::cout << resp.rows()->size() << " row" << (resp.rows()->size() == 1 ? "" : "s") << std::endl;
             }
         } else {
             std::cerr << "Unknown command: " << cmd << std::endl;
@@ -395,8 +397,7 @@ static void runRpcRepl(const ShellConfig& config) {
     }
     std::cout << "Connected." << std::endl;
 
-    auto cmd_handler = [&client](const std::string& cmd, const std::string& args,
-                                  const std::string& accumulated) {
+    auto cmd_handler = [&client](const std::string& cmd, const std::string& args, const std::string& accumulated) {
         try {
             if (cmd == ":help") {
                 std::cout << "Available commands:" << std::endl;
@@ -451,10 +452,12 @@ static void runRpcRepl(const ShellConfig& config) {
                     for (const auto& l : labels) {
                         std::string props_str;
                         for (size_t i = 0; i < l.properties()->size(); i++) {
-                            if (i > 0) props_str += ", ";
+                            if (i > 0)
+                                props_str += ", ";
                             props_str += l.properties()->at(i).name().value();
                         }
-                        if (props_str.empty()) props_str = "(none)";
+                        if (props_str.empty())
+                            props_str = "(none)";
                         rows.push_back({l.id().value(), l.name().value(), props_str});
                     }
                     std::cout << formatLabelList(rows);
@@ -498,8 +501,7 @@ static void runRpcRepl(const ShellConfig& config) {
                         rows.push_back(std::move(cells));
                     }
                     std::cout << formatTable(*resp.columns(), rows);
-                    std::cout << resp.rows()->size() << " row"
-                              << (resp.rows()->size() == 1 ? "" : "s") << std::endl;
+                    std::cout << resp.rows()->size() << " row" << (resp.rows()->size() == 1 ? "" : "s") << std::endl;
                 }
                 std::cout << "  [RPC: " << ms << " us]" << std::endl;
             } else {

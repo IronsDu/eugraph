@@ -12,14 +12,11 @@
 namespace eugraph {
 namespace shell {
 
-EuGraphRpcClient::EuGraphRpcClient(const std::string& host, int port)
-    : host_(host), port_(port) {}
+EuGraphRpcClient::EuGraphRpcClient(const std::string& host, int port) : host_(host), port_(port) {}
 
 EuGraphRpcClient::~EuGraphRpcClient() {
     if (evb_) {
-        evb_->runImmediatelyOrRunInEventBaseThreadAndWait([this]() {
-            client_.reset();
-        });
+        evb_->runImmediatelyOrRunInEventBaseThreadAndWait([this]() { client_.reset(); });
         evb_->terminateLoopSoon();
     }
     if (evb_thread_.joinable()) {
@@ -32,17 +29,14 @@ bool EuGraphRpcClient::connect() {
         evb_ = std::make_shared<folly::EventBase>();
 
         // Start EventBase loop in a background thread
-        evb_thread_ = std::thread([this]() {
-            evb_->loopForever();
-        });
+        evb_thread_ = std::thread([this]() { evb_->loopForever(); });
 
         // Wait until the EVB thread is running
         evb_->waitUntilRunning();
 
         // Create socket and channel on the EVB thread to ensure proper I/O handling
         evb_->runInEventBaseThreadAndWait([&]() {
-            auto socket = folly::AsyncSocket::UniquePtr(
-                new folly::AsyncSocket(evb_.get(), host_.c_str(), port_));
+            auto socket = folly::AsyncSocket::UniquePtr(new folly::AsyncSocket(evb_.get(), host_.c_str(), port_));
             auto channel = apache::thrift::RocketClientChannel::newChannel(std::move(socket));
             channel->setTimeout(5000);
             client_ = std::make_shared<apache::thrift::Client<thrift::EuGraphService>>(std::move(channel));
@@ -69,14 +63,12 @@ T rpcCall(F&& func, folly::EventBase* evb, std::shared_ptr<apache::thrift::Clien
     // Schedule the RPC on the EVB thread
     evb->runInEventBaseThread([&]() {
         auto sf = func(client);
-        std::move(std::move(sf))
-            .via(evb)
-            .then([&](folly::Try<T> t) {
-                std::lock_guard<std::mutex> lock(m);
-                result = std::move(t);
-                done = true;
-                cv.notify_one();
-            });
+        std::move(std::move(sf)).via(evb).then([&](folly::Try<T> t) {
+            std::lock_guard<std::mutex> lock(m);
+            result = std::move(t);
+            done = true;
+            cv.notify_one();
+        });
     });
 
     // Wait for completion
@@ -94,35 +86,30 @@ T rpcCall(F&& func, folly::EventBase* evb, std::shared_ptr<apache::thrift::Clien
 } // anonymous namespace
 
 thrift::LabelInfo EuGraphRpcClient::createLabel(const std::string& name,
-                                                  const std::vector<thrift::PropertyDefThrift>& properties) {
-    return rpcCall<thrift::LabelInfo>(
-        [&](auto& c) { return c->semifuture_createLabel(name, properties); },
-        evb_.get(), client_);
+                                                const std::vector<thrift::PropertyDefThrift>& properties) {
+    return rpcCall<thrift::LabelInfo>([&](auto& c) { return c->semifuture_createLabel(name, properties); }, evb_.get(),
+                                      client_);
 }
 
 std::vector<thrift::LabelInfo> EuGraphRpcClient::listLabels() {
-    return rpcCall<std::vector<thrift::LabelInfo>>(
-        [&](auto& c) { return c->semifuture_listLabels(); },
-        evb_.get(), client_);
+    return rpcCall<std::vector<thrift::LabelInfo>>([&](auto& c) { return c->semifuture_listLabels(); }, evb_.get(),
+                                                   client_);
 }
 
 thrift::EdgeLabelInfo EuGraphRpcClient::createEdgeLabel(const std::string& name,
-                                                          const std::vector<thrift::PropertyDefThrift>& properties) {
-    return rpcCall<thrift::EdgeLabelInfo>(
-        [&](auto& c) { return c->semifuture_createEdgeLabel(name, properties); },
-        evb_.get(), client_);
+                                                        const std::vector<thrift::PropertyDefThrift>& properties) {
+    return rpcCall<thrift::EdgeLabelInfo>([&](auto& c) { return c->semifuture_createEdgeLabel(name, properties); },
+                                          evb_.get(), client_);
 }
 
 std::vector<thrift::EdgeLabelInfo> EuGraphRpcClient::listEdgeLabels() {
-    return rpcCall<std::vector<thrift::EdgeLabelInfo>>(
-        [&](auto& c) { return c->semifuture_listEdgeLabels(); },
-        evb_.get(), client_);
+    return rpcCall<std::vector<thrift::EdgeLabelInfo>>([&](auto& c) { return c->semifuture_listEdgeLabels(); },
+                                                       evb_.get(), client_);
 }
 
 thrift::QueryResult EuGraphRpcClient::executeCypher(const std::string& query) {
-    return rpcCall<thrift::QueryResult>(
-        [&](auto& c) { return c->semifuture_executeCypher(query); },
-        evb_.get(), client_);
+    return rpcCall<thrift::QueryResult>([&](auto& c) { return c->semifuture_executeCypher(query); }, evb_.get(),
+                                        client_);
 }
 
 } // namespace shell
