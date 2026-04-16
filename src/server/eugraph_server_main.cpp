@@ -1,8 +1,8 @@
 #include "compute_service/executor/query_executor.hpp"
+#include "gen-cpp2/EuGraphService.h"
 #include "metadata_service/metadata_service.hpp"
 #include "server/eugraph_handler.hpp"
 #include "storage/graph_store_impl.hpp"
-#include "gen-cpp2/EuGraphService.h"
 
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 

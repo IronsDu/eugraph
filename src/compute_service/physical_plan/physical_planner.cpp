@@ -15,16 +15,16 @@ PhysicalPlanner::plan(LogicalPlan& logical_plan, AsyncGraphStore& store, PlanCon
     return std::move(std::get<PlanOperatorResult>(result).op);
 }
 
-std::variant<PlanOperatorResult, std::string>
-PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanContext& ctx, Schema input_schema) {
+std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store,
+                                                                            PlanContext& ctx, Schema input_schema) {
     return std::visit(
         [this, &store, &ctx, &input_schema](auto& ptr) -> std::variant<PlanOperatorResult, std::string> {
             using T = std::decay_t<decltype(ptr)>;
             using OpType = typename T::element_type;
 
             if constexpr (std::is_same_v<OpType, AllNodeScanOp>) {
-                auto result = std::make_unique<AllNodeScanPhysicalOp>(ptr->variable, store, ctx.label_name_to_id,
-                                                                      ctx.label_defs);
+                auto result =
+                    std::make_unique<AllNodeScanPhysicalOp>(ptr->variable, store, ctx.label_name_to_id, ctx.label_defs);
                 Schema output_schema;
                 if (!ptr->variable.empty()) {
                     output_schema.push_back(ptr->variable);
@@ -110,9 +110,8 @@ PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanC
                     items.push_back(std::move(pi));
                 }
 
-                auto result =
-                    std::make_unique<ProjectPhysicalOp>(std::move(items), Schema(child_schema), std::move(child_op),
-                                                        &ctx.label_defs);
+                auto result = std::make_unique<ProjectPhysicalOp>(std::move(items), Schema(child_schema),
+                                                                  std::move(child_op), &ctx.label_defs);
                 return PlanOperatorResult{std::move(result), std::move(output_schema)};
 
             } else if constexpr (std::is_same_v<OpType, LimitOp>) {
@@ -168,8 +167,11 @@ PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanC
                                 }
                                 // Ensure props vector is large enough
                                 if (!name_to_id.empty()) {
-                                    props.resize(std::max_element(name_to_id.begin(), name_to_id.end(),
-                                                                   [](const auto& a, const auto& b) { return a.second < b.second; })->second + 1);
+                                    props.resize(std::max_element(
+                                                     name_to_id.begin(), name_to_id.end(),
+                                                     [](const auto& a, const auto& b) { return a.second < b.second; })
+                                                     ->second +
+                                                 1);
                                 }
                                 for (const auto& [pname, expr] : ptr->properties->entries) {
                                     auto pi_it = name_to_id.find(pname);

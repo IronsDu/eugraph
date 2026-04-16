@@ -32,13 +32,20 @@ namespace server {
 
 std::string propertyTypeToName(::eugraph::PropertyType t) {
     switch (t) {
-    case ::eugraph::PropertyType::BOOL: return "BOOL";
-    case ::eugraph::PropertyType::INT64: return "INT64";
-    case ::eugraph::PropertyType::DOUBLE: return "DOUBLE";
-    case ::eugraph::PropertyType::STRING: return "STRING";
-    case ::eugraph::PropertyType::INT64_ARRAY: return "INT64_ARRAY";
-    case ::eugraph::PropertyType::DOUBLE_ARRAY: return "DOUBLE_ARRAY";
-    case ::eugraph::PropertyType::STRING_ARRAY: return "STRING_ARRAY";
+    case ::eugraph::PropertyType::BOOL:
+        return "BOOL";
+    case ::eugraph::PropertyType::INT64:
+        return "INT64";
+    case ::eugraph::PropertyType::DOUBLE:
+        return "DOUBLE";
+    case ::eugraph::PropertyType::STRING:
+        return "STRING";
+    case ::eugraph::PropertyType::INT64_ARRAY:
+        return "INT64_ARRAY";
+    case ::eugraph::PropertyType::DOUBLE_ARRAY:
+        return "DOUBLE_ARRAY";
+    case ::eugraph::PropertyType::STRING_ARRAY:
+        return "STRING_ARRAY";
     }
     return "UNKNOWN";
 }
@@ -53,10 +60,12 @@ PropertyDef EuGraphHandler::toPropertyDef(const thrift::PropertyDefThrift& req, 
 }
 
 std::string EuGraphHandler::formatProperties(const std::vector<PropertyDef>& props) {
-    if (props.empty()) return "(none)";
+    if (props.empty())
+        return "(none)";
     std::string result;
     for (size_t i = 0; i < props.size(); i++) {
-        if (i > 0) result += ", ";
+        if (i > 0)
+            result += ", ";
         result += props[i].name + ":" + propertyTypeToName(props[i].type);
     }
     return result;
@@ -92,9 +101,8 @@ thrift::ResultValue EuGraphHandler::valueToThrift(const Value& val) {
 
 // ==================== DDL: Label ====================
 
-void EuGraphHandler::sync_createLabel(thrift::LabelInfo& _return,
-                                       std::unique_ptr<std::string> name,
-                                       std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
+void EuGraphHandler::sync_createLabel(thrift::LabelInfo& _return, std::unique_ptr<std::string> name,
+                                      std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
     std::vector<PropertyDef> defs;
     for (size_t i = 0; i < properties->size(); i++) {
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
@@ -145,9 +153,8 @@ void EuGraphHandler::sync_listLabels(std::vector<thrift::LabelInfo>& _return) {
 
 // ==================== DDL: EdgeLabel ====================
 
-void EuGraphHandler::sync_createEdgeLabel(thrift::EdgeLabelInfo& _return,
-                                            std::unique_ptr<std::string> name,
-                                            std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
+void EuGraphHandler::sync_createEdgeLabel(thrift::EdgeLabelInfo& _return, std::unique_ptr<std::string> name,
+                                          std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
     std::vector<PropertyDef> defs;
     for (size_t i = 0; i < properties->size(); i++) {
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
@@ -180,8 +187,7 @@ void EuGraphHandler::sync_listEdgeLabels(std::vector<thrift::EdgeLabelInfo>& _re
 
 // ==================== DML: Cypher ====================
 
-void EuGraphHandler::sync_executeCypher(thrift::QueryResult& _return,
-                                          std::unique_ptr<std::string> query) {
+void EuGraphHandler::sync_executeCypher(thrift::QueryResult& _return, std::unique_ptr<std::string> query) {
     auto result = executor_.executeSync(*query);
 
     if (!result.error.empty()) {

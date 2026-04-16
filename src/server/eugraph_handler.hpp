@@ -2,9 +2,9 @@
 
 #include "common/types/graph_types.hpp"
 #include "compute_service/executor/query_executor.hpp"
+#include "gen-cpp2/EuGraphService.h"
 #include "metadata_service/metadata_service.hpp"
 #include "storage/graph_store.hpp"
-#include "gen-cpp2/EuGraphService.h"
 
 namespace eugraph {
 namespace server {
@@ -17,20 +17,17 @@ public:
         : store_(store), meta_(meta), executor_(executor) {}
 
     // Thrift service methods (sync_ interface)
-    void sync_createLabel(thrift::LabelInfo& _return,
-                          std::unique_ptr<std::string> name,
+    void sync_createLabel(thrift::LabelInfo& _return, std::unique_ptr<std::string> name,
                           std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) override;
 
     void sync_listLabels(std::vector<thrift::LabelInfo>& _return) override;
 
-    void sync_createEdgeLabel(thrift::EdgeLabelInfo& _return,
-                              std::unique_ptr<std::string> name,
+    void sync_createEdgeLabel(thrift::EdgeLabelInfo& _return, std::unique_ptr<std::string> name,
                               std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) override;
 
     void sync_listEdgeLabels(std::vector<thrift::EdgeLabelInfo>& _return) override;
 
-    void sync_executeCypher(thrift::QueryResult& _return,
-                            std::unique_ptr<std::string> query) override;
+    void sync_executeCypher(thrift::QueryResult& _return, std::unique_ptr<std::string> query) override;
 
 private:
     // Convert runtime Value to Thrift ResultValue union

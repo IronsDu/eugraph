@@ -9,8 +9,7 @@ namespace shell {
 // ==================== Value formatting ====================
 
 // Format query results as an ASCII table
-std::string formatTable(const std::vector<std::string>& columns,
-                        const std::vector<std::vector<std::string>>& rows);
+std::string formatTable(const std::vector<std::string>& columns, const std::vector<std::vector<std::string>>& rows);
 
 // Format DDL result
 std::string formatLabelCreated(const std::string& name, int id);

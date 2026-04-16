@@ -20,7 +20,7 @@ namespace compute {
 struct PlanContext {
     std::unordered_map<std::string, LabelId> label_name_to_id;
     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
-    std::unordered_map<LabelId, LabelDef> label_defs;            // label_id → full definition (with property defs)
+    std::unordered_map<LabelId, LabelDef> label_defs; // label_id → full definition (with property defs)
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
     std::unordered_map<std::string, VertexId> variable_vertex_ids; // for CREATE: assigned IDs
     std::unordered_map<std::string, EdgeId> variable_edge_ids;     // for CREATE: assigned IDs
@@ -43,8 +43,8 @@ public:
                                                                       PlanContext& ctx);
 
 private:
-    std::variant<PlanOperatorResult, std::string>
-    planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planOperator(LogicalOperator& op, AsyncGraphStore& store,
+                                                               PlanContext& ctx, Schema input_schema);
 };
 
 } // namespace compute
