@@ -159,6 +159,9 @@ target_include_directories(eugraph_thrift PUBLIC
     "${PROJECT_SOURCE_DIR}/src"
 )
 
+# Disable warnings for thrift-generated code
+target_compile_options(eugraph_thrift PRIVATE -w)
+
 target_link_libraries(eugraph_thrift PUBLIC
     FBThrift::thriftcpp2
     FBThrift::async
