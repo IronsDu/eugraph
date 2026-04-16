@@ -2,12 +2,18 @@
 
 #include "gen-cpp2/EuGraphService.h"
 
+#include <folly/io/async/EventBase.h>
+
+#include <memory>
 #include <string>
+#include <thread>
 
 namespace eugraph {
 namespace shell {
 
 /// RPC client that connects to a remote EuGraph server via fbthrift.
+/// Uses a background thread for the EventBase loop (loopForever) with
+/// semifuture_* calls bridged via mutex/condition_variable.
 class EuGraphRpcClient {
 public:
     EuGraphRpcClient(const std::string& host, int port);
@@ -32,8 +38,8 @@ private:
     std::string host_;
     int port_;
     std::shared_ptr<apache::thrift::Client<thrift::EuGraphService>> client_;
-    std::shared_ptr<apache::thrift::ThriftServer> server_; // keeps event base alive
-    folly::EventBase* evb_ = nullptr;
+    std::shared_ptr<folly::EventBase> evb_;
+    std::thread evb_thread_;
 };
 
 } // namespace shell

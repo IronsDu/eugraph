@@ -6,8 +6,11 @@
 #include "storage/graph_store_impl.hpp"
 #include "gen-cpp2/eugraph_types.h"
 
+#include <chrono>
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
+
+using Clock = std::chrono::steady_clock;
 
 using namespace eugraph;
 using namespace eugraph::thrift;
@@ -169,6 +172,172 @@ TEST_F(RpcIntegrationTest, FullAdjacencyScenario) {
     auto r3 = execCypher("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name");
     EXPECT_TRUE(r3.error().value().empty()) << "All edges error: " << r3.error().value();
     EXPECT_GE(r3.rows()->size(), 1) << "Should have at least 1 edge";
+}
+
+// ==================== Performance Benchmark ====================
+
+TEST_F(RpcIntegrationTest, PerformanceBenchmark) {
+    using ms = std::chrono::milliseconds;
+
+    auto t0 = Clock::now();
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createEdgeLabel("KNOWS");
+    auto t1 = Clock::now();
+    std::cout << "[PERF] DDL (createLabel + createEdgeLabel): "
+              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms\n";
+
+    // CREATE with properties
+    t0 = Clock::now();
+    auto r1 = execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})-[:KNOWS]->(bob:Person {name: \"Bob\", age: 25})");
+    t1 = Clock::now();
+    std::cout << "[PERF] CREATE (vertex+edge): "
+              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
+              << " error=" << r1.error().value() << "\n";
+
+    // Simple MATCH scan
+    t0 = Clock::now();
+    auto r2 = execCypher("MATCH (n:Person) RETURN n.name, n.age");
+    t1 = Clock::now();
+    std::cout << "[PERF] MATCH scan (2 vertices): "
+              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
+              << " rows=" << r2.rows()->size() << "\n";
+
+    // MATCH with property filter
+    t0 = Clock::now();
+    auto r3 = execCypher("MATCH (n:Person {name: \"Alice\"}) RETURN n.name, n.age");
+    t1 = Clock::now();
+    std::cout << "[PERF] MATCH filter: "
+              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
+              << " rows=" << r3.rows()->size() << "\n";
+
+    // Expand query
+    t0 = Clock::now();
+    auto r4 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name, b.age");
+    t1 = Clock::now();
+    std::cout << "[PERF] MATCH expand: "
+              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
+              << " rows=" << r4.rows()->size()
+              << " error=" << r4.error().value() << "\n";
+
+    // Repeat expand to see if there's per-query overhead
+    t0 = Clock::now();
+    auto r5 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name");
+    t1 = Clock::now();
+    std::cout << "[PERF] MATCH expand (repeat): "
+              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms\n";
+
+    // Simple MATCH repeat
+    t0 = Clock::now();
+    auto r6 = execCypher("MATCH (n:Person) RETURN n.name");
+    t1 = Clock::now();
+    std::cout << "[PERF] MATCH scan (repeat): "
+              << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms\n";
+}
+
+TEST_F(RpcIntegrationTest, ExecuteSyncDetailedTiming) {
+    // Measure each phase of executeSync independently
+    using us = std::chrono::microseconds;
+
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createEdgeLabel("KNOWS");
+
+    // Warm up: create some data
+    execCypher("CREATE (a:Person {name: \"Alice\", age: 30})-[:KNOWS]->(b:Person {name: \"Bob\", age: 25})");
+
+    // Measure a batch of queries to average out noise
+    constexpr int N = 20;
+    std::vector<long> create_times, scan_times, filter_times, expand_times;
+
+    for (int i = 0; i < N; i++) {
+        // Create
+        auto t0 = Clock::now();
+        execCypher("CREATE (x:Person {name: \"X\", age: " + std::to_string(i) + "})");
+        auto t1 = Clock::now();
+        create_times.push_back(std::chrono::duration_cast<us>(t1 - t0).count());
+
+        // Scan
+        t0 = Clock::now();
+        execCypher("MATCH (n:Person) RETURN n.name");
+        t1 = Clock::now();
+        scan_times.push_back(std::chrono::duration_cast<us>(t1 - t0).count());
+
+        // Filter
+        t0 = Clock::now();
+        execCypher("MATCH (n:Person {name: \"Alice\"}) RETURN n.name");
+        t1 = Clock::now();
+        filter_times.push_back(std::chrono::duration_cast<us>(t1 - t0).count());
+
+        // Expand
+        t0 = Clock::now();
+        execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name");
+        t1 = Clock::now();
+        expand_times.push_back(std::chrono::duration_cast<us>(t1 - t0).count());
+    }
+
+    auto avg = [](const std::vector<long>& v) -> long {
+        long sum = 0;
+        for (auto x : v) sum += x;
+        return sum / (long)v.size();
+    };
+
+    std::cout << "\n====== ExecuteSync Detailed Timing (avg over " << N << " runs) ======\n";
+    std::cout << "CREATE:   " << avg(create_times) << " us\n";
+    std::cout << "SCAN:     " << avg(scan_times) << " us\n";
+    std::cout << "FILTER:   " << avg(filter_times) << " us\n";
+    std::cout << "EXPAND:   " << avg(expand_times) << " us\n";
+}
+
+TEST_F(RpcIntegrationTest, MetadataOverheadAnalysis) {
+    using us = std::chrono::microseconds;
+
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createEdgeLabel("KNOWS");
+
+    // Create 50 vertices to make scan overhead visible
+    for (int i = 0; i < 50; i++) {
+        execCypher("CREATE (p:Person {name: \"P" + std::to_string(i) + "\", age: " + std::to_string(i) + "})");
+    }
+
+    // Scan timing - this includes per-vertex IO dispatch
+    constexpr int M = 10;
+    std::vector<long> scan_small, scan_large;
+    std::vector<long> create_ops;
+
+    // Measure scan on 52 vertices
+    for (int i = 0; i < M; i++) {
+        auto t0 = Clock::now();
+        execCypher("MATCH (n:Person) RETURN n.name, n.age");
+        auto t1 = Clock::now();
+        scan_small.push_back(std::chrono::duration_cast<us>(t1 - t0).count());
+    }
+
+    // Add 50 more, scan 102 vertices
+    for (int i = 0; i < 50; i++) {
+        execCypher("CREATE (q:Person {name: \"Q" + std::to_string(i) + "\", age: " + std::to_string(i + 50) + "})");
+    }
+
+    for (int i = 0; i < M; i++) {
+        auto t0 = Clock::now();
+        execCypher("MATCH (n:Person) RETURN n.name, n.age");
+        auto t1 = Clock::now();
+        scan_large.push_back(std::chrono::duration_cast<us>(t1 - t0).count());
+    }
+
+    auto avg = [](const std::vector<long>& v) -> long {
+        long sum = 0;
+        for (auto x : v) sum += x;
+        return sum / (long)v.size();
+    };
+
+    std::cout << "\n====== Scan Scaling Analysis ======\n";
+    std::cout << "Scan ~52 vertices:  " << avg(scan_small) << " us\n";
+    std::cout << "Scan ~102 vertices: " << avg(scan_large) << " us\n";
+    std::cout << "Per-vertex overhead: "
+              << (avg(scan_large) - avg(scan_small)) / 50 << " us/vertex\n";
+    std::cout << "Fixed overhead (approx): " << avg(scan_small) - 52 * ((avg(scan_large) - avg(scan_small)) / 50) << " us\n";
 }
 
 } // anonymous namespace

@@ -11,6 +11,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -418,8 +419,12 @@ static void runRpcRepl(const ShellConfig& config) {
                 std::string rest;
                 std::getline(iss, rest);
                 auto props = parsePropertyDefs(rest);
+                auto t0 = std::chrono::steady_clock::now();
                 auto resp = client.createLabel(name, props);
+                auto t1 = std::chrono::steady_clock::now();
+                auto ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
                 std::cout << formatLabelCreated(resp.name().value(), resp.id().value());
+                std::cout << "  [RPC: " << ms << " us]" << std::endl;
             } else if (cmd == ":create-edge-label") {
                 if (args.empty()) {
                     std::cerr << "Usage: :create-edge-label <name> [prop1:type1 ...]" << std::endl;
@@ -431,8 +436,12 @@ static void runRpcRepl(const ShellConfig& config) {
                 std::string rest;
                 std::getline(iss, rest);
                 auto props = parsePropertyDefs(rest);
+                auto t0 = std::chrono::steady_clock::now();
                 auto resp = client.createEdgeLabel(name, props);
+                auto t1 = std::chrono::steady_clock::now();
+                auto ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
                 std::cout << formatEdgeLabelCreated(resp.name().value(), resp.id().value());
+                std::cout << "  [RPC: " << ms << " us]" << std::endl;
             } else if (cmd == ":list-labels") {
                 auto labels = client.listLabels();
                 if (labels.empty()) {
@@ -466,7 +475,10 @@ static void runRpcRepl(const ShellConfig& config) {
                 if (!query.empty() && query.back() == ';') {
                     query.pop_back();
                 }
+                auto t0 = std::chrono::steady_clock::now();
                 auto resp = client.executeCypher(query);
+                auto t1 = std::chrono::steady_clock::now();
+                auto ms = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
                 if (!resp.error().value().empty()) {
                     std::cerr << "Error: " << resp.error().value() << std::endl;
                 } else if (resp.columns()->empty()) {
@@ -489,6 +501,7 @@ static void runRpcRepl(const ShellConfig& config) {
                     std::cout << resp.rows()->size() << " row"
                               << (resp.rows()->size() == 1 ? "" : "s") << std::endl;
                 }
+                std::cout << "  [RPC: " << ms << " us]" << std::endl;
             } else {
                 std::cerr << "Unknown command: " << cmd << std::endl;
             }
