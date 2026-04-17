@@ -26,7 +26,7 @@ bool EuGraphRpcClient::connect() {
         auto socket =
             folly::AsyncSocket::UniquePtr(new folly::AsyncSocket(evb_.get(), host_.c_str(), port_));
         auto channel = apache::thrift::RocketClientChannel::newChannel(std::move(socket));
-        channel->setTimeout(5000);
+        channel->setTimeout(30000);
         client_ = std::make_unique<apache::thrift::Client<thrift::EuGraphService>>(std::move(channel));
         return true;
     } catch (const std::exception& e) {
