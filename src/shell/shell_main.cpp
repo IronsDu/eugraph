@@ -37,7 +37,7 @@ static ShellConfig parseArgs(int argc, char* argv[]) {
 int main(int argc, char* argv[]) {
     auto config = parseArgs(argc, argv);
     int folly_argc = 1;
-    folly::init(&folly_argc, &argv);
+    folly::Init init(&folly_argc, &argv);
     runRepl(config);
     return 0;
 }

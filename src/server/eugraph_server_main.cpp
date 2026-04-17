@@ -52,9 +52,9 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
 
 int main(int argc, char* argv[]) {
     auto config = parseArgs(argc, argv);
-    // folly::init only needs program name; our custom flags confuse gflags
+    // folly::Init only needs program name; our custom flags confuse gflags
     int folly_argc = 1;
-    folly::init(&folly_argc, &argv);
+    folly::Init init(&folly_argc, &argv);
 
     spdlog::info("Starting EuGraph server...");
     spdlog::info("  Port: {}", config.port);
