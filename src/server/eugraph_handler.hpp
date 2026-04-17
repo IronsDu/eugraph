@@ -6,28 +6,33 @@
 #include "metadata_service/metadata_service.hpp"
 #include "storage/graph_store.hpp"
 
+#include <folly/coro/Task.h>
+
 namespace eugraph {
 namespace server {
 
 /// Service handler that implements the Thrift-generated EuGraphService interface.
-/// Used both in embedded mode (direct calls) and RPC mode (via fbthrift server).
+/// Uses fbthrift coroutine (co_*) methods for async request handling.
 class EuGraphHandler : public apache::thrift::ServiceHandler<thrift::EuGraphService> {
 public:
     EuGraphHandler(IGraphStore& store, IMetadataService& meta, compute::QueryExecutor& executor)
         : store_(store), meta_(meta), executor_(executor) {}
 
-    // Thrift service methods (sync_ interface)
-    void sync_createLabel(thrift::LabelInfo& _return, std::unique_ptr<std::string> name,
-                          std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) override;
+    // Thrift service methods (coroutine interface)
+    folly::coro::Task<std::unique_ptr<thrift::LabelInfo>>
+    co_createLabel(std::unique_ptr<std::string> name,
+                   std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) override;
 
-    void sync_listLabels(std::vector<thrift::LabelInfo>& _return) override;
+    folly::coro::Task<std::unique_ptr<std::vector<thrift::LabelInfo>>> co_listLabels() override;
 
-    void sync_createEdgeLabel(thrift::EdgeLabelInfo& _return, std::unique_ptr<std::string> name,
-                              std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) override;
+    folly::coro::Task<std::unique_ptr<thrift::EdgeLabelInfo>>
+    co_createEdgeLabel(std::unique_ptr<std::string> name,
+                       std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) override;
 
-    void sync_listEdgeLabels(std::vector<thrift::EdgeLabelInfo>& _return) override;
+    folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> co_listEdgeLabels() override;
 
-    void sync_executeCypher(thrift::QueryResult& _return, std::unique_ptr<std::string> query) override;
+    folly::coro::Task<std::unique_ptr<thrift::QueryResult>>
+    co_executeCypher(std::unique_ptr<std::string> query) override;
 
 private:
     // Convert runtime Value to Thrift ResultValue union
@@ -38,9 +43,6 @@ private:
 
     // Convert Thrift PropertyDefThrift to internal PropertyDef
     static PropertyDef toPropertyDef(const thrift::PropertyDefThrift& req, uint16_t id);
-
-    // Format properties for display
-    static std::string formatProperties(const std::vector<PropertyDef>& props);
 
     IGraphStore& store_;
     IMetadataService& meta_;

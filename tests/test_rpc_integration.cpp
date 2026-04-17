@@ -1,14 +1,18 @@
 #include <gtest/gtest.h>
 
+#include <folly/init/Init.h>
+
 #include "compute_service/executor/query_executor.hpp"
 #include "gen-cpp2/eugraph_types.h"
 #include "metadata_service/metadata_service.hpp"
 #include "server/eugraph_handler.hpp"
+#include "shell/rpc_client.hpp"
 #include "storage/graph_store_impl.hpp"
 
 #include <chrono>
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
+#include <thrift/lib/cpp2/util/ScopedServerInterfaceThread.h>
 
 using Clock = std::chrono::steady_clock;
 
@@ -37,7 +41,11 @@ protected:
     std::unique_ptr<GraphStoreImpl> store_;
     std::unique_ptr<MetadataServiceImpl> meta_;
     std::unique_ptr<compute::QueryExecutor> executor_;
-    std::unique_ptr<server::EuGraphHandler> handler_;
+    std::shared_ptr<server::EuGraphHandler> handler_;
+
+    // Real RPC server and client
+    std::unique_ptr<apache::thrift::ScopedServerInterfaceThread> server_;
+    std::unique_ptr<shell::EuGraphRpcClient> client_;
 
     void SetUp() override {
         db_path_ = getTestDbPath();
@@ -51,10 +59,21 @@ protected:
         ASSERT_TRUE(opened);
 
         executor_ = std::make_unique<compute::QueryExecutor>(*store_, *meta_, compute::QueryExecutor::Config{});
-        handler_ = std::make_unique<server::EuGraphHandler>(*store_, *meta_, *executor_);
+        handler_ = std::make_shared<server::EuGraphHandler>(*store_, *meta_, *executor_);
+
+        // Start real fbthrift server via ScopedServerInterfaceThread
+        server_ = std::make_unique<apache::thrift::ScopedServerInterfaceThread>(handler_);
+
+        // Get a connected thrift client (uses default RocketClientChannel)
+        auto thrift_client = server_->newClient<apache::thrift::Client<thrift::EuGraphService>>();
+
+        // Wrap in EuGraphRpcClient (same wrapper the shell uses)
+        client_ = std::make_unique<shell::EuGraphRpcClient>(std::move(thrift_client));
     }
 
     void TearDown() override {
+        client_.reset();
+        server_.reset();
         handler_.reset();
         executor_.reset();
         blockingWait(meta_->close());
@@ -63,23 +82,15 @@ protected:
     }
 
     QueryResult execCypher(const std::string& query) {
-        QueryResult result;
-        handler_->sync_executeCypher(result, std::make_unique<std::string>(query));
-        return result;
+        return client_->executeCypher(query);
     }
 
     LabelInfo createLabel(const std::string& name, std::vector<PropertyDefThrift> props = {}) {
-        LabelInfo info;
-        handler_->sync_createLabel(info, std::make_unique<std::string>(name),
-                                   std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
-        return info;
+        return client_->createLabel(name, props);
     }
 
     EdgeLabelInfo createEdgeLabel(const std::string& name, std::vector<PropertyDefThrift> props = {}) {
-        EdgeLabelInfo info;
-        handler_->sync_createEdgeLabel(info, std::make_unique<std::string>(name),
-                                       std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
-        return info;
+        return client_->createEdgeLabel(name, props);
     }
 };
 
@@ -91,8 +102,7 @@ TEST_F(RpcIntegrationTest, CreateAndListLabels) {
     EXPECT_EQ(info.id().value(), 1);
     EXPECT_EQ(info.name().value(), "Person");
 
-    std::vector<LabelInfo> labels;
-    handler_->sync_listLabels(labels);
+    auto labels = client_->listLabels();
     EXPECT_EQ(labels.size(), 1);
 }
 
@@ -101,8 +111,7 @@ TEST_F(RpcIntegrationTest, CreateAndListEdgeLabels) {
     EXPECT_EQ(info.id().value(), 1);
     EXPECT_EQ(info.name().value(), "KNOWS");
 
-    std::vector<EdgeLabelInfo> labels;
-    handler_->sync_listEdgeLabels(labels);
+    auto labels = client_->listEdgeLabels();
     EXPECT_EQ(labels.size(), 1);
 }
 
@@ -130,20 +139,16 @@ TEST_F(RpcIntegrationTest, CreateVerticesWithPropertiesAndQuery) {
 // ==================== Adjacency Queries ====================
 
 TEST_F(RpcIntegrationTest, CreateEdgeInSingleStatementAndExpand) {
-    // Create label and edge label with properties
     createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
                            makePropDef("age", eugraph::thrift::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
 
-    // Create alice->bob in one statement
     auto r1 = execCypher("CREATE (alice:Person {name: \"Alice\"})-[:KNOWS]->(bob:Person {name: \"Bob\"})");
     EXPECT_TRUE(r1.error().value().empty()) << "CREATE edge: " << r1.error().value();
 
-    // Verify 2 persons exist
     auto r2 = execCypher("MATCH (n:Person) RETURN n.name");
     ASSERT_EQ(r2.rows()->size(), 2) << "Should have 2 Person vertices";
 
-    // Expand: find alice's neighbors
     auto r3 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name");
     EXPECT_TRUE(r3.error().value().empty()) << "Expand error: " << r3.error().value();
     ASSERT_EQ(r3.rows()->size(), 1) << "Alice should have 1 KNOWS neighbor";
@@ -155,24 +160,18 @@ TEST_F(RpcIntegrationTest, FullAdjacencyScenario) {
                            makePropDef("age", eugraph::thrift::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
 
-    // Create all vertices and edges in single CREATE statements
     execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})-[:KNOWS]->(bob:Person {name: \"Bob\", age: 25})");
     execCypher("CREATE (bob:Person {name: \"Bob\", age: 25})-[:KNOWS]->(carol:Person {name: \"Carol\", age: 28})");
     execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})-[:KNOWS]->(carol:Person {name: \"Carol\", age: 28})");
 
-    // Verify all persons
     auto r1 = execCypher("MATCH (n:Person) RETURN n.name");
     EXPECT_TRUE(r1.error().value().empty()) << "Scan error: " << r1.error().value();
-    // Note: creates duplicate persons (alice, bob, carol created multiple times)
-    // This is expected because each CREATE statement is independent
     EXPECT_GE(r1.rows()->size(), 3);
 
-    // Alice's friends (expand from the first alice created)
     auto r2 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(f) RETURN f.name");
     EXPECT_TRUE(r2.error().value().empty()) << "Alice expand error: " << r2.error().value();
     EXPECT_GE(r2.rows()->size(), 1) << "Alice should have at least 1 friend";
 
-    // All relationships
     auto r3 = execCypher("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name");
     EXPECT_TRUE(r3.error().value().empty()) << "All edges error: " << r3.error().value();
     EXPECT_GE(r3.rows()->size(), 1) << "Should have at least 1 edge";
@@ -191,7 +190,6 @@ TEST_F(RpcIntegrationTest, PerformanceBenchmark) {
     std::cout << "[PERF] DDL (createLabel + createEdgeLabel): " << std::chrono::duration_cast<ms>(t1 - t0).count()
               << " ms\n";
 
-    // CREATE with properties
     t0 = Clock::now();
     auto r1 =
         execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})-[:KNOWS]->(bob:Person {name: \"Bob\", age: 25})");
@@ -199,75 +197,63 @@ TEST_F(RpcIntegrationTest, PerformanceBenchmark) {
     std::cout << "[PERF] CREATE (vertex+edge): " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
               << " error=" << r1.error().value() << "\n";
 
-    // Simple MATCH scan
     t0 = Clock::now();
     auto r2 = execCypher("MATCH (n:Person) RETURN n.name, n.age");
     t1 = Clock::now();
     std::cout << "[PERF] MATCH scan (2 vertices): " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
               << " rows=" << r2.rows()->size() << "\n";
 
-    // MATCH with property filter
     t0 = Clock::now();
     auto r3 = execCypher("MATCH (n:Person {name: \"Alice\"}) RETURN n.name, n.age");
     t1 = Clock::now();
     std::cout << "[PERF] MATCH filter: " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
               << " rows=" << r3.rows()->size() << "\n";
 
-    // Expand query
     t0 = Clock::now();
     auto r4 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name, b.age");
     t1 = Clock::now();
     std::cout << "[PERF] MATCH expand: " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
               << " rows=" << r4.rows()->size() << " error=" << r4.error().value() << "\n";
 
-    // Repeat expand to see if there's per-query overhead
     t0 = Clock::now();
     auto r5 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name");
     t1 = Clock::now();
     std::cout << "[PERF] MATCH expand (repeat): " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms\n";
 
-    // Simple MATCH repeat
     t0 = Clock::now();
     auto r6 = execCypher("MATCH (n:Person) RETURN n.name");
     t1 = Clock::now();
     std::cout << "[PERF] MATCH scan (repeat): " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms\n";
 }
 
-TEST_F(RpcIntegrationTest, ExecuteSyncDetailedTiming) {
-    // Measure each phase of executeSync independently
+TEST_F(RpcIntegrationTest, RPCDetailedTiming) {
     using us = std::chrono::microseconds;
 
     createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
                            makePropDef("age", eugraph::thrift::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
 
-    // Warm up: create some data
     execCypher("CREATE (a:Person {name: \"Alice\", age: 30})-[:KNOWS]->(b:Person {name: \"Bob\", age: 25})");
 
-    // Measure a batch of queries to average out noise
     constexpr int N = 20;
     std::vector<long> create_times, scan_times, filter_times, expand_times;
 
     for (int i = 0; i < N; i++) {
-        // Create
         auto t0 = Clock::now();
         execCypher("CREATE (x:Person {name: \"X\", age: " + std::to_string(i) + "})");
         auto t1 = Clock::now();
         create_times.push_back(std::chrono::duration_cast<us>(t1 - t0).count());
 
-        // Scan
         t0 = Clock::now();
         execCypher("MATCH (n:Person) RETURN n.name");
         t1 = Clock::now();
         scan_times.push_back(std::chrono::duration_cast<us>(t1 - t0).count());
 
-        // Filter
         t0 = Clock::now();
         execCypher("MATCH (n:Person {name: \"Alice\"}) RETURN n.name");
         t1 = Clock::now();
         filter_times.push_back(std::chrono::duration_cast<us>(t1 - t0).count());
 
-        // Expand
         t0 = Clock::now();
         execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name");
         t1 = Clock::now();
@@ -281,7 +267,7 @@ TEST_F(RpcIntegrationTest, ExecuteSyncDetailedTiming) {
         return sum / (long)v.size();
     };
 
-    std::cout << "\n====== ExecuteSync Detailed Timing (avg over " << N << " runs) ======\n";
+    std::cout << "\n====== RPC Detailed Timing (avg over " << N << " runs) ======\n";
     std::cout << "CREATE:   " << avg(create_times) << " us\n";
     std::cout << "SCAN:     " << avg(scan_times) << " us\n";
     std::cout << "FILTER:   " << avg(filter_times) << " us\n";
@@ -295,17 +281,13 @@ TEST_F(RpcIntegrationTest, MetadataOverheadAnalysis) {
                            makePropDef("age", eugraph::thrift::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
 
-    // Create 50 vertices to make scan overhead visible
     for (int i = 0; i < 50; i++) {
         execCypher("CREATE (p:Person {name: \"P" + std::to_string(i) + "\", age: " + std::to_string(i) + "})");
     }
 
-    // Scan timing - this includes per-vertex IO dispatch
     constexpr int M = 10;
     std::vector<long> scan_small, scan_large;
-    std::vector<long> create_ops;
 
-    // Measure scan on 52 vertices
     for (int i = 0; i < M; i++) {
         auto t0 = Clock::now();
         execCypher("MATCH (n:Person) RETURN n.name, n.age");
@@ -313,7 +295,6 @@ TEST_F(RpcIntegrationTest, MetadataOverheadAnalysis) {
         scan_small.push_back(std::chrono::duration_cast<us>(t1 - t0).count());
     }
 
-    // Add 50 more, scan 102 vertices
     for (int i = 0; i < 50; i++) {
         execCypher("CREATE (q:Person {name: \"Q" + std::to_string(i) + "\", age: " + std::to_string(i + 50) + "})");
     }
@@ -341,3 +322,9 @@ TEST_F(RpcIntegrationTest, MetadataOverheadAnalysis) {
 }
 
 } // anonymous namespace
+
+int main(int argc, char** argv) {
+    testing::InitGoogleTest(&argc, argv);
+    folly::Init init(&argc, &argv, /*removeFlags=*/false);
+    return RUN_ALL_TESTS();
+}

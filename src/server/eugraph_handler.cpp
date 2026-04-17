@@ -1,6 +1,5 @@
 #include "server/eugraph_handler.hpp"
 
-#include <folly/coro/BlockingWait.h>
 #include <spdlog/spdlog.h>
 
 #include <sstream>
@@ -30,26 +29,6 @@ namespace server {
     return ::eugraph::PropertyType::STRING;
 }
 
-std::string propertyTypeToName(::eugraph::PropertyType t) {
-    switch (t) {
-    case ::eugraph::PropertyType::BOOL:
-        return "BOOL";
-    case ::eugraph::PropertyType::INT64:
-        return "INT64";
-    case ::eugraph::PropertyType::DOUBLE:
-        return "DOUBLE";
-    case ::eugraph::PropertyType::STRING:
-        return "STRING";
-    case ::eugraph::PropertyType::INT64_ARRAY:
-        return "INT64_ARRAY";
-    case ::eugraph::PropertyType::DOUBLE_ARRAY:
-        return "DOUBLE_ARRAY";
-    case ::eugraph::PropertyType::STRING_ARRAY:
-        return "STRING_ARRAY";
-    }
-    return "UNKNOWN";
-}
-
 PropertyDef EuGraphHandler::toPropertyDef(const thrift::PropertyDefThrift& req, uint16_t id) {
     PropertyDef def;
     def.id = id;
@@ -57,18 +36,6 @@ PropertyDef EuGraphHandler::toPropertyDef(const thrift::PropertyDefThrift& req, 
     def.type = toPropertyType(req.type().value());
     def.required = req.is_required().value();
     return def;
-}
-
-std::string EuGraphHandler::formatProperties(const std::vector<PropertyDef>& props) {
-    if (props.empty())
-        return "(none)";
-    std::string result;
-    for (size_t i = 0; i < props.size(); i++) {
-        if (i > 0)
-            result += ", ";
-        result += props[i].name + ":" + propertyTypeToName(props[i].type);
-    }
-    return result;
 }
 
 // ==================== Value conversion ====================
@@ -101,41 +68,43 @@ thrift::ResultValue EuGraphHandler::valueToThrift(const Value& val) {
 
 // ==================== DDL: Label ====================
 
-void EuGraphHandler::sync_createLabel(thrift::LabelInfo& _return, std::unique_ptr<std::string> name,
-                                      std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
+folly::coro::Task<std::unique_ptr<thrift::LabelInfo>>
+EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
+                               std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
     std::vector<PropertyDef> defs;
     for (size_t i = 0; i < properties->size(); i++) {
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
     }
 
-    auto label_id = folly::coro::blockingWait(meta_.createLabel(*name, defs));
+    auto label_id = co_await meta_.createLabel(*name, defs);
+    auto resp = std::make_unique<thrift::LabelInfo>();
+
     if (label_id == INVALID_LABEL_ID) {
-        _return.id() = 0;
-        _return.name() = *name;
-        return;
+        resp->id() = 0;
+        resp->name() = *name;
+        co_return resp;
     }
 
     store_.createLabel(label_id);
 
-    _return.id() = label_id;
-    _return.name() = *name;
+    resp->id() = label_id;
+    resp->name() = *name;
     for (auto& d : defs) {
         thrift::PropertyDefThrift pd;
         pd.name() = d.name;
-        pd.type() = thrift::PropertyType::STRING; // simplified
-        for (int i = 1; i <= 7; i++) {
-            if (static_cast<int>(d.type) == i) {
-                pd.type() = static_cast<thrift::PropertyType>(i);
-                break;
-            }
-        }
+        pd.type() = static_cast<thrift::PropertyType>(static_cast<int>(d.type));
         pd.is_required() = d.required;
-        _return.properties()->push_back(std::move(pd));
+        resp->properties()->push_back(std::move(pd));
     }
+
+    spdlog::info("Created label '{}' with id={}, {} properties", *name, label_id, defs.size());
+    co_return resp;
 }
 
-void EuGraphHandler::sync_listLabels(std::vector<thrift::LabelInfo>& _return) {
-    auto labels = folly::coro::blockingWait(meta_.listLabels());
+folly::coro::Task<std::unique_ptr<std::vector<thrift::LabelInfo>>> EuGraphHandler::co_listLabels() {
+    auto labels = co_await meta_.listLabels();
+    auto resp = std::make_unique<std::vector<thrift::LabelInfo>>();
+
     for (const auto& l : labels) {
         thrift::LabelInfo info;
         info.id() = l.id;
@@ -147,65 +116,80 @@ void EuGraphHandler::sync_listLabels(std::vector<thrift::LabelInfo>& _return) {
             p.is_required() = pd.required;
             info.properties()->push_back(std::move(p));
         }
-        _return.push_back(std::move(info));
+        resp->push_back(std::move(info));
     }
+
+    co_return resp;
 }
 
 // ==================== DDL: EdgeLabel ====================
 
-void EuGraphHandler::sync_createEdgeLabel(thrift::EdgeLabelInfo& _return, std::unique_ptr<std::string> name,
-                                          std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
+folly::coro::Task<std::unique_ptr<thrift::EdgeLabelInfo>>
+EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
+                                   std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
     std::vector<PropertyDef> defs;
     for (size_t i = 0; i < properties->size(); i++) {
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
     }
 
-    auto label_id = folly::coro::blockingWait(meta_.createEdgeLabel(*name, defs));
+    auto label_id = co_await meta_.createEdgeLabel(*name, defs);
+    auto resp = std::make_unique<thrift::EdgeLabelInfo>();
+
     if (label_id == INVALID_EDGE_LABEL_ID) {
-        _return.id() = 0;
-        _return.name() = *name;
-        return;
+        resp->id() = 0;
+        resp->name() = *name;
+        co_return resp;
     }
 
     store_.createEdgeLabel(label_id);
 
-    _return.id() = label_id;
-    _return.name() = *name;
-    _return.directed() = true;
+    resp->id() = label_id;
+    resp->name() = *name;
+    resp->directed() = true;
+
+    spdlog::info("Created edge label '{}' with id={}", *name, label_id);
+    co_return resp;
 }
 
-void EuGraphHandler::sync_listEdgeLabels(std::vector<thrift::EdgeLabelInfo>& _return) {
-    auto labels = folly::coro::blockingWait(meta_.listEdgeLabels());
+folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> EuGraphHandler::co_listEdgeLabels() {
+    auto labels = co_await meta_.listEdgeLabels();
+    auto resp = std::make_unique<std::vector<thrift::EdgeLabelInfo>>();
+
     for (const auto& l : labels) {
         thrift::EdgeLabelInfo info;
         info.id() = l.id;
         info.name() = l.name;
         info.directed() = l.directed;
-        _return.push_back(std::move(info));
+        resp->push_back(std::move(info));
     }
+
+    co_return resp;
 }
 
 // ==================== DML: Cypher ====================
 
-void EuGraphHandler::sync_executeCypher(thrift::QueryResult& _return, std::unique_ptr<std::string> query) {
+folly::coro::Task<std::unique_ptr<thrift::QueryResult>>
+EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
     auto result = executor_.executeSync(*query);
+    auto resp = std::make_unique<thrift::QueryResult>();
 
     if (!result.error.empty()) {
-        _return.error() = std::move(result.error);
-        return;
+        resp->error() = std::move(result.error);
+        co_return resp;
     }
 
-    _return.columns() = std::move(result.columns);
+    resp->columns() = std::move(result.columns);
 
     for (const auto& row : result.rows) {
         thrift::ResultRow row_resp;
         for (const auto& val : row) {
             row_resp.values()->push_back(valueToThrift(val));
         }
-        _return.rows()->push_back(std::move(row_resp));
+        resp->rows()->push_back(std::move(row_resp));
     }
 
-    _return.rows_affected() = static_cast<int64_t>(result.rows.size());
+    resp->rows_affected() = static_cast<int64_t>(result.rows.size());
+    co_return resp;
 }
 
 } // namespace server

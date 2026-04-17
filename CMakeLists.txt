@@ -370,7 +370,6 @@ if(EUGRAPH_BUILD_TESTS)
         Folly::folly
         Folly::folly_deps
         GTest::gtest
-        GTest::gtest_main
         dl
     )
 
