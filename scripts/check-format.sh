@@ -72,6 +72,7 @@ fi
 SOURCE_FILES=$(find "${FIND_PATHS[@]}" \
     \( -name "*.cpp" -o -name "*.h" -o -name "*.hpp" -o -name "*.cc" -o -name "*.cxx" \) \
     -not -path "*/generated/*" \
+    -not -path "*/gen-cpp2/*" \
     2>/dev/null)
 
 if [[ -z "$SOURCE_FILES" ]]; then

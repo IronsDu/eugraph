@@ -20,10 +20,18 @@ namespace compute {
 struct PlanContext {
     std::unordered_map<std::string, LabelId> label_name_to_id;
     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
+    std::unordered_map<LabelId, LabelDef> label_defs; // label_id → full definition (with property defs)
+    std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
     std::unordered_map<std::string, VertexId> variable_vertex_ids; // for CREATE: assigned IDs
     std::unordered_map<std::string, EdgeId> variable_edge_ids;     // for CREATE: assigned IDs
     VertexId next_vertex_id = 1;
     EdgeId next_edge_id = 1;
+};
+
+/// Result of planning an operator: the physical operator + its output schema.
+struct PlanOperatorResult {
+    std::unique_ptr<PhysicalOperator> op;
+    Schema output_schema;
 };
 
 /// Converts a LogicalPlan into a tree of PhysicalOperator.
@@ -35,8 +43,8 @@ public:
                                                                       PlanContext& ctx);
 
 private:
-    std::variant<std::unique_ptr<PhysicalOperator>, std::string>
-    planOperator(LogicalOperator& op, AsyncGraphStore& store, PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planOperator(LogicalOperator& op, AsyncGraphStore& store,
+                                                               PlanContext& ctx, Schema input_schema);
 };
 
 } // namespace compute
