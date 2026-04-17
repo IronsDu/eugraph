@@ -2,19 +2,18 @@
 
 #include <thrift/lib/cpp2/async/RocketClientChannel.h>
 
-#include <folly/coro/BlockingWait.h>
 #include <folly/io/async/AsyncSocket.h>
-#include <folly/io/async/EventBase.h>
 
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace shell {
 
-EuGraphRpcClient::EuGraphRpcClient(const std::string& host, int port) : host_(host), port_(port) {}
+EuGraphRpcClient::EuGraphRpcClient(const std::string& host, int port)
+    : host_(host), port_(port), evb_(std::make_unique<folly::EventBase>()) {}
 
 EuGraphRpcClient::EuGraphRpcClient(std::unique_ptr<apache::thrift::Client<thrift::EuGraphService>> client)
-    : port_(0), client_(std::move(client)) {}
+    : port_(0), evb_(std::make_unique<folly::EventBase>()), client_(std::move(client)) {}
 
 EuGraphRpcClient::~EuGraphRpcClient() = default;
 
@@ -24,21 +23,8 @@ bool EuGraphRpcClient::connect() {
     }
 
     try {
-        // Use a stack-based EventBase to connect the socket, then let
-        // folly::coro::blockingWait manage the EVB for RPC calls.
-        folly::EventBase evb;
-        auto socket = folly::AsyncSocket::UniquePtr(new folly::AsyncSocket(&evb, host_.c_str(), port_));
-
-        // Drive EVB to complete TCP handshake
-        for (int i = 0; i < 100 && socket->connecting(); ++i) {
-            evb.loopOnce(30);
-        }
-
-        if (!socket->good()) {
-            spdlog::error("Failed to connect to server at {}:{}: socket not connected", host_, port_);
-            return false;
-        }
-
+        auto socket =
+            folly::AsyncSocket::UniquePtr(new folly::AsyncSocket(evb_.get(), host_.c_str(), port_));
         auto channel = apache::thrift::RocketClientChannel::newChannel(std::move(socket));
         channel->setTimeout(5000);
         client_ = std::make_unique<apache::thrift::Client<thrift::EuGraphService>>(std::move(channel));
@@ -51,24 +37,34 @@ bool EuGraphRpcClient::connect() {
 
 thrift::LabelInfo EuGraphRpcClient::createLabel(const std::string& name,
                                                 const std::vector<thrift::PropertyDefThrift>& properties) {
-    return folly::coro::blockingWait(client_->co_createLabel(name, properties));
+    thrift::LabelInfo resp;
+    client_->sync_createLabel(resp, name, properties);
+    return resp;
 }
 
 std::vector<thrift::LabelInfo> EuGraphRpcClient::listLabels() {
-    return folly::coro::blockingWait(client_->co_listLabels());
+    std::vector<thrift::LabelInfo> resp;
+    client_->sync_listLabels(resp);
+    return resp;
 }
 
 thrift::EdgeLabelInfo EuGraphRpcClient::createEdgeLabel(const std::string& name,
                                                         const std::vector<thrift::PropertyDefThrift>& properties) {
-    return folly::coro::blockingWait(client_->co_createEdgeLabel(name, properties));
+    thrift::EdgeLabelInfo resp;
+    client_->sync_createEdgeLabel(resp, name, properties);
+    return resp;
 }
 
 std::vector<thrift::EdgeLabelInfo> EuGraphRpcClient::listEdgeLabels() {
-    return folly::coro::blockingWait(client_->co_listEdgeLabels());
+    std::vector<thrift::EdgeLabelInfo> resp;
+    client_->sync_listEdgeLabels(resp);
+    return resp;
 }
 
 thrift::QueryResult EuGraphRpcClient::executeCypher(const std::string& query) {
-    return folly::coro::blockingWait(client_->co_executeCypher(query));
+    thrift::QueryResult resp;
+    client_->sync_executeCypher(resp, query);
+    return resp;
 }
 
 } // namespace shell
