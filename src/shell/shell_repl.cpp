@@ -300,10 +300,10 @@ static void runEmbeddedRepl(const ShellConfig& config) {
             std::string rest;
             std::getline(iss, rest);
             auto props = parsePropertyDefs(rest);
-            LabelInfo resp;
-            handler.sync_createLabel(resp, std::make_unique<std::string>(name),
-                                     std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
-            std::cout << formatLabelCreated(resp.name().value(), resp.id().value());
+            auto resp = folly::coro::blockingWait(
+                handler.co_createLabel(std::make_unique<std::string>(name),
+                                       std::make_unique<std::vector<PropertyDefThrift>>(std::move(props))));
+            std::cout << formatLabelCreated(resp->name().value(), resp->id().value());
         } else if (cmd == ":create-edge-label") {
             if (args.empty()) {
                 std::cerr << "Usage: :create-edge-label <name> [prop1:type1 ...]" << std::endl;
@@ -315,18 +315,17 @@ static void runEmbeddedRepl(const ShellConfig& config) {
             std::string rest;
             std::getline(iss, rest);
             auto props = parsePropertyDefs(rest);
-            EdgeLabelInfo resp;
-            handler.sync_createEdgeLabel(resp, std::make_unique<std::string>(name),
-                                         std::make_unique<std::vector<PropertyDefThrift>>(std::move(props)));
-            std::cout << formatEdgeLabelCreated(resp.name().value(), resp.id().value());
+            auto resp = folly::coro::blockingWait(
+                handler.co_createEdgeLabel(std::make_unique<std::string>(name),
+                                           std::make_unique<std::vector<PropertyDefThrift>>(std::move(props))));
+            std::cout << formatEdgeLabelCreated(resp->name().value(), resp->id().value());
         } else if (cmd == ":list-labels") {
-            std::vector<LabelInfo> labels;
-            handler.sync_listLabels(labels);
-            if (labels.empty()) {
+            auto labels = folly::coro::blockingWait(handler.co_listLabels());
+            if (labels->empty()) {
                 std::cout << "(no labels)" << std::endl;
             } else {
                 std::vector<std::tuple<int, std::string, std::string>> rows;
-                for (const auto& l : labels) {
+                for (const auto& l : *labels) {
                     std::string props_str;
                     for (size_t i = 0; i < l.properties()->size(); i++) {
                         if (i > 0)
@@ -340,13 +339,12 @@ static void runEmbeddedRepl(const ShellConfig& config) {
                 std::cout << formatLabelList(rows);
             }
         } else if (cmd == ":list-edge-labels") {
-            std::vector<EdgeLabelInfo> labels;
-            handler.sync_listEdgeLabels(labels);
-            if (labels.empty()) {
+            auto labels = folly::coro::blockingWait(handler.co_listEdgeLabels());
+            if (labels->empty()) {
                 std::cout << "(no edge labels)" << std::endl;
             } else {
                 std::vector<std::tuple<int, std::string, std::string, bool>> rows;
-                for (const auto& l : labels) {
+                for (const auto& l : *labels) {
                     rows.push_back({l.id().value(), l.name().value(), "(none)", l.directed().value()});
                 }
                 std::cout << formatEdgeLabelList(rows);
@@ -357,15 +355,14 @@ static void runEmbeddedRepl(const ShellConfig& config) {
             if (!query.empty() && query.back() == ';') {
                 query.pop_back();
             }
-            QueryResult resp;
-            handler.sync_executeCypher(resp, std::make_unique<std::string>(query));
-            if (!resp.error().value().empty()) {
-                std::cerr << "Error: " << resp.error().value() << std::endl;
-            } else if (resp.columns()->empty()) {
+            auto resp = folly::coro::blockingWait(handler.co_executeCypher(std::make_unique<std::string>(query)));
+            if (!resp->error().value().empty()) {
+                std::cerr << "Error: " << resp->error().value() << std::endl;
+            } else if (resp->columns()->empty()) {
                 std::cout << "OK" << std::endl;
             } else {
                 std::vector<std::vector<std::string>> rows;
-                for (const auto& row : *resp.rows()) {
+                for (const auto& row : *resp->rows()) {
                     std::vector<std::string> cells;
                     for (const auto& val : *row.values()) {
                         std::string s = resultValueToString(val);
@@ -378,8 +375,8 @@ static void runEmbeddedRepl(const ShellConfig& config) {
                     }
                     rows.push_back(std::move(cells));
                 }
-                std::cout << formatTable(*resp.columns(), rows);
-                std::cout << resp.rows()->size() << " row" << (resp.rows()->size() == 1 ? "" : "s") << std::endl;
+                std::cout << formatTable(*resp->columns(), rows);
+                std::cout << resp->rows()->size() << " row" << (resp->rows()->size() == 1 ? "" : "s") << std::endl;
             }
         } else {
             std::cerr << "Unknown command: " << cmd << std::endl;
