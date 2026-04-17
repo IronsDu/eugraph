@@ -38,8 +38,8 @@ public:
 private:
     std::string host_;
     int port_;
-    std::unique_ptr<apache::thrift::Client<thrift::EuGraphService>> client_;
     std::unique_ptr<folly::EventBase> evb_;
+    std::unique_ptr<apache::thrift::Client<thrift::EuGraphService>> client_;
 };
 
 } // namespace shell
