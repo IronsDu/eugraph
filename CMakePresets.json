@@ -14,6 +14,10 @@
           "type": "FILEPATH",
           "value": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake"
         },
+        "VCPKG_OVERLAY_PORTS": {
+          "type": "FILEPATH",
+          "value": "${sourceDir}/ports"
+        },
         "EUGRAPH_BUILD_TESTS": "ON"
       }
     },
