@@ -37,10 +37,11 @@ ExternalProject_Add(wiredtiger_ext
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
         -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-        -DCMAKE_C_FLAGS=-Wno-error=array-bounds\ -Wno-array-bounds
-        -DCMAKE_CXX_FLAGS=-Wno-error=array-bounds\ -Wno-array-bounds
+        -DCMAKE_C_FLAGS=-Wno-error
+        -DCMAKE_CXX_FLAGS=-Wno-error
         -DENABLE_STATIC=ON
         -DENABLE_SHARED=OFF
+        -DENABLE_STRICT=OFF
     BUILD_BYPRODUCTS
         "${WT_LIB}"
 )
@@ -324,6 +325,8 @@ if(EUGRAPH_BUILD_TESTS)
     target_link_libraries(query_executor_tests PRIVATE
         eugraph_query_engine
         eugraph_metadata
+        Folly::folly
+        Folly::folly_deps
         GTest::gtest
         GTest::gtest_main
         dl
@@ -344,6 +347,8 @@ if(EUGRAPH_BUILD_TESTS)
 
     target_link_libraries(metadata_tests PRIVATE
         eugraph_metadata
+        Folly::folly
+        Folly::folly_deps
         GTest::gtest
         GTest::gtest_main
         dl

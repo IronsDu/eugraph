@@ -71,6 +71,7 @@ thrift::ResultValue EuGraphHandler::valueToThrift(const Value& val) {
 folly::coro::Task<std::unique_ptr<thrift::LabelInfo>>
 EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
                                std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
+    spdlog::info("start execute create label");
     std::vector<PropertyDef> defs;
     for (size_t i = 0; i < properties->size(); i++) {
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
