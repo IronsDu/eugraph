@@ -10,7 +10,6 @@
 #include <folly/init/Init.h>
 #include <spdlog/spdlog.h>
 
-#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -23,7 +22,7 @@ using namespace eugraph::compute;
 struct ServerConfig {
     int port = 9090;
     std::string data_dir = "./eugraph-data";
-    int compute_threads = 4;
+    int compute_threads = 0;
     int io_threads = 2;
 };
 
@@ -88,8 +87,18 @@ int main(int argc, char* argv[]) {
     auto server = std::make_shared<apache::thrift::ThriftServer>();
     server->setPort(config.port);
     server->setInterface(handler);
-    server->setNumIOWorkerThreads(config.io_threads);
-    server->setNumCPUWorkerThreads(config.compute_threads);
+
+    // Create IO thread pool upfront so we can use it as both IO and handler
+    // executor. This avoids the PriorityThreadManager's delayed eventfd
+    // notification issue where responses from CPU worker threads don't wake
+    // the IO thread promptly.
+    auto ioPool = std::make_shared<folly::IOThreadPoolExecutor>(
+        config.io_threads,
+        std::make_shared<folly::NamedThreadFactory>("ThriftIO"));
+    server->setIOThreadPool(ioPool);
+    server->setThreadManagerFromExecutor(ioPool.get());
+    spdlog::info("  Using IO thread pool ({} threads) as handler executor",
+                 config.io_threads);
 
     spdlog::info("EuGraph server initialized successfully");
     spdlog::info("Listening on port {}...", config.port);

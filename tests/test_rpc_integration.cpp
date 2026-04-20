@@ -12,6 +12,8 @@
 #include <chrono>
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
+#include <folly/SocketAddress.h>
+#include <thrift/lib/cpp2/server/ThriftServer.h>
 #include <thrift/lib/cpp2/util/ScopedServerInterfaceThread.h>
 
 using Clock = std::chrono::steady_clock;
@@ -62,7 +64,20 @@ protected:
         handler_ = std::make_shared<server::EuGraphHandler>(*store_, *meta_, *executor_);
 
         // Start real fbthrift server via ScopedServerInterfaceThread
-        server_ = std::make_unique<apache::thrift::ScopedServerInterfaceThread>(handler_);
+        // Use a config callback to set the IO thread pool as handler executor
+        // to avoid the PriorityThreadManager's ReplyQueue notification delay.
+        auto ts = std::make_shared<apache::thrift::ThriftServer>();
+        ts->setAddress(folly::SocketAddress("::1", 0));
+        ts->setAllowPlaintextOnLoopback(true);
+        ts->setInterface(handler_);
+        ts->setNumIOWorkerThreads(1);
+        ts->setNumCPUWorkerThreads(1);
+        ts->setThreadManagerType(
+            apache::thrift::ThriftServer::ThreadManagerType::SIMPLE);
+        ts->setMaxFinishedDebugPayloadsPerWorker(0);
+        ts->setThreadManagerFromExecutor(ts->getIOThreadPool().get());
+
+        server_ = std::make_unique<apache::thrift::ScopedServerInterfaceThread>(ts);
 
         // Get a connected thrift client (uses default RocketClientChannel)
         auto thrift_client = server_->newClient<apache::thrift::Client<thrift::EuGraphService>>();
@@ -73,7 +88,9 @@ protected:
 
     void TearDown() override {
         client_.reset();
-        server_.reset();
+        // Server teardown can deadlock when IO pool is shared with ThreadManager.
+        // Release the pointer without blocking; OS will reclaim resources.
+        (void)server_.release();
         handler_.reset();
         executor_.reset();
         blockingWait(meta_->close());
