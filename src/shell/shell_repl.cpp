@@ -396,11 +396,16 @@ static void runRpcRepl(const ShellConfig& config) {
     EuGraphRpcClient client(config.host, config.port);
 
     std::cout << "Connecting to " << config.host << ":" << config.port << "..." << std::endl;
-    if (!client.connect()) {
-        std::cerr << "Error: Failed to connect to server." << std::endl;
-        return;
+    {
+        auto t0 = std::chrono::steady_clock::now();
+        if (!client.connect()) {
+            std::cerr << "Error: Failed to connect to server." << std::endl;
+            return;
+        }
+        auto t1 = std::chrono::steady_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+        std::cout << "Connected. (connect took " << ms << "ms)" << std::endl;
     }
-    std::cout << "Connected." << std::endl;
 
     auto cmd_handler = [&client](const std::string& cmd, const std::string& args, const std::string& accumulated) {
         try {

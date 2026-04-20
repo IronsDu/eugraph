@@ -2,7 +2,16 @@
 
 #include <spdlog/spdlog.h>
 
+#include <chrono>
 #include <sstream>
+
+namespace {
+int64_t nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+} // namespace
 
 namespace eugraph {
 namespace server {
@@ -71,7 +80,8 @@ thrift::ResultValue EuGraphHandler::valueToThrift(const Value& val) {
 folly::coro::Task<std::unique_ptr<thrift::LabelInfo>>
 EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
                                std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
-    spdlog::info("start execute create label");
+    auto t0 = nowMs();
+    spdlog::info("[handler] createLabel start");
     std::vector<PropertyDef> defs;
     for (size_t i = 0; i < properties->size(); i++) {
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
@@ -98,11 +108,14 @@ EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
         resp->properties()->push_back(std::move(pd));
     }
 
-    spdlog::info("Created label '{}' with id={}, {} properties", *name, label_id, defs.size());
+    spdlog::info("[handler] createLabel '{}' done, id={}, {} properties, took={}ms",
+                 *name, label_id, defs.size(), nowMs() - t0);
     co_return resp;
 }
 
 folly::coro::Task<std::unique_ptr<std::vector<thrift::LabelInfo>>> EuGraphHandler::co_listLabels() {
+    auto t0 = nowMs();
+    spdlog::info("[handler] listLabels start");
     auto labels = co_await meta_.listLabels();
     auto resp = std::make_unique<std::vector<thrift::LabelInfo>>();
 
@@ -120,14 +133,15 @@ folly::coro::Task<std::unique_ptr<std::vector<thrift::LabelInfo>>> EuGraphHandle
         resp->push_back(std::move(info));
     }
 
+    spdlog::info("[handler] listLabels done, took={}ms", nowMs() - t0);
     co_return resp;
 }
-
-// ==================== DDL: EdgeLabel ====================
 
 folly::coro::Task<std::unique_ptr<thrift::EdgeLabelInfo>>
 EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
                                    std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
+    auto t0 = nowMs();
+    spdlog::info("[handler] createEdgeLabel start");
     std::vector<PropertyDef> defs;
     for (size_t i = 0; i < properties->size(); i++) {
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
@@ -148,11 +162,13 @@ EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
     resp->name() = *name;
     resp->directed() = true;
 
-    spdlog::info("Created edge label '{}' with id={}", *name, label_id);
+    spdlog::info("[handler] createEdgeLabel '{}' done, id={}, took={}ms", *name, label_id, nowMs() - t0);
     co_return resp;
 }
 
 folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> EuGraphHandler::co_listEdgeLabels() {
+    auto t0 = nowMs();
+    spdlog::info("[handler] listEdgeLabels start");
     auto labels = co_await meta_.listEdgeLabels();
     auto resp = std::make_unique<std::vector<thrift::EdgeLabelInfo>>();
 
@@ -164,6 +180,7 @@ folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> EuGraphHa
         resp->push_back(std::move(info));
     }
 
+    spdlog::info("[handler] listEdgeLabels done, took={}ms", nowMs() - t0);
     co_return resp;
 }
 
@@ -171,7 +188,9 @@ folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> EuGraphHa
 
 folly::coro::Task<std::unique_ptr<thrift::QueryResult>>
 EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
-    auto result = executor_.executeSync(*query);
+    auto t0 = nowMs();
+    spdlog::info("[handler] executeCypher start, query='{}'", *query);
+    auto result = co_await executor_.executeAsync(*query);
     auto resp = std::make_unique<thrift::QueryResult>();
 
     if (!result.error.empty()) {
@@ -190,6 +209,7 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
     }
 
     resp->rows_affected() = static_cast<int64_t>(result.rows.size());
+    spdlog::info("[handler] executeCypher done, {} rows, took={}ms", result.rows.size(), nowMs() - t0);
     co_return resp;
 }
 
