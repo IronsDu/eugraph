@@ -13,10 +13,10 @@
 #include <filesystem>
 #include <folly/SocketAddress.h>
 #include <folly/coro/BlockingWait.h>
-#if defined(__SANITIZE_ADDRESS__) || defined(__has_feature)
-#if defined(__has_feature) && __has_feature(address_sanitizer)
+#if defined(__SANITIZE_ADDRESS__)
 #define EUGRAPH_ASAN 1
-#elif defined(__SANITIZE_ADDRESS__)
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
 #define EUGRAPH_ASAN 1
 #endif
 #endif
