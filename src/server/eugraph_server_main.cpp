@@ -22,7 +22,7 @@ using namespace eugraph::compute;
 struct ServerConfig {
     int port = 9090;
     std::string data_dir = "./eugraph-data";
-    int compute_threads = 0;
+    int compute_threads = 4;
     int io_threads = 2;
 };
 
@@ -55,6 +55,10 @@ int main(int argc, char* argv[]) {
     int folly_argc = 1;
     folly::Init init(&folly_argc, &argv);
 
+    spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [thread %t] [%l] %v");
+    
+    spdlog::info("这条日志会自动带上线程 ID");
+    
     spdlog::info("Starting EuGraph server...");
     spdlog::info("  Port: {}", config.port);
     spdlog::info("  Data dir: {}", config.data_dir);
@@ -86,7 +90,14 @@ int main(int argc, char* argv[]) {
     // 5. Create and start Thrift server
     auto server = std::make_shared<apache::thrift::ThriftServer>();
     server->setPort(config.port);
+    server->setAllowPlaintextOnLoopback(true);
     server->setInterface(handler);
+
+    // Use SIMPLE ThreadManager to avoid PriorityThreadManager's ReplyQueue
+    // eventfd notification delay, which causes Cypher execution responses to
+    // stall on the IO thread.
+    server->setThreadManagerType(apache::thrift::ThriftServer::ThreadManagerType::SIMPLE);
+    server->setMaxFinishedDebugPayloadsPerWorker(0);
 
     // Create IO thread pool upfront so we can use it as both IO and handler
     // executor. This avoids the PriorityThreadManager's delayed eventfd

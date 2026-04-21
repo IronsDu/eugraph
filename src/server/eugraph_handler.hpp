@@ -8,6 +8,8 @@
 
 #include <folly/coro/Task.h>
 
+#include <unordered_map>
+
 namespace eugraph {
 namespace server {
 
@@ -35,8 +37,11 @@ public:
     co_executeCypher(std::unique_ptr<std::string> query) override;
 
 private:
-    // Convert runtime Value to Thrift ResultValue union
-    thrift::ResultValue valueToThrift(const Value& val);
+    // Convert runtime Value to Thrift ResultValue union.
+    // label_defs is used to map prop_id → property name when serializing VertexValue/EdgeValue.
+    thrift::ResultValue valueToThrift(const Value& val,
+                                      const std::unordered_map<LabelId, LabelDef>& label_defs,
+                                      const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs);
 
     // Convert Thrift PropertyType enum to internal PropertyType
     static ::eugraph::PropertyType toPropertyType(thrift::PropertyType t);

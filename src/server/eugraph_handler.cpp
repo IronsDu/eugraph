@@ -48,7 +48,66 @@ PropertyDef EuGraphHandler::toPropertyDef(const thrift::PropertyDefThrift& req, 
 
 // ==================== Value conversion ====================
 
-thrift::ResultValue EuGraphHandler::valueToThrift(const Value& val) {
+namespace {
+
+void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
+    if (std::holds_alternative<bool>(pv)) {
+        oss << (std::get<bool>(pv) ? "true" : "false");
+    } else if (std::holds_alternative<int64_t>(pv)) {
+        oss << std::get<int64_t>(pv);
+    } else if (std::holds_alternative<double>(pv)) {
+        oss << std::get<double>(pv);
+    } else if (std::holds_alternative<std::string>(pv)) {
+        oss << '"';
+        for (char c : std::get<std::string>(pv)) {
+            switch (c) {
+            case '"':  oss << "\\\""; break;
+            case '\\': oss << "\\\\"; break;
+            case '\n': oss << "\\n"; break;
+            case '\r': oss << "\\r"; break;
+            case '\t': oss << "\\t"; break;
+            default:   oss << c; break;
+            }
+        }
+        oss << '"';
+    } else if (std::holds_alternative<std::vector<int64_t>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<int64_t>>(pv)) {
+            if (!first) oss << ',';
+            oss << x;
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<double>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<double>>(pv)) {
+            if (!first) oss << ',';
+            oss << x;
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<std::string>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& s : std::get<std::vector<std::string>>(pv)) {
+            if (!first) oss << ',';
+            oss << '"' << s << '"';
+            first = false;
+        }
+        oss << ']';
+    } else {
+        oss << "null";
+    }
+}
+
+} // anonymous namespace
+
+thrift::ResultValue EuGraphHandler::valueToThrift(
+    const Value& val,
+    const std::unordered_map<LabelId, LabelDef>& label_defs,
+    const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs) {
     thrift::ResultValue rv;
 
     if (std::holds_alternative<std::monostate>(val)) {
@@ -63,11 +122,51 @@ thrift::ResultValue EuGraphHandler::valueToThrift(const Value& val) {
         rv.set_string_val(std::get<std::string>(val));
     } else if (std::holds_alternative<VertexValue>(val)) {
         auto& v = std::get<VertexValue>(val);
-        rv.set_vertex_json("Vertex(id=" + std::to_string(v.id) + ")");
+        std::ostringstream oss;
+        oss << "{\"id\":" << v.id;
+
+        // Collect property name→value pairs from all labels of this vertex
+        if (v.properties.has_value() && v.labels.has_value()) {
+            for (LabelId lid : *v.labels) {
+                auto it = label_defs.find(lid);
+                if (it == label_defs.end()) continue;
+                for (const auto& pd : it->second.properties) {
+                    if (pd.id < v.properties->size()) {
+                        const auto& pv = (*v.properties)[pd.id];
+                        if (pv.has_value()) {
+                            oss << ",\"" << pd.name << "\":";
+                            appendJsonValue(oss, *pv);
+                        }
+                    }
+                }
+            }
+        }
+        oss << '}';
+        rv.set_vertex_json(oss.str());
     } else if (std::holds_alternative<EdgeValue>(val)) {
         auto& e = std::get<EdgeValue>(val);
         std::ostringstream oss;
-        oss << "Edge(id=" << e.id << ", " << e.src_id << "->" << e.dst_id << ")";
+        oss << "{\"id\":" << e.id << ",\"src\":" << e.src_id << ",\"dst\":" << e.dst_id;
+
+        // Resolve edge label name
+        auto elit = edge_label_defs.find(e.label_id);
+        if (elit != edge_label_defs.end()) {
+            oss << ",\"label\":\"" << elit->second.name << '"';
+        }
+
+        // Collect properties
+        if (e.properties.has_value() && elit != edge_label_defs.end()) {
+            for (const auto& pd : elit->second.properties) {
+                if (pd.id < e.properties->size()) {
+                    const auto& pv = (*e.properties)[pd.id];
+                    if (pv.has_value()) {
+                        oss << ",\"" << pd.name << "\":";
+                        appendJsonValue(oss, *pv);
+                    }
+                }
+            }
+        }
+        oss << '}';
         rv.set_edge_json(oss.str());
     }
 
@@ -197,12 +296,22 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
         co_return resp;
     }
 
+    // Fetch label definitions for vertex/edge JSON serialization
+    auto labels = co_await meta_.listLabels();
+    auto edge_labels = co_await meta_.listEdgeLabels();
+    std::unordered_map<LabelId, LabelDef> label_defs;
+    for (const auto& l : labels)
+        label_defs[l.id] = l;
+    std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
+    for (const auto& el : edge_labels)
+        edge_label_defs[el.id] = el;
+
     resp->columns() = std::move(result.columns);
 
     for (const auto& row : result.rows) {
         thrift::ResultRow row_resp;
         for (const auto& val : row) {
-            row_resp.values()->push_back(valueToThrift(val));
+            row_resp.values()->push_back(valueToThrift(val, label_defs, edge_label_defs));
         }
         resp->rows()->push_back(std::move(row_resp));
     }
