@@ -23,7 +23,7 @@ struct ServerConfig {
     int port = 9090;
     std::string data_dir = "./eugraph-data";
     int compute_threads = 4;
-    int io_threads = 1;
+    int io_threads = 4;
 };
 
 static ServerConfig parseArgs(int argc, char* argv[]) {
@@ -56,9 +56,9 @@ int main(int argc, char* argv[]) {
     folly::Init init(&folly_argc, &argv);
 
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [thread %t] [%l] %v");
-    
+
     spdlog::info("这条日志会自动带上线程 ID");
-    
+
     spdlog::info("Starting EuGraph server...");
     spdlog::info("  Port: {}", config.port);
     spdlog::info("  Data dir: {}", config.data_dir);

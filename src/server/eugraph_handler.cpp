@@ -5,6 +5,8 @@
 #include <chrono>
 #include <sstream>
 
+#include <folly/io/async/EventBaseManager.h>
+
 namespace {
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -61,12 +63,24 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
         oss << '"';
         for (char c : std::get<std::string>(pv)) {
             switch (c) {
-            case '"':  oss << "\\\""; break;
-            case '\\': oss << "\\\\"; break;
-            case '\n': oss << "\\n"; break;
-            case '\r': oss << "\\r"; break;
-            case '\t': oss << "\\t"; break;
-            default:   oss << c; break;
+            case '"':
+                oss << "\\\"";
+                break;
+            case '\\':
+                oss << "\\\\";
+                break;
+            case '\n':
+                oss << "\\n";
+                break;
+            case '\r':
+                oss << "\\r";
+                break;
+            case '\t':
+                oss << "\\t";
+                break;
+            default:
+                oss << c;
+                break;
             }
         }
         oss << '"';
@@ -74,7 +88,8 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
         oss << '[';
         bool first = true;
         for (auto& x : std::get<std::vector<int64_t>>(pv)) {
-            if (!first) oss << ',';
+            if (!first)
+                oss << ',';
             oss << x;
             first = false;
         }
@@ -83,7 +98,8 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
         oss << '[';
         bool first = true;
         for (auto& x : std::get<std::vector<double>>(pv)) {
-            if (!first) oss << ',';
+            if (!first)
+                oss << ',';
             oss << x;
             first = false;
         }
@@ -92,7 +108,8 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
         oss << '[';
         bool first = true;
         for (auto& s : std::get<std::vector<std::string>>(pv)) {
-            if (!first) oss << ',';
+            if (!first)
+                oss << ',';
             oss << '"' << s << '"';
             first = false;
         }
@@ -104,10 +121,9 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
 
 } // anonymous namespace
 
-thrift::ResultValue EuGraphHandler::valueToThrift(
-    const Value& val,
-    const std::unordered_map<LabelId, LabelDef>& label_defs,
-    const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs) {
+thrift::ResultValue
+EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
+                              const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs) {
     thrift::ResultValue rv;
 
     if (std::holds_alternative<std::monostate>(val)) {
@@ -129,7 +145,8 @@ thrift::ResultValue EuGraphHandler::valueToThrift(
         if (v.properties.has_value() && v.labels.has_value()) {
             for (LabelId lid : *v.labels) {
                 auto it = label_defs.find(lid);
-                if (it == label_defs.end()) continue;
+                if (it == label_defs.end())
+                    continue;
                 for (const auto& pd : it->second.properties) {
                     if (pd.id < v.properties->size()) {
                         const auto& pv = (*v.properties)[pd.id];
@@ -288,7 +305,21 @@ folly::coro::Task<std::unique_ptr<thrift::QueryResult>>
 EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
     auto t0 = nowMs();
     spdlog::info("[handler] executeCypher start, query='{}'", *query);
+
+    // Capture this IO thread's EventBase before switching to compute pool.
+    // Each IO thread has its own EventBase with its own epoll loop.
+    // After compute work, we switch back to THIS specific EventBase to wake
+    // it up immediately, rather than submitting to the IO pool and hoping
+    // the right thread picks it up.
+    auto* ioEvb = folly::EventBaseManager::get()->getEventBase();
+
     auto result = co_await executor_.executeAsync(*query);
+
+    // Switch back to the specific IO thread that received this request.
+    // co_withExecutor(ioEvb, noop) schedules on this EventBase via
+    // EventBase::add(), which writes to its eventfd and wakes its epoll_wait.
+    co_await folly::coro::co_withExecutor(ioEvb,
+                                          folly::coro::co_invoke([]() -> folly::coro::Task<void> { co_return; }));
     auto resp = std::make_unique<thrift::QueryResult>();
 
     if (!result.error.empty()) {

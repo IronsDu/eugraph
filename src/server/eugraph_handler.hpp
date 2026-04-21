@@ -39,8 +39,7 @@ public:
 private:
     // Convert runtime Value to Thrift ResultValue union.
     // label_defs is used to map prop_id → property name when serializing VertexValue/EdgeValue.
-    thrift::ResultValue valueToThrift(const Value& val,
-                                      const std::unordered_map<LabelId, LabelDef>& label_defs,
+    thrift::ResultValue valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
                                       const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs);
 
     // Convert Thrift PropertyType enum to internal PropertyType
