@@ -16,6 +16,7 @@ folly::coro::AsyncGenerator<RowBatch> AllNodeScanPhysicalOp::execute() {
                 auto props = co_await store_.getVertexProperties(vid, label_id);
                 VertexValue vv;
                 vv.id = vid;
+                vv.labels = LabelIdSet{label_id};
                 vv.properties = std::move(props);
                 Row row;
                 row.push_back(Value(std::move(vv)));
@@ -39,6 +40,7 @@ folly::coro::AsyncGenerator<RowBatch> LabelScanPhysicalOp::execute() {
             auto props = co_await store_.getVertexProperties(vid, label_id_);
             VertexValue vv;
             vv.id = vid;
+            vv.labels = LabelIdSet{label_id_};
             vv.properties = std::move(props);
             Row row;
             row.push_back(Value(std::move(vv)));
