@@ -23,7 +23,7 @@ struct ServerConfig {
     int port = 9090;
     std::string data_dir = "./eugraph-data";
     int compute_threads = 4;
-    int io_threads = 2;
+    int io_threads = 1;
 };
 
 static ServerConfig parseArgs(int argc, char* argv[]) {
