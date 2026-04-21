@@ -7,8 +7,7 @@
 
 namespace {
 int64_t nowMs() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
         .count();
 }
 } // namespace
@@ -108,8 +107,8 @@ EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
         resp->properties()->push_back(std::move(pd));
     }
 
-    spdlog::info("[handler] createLabel '{}' done, id={}, {} properties, took={}ms",
-                 *name, label_id, defs.size(), nowMs() - t0);
+    spdlog::info("[handler] createLabel '{}' done, id={}, {} properties, took={}ms", *name, label_id, defs.size(),
+                 nowMs() - t0);
     co_return resp;
 }
 

@@ -12,8 +12,7 @@ namespace eugraph {
 namespace shell {
 
 static int64_t nowMs() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
         .count();
 }
 
@@ -39,8 +38,8 @@ bool EuGraphRpcClient::connect() {
         channel->setTimeout(30000);
         client_ = std::make_unique<apache::thrift::Client<thrift::EuGraphService>>(std::move(channel));
         auto t3 = nowMs();
-        spdlog::info("[rpc_client] connect: socket={}ms, channel={}ms, client={}ms, total={}ms",
-                     t1 - t0, t2 - t1, t3 - t2, t3 - t0);
+        spdlog::info("[rpc_client] connect: socket={}ms, channel={}ms, client={}ms, total={}ms", t1 - t0, t2 - t1,
+                     t3 - t2, t3 - t0);
         return true;
     } catch (const std::exception& e) {
         spdlog::error("Failed to connect to server at {}:{}: {}", host_, port_, e.what());
