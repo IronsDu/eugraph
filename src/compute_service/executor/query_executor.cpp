@@ -1,6 +1,7 @@
 #include "compute_service/executor/query_executor.hpp"
 
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/CurrentExecutor.h>
 
 #include <spdlog/spdlog.h>
 
@@ -19,6 +20,11 @@ ExecutionResult QueryExecutor::executeSync(const std::string& cypher_query) {
 }
 
 folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string& cypher_query) {
+    // Capture the caller's executor (IO thread pool) before switching to compute pool.
+    // We need this to explicitly switch back after compute work completes, ensuring
+    // the IO thread wakes up immediately to send the response.
+    auto* caller_executor = co_await folly::coro::co_current_executor;
+
     ExecutionResult result;
 
     // Schedule the heavy work on the compute pool, but use co_withExecutor
@@ -72,7 +78,6 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
 
         ctx.next_vertex_id = co_await meta_.nextVertexId();
         ctx.next_edge_id = co_await meta_.nextEdgeId();
-
         PhysicalPlanner physical_planner;
         auto phys_result = physical_planner.plan(logical_plan, async_store, ctx);
         if (std::holds_alternative<std::string>(phys_result)) {
@@ -95,7 +100,12 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
     });
 
     co_await folly::coro::co_withExecutor(compute_pool_.get(), std::move(inner));
-
+    // Explicitly switch back to the caller's executor (IO thread pool).
+    // Without this, co_return resumes the handler on the compute thread,
+    // and the IO thread only wakes up on the next epoll_wait timeout (~5s).
+    co_await folly::coro::co_withExecutor(
+        caller_executor,
+        folly::coro::co_invoke([]() -> folly::coro::Task<void> { co_return; }));
     co_return result;
 }
 
