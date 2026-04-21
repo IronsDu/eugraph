@@ -93,12 +93,10 @@ int main(int argc, char* argv[]) {
     // notification issue where responses from CPU worker threads don't wake
     // the IO thread promptly.
     auto ioPool = std::make_shared<folly::IOThreadPoolExecutor>(
-        config.io_threads,
-        std::make_shared<folly::NamedThreadFactory>("ThriftIO"));
+        config.io_threads, std::make_shared<folly::NamedThreadFactory>("ThriftIO"));
     server->setIOThreadPool(ioPool);
     server->setThreadManagerFromExecutor(ioPool.get());
-    spdlog::info("  Using IO thread pool ({} threads) as handler executor",
-                 config.io_threads);
+    spdlog::info("  Using IO thread pool ({} threads) as handler executor", config.io_threads);
 
     spdlog::info("EuGraph server initialized successfully");
     spdlog::info("Listening on port {}...", config.port);

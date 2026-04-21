@@ -11,8 +11,9 @@
 
 #include <chrono>
 #include <filesystem>
-#include <folly/coro/BlockingWait.h>
 #include <folly/SocketAddress.h>
+#include <folly/coro/BlockingWait.h>
+#include <sanitizer/lsan_interface.h>
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 #include <thrift/lib/cpp2/util/ScopedServerInterfaceThread.h>
 
@@ -72,18 +73,19 @@ protected:
         ts->setInterface(handler_);
         ts->setNumIOWorkerThreads(1);
         ts->setNumCPUWorkerThreads(1);
-        ts->setThreadManagerType(
-            apache::thrift::ThriftServer::ThreadManagerType::SIMPLE);
+        ts->setThreadManagerType(apache::thrift::ThriftServer::ThreadManagerType::SIMPLE);
         ts->setMaxFinishedDebugPayloadsPerWorker(0);
         ts->setThreadManagerFromExecutor(ts->getIOThreadPool().get());
 
+        // Suppress LSan for this allocation: the server must be leaked in
+        // TearDown to avoid a deadlock when IO pool is shared with ThreadManager.
+        __lsan_disable();
         server_ = std::make_unique<apache::thrift::ScopedServerInterfaceThread>(ts);
+        __lsan_enable();
 
-        // Get a connected thrift client (uses default RocketClientChannel)
-        auto thrift_client = server_->newClient<apache::thrift::Client<thrift::EuGraphService>>();
-
-        // Wrap in EuGraphRpcClient (same wrapper the shell uses)
-        client_ = std::make_unique<shell::EuGraphRpcClient>(std::move(thrift_client));
+        // Connect via real TCP socket, same path as the shell client.
+        client_ = std::make_unique<shell::EuGraphRpcClient>("::1", server_->getPort());
+        ASSERT_TRUE(client_->connect());
     }
 
     void TearDown() override {
