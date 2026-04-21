@@ -5,6 +5,8 @@
 #include <chrono>
 #include <sstream>
 
+#include <folly/io/async/EventBaseManager.h>
+
 namespace {
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -288,7 +290,22 @@ folly::coro::Task<std::unique_ptr<thrift::QueryResult>>
 EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
     auto t0 = nowMs();
     spdlog::info("[handler] executeCypher start, query='{}'", *query);
+
+    // Capture this IO thread's EventBase before switching to compute pool.
+    // Each IO thread has its own EventBase with its own epoll loop.
+    // After compute work, we switch back to THIS specific EventBase to wake
+    // it up immediately, rather than submitting to the IO pool and hoping
+    // the right thread picks it up.
+    auto* ioEvb = folly::EventBaseManager::get()->getEventBase();
+
     auto result = co_await executor_.executeAsync(*query);
+
+    // Switch back to the specific IO thread that received this request.
+    // co_withExecutor(ioEvb, noop) schedules on this EventBase via
+    // EventBase::add(), which writes to its eventfd and wakes its epoll_wait.
+    co_await folly::coro::co_withExecutor(
+        ioEvb,
+        folly::coro::co_invoke([]() -> folly::coro::Task<void> { co_return; }));
     auto resp = std::make_unique<thrift::QueryResult>();
 
     if (!result.error.empty()) {
