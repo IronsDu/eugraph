@@ -13,7 +13,18 @@
 #include <filesystem>
 #include <folly/SocketAddress.h>
 #include <folly/coro/BlockingWait.h>
+#if defined(__SANITIZE_ADDRESS__) || defined(__has_feature)
+#if defined(__has_feature) && __has_feature(address_sanitizer)
+#define EUGRAPH_ASAN 1
+#elif defined(__SANITIZE_ADDRESS__)
+#define EUGRAPH_ASAN 1
+#endif
+#endif
+
+#if EUGRAPH_ASAN
 #include <sanitizer/lsan_interface.h>
+#endif
+
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 #include <thrift/lib/cpp2/util/ScopedServerInterfaceThread.h>
 
@@ -79,9 +90,13 @@ protected:
 
         // Suppress LSan for this allocation: the server must be leaked in
         // TearDown to avoid a deadlock when IO pool is shared with ThreadManager.
+#if EUGRAPH_ASAN
         __lsan_disable();
+#endif
         server_ = std::make_unique<apache::thrift::ScopedServerInterfaceThread>(ts);
+#if EUGRAPH_ASAN
         __lsan_enable();
+#endif
 
         // Connect via real TCP socket, same path as the shell client.
         client_ = std::make_unique<shell::EuGraphRpcClient>("::1", server_->getPort());
