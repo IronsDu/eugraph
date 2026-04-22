@@ -38,8 +38,8 @@ public:
 
     // Write Operations
     virtual folly::coro::Task<bool> insertVertex(VertexId vid,
-                                                  std::span<const std::pair<LabelId, Properties>> label_props,
-                                                  const PropertyValue* pk_value) = 0;
+                                                 std::span<const std::pair<LabelId, Properties>> label_props,
+                                                 const PropertyValue* pk_value) = 0;
     virtual folly::coro::Task<bool> insertEdge(EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
                                                uint64_t seq, const Properties& props) = 0;
 };

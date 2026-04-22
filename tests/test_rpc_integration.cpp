@@ -86,7 +86,8 @@ protected:
         io_scheduler_ = std::make_unique<IoScheduler>(2);
         async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
 
-        executor_ = std::make_unique<compute::QueryExecutor>(*sync_data_, *async_data_, *async_meta_, compute::QueryExecutor::Config{});
+        executor_ = std::make_unique<compute::QueryExecutor>(*sync_data_, *async_data_, *async_meta_,
+                                                             compute::QueryExecutor::Config{});
         handler_ = std::make_shared<server::EuGraphHandler>(*sync_data_, *async_meta_, *executor_);
 
         // Start real fbthrift server via ScopedServerInterfaceThread

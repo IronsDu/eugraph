@@ -415,7 +415,8 @@ bool SyncGraphDataStore::putVertexProperty(GraphTxnHandle txn, VertexId vid, Lab
     return tablePut(session, vpropTable(label_id), key, ValueCodec::encode(value));
 }
 
-bool SyncGraphDataStore::putVertexProperties(GraphTxnHandle txn, VertexId vid, LabelId label_id, const Properties& props) {
+bool SyncGraphDataStore::putVertexProperties(GraphTxnHandle txn, VertexId vid, LabelId label_id,
+                                             const Properties& props) {
     auto session = getSession(txn);
     if (!session)
         return false;
@@ -729,8 +730,8 @@ SyncGraphDataStore::createEdgeScanCursor(GraphTxnHandle txn, VertexId vid, Direc
 }
 
 std::unique_ptr<ISyncGraphDataStore::IEdgeTypeScanCursor>
-SyncGraphDataStore::createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId label_id, std::optional<VertexId> src_filter,
-                                             std::optional<VertexId> dst_filter) {
+SyncGraphDataStore::createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId label_id,
+                                             std::optional<VertexId> src_filter, std::optional<VertexId> dst_filter) {
     auto session = getSession(txn);
     if (!session)
         return nullptr;
@@ -771,8 +772,12 @@ void VertexScanCursorImpl::readCurrent() {
     valid_ = true;
 }
 
-bool VertexScanCursorImpl::valid() const { return valid_; }
-VertexId VertexScanCursorImpl::vertexId() const { return current_vid_; }
+bool VertexScanCursorImpl::valid() const {
+    return valid_;
+}
+VertexId VertexScanCursorImpl::vertexId() const {
+    return current_vid_;
+}
 
 void VertexScanCursorImpl::next() {
     int ret = cursor_->next(cursor_);
@@ -824,8 +829,12 @@ void EdgeScanCursorImpl::readCurrent() {
     valid_ = true;
 }
 
-bool EdgeScanCursorImpl::valid() const { return valid_; }
-const ISyncGraphDataStore::EdgeIndexEntry& EdgeScanCursorImpl::entry() const { return current_; }
+bool EdgeScanCursorImpl::valid() const {
+    return valid_;
+}
+const ISyncGraphDataStore::EdgeIndexEntry& EdgeScanCursorImpl::entry() const {
+    return current_;
+}
 
 void EdgeScanCursorImpl::next() {
     int ret = cursor_->next(cursor_);
@@ -881,8 +890,12 @@ void EdgeTypeScanCursorImpl::readCurrent() {
     valid_ = true;
 }
 
-bool EdgeTypeScanCursorImpl::valid() const { return valid_; }
-const ISyncGraphDataStore::EdgeTypeIndexEntry& EdgeTypeScanCursorImpl::entry() const { return current_; }
+bool EdgeTypeScanCursorImpl::valid() const {
+    return valid_;
+}
+const ISyncGraphDataStore::EdgeTypeIndexEntry& EdgeTypeScanCursorImpl::entry() const {
+    return current_;
+}
 
 void EdgeTypeScanCursorImpl::next() {
     int ret = cursor_->next(cursor_);

@@ -25,7 +25,9 @@ public:
     WtStoreBase(const WtStoreBase&) = delete;
     WtStoreBase& operator=(const WtStoreBase&) = delete;
 
-    bool isOpen() const { return conn_ != nullptr; }
+    bool isOpen() const {
+        return conn_ != nullptr;
+    }
 
 protected:
     WtStoreBase() = default;

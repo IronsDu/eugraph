@@ -18,11 +18,12 @@ namespace eugraph {
 /// All storage calls are dispatched to the IO thread pool via IoScheduler.
 class AsyncGraphDataStore : public IAsyncGraphDataStore {
 public:
-    AsyncGraphDataStore(ISyncGraphDataStore& store, IoScheduler& io,
-                        GraphTxnHandle txn = INVALID_GRAPH_TXN)
+    AsyncGraphDataStore(ISyncGraphDataStore& store, IoScheduler& io, GraphTxnHandle txn = INVALID_GRAPH_TXN)
         : store_(&store), io_(&io), txn_(txn) {}
 
-    void setTransaction(GraphTxnHandle txn) override { txn_ = txn; }
+    void setTransaction(GraphTxnHandle txn) override {
+        txn_ = txn;
+    }
 
     // ==================== Vertex Properties ====================
 
@@ -86,7 +87,8 @@ public:
     // ==================== Edge Type Scan ====================
 
     folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry>>
-    scanEdgesByType(EdgeLabelId label_id, std::optional<VertexId> src_filter, std::optional<VertexId> dst_filter) override {
+    scanEdgesByType(EdgeLabelId label_id, std::optional<VertexId> src_filter,
+                    std::optional<VertexId> dst_filter) override {
         constexpr size_t BATCH = 1024;
         auto cursor = co_await io_->dispatch([this, label_id, src_filter, dst_filter]() {
             return store_->createEdgeTypeScanCursor(txn_, label_id, src_filter, dst_filter);

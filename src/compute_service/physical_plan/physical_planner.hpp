@@ -1,8 +1,8 @@
 #pragma once
 
+#include "compute_service/executor/row.hpp"
 #include "compute_service/logical_plan/logical_plan.hpp"
 #include "compute_service/physical_plan/physical_operator.hpp"
-#include "compute_service/executor/row.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 
 #include <memory>

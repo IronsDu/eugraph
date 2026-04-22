@@ -15,8 +15,8 @@ PhysicalPlanner::plan(LogicalPlan& logical_plan, IAsyncGraphDataStore& store, Pl
     return std::move(std::get<PlanOperatorResult>(result).op);
 }
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store,
-                                                                            PlanContext& ctx, Schema input_schema) {
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema) {
     return std::visit(
         [this, &store, &ctx, &input_schema](auto& ptr) -> std::variant<PlanOperatorResult, std::string> {
             using T = std::decay_t<decltype(ptr)>;

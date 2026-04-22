@@ -43,7 +43,9 @@ public:
     folly::coro::Task<EdgeId> nextEdgeId() override;
 
     // Schema access
-    const GraphSchema& schema() const override { return schema_; }
+    const GraphSchema& schema() const override {
+        return schema_;
+    }
 
 private:
     void saveNextIds();

@@ -256,10 +256,11 @@ TEST_F(WTGraphStoreTest, ScanOutEdges) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, std::nullopt, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
-        found.push_back(e.edge_id);
-        return true;
-    });
+    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                          found.push_back(e.edge_id);
+                          return true;
+                      });
 
     EXPECT_EQ(found.size(), 2u);
 }
@@ -527,10 +528,11 @@ TEST_F(WTGraphStoreTest, DeleteEdge) {
     EXPECT_FALSE(result.has_value());
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, label_id, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
-        found.push_back(e.edge_id);
-        return true;
-    });
+    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, label_id,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                          found.push_back(e.edge_id);
+                          return true;
+                      });
     EXPECT_TRUE(found.empty());
 }
 
@@ -566,10 +568,11 @@ TEST_F(WTGraphStoreTest, ScanInEdges) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 5, Direction::IN, std::nullopt, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
-        found.push_back(e.edge_id);
-        return true;
-    });
+    store_->scanEdges(INVALID_GRAPH_TXN, 5, Direction::IN, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                          found.push_back(e.edge_id);
+                          return true;
+                      });
 
     EXPECT_EQ(found.size(), 2u);
     EXPECT_NE(std::find(found.begin(), found.end(), 200), found.end());
@@ -602,10 +605,11 @@ TEST_F(WTGraphStoreTest, MultipleEdgesSamePair) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, label_id, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
-        found.push_back(e.edge_id);
-        return true;
-    });
+    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, label_id,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                          found.push_back(e.edge_id);
+                          return true;
+                      });
 
     EXPECT_EQ(found.size(), 3u);
 }
@@ -757,10 +761,11 @@ TEST_F(WTGraphStoreTest, ScanEdgesReturnsNeighborInfo) {
     commit(txn);
 
     std::vector<ISyncGraphDataStore::EdgeIndexEntry> entries;
-    store_->scanEdges(INVALID_GRAPH_TXN, 10, Direction::OUT, std::nullopt, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
-        entries.push_back(e);
-        return true;
-    });
+    store_->scanEdges(INVALID_GRAPH_TXN, 10, Direction::OUT, std::nullopt,
+                      [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                          entries.push_back(e);
+                          return true;
+                      });
 
     ASSERT_EQ(entries.size(), 1u);
     EXPECT_EQ(entries[0].neighbor_id, 20u);

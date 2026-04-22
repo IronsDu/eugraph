@@ -158,8 +158,7 @@ bool WtStoreBase::tablePut(WT_SESSION* session, const std::string& table, std::s
     return true;
 }
 
-std::optional<std::string> WtStoreBase::tableGet(WT_SESSION* session, const std::string& table,
-                                                 std::string_view key) {
+std::optional<std::string> WtStoreBase::tableGet(WT_SESSION* session, const std::string& table, std::string_view key) {
     WT_CURSOR* cursor = getCursor(session, table);
     if (!cursor)
         return std::nullopt;

@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
-#include "storage/meta/meta_codec.hpp"
-#include "storage/meta/async_graph_meta_store.hpp"
-#include "storage/meta/sync_graph_meta_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/meta/async_graph_meta_store.hpp"
+#include "storage/meta/meta_codec.hpp"
+#include "storage/meta/sync_graph_meta_store.hpp"
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
@@ -252,12 +252,12 @@ TEST_F(MetadataServiceTest, PersistenceAcrossRestart) {
 // ==================== PropertyValue serialization ====================
 
 TEST_F(MetadataServiceTest, PropertyDefWithDefaultValue) {
-    blockingWait(
-        async_meta_->createLabel("Config", {prop("key", PropertyType::STRING, true),
-                                      prop("value", PropertyType::STRING, false, PropertyValue(std::string("default"))),
-                                      prop("count", PropertyType::INT64, false, PropertyValue(int64_t(42))),
-                                      prop("enabled", PropertyType::BOOL, false, PropertyValue(true)),
-                                      prop("score", PropertyType::DOUBLE, false, PropertyValue(3.14))}));
+    blockingWait(async_meta_->createLabel(
+        "Config", {prop("key", PropertyType::STRING, true),
+                   prop("value", PropertyType::STRING, false, PropertyValue(std::string("default"))),
+                   prop("count", PropertyType::INT64, false, PropertyValue(int64_t(42))),
+                   prop("enabled", PropertyType::BOOL, false, PropertyValue(true)),
+                   prop("score", PropertyType::DOUBLE, false, PropertyValue(3.14))}));
 
     auto def = blockingWait(async_meta_->getLabelDef("Config"));
     ASSERT_TRUE(def.has_value());

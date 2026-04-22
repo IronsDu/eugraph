@@ -2,9 +2,9 @@
 
 #include "compute_service/executor/row.hpp"
 #include "compute_service/logical_plan/logical_plan_builder.hpp"
-#include "compute_service/physical_plan/physical_planner.hpp"
 #include "compute_service/parser/ast.hpp"
 #include "compute_service/parser/cypher_parser.hpp"
+#include "compute_service/physical_plan/physical_planner.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
 #include "storage/io_scheduler.hpp"
@@ -31,8 +31,8 @@ public:
         Config() = default;
     };
 
-    QueryExecutor(ISyncGraphDataStore& sync_data, IAsyncGraphDataStore& async_data,
-                   IAsyncGraphMetaStore& async_meta, Config config);
+    QueryExecutor(ISyncGraphDataStore& sync_data, IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta,
+                  Config config);
     ~QueryExecutor();
 
     ExecutionResult executeSync(const std::string& cypher_query);
