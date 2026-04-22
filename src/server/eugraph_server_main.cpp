@@ -1,8 +1,11 @@
 #include "compute_service/executor/query_executor.hpp"
 #include "gen-cpp2/EuGraphService.h"
-#include "metadata_service/metadata_service.hpp"
 #include "server/eugraph_handler.hpp"
-#include "storage/graph_store_impl.hpp"
+#include "storage/data/async_graph_data_store.hpp"
+#include "storage/data/sync_graph_data_store.hpp"
+#include "storage/io_scheduler.hpp"
+#include "storage/meta/async_graph_meta_store.hpp"
+#include "storage/meta/sync_graph_meta_store.hpp"
 
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 
@@ -57,37 +60,45 @@ int main(int argc, char* argv[]) {
 
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [thread %t] [%l] %v");
 
-    spdlog::info("这条日志会自动带上线程 ID");
-
     spdlog::info("Starting EuGraph server...");
     spdlog::info("  Port: {}", config.port);
     spdlog::info("  Data dir: {}", config.data_dir);
 
-    // 1. Initialize storage layer
-    auto store = std::make_unique<GraphStoreImpl>();
-    if (!store->open(config.data_dir)) {
-        spdlog::error("Failed to open database at {}", config.data_dir);
+    // 1. Create sync stores (independent WT connections)
+    auto sync_data = std::make_unique<SyncGraphDataStore>();
+    if (!sync_data->open(config.data_dir + "/data")) {
+        spdlog::error("Failed to open data store at {}/data", config.data_dir);
         return 1;
     }
 
-    // 2. Initialize metadata service
-    auto meta = std::make_unique<MetadataServiceImpl>();
-    auto opened = folly::coro::blockingWait(meta->open(*store));
+    auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+    if (!sync_meta->open(config.data_dir + "/meta")) {
+        spdlog::error("Failed to open meta store at {}/meta", config.data_dir);
+        return 1;
+    }
+
+    // 2. Create shared IoScheduler
+    auto io_scheduler = std::make_shared<IoScheduler>(config.io_threads);
+
+    // 3. Create async stores
+    auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io_scheduler);
+    auto async_meta = std::make_unique<AsyncGraphMetaStore>();
+    auto opened = folly::coro::blockingWait(async_meta->open(*sync_meta));
     if (!opened) {
-        spdlog::error("Failed to initialize metadata service");
+        spdlog::error("Failed to initialize async meta store");
         return 1;
     }
 
-    // 3. Initialize query executor
+    // 4. Create query executor
     QueryExecutor::Config executor_config;
     executor_config.compute_threads = config.compute_threads;
     executor_config.io_threads = config.io_threads;
-    auto executor = std::make_unique<QueryExecutor>(*store, *meta, executor_config);
+    auto executor = std::make_unique<QueryExecutor>(*sync_data, *async_data, *async_meta, executor_config);
 
-    // 4. Create Thrift handler
-    auto handler = std::make_shared<server::EuGraphHandler>(*store, *meta, *executor);
+    // 5. Create Thrift handler
+    auto handler = std::make_shared<server::EuGraphHandler>(*sync_data, *async_meta, *executor);
 
-    // 5. Create and start Thrift server
+    // 6. Create and start Thrift server
     auto server = std::make_shared<apache::thrift::ThriftServer>();
     server->setPort(config.port);
     server->setAllowPlaintextOnLoopback(true);
@@ -117,8 +128,9 @@ int main(int argc, char* argv[]) {
 
     // Cleanup
     spdlog::info("Shutting down...");
-    folly::coro::blockingWait(meta->close());
-    store->close();
+    folly::coro::blockingWait(async_meta->close());
+    sync_data->close();
+    sync_meta->close();
     spdlog::info("Bye.");
 
     return 0;

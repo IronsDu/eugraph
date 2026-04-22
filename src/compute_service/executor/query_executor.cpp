@@ -7,8 +7,9 @@
 namespace eugraph {
 namespace compute {
 
-QueryExecutor::QueryExecutor(IGraphStore& store, IMetadataService& meta, Config config)
-    : store_(store), meta_(meta), config_(config),
+QueryExecutor::QueryExecutor(ISyncGraphDataStore& sync_data, IAsyncGraphDataStore& async_data,
+                             IAsyncGraphMetaStore& async_meta, Config config)
+    : sync_data_(sync_data), async_data_(async_data), async_meta_(async_meta), config_(config),
       compute_pool_(std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads)),
       io_scheduler_(std::make_shared<IoScheduler>(config.io_threads)) {}
 
@@ -21,8 +22,6 @@ ExecutionResult QueryExecutor::executeSync(const std::string& cypher_query) {
 folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string& cypher_query) {
     ExecutionResult result;
 
-    // Schedule the heavy work on the compute pool, but use co_withExecutor
-    // so the calling coroutine suspends without blocking the current thread.
     auto inner = folly::coro::co_invoke([this, &cypher_query, &result]() -> folly::coro::Task<void> {
         // 1. Parse
         cypher::CypherQueryParser parser;
@@ -42,12 +41,11 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         }
         auto& logical_plan = std::get<LogicalPlan>(logical_result);
 
-        // Extract column names from logical plan
         extractColumnsFromLogicalPlan(logical_plan.root, result.columns);
 
         // 3. Load label/edge_label mappings from metadata service
-        auto labels = co_await meta_.listLabels();
-        auto edge_labels = co_await meta_.listEdgeLabels();
+        auto labels = co_await async_meta_.listLabels();
+        auto edge_labels = co_await async_meta_.listEdgeLabels();
 
         std::unordered_map<std::string, LabelId> label_name_to_id;
         for (const auto& l : labels)
@@ -58,8 +56,8 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
             edge_label_name_to_id[el.name] = el.id;
 
         // 4. Plan physical operators
-        GraphTxnHandle txn = store_.beginTransaction();
-        AsyncGraphStore async_store(store_, *io_scheduler_, txn);
+        GraphTxnHandle txn = sync_data_.beginTransaction();
+        AsyncGraphDataStore async_store(sync_data_, *io_scheduler_, txn);
 
         PlanContext ctx;
         ctx.label_name_to_id = std::move(label_name_to_id);
@@ -70,13 +68,13 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         for (const auto& el : edge_labels)
             ctx.edge_label_defs[el.id] = el;
 
-        ctx.next_vertex_id = co_await meta_.nextVertexId();
-        ctx.next_edge_id = co_await meta_.nextEdgeId();
+        ctx.next_vertex_id = co_await async_meta_.nextVertexId();
+        ctx.next_edge_id = co_await async_meta_.nextEdgeId();
         PhysicalPlanner physical_planner;
         auto phys_result = physical_planner.plan(logical_plan, async_store, ctx);
         if (std::holds_alternative<std::string>(phys_result)) {
             result.error = std::get<std::string>(phys_result);
-            store_.rollbackTransaction(txn);
+            sync_data_.rollbackTransaction(txn);
             co_return;
         }
         auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
@@ -89,8 +87,7 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
             }
         }
 
-        // Commit transaction
-        store_.commitTransaction(txn);
+        sync_data_.commitTransaction(txn);
     });
 
     co_await folly::coro::co_withExecutor(compute_pool_.get(), std::move(inner));
@@ -113,12 +110,10 @@ void QueryExecutor::extractColumnsFromLogicalPlan(const LogicalOperator& op, Sch
                     }
                 }
             } else if constexpr (std::is_same_v<OpType, LimitOp> || std::is_same_v<OpType, FilterOp>) {
-                // Limit/Filter pass through — recurse into child
                 if (!ptr->children.empty()) {
                     extractColumnsFromLogicalPlan(ptr->children[0], columns);
                 }
             }
-            // For CreateNodeOp, CreateEdgeOp, ScanOps, ExpandOp: no output columns from RETURN
         },
         op);
 }

@@ -4,8 +4,11 @@
 
 #include "compute_service/executor/query_executor.hpp"
 #include "gen-cpp2/eugraph_types.h"
-#include "metadata_service/metadata_service.hpp"
-#include "storage/graph_store_impl.hpp"
+#include "storage/data/async_graph_data_store.hpp"
+#include "storage/data/sync_graph_data_store.hpp"
+#include "storage/io_scheduler.hpp"
+#include "storage/meta/async_graph_meta_store.hpp"
+#include "storage/meta/sync_graph_meta_store.hpp"
 
 #include <folly/coro/BlockingWait.h>
 #include <spdlog/spdlog.h>
@@ -258,23 +261,33 @@ static void runEmbeddedRepl(const ShellConfig& config) {
         db_path = "/tmp/eugraph-shell-" + std::to_string(getpid());
     }
 
-    std::filesystem::create_directories(db_path);
+    std::filesystem::create_directories(db_path + "/data");
+    std::filesystem::create_directories(db_path + "/meta");
 
-    auto store = std::make_unique<GraphStoreImpl>();
-    if (!store->open(db_path)) {
-        std::cerr << "Error: Failed to open database at " << db_path << std::endl;
+    auto sync_data = std::make_unique<SyncGraphDataStore>();
+    if (!sync_data->open(db_path + "/data")) {
+        std::cerr << "Error: Failed to open data store at " << db_path << "/data" << std::endl;
         return;
     }
 
-    auto meta = std::make_unique<MetadataServiceImpl>();
-    auto opened = folly::coro::blockingWait(meta->open(*store));
+    auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+    if (!sync_meta->open(db_path + "/meta")) {
+        std::cerr << "Error: Failed to open meta store at " << db_path << "/meta" << std::endl;
+        return;
+    }
+
+    auto io_scheduler = std::make_shared<IoScheduler>(2);
+    auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io_scheduler);
+
+    auto async_meta = std::make_unique<AsyncGraphMetaStore>();
+    auto opened = folly::coro::blockingWait(async_meta->open(*sync_meta));
     if (!opened) {
-        std::cerr << "Error: Failed to initialize metadata service" << std::endl;
+        std::cerr << "Error: Failed to initialize async meta store" << std::endl;
         return;
     }
 
-    compute::QueryExecutor executor(*store, *meta, compute::QueryExecutor::Config{});
-    server::EuGraphHandler handler(*store, *meta, executor);
+    compute::QueryExecutor executor(*sync_data, *async_data, *async_meta, compute::QueryExecutor::Config{});
+    server::EuGraphHandler handler(*sync_data, *async_meta, executor);
 
     std::cout << "Database: " << db_path << std::endl;
 
@@ -386,8 +399,9 @@ static void runEmbeddedRepl(const ShellConfig& config) {
 
     runReplLoop("embedded", cmd_handler);
 
-    folly::coro::blockingWait(meta->close());
-    store->close();
+    folly::coro::blockingWait(async_meta->close());
+    sync_data->close();
+    sync_meta->close();
 }
 
 // ==================== RPC mode REPL ====================

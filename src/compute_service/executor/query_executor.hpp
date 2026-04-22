@@ -1,15 +1,14 @@
 #pragma once
 
-#include "compute_service/executor/async_graph_store.hpp"
-#include "compute_service/executor/io_scheduler.hpp"
 #include "compute_service/executor/row.hpp"
 #include "compute_service/logical_plan/logical_plan_builder.hpp"
+#include "compute_service/physical_plan/physical_planner.hpp"
 #include "compute_service/parser/ast.hpp"
 #include "compute_service/parser/cypher_parser.hpp"
-#include "compute_service/physical_plan/physical_operator.hpp"
-#include "compute_service/physical_plan/physical_planner.hpp"
-#include "metadata_service/metadata_service.hpp"
-#include "storage/graph_store.hpp"
+#include "storage/data/async_graph_data_store.hpp"
+#include "storage/data/i_sync_graph_data_store.hpp"
+#include "storage/io_scheduler.hpp"
+#include "storage/meta/i_async_graph_meta_store.hpp"
 
 #include <folly/coro/Task.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
@@ -32,19 +31,17 @@ public:
         Config() = default;
     };
 
-    QueryExecutor(IGraphStore& store, IMetadataService& meta, Config config);
+    QueryExecutor(ISyncGraphDataStore& sync_data, IAsyncGraphDataStore& async_data,
+                   IAsyncGraphMetaStore& async_meta, Config config);
     ~QueryExecutor();
 
-    /// Execute a Cypher query synchronously (blocking). Returns result with columns, rows, and error.
     ExecutionResult executeSync(const std::string& cypher_query);
-
-    /// Execute a Cypher query as a coroutine (non-blocking). Schedules work on
-    /// the compute pool and co_awaits completion. Safe to call from IO threads.
     folly::coro::Task<ExecutionResult> executeAsync(const std::string& cypher_query);
 
 private:
-    IGraphStore& store_;
-    IMetadataService& meta_;
+    ISyncGraphDataStore& sync_data_;
+    IAsyncGraphDataStore& async_data_;
+    IAsyncGraphMetaStore& async_meta_;
     Config config_;
     std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool_;
     std::shared_ptr<IoScheduler> io_scheduler_;

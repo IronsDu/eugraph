@@ -1,4 +1,4 @@
-#include "metadata_service/metadata_codec.hpp"
+#include "storage/meta/meta_codec.hpp"
 
 #include <cstring>
 #include <stdexcept>

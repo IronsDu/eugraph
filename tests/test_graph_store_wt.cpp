@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "storage/graph_store_impl.hpp"
+#include "storage/data/sync_graph_data_store.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -12,12 +12,12 @@ using namespace eugraph;
 class WTGraphStoreTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<GraphStoreImpl> store_;
+    std::unique_ptr<SyncGraphDataStore> store_;
 
     void SetUp() override {
         db_path_ = "/tmp/eugraph_wt_graph_test_" + std::to_string(::getpid()) + "_" +
                    ::testing::UnitTest::GetInstance()->current_test_info()->name();
-        store_ = std::make_unique<GraphStoreImpl>();
+        store_ = std::make_unique<SyncGraphDataStore>();
         ASSERT_TRUE(store_->open(db_path_));
 
         // Pre-create commonly used labels and edge labels
@@ -136,12 +136,16 @@ TEST_F(WTGraphStoreTest, DropLabelTombstoneFiltering) {
     ASSERT_TRUE(store_->insertVertex(txn, 600, std::vector<std::pair<LabelId, Properties>>{{1, props}}, nullptr));
     commit(txn);
 
-    // Drop label 1 (adds to deletedLabels_)
+    // Drop label 1 (drops the per-label tables)
     ASSERT_TRUE(store_->dropLabel(1));
 
-    // getVertexLabels should filter out label 1 (L| entry remains but is filtered)
-    auto labels = store_->getVertexLabels(INVALID_GRAPH_TXN, 600);
-    EXPECT_EQ(labels.size(), 0u);
+    // In the new architecture, getVertexLabels returns raw labels from the
+    // label_fwd table. Tombstone filtering is handled by the async layer
+    // via GraphSchema, not by the sync data store.
+    // After dropping label 1, the label_fwd entry may still exist but
+    // per-label property tables are gone.
+    auto props_result = store_->getVertexProperties(INVALID_GRAPH_TXN, 600, 1);
+    EXPECT_FALSE(props_result.has_value());
 }
 
 // ==================== Vertex CRUD ====================
@@ -252,7 +256,7 @@ TEST_F(WTGraphStoreTest, ScanOutEdges) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, std::nullopt, [&](const IGraphStore::EdgeIndexEntry& e) {
+    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, std::nullopt, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
         found.push_back(e.edge_id);
         return true;
     });
@@ -523,7 +527,7 @@ TEST_F(WTGraphStoreTest, DeleteEdge) {
     EXPECT_FALSE(result.has_value());
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, label_id, [&](const IGraphStore::EdgeIndexEntry& e) {
+    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, label_id, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
         found.push_back(e.edge_id);
         return true;
     });
@@ -562,7 +566,7 @@ TEST_F(WTGraphStoreTest, ScanInEdges) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 5, Direction::IN, std::nullopt, [&](const IGraphStore::EdgeIndexEntry& e) {
+    store_->scanEdges(INVALID_GRAPH_TXN, 5, Direction::IN, std::nullopt, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
         found.push_back(e.edge_id);
         return true;
     });
@@ -579,7 +583,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesWithLabelFilter) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, 1, [&](const IGraphStore::EdgeIndexEntry& e) {
+    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, 1, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
         found.push_back(e.edge_id);
         return true;
     });
@@ -598,7 +602,7 @@ TEST_F(WTGraphStoreTest, MultipleEdgesSamePair) {
     commit(txn);
 
     std::vector<EdgeId> found;
-    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, label_id, [&](const IGraphStore::EdgeIndexEntry& e) {
+    store_->scanEdges(INVALID_GRAPH_TXN, 1, Direction::OUT, label_id, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
         found.push_back(e.edge_id);
         return true;
     });
@@ -651,7 +655,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesByType) {
 
     std::vector<EdgeId> found;
     store_->scanEdgesByType(INVALID_GRAPH_TXN, label1, std::nullopt, std::nullopt,
-                            [&](const IGraphStore::EdgeTypeIndexEntry& e) {
+                            [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& e) {
                                 found.push_back(e.edge_id);
                                 return true;
                             });
@@ -670,9 +674,9 @@ TEST_F(WTGraphStoreTest, ScanEdgesByTypeWithSrcFilter) {
     store_->insertEdge(txn, 802, 40, 50, label_id, 0, Properties{});
     commit(txn);
 
-    std::vector<IGraphStore::EdgeTypeIndexEntry> found;
+    std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> found;
     store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, VertexId(10), std::nullopt,
-                            [&](const IGraphStore::EdgeTypeIndexEntry& e) {
+                            [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& e) {
                                 found.push_back(e);
                                 return true;
                             });
@@ -694,7 +698,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesByTypeWithSrcDstFilter) {
 
     std::vector<EdgeId> found;
     store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, VertexId(10), VertexId(20),
-                            [&](const IGraphStore::EdgeTypeIndexEntry& e) {
+                            [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& e) {
                                 found.push_back(e.edge_id);
                                 return true;
                             });
@@ -717,7 +721,7 @@ TEST_F(WTGraphStoreTest, ScanEdgesByTypeAfterDelete) {
 
     std::vector<EdgeId> found;
     store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, std::nullopt, std::nullopt,
-                            [&](const IGraphStore::EdgeTypeIndexEntry& e) {
+                            [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& e) {
                                 found.push_back(e.edge_id);
                                 return true;
                             });
@@ -731,9 +735,9 @@ TEST_F(WTGraphStoreTest, ScanEdgesByTypeReturnsEntryInfo) {
     store_->insertEdge(txn, 960, 10, 20, label_id, 5, Properties{});
     commit(txn);
 
-    std::vector<IGraphStore::EdgeTypeIndexEntry> found;
+    std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> found;
     store_->scanEdgesByType(INVALID_GRAPH_TXN, label_id, std::nullopt, std::nullopt,
-                            [&](const IGraphStore::EdgeTypeIndexEntry& e) {
+                            [&](const ISyncGraphDataStore::EdgeTypeIndexEntry& e) {
                                 found.push_back(e);
                                 return true;
                             });
@@ -752,8 +756,8 @@ TEST_F(WTGraphStoreTest, ScanEdgesReturnsNeighborInfo) {
     store_->insertEdge(txn, 600, 10, 20, label_id, 0, Properties{});
     commit(txn);
 
-    std::vector<IGraphStore::EdgeIndexEntry> entries;
-    store_->scanEdges(INVALID_GRAPH_TXN, 10, Direction::OUT, std::nullopt, [&](const IGraphStore::EdgeIndexEntry& e) {
+    std::vector<ISyncGraphDataStore::EdgeIndexEntry> entries;
+    store_->scanEdges(INVALID_GRAPH_TXN, 10, Direction::OUT, std::nullopt, [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
         entries.push_back(e);
         return true;
     });

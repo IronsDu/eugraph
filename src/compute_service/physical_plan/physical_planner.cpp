@@ -6,7 +6,7 @@ namespace eugraph {
 namespace compute {
 
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
-PhysicalPlanner::plan(LogicalPlan& logical_plan, AsyncGraphStore& store, PlanContext& ctx) {
+PhysicalPlanner::plan(LogicalPlan& logical_plan, IAsyncGraphDataStore& store, PlanContext& ctx) {
     Schema empty_schema;
     auto result = planOperator(logical_plan.root, store, ctx, empty_schema);
     if (std::holds_alternative<std::string>(result)) {
@@ -15,7 +15,7 @@ PhysicalPlanner::plan(LogicalPlan& logical_plan, AsyncGraphStore& store, PlanCon
     return std::move(std::get<PlanOperatorResult>(result).op);
 }
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planOperator(LogicalOperator& op, AsyncGraphStore& store,
+std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store,
                                                                             PlanContext& ctx, Schema input_schema) {
     return std::visit(
         [this, &store, &ctx, &input_schema](auto& ptr) -> std::variant<PlanOperatorResult, std::string> {
@@ -51,7 +51,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planOperator(Logi
                 if (std::holds_alternative<std::string>(child_result)) {
                     return std::get<std::string>(child_result);
                 }
-                auto [child_op, child_schema] = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_op = std::move(child_res.op);
+                auto child_schema = std::move(child_res.output_schema);
 
                 std::optional<EdgeLabelId> label_filter;
                 if (!ptr->rel_types.empty()) {
@@ -83,7 +85,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planOperator(Logi
                 if (std::holds_alternative<std::string>(child_result)) {
                     return std::get<std::string>(child_result);
                 }
-                auto [child_op, child_schema] = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_op = std::move(child_res.op);
+                auto child_schema = std::move(child_res.output_schema);
 
                 auto result = std::make_unique<FilterPhysicalOp>(std::move(ptr->predicate), Schema(child_schema),
                                                                  std::move(child_op), &ctx.label_defs);
@@ -98,7 +102,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planOperator(Logi
                 if (std::holds_alternative<std::string>(child_result)) {
                     return std::get<std::string>(child_result);
                 }
-                auto [child_op, child_schema] = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_op = std::move(child_res.op);
+                auto child_schema = std::move(child_res.output_schema);
 
                 std::vector<ProjectPhysicalOp::ProjectItem> items;
                 Schema output_schema;
@@ -122,7 +128,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planOperator(Logi
                 if (std::holds_alternative<std::string>(child_result)) {
                     return std::get<std::string>(child_result);
                 }
-                auto [child_op, child_schema] = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_op = std::move(child_res.op);
+                auto child_schema = std::move(child_res.output_schema);
 
                 auto result = std::make_unique<LimitPhysicalOp>(ptr->limit, std::move(child_op));
                 // Limit passes through schema
@@ -136,7 +144,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planOperator(Logi
                     if (std::holds_alternative<std::string>(child_result)) {
                         return std::get<std::string>(child_result);
                     }
-                    auto [cop, cschema] = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto child_res2 = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cop = std::move(child_res2.op);
+                    auto cschema = std::move(child_res2.output_schema);
                     child_op = std::move(cop);
                     child_schema = std::move(cschema);
                 }
@@ -216,7 +226,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planOperator(Logi
                     if (std::holds_alternative<std::string>(child_result)) {
                         return std::get<std::string>(child_result);
                     }
-                    auto [cop, cschema] = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto child_res2 = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cop = std::move(child_res2.op);
+                    auto cschema = std::move(child_res2.output_schema);
                     child_op = std::move(cop);
                     child_schema = std::move(cschema);
                 }
