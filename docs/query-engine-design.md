@@ -95,19 +95,19 @@ class IoScheduler {
 
 - `dispatch(func)`：将 `func` 调度到 IO 线程池，协程挂起直到结果就绪。
 - 内部使用 `folly::coro::co_viaIfAsync` 切换到 IO executor 执行，完成后恢复调用者。
-- 所有对 `IGraphStore` 的调用都通过此机制，确保计算层不直接阻塞。
+- 所有对 `ISyncGraphDataStore` 的调用都通过此机制，确保计算层不直接阻塞。
 
-### 1.4 AsyncGraphStore
+### 1.4 AsyncGraphDataStore
 
 ```cpp
-class AsyncGraphStore {
-    IGraphStore* store_;
+class AsyncGraphDataStore : public IAsyncGraphDataStore {
+    ISyncGraphDataStore* store_;
     IoScheduler* io_;
     GraphTxnHandle txn_;
 };
 ```
 
-`IGraphStore` 的异步包装。每个方法将同步存储调用通过 `IoScheduler::dispatch` 转为异步协程：
+`ISyncGraphDataStore` 的异步包装，实现 `IAsyncGraphDataStore` 接口。每个方法将同步存储调用通过 `IoScheduler::dispatch` 转为异步协程。同时提供事务方法（`beginTran/commitTran/rollbackTran`）和 DDL 方法（`createLabel/createEdgeLabel`）：
 
 ```cpp
 folly::coro::Task<bool> insertVertex(VertexId vid,
@@ -130,6 +130,11 @@ folly::coro::Task<bool> insertVertex(VertexId vid,
 | `scanEdgesByType` | `AsyncGenerator<vector<EdgeTypeIndexEntry>>` | 按关系类型扫描边 |
 | `insertVertex` | `Task<bool>` | 插入顶点 |
 | `insertEdge` | `Task<bool>` | 插入边 |
+| `beginTran` | `Task<GraphTxnHandle>` | 开始事务 |
+| `commitTran` | `Task<bool>` | 提交事务 |
+| `rollbackTran` | `Task<bool>` | 回滚事务 |
+| `createLabel` | `Task<bool>` | 创建标签物理表 |
+| `createEdgeLabel` | `Task<bool>` | 创建关系类型物理表 |
 | `getVertexProperties` | `Task<optional<Properties>>` | 获取顶点属性 |
 | `getVertexLabels` | `Task<LabelIdSet>` | 获取顶点标签集合 |
 
@@ -210,18 +215,18 @@ tests/test_logical_plan.cpp  -- 逻辑计划测试
 
 | 物理算子 | 额外信息 | 说明 |
 |----------|----------|------|
-| `AllNodeScanPhysicalOp` | `AsyncGraphStore&`, `label_map` | 扫描所有已知标签 |
-| `LabelScanPhysicalOp` | `AsyncGraphStore&`, `LabelId` | 按标签 ID 扫描 |
-| `ExpandPhysicalOp` | `AsyncGraphStore&`, `EdgeLabelId` | 展开，按关系类型 ID 过滤 |
+| `AllNodeScanPhysicalOp` | `IAsyncGraphDataStore&`, `label_map` | 扫描所有已知标签 |
+| `LabelScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId` | 按标签 ID 扫描 |
+| `ExpandPhysicalOp` | `IAsyncGraphDataStore&`, `EdgeLabelId` | 展开，按关系类型 ID 过滤 |
 | `FilterPhysicalOp` | `ExpressionEvaluator` | 行内表达式求值过滤 |
 | `ProjectPhysicalOp` | `ExpressionEvaluator` | 行内表达式求值投影 |
 | `LimitPhysicalOp` | `int64_t limit` | 限制行数 |
-| `CreateNodePhysicalOp` | `AsyncGraphStore&`, `VertexId`, `label_props` | 创建顶点（预分配 ID） |
-| `CreateEdgePhysicalOp` | `AsyncGraphStore&`, `EdgeId`, `src/dst` | 创建边（预分配 ID） |
+| `CreateNodePhysicalOp` | `IAsyncGraphDataStore&`, `VertexId`, `label_props` | 创建顶点（预分配 ID） |
+| `CreateEdgePhysicalOp` | `IAsyncGraphDataStore&`, `EdgeId`, `src/dst` | 创建边（预分配 ID） |
 
 关键差异：
 - 逻辑计划的字符串 label/rel_type 在此阶段解析为 `LabelId` / `EdgeLabelId`。
-- 物理算子持有 `AsyncGraphStore&` 引用，用于执行实际的存储操作。
+- 物理算子持有 `IAsyncGraphDataStore&` 引用，用于执行实际的存储操作。
 - `CreateNodeOp` / `CreateEdgeOp` 在此阶段预分配 VertexId / EdgeId（通过 `PlanContext::next_vertex_id` 递增），用于后续变量引用解析。
 
 ### 3.2 执行模型
@@ -256,7 +261,7 @@ while (auto batch = co_await gen.next()) {
 }
 ```
 
-Scan 算子通过 `AsyncGraphStore` 发起异步扫描，每次拉取一批 VertexId，转为 `RowBatch` 向上输出。
+Scan 算子通过 `IAsyncGraphDataStore` 发起异步扫描，每次拉取一批 VertexId，转为 `RowBatch` 向上输出。
 
 #### Expand 算子
 
@@ -313,7 +318,7 @@ Limit 在达到限制前持续拉取子算子输出。达到限制时，先 yiel
 ```cpp
 class PhysicalPlanner {
     std::variant<unique_ptr<PhysicalOperator>, string>
-    plan(LogicalPlan& logical_plan, AsyncGraphStore& store, PlanContext& ctx);
+    plan(LogicalPlan& logical_plan, IAsyncGraphDataStore& store, PlanContext& ctx);
 };
 ```
 
@@ -322,7 +327,7 @@ class PhysicalPlanner {
 - `variable_vertex_ids` / `variable_edge_ids`：CREATE 语句中的变量到预分配 ID 的映射
 - `next_vertex_id` / `next_edge_id`：ID 分配计数器
 
-翻译过程递归遍历逻辑算子树，对每种算子类型创建对应的物理算子，绑定 `AsyncGraphStore` 引用和解析后的 ID。
+翻译过程递归遍历逻辑算子树，对每种算子类型创建对应的物理算子，绑定 `IAsyncGraphDataStore` 引用和解析后的 ID。
 
 ### 3.5 文件结构
 
@@ -411,9 +416,9 @@ folly::coro::AsyncGenerator<RowBatch> execute(const string& cypher_query) {
     auto logical_plan = plan_builder.build(stmt);
 
     // 3. 规划物理算子
-    GraphTxnHandle txn = store_.beginTransaction();
-    AsyncGraphStore async_store(store_, *io_scheduler_, txn);
-    auto phys_op = physical_planner.plan(logical_plan, async_store, ctx);
+    GraphTxnHandle txn = co_await async_data_.beginTran();
+    async_data_.setTransaction(txn);
+    auto phys_op = physical_planner.plan(logical_plan, async_data_, ctx);
 
     // 4. 协程管道执行
     auto gen = phys_op->execute();
@@ -422,7 +427,7 @@ folly::coro::AsyncGenerator<RowBatch> execute(const string& cypher_query) {
     }
 
     // 5. 提交事务
-    store_.commitTransaction(txn);
+    co_await async_data_.commitTran(txn);
 }
 ```
 
@@ -430,22 +435,20 @@ folly::coro::AsyncGenerator<RowBatch> execute(const string& cypher_query) {
 
 ```cpp
 std::vector<Row> executeSync(const string& cypher_query) {
-    // 在 compute executor 上运行异步 execute
-    folly::coro::blockingWait(
-        folly::coro::co_withExecutor(compute_pool_.get(), task));
+    return folly::coro::blockingWait(executeAsync(cypher_query));
 }
 ```
 
-通过 `co_withExecutor(compute_pool_.get(), ...)` 确保整个协程链在 compute executor 上启动，使 IO dispatch 有有效的 executor 上下文。
-
 ### 6.3 事务管理
 
-每次查询在独立事务中执行：
-1. 查询开始时 `beginTransaction()` 获取 WT session
-2. 查询执行中所有存储操作使用该 session
-3. 查询完成后 `commitTransaction()` 提交并关闭 session
+每次查询在独立事务中执行，事务通过 async 接口管理：
+1. 查询开始时 `co_await async_data_.beginTran()` 获取事务句柄
+2. `async_data_.setTransaction(txn)` 设置事务上下文
+3. 查询执行中所有存储操作使用该事务
+4. 查询完成后 `co_await async_data_.commitTran(txn)` 提交
+5. 出错时 `co_await async_data_.rollbackTran(txn)` 回滚
 
-**注意**：`commitTransaction` 会关闭 WT session，因此所有 scan cursor 必须在 commit 前销毁。
+QueryExecutor 只依赖 `IAsyncGraphDataStore` 和 `IAsyncGraphMetaStore`，不直接依赖任何 sync 接口。
 
 ---
 
