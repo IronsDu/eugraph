@@ -4,10 +4,13 @@
 
 #include "compute_service/executor/query_executor.hpp"
 #include "gen-cpp2/eugraph_types.h"
-#include "metadata_service/metadata_service.hpp"
 #include "server/eugraph_handler.hpp"
 #include "shell/rpc_client.hpp"
-#include "storage/graph_store_impl.hpp"
+#include "storage/data/async_graph_data_store.hpp"
+#include "storage/data/sync_graph_data_store.hpp"
+#include "storage/io_scheduler.hpp"
+#include "storage/meta/async_graph_meta_store.hpp"
+#include "storage/meta/sync_graph_meta_store.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -52,8 +55,11 @@ PropertyDefThrift makePropDef(const std::string& name, eugraph::thrift::Property
 class RpcIntegrationTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<GraphStoreImpl> store_;
-    std::unique_ptr<MetadataServiceImpl> meta_;
+    std::unique_ptr<SyncGraphDataStore> sync_data_;
+    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<AsyncGraphMetaStore> async_meta_;
+    std::unique_ptr<IoScheduler> io_scheduler_;
+    std::unique_ptr<AsyncGraphDataStore> async_data_;
     std::unique_ptr<compute::QueryExecutor> executor_;
     std::shared_ptr<server::EuGraphHandler> handler_;
 
@@ -64,16 +70,25 @@ protected:
     void SetUp() override {
         db_path_ = getTestDbPath();
         std::filesystem::remove_all(db_path_);
+        std::filesystem::create_directories(db_path_ + "/data");
+        std::filesystem::create_directories(db_path_ + "/meta");
 
-        store_ = std::make_unique<GraphStoreImpl>();
-        ASSERT_TRUE(store_->open(db_path_));
+        sync_data_ = std::make_unique<SyncGraphDataStore>();
+        ASSERT_TRUE(sync_data_->open(db_path_ + "/data"));
 
-        meta_ = std::make_unique<MetadataServiceImpl>();
-        auto opened = blockingWait(meta_->open(*store_));
+        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
+
+        async_meta_ = std::make_unique<AsyncGraphMetaStore>();
+        io_scheduler_ = std::make_unique<IoScheduler>(2);
+        auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
         ASSERT_TRUE(opened);
 
-        executor_ = std::make_unique<compute::QueryExecutor>(*store_, *meta_, compute::QueryExecutor::Config{});
-        handler_ = std::make_shared<server::EuGraphHandler>(*store_, *meta_, *executor_);
+        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
+
+        executor_ =
+            std::make_unique<compute::QueryExecutor>(*async_data_, *async_meta_, compute::QueryExecutor::Config{});
+        handler_ = std::make_shared<server::EuGraphHandler>(*async_data_, *async_meta_, *executor_);
 
         // Start real fbthrift server via ScopedServerInterfaceThread
         // Use a config callback to set the IO thread pool as handler executor
@@ -110,8 +125,11 @@ protected:
         (void)server_.release();
         handler_.reset();
         executor_.reset();
-        blockingWait(meta_->close());
-        store_->close();
+        async_data_.reset();
+        io_scheduler_.reset();
+        blockingWait(async_meta_->close());
+        sync_data_->close();
+        sync_meta_->close();
         std::filesystem::remove_all(db_path_);
     }
 

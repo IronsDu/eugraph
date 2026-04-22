@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
-#include "metadata_service/metadata_codec.hpp"
-#include "metadata_service/metadata_service.hpp"
-#include "storage/graph_store_impl.hpp"
+#include "storage/data/sync_graph_data_store.hpp"
+#include "storage/io_scheduler.hpp"
+#include "storage/meta/async_graph_meta_store.hpp"
+#include "storage/meta/meta_codec.hpp"
+#include "storage/meta/sync_graph_meta_store.hpp"
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
@@ -25,24 +27,27 @@ PropertyDef prop(const std::string& name, PropertyType type, bool required = fal
 class MetadataServiceTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<GraphStoreImpl> store_;
-    std::unique_ptr<MetadataServiceImpl> meta_;
+    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<IoScheduler> io_scheduler_;
+    std::unique_ptr<AsyncGraphMetaStore> async_meta_;
 
     void SetUp() override {
         db_path_ = getTestDbPath();
         std::filesystem::remove_all(db_path_);
+        std::filesystem::create_directories(db_path_ + "/meta");
 
-        store_ = std::make_unique<GraphStoreImpl>();
-        ASSERT_TRUE(store_->open(db_path_));
+        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
 
-        meta_ = std::make_unique<MetadataServiceImpl>();
-        auto result = blockingWait(meta_->open(*store_));
+        async_meta_ = std::make_unique<AsyncGraphMetaStore>();
+        io_scheduler_ = std::make_unique<IoScheduler>(2);
+        auto result = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
         ASSERT_TRUE(result);
     }
 
     void TearDown() override {
-        blockingWait(meta_->close());
-        store_->close();
+        blockingWait(async_meta_->close());
+        sync_meta_->close();
         std::filesystem::remove_all(db_path_);
     }
 };
@@ -52,40 +57,40 @@ protected:
 // ==================== Label CRUD ====================
 
 TEST_F(MetadataServiceTest, CreateAndGetLabel) {
-    auto label_id = blockingWait(meta_->createLabel(
+    auto label_id = blockingWait(async_meta_->createLabel(
         "Person", {prop("name", PropertyType::STRING, true), prop("age", PropertyType::INT64, false)}));
     EXPECT_NE(label_id, INVALID_LABEL_ID);
 
-    auto result = blockingWait(meta_->getLabelId("Person"));
+    auto result = blockingWait(async_meta_->getLabelId("Person"));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(*result, label_id);
 
-    auto name = blockingWait(meta_->getLabelName(label_id));
+    auto name = blockingWait(async_meta_->getLabelName(label_id));
     ASSERT_TRUE(name.has_value());
     EXPECT_EQ(*name, "Person");
 }
 
 TEST_F(MetadataServiceTest, CreateLabelDuplicateFails) {
-    auto id1 = blockingWait(meta_->createLabel("Person"));
+    auto id1 = blockingWait(async_meta_->createLabel("Person"));
     EXPECT_NE(id1, INVALID_LABEL_ID);
 
-    auto id2 = blockingWait(meta_->createLabel("Person"));
+    auto id2 = blockingWait(async_meta_->createLabel("Person"));
     EXPECT_EQ(id2, INVALID_LABEL_ID);
 }
 
 TEST_F(MetadataServiceTest, GetLabelNonexistent) {
-    auto result = blockingWait(meta_->getLabelId("Nonexistent"));
+    auto result = blockingWait(async_meta_->getLabelId("Nonexistent"));
     EXPECT_FALSE(result.has_value());
 
-    auto name = blockingWait(meta_->getLabelName(9999));
+    auto name = blockingWait(async_meta_->getLabelName(9999));
     EXPECT_FALSE(name.has_value());
 }
 
 TEST_F(MetadataServiceTest, GetLabelDef) {
-    auto label_id = blockingWait(meta_->createLabel(
+    auto label_id = blockingWait(async_meta_->createLabel(
         "Person", {prop("name", PropertyType::STRING, true), prop("age", PropertyType::INT64, false)}));
 
-    auto def = blockingWait(meta_->getLabelDef("Person"));
+    auto def = blockingWait(async_meta_->getLabelDef("Person"));
     ASSERT_TRUE(def.has_value());
     EXPECT_EQ(def->id, label_id);
     EXPECT_EQ(def->name, "Person");
@@ -99,17 +104,17 @@ TEST_F(MetadataServiceTest, GetLabelDef) {
     EXPECT_EQ(def->properties[1].type, PropertyType::INT64);
     EXPECT_FALSE(def->properties[1].required);
 
-    auto def_by_id = blockingWait(meta_->getLabelDefById(label_id));
+    auto def_by_id = blockingWait(async_meta_->getLabelDefById(label_id));
     ASSERT_TRUE(def_by_id.has_value());
     EXPECT_EQ(def_by_id->name, "Person");
 }
 
 TEST_F(MetadataServiceTest, ListLabels) {
-    blockingWait(meta_->createLabel("Person"));
-    blockingWait(meta_->createLabel("City"));
-    blockingWait(meta_->createLabel("Company"));
+    blockingWait(async_meta_->createLabel("Person"));
+    blockingWait(async_meta_->createLabel("City"));
+    blockingWait(async_meta_->createLabel("Company"));
 
-    auto labels = blockingWait(meta_->listLabels());
+    auto labels = blockingWait(async_meta_->listLabels());
     EXPECT_EQ(labels.size(), 3u);
 
     std::set<std::string> names;
@@ -123,31 +128,31 @@ TEST_F(MetadataServiceTest, ListLabels) {
 // ==================== EdgeLabel CRUD ====================
 
 TEST_F(MetadataServiceTest, CreateAndGetEdgeLabel) {
-    auto elabel_id = blockingWait(meta_->createEdgeLabel("KNOWS", {prop("since", PropertyType::INT64, false)}));
+    auto elabel_id = blockingWait(async_meta_->createEdgeLabel("KNOWS", {prop("since", PropertyType::INT64, false)}));
     EXPECT_NE(elabel_id, INVALID_EDGE_LABEL_ID);
 
-    auto result = blockingWait(meta_->getEdgeLabelId("KNOWS"));
+    auto result = blockingWait(async_meta_->getEdgeLabelId("KNOWS"));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(*result, elabel_id);
 
-    auto name = blockingWait(meta_->getEdgeLabelName(elabel_id));
+    auto name = blockingWait(async_meta_->getEdgeLabelName(elabel_id));
     ASSERT_TRUE(name.has_value());
     EXPECT_EQ(*name, "KNOWS");
 }
 
 TEST_F(MetadataServiceTest, CreateEdgeLabelDuplicateFails) {
-    auto id1 = blockingWait(meta_->createEdgeLabel("KNOWS"));
+    auto id1 = blockingWait(async_meta_->createEdgeLabel("KNOWS"));
     EXPECT_NE(id1, INVALID_EDGE_LABEL_ID);
 
-    auto id2 = blockingWait(meta_->createEdgeLabel("KNOWS"));
+    auto id2 = blockingWait(async_meta_->createEdgeLabel("KNOWS"));
     EXPECT_EQ(id2, INVALID_EDGE_LABEL_ID);
 }
 
 TEST_F(MetadataServiceTest, GetEdgeLabelDef) {
-    auto elabel_id = blockingWait(meta_->createEdgeLabel(
+    auto elabel_id = blockingWait(async_meta_->createEdgeLabel(
         "KNOWS", {prop("since", PropertyType::INT64, false), prop("weight", PropertyType::DOUBLE, false)}));
 
-    auto def = blockingWait(meta_->getEdgeLabelDef("KNOWS"));
+    auto def = blockingWait(async_meta_->getEdgeLabelDef("KNOWS"));
     ASSERT_TRUE(def.has_value());
     EXPECT_EQ(def->id, elabel_id);
     EXPECT_EQ(def->name, "KNOWS");
@@ -157,32 +162,32 @@ TEST_F(MetadataServiceTest, GetEdgeLabelDef) {
     EXPECT_EQ(def->properties[1].id, 2);
     EXPECT_EQ(def->properties[1].name, "weight");
 
-    auto def_by_id = blockingWait(meta_->getEdgeLabelDefById(elabel_id));
+    auto def_by_id = blockingWait(async_meta_->getEdgeLabelDefById(elabel_id));
     ASSERT_TRUE(def_by_id.has_value());
     EXPECT_EQ(def_by_id->name, "KNOWS");
 }
 
 TEST_F(MetadataServiceTest, ListEdgeLabels) {
-    blockingWait(meta_->createEdgeLabel("KNOWS"));
-    blockingWait(meta_->createEdgeLabel("LIVES_IN"));
+    blockingWait(async_meta_->createEdgeLabel("KNOWS"));
+    blockingWait(async_meta_->createEdgeLabel("LIVES_IN"));
 
-    auto labels = blockingWait(meta_->listEdgeLabels());
+    auto labels = blockingWait(async_meta_->listEdgeLabels());
     EXPECT_EQ(labels.size(), 2u);
 }
 
 // ==================== ID allocation ====================
 
 TEST_F(MetadataServiceTest, IdAllocation) {
-    auto vid1 = blockingWait(meta_->nextVertexId());
-    auto vid2 = blockingWait(meta_->nextVertexId());
-    auto vid3 = blockingWait(meta_->nextVertexId());
+    auto vid1 = blockingWait(async_meta_->nextVertexId());
+    auto vid2 = blockingWait(async_meta_->nextVertexId());
+    auto vid3 = blockingWait(async_meta_->nextVertexId());
     EXPECT_NE(vid1, vid2);
     EXPECT_NE(vid2, vid3);
     EXPECT_LT(vid1, vid2);
     EXPECT_LT(vid2, vid3);
 
-    auto eid1 = blockingWait(meta_->nextEdgeId());
-    auto eid2 = blockingWait(meta_->nextEdgeId());
+    auto eid1 = blockingWait(async_meta_->nextEdgeId());
+    auto eid2 = blockingWait(async_meta_->nextEdgeId());
     EXPECT_NE(eid1, eid2);
     EXPECT_LT(eid1, eid2);
 }
@@ -190,13 +195,13 @@ TEST_F(MetadataServiceTest, IdAllocation) {
 TEST_F(MetadataServiceTest, IdAllocationMany) {
     std::set<VertexId> vids;
     for (int i = 0; i < 100; ++i) {
-        auto vid = blockingWait(meta_->nextVertexId());
+        auto vid = blockingWait(async_meta_->nextVertexId());
         EXPECT_TRUE(vids.insert(vid).second) << "Duplicate VertexId: " << vid;
     }
 
     std::set<EdgeId> eids;
     for (int i = 0; i < 100; ++i) {
-        auto eid = blockingWait(meta_->nextEdgeId());
+        auto eid = blockingWait(async_meta_->nextEdgeId());
         EXPECT_TRUE(eids.insert(eid).second) << "Duplicate EdgeId: " << eid;
     }
 }
@@ -205,59 +210,60 @@ TEST_F(MetadataServiceTest, IdAllocationMany) {
 
 TEST_F(MetadataServiceTest, PersistenceAcrossRestart) {
     // Create some data
-    auto person_id = blockingWait(meta_->createLabel(
+    auto person_id = blockingWait(async_meta_->createLabel(
         "Person", {prop("name", PropertyType::STRING, true), prop("age", PropertyType::INT64, false)}));
-    auto knows_id = blockingWait(meta_->createEdgeLabel("KNOWS", {prop("since", PropertyType::INT64, false)}));
+    auto knows_id = blockingWait(async_meta_->createEdgeLabel("KNOWS", {prop("since", PropertyType::INT64, false)}));
 
     // Allocate some IDs
-    auto vid = blockingWait(meta_->nextVertexId());
-    auto eid = blockingWait(meta_->nextEdgeId());
+    auto vid = blockingWait(async_meta_->nextVertexId());
+    auto eid = blockingWait(async_meta_->nextEdgeId());
 
     // Close
-    blockingWait(meta_->close());
-    store_->close();
+    blockingWait(async_meta_->close());
+    sync_meta_->close();
 
     // Reopen
-    store_ = std::make_unique<GraphStoreImpl>();
-    ASSERT_TRUE(store_->open(db_path_));
-    meta_ = std::make_unique<MetadataServiceImpl>();
-    auto opened = blockingWait(meta_->open(*store_));
+    sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+    ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
+    async_meta_ = std::make_unique<AsyncGraphMetaStore>();
+    io_scheduler_ = std::make_unique<IoScheduler>(2);
+    auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
     ASSERT_TRUE(opened);
 
     // Verify labels
-    auto result = blockingWait(meta_->getLabelId("Person"));
+    auto result = blockingWait(async_meta_->getLabelId("Person"));
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(*result, person_id);
 
-    auto def = blockingWait(meta_->getLabelDef("Person"));
+    auto def = blockingWait(async_meta_->getLabelDef("Person"));
     ASSERT_TRUE(def.has_value());
     EXPECT_EQ(def->properties.size(), 2u);
     EXPECT_EQ(def->properties[0].name, "name");
     EXPECT_EQ(def->properties[1].name, "age");
 
     // Verify edge labels
-    auto elabel = blockingWait(meta_->getEdgeLabelId("KNOWS"));
+    auto elabel = blockingWait(async_meta_->getEdgeLabelId("KNOWS"));
     ASSERT_TRUE(elabel.has_value());
     EXPECT_EQ(*elabel, knows_id);
 
     // Verify ID counters continued from where they left off
-    auto vid2 = blockingWait(meta_->nextVertexId());
+    auto vid2 = blockingWait(async_meta_->nextVertexId());
     EXPECT_GT(vid2, vid);
-    auto eid2 = blockingWait(meta_->nextEdgeId());
+    auto eid2 = blockingWait(async_meta_->nextEdgeId());
     EXPECT_GT(eid2, eid);
 }
 
 // ==================== PropertyValue serialization ====================
 
 TEST_F(MetadataServiceTest, PropertyDefWithDefaultValue) {
-    blockingWait(
-        meta_->createLabel("Config", {prop("key", PropertyType::STRING, true),
-                                      prop("value", PropertyType::STRING, false, PropertyValue(std::string("default"))),
-                                      prop("count", PropertyType::INT64, false, PropertyValue(int64_t(42))),
-                                      prop("enabled", PropertyType::BOOL, false, PropertyValue(true)),
-                                      prop("score", PropertyType::DOUBLE, false, PropertyValue(3.14))}));
+    blockingWait(async_meta_->createLabel(
+        "Config", {prop("key", PropertyType::STRING, true),
+                   prop("value", PropertyType::STRING, false, PropertyValue(std::string("default"))),
+                   prop("count", PropertyType::INT64, false, PropertyValue(int64_t(42))),
+                   prop("enabled", PropertyType::BOOL, false, PropertyValue(true)),
+                   prop("score", PropertyType::DOUBLE, false, PropertyValue(3.14))}));
 
-    auto def = blockingWait(meta_->getLabelDef("Config"));
+    auto def = blockingWait(async_meta_->getLabelDef("Config"));
     ASSERT_TRUE(def.has_value());
     ASSERT_EQ(def->properties.size(), 5u);
 

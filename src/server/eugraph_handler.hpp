@@ -3,8 +3,8 @@
 #include "common/types/graph_types.hpp"
 #include "compute_service/executor/query_executor.hpp"
 #include "gen-cpp2/EuGraphService.h"
-#include "metadata_service/metadata_service.hpp"
-#include "storage/graph_store.hpp"
+#include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/meta/i_async_graph_meta_store.hpp"
 
 #include <folly/coro/Task.h>
 
@@ -15,10 +15,11 @@ namespace server {
 
 /// Service handler that implements the Thrift-generated EuGraphService interface.
 /// Uses fbthrift coroutine (co_*) methods for async request handling.
+/// DDL operations coordinate between meta store and data store.
 class EuGraphHandler : public apache::thrift::ServiceHandler<thrift::EuGraphService> {
 public:
-    EuGraphHandler(IGraphStore& store, IMetadataService& meta, compute::QueryExecutor& executor)
-        : store_(store), meta_(meta), executor_(executor) {}
+    EuGraphHandler(IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, compute::QueryExecutor& executor)
+        : async_data_(async_data), async_meta_(async_meta), executor_(executor) {}
 
     // Thrift service methods (coroutine interface)
     folly::coro::Task<std::unique_ptr<thrift::LabelInfo>>
@@ -37,19 +38,14 @@ public:
     co_executeCypher(std::unique_ptr<std::string> query) override;
 
 private:
-    // Convert runtime Value to Thrift ResultValue union.
-    // label_defs is used to map prop_id → property name when serializing VertexValue/EdgeValue.
     thrift::ResultValue valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
                                       const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs);
 
-    // Convert Thrift PropertyType enum to internal PropertyType
     static ::eugraph::PropertyType toPropertyType(thrift::PropertyType t);
-
-    // Convert Thrift PropertyDefThrift to internal PropertyDef
     static PropertyDef toPropertyDef(const thrift::PropertyDefThrift& req, uint16_t id);
 
-    IGraphStore& store_;
-    IMetadataService& meta_;
+    IAsyncGraphDataStore& async_data_;
+    IAsyncGraphMetaStore& async_meta_;
     compute::QueryExecutor& executor_;
 };
 

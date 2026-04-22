@@ -53,7 +53,10 @@ file(MAKE_DIRECTORY "${WT_INSTALL_DIR}/include")
 add_library(eugraph_lib STATIC
     src/storage/kv/key_codec.cpp
     src/storage/kv/value_codec.cpp
-    src/storage/graph_store_impl.cpp
+    src/storage/wt_store_base.cpp
+    src/storage/data/sync_graph_data_store.cpp
+    src/storage/meta/sync_graph_meta_store.cpp
+    src/storage/meta/meta_codec.cpp
 )
 
 target_include_directories(eugraph_lib PUBLIC
@@ -101,8 +104,7 @@ target_link_libraries(eugraph_compute PUBLIC
 # ==================== Metadata Service ====================
 
 add_library(eugraph_metadata STATIC
-    src/metadata_service/metadata_codec.cpp
-    src/metadata_service/metadata_service.cpp
+    src/storage/meta/async_graph_meta_store.cpp
 )
 
 target_include_directories(eugraph_metadata PUBLIC
@@ -119,7 +121,7 @@ target_link_libraries(eugraph_metadata PUBLIC
 
 add_library(eugraph_query_engine STATIC
     src/compute_service/logical_plan/logical_plan_builder.cpp
-    src/compute_service/executor/async_graph_store.cpp
+    src/storage/data/async_graph_data_store.cpp
     src/compute_service/executor/expression_evaluator.cpp
     src/compute_service/physical_plan/physical_operator.cpp
     src/compute_service/physical_plan/physical_planner.cpp

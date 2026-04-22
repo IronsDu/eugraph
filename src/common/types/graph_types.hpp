@@ -29,6 +29,11 @@ constexpr EdgeLabelId INVALID_EDGE_LABEL_ID = 0;
 // ==================== Label ID Set ====================
 using LabelIdSet = std::set<LabelId>;
 
+// ==================== Transaction Handle ====================
+/// Opaque transaction handle — avoids exposing underlying engine types.
+using GraphTxnHandle = void*;
+static constexpr GraphTxnHandle INVALID_GRAPH_TXN = nullptr;
+
 // ==================== Property Value Type ====================
 using PropertyValue = std::variant<std::monostate, bool, int64_t, double, std::string, std::vector<int64_t>,
                                    std::vector<double>, std::vector<std::string>>;

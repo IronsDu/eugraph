@@ -1,10 +1,9 @@
 #pragma once
 
-#include "compute_service/executor/async_graph_store.hpp"
 #include "compute_service/executor/expression_evaluator.hpp"
 #include "compute_service/executor/row.hpp"
 #include "compute_service/logical_plan/logical_operator.hpp"
-#include "storage/graph_store.hpp"
+#include "storage/data/i_async_graph_data_store.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
@@ -33,7 +32,7 @@ public:
 
 class AllNodeScanPhysicalOp : public PhysicalOperator {
 public:
-    AllNodeScanPhysicalOp(std::string variable, AsyncGraphStore& store,
+    AllNodeScanPhysicalOp(std::string variable, IAsyncGraphDataStore& store,
                           const std::unordered_map<std::string, LabelId>& label_map,
                           std::unordered_map<LabelId, LabelDef> label_defs)
         : variable_(std::move(variable)), store_(store), label_map_(label_map), label_defs_(std::move(label_defs)) {}
@@ -45,14 +44,14 @@ public:
 
 private:
     std::string variable_;
-    AsyncGraphStore& store_;
+    IAsyncGraphDataStore& store_;
     const std::unordered_map<std::string, LabelId>& label_map_;
     std::unordered_map<LabelId, LabelDef> label_defs_;
 };
 
 class LabelScanPhysicalOp : public PhysicalOperator {
 public:
-    LabelScanPhysicalOp(std::string variable, LabelId label_id, AsyncGraphStore& store,
+    LabelScanPhysicalOp(std::string variable, LabelId label_id, IAsyncGraphDataStore& store,
                         std::unordered_map<LabelId, LabelDef> label_defs)
         : variable_(std::move(variable)), label_id_(label_id), store_(store), label_defs_(std::move(label_defs)) {}
 
@@ -64,7 +63,7 @@ public:
 private:
     std::string variable_;
     LabelId label_id_;
-    AsyncGraphStore& store_;
+    IAsyncGraphDataStore& store_;
     std::unordered_map<LabelId, LabelDef> label_defs_;
 };
 
@@ -74,7 +73,7 @@ class ExpandPhysicalOp : public PhysicalOperator {
 public:
     ExpandPhysicalOp(std::string src_var, std::string dst_var, std::string edge_var,
                      std::optional<EdgeLabelId> label_filter, cypher::RelationshipDirection direction,
-                     AsyncGraphStore& store, std::unique_ptr<PhysicalOperator> child)
+                     IAsyncGraphDataStore& store, std::unique_ptr<PhysicalOperator> child)
         : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)),
           label_filter_(label_filter), direction_(direction), store_(store), child_(std::move(child)) {}
 
@@ -89,7 +88,7 @@ private:
     std::string edge_var_;
     std::optional<EdgeLabelId> label_filter_;
     cypher::RelationshipDirection direction_;
-    AsyncGraphStore& store_;
+    IAsyncGraphDataStore& store_;
     std::unique_ptr<PhysicalOperator> child_;
 };
 
@@ -167,7 +166,7 @@ private:
 class CreateNodePhysicalOp : public PhysicalOperator {
 public:
     CreateNodePhysicalOp(std::string variable, std::vector<LabelId> label_ids,
-                         std::vector<std::pair<LabelId, Properties>> label_props, AsyncGraphStore& store,
+                         std::vector<std::pair<LabelId, Properties>> label_props, IAsyncGraphDataStore& store,
                          VertexId assigned_vid, std::unique_ptr<PhysicalOperator> child = nullptr)
         : variable_(std::move(variable)), label_ids_(std::move(label_ids)), label_props_(std::move(label_props)),
           store_(store), assigned_vid_(assigned_vid), child_(std::move(child)) {}
@@ -181,7 +180,7 @@ private:
     std::string variable_;
     std::vector<LabelId> label_ids_;
     std::vector<std::pair<LabelId, Properties>> label_props_;
-    AsyncGraphStore& store_;
+    IAsyncGraphDataStore& store_;
     VertexId assigned_vid_;
     std::unique_ptr<PhysicalOperator> child_;
 };
@@ -189,7 +188,7 @@ private:
 class CreateEdgePhysicalOp : public PhysicalOperator {
 public:
     CreateEdgePhysicalOp(std::string variable, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
-                         EdgeId assigned_eid, AsyncGraphStore& store, std::unique_ptr<PhysicalOperator> child)
+                         EdgeId assigned_eid, IAsyncGraphDataStore& store, std::unique_ptr<PhysicalOperator> child)
         : variable_(std::move(variable)), src_id_(src_id), dst_id_(dst_id), label_id_(label_id),
           assigned_eid_(assigned_eid), store_(store), child_(std::move(child)) {}
 
@@ -204,7 +203,7 @@ private:
     VertexId dst_id_;
     EdgeLabelId label_id_;
     EdgeId assigned_eid_;
-    AsyncGraphStore& store_;
+    IAsyncGraphDataStore& store_;
     std::unique_ptr<PhysicalOperator> child_;
 };
 

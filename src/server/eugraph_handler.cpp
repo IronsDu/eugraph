@@ -202,7 +202,7 @@ EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
     }
 
-    auto label_id = co_await meta_.createLabel(*name, defs);
+    auto label_id = co_await async_meta_.createLabel(*name, defs);
     auto resp = std::make_unique<thrift::LabelInfo>();
 
     if (label_id == INVALID_LABEL_ID) {
@@ -211,7 +211,7 @@ EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
         co_return resp;
     }
 
-    store_.createLabel(label_id);
+    co_await async_data_.createLabel(label_id);
 
     resp->id() = label_id;
     resp->name() = *name;
@@ -231,7 +231,7 @@ EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
 folly::coro::Task<std::unique_ptr<std::vector<thrift::LabelInfo>>> EuGraphHandler::co_listLabels() {
     auto t0 = nowMs();
     spdlog::info("[handler] listLabels start");
-    auto labels = co_await meta_.listLabels();
+    auto labels = co_await async_meta_.listLabels();
     auto resp = std::make_unique<std::vector<thrift::LabelInfo>>();
 
     for (const auto& l : labels) {
@@ -262,7 +262,7 @@ EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
     }
 
-    auto label_id = co_await meta_.createEdgeLabel(*name, defs);
+    auto label_id = co_await async_meta_.createEdgeLabel(*name, defs);
     auto resp = std::make_unique<thrift::EdgeLabelInfo>();
 
     if (label_id == INVALID_EDGE_LABEL_ID) {
@@ -271,7 +271,7 @@ EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
         co_return resp;
     }
 
-    store_.createEdgeLabel(label_id);
+    co_await async_data_.createEdgeLabel(label_id);
 
     resp->id() = label_id;
     resp->name() = *name;
@@ -284,7 +284,7 @@ EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
 folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> EuGraphHandler::co_listEdgeLabels() {
     auto t0 = nowMs();
     spdlog::info("[handler] listEdgeLabels start");
-    auto labels = co_await meta_.listEdgeLabels();
+    auto labels = co_await async_meta_.listEdgeLabels();
     auto resp = std::make_unique<std::vector<thrift::EdgeLabelInfo>>();
 
     for (const auto& l : labels) {
@@ -328,8 +328,8 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
     }
 
     // Fetch label definitions for vertex/edge JSON serialization
-    auto labels = co_await meta_.listLabels();
-    auto edge_labels = co_await meta_.listEdgeLabels();
+    auto labels = co_await async_meta_.listLabels();
+    auto edge_labels = co_await async_meta_.listEdgeLabels();
     std::unordered_map<LabelId, LabelDef> label_defs;
     for (const auto& l : labels)
         label_defs[l.id] = l;

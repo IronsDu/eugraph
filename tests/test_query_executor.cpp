@@ -1,8 +1,11 @@
 #include <gtest/gtest.h>
 
 #include "compute_service/executor/query_executor.hpp"
-#include "metadata_service/metadata_service.hpp"
-#include "storage/graph_store_impl.hpp"
+#include "storage/data/async_graph_data_store.hpp"
+#include "storage/data/sync_graph_data_store.hpp"
+#include "storage/io_scheduler.hpp"
+#include "storage/meta/async_graph_meta_store.hpp"
+#include "storage/meta/sync_graph_meta_store.hpp"
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
@@ -20,8 +23,11 @@ std::string getTestDbPath() {
 class QueryExecutorTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<GraphStoreImpl> store_;
-    std::unique_ptr<MetadataServiceImpl> meta_;
+    std::unique_ptr<SyncGraphDataStore> sync_data_;
+    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<AsyncGraphMetaStore> async_meta_;
+    std::unique_ptr<IoScheduler> io_scheduler_;
+    std::unique_ptr<AsyncGraphDataStore> async_data_;
     std::unique_ptr<QueryExecutor> executor_;
 
     LabelId PERSON_LABEL = INVALID_LABEL_ID;
@@ -32,52 +38,69 @@ protected:
     void SetUp() override {
         db_path_ = getTestDbPath();
         std::filesystem::remove_all(db_path_);
+        std::filesystem::create_directories(db_path_ + "/data");
+        std::filesystem::create_directories(db_path_ + "/meta");
 
-        store_ = std::make_unique<GraphStoreImpl>();
-        ASSERT_TRUE(store_->open(db_path_));
+        sync_data_ = std::make_unique<SyncGraphDataStore>();
+        ASSERT_TRUE(sync_data_->open(db_path_ + "/data"));
 
-        meta_ = std::make_unique<MetadataServiceImpl>();
-        auto opened = blockingWait(meta_->open(*store_));
+        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
+
+        async_meta_ = std::make_unique<AsyncGraphMetaStore>();
+        io_scheduler_ = std::make_unique<IoScheduler>(2);
+        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
+
+        auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
         ASSERT_TRUE(opened);
 
         // Create labels via metadata service
-        PERSON_LABEL = blockingWait(meta_->createLabel("Person"));
-        CITY_LABEL = blockingWait(meta_->createLabel("City"));
-        KNOWS_LABEL = blockingWait(meta_->createEdgeLabel("KNOWS"));
-        LIVES_IN_LABEL = blockingWait(meta_->createEdgeLabel("LIVES_IN"));
+        PERSON_LABEL = blockingWait(async_meta_->createLabel("Person"));
+        CITY_LABEL = blockingWait(async_meta_->createLabel("City"));
+        KNOWS_LABEL = blockingWait(async_meta_->createEdgeLabel("KNOWS"));
+        LIVES_IN_LABEL = blockingWait(async_meta_->createEdgeLabel("LIVES_IN"));
 
         ASSERT_NE(PERSON_LABEL, INVALID_LABEL_ID);
         ASSERT_NE(CITY_LABEL, INVALID_LABEL_ID);
         ASSERT_NE(KNOWS_LABEL, INVALID_EDGE_LABEL_ID);
         ASSERT_NE(LIVES_IN_LABEL, INVALID_EDGE_LABEL_ID);
 
-        executor_ = std::make_unique<QueryExecutor>(*store_, *meta_, QueryExecutor::Config{});
+        // Create physical tables in data store
+        blockingWait(async_data_->createLabel(PERSON_LABEL));
+        blockingWait(async_data_->createLabel(CITY_LABEL));
+        blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
+        blockingWait(async_data_->createEdgeLabel(LIVES_IN_LABEL));
+
+        executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
     }
 
     void TearDown() override {
         executor_.reset();
-        blockingWait(meta_->close());
-        store_->close();
+        async_data_.reset();
+        io_scheduler_.reset();
+        blockingWait(async_meta_->close());
+        sync_data_->close();
+        sync_meta_->close();
         std::filesystem::remove_all(db_path_);
     }
 
     // Helper: insert test vertices
     void insertTestVertices() {
-        auto txn = store_->beginTransaction();
+        auto txn = sync_data_->beginTransaction();
         for (VertexId vid = 1; vid <= 5; ++vid) {
             std::vector<std::pair<LabelId, Properties>> label_props = {
                 {PERSON_LABEL, Properties{PropertyValue(std::string("name") + std::to_string(vid))}}};
-            ASSERT_TRUE(store_->insertVertex(txn, vid, label_props, nullptr));
+            ASSERT_TRUE(sync_data_->insertVertex(txn, vid, label_props, nullptr));
         }
-        ASSERT_TRUE(store_->commitTransaction(txn));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
 
     // Helper: insert test edges
     void insertTestEdges() {
-        auto txn = store_->beginTransaction();
-        ASSERT_TRUE(store_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(store_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, {}));
-        ASSERT_TRUE(store_->commitTransaction(txn));
+        auto txn = sync_data_->beginTransaction();
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
 };
 
@@ -115,15 +138,15 @@ TEST_F(QueryExecutorTest, CreateNode) {
     auto rows = executor_->executeSync("CREATE (n:Person)").rows;
     EXPECT_EQ(rows.size(), 1);
 
-    auto txn = store_->beginTransaction();
-    auto cursor = store_->createVertexScanCursor(txn, PERSON_LABEL);
+    auto txn = sync_data_->beginTransaction();
+    auto cursor = sync_data_->createVertexScanCursor(txn, PERSON_LABEL);
     int count = 0;
     while (cursor->valid()) {
         ++count;
         cursor->next();
     }
     cursor.reset();
-    store_->commitTransaction(txn);
+    sync_data_->commitTransaction(txn);
     EXPECT_EQ(count, 1);
 }
 
@@ -270,16 +293,16 @@ TEST_F(QueryExecutorTest, LabelScanWithWhereTrueAndLimit) {
 }
 
 TEST_F(QueryExecutorTest, LabelScanMultipleLabelsIndependently) {
-    auto txn = store_->beginTransaction();
+    auto txn = sync_data_->beginTransaction();
     for (VertexId vid = 1; vid <= 3; ++vid) {
         std::vector<std::pair<LabelId, Properties>> lp = {{PERSON_LABEL, Properties{}}};
-        ASSERT_TRUE(store_->insertVertex(txn, vid, lp, nullptr));
+        ASSERT_TRUE(sync_data_->insertVertex(txn, vid, lp, nullptr));
     }
     for (VertexId vid = 10; vid <= 12; ++vid) {
         std::vector<std::pair<LabelId, Properties>> lp = {{CITY_LABEL, Properties{}}};
-        ASSERT_TRUE(store_->insertVertex(txn, vid, lp, nullptr));
+        ASSERT_TRUE(sync_data_->insertVertex(txn, vid, lp, nullptr));
     }
-    ASSERT_TRUE(store_->commitTransaction(txn));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     auto person_rows = executor_->executeSync("MATCH (n:Person) RETURN n").rows;
     EXPECT_EQ(person_rows.size(), 3);
@@ -310,11 +333,11 @@ TEST_F(QueryExecutorTest, ExpandNoEdgesReturnsEmpty) {
 
 TEST_F(QueryExecutorTest, ExpandMultipleEdgesFromSameSource) {
     insertTestVertices();
-    auto txn = store_->beginTransaction();
+    auto txn = sync_data_->beginTransaction();
     for (VertexId dst = 2; dst <= 5; ++dst) {
-        ASSERT_TRUE(store_->insertEdge(txn, static_cast<EdgeId>(dst), 1, dst, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, static_cast<EdgeId>(dst), 1, dst, KNOWS_LABEL, 0, {}));
     }
-    ASSERT_TRUE(store_->commitTransaction(txn));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 4);
@@ -338,11 +361,11 @@ TEST_F(QueryExecutorTest, ExpandWithWhereFalseFiltersAll) {
 
 TEST_F(QueryExecutorTest, ExpandWithLimit) {
     insertTestVertices();
-    auto txn = store_->beginTransaction();
+    auto txn = sync_data_->beginTransaction();
     for (VertexId dst = 2; dst <= 5; ++dst) {
-        ASSERT_TRUE(store_->insertEdge(txn, static_cast<EdgeId>(dst), 1, dst, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, static_cast<EdgeId>(dst), 1, dst, KNOWS_LABEL, 0, {}));
     }
-    ASSERT_TRUE(store_->commitTransaction(txn));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
     auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b LIMIT 2").rows;
     EXPECT_EQ(rows.size(), 2);
@@ -379,15 +402,15 @@ TEST_F(QueryExecutorTest, CreateMultipleNodesSequentially) {
 TEST_F(QueryExecutorTest, CreateNodeVerifyInStore) {
     executor_->executeSync("CREATE (n:Person)");
 
-    auto txn = store_->beginTransaction();
-    auto cursor = store_->createVertexScanCursor(txn, PERSON_LABEL);
+    auto txn = sync_data_->beginTransaction();
+    auto cursor = sync_data_->createVertexScanCursor(txn, PERSON_LABEL);
     int count = 0;
     while (cursor->valid()) {
         ++count;
         cursor->next();
     }
     cursor.reset();
-    store_->commitTransaction(txn);
+    sync_data_->commitTransaction(txn);
     EXPECT_EQ(count, 1);
 }
 

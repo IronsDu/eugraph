@@ -1,10 +1,9 @@
 #pragma once
 
-#include "compute_service/executor/async_graph_store.hpp"
-#include "compute_service/executor/io_scheduler.hpp"
+#include "compute_service/executor/row.hpp"
 #include "compute_service/logical_plan/logical_plan.hpp"
 #include "compute_service/physical_plan/physical_operator.hpp"
-#include "storage/graph_store.hpp"
+#include "storage/data/i_async_graph_data_store.hpp"
 
 #include <memory>
 #include <optional>
@@ -39,11 +38,11 @@ class PhysicalPlanner {
 public:
     /// Plan a logical plan into physical operators.
     /// Returns the physical operator tree root on success, or an error string.
-    std::variant<std::unique_ptr<PhysicalOperator>, std::string> plan(LogicalPlan& logical_plan, AsyncGraphStore& store,
-                                                                      PlanContext& ctx);
+    std::variant<std::unique_ptr<PhysicalOperator>, std::string> plan(LogicalPlan& logical_plan,
+                                                                      IAsyncGraphDataStore& store, PlanContext& ctx);
 
 private:
-    std::variant<PlanOperatorResult, std::string> planOperator(LogicalOperator& op, AsyncGraphStore& store,
+    std::variant<PlanOperatorResult, std::string> planOperator(LogicalOperator& op, IAsyncGraphDataStore& store,
                                                                PlanContext& ctx, Schema input_schema);
 };
 
