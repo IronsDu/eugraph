@@ -83,7 +83,7 @@ int main(int argc, char* argv[]) {
     // 3. Create async stores
     auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io_scheduler);
     auto async_meta = std::make_unique<AsyncGraphMetaStore>();
-    auto opened = folly::coro::blockingWait(async_meta->open(*sync_meta));
+    auto opened = folly::coro::blockingWait(async_meta->open(*sync_meta, *io_scheduler));
     if (!opened) {
         spdlog::error("Failed to initialize async meta store");
         return 1;
@@ -92,11 +92,10 @@ int main(int argc, char* argv[]) {
     // 4. Create query executor
     QueryExecutor::Config executor_config;
     executor_config.compute_threads = config.compute_threads;
-    executor_config.io_threads = config.io_threads;
-    auto executor = std::make_unique<QueryExecutor>(*sync_data, *async_data, *async_meta, executor_config);
+    auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, executor_config);
 
     // 5. Create Thrift handler
-    auto handler = std::make_shared<server::EuGraphHandler>(*sync_data, *async_meta, *executor);
+    auto handler = std::make_shared<server::EuGraphHandler>(*async_data, *async_meta, *executor);
 
     // 6. Create and start Thrift server
     auto server = std::make_shared<apache::thrift::ThriftServer>();

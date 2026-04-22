@@ -80,15 +80,15 @@ protected:
         ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
 
         async_meta_ = std::make_unique<AsyncGraphMetaStore>();
-        auto opened = blockingWait(async_meta_->open(*sync_meta_));
+        io_scheduler_ = std::make_unique<IoScheduler>(2);
+        auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
         ASSERT_TRUE(opened);
 
-        io_scheduler_ = std::make_unique<IoScheduler>(2);
         async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
 
-        executor_ = std::make_unique<compute::QueryExecutor>(*sync_data_, *async_data_, *async_meta_,
-                                                             compute::QueryExecutor::Config{});
-        handler_ = std::make_shared<server::EuGraphHandler>(*sync_data_, *async_meta_, *executor_);
+        executor_ =
+            std::make_unique<compute::QueryExecutor>(*async_data_, *async_meta_, compute::QueryExecutor::Config{});
+        handler_ = std::make_shared<server::EuGraphHandler>(*async_data_, *async_meta_, *executor_);
 
         // Start real fbthrift server via ScopedServerInterfaceThread
         // Use a config callback to set the IO thread pool as handler executor

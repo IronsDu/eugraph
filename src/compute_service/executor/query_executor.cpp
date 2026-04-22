@@ -7,11 +7,9 @@
 namespace eugraph {
 namespace compute {
 
-QueryExecutor::QueryExecutor(ISyncGraphDataStore& sync_data, IAsyncGraphDataStore& async_data,
-                             IAsyncGraphMetaStore& async_meta, Config config)
-    : sync_data_(sync_data), async_data_(async_data), async_meta_(async_meta), config_(config),
-      compute_pool_(std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads)),
-      io_scheduler_(std::make_shared<IoScheduler>(config.io_threads)) {}
+QueryExecutor::QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, Config config)
+    : async_data_(async_data), async_meta_(async_meta), config_(config),
+      compute_pool_(std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads)) {}
 
 QueryExecutor::~QueryExecutor() = default;
 
@@ -55,9 +53,9 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         for (const auto& el : edge_labels)
             edge_label_name_to_id[el.name] = el.id;
 
-        // 4. Plan physical operators
-        GraphTxnHandle txn = sync_data_.beginTransaction();
-        AsyncGraphDataStore async_store(sync_data_, *io_scheduler_, txn);
+        // 4. Begin transaction and set on async data store
+        GraphTxnHandle txn = co_await async_data_.beginTran();
+        async_data_.setTransaction(txn);
 
         PlanContext ctx;
         ctx.label_name_to_id = std::move(label_name_to_id);
@@ -70,16 +68,18 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
 
         ctx.next_vertex_id = co_await async_meta_.nextVertexId();
         ctx.next_edge_id = co_await async_meta_.nextEdgeId();
+
+        // 5. Plan physical operators
         PhysicalPlanner physical_planner;
-        auto phys_result = physical_planner.plan(logical_plan, async_store, ctx);
+        auto phys_result = physical_planner.plan(logical_plan, async_data_, ctx);
         if (std::holds_alternative<std::string>(phys_result)) {
             result.error = std::get<std::string>(phys_result);
-            sync_data_.rollbackTransaction(txn);
+            co_await async_data_.rollbackTran(txn);
             co_return;
         }
         auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
 
-        // 5. Execute
+        // 6. Execute
         auto gen = phys_op->execute();
         while (auto batch = co_await gen.next()) {
             for (auto& row : batch->rows) {
@@ -87,7 +87,7 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
             }
         }
 
-        sync_data_.commitTransaction(txn);
+        co_await async_data_.commitTran(txn);
     });
 
     co_await folly::coro::co_withExecutor(compute_pool_.get(), std::move(inner));

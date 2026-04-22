@@ -5,9 +5,7 @@
 #include "compute_service/parser/ast.hpp"
 #include "compute_service/parser/cypher_parser.hpp"
 #include "compute_service/physical_plan/physical_planner.hpp"
-#include "storage/data/async_graph_data_store.hpp"
-#include "storage/data/i_sync_graph_data_store.hpp"
-#include "storage/io_scheduler.hpp"
+#include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
 #include <folly/coro/Task.h>
@@ -23,28 +21,25 @@ namespace compute {
 
 /// Top-level query execution engine.
 /// Orchestrates: parse → logical plan → physical plan → execute.
+/// Depends only on async interfaces — no direct sync store dependency.
 class QueryExecutor {
 public:
     struct Config {
         size_t compute_threads = 4;
-        size_t io_threads = 2;
         Config() = default;
     };
 
-    QueryExecutor(ISyncGraphDataStore& sync_data, IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta,
-                  Config config);
+    QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, Config config);
     ~QueryExecutor();
 
     ExecutionResult executeSync(const std::string& cypher_query);
     folly::coro::Task<ExecutionResult> executeAsync(const std::string& cypher_query);
 
 private:
-    ISyncGraphDataStore& sync_data_;
     IAsyncGraphDataStore& async_data_;
     IAsyncGraphMetaStore& async_meta_;
     Config config_;
     std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool_;
-    std::shared_ptr<IoScheduler> io_scheduler_;
 
     void extractColumnsFromLogicalPlan(const LogicalOperator& op, Schema& columns);
 };

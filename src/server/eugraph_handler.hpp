@@ -3,7 +3,7 @@
 #include "common/types/graph_types.hpp"
 #include "compute_service/executor/query_executor.hpp"
 #include "gen-cpp2/EuGraphService.h"
-#include "storage/data/i_sync_graph_data_store.hpp"
+#include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
 #include <folly/coro/Task.h>
@@ -18,8 +18,8 @@ namespace server {
 /// DDL operations coordinate between meta store and data store.
 class EuGraphHandler : public apache::thrift::ServiceHandler<thrift::EuGraphService> {
 public:
-    EuGraphHandler(ISyncGraphDataStore& sync_data, IAsyncGraphMetaStore& async_meta, compute::QueryExecutor& executor)
-        : sync_data_(sync_data), async_meta_(async_meta), executor_(executor) {}
+    EuGraphHandler(IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, compute::QueryExecutor& executor)
+        : async_data_(async_data), async_meta_(async_meta), executor_(executor) {}
 
     // Thrift service methods (coroutine interface)
     folly::coro::Task<std::unique_ptr<thrift::LabelInfo>>
@@ -44,7 +44,7 @@ private:
     static ::eugraph::PropertyType toPropertyType(thrift::PropertyType t);
     static PropertyDef toPropertyDef(const thrift::PropertyDefThrift& req, uint16_t id);
 
-    ISyncGraphDataStore& sync_data_;
+    IAsyncGraphDataStore& async_data_;
     IAsyncGraphMetaStore& async_meta_;
     compute::QueryExecutor& executor_;
 };

@@ -280,14 +280,14 @@ static void runEmbeddedRepl(const ShellConfig& config) {
     auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io_scheduler);
 
     auto async_meta = std::make_unique<AsyncGraphMetaStore>();
-    auto opened = folly::coro::blockingWait(async_meta->open(*sync_meta));
+    auto opened = folly::coro::blockingWait(async_meta->open(*sync_meta, *io_scheduler));
     if (!opened) {
         std::cerr << "Error: Failed to initialize async meta store" << std::endl;
         return;
     }
 
-    compute::QueryExecutor executor(*sync_data, *async_data, *async_meta, compute::QueryExecutor::Config{});
-    server::EuGraphHandler handler(*sync_data, *async_meta, executor);
+    compute::QueryExecutor executor(*async_data, *async_meta, compute::QueryExecutor::Config{});
+    server::EuGraphHandler handler(*async_data, *async_meta, executor);
 
     std::cout << "Database: " << db_path << std::endl;
 

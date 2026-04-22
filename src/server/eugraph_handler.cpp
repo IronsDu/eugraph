@@ -211,7 +211,7 @@ EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
         co_return resp;
     }
 
-    sync_data_.createLabel(label_id);
+    co_await async_data_.createLabel(label_id);
 
     resp->id() = label_id;
     resp->name() = *name;
@@ -271,7 +271,7 @@ EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
         co_return resp;
     }
 
-    sync_data_.createEdgeLabel(label_id);
+    co_await async_data_.createEdgeLabel(label_id);
 
     resp->id() = label_id;
     resp->name() = *name;

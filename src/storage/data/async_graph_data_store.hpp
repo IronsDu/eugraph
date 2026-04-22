@@ -25,6 +25,35 @@ public:
         txn_ = txn;
     }
 
+    // ==================== Transaction ====================
+
+    folly::coro::Task<GraphTxnHandle> beginTran() override {
+        auto txn = co_await io_->dispatch([this]() { return store_->beginTransaction(); });
+        co_return txn;
+    }
+
+    folly::coro::Task<bool> commitTran(GraphTxnHandle txn) override {
+        auto ok = co_await io_->dispatch([this, txn]() { return store_->commitTransaction(txn); });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) override {
+        auto ok = co_await io_->dispatch([this, txn]() { return store_->rollbackTransaction(txn); });
+        co_return ok;
+    }
+
+    // ==================== DDL ====================
+
+    folly::coro::Task<bool> createLabel(LabelId label_id) override {
+        auto ok = co_await io_->dispatch([this, label_id]() { return store_->createLabel(label_id); });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> createEdgeLabel(EdgeLabelId edge_label_id) override {
+        auto ok = co_await io_->dispatch([this, edge_label_id]() { return store_->createEdgeLabel(edge_label_id); });
+        co_return ok;
+    }
+
     // ==================== Vertex Properties ====================
 
     folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id) override {

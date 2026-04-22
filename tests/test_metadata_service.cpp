@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/meta_codec.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
@@ -27,6 +28,7 @@ class MetadataServiceTest : public ::testing::Test {
 protected:
     std::string db_path_;
     std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<IoScheduler> io_scheduler_;
     std::unique_ptr<AsyncGraphMetaStore> async_meta_;
 
     void SetUp() override {
@@ -38,7 +40,8 @@ protected:
         ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
 
         async_meta_ = std::make_unique<AsyncGraphMetaStore>();
-        auto result = blockingWait(async_meta_->open(*sync_meta_));
+        io_scheduler_ = std::make_unique<IoScheduler>(2);
+        auto result = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
         ASSERT_TRUE(result);
     }
 
@@ -223,7 +226,8 @@ TEST_F(MetadataServiceTest, PersistenceAcrossRestart) {
     sync_meta_ = std::make_unique<SyncGraphMetaStore>();
     ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
     async_meta_ = std::make_unique<AsyncGraphMetaStore>();
-    auto opened = blockingWait(async_meta_->open(*sync_meta_));
+    io_scheduler_ = std::make_unique<IoScheduler>(2);
+    auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
     ASSERT_TRUE(opened);
 
     // Verify labels

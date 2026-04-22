@@ -19,7 +19,20 @@ class IAsyncGraphDataStore {
 public:
     virtual ~IAsyncGraphDataStore() = default;
 
+    // ==================== Transaction ====================
+
+    virtual folly::coro::Task<GraphTxnHandle> beginTran() = 0;
+    virtual folly::coro::Task<bool> commitTran(GraphTxnHandle txn) = 0;
+    virtual folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) = 0;
     virtual void setTransaction(GraphTxnHandle txn) = 0;
+
+    // ==================== DDL ====================
+
+    /// Create storage tables for a new label (async dispatch to IO pool).
+    virtual folly::coro::Task<bool> createLabel(LabelId label_id) = 0;
+
+    /// Create storage tables for a new edge label (async dispatch to IO pool).
+    virtual folly::coro::Task<bool> createEdgeLabel(EdgeLabelId edge_label_id) = 0;
 
     // Vertex Properties
     virtual folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id) = 0;

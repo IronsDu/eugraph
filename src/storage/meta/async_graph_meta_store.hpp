@@ -1,6 +1,7 @@
 #pragma once
 
 #include "storage/graph_schema.hpp"
+#include "storage/io_scheduler.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
 #include <string>
@@ -17,7 +18,7 @@ public:
     ~AsyncGraphMetaStore() override = default;
 
     // Lifecycle
-    folly::coro::Task<bool> open(ISyncGraphMetaStore& store) override;
+    folly::coro::Task<bool> open(ISyncGraphMetaStore& store, IoScheduler& io) override;
     folly::coro::Task<void> close() override;
 
     // Label management
@@ -48,9 +49,10 @@ public:
     }
 
 private:
-    void saveNextIds();
+    folly::coro::Task<void> saveNextIds();
 
     ISyncGraphMetaStore* store_ = nullptr;
+    IoScheduler* io_ = nullptr;
     GraphSchema schema_;
 };
 

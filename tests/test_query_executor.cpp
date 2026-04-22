@@ -48,7 +48,10 @@ protected:
         ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
 
         async_meta_ = std::make_unique<AsyncGraphMetaStore>();
-        auto opened = blockingWait(async_meta_->open(*sync_meta_));
+        io_scheduler_ = std::make_unique<IoScheduler>(2);
+        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
+
+        auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
         ASSERT_TRUE(opened);
 
         // Create labels via metadata service
@@ -63,15 +66,12 @@ protected:
         ASSERT_NE(LIVES_IN_LABEL, INVALID_EDGE_LABEL_ID);
 
         // Create physical tables in data store
-        sync_data_->createLabel(PERSON_LABEL);
-        sync_data_->createLabel(CITY_LABEL);
-        sync_data_->createEdgeLabel(KNOWS_LABEL);
-        sync_data_->createEdgeLabel(LIVES_IN_LABEL);
+        blockingWait(async_data_->createLabel(PERSON_LABEL));
+        blockingWait(async_data_->createLabel(CITY_LABEL));
+        blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
+        blockingWait(async_data_->createEdgeLabel(LIVES_IN_LABEL));
 
-        io_scheduler_ = std::make_unique<IoScheduler>(2);
-        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
-
-        executor_ = std::make_unique<QueryExecutor>(*sync_data_, *async_data_, *async_meta_, QueryExecutor::Config{});
+        executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
     }
 
     void TearDown() override {

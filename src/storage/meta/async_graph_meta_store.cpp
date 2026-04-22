@@ -9,33 +9,38 @@ namespace eugraph {
 
 // ==================== Lifecycle ====================
 
-folly::coro::Task<bool> AsyncGraphMetaStore::open(ISyncGraphMetaStore& store) {
+folly::coro::Task<bool> AsyncGraphMetaStore::open(ISyncGraphMetaStore& store, IoScheduler& io) {
     store_ = &store;
+    io_ = &io;
 
     // Scan M|label:* entries
-    store_->metadataScan("M|label:", [&](std::string_view key, std::string_view value) {
-        std::string name(key.substr(8)); // skip "M|label:"
-        auto def = MetadataCodec::decodeLabelDef(value);
-        schema_.labels[def.id] = def;
-        schema_.label_name_to_id[name] = def.id;
-        if (def.id >= schema_.next_label_id)
-            schema_.next_label_id = static_cast<LabelId>(def.id + 1);
-        return true;
+    co_await io_->dispatchVoid([&]() {
+        store_->metadataScan("M|label:", [&](std::string_view key, std::string_view value) {
+            std::string name(key.substr(8)); // skip "M|label:"
+            auto def = MetadataCodec::decodeLabelDef(value);
+            schema_.labels[def.id] = def;
+            schema_.label_name_to_id[name] = def.id;
+            if (def.id >= schema_.next_label_id)
+                schema_.next_label_id = static_cast<LabelId>(def.id + 1);
+            return true;
+        });
     });
 
     // Scan M|edge_label:* entries
-    store_->metadataScan("M|edge_label:", [&](std::string_view key, std::string_view value) {
-        std::string name(key.substr(13)); // skip "M|edge_label:"
-        auto def = MetadataCodec::decodeEdgeLabelDef(value);
-        schema_.edge_labels[def.id] = def;
-        schema_.edge_label_name_to_id[name] = def.id;
-        if (def.id >= schema_.next_edge_label_id)
-            schema_.next_edge_label_id = static_cast<EdgeLabelId>(def.id + 1);
-        return true;
+    co_await io_->dispatchVoid([&]() {
+        store_->metadataScan("M|edge_label:", [&](std::string_view key, std::string_view value) {
+            std::string name(key.substr(13)); // skip "M|edge_label:"
+            auto def = MetadataCodec::decodeEdgeLabelDef(value);
+            schema_.edge_labels[def.id] = def;
+            schema_.edge_label_name_to_id[name] = def.id;
+            if (def.id >= schema_.next_edge_label_id)
+                schema_.next_edge_label_id = static_cast<EdgeLabelId>(def.id + 1);
+            return true;
+        });
     });
 
     // Load ID counters
-    auto ids_data = store_->metadataGet("M|next_ids");
+    auto ids_data = co_await io_->dispatch([&]() { return store_->metadataGet("M|next_ids"); });
     if (ids_data) {
         MetadataCodec::decodeNextIds(*ids_data, schema_.next_vertex_id, schema_.next_edge_id, schema_.next_label_id,
                                      schema_.next_edge_label_id);
@@ -49,6 +54,7 @@ folly::coro::Task<bool> AsyncGraphMetaStore::open(ISyncGraphMetaStore& store) {
 
 folly::coro::Task<void> AsyncGraphMetaStore::close() {
     store_ = nullptr;
+    io_ = nullptr;
     schema_ = GraphSchema{};
     co_return;
 }
@@ -78,9 +84,11 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
     std::string name_key = std::string("M|label:") + name;
     std::string id_key = std::string("M|label_id:") + std::to_string(id);
 
-    store_->metadataPut(name_key, encoded);
-    store_->metadataPut(id_key, encoded);
-    saveNextIds();
+    co_await io_->dispatchVoid([&]() {
+        store_->metadataPut(name_key, encoded);
+        store_->metadataPut(id_key, encoded);
+    });
+    co_await saveNextIds();
 
     // NOTE: No longer calls store_->createLabel(id) — data table creation is the handler's responsibility.
 
@@ -147,9 +155,11 @@ folly::coro::Task<EdgeLabelId> AsyncGraphMetaStore::createEdgeLabel(const std::s
     std::string name_key = std::string("M|edge_label:") + name;
     std::string id_key = std::string("M|edge_label_id:") + std::to_string(id);
 
-    store_->metadataPut(name_key, encoded);
-    store_->metadataPut(id_key, encoded);
-    saveNextIds();
+    co_await io_->dispatchVoid([&]() {
+        store_->metadataPut(name_key, encoded);
+        store_->metadataPut(id_key, encoded);
+    });
+    co_await saveNextIds();
 
     // NOTE: No longer calls store_->createEdgeLabel(id).
 
@@ -195,22 +205,22 @@ folly::coro::Task<std::vector<EdgeLabelDef>> AsyncGraphMetaStore::listEdgeLabels
 
 folly::coro::Task<VertexId> AsyncGraphMetaStore::nextVertexId() {
     VertexId id = schema_.next_vertex_id++;
-    saveNextIds();
+    co_await saveNextIds();
     co_return id;
 }
 
 folly::coro::Task<EdgeId> AsyncGraphMetaStore::nextEdgeId() {
     EdgeId id = schema_.next_edge_id++;
-    saveNextIds();
+    co_await saveNextIds();
     co_return id;
 }
 
 // ==================== Private ====================
 
-void AsyncGraphMetaStore::saveNextIds() {
+folly::coro::Task<void> AsyncGraphMetaStore::saveNextIds() {
     auto encoded = MetadataCodec::encodeNextIds(schema_.next_vertex_id, schema_.next_edge_id, schema_.next_label_id,
                                                 schema_.next_edge_label_id);
-    store_->metadataPut("M|next_ids", encoded);
+    co_await io_->dispatchVoid([this, encoded = std::move(encoded)]() { store_->metadataPut("M|next_ids", encoded); });
 }
 
 } // namespace eugraph

@@ -12,6 +12,7 @@
 namespace eugraph {
 
 class ISyncGraphMetaStore; // forward declare
+class IoScheduler;
 
 /// Async graph metadata store interface.
 /// Renamed from IMetadataService. Maintains GraphSchema in memory.
@@ -20,7 +21,7 @@ public:
     virtual ~IAsyncGraphMetaStore() = default;
 
     // Lifecycle
-    virtual folly::coro::Task<bool> open(ISyncGraphMetaStore& store) = 0;
+    virtual folly::coro::Task<bool> open(ISyncGraphMetaStore& store, IoScheduler& io) = 0;
     virtual folly::coro::Task<void> close() = 0;
 
     // Label management
