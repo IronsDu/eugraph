@@ -18,14 +18,6 @@ void setItem(WT_CURSOR* cursor, std::string_view data) {
     cursor->set_key(cursor, &item);
 }
 
-void setValueItem(WT_CURSOR* cursor, std::string_view data) {
-    WT_ITEM item;
-    std::memset(&item, 0, sizeof(item));
-    item.data = data.data();
-    item.size = data.size();
-    cursor->set_value(cursor, &item);
-}
-
 std::string getValueFromCursor(WT_CURSOR* cursor) {
     WT_ITEM item;
     std::memset(&item, 0, sizeof(item));
