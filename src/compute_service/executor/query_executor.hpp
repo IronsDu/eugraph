@@ -11,7 +11,6 @@
 #include "metadata_service/metadata_service.hpp"
 #include "storage/graph_store.hpp"
 
-#include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
@@ -36,11 +35,12 @@ public:
     QueryExecutor(IGraphStore& store, IMetadataService& meta, Config config);
     ~QueryExecutor();
 
-    /// Execute a Cypher query string. Returns batches of result rows.
-    folly::coro::AsyncGenerator<RowBatch> execute(const std::string& cypher_query);
-
     /// Execute a Cypher query synchronously (blocking). Returns result with columns, rows, and error.
     ExecutionResult executeSync(const std::string& cypher_query);
+
+    /// Execute a Cypher query as a coroutine (non-blocking). Schedules work on
+    /// the compute pool and co_awaits completion. Safe to call from IO threads.
+    folly::coro::Task<ExecutionResult> executeAsync(const std::string& cypher_query);
 
 private:
     IGraphStore& store_;

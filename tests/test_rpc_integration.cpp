@@ -11,7 +11,21 @@
 
 #include <chrono>
 #include <filesystem>
+#include <folly/SocketAddress.h>
 #include <folly/coro/BlockingWait.h>
+#if defined(__SANITIZE_ADDRESS__)
+#define EUGRAPH_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define EUGRAPH_ASAN 1
+#endif
+#endif
+
+#if EUGRAPH_ASAN
+#include <sanitizer/lsan_interface.h>
+#endif
+
+#include <thrift/lib/cpp2/server/ThriftServer.h>
 #include <thrift/lib/cpp2/util/ScopedServerInterfaceThread.h>
 
 using Clock = std::chrono::steady_clock;
@@ -62,18 +76,38 @@ protected:
         handler_ = std::make_shared<server::EuGraphHandler>(*store_, *meta_, *executor_);
 
         // Start real fbthrift server via ScopedServerInterfaceThread
-        server_ = std::make_unique<apache::thrift::ScopedServerInterfaceThread>(handler_);
+        // Use a config callback to set the IO thread pool as handler executor
+        // to avoid the PriorityThreadManager's ReplyQueue notification delay.
+        auto ts = std::make_shared<apache::thrift::ThriftServer>();
+        ts->setAddress(folly::SocketAddress("::1", 0));
+        ts->setAllowPlaintextOnLoopback(true);
+        ts->setInterface(handler_);
+        ts->setNumIOWorkerThreads(1);
+        ts->setNumCPUWorkerThreads(1);
+        ts->setThreadManagerType(apache::thrift::ThriftServer::ThreadManagerType::SIMPLE);
+        ts->setMaxFinishedDebugPayloadsPerWorker(0);
+        ts->setThreadManagerFromExecutor(ts->getIOThreadPool().get());
 
-        // Get a connected thrift client (uses default RocketClientChannel)
-        auto thrift_client = server_->newClient<apache::thrift::Client<thrift::EuGraphService>>();
+        // Suppress LSan for this allocation: the server must be leaked in
+        // TearDown to avoid a deadlock when IO pool is shared with ThreadManager.
+#if EUGRAPH_ASAN
+        __lsan_disable();
+#endif
+        server_ = std::make_unique<apache::thrift::ScopedServerInterfaceThread>(ts);
+#if EUGRAPH_ASAN
+        __lsan_enable();
+#endif
 
-        // Wrap in EuGraphRpcClient (same wrapper the shell uses)
-        client_ = std::make_unique<shell::EuGraphRpcClient>(std::move(thrift_client));
+        // Connect via real TCP socket, same path as the shell client.
+        client_ = std::make_unique<shell::EuGraphRpcClient>("::1", server_->getPort());
+        ASSERT_TRUE(client_->connect());
     }
 
     void TearDown() override {
         client_.reset();
-        server_.reset();
+        // Server teardown can deadlock when IO pool is shared with ThreadManager.
+        // Release the pointer without blocking; OS will reclaim resources.
+        (void)server_.release();
         handler_.reset();
         executor_.reset();
         blockingWait(meta_->close());
