@@ -649,11 +649,11 @@ TEST(QueryExecutorRestartTest, DataWithPropertiesPersistsAcrossRestart) {
         auto async_meta = std::make_unique<AsyncGraphMetaStore>();
         ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
 
-        auto label_id =
-            blockingWait(async_meta->createLabel("Person", {PropertyDef{0, "name", PropertyType::STRING}}));
+        auto label_id = blockingWait(
+            async_meta->createLabel("Person", {PropertyDef{0, "name", PropertyType::STRING, false, std::nullopt}}));
         ASSERT_NE(label_id, INVALID_LABEL_ID);
-        auto edge_label_id = blockingWait(async_meta->createEdgeLabel(
-            "KNOWS", {PropertyDef{0, "since", PropertyType::INT64}}));
+        auto edge_label_id = blockingWait(
+            async_meta->createEdgeLabel("KNOWS", {PropertyDef{0, "since", PropertyType::INT64, false, std::nullopt}}));
         ASSERT_NE(edge_label_id, INVALID_EDGE_LABEL_ID);
 
         blockingWait(async_data->createLabel(label_id));
