@@ -82,7 +82,11 @@ bool WtStoreBase::openConnection(const std::string& db_path) {
         return false;
     }
 
-    int ret = wiredtiger_open(db_path.c_str(), nullptr, "create", &conn_);
+    // Enable WAL with fsync on commit for crash durability.
+    // transaction_sync=(enabled=true) is required: without it, log records are
+    // only buffered in memory and flushed on checkpoint or clean shutdown.
+    int ret = wiredtiger_open(db_path.c_str(), nullptr,
+                              "create,log=(enabled=true),transaction_sync=(enabled=true,method=fsync)", &conn_);
     if (ret != 0) {
         spdlog::error("Failed to open WiredTiger: error {}", ret);
         return false;
@@ -133,6 +137,17 @@ bool WtStoreBase::ensureGlobalTable(WT_SESSION* session, const char* table_name)
     int ret = session->create(session, table_name, WT_TABLE_CONFIG);
     if (ret != 0) {
         spdlog::error("Failed to create table {}: error {}", table_name, ret);
+        return false;
+    }
+    return true;
+}
+
+bool WtStoreBase::checkpoint() {
+    if (!defaultSession_)
+        return false;
+    int ret = defaultSession_->checkpoint(defaultSession_, nullptr);
+    if (ret != 0) {
+        spdlog::error("Checkpoint failed: error {}", ret);
         return false;
     }
     return true;

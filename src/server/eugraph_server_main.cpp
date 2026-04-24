@@ -125,7 +125,7 @@ int main(int argc, char* argv[]) {
     // Block until server stops
     server->serve();
 
-    // Cleanup
+    // Cleanup: close WT connections, which forces a checkpoint and flushes all data
     spdlog::info("Shutting down...");
     folly::coro::blockingWait(async_meta->close());
     sync_data->close();

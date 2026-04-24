@@ -142,4 +142,10 @@ bool SyncGraphMetaStore::dropEdgeLabel(EdgeLabelId /*edge_label_id*/) {
     return true;
 }
 
+// ==================== Durability ====================
+
+bool SyncGraphMetaStore::checkpoint() {
+    return WtStoreBase::checkpoint();
+}
+
 } // namespace eugraph

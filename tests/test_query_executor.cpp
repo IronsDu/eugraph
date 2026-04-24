@@ -533,3 +533,251 @@ TEST_F(QueryExecutorTest, ReturnStarWithLimit) {
     auto rows = executor_->executeSync("MATCH (n:Person) RETURN * LIMIT 2").rows;
     EXPECT_EQ(rows.size(), 2);
 }
+
+// ==================== Restart Persistence Tests ====================
+
+TEST(QueryExecutorRestartTest, DataPersistsAcrossRestart) {
+    const std::string db_path = "/tmp/eugraph_restart_test_" + std::to_string(getpid());
+    std::filesystem::remove_all(db_path);
+    std::filesystem::create_directories(db_path + "/data");
+    std::filesystem::create_directories(db_path + "/meta");
+
+    LabelId person_label_id = INVALID_LABEL_ID;
+    EdgeLabelId knows_label_id = INVALID_EDGE_LABEL_ID;
+
+    // ====== Phase 1: Write data, then shut down ======
+    {
+        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        ASSERT_TRUE(sync_data->open(db_path + "/data"));
+
+        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
+
+        auto io = std::make_unique<IoScheduler>(2);
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_meta = std::make_unique<AsyncGraphMetaStore>();
+        ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
+
+        person_label_id = blockingWait(async_meta->createLabel("Person"));
+        ASSERT_NE(person_label_id, INVALID_LABEL_ID);
+        knows_label_id = blockingWait(async_meta->createEdgeLabel("KNOWS"));
+        ASSERT_NE(knows_label_id, INVALID_EDGE_LABEL_ID);
+
+        blockingWait(async_data->createLabel(person_label_id));
+        blockingWait(async_data->createEdgeLabel(knows_label_id));
+
+        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+
+        auto r1 = executor->executeSync("CREATE (n:Person)");
+        ASSERT_TRUE(r1.error.empty()) << "CREATE error: " << r1.error;
+
+        auto r2 = executor->executeSync("CREATE (n:Person)");
+        ASSERT_TRUE(r2.error.empty()) << "CREATE error: " << r2.error;
+
+        auto before = executor->executeSync("MATCH (n:Person) RETURN n");
+        ASSERT_TRUE(before.error.empty()) << "MATCH before shutdown error: " << before.error;
+        ASSERT_EQ(before.rows.size(), 2) << "Should have 2 vertices before shutdown";
+
+        executor.reset();
+        async_data.reset();
+        io.reset();
+        blockingWait(async_meta->close());
+        sync_data->close();
+        sync_meta->close();
+    }
+
+    // ====== Phase 2: Restart from same data dir, query ======
+    {
+        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        ASSERT_TRUE(sync_data->open(db_path + "/data"));
+
+        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
+
+        auto io = std::make_unique<IoScheduler>(2);
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_meta = std::make_unique<AsyncGraphMetaStore>();
+        ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
+
+        auto label_opt = blockingWait(async_meta->getLabelId("Person"));
+        ASSERT_TRUE(label_opt.has_value()) << "Label 'Person' should survive restart";
+        EXPECT_EQ(*label_opt, person_label_id);
+
+        auto edge_label_opt = blockingWait(async_meta->getEdgeLabelId("KNOWS"));
+        ASSERT_TRUE(edge_label_opt.has_value()) << "EdgeLabel 'KNOWS' should survive restart";
+        EXPECT_EQ(*edge_label_opt, knows_label_id);
+
+        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+
+        auto after = executor->executeSync("MATCH (n:Person) RETURN n");
+        EXPECT_TRUE(after.error.empty()) << "MATCH after restart error: " << after.error;
+        EXPECT_EQ(after.rows.size(), 2) << "Data should persist across restart";
+
+        auto r3 = executor->executeSync("CREATE (n:Person)");
+        EXPECT_TRUE(r3.error.empty()) << "CREATE after restart error: " << r3.error;
+
+        auto scan2 = executor->executeSync("MATCH (n:Person) RETURN n");
+        EXPECT_EQ(scan2.rows.size(), 3) << "Should have 3 vertices after post-restart insert";
+
+        executor.reset();
+        async_data.reset();
+        io.reset();
+        blockingWait(async_meta->close());
+        sync_data->close();
+        sync_meta->close();
+    }
+
+    std::filesystem::remove_all(db_path);
+}
+
+TEST(QueryExecutorRestartTest, DataWithPropertiesPersistsAcrossRestart) {
+    const std::string db_path = "/tmp/eugraph_restart_props_test_" + std::to_string(getpid());
+    std::filesystem::remove_all(db_path);
+    std::filesystem::create_directories(db_path + "/data");
+    std::filesystem::create_directories(db_path + "/meta");
+
+    // ====== Phase 1: Write vertices with properties ======
+    {
+        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        ASSERT_TRUE(sync_data->open(db_path + "/data"));
+
+        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
+
+        auto io = std::make_unique<IoScheduler>(2);
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_meta = std::make_unique<AsyncGraphMetaStore>();
+        ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
+
+        auto label_id = blockingWait(
+            async_meta->createLabel("Person", {PropertyDef{0, "name", PropertyType::STRING, false, std::nullopt}}));
+        ASSERT_NE(label_id, INVALID_LABEL_ID);
+        auto edge_label_id = blockingWait(
+            async_meta->createEdgeLabel("KNOWS", {PropertyDef{0, "since", PropertyType::INT64, false, std::nullopt}}));
+        ASSERT_NE(edge_label_id, INVALID_EDGE_LABEL_ID);
+
+        blockingWait(async_data->createLabel(label_id));
+        blockingWait(async_data->createEdgeLabel(edge_label_id));
+
+        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+
+        auto r1 = executor->executeSync("CREATE (n:Person {name: 'Alice'})");
+        ASSERT_TRUE(r1.error.empty()) << r1.error;
+        auto r2 = executor->executeSync("CREATE (n:Person {name: 'Bob'})");
+        ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+        executor.reset();
+        async_data.reset();
+        io.reset();
+        blockingWait(async_meta->close());
+        sync_data->close();
+        sync_meta->close();
+    }
+
+    // ====== Phase 2: Restart, query properties ======
+    {
+        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        ASSERT_TRUE(sync_data->open(db_path + "/data"));
+
+        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
+
+        auto io = std::make_unique<IoScheduler>(2);
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_meta = std::make_unique<AsyncGraphMetaStore>();
+        ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
+
+        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+
+        auto result = executor->executeSync("MATCH (n:Person) RETURN n.name ORDER BY n.name");
+        EXPECT_TRUE(result.error.empty()) << result.error;
+        EXPECT_EQ(result.rows.size(), 2);
+
+        executor.reset();
+        async_data.reset();
+        io.reset();
+        blockingWait(async_meta->close());
+        sync_data->close();
+        sync_meta->close();
+    }
+
+    std::filesystem::remove_all(db_path);
+}
+
+TEST(QueryExecutorRestartTest, EdgeDataPersistsAcrossRestart) {
+    const std::string db_path = "/tmp/eugraph_restart_edge_test_" + std::to_string(getpid());
+    std::filesystem::remove_all(db_path);
+    std::filesystem::create_directories(db_path + "/data");
+    std::filesystem::create_directories(db_path + "/meta");
+
+    // ====== Phase 1: Create vertices and edges ======
+    {
+        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        ASSERT_TRUE(sync_data->open(db_path + "/data"));
+
+        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
+
+        auto io = std::make_unique<IoScheduler>(2);
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_meta = std::make_unique<AsyncGraphMetaStore>();
+        ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
+
+        auto label_id = blockingWait(async_meta->createLabel("Person"));
+        ASSERT_NE(label_id, INVALID_LABEL_ID);
+        auto edge_label_id = blockingWait(async_meta->createEdgeLabel("KNOWS"));
+        ASSERT_NE(edge_label_id, INVALID_EDGE_LABEL_ID);
+
+        blockingWait(async_data->createLabel(label_id));
+        blockingWait(async_data->createEdgeLabel(edge_label_id));
+
+        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+
+        auto r1 = executor->executeSync("CREATE (a:Person)-[:KNOWS]->(b:Person)");
+        ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+        // Verify before shutdown
+        auto before = executor->executeSync("MATCH (a:Person)-[e:KNOWS]->(b:Person) RETURN a, b");
+        ASSERT_TRUE(before.error.empty()) << before.error;
+        ASSERT_EQ(before.rows.size(), 1) << "Should have 1 edge before shutdown";
+
+        executor.reset();
+        async_data.reset();
+        io.reset();
+        blockingWait(async_meta->close());
+        sync_data->close();
+        sync_meta->close();
+    }
+
+    // ====== Phase 2: Restart, query edges ======
+    {
+        auto sync_data = std::make_unique<SyncGraphDataStore>();
+        ASSERT_TRUE(sync_data->open(db_path + "/data"));
+
+        auto sync_meta = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta->open(db_path + "/meta"));
+
+        auto io = std::make_unique<IoScheduler>(2);
+        auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io);
+        auto async_meta = std::make_unique<AsyncGraphMetaStore>();
+        ASSERT_TRUE(blockingWait(async_meta->open(*sync_meta, *io)));
+
+        auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
+
+        auto result = executor->executeSync("MATCH (a:Person)-[e:KNOWS]->(b:Person) RETURN a, b");
+        EXPECT_TRUE(result.error.empty()) << result.error;
+        EXPECT_EQ(result.rows.size(), 1) << "Edge should persist across restart";
+
+        auto vertices = executor->executeSync("MATCH (n:Person) RETURN n");
+        EXPECT_EQ(vertices.rows.size(), 2) << "Vertices should persist across restart";
+
+        executor.reset();
+        async_data.reset();
+        io.reset();
+        blockingWait(async_meta->close());
+        sync_data->close();
+        sync_meta->close();
+    }
+
+    std::filesystem::remove_all(db_path);
+}
