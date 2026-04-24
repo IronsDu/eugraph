@@ -63,6 +63,9 @@ protected:
     /// Ensure a global table exists (create if not).
     bool ensureGlobalTable(WT_SESSION* session, const char* table_name);
 
+    /// Force a WT checkpoint (flush all committed data to disk).
+    bool checkpoint();
+
     WT_CONNECTION* conn_ = nullptr;
     WT_SESSION* defaultSession_ = nullptr;
 

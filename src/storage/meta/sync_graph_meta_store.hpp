@@ -43,6 +43,9 @@ public:
     bool dropLabel(LabelId label_id) override;
     bool createEdgeLabel(EdgeLabelId edge_label_id) override;
     bool dropEdgeLabel(EdgeLabelId edge_label_id) override;
+
+    // Durability
+    bool checkpoint() override;
 };
 
 } // namespace eugraph

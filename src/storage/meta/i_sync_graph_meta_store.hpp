@@ -40,6 +40,10 @@ public:
     virtual bool dropLabel(LabelId label_id) = 0;
     virtual bool createEdgeLabel(EdgeLabelId edge_label_id) = 0;
     virtual bool dropEdgeLabel(EdgeLabelId edge_label_id) = 0;
+
+    // ==================== Durability ====================
+
+    virtual bool checkpoint() = 0;
 };
 
 } // namespace eugraph
