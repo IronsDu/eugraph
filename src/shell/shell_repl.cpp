@@ -439,9 +439,7 @@ static void runRpcRepl(const ShellConfig& config) {
                 std::string rest;
                 std::getline(iss, rest);
                 auto props = parsePropertyDefs(rest);
-                std::cout << "ready call create label" << std::endl;
                 auto resp = client.createLabel(name, props);
-                std::cout << "end call create label" << std::endl;
                 std::cout << formatLabelCreated(resp.name().value(), resp.id().value());
             } else if (cmd == ":create-edge-label") {
                 if (args.empty()) {
