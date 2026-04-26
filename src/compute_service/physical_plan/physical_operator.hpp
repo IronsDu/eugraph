@@ -26,6 +26,9 @@ public:
     virtual ~PhysicalOperator() = default;
     virtual folly::coro::AsyncGenerator<RowBatch> execute() = 0;
     virtual std::string toString() const = 0;
+    virtual std::vector<const PhysicalOperator*> children() const {
+        return {};
+    }
 };
 
 // ==================== Scan Operators ====================
@@ -39,7 +42,7 @@ public:
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
-        return "AllNodeScan";
+        return "AllNodeScan(variable=" + variable_ + ")";
     }
 
 private:
@@ -57,7 +60,9 @@ public:
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
-        return "LabelScan";
+        auto it = label_defs_.find(label_id_);
+        std::string label_name = (it != label_defs_.end()) ? it->second.name : std::to_string(label_id_);
+        return "LabelScan(variable=" + variable_ + ", label=" + label_name + ")";
     }
 
 private:
@@ -85,7 +90,20 @@ public:
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
-        return "IndexScan";
+        std::string label_name = std::to_string(label_id_);
+        std::string prop_name = std::to_string(prop_id_);
+        auto it = label_defs_.find(label_id_);
+        if (it != label_defs_.end()) {
+            label_name = it->second.name;
+            for (const auto& pd : it->second.properties) {
+                if (pd.id == prop_id_) {
+                    prop_name = pd.name;
+                    break;
+                }
+            }
+        }
+        return "IndexScan(variable=" + variable_ + ", label=" + label_name + ", prop=" + prop_name + ", " +
+               (mode_ == ScanMode::EQUALITY ? "EQ" : "RANGE") + ")";
     }
 
 private:
@@ -111,7 +129,26 @@ public:
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
-        return "Expand";
+        std::string dir;
+        switch (direction_) {
+        case cypher::RelationshipDirection::LEFT_TO_RIGHT:
+            dir = "OUT";
+            break;
+        case cypher::RelationshipDirection::RIGHT_TO_LEFT:
+            dir = "IN";
+            break;
+        case cypher::RelationshipDirection::UNDIRECTED:
+            dir = "ANY";
+            break;
+        }
+        auto s = "Expand(src=" + src_var_ + ", dst=" + dst_var_;
+        if (!edge_var_.empty())
+            s += ", edge=" + edge_var_;
+        s += ", direction=" + dir + ")";
+        return s;
+    }
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
     }
 
 private:
@@ -138,6 +175,9 @@ public:
     std::string toString() const override {
         return "Filter";
     }
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
+    }
 
 private:
     cypher::Expression predicate_;
@@ -163,7 +203,16 @@ public:
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
-        return "Project";
+        std::string s;
+        for (size_t i = 0; i < items_.size(); i++) {
+            if (i > 0)
+                s += ", ";
+            s += items_[i].name;
+        }
+        return "Project(items=[" + s + "])";
+    }
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
     }
 
     const std::vector<ProjectItem>& items() const {
@@ -185,7 +234,10 @@ public:
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
-        return "Limit";
+        return "Limit(" + std::to_string(limit_) + ")";
+    }
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
     }
 
 private:
@@ -206,7 +258,23 @@ public:
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
-        return "CreateNode";
+        std::string s;
+        for (size_t i = 0; i < label_ids_.size(); i++) {
+            if (i > 0)
+                s += ", ";
+            if (label_defs_) {
+                auto it = label_defs_->find(label_ids_[i]);
+                s += (it != label_defs_->end()) ? it->second.name : std::to_string(label_ids_[i]);
+            } else {
+                s += std::to_string(label_ids_[i]);
+            }
+        }
+        return "CreateNode(variable=" + variable_ + ", labels=[" + s + "])";
+    }
+    std::vector<const PhysicalOperator*> children() const override {
+        if (child_)
+            return {child_.get()};
+        return {};
     }
 
 private:
@@ -228,7 +296,11 @@ public:
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
-        return "CreateEdge";
+        return "CreateEdge(variable=" + variable_ + ", src=" + std::to_string(src_id_) +
+               ", dst=" + std::to_string(dst_id_) + ")";
+    }
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
     }
 
 private:

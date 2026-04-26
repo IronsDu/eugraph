@@ -44,6 +44,7 @@ private:
     std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool_;
 
     void extractColumnsFromLogicalPlan(const LogicalOperator& op, Schema& columns);
+    void formatExplainPlan(PhysicalOperator& root, ExecutionResult& result);
 };
 
 } // namespace compute

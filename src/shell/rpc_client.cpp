@@ -49,43 +49,33 @@ bool EuGraphRpcClient::connect() {
 
 thrift::LabelInfo EuGraphRpcClient::createLabel(const std::string& name,
                                                 const std::vector<thrift::PropertyDefThrift>& properties) {
-    auto t0 = nowMs();
     thrift::LabelInfo resp;
     client_->sync_createLabel(resp, name, properties);
-    spdlog::info("[rpc_client] createLabel: {}ms", nowMs() - t0);
     return resp;
 }
 
 std::vector<thrift::LabelInfo> EuGraphRpcClient::listLabels() {
-    auto t0 = nowMs();
     std::vector<thrift::LabelInfo> resp;
     client_->sync_listLabels(resp);
-    spdlog::info("[rpc_client] listLabels: {}ms", nowMs() - t0);
     return resp;
 }
 
 thrift::EdgeLabelInfo EuGraphRpcClient::createEdgeLabel(const std::string& name,
                                                         const std::vector<thrift::PropertyDefThrift>& properties) {
-    auto t0 = nowMs();
     thrift::EdgeLabelInfo resp;
     client_->sync_createEdgeLabel(resp, name, properties);
-    spdlog::info("[rpc_client] createEdgeLabel: {}ms", nowMs() - t0);
     return resp;
 }
 
 std::vector<thrift::EdgeLabelInfo> EuGraphRpcClient::listEdgeLabels() {
-    auto t0 = nowMs();
     std::vector<thrift::EdgeLabelInfo> resp;
     client_->sync_listEdgeLabels(resp);
-    spdlog::info("[rpc_client] listEdgeLabels: {}ms", nowMs() - t0);
     return resp;
 }
 
 thrift::QueryResult EuGraphRpcClient::executeCypher(const std::string& query) {
-    auto t0 = nowMs();
     thrift::QueryResult resp;
     client_->sync_executeCypher(resp, query);
-    spdlog::info("[rpc_client] executeCypher: {}ms", nowMs() - t0);
     return resp;
 }
 
