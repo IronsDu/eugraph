@@ -170,7 +170,24 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             co_return;
         }
 
-        // Set to PUBLIC immediately (no backfill worker yet)
+        // Backfill: scan existing vertices and insert index entries
+        {
+            GraphTxnHandle txn = co_await async_data_.beginTran();
+            async_data_.setTransaction(txn);
+
+            auto gen = async_data_.scanVerticesByLabel(label_def->id);
+            while (auto batch = co_await gen.next()) {
+                for (auto vid : *batch) {
+                    auto props = co_await async_data_.getVertexProperties(vid, label_def->id);
+                    if (props.has_value() && prop_id < props->size() && (*props)[prop_id].has_value()) {
+                        co_await async_data_.insertIndexEntry(table, (*props)[prop_id].value(), vid);
+                    }
+                }
+            }
+
+            co_await async_data_.commitTran(txn);
+        }
+
         ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::PUBLIC);
         if (!ok) {
             result.error = "Failed to set index state to PUBLIC";

@@ -374,16 +374,14 @@ TEST_F(IndexE2ETest, EndToEndCreateIndexAndQuery) {
     auto rows = runQuery(executor, "MATCH (n:Person) WHERE n.age = 30 RETURN n");
     ASSERT_EQ(rows.size(), 1u);
 
-    // Create index (data already exists but index is empty — no backfill yet)
+    // Create index (data already exists — backfill should populate index)
     auto ddl_result = blockingWait(executor.executeAsync(
         "CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
     ASSERT_TRUE(ddl_result.error.empty()) << ddl_result.error;
 
-    // Query via IndexScan returns 0 rows because no index entries exist for
-    // pre-existing data (no backfill worker yet). The planner uses IndexScan
-    // since the index is PUBLIC, but it finds nothing.
+    // Query via IndexScan should now return correct results after backfill
     rows = runQuery(executor, "MATCH (n:Person) WHERE n.age = 35 RETURN n");
-    EXPECT_EQ(rows.size(), 0u);
+    ASSERT_EQ(rows.size(), 1u);
 
     // SHOW INDEXES
     auto show = blockingWait(executor.executeAsync("SHOW INDEXES"));

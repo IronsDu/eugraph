@@ -230,7 +230,8 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
                 }
 
                 auto result = std::make_unique<CreateNodePhysicalOp>(
-                    ptr->variable, std::move(label_ids), std::move(label_props), store, vid, std::move(child_op));
+                    ptr->variable, std::move(label_ids), std::move(label_props), store, vid, std::move(child_op),
+                    &ctx.label_defs);
 
                 Schema output_schema;
                 if (!ptr->variable.empty()) {
