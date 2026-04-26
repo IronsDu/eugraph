@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compute_service/executor/row.hpp"
+#include "compute_service/parser/index_ddl_parser.hpp"
 #include "compute_service/logical_plan/logical_plan_builder.hpp"
 #include "compute_service/parser/ast.hpp"
 #include "compute_service/parser/cypher_parser.hpp"
@@ -36,6 +37,7 @@ public:
     folly::coro::Task<ExecutionResult> executeAsync(const std::string& cypher_query);
 
 private:
+    folly::coro::Task<void> handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result);
     IAsyncGraphDataStore& async_data_;
     IAsyncGraphMetaStore& async_meta_;
     Config config_;
