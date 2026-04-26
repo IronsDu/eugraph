@@ -35,6 +35,7 @@ public:
     // Metadata Raw KV
     bool metadataPut(std::string_view key, std::string_view value) override;
     std::optional<std::string> metadataGet(std::string_view key) override;
+    bool metadataDel(std::string_view key) override;
     void metadataScan(std::string_view prefix,
                       const std::function<bool(std::string_view, std::string_view)>& callback) override;
 

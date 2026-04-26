@@ -20,7 +20,10 @@ ExecutionResult QueryExecutor::executeSync(const std::string& cypher_query) {
 folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string& cypher_query) {
     ExecutionResult result;
 
+    spdlog::info("{} 11111111", __FUNCTION__);
     auto inner = folly::coro::co_invoke([this, &cypher_query, &result]() -> folly::coro::Task<void> {
+
+        spdlog::info("{} 222222222", __FUNCTION__);
         // 1. Parse
         cypher::CypherQueryParser parser;
         auto parse_result = parser.parse(cypher_query);
@@ -45,6 +48,7 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         auto labels = co_await async_meta_.listLabels();
         auto edge_labels = co_await async_meta_.listEdgeLabels();
 
+        spdlog::info("{} 333333333", __FUNCTION__);
         std::unordered_map<std::string, LabelId> label_name_to_id;
         for (const auto& l : labels)
             label_name_to_id[l.name] = l.id;
@@ -57,6 +61,7 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         GraphTxnHandle txn = co_await async_data_.beginTran();
         async_data_.setTransaction(txn);
 
+        spdlog::info("{} 4444444444", __FUNCTION__);
         PlanContext ctx;
         ctx.label_name_to_id = std::move(label_name_to_id);
         ctx.edge_label_name_to_id = std::move(edge_label_name_to_id);
@@ -88,10 +93,12 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         }
 
         co_await async_data_.commitTran(txn);
+        spdlog::info("{} 55555555555", __FUNCTION__);
     });
 
     co_await folly::coro::co_withExecutor(compute_pool_.get(), std::move(inner));
 
+    spdlog::info("{} 66666666666666", __FUNCTION__);
     co_return result;
 }
 

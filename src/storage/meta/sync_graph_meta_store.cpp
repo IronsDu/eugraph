@@ -116,6 +116,10 @@ std::optional<std::string> SyncGraphMetaStore::metadataGet(std::string_view key)
     return tableGet(defaultSession_, TABLE_METADATA, key);
 }
 
+bool SyncGraphMetaStore::metadataDel(std::string_view key) {
+    return tableDel(defaultSession_, TABLE_METADATA, key);
+}
+
 void SyncGraphMetaStore::metadataScan(std::string_view prefix,
                                       const std::function<bool(std::string_view, std::string_view)>& callback) {
     tableScan(defaultSession_, TABLE_METADATA, prefix, callback);

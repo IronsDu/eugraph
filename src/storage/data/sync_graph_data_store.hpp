@@ -100,6 +100,25 @@ public:
     uint64_t countVerticesByLabel(GraphTxnHandle txn, LabelId label_id) override;
     uint64_t countDegree(GraphTxnHandle txn, VertexId vid, Direction direction,
                          std::optional<EdgeLabelId> label_filter) override;
+
+    // Index DDL
+    bool createIndex(const std::string& table_name) override;
+    bool dropIndex(const std::string& table_name) override;
+
+    // Index Entry Operations
+    bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) override;
+    bool deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) override;
+    bool checkUniqueConstraint(const std::string& table, const PropertyValue& value) override;
+
+    // Index Scan
+    void scanIndexEquality(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
+                           const std::function<bool(uint64_t)>& callback) override;
+    void scanIndexRange(GraphTxnHandle txn, const std::string& table,
+                        const std::optional<PropertyValue>& start, const std::optional<PropertyValue>& end,
+                        const std::function<bool(uint64_t)>& callback) override;
+
+    // Index Cleanup
+    void dropAllIndexEntries(const std::string& table) override;
 };
 
 // ==================== Scan Cursor Implementations ====================

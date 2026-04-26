@@ -46,6 +46,25 @@ public:
     virtual folly::coro::Task<VertexId> nextVertexId() = 0;
     virtual folly::coro::Task<EdgeId> nextEdgeId() = 0;
 
+    // Index management
+    struct IndexInfo {
+        std::string name;
+        std::string label_name;
+        std::string property_name;
+        bool unique;
+        bool is_edge;
+        IndexState state;
+    };
+
+    virtual folly::coro::Task<bool> createVertexIndex(const std::string& name, const std::string& label_name,
+                                                       const std::string& prop_name, bool unique) = 0;
+    virtual folly::coro::Task<bool> createEdgeIndex(const std::string& name, const std::string& edge_label_name,
+                                                     const std::string& prop_name, bool unique) = 0;
+    virtual folly::coro::Task<bool> updateIndexState(const std::string& name, IndexState new_state) = 0;
+    virtual folly::coro::Task<bool> dropIndex(const std::string& name) = 0;
+    virtual folly::coro::Task<std::vector<IndexInfo>> listIndexes() = 0;
+    virtual folly::coro::Task<std::optional<IndexInfo>> getIndex(const std::string& name) = 0;
+
     // Schema access
     virtual const GraphSchema& schema() const = 0;
 };

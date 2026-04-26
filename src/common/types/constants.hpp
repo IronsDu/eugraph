@@ -30,6 +30,14 @@ inline std::string epropTable(EdgeLabelId id) {
     return "table:eprop_" + std::to_string(id);
 }
 
+// 索引表（按 label_id + prop_id 分表）
+inline std::string vidxTable(LabelId label_id, uint16_t prop_id) {
+    return "table:vidx_" + std::to_string(label_id) + "_" + std::to_string(prop_id);
+}
+inline std::string eidxTable(EdgeLabelId label_id, uint16_t prop_id) {
+    return "table:eidx_" + std::to_string(label_id) + "_" + std::to_string(prop_id);
+}
+
 // WiredTiger 表配置
 constexpr const char* WT_TABLE_CONFIG = "key_format=u,value_format=u";
 

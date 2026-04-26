@@ -83,6 +83,14 @@ struct PropertyDef {
     std::optional<PropertyValue> default_value;
 };
 
+// ==================== Index State ====================
+enum class IndexState : uint8_t {
+    WRITE_ONLY = 0,
+    PUBLIC = 1,
+    DELETE_ONLY = 2,
+    ERROR = 3,
+};
+
 // ==================== Label Definition ====================
 struct LabelDef {
     LabelId id = INVALID_LABEL_ID;
@@ -93,6 +101,7 @@ struct LabelDef {
         std::string name;
         std::vector<uint16_t> prop_ids;
         bool unique = false;
+        IndexState state = IndexState::WRITE_ONLY;
     };
     std::vector<IndexDef> indexes;
 };
@@ -103,6 +112,7 @@ struct EdgeLabelDef {
     EdgeLabelName name;
     std::vector<PropertyDef> properties;
     bool directed = true;
+    std::vector<LabelDef::IndexDef> indexes;
 };
 
 } // namespace eugraph

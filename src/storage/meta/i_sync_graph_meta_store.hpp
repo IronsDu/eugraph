@@ -31,6 +31,7 @@ public:
 
     virtual bool metadataPut(std::string_view key, std::string_view value) = 0;
     virtual std::optional<std::string> metadataGet(std::string_view key) = 0;
+    virtual bool metadataDel(std::string_view key) = 0;
     virtual void metadataScan(std::string_view prefix,
                               const std::function<bool(std::string_view, std::string_view)>& callback) = 0;
 

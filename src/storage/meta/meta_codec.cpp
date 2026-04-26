@@ -175,6 +175,29 @@ PropertyDef MetadataCodec::decodePropertyDef(std::string_view data, size_t& offs
     return prop;
 }
 
+// ==================== IndexDef ====================
+
+void MetadataCodec::encodeIndexDef(std::string& buf, const LabelDef::IndexDef& idx) {
+    encodeString(buf, idx.name);
+    encodeU16(buf, static_cast<uint16_t>(idx.prop_ids.size()));
+    for (auto pid : idx.prop_ids)
+        encodeU16(buf, pid);
+    encodeU8(buf, idx.unique ? 1 : 0);
+    encodeU8(buf, static_cast<uint8_t>(idx.state));
+}
+
+LabelDef::IndexDef MetadataCodec::decodeIndexDef(std::string_view data, size_t& offset) {
+    LabelDef::IndexDef idx;
+    idx.name = decodeString(data, offset);
+    auto count = decodeU16(data, offset);
+    idx.prop_ids.resize(count);
+    for (uint16_t i = 0; i < count; ++i)
+        idx.prop_ids[i] = decodeU16(data, offset);
+    idx.unique = decodeU8(data, offset) != 0;
+    idx.state = static_cast<IndexState>(decodeU8(data, offset));
+    return idx;
+}
+
 // ==================== LabelDef ====================
 
 std::string MetadataCodec::encodeLabelDef(const LabelDef& def) {
@@ -185,8 +208,10 @@ std::string MetadataCodec::encodeLabelDef(const LabelDef& def) {
     for (const auto& prop : def.properties) {
         encodePropertyDef(buf, prop);
     }
-    // indexes — not yet used, encode count=0
-    encodeU16(buf, 0);
+    encodeU16(buf, static_cast<uint16_t>(def.indexes.size()));
+    for (const auto& idx : def.indexes) {
+        encodeIndexDef(buf, idx);
+    }
     return buf;
 }
 
@@ -200,9 +225,11 @@ LabelDef MetadataCodec::decodeLabelDef(std::string_view data) {
     for (uint16_t i = 0; i < prop_count; ++i) {
         def.properties[i] = decodePropertyDef(data, offset);
     }
-    // indexes — skip
     auto idx_count = decodeU16(data, offset);
-    (void)idx_count;
+    def.indexes.resize(idx_count);
+    for (uint16_t i = 0; i < idx_count; ++i) {
+        def.indexes[i] = decodeIndexDef(data, offset);
+    }
     return def;
 }
 
@@ -217,6 +244,10 @@ std::string MetadataCodec::encodeEdgeLabelDef(const EdgeLabelDef& def) {
         encodePropertyDef(buf, prop);
     }
     encodeU8(buf, def.directed ? 1 : 0);
+    encodeU16(buf, static_cast<uint16_t>(def.indexes.size()));
+    for (const auto& idx : def.indexes) {
+        encodeIndexDef(buf, idx);
+    }
     return buf;
 }
 
@@ -231,6 +262,11 @@ EdgeLabelDef MetadataCodec::decodeEdgeLabelDef(std::string_view data) {
         def.properties[i] = decodePropertyDef(data, offset);
     }
     def.directed = decodeU8(data, offset) != 0;
+    auto idx_count = decodeU16(data, offset);
+    def.indexes.resize(idx_count);
+    for (uint16_t i = 0; i < idx_count; ++i) {
+        def.indexes[i] = decodeIndexDef(data, offset);
+    }
     return def;
 }
 

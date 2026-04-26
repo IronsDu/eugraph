@@ -156,6 +156,29 @@ public:
     virtual uint64_t countVerticesByLabel(GraphTxnHandle txn, LabelId label_id) = 0;
     virtual uint64_t countDegree(GraphTxnHandle txn, VertexId vid, Direction direction,
                                  std::optional<EdgeLabelId> label_filter) = 0;
+
+    // ==================== Index DDL ====================
+
+    virtual bool createIndex(const std::string& table_name) = 0;
+    virtual bool dropIndex(const std::string& table_name) = 0;
+
+    // ==================== Index Entry Operations ====================
+
+    virtual bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) = 0;
+    virtual bool deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) = 0;
+    virtual bool checkUniqueConstraint(const std::string& table, const PropertyValue& value) = 0;
+
+    // ==================== Index Scan ====================
+
+    virtual void scanIndexEquality(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
+                                   const std::function<bool(uint64_t)>& callback) = 0;
+    virtual void scanIndexRange(GraphTxnHandle txn, const std::string& table,
+                                const std::optional<PropertyValue>& start, const std::optional<PropertyValue>& end,
+                                const std::function<bool(uint64_t)>& callback) = 0;
+
+    // ==================== Index Cleanup ====================
+
+    virtual void dropAllIndexEntries(const std::string& table) = 0;
 };
 
 } // namespace eugraph

@@ -81,6 +81,27 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
                 if (ptr->children.size() != 1) {
                     return "Filter requires exactly one child";
                 }
+
+                // Try index scan optimization: if child is LabelScan and predicate is indexable
+                if (std::holds_alternative<std::unique_ptr<LabelScanOp>>(ptr->children[0])) {
+                    auto& scan_op = std::get<std::unique_ptr<LabelScanOp>>(ptr->children[0]);
+                    auto label_it = ctx.label_name_to_id.find(scan_op->label);
+                    if (label_it != ctx.label_name_to_id.end()) {
+                        LabelId label_id = label_it->second;
+                        auto def_it = ctx.label_defs.find(label_id);
+                        if (def_it != ctx.label_defs.end()) {
+                            auto& pred = ptr->predicate;
+                            if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(pred)) {
+                                auto& binop = std::get<std::unique_ptr<cypher::BinaryOp>>(pred);
+                                auto idx_result = tryIndexScan(*scan_op, *binop, label_id, def_it->second, store, ctx);
+                                if (idx_result.has_value()) {
+                                    return std::move(idx_result.value());
+                                }
+                            }
+                        }
+                    }
+                }
+
                 auto child_result = planOperator(ptr->children[0], store, ctx, input_schema);
                 if (std::holds_alternative<std::string>(child_result)) {
                     return std::get<std::string>(child_result);
@@ -91,7 +112,6 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
 
                 auto result = std::make_unique<FilterPhysicalOp>(std::move(ptr->predicate), Schema(child_schema),
                                                                  std::move(child_op), &ctx.label_defs);
-                // Filter passes through the child's schema
                 return PlanOperatorResult{std::move(result), std::move(child_schema)};
 
             } else if constexpr (std::is_same_v<OpType, ProjectOp>) {
@@ -275,6 +295,79 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
             }
         },
         op);
+}
+
+std::optional<PlanOperatorResult>
+PhysicalPlanner::tryIndexScan(LabelScanOp& scan_op, cypher::BinaryOp& binop,
+                               LabelId label_id, const LabelDef& label_def,
+                               IAsyncGraphDataStore& store, PlanContext& ctx) {
+    // Check pattern: PropertyAccess(Variable, prop) op Literal
+    if (!std::holds_alternative<std::unique_ptr<cypher::PropertyAccess>>(binop.left) ||
+        !std::holds_alternative<std::unique_ptr<cypher::Literal>>(binop.right)) {
+        return std::nullopt;
+    }
+
+    auto& pa = std::get<std::unique_ptr<cypher::PropertyAccess>>(binop.left);
+    auto& lit = std::get<std::unique_ptr<cypher::Literal>>(binop.right);
+
+    // Find property in label def
+    for (const auto& prop_def : label_def.properties) {
+        if (prop_def.name != pa->property) {
+            continue;
+        }
+
+        // Find matching PUBLIC index
+        for (const auto& idx : label_def.indexes) {
+            if (idx.state != IndexState::PUBLIC || idx.prop_ids.size() != 1 || idx.prop_ids[0] != prop_def.id) {
+                continue;
+            }
+
+            PropertyValue search_val;
+            if (std::holds_alternative<std::string>(lit->value))
+                search_val = std::get<std::string>(lit->value);
+            else if (std::holds_alternative<int64_t>(lit->value))
+                search_val = std::get<int64_t>(lit->value);
+            else if (std::holds_alternative<double>(lit->value))
+                search_val = std::get<double>(lit->value);
+            else if (std::holds_alternative<bool>(lit->value))
+                search_val = std::get<bool>(lit->value);
+
+            using ScanMode = IndexScanPhysicalOp::ScanMode;
+            std::unique_ptr<IndexScanPhysicalOp> result;
+
+            if (binop.op == cypher::BinaryOperator::EQ) {
+                result = std::make_unique<IndexScanPhysicalOp>(
+                    scan_op.variable, label_id, prop_def.id,
+                    ScanMode::EQUALITY,
+                    std::move(search_val), std::nullopt,
+                    store, ctx.label_defs);
+            } else if (binop.op == cypher::BinaryOperator::GT ||
+                       binop.op == cypher::BinaryOperator::GTE) {
+                result = std::make_unique<IndexScanPhysicalOp>(
+                    scan_op.variable, label_id, prop_def.id,
+                    ScanMode::RANGE,
+                    std::move(search_val), std::nullopt,
+                    store, ctx.label_defs);
+            } else if (binop.op == cypher::BinaryOperator::LT ||
+                       binop.op == cypher::BinaryOperator::LTE) {
+                result = std::make_unique<IndexScanPhysicalOp>(
+                    scan_op.variable, label_id, prop_def.id,
+                    ScanMode::RANGE,
+                    PropertyValue{std::monostate{}},
+                    std::move(search_val),
+                    store, ctx.label_defs);
+            } else {
+                return std::nullopt;
+            }
+
+            Schema output_schema;
+            if (!scan_op.variable.empty()) {
+                output_schema.push_back(scan_op.variable);
+            }
+            return PlanOperatorResult{std::move(result), std::move(output_schema)};
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace compute

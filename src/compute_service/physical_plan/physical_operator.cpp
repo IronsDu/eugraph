@@ -36,7 +36,34 @@ folly::coro::AsyncGenerator<RowBatch> LabelScanPhysicalOp::execute() {
     while (auto batch = co_await gen.next()) {
         RowBatch output;
         for (VertexId vid : *batch) {
-            // Load properties for this vertex
+            auto props = co_await store_.getVertexProperties(vid, label_id_);
+            VertexValue vv;
+            vv.id = vid;
+            vv.labels = LabelIdSet{label_id_};
+            vv.properties = std::move(props);
+            Row row;
+            row.push_back(Value(std::move(vv)));
+            output.push_back(std::move(row));
+        }
+        if (!output.empty()) {
+            co_yield std::move(output);
+        }
+    }
+}
+
+// ==================== IndexScan ====================
+
+folly::coro::AsyncGenerator<RowBatch> IndexScanPhysicalOp::execute() {
+    folly::coro::AsyncGenerator<std::vector<VertexId>> gen;
+    if (mode_ == ScanMode::EQUALITY) {
+        gen = store_.scanVerticesByIndex(label_id_, prop_id_, search_value_);
+    } else {
+        gen = store_.scanVerticesByIndexRange(label_id_, prop_id_, search_value_, range_end_);
+    }
+
+    while (auto batch = co_await gen.next()) {
+        RowBatch output;
+        for (VertexId vid : *batch) {
             auto props = co_await store_.getVertexProperties(vid, label_id_);
             VertexValue vv;
             vv.id = vid;
