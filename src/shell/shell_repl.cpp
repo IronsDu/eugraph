@@ -10,6 +10,8 @@
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
 
+#include <linenoise.h>
+
 #include <folly/coro/BlockingWait.h>
 #include <spdlog/spdlog.h>
 
@@ -194,26 +196,45 @@ std::vector<PropertyDefThrift> parsePropertyDefs(const std::string& args) {
 using CommandHandler =
     std::function<void(const std::string& cmd, const std::string& args, const std::string& accumulated)>;
 
+static const char* kPrompt = "\033[32meugraph>\033[0m ";
+static const char* kMultilinePrompt = "\033[36m......>\033[0m ";
+
+static void completionCallback(const char* buf, linenoiseCompletions* lc) {
+    if (buf[0] == ':') {
+        const char* cmds[] = {":help", ":exit", ":quit", ":create-label", ":create-edge-label",
+                              ":list-labels", ":list-edge-labels"};
+        for (const auto* c : cmds) {
+            if (strncmp(c, buf, strlen(buf)) == 0) {
+                linenoiseAddCompletion(lc, c);
+            }
+        }
+    }
+}
+
 static void runReplLoop(const std::string& mode_label, CommandHandler handler) {
+    linenoiseSetCompletionCallback(completionCallback);
+    linenoiseHistorySetMaxLen(256);
+
+    std::string history_path = std::string(getenv("HOME") ? getenv("HOME") : "/tmp") + "/.eugraph_history";
+    linenoiseHistoryLoad(history_path.c_str());
+
     std::cout << "EuGraph Shell (" << mode_label << " mode)" << std::endl;
     std::cout << "Type :help for available commands, :exit to quit." << std::endl;
     std::cout << std::endl;
-
-    std::string prompt = "eugraph> ";
-    std::string multiline_prompt = "......> ";
 
     while (true) {
         std::string accumulated;
 
         while (true) {
-            std::cout << (accumulated.empty() ? prompt : multiline_prompt);
-            std::cout.flush();
-
-            std::string line;
-            if (!std::getline(std::cin, line)) {
+            const char* prompt = accumulated.empty() ? kPrompt : kMultilinePrompt;
+            char* line_raw = linenoise(prompt);
+            if (!line_raw) {
                 std::cout << std::endl;
+                linenoiseHistorySave(history_path.c_str());
                 return;
             }
+            std::string line(line_raw);
+            linenoiseFree(line_raw);
 
             accumulated = accumulated.empty() ? line : accumulated + "\n" + line;
 
@@ -236,9 +257,11 @@ static void runReplLoop(const std::string& mode_label, CommandHandler handler) {
         auto [cmd, args] = parseCommand(accumulated);
 
         if (cmd == ":exit" || cmd == ":quit") {
+            linenoiseHistorySave(history_path.c_str());
             std::cout << "Bye!" << std::endl;
             return;
         } else {
+            linenoiseHistoryAdd(accumulated.c_str());
             auto t0 = std::chrono::steady_clock::now();
             handler(cmd, args, accumulated);
             auto t1 = std::chrono::steady_clock::now();
