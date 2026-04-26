@@ -276,3 +276,117 @@ TEST_F(IndexE2ETest, IndexRangeQuery) {
     EXPECT_EQ(results[1], 5u);
     EXPECT_EQ(results[2], 6u);
 }
+
+// ==================== DDL via QueryExecutor ====================
+
+TEST_F(IndexE2ETest, DdlCreateIndexViaExecutor) {
+    createLabel(env, "Person", {
+        {0, "name", PropertyType::STRING, false, std::nullopt},
+        {0, "age", PropertyType::INT64, false, std::nullopt},
+    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto result = blockingWait(executor.executeAsync(
+        "CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    // result column contains "Index created: idx_age"
+    EXPECT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_NE(std::get<std::string>(result.rows[0][0]).find("idx_age"), std::string::npos);
+
+    // Verify index is in PUBLIC state via meta store
+    auto info = blockingWait(env.async_meta->getIndex("idx_age"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+}
+
+TEST_F(IndexE2ETest, DdlShowIndexesViaExecutor) {
+    createLabel(env, "Person", {
+        {0, "name", PropertyType::STRING, false, std::nullopt},
+        {0, "age", PropertyType::INT64, false, std::nullopt},
+    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    // No indexes initially
+    auto result = blockingWait(executor.executeAsync("SHOW INDEXES"));
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
+    ASSERT_EQ(result.columns.size(), 5u);
+    EXPECT_EQ(result.columns[0], "name");
+
+    // Create an index
+    blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+
+    // Now SHOW INDEXES should return 1 row
+    result = blockingWait(executor.executeAsync("SHOW INDEXES"));
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "idx_age");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "Person");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][2]), "age");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][4]), "PUBLIC");
+}
+
+TEST_F(IndexE2ETest, DdlDropIndexViaExecutor) {
+    createLabel(env, "Person", {
+        {0, "name", PropertyType::STRING, false, std::nullopt},
+        {0, "age", PropertyType::INT64, false, std::nullopt},
+    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+
+    // Drop it
+    auto result = blockingWait(executor.executeAsync("DROP INDEX idx_age"));
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_NE(std::get<std::string>(result.rows[0][0]).find("dropped"), std::string::npos);
+
+    // Verify it's gone
+    auto indexes = blockingWait(env.async_meta->listIndexes());
+    EXPECT_TRUE(indexes.empty());
+}
+
+TEST_F(IndexE2ETest, DdlCreateIndexLabelNotFound) {
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto result = blockingWait(executor.executeAsync(
+        "CREATE INDEX idx_age FOR (n:NoSuchLabel) ON (n.age)"));
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("Label not found"), std::string::npos);
+}
+
+TEST_F(IndexE2ETest, EndToEndCreateIndexAndQuery) {
+    // Full flow: create label → insert data → create index → query via index
+    createLabel(env, "Person", {
+        {0, "name", PropertyType::STRING, false, std::nullopt},
+        {0, "age", PropertyType::INT64, false, std::nullopt},
+    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    // Insert data
+    runQuery(executor, "CREATE (n:Person {name: 'alice', age: 25})");
+    runQuery(executor, "CREATE (n:Person {name: 'bob', age: 30})");
+    runQuery(executor, "CREATE (n:Person {name: 'charlie', age: 35})");
+
+    // Before index: query still works via LabelScan + Filter
+    auto rows = runQuery(executor, "MATCH (n:Person) WHERE n.age = 30 RETURN n");
+    ASSERT_EQ(rows.size(), 1u);
+
+    // Create index (data already exists but index is empty — no backfill yet)
+    auto ddl_result = blockingWait(executor.executeAsync(
+        "CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+    ASSERT_TRUE(ddl_result.error.empty()) << ddl_result.error;
+
+    // Query via IndexScan returns 0 rows because no index entries exist for
+    // pre-existing data (no backfill worker yet). The planner uses IndexScan
+    // since the index is PUBLIC, but it finds nothing.
+    rows = runQuery(executor, "MATCH (n:Person) WHERE n.age = 35 RETURN n");
+    EXPECT_EQ(rows.size(), 0u);
+
+    // SHOW INDEXES
+    auto show = blockingWait(executor.executeAsync("SHOW INDEXES"));
+    ASSERT_EQ(show.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(show.rows[0][0]), "idx_age");
+}
