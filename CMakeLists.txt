@@ -179,10 +179,12 @@ add_library(eugraph_shell_lib STATIC
     src/shell/shell_repl.cpp
     src/shell/rpc_client.cpp
     src/server/eugraph_handler.cpp
+    third_party/linenoise/linenoise.c
 )
 
 target_include_directories(eugraph_shell_lib PUBLIC
     "${PROJECT_SOURCE_DIR}/src"
+    "${PROJECT_SOURCE_DIR}/third_party/linenoise"
 )
 
 target_link_libraries(eugraph_shell_lib PUBLIC
