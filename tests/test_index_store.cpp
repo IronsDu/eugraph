@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
+#include "common/types/constants.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/kv/index_key_codec.hpp"
-#include "common/types/constants.hpp"
 
 #include <filesystem>
 #include <spdlog/spdlog.h>

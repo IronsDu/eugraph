@@ -6,7 +6,13 @@
 namespace eugraph {
 
 struct IndexDdlStatement {
-    enum Type { CREATE_VERTEX_INDEX, CREATE_EDGE_INDEX, DROP_INDEX, SHOW_INDEXES, SHOW_INDEX };
+    enum Type {
+        CREATE_VERTEX_INDEX,
+        CREATE_EDGE_INDEX,
+        DROP_INDEX,
+        SHOW_INDEXES,
+        SHOW_INDEX
+    };
     Type type;
     bool unique = false;
     std::string index_name;

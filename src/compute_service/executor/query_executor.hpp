@@ -1,10 +1,10 @@
 #pragma once
 
 #include "compute_service/executor/row.hpp"
-#include "compute_service/parser/index_ddl_parser.hpp"
 #include "compute_service/logical_plan/logical_plan_builder.hpp"
 #include "compute_service/parser/ast.hpp"
 #include "compute_service/parser/cypher_parser.hpp"
+#include "compute_service/parser/index_ddl_parser.hpp"
 #include "compute_service/physical_plan/physical_planner.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"

@@ -113,8 +113,8 @@ public:
     // Index Scan
     void scanIndexEquality(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                            const std::function<bool(uint64_t)>& callback) override;
-    void scanIndexRange(GraphTxnHandle txn, const std::string& table,
-                        const std::optional<PropertyValue>& start, const std::optional<PropertyValue>& end,
+    void scanIndexRange(GraphTxnHandle txn, const std::string& table, const std::optional<PropertyValue>& start,
+                        const std::optional<PropertyValue>& end,
                         const std::function<bool(uint64_t)>& callback) override;
 
     // Index Cleanup

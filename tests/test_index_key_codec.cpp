@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
+#include "common/types/graph_types.hpp"
 #include "storage/kv/index_key_codec.hpp"
 #include "storage/meta/meta_codec.hpp"
-#include "common/types/graph_types.hpp"
 
 using namespace eugraph;
 
@@ -69,9 +69,9 @@ TEST(IndexKeyCodec, IndexKeyOrdering) {
     auto key3 = IndexKeyCodec::encodeIndexKey(int64_t(10), 2);
 
     // value first, then entity_id
-    EXPECT_LT(key1, key2);  // 10 < 20
-    EXPECT_LT(key1, key3);  // same value, id 1 < 2
-    EXPECT_LT(key3, key2);  // value 10 < 20 overrides id
+    EXPECT_LT(key1, key2); // 10 < 20
+    EXPECT_LT(key1, key3); // same value, id 1 < 2
+    EXPECT_LT(key3, key2); // value 10 < 20 overrides id
 }
 
 TEST(IndexKeyCodec, EqualityPrefix) {

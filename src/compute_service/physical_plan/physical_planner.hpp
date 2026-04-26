@@ -45,9 +45,9 @@ private:
     std::variant<PlanOperatorResult, std::string> planOperator(LogicalOperator& op, IAsyncGraphDataStore& store,
                                                                PlanContext& ctx, Schema input_schema);
 
-    std::optional<PlanOperatorResult> tryIndexScan(LabelScanOp& scan_op, cypher::BinaryOp& binop,
-                                                    LabelId label_id, const LabelDef& label_def,
-                                                    IAsyncGraphDataStore& store, PlanContext& ctx);
+    std::optional<PlanOperatorResult> tryIndexScan(LabelScanOp& scan_op, cypher::BinaryOp& binop, LabelId label_id,
+                                                   const LabelDef& label_def, IAsyncGraphDataStore& store,
+                                                   PlanContext& ctx);
 };
 
 } // namespace compute

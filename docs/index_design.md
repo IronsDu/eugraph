@@ -337,20 +337,65 @@ folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByIndexRange(
 
 ### 阶段 3：索引维护（写入路径）
 
-#### 3.1 Schema 访问（事务级绑定）
+#### 3.1 当前实现：计算层写入路径维护
+
+当前版本在计算层（`CreateNodePhysicalOp`）而非存储层维护索引条目。`PhysicalPlanner` 在构建 `CreateNodePhysicalOp` 时传入 `PlanContext::label_defs` 指针，`execute()` 在插入顶点后遍历索引定义写入索引条目。
+
+**文件**: `src/compute_service/physical_plan/physical_operator.hpp`
+
+`CreateNodePhysicalOp` 构造函数新增 `label_defs` 指针参数：
+
+```cpp
+CreateNodePhysicalOp(std::string variable, std::vector<LabelId> label_ids,
+                     std::vector<std::pair<LabelId, Properties>> label_props,
+                     IAsyncGraphDataStore& store, VertexId assigned_vid,
+                     std::unique_ptr<PhysicalOperator> child = nullptr,
+                     const std::unordered_map<LabelId, LabelDef>* label_defs = nullptr);
+```
+
+**文件**: `src/compute_service/physical_plan/physical_operator.cpp`
+
+`execute()` 在 `insertVertex` 成功后：
+
+```cpp
+if (ok && label_defs_) {
+    for (const auto& [label_id, props] : label_props_) {
+        auto def_it = label_defs_->find(label_id);
+        if (def_it == label_defs_->end()) continue;
+        for (const auto& idx : def_it->second.indexes) {
+            if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC) continue;
+            for (auto prop_id : idx.prop_ids) {
+                if (prop_id < props.size() && props[prop_id].has_value()) {
+                    co_await store_.insertIndexEntry(vidxTable(label_id, prop_id),
+                                                     props[prop_id].value(), assigned_vid_);
+                }
+            }
+        }
+    }
+}
+```
+
+**文件**: `src/compute_service/physical_plan/physical_planner.cpp`
+
+`PhysicalPlanner` 在构建 `CreateNodePhysicalOp` 时传入 `&ctx.label_defs`。
+
+#### 3.2 当前局限
+
+当前仅实现了 `insertVertex` 的索引维护，以下操作尚未维护索引条目：
+
+- `deleteVertex` / `deleteEdge`：删除时未清理索引条目
+- `putVertexProperty` / `putEdgeProperty`：更新属性时未删除旧索引条目 + 写入新索引条目
+- `deleteVertexProperty` / `deleteEdgeProperty`：删除属性时未清理索引条目
+- 唯一性约束检查（`checkUniqueConstraint`）未在写入路径中调用
+- Edge 写入路径（`CreateEdgePhysicalOp`）未维护边属性索引
+
+#### 3.3 未来目标：存储层统一维护（事务级 Schema 绑定）
+
+最终目标是下沉到存储层（`SyncGraphDataStore`），通过事务级 schema 快照统一维护所有写入路径的索引：
 
 每个事务在开始时获取 schema 快照，写入路径通过事务级别的 schema 引用访问索引信息，而非使用全局 schema 指针。
 
-**文件**: `src/storage/data/sync_graph_data_store.hpp`
-
-- 移除 `setSchema(const GraphSchema* schema)` 全局设置方式
-- 每个写操作接口需传入 schema 上下文（或通过 `GraphTxnHandle` 关联 schema 快照）
-
 全局 schema 通过 `std::shared_ptr<GraphSchema>` 管理，DDL Worker 更新索引状态后通过 `std::atomic_store` 原子替换。新事务启动时加载最新版本，运行中的事务持有旧版本的 shared_ptr 不受影响。
-
-#### 3.2 写入路径索引维护
-
-所有写入操作通过事务级 schema 快照检查 `txn_schema.labels[label_id].indexes`，根据索引 `state` 执行不同行为：
 
 **insertVertex/insertEdge** — 在写入属性后：
 - 遍历 `state == WRITE_ONLY || state == PUBLIC` 的索引
@@ -372,8 +417,6 @@ folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByIndexRange(
 **deleteVertexProperty/deleteEdgeProperty** — 在删除属性值时：
 - 遍历 `state == WRITE_ONLY || state == PUBLIC` 的索引（若该 prop_id 被索引）：
   - 读取旧值 → `deleteIndexEntry(table, old_value, entity_id)`
-
-**文件**: `src/storage/data/sync_graph_data_store.cpp`
 
 ---
 
@@ -452,7 +495,62 @@ folly::coro::Task<std::optional<IndexInfo>> getIndex(const std::string& name);
 5. 写入 `M|index:{name}` → `{label_id:u16}{prop_id:u16}{is_edge:u8}{state:u8}`（快速索引名查找）
 6. 在 `open()` 时扫描 `M|index:*` 加载索引元数据
 
-#### 4.3 DDL 任务与后台执行
+#### 4.3 当前实现：同步回填
+
+当前版本未实现 DdlWorker 后台线程，而是在 `QueryExecutor::handleIndexDdl()` 中同步执行回填。用户执行 `CREATE INDEX` 时，在当前请求内完成所有工作后返回。
+
+**文件**: `src/compute_service/executor/query_executor.cpp`
+
+##### CREATE INDEX 同步执行流程
+
+```
+handleIndexDdl(CREATE_VERTEX_INDEX):
+  1. 参数校验：label 存在性、property 存在性
+  2. 创建索引元数据（state=WRITE_ONLY）
+  3. 创建索引存储表（WT 表）
+  4. 同步回填：
+     a. 开启事务
+     b. scanVerticesByLabel(label_id) 扫描该 label 下所有顶点
+     c. 对每个顶点：getVertexProperties → 若属性有值 → insertIndexEntry
+     d. 提交事务
+  5. 更新索引状态为 PUBLIC
+  6. 返回"Index created: {name}"
+```
+
+回填代码：
+
+```cpp
+GraphTxnHandle txn = co_await async_data_.beginTran();
+async_data_.setTransaction(txn);
+
+auto gen = async_data_.scanVerticesByLabel(label_def->id);
+while (auto batch = co_await gen.next()) {
+    for (auto vid : *batch) {
+        auto props = co_await async_data_.getVertexProperties(vid, label_def->id);
+        if (props.has_value() && prop_id < props->size() && (*props)[prop_id].has_value()) {
+            co_await async_data_.insertIndexEntry(table, (*props)[prop_id].value(), vid);
+        }
+    }
+}
+
+co_await async_data_.commitTran(txn);
+```
+
+##### DROP INDEX 同步执行流程
+
+```
+handleIndexDdl(DROP_INDEX):
+  1. 删除索引元数据（从 LabelDef.indexes 移除 + 删除 M|index:{name}）
+  2. 返回"Index dropped: {name}"
+```
+
+注意：当前 DROP INDEX 未清理已有索引条目（无 `dropAllIndexEntries` 调用），也未物理删除 WT 索引表。
+
+##### SHOW INDEXES
+
+直接查询 `async_meta_.listIndexes()` 返回所有索引信息（含状态）。
+
+#### 4.4 未来目标：DdlWorker 后台异步执行
 
 **新文件**: `src/storage/ddl/ddl_worker.hpp`, `src/storage/ddl/ddl_worker.cpp`
 
@@ -526,12 +624,12 @@ executeDropIndex(task):
   4. 将索引表名记录到"待删除列表"（持久化到 meta store）
   5. 不立即物理删表（可能仍有运行中事务持有旧 schema 引用该索引）
 
-重启时清理（参见 4.4 节）:
+重启时清理（参见 4.5 节）:
   - 扫描待删除列表，物理删除 WT 索引表
   - 从待删除列表中移除已删除的表
 ```
 
-#### 4.4 服务器重启恢复
+#### 4.5 未来目标：服务器重启恢复
 
 启动时自动恢复未完成的 DDL 任务：
 
@@ -552,15 +650,21 @@ executeDropIndex(task):
 - **清理**（DELETE_ONLY）：删除操作天然幂等，删除不存在的条目直接跳过
 - **ERROR**：不自动重试，用户看到后需先 `DROP INDEX` 修复数据，再重新 `CREATE INDEX`
 
-#### 4.5 QueryExecutor 集成
+#### 4.6 QueryExecutor 集成
 
 **文件**: `src/compute_service/executor/query_executor.cpp`
 
 在 `executeAsync()` 中，在 Cypher 解析前调用 `IndexDdlParser::tryParse()`：
-- 若匹配到 `CREATE INDEX` → 参数校验 + 写入元数据（state=WRITE_ONLY）+ 创建存储表 + 提交 DdlTask → 立即返回"索引创建中"
-- 若匹配到 `DROP INDEX` → 校验存在性 + 更新 state=DELETE_ONLY + 提交 DdlTask → 立即返回"索引删除中"
+
+**当前实现**：
+- 若匹配到 `CREATE INDEX` → 参数校验 + 写入元数据（WRITE_ONLY）+ 创建存储表 + 同步回填已有数据 + 设为 PUBLIC → 返回"Index created"
+- 若匹配到 `DROP INDEX` → 校验存在性 + 删除元数据 → 返回"Index dropped"
 - 若匹配到 `SHOW INDEXES` / `SHOW INDEX` → 查询元数据，返回索引信息（含状态）
 - 若不匹配 → 走原有 Cypher 解析流程
+
+**未来目标（DdlWorker 版本）**：
+- 若匹配到 `CREATE INDEX` → 参数校验 + 写入元数据（state=WRITE_ONLY）+ 创建存储表 + 提交 DdlTask → 立即返回"索引创建中"
+- 若匹配到 `DROP INDEX` → 校验存在性 + 更新 state=DELETE_ONLY + 提交 DdlTask → 立即返回"索引删除中"
 
 ---
 
@@ -722,64 +826,79 @@ service EuGraphService {
 
 ---
 
-## 三、实现顺序（依赖关系）
+## 三、实现顺序与当前进度
 
 ```
 阶段 1（类型/Schema）→ 阶段 2（存储操作）→ 阶段 3（索引维护）
                                          ↘
-阶段 4（DDL 解析 + DdlWorker）→ 阶段 5（查询优化）→ 阶段 6（Thrift RPC）
-阶段 7（测试）与各阶段并行
+阶段 4（DDL 解析 + 回填）→ 阶段 5（查询优化）→ 阶段 6（Thrift RPC）
+测试与各阶段并行
 ```
 
-建议按以下顺序逐步实现：
-1. 阶段 1 + 阶段 2.1（IndexKeyCodec）+ 阶段 7.1（编码测试）
-2. 阶段 2.2-2.4（存储接口）+ 阶段 3（写入路径维护）+ 阶段 7.3（存储测试）
-3. 阶段 4.1-4.3（DDL 解析 + DdlWorker + 回填/清理）+ 阶段 7.2 + 7.5 + 7.6（DDL 测试 + 恢复测试）
-4. 阶段 5（查询优化）+ 阶段 7.4（E2E 测试）
-5. 阶段 6（Thrift RPC）
+### 已完成
+- 阶段 1：类型与 Schema 扩展（IndexState、IndexDef.state、EdgeLabelDef.indexes）
+- 阶段 2：索引键编码（IndexKeyCodec）+ 存储接口（ISyncGraphDataStore 索引方法）+ Async 包装
+- 阶段 3（简化版）：计算层 insertVertex 索引维护（CreateNodePhysicalOp）
+- 阶段 4（简化版）：DDL 解析（IndexDdlParser）+ 同步回填 + QueryExecutor DDL 路由
+- 阶段 5：IndexScan 物理算子 + 物理计划器索引优化
+- 测试：274 个测试全部通过（含 15 个索引 E2E 测试）
+
+### 待完成
+- 阶段 3（完整版）：存储层写入路径统一维护（deleteVertex、putVertexProperty 等的索引维护）
+- 阶段 4（完整版）：DdlWorker 后台异步执行 + 崩溃恢复 + 延迟物理删表
+- 阶段 6：Thrift RPC 接口
+- 测试：DDL 异步执行测试、崩溃恢复测试
 
 ---
 
 ## 四、文件清单
 
-### 新建文件
+### 已实现的新建文件
 | 文件 | 用途 |
 |------|------|
 | `src/storage/kv/index_key_codec.hpp` | 索引键编码接口 |
 | `src/storage/kv/index_key_codec.cpp` | 索引键编码实现 |
-| `src/storage/ddl/ddl_worker.hpp` | DDL 后台执行器接口 |
-| `src/storage/ddl/ddl_worker.cpp` | DDL 后台执行器实现 |
 | `src/compute_service/parser/index_ddl_parser.hpp` | DDL 解析器接口 |
 | `src/compute_service/parser/index_ddl_parser.cpp` | DDL 解析器实现 |
 | `tests/test_index_key_codec.cpp` | 编码单元测试 |
-| `tests/test_index_ddl_parser.cpp` | DDL 解析测试 |
 | `tests/test_index_store.cpp` | 索引存储集成测试 |
-| `tests/test_index_query.cpp` | 端到端查询测试 |
+| `tests/test_index_e2e.cpp` | 端到端测试（含 DDL 路由、IndexScan、回填验证） |
+
+### 待实现的新建文件
+| 文件 | 用途 |
+|------|------|
+| `src/storage/ddl/ddl_worker.hpp` | DDL 后台执行器接口 |
+| `src/storage/ddl/ddl_worker.cpp` | DDL 后台执行器实现 |
+| `tests/test_index_ddl_parser.cpp` | DDL 解析测试（当前在 test_index_e2e.cpp 中） |
 | `tests/test_index_ddl.cpp` | DDL 异步执行测试 |
 | `tests/test_index_recovery.cpp` | 崩溃恢复测试 |
 
-### 修改文件
+### 已修改文件
 | 文件 | 修改内容 |
 |------|----------|
 | `src/common/types/graph_types.hpp` | IndexDef 增加 IndexState state 字段；EdgeLabelDef 添加 indexes 字段 |
 | `src/common/types/constants.hpp` | 添加 vidxTable/eidxTable 辅助函数 |
-| `src/storage/graph_schema.hpp` | 添加索引查找辅助方法 |
 | `src/storage/meta/meta_codec.cpp` | 序列化/反序列化 IndexDef（含 state） |
 | `src/storage/data/i_sync_graph_data_store.hpp` | 添加索引相关 virtual 方法 |
-| `src/storage/data/sync_graph_data_store.hpp` | 添加索引方法声明 + setSchema |
-| `src/storage/data/sync_graph_data_store.cpp` | 实现索引方法 + 写入路径按 state 维护索引 |
+| `src/storage/data/sync_graph_data_store.hpp` | 添加索引方法声明 |
+| `src/storage/data/sync_graph_data_store.cpp` | 实现索引方法（createIndex/insertIndexEntry/scanIndex* 等） |
 | `src/storage/data/i_async_graph_data_store.hpp` | 添加 async 索引方法 |
 | `src/storage/data/async_graph_data_store.hpp` | 实现 async 索引方法 |
 | `src/storage/meta/i_async_graph_meta_store.hpp` | 添加索引元数据方法 |
 | `src/storage/meta/async_graph_meta_store.hpp` | 添加索引元数据方法声明 |
 | `src/storage/meta/async_graph_meta_store.cpp` | 实现索引元数据 CRUD + 状态更新 + 加载 |
-| `src/compute_service/physical_plan/physical_operator.hpp` | 添加 IndexScanPhysicalOp |
-| `src/compute_service/physical_plan/physical_operator.cpp` | 实现 IndexScanPhysicalOp::execute() |
-| `src/compute_service/physical_plan/physical_planner.cpp` | 索引感知优化逻辑（仅 PUBLIC 索引） |
-| `src/compute_service/executor/query_executor.cpp` | DDL 预解析与路由 |
+| `src/compute_service/physical_plan/physical_operator.hpp` | 添加 IndexScanPhysicalOp + CreateNodePhysicalOp 增加 label_defs |
+| `src/compute_service/physical_plan/physical_operator.cpp` | 实现 IndexScanPhysicalOp::execute() + CreateNodePhysicalOp 写入索引条目 |
+| `src/compute_service/physical_plan/physical_planner.cpp` | 索引感知优化逻辑 + 传入 label_defs 到 CreateNodePhysicalOp |
+| `src/compute_service/executor/query_executor.cpp` | DDL 预解析与路由 + 同步回填 |
+| `CMakeLists.txt` | 添加新源文件和测试目标 |
+
+### 待修改文件
+| 文件 | 修改内容 |
+|------|----------|
+| `src/storage/data/sync_graph_data_store.cpp` | 写入路径按 state 统一维护索引（deleteVertex/putVertexProperty 等） |
 | `src/server/eugraph_handler.hpp` | 添加索引 RPC 方法 |
 | `src/server/eugraph_handler.cpp` | 实现索引 RPC 方法 |
-| `CMakeLists.txt` | 添加新源文件和测试目标 |
 
 ---
 
@@ -787,10 +906,10 @@ service EuGraphService {
 
 1. **编译**：`cmake --build build` 确保所有新文件编译通过
 2. **单元测试**：
-   - `./build/test_index_key_codec` — 编码正确性和排序性
-   - `./build/test_index_ddl_parser` — DDL 解析覆盖
-3. **存储测试**：`./build/test_index_store` — 索引 CRUD 和扫描
-4. **DDL 测试**：`./build/test_index_ddl` — 异步 DDL 执行、状态转换
-5. **恢复测试**：`./build/test_index_recovery` — 崩溃恢复
-6. **E2E 测试**：`./build/test_index_query` — 通过 Cypher 使用索引查询
-7. **现有测试回归**：确保所有现有测试不受影响
+   - `./build/debug/index_codec_tests` — 编码正确性和排序性
+3. **存储测试**：`./build/debug/index_store_tests` — 索引 CRUD 和扫描
+4. **E2E 测试**：`./build/debug/index_e2e_tests` — DDL 路由、IndexScan、回填验证（15 个测试）
+5. **全量测试**：`cd build/debug && ctest` — 274 个测试全部通过
+6. **待实现**：
+   - `./build/test_index_ddl` — 异步 DDL 执行、状态转换
+   - `./build/test_index_recovery` — 崩溃恢复

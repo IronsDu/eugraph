@@ -125,7 +125,7 @@ std::optional<uint16_t> findPropId(const std::vector<PropertyDef>& props, const 
 } // namespace
 
 folly::coro::Task<bool> AsyncGraphMetaStore::createVertexIndex(const std::string& name, const std::string& label_name,
-                                                                const std::string& prop_name, bool unique) {
+                                                               const std::string& prop_name, bool unique) {
     if (schema_.findIndexByName(name).has_value()) {
         spdlog::error("Index '{}' already exists", name);
         co_return false;
@@ -174,8 +174,9 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createVertexIndex(const std::string
     co_return true;
 }
 
-folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& name, const std::string& edge_label_name,
-                                                              const std::string& prop_name, bool unique) {
+folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& name,
+                                                             const std::string& edge_label_name,
+                                                             const std::string& prop_name, bool unique) {
     if (schema_.findIndexByName(name).has_value()) {
         spdlog::error("Index '{}' already exists", name);
         co_return false;
@@ -319,7 +320,8 @@ folly::coro::Task<std::vector<IAsyncGraphMetaStore::IndexInfo>> AsyncGraphMetaSt
     co_return result;
 }
 
-folly::coro::Task<std::optional<IAsyncGraphMetaStore::IndexInfo>> AsyncGraphMetaStore::getIndex(const std::string& name) {
+folly::coro::Task<std::optional<IAsyncGraphMetaStore::IndexInfo>>
+AsyncGraphMetaStore::getIndex(const std::string& name) {
     auto all = co_await listIndexes();
     for (auto& info : all) {
         if (info.name == name)

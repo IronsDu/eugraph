@@ -45,9 +45,9 @@ public:
 
     // Index management
     folly::coro::Task<bool> createVertexIndex(const std::string& name, const std::string& label_name,
-                                               const std::string& prop_name, bool unique) override;
+                                              const std::string& prop_name, bool unique) override;
     folly::coro::Task<bool> createEdgeIndex(const std::string& name, const std::string& edge_label_name,
-                                             const std::string& prop_name, bool unique) override;
+                                            const std::string& prop_name, bool unique) override;
     folly::coro::Task<bool> updateIndexState(const std::string& name, IndexState new_state) override;
     folly::coro::Task<bool> dropIndex(const std::string& name) override;
     folly::coro::Task<std::vector<IAsyncGraphMetaStore::IndexInfo>> listIndexes() override;

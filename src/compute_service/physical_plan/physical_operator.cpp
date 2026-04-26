@@ -250,9 +250,11 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
     if (ok && label_defs_) {
         for (const auto& [label_id, props] : label_props_) {
             auto def_it = label_defs_->find(label_id);
-            if (def_it == label_defs_->end()) continue;
+            if (def_it == label_defs_->end())
+                continue;
             for (const auto& idx : def_it->second.indexes) {
-                if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC) continue;
+                if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
+                    continue;
                 for (auto prop_id : idx.prop_ids) {
                     if (prop_id < props.size() && props[prop_id].has_value()) {
                         auto table = vidxTable(label_id, prop_id);

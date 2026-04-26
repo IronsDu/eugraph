@@ -25,7 +25,6 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
 
     spdlog::info("{} 11111111", __FUNCTION__);
     auto inner = folly::coro::co_invoke([this, &cypher_query, &result]() -> folly::coro::Task<void> {
-
         spdlog::info("{} 222222222", __FUNCTION__);
 
         // 0. Try index DDL
@@ -157,7 +156,8 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             co_return;
         }
 
-        bool ok = co_await async_meta_.createVertexIndex(stmt.index_name, stmt.label_name, stmt.property_name, stmt.unique);
+        bool ok =
+            co_await async_meta_.createVertexIndex(stmt.index_name, stmt.label_name, stmt.property_name, stmt.unique);
         if (!ok) {
             result.error = "Failed to create index (duplicate name?)";
             co_return;
@@ -200,7 +200,8 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         result.rows.push_back(std::move(row));
 
     } else if (stmt.type == IndexDdlStatement::CREATE_EDGE_INDEX) {
-        bool ok = co_await async_meta_.createEdgeIndex(stmt.index_name, stmt.label_name, stmt.property_name, stmt.unique);
+        bool ok =
+            co_await async_meta_.createEdgeIndex(stmt.index_name, stmt.label_name, stmt.property_name, stmt.unique);
         if (!ok) {
             result.error = "Failed to create edge index";
             co_return;
@@ -233,10 +234,18 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             row.push_back(idx.unique ? std::string("true") : std::string("false"));
             std::string state_str;
             switch (idx.state) {
-            case IndexState::WRITE_ONLY: state_str = "WRITE_ONLY"; break;
-            case IndexState::PUBLIC: state_str = "PUBLIC"; break;
-            case IndexState::DELETE_ONLY: state_str = "DELETE_ONLY"; break;
-            default: state_str = "ERROR"; break;
+            case IndexState::WRITE_ONLY:
+                state_str = "WRITE_ONLY";
+                break;
+            case IndexState::PUBLIC:
+                state_str = "PUBLIC";
+                break;
+            case IndexState::DELETE_ONLY:
+                state_str = "DELETE_ONLY";
+                break;
+            default:
+                state_str = "ERROR";
+                break;
             }
             row.push_back(std::move(state_str));
             result.rows.push_back(std::move(row));

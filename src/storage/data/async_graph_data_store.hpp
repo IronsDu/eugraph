@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/types/graph_types.hpp"
 #include "common/types/constants.hpp"
+#include "common/types/graph_types.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
 #include "storage/io_scheduler.hpp"
@@ -171,17 +171,15 @@ public:
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,
                                              uint64_t entity_id) override {
-        auto ok = co_await io_->dispatch([this, &table, &value, entity_id]() {
-            return store_->insertIndexEntry(table, value, entity_id);
-        });
+        auto ok = co_await io_->dispatch(
+            [this, &table, &value, entity_id]() { return store_->insertIndexEntry(table, value, entity_id); });
         co_return ok;
     }
 
     folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
                                              uint64_t entity_id) override {
-        auto ok = co_await io_->dispatch([this, &table, &value, entity_id]() {
-            return store_->deleteIndexEntry(table, value, entity_id);
-        });
+        auto ok = co_await io_->dispatch(
+            [this, &table, &value, entity_id]() { return store_->deleteIndexEntry(table, value, entity_id); });
         co_return ok;
     }
 

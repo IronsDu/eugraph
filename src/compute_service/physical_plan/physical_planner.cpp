@@ -229,9 +229,9 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
                     }
                 }
 
-                auto result = std::make_unique<CreateNodePhysicalOp>(
-                    ptr->variable, std::move(label_ids), std::move(label_props), store, vid, std::move(child_op),
-                    &ctx.label_defs);
+                auto result =
+                    std::make_unique<CreateNodePhysicalOp>(ptr->variable, std::move(label_ids), std::move(label_props),
+                                                           store, vid, std::move(child_op), &ctx.label_defs);
 
                 Schema output_schema;
                 if (!ptr->variable.empty()) {
@@ -298,10 +298,9 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
         op);
 }
 
-std::optional<PlanOperatorResult>
-PhysicalPlanner::tryIndexScan(LabelScanOp& scan_op, cypher::BinaryOp& binop,
-                               LabelId label_id, const LabelDef& label_def,
-                               IAsyncGraphDataStore& store, PlanContext& ctx) {
+std::optional<PlanOperatorResult> PhysicalPlanner::tryIndexScan(LabelScanOp& scan_op, cypher::BinaryOp& binop,
+                                                                LabelId label_id, const LabelDef& label_def,
+                                                                IAsyncGraphDataStore& store, PlanContext& ctx) {
     // Check pattern: PropertyAccess(Variable, prop) op Literal
     if (!std::holds_alternative<std::unique_ptr<cypher::PropertyAccess>>(binop.left) ||
         !std::holds_alternative<std::unique_ptr<cypher::Literal>>(binop.right)) {
@@ -337,26 +336,17 @@ PhysicalPlanner::tryIndexScan(LabelScanOp& scan_op, cypher::BinaryOp& binop,
             std::unique_ptr<IndexScanPhysicalOp> result;
 
             if (binop.op == cypher::BinaryOperator::EQ) {
-                result = std::make_unique<IndexScanPhysicalOp>(
-                    scan_op.variable, label_id, prop_def.id,
-                    ScanMode::EQUALITY,
-                    std::move(search_val), std::nullopt,
-                    store, ctx.label_defs);
-            } else if (binop.op == cypher::BinaryOperator::GT ||
-                       binop.op == cypher::BinaryOperator::GTE) {
-                result = std::make_unique<IndexScanPhysicalOp>(
-                    scan_op.variable, label_id, prop_def.id,
-                    ScanMode::RANGE,
-                    std::move(search_val), std::nullopt,
-                    store, ctx.label_defs);
-            } else if (binop.op == cypher::BinaryOperator::LT ||
-                       binop.op == cypher::BinaryOperator::LTE) {
-                result = std::make_unique<IndexScanPhysicalOp>(
-                    scan_op.variable, label_id, prop_def.id,
-                    ScanMode::RANGE,
-                    PropertyValue{std::monostate{}},
-                    std::move(search_val),
-                    store, ctx.label_defs);
+                result =
+                    std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, prop_def.id, ScanMode::EQUALITY,
+                                                          std::move(search_val), std::nullopt, store, ctx.label_defs);
+            } else if (binop.op == cypher::BinaryOperator::GT || binop.op == cypher::BinaryOperator::GTE) {
+                result =
+                    std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, prop_def.id, ScanMode::RANGE,
+                                                          std::move(search_val), std::nullopt, store, ctx.label_defs);
+            } else if (binop.op == cypher::BinaryOperator::LT || binop.op == cypher::BinaryOperator::LTE) {
+                result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, prop_def.id, ScanMode::RANGE,
+                                                               PropertyValue{std::monostate{}}, std::move(search_val),
+                                                               store, ctx.label_defs);
             } else {
                 return std::nullopt;
             }

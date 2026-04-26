@@ -57,9 +57,9 @@ public:
     };
 
     virtual folly::coro::Task<bool> createVertexIndex(const std::string& name, const std::string& label_name,
-                                                       const std::string& prop_name, bool unique) = 0;
+                                                      const std::string& prop_name, bool unique) = 0;
     virtual folly::coro::Task<bool> createEdgeIndex(const std::string& name, const std::string& edge_label_name,
-                                                     const std::string& prop_name, bool unique) = 0;
+                                                    const std::string& prop_name, bool unique) = 0;
     virtual folly::coro::Task<bool> updateIndexState(const std::string& name, IndexState new_state) = 0;
     virtual folly::coro::Task<bool> dropIndex(const std::string& name) = 0;
     virtual folly::coro::Task<std::vector<IndexInfo>> listIndexes() = 0;

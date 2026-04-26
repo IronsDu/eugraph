@@ -1,13 +1,13 @@
 #include <gtest/gtest.h>
 
 #include "common/types/constants.hpp"
-#include "storage/data/sync_graph_data_store.hpp"
-#include "storage/data/async_graph_data_store.hpp"
-#include "storage/meta/sync_graph_meta_store.hpp"
-#include "storage/meta/async_graph_meta_store.hpp"
-#include "storage/io_scheduler.hpp"
 #include "compute_service/executor/query_executor.hpp"
 #include "compute_service/parser/index_ddl_parser.hpp"
+#include "storage/data/async_graph_data_store.hpp"
+#include "storage/data/sync_graph_data_store.hpp"
+#include "storage/io_scheduler.hpp"
+#include "storage/meta/async_graph_meta_store.hpp"
+#include "storage/meta/sync_graph_meta_store.hpp"
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
@@ -64,8 +64,12 @@ class IndexE2ETest : public ::testing::Test {
 protected:
     TestEnv env;
 
-    void SetUp() override { env.init(testing::UnitTest::GetInstance()->current_test_info()->name()); }
-    void TearDown() override { env.shutdown(); }
+    void SetUp() override {
+        env.init(testing::UnitTest::GetInstance()->current_test_info()->name());
+    }
+    void TearDown() override {
+        env.shutdown();
+    }
 };
 
 // Helper: run query and collect all rows
@@ -75,16 +79,14 @@ static std::vector<Row> runQuery(QueryExecutor& executor, const std::string& que
 }
 
 // Helper: create label with properties via meta + data stores
-static void createLabel(TestEnv& env, const std::string& name,
-                        const std::vector<PropertyDef>& props) {
+static void createLabel(TestEnv& env, const std::string& name, const std::vector<PropertyDef>& props) {
     auto label_id = blockingWait(env.async_meta->createLabel(name, props));
     ASSERT_NE(label_id, INVALID_LABEL_ID);
     ASSERT_TRUE(blockingWait(env.async_data->createLabel(label_id)));
 }
 
 // Helper: manually insert vertices with properties and index entries
-static void insertVertexWithIndex(TestEnv& env, LabelId label_id, VertexId vid,
-                                  const Properties& props,
+static void insertVertexWithIndex(TestEnv& env, LabelId label_id, VertexId vid, const Properties& props,
                                   const std::vector<LabelDef::IndexDef>& indexes) {
     auto txn = env.data_store->beginTransaction();
     std::pair<LabelId, Properties> lp{label_id, props};
@@ -105,10 +107,11 @@ static void insertVertexWithIndex(TestEnv& env, LabelId label_id, VertexId vid,
 
 TEST_F(IndexE2ETest, QueryByIndexEquality) {
     // Create label "Person" with properties name, age
-    createLabel(env, "Person", {
-        {0, "name", PropertyType::STRING, false, std::nullopt},
-        {0, "age", PropertyType::INT64, false, std::nullopt},
-    });
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
 
     // Get the label definition
     auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
@@ -147,10 +150,11 @@ TEST_F(IndexE2ETest, QueryByIndexEquality) {
 
 TEST_F(IndexE2ETest, QueryWithoutIndexUsesLabelScan) {
     // Create label without any index
-    createLabel(env, "Person", {
-        {0, "name", PropertyType::STRING, false, std::nullopt},
-        {0, "age", PropertyType::INT64, false, std::nullopt},
-    });
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
 
     auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
     ASSERT_TRUE(label_def.has_value());
@@ -210,10 +214,11 @@ TEST_F(IndexE2ETest, DdlParserNonIndexQuery) {
 }
 
 TEST_F(IndexE2ETest, MetaStoreIndexCRUD) {
-    createLabel(env, "Person", {
-        {0, "name", PropertyType::STRING, false, std::nullopt},
-        {0, "age", PropertyType::INT64, false, std::nullopt},
-    });
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
 
     // Create index
     ASSERT_TRUE(blockingWait(env.async_meta->createVertexIndex("idx_age", "Person", "age", false)));
@@ -238,10 +243,11 @@ TEST_F(IndexE2ETest, MetaStoreIndexCRUD) {
 }
 
 TEST_F(IndexE2ETest, IndexRangeQuery) {
-    createLabel(env, "Person", {
-        {0, "name", PropertyType::STRING, false, std::nullopt},
-        {0, "age", PropertyType::INT64, false, std::nullopt},
-    });
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
 
     auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
     ASSERT_TRUE(label_def.has_value());
@@ -280,14 +286,14 @@ TEST_F(IndexE2ETest, IndexRangeQuery) {
 // ==================== DDL via QueryExecutor ====================
 
 TEST_F(IndexE2ETest, DdlCreateIndexViaExecutor) {
-    createLabel(env, "Person", {
-        {0, "name", PropertyType::STRING, false, std::nullopt},
-        {0, "age", PropertyType::INT64, false, std::nullopt},
-    });
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
-    auto result = blockingWait(executor.executeAsync(
-        "CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+    auto result = blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
 
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
@@ -302,10 +308,11 @@ TEST_F(IndexE2ETest, DdlCreateIndexViaExecutor) {
 }
 
 TEST_F(IndexE2ETest, DdlShowIndexesViaExecutor) {
-    createLabel(env, "Person", {
-        {0, "name", PropertyType::STRING, false, std::nullopt},
-        {0, "age", PropertyType::INT64, false, std::nullopt},
-    });
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
 
@@ -330,10 +337,11 @@ TEST_F(IndexE2ETest, DdlShowIndexesViaExecutor) {
 }
 
 TEST_F(IndexE2ETest, DdlDropIndexViaExecutor) {
-    createLabel(env, "Person", {
-        {0, "name", PropertyType::STRING, false, std::nullopt},
-        {0, "age", PropertyType::INT64, false, std::nullopt},
-    });
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
     blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
@@ -350,18 +358,18 @@ TEST_F(IndexE2ETest, DdlDropIndexViaExecutor) {
 
 TEST_F(IndexE2ETest, DdlCreateIndexLabelNotFound) {
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
-    auto result = blockingWait(executor.executeAsync(
-        "CREATE INDEX idx_age FOR (n:NoSuchLabel) ON (n.age)"));
+    auto result = blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:NoSuchLabel) ON (n.age)"));
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("Label not found"), std::string::npos);
 }
 
 TEST_F(IndexE2ETest, EndToEndCreateIndexAndQuery) {
     // Full flow: create label → insert data → create index → query via index
-    createLabel(env, "Person", {
-        {0, "name", PropertyType::STRING, false, std::nullopt},
-        {0, "age", PropertyType::INT64, false, std::nullopt},
-    });
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
 
@@ -375,8 +383,7 @@ TEST_F(IndexE2ETest, EndToEndCreateIndexAndQuery) {
     ASSERT_EQ(rows.size(), 1u);
 
     // Create index (data already exists — backfill should populate index)
-    auto ddl_result = blockingWait(executor.executeAsync(
-        "CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+    auto ddl_result = blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
     ASSERT_TRUE(ddl_result.error.empty()) << ddl_result.error;
 
     // Query via IndexScan should now return correct results after backfill
