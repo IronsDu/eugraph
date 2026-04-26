@@ -53,6 +53,7 @@ file(MAKE_DIRECTORY "${WT_INSTALL_DIR}/include")
 add_library(eugraph_lib STATIC
     src/storage/kv/key_codec.cpp
     src/storage/kv/value_codec.cpp
+    src/storage/kv/index_key_codec.cpp
     src/storage/wt_store_base.cpp
     src/storage/data/sync_graph_data_store.cpp
     src/storage/meta/sync_graph_meta_store.cpp
@@ -89,6 +90,7 @@ set(ANTLR_GENERATED_SOURCES
 add_library(eugraph_compute STATIC
     ${ANTLR_GENERATED_SOURCES}
     src/compute_service/parser/cypher_parser.cpp
+    src/compute_service/parser/index_ddl_parser.cpp
 )
 
 target_include_directories(eugraph_compute PUBLIC
@@ -382,4 +384,89 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(rpc_integration_tests wiredtiger_ext)
     gtest_add_tests(TARGET rpc_integration_tests)
+
+    # Restart persistence tests (data survives store close/reopen)
+    add_executable(restart_persistence_tests
+        tests/test_restart_persistence.cpp
+    )
+
+    target_include_directories(restart_persistence_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(restart_persistence_tests PRIVATE
+        eugraph_query_engine
+        eugraph_metadata
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        dl
+    )
+
+    add_dependencies(restart_persistence_tests wiredtiger_ext)
+    gtest_add_tests(TARGET restart_persistence_tests)
+
+    # Index key codec + metadata codec tests
+    add_executable(index_codec_tests
+        tests/test_index_key_codec.cpp
+    )
+
+    target_include_directories(index_codec_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(index_codec_tests PRIVATE
+        eugraph_lib
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(index_codec_tests wiredtiger_ext)
+    gtest_add_tests(TARGET index_codec_tests)
+
+    # Index store integration tests
+    add_executable(index_store_tests
+        tests/test_index_store.cpp
+    )
+
+    target_include_directories(index_store_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(index_store_tests PRIVATE
+        eugraph_lib
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(index_store_tests wiredtiger_ext)
+    gtest_add_tests(TARGET index_store_tests)
+
+    # Index E2E tests (meta + data + query engine integration)
+    add_executable(index_e2e_tests
+        tests/test_index_e2e.cpp
+    )
+
+    target_include_directories(index_e2e_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(index_e2e_tests PRIVATE
+        eugraph_query_engine
+        eugraph_metadata
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(index_e2e_tests wiredtiger_ext)
+    gtest_add_tests(TARGET index_e2e_tests)
 endif()

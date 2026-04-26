@@ -55,6 +55,21 @@ public:
                                                  const PropertyValue* pk_value) = 0;
     virtual folly::coro::Task<bool> insertEdge(EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
                                                uint64_t seq, const Properties& props) = 0;
+
+    // Index Operations
+    virtual folly::coro::Task<bool> createIndex(const std::string& table_name) = 0;
+    virtual folly::coro::Task<bool> dropIndex(const std::string& table_name) = 0;
+    virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,
+                                                     uint64_t entity_id) = 0;
+    virtual folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
+                                                     uint64_t entity_id) = 0;
+
+    // Index Scan
+    virtual folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByIndex(LabelId label_id, uint16_t prop_id,
+                                                                                   const PropertyValue& value) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
+                             const std::optional<PropertyValue>& end) = 0;
 };
 
 } // namespace eugraph

@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <spdlog/spdlog.h>
 
+#include "storage/kv/index_key_codec.hpp"
+
 namespace eugraph {
 
 // ==================== WT Item Helpers (local) ====================
@@ -896,6 +898,142 @@ void EdgeTypeScanCursorImpl::next() {
         return;
     }
     readCurrent();
+}
+
+// ==================== Index DDL ====================
+
+bool SyncGraphDataStore::createIndex(const std::string& table_name) {
+    return ensureGlobalTable(defaultSession_, table_name.c_str());
+}
+
+bool SyncGraphDataStore::dropIndex(const std::string& table_name) {
+    std::string uri = table_name;
+    // ensureGlobalTable stores as "table:xxx", drop needs "table:xxx"
+    int ret = defaultSession_->drop(defaultSession_, uri.c_str(), nullptr);
+    if (ret != 0 && ret != ENOENT) {
+        spdlog::error("dropIndex: failed to drop {}: {}", uri, wiredtiger_strerror(ret));
+        return false;
+    }
+    return true;
+}
+
+// ==================== Index Entry Operations ====================
+
+bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) {
+    auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
+    return tablePut(defaultSession_, table, key, {});
+}
+
+bool SyncGraphDataStore::deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) {
+    auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
+    return tableDel(defaultSession_, table, key);
+}
+
+bool SyncGraphDataStore::checkUniqueConstraint(const std::string& table, const PropertyValue& value) {
+    auto prefix = IndexKeyCodec::encodeEqualityPrefix(value);
+    bool found = false;
+    tableScan(defaultSession_, table, prefix, [&](std::string_view key, std::string_view /*val*/) {
+        // Check that the key actually starts with our exact prefix (not a longer prefix match)
+        if (key.size() >= prefix.size()) {
+            found = true;
+            return false; // stop scanning
+        }
+        return true;
+    });
+    return !found; // true = constraint satisfied (no duplicate)
+}
+
+// ==================== Index Scan ====================
+
+void SyncGraphDataStore::scanIndexEquality(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
+                                           const std::function<bool(uint64_t)>& callback) {
+    auto prefix = IndexKeyCodec::encodeEqualityPrefix(value);
+    auto* session = getSession(txn);
+    tableScan(session, table, prefix, [&](std::string_view key, std::string_view /*val*/) {
+        auto entity_id = IndexKeyCodec::decodeEntityId(key);
+        return callback(entity_id);
+    });
+}
+
+void SyncGraphDataStore::scanIndexRange(GraphTxnHandle txn, const std::string& table,
+                                        const std::optional<PropertyValue>& start,
+                                        const std::optional<PropertyValue>& end,
+                                        const std::function<bool(uint64_t)>& callback) {
+    auto* session = getSession(txn);
+    WT_CURSOR* cursor = getCursor(session, table);
+    if (!cursor)
+        return;
+
+    std::string start_encoded;
+    if (start.has_value()) {
+        // Append max entity_id suffix so search_near skips past all entries
+        // with the exact start value (exclusive lower bound)
+        start_encoded = IndexKeyCodec::encodeSortableValue(*start);
+        start_encoded.append(8, '\xFF');
+    }
+
+    std::string end_encoded;
+    if (end.has_value())
+        end_encoded = IndexKeyCodec::encodeSortableValue(*end);
+
+    int ret;
+    if (!start_encoded.empty()) {
+        WT_ITEM item;
+        item.data = start_encoded.data();
+        item.size = start_encoded.size();
+        cursor->set_key(cursor, &item);
+        int cmp;
+        ret = cursor->search_near(cursor, &cmp);
+        if (ret != 0)
+            return;
+        // cmp < 0: returned key < search key → advance
+        // cmp == 0: exact match → also advance (exclusive lower bound)
+        if (cmp <= 0) {
+            ret = cursor->next(cursor);
+            if (ret != 0)
+                return;
+        }
+    } else {
+        ret = cursor->reset(cursor);
+        if (ret != 0)
+            return;
+        ret = cursor->next(cursor);
+        if (ret != 0)
+            return;
+    }
+
+    while (true) {
+        WT_ITEM key_item;
+        ret = cursor->get_key(cursor, &key_item);
+        if (ret != 0)
+            break;
+
+        std::string_view key(static_cast<const char*>(key_item.data), key_item.size);
+
+        // Check upper bound: compare sortable value part (strip 8-byte entity_id suffix)
+        if (!end_encoded.empty()) {
+            auto key_sortable = key.substr(0, key.size() - 8);
+            if (key_sortable >= end_encoded)
+                break;
+        }
+
+        auto entity_id = IndexKeyCodec::decodeEntityId(key);
+        if (!callback(entity_id))
+            break;
+
+        ret = cursor->next(cursor);
+        if (ret != 0)
+            break;
+    }
+}
+
+// ==================== Index Cleanup ====================
+
+void SyncGraphDataStore::dropAllIndexEntries(const std::string& table) {
+    tableScan(defaultSession_, table, {}, [&](std::string_view key, std::string_view /*val*/) {
+        tableDel(defaultSession_, table, key);
+        return true; // continue
+    });
 }
 
 } // namespace eugraph

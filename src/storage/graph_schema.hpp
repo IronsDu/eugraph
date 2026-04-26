@@ -60,6 +60,22 @@ struct GraphSchema {
             return getEdgeLabel(it->second);
         return std::nullopt;
     }
+
+    std::optional<LabelDef::IndexDef> findIndexByName(const std::string& index_name) const {
+        for (const auto& [_, label] : labels) {
+            for (const auto& idx : label.indexes) {
+                if (idx.name == index_name)
+                    return idx;
+            }
+        }
+        for (const auto& [_, elabel] : edge_labels) {
+            for (const auto& idx : elabel.indexes) {
+                if (idx.name == index_name)
+                    return idx;
+            }
+        }
+        return std::nullopt;
+    }
 };
 
 } // namespace eugraph

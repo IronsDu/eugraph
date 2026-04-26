@@ -1,0 +1,61 @@
+# EuGraph Shell 测试命令
+#
+# 启动方式（嵌入式模式，无需 server）：
+#   ./build/debug/eugraph-shell --data-dir /tmp/eugraph-test
+#
+# 启动后逐行复制下面的命令到 shell 中执行。
+# 冒号开头的是 shell 内置命令，其余为 Cypher 查询（以分号结尾）。
+
+# ===== 创建标签 =====
+
+:create-label Person name:string age:int64
+
+:create-edge-label KNOWS since:string
+
+:list-labels
+
+# ===== 插入数据 =====
+
+CREATE (n:Person {name: 'alice', age: 25});
+
+CREATE (n:Person {name: 'bob', age: 30});
+
+CREATE (n:Person {name: 'charlie', age: 35});
+
+CREATE (n:Person {name: 'david', age: 28});
+
+# ===== 查询 =====
+
+MATCH (n:Person) RETURN n;
+
+MATCH (n:Person) WHERE n.age = 30 RETURN n;
+
+MATCH (n:Person) WHERE n.age > 28 RETURN n;
+
+MATCH (n:Person) RETURN n LIMIT 2;
+
+MATCH (n) RETURN n;
+
+# ===== 索引 DDL =====
+
+CREATE INDEX idx_age FOR (n:Person) ON (n.age);
+
+SHOW INDEXES;
+
+# ===== 索引查询（走 IndexScan）=====
+
+MATCH (n:Person) WHERE n.age = 30 RETURN n;
+
+MATCH (n:Person) WHERE n.age > 28 RETURN n;
+
+# ===== 删除索引 =====
+
+DROP INDEX idx_age;
+
+SHOW INDEXES;
+
+# ===== 边标签 =====
+
+:list-edge-labels
+
+:exit

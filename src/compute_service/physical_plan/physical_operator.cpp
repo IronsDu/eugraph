@@ -1,4 +1,5 @@
 #include "compute_service/physical_plan/physical_operator.hpp"
+#include "common/types/constants.hpp"
 
 namespace eugraph {
 namespace compute {
@@ -36,7 +37,34 @@ folly::coro::AsyncGenerator<RowBatch> LabelScanPhysicalOp::execute() {
     while (auto batch = co_await gen.next()) {
         RowBatch output;
         for (VertexId vid : *batch) {
-            // Load properties for this vertex
+            auto props = co_await store_.getVertexProperties(vid, label_id_);
+            VertexValue vv;
+            vv.id = vid;
+            vv.labels = LabelIdSet{label_id_};
+            vv.properties = std::move(props);
+            Row row;
+            row.push_back(Value(std::move(vv)));
+            output.push_back(std::move(row));
+        }
+        if (!output.empty()) {
+            co_yield std::move(output);
+        }
+    }
+}
+
+// ==================== IndexScan ====================
+
+folly::coro::AsyncGenerator<RowBatch> IndexScanPhysicalOp::execute() {
+    folly::coro::AsyncGenerator<std::vector<VertexId>> gen;
+    if (mode_ == ScanMode::EQUALITY) {
+        gen = store_.scanVerticesByIndex(label_id_, prop_id_, search_value_);
+    } else {
+        gen = store_.scanVerticesByIndexRange(label_id_, prop_id_, search_value_, range_end_);
+    }
+
+    while (auto batch = co_await gen.next()) {
+        RowBatch output;
+        for (VertexId vid : *batch) {
             auto props = co_await store_.getVertexProperties(vid, label_id_);
             VertexValue vv;
             vv.id = vid;
@@ -218,6 +246,24 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
     bool ok = co_await store_.insertVertex(assigned_vid_, label_props_,
                                            nullptr // no primary key in Phase 1
     );
+
+    if (ok && label_defs_) {
+        for (const auto& [label_id, props] : label_props_) {
+            auto def_it = label_defs_->find(label_id);
+            if (def_it == label_defs_->end())
+                continue;
+            for (const auto& idx : def_it->second.indexes) {
+                if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
+                    continue;
+                for (auto prop_id : idx.prop_ids) {
+                    if (prop_id < props.size() && props[prop_id].has_value()) {
+                        auto table = vidxTable(label_id, prop_id);
+                        co_await store_.insertIndexEntry(table, props[prop_id].value(), assigned_vid_);
+                    }
+                }
+            }
+        }
+    }
 
     RowBatch output;
     if (ok) {

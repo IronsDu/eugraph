@@ -271,8 +271,10 @@ EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
         co_return resp;
     }
 
+    spdlog::info("{} 111111111", __FUNCTION__);
     co_await async_data_.createEdgeLabel(label_id);
 
+    spdlog::info("{} 222222222222", __FUNCTION__);
     resp->id() = label_id;
     resp->name() = *name;
     resp->directed() = true;
@@ -313,13 +315,17 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
     // the right thread picks it up.
     auto* ioEvb = folly::EventBaseManager::get()->getEventBase();
 
+    spdlog::info("{} 11111111", __FUNCTION__);
     auto result = co_await executor_.executeAsync(*query);
+    spdlog::info("{} 2222222222", __FUNCTION__);
 
     // Switch back to the specific IO thread that received this request.
     // co_withExecutor(ioEvb, noop) schedules on this EventBase via
     // EventBase::add(), which writes to its eventfd and wakes its epoll_wait.
     co_await folly::coro::co_withExecutor(ioEvb,
                                           folly::coro::co_invoke([]() -> folly::coro::Task<void> { co_return; }));
+
+    spdlog::info("{} 3333333333", __FUNCTION__);
     auto resp = std::make_unique<thrift::QueryResult>();
 
     if (!result.error.empty()) {

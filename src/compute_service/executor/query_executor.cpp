@@ -1,5 +1,8 @@
 #include "compute_service/executor/query_executor.hpp"
 
+#include "common/types/constants.hpp"
+#include "compute_service/parser/index_ddl_parser.hpp"
+
 #include <folly/coro/BlockingWait.h>
 
 #include <spdlog/spdlog.h>
@@ -20,7 +23,17 @@ ExecutionResult QueryExecutor::executeSync(const std::string& cypher_query) {
 folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string& cypher_query) {
     ExecutionResult result;
 
+    spdlog::info("{} 11111111", __FUNCTION__);
     auto inner = folly::coro::co_invoke([this, &cypher_query, &result]() -> folly::coro::Task<void> {
+        spdlog::info("{} 222222222", __FUNCTION__);
+
+        // 0. Try index DDL
+        auto ddl_stmt = IndexDdlParser::tryParse(cypher_query);
+        if (ddl_stmt.has_value()) {
+            co_await handleIndexDdl(*ddl_stmt, result);
+            co_return;
+        }
+
         // 1. Parse
         cypher::CypherQueryParser parser;
         auto parse_result = parser.parse(cypher_query);
@@ -45,6 +58,7 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         auto labels = co_await async_meta_.listLabels();
         auto edge_labels = co_await async_meta_.listEdgeLabels();
 
+        spdlog::info("{} 333333333", __FUNCTION__);
         std::unordered_map<std::string, LabelId> label_name_to_id;
         for (const auto& l : labels)
             label_name_to_id[l.name] = l.id;
@@ -57,6 +71,7 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         GraphTxnHandle txn = co_await async_data_.beginTran();
         async_data_.setTransaction(txn);
 
+        spdlog::info("{} 4444444444", __FUNCTION__);
         PlanContext ctx;
         ctx.label_name_to_id = std::move(label_name_to_id);
         ctx.edge_label_name_to_id = std::move(edge_label_name_to_id);
@@ -88,10 +103,12 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         }
 
         co_await async_data_.commitTran(txn);
+        spdlog::info("{} 55555555555", __FUNCTION__);
     });
 
     co_await folly::coro::co_withExecutor(compute_pool_.get(), std::move(inner));
 
+    spdlog::info("{} 66666666666666", __FUNCTION__);
     co_return result;
 }
 
@@ -116,6 +133,124 @@ void QueryExecutor::extractColumnsFromLogicalPlan(const LogicalOperator& op, Sch
             }
         },
         op);
+}
+
+folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result) {
+    if (stmt.type == IndexDdlStatement::CREATE_VERTEX_INDEX) {
+        auto label_def = co_await async_meta_.getLabelDef(stmt.label_name);
+        if (!label_def.has_value()) {
+            result.error = "Label not found: " + stmt.label_name;
+            co_return;
+        }
+        uint16_t prop_id = 0;
+        bool found = false;
+        for (const auto& p : label_def->properties) {
+            if (p.name == stmt.property_name) {
+                prop_id = p.id;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            result.error = "Property not found: " + stmt.property_name;
+            co_return;
+        }
+
+        bool ok =
+            co_await async_meta_.createVertexIndex(stmt.index_name, stmt.label_name, stmt.property_name, stmt.unique);
+        if (!ok) {
+            result.error = "Failed to create index (duplicate name?)";
+            co_return;
+        }
+
+        auto table = vidxTable(label_def->id, prop_id);
+        ok = co_await async_data_.createIndex(table);
+        if (!ok) {
+            result.error = "Failed to create index storage table";
+            co_return;
+        }
+
+        // Backfill: scan existing vertices and insert index entries
+        {
+            GraphTxnHandle txn = co_await async_data_.beginTran();
+            async_data_.setTransaction(txn);
+
+            auto gen = async_data_.scanVerticesByLabel(label_def->id);
+            while (auto batch = co_await gen.next()) {
+                for (auto vid : *batch) {
+                    auto props = co_await async_data_.getVertexProperties(vid, label_def->id);
+                    if (props.has_value() && prop_id < props->size() && (*props)[prop_id].has_value()) {
+                        co_await async_data_.insertIndexEntry(table, (*props)[prop_id].value(), vid);
+                    }
+                }
+            }
+
+            co_await async_data_.commitTran(txn);
+        }
+
+        ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::PUBLIC);
+        if (!ok) {
+            result.error = "Failed to set index state to PUBLIC";
+            co_return;
+        }
+
+        result.columns.push_back("result");
+        Row row;
+        row.push_back(std::string("Index created: " + stmt.index_name));
+        result.rows.push_back(std::move(row));
+
+    } else if (stmt.type == IndexDdlStatement::CREATE_EDGE_INDEX) {
+        bool ok =
+            co_await async_meta_.createEdgeIndex(stmt.index_name, stmt.label_name, stmt.property_name, stmt.unique);
+        if (!ok) {
+            result.error = "Failed to create edge index";
+            co_return;
+        }
+        result.columns.push_back("result");
+        Row row;
+        row.push_back(std::string("Edge index created: " + stmt.index_name));
+        result.rows.push_back(std::move(row));
+
+    } else if (stmt.type == IndexDdlStatement::DROP_INDEX) {
+        bool ok = co_await async_meta_.dropIndex(stmt.index_name);
+        if (!ok) {
+            result.error = "Failed to drop index: " + stmt.index_name;
+            co_return;
+        }
+        result.columns.push_back("result");
+        Row row;
+        row.push_back(std::string("Index dropped: " + stmt.index_name));
+        result.rows.push_back(std::move(row));
+
+    } else if (stmt.type == IndexDdlStatement::SHOW_INDEXES || stmt.type == IndexDdlStatement::SHOW_INDEX) {
+        auto indexes = co_await async_meta_.listIndexes();
+        result.columns = {"name", "label", "property", "unique", "state"};
+
+        for (const auto& idx : indexes) {
+            Row row;
+            row.push_back(std::string(idx.name));
+            row.push_back(std::string(idx.label_name));
+            row.push_back(std::string(idx.property_name));
+            row.push_back(idx.unique ? std::string("true") : std::string("false"));
+            std::string state_str;
+            switch (idx.state) {
+            case IndexState::WRITE_ONLY:
+                state_str = "WRITE_ONLY";
+                break;
+            case IndexState::PUBLIC:
+                state_str = "PUBLIC";
+                break;
+            case IndexState::DELETE_ONLY:
+                state_str = "DELETE_ONLY";
+                break;
+            default:
+                state_str = "ERROR";
+                break;
+            }
+            row.push_back(std::move(state_str));
+            result.rows.push_back(std::move(row));
+        }
+    }
 }
 
 } // namespace compute

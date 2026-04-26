@@ -36,6 +36,11 @@ public:
     static void encodePropertyValue(std::string& buf, const PropertyValue& value);
     static PropertyValue decodePropertyValue(std::string_view data, size_t& offset);
 
+    // ==================== IndexDef ====================
+
+    static void encodeIndexDef(std::string& buf, const LabelDef::IndexDef& idx);
+    static LabelDef::IndexDef decodeIndexDef(std::string_view data, size_t& offset);
+
 private:
     // ==================== PropertyDef ====================
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
@@ -154,6 +155,75 @@ public:
             return store_->insertEdge(txn_, eid, src_id, dst_id, label_id, seq, props);
         });
         co_return result;
+    }
+
+    // ==================== Index Operations ====================
+
+    folly::coro::Task<bool> createIndex(const std::string& table_name) override {
+        auto ok = co_await io_->dispatch([this, &table_name]() { return store_->createIndex(table_name); });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> dropIndex(const std::string& table_name) override {
+        auto ok = co_await io_->dispatch([this, &table_name]() { return store_->dropIndex(table_name); });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,
+                                             uint64_t entity_id) override {
+        auto ok = co_await io_->dispatch(
+            [this, &table, &value, entity_id]() { return store_->insertIndexEntry(table, value, entity_id); });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
+                                             uint64_t entity_id) override {
+        auto ok = co_await io_->dispatch(
+            [this, &table, &value, entity_id]() { return store_->deleteIndexEntry(table, value, entity_id); });
+        co_return ok;
+    }
+
+    // ==================== Index Scan ====================
+
+    folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByIndex(LabelId label_id, uint16_t prop_id,
+                                                                           const PropertyValue& value) override {
+        constexpr size_t BATCH = 1024;
+        std::string table = vidxTable(label_id, prop_id);
+        while (true) {
+            std::vector<VertexId> batch;
+            co_await io_->dispatchVoid([&]() {
+                store_->scanIndexEquality(txn_, table, value, [&](uint64_t entity_id) {
+                    batch.push_back(entity_id);
+                    return batch.size() < BATCH;
+                });
+            });
+            if (batch.empty())
+                co_return;
+            co_yield std::move(batch);
+            if (batch.size() < BATCH)
+                co_return;
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
+                             const std::optional<PropertyValue>& end) override {
+        constexpr size_t BATCH = 1024;
+        std::string table = vidxTable(label_id, prop_id);
+        while (true) {
+            std::vector<VertexId> batch;
+            co_await io_->dispatchVoid([&]() {
+                store_->scanIndexRange(txn_, table, start, end, [&](uint64_t entity_id) {
+                    batch.push_back(entity_id);
+                    return batch.size() < BATCH;
+                });
+            });
+            if (batch.empty())
+                co_return;
+            co_yield std::move(batch);
+            if (batch.size() < BATCH)
+                co_return;
+        }
     }
 
 private:

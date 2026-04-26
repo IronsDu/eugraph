@@ -4,6 +4,7 @@
 #include "compute_service/logical_plan/logical_plan_builder.hpp"
 #include "compute_service/parser/ast.hpp"
 #include "compute_service/parser/cypher_parser.hpp"
+#include "compute_service/parser/index_ddl_parser.hpp"
 #include "compute_service/physical_plan/physical_planner.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
@@ -36,6 +37,7 @@ public:
     folly::coro::Task<ExecutionResult> executeAsync(const std::string& cypher_query);
 
 private:
+    folly::coro::Task<void> handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result);
     IAsyncGraphDataStore& async_data_;
     IAsyncGraphMetaStore& async_meta_;
     Config config_;

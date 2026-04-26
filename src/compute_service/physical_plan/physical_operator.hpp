@@ -67,6 +67,38 @@ private:
     std::unordered_map<LabelId, LabelDef> label_defs_;
 };
 
+// ==================== Index Scan ====================
+
+class IndexScanPhysicalOp : public PhysicalOperator {
+public:
+    enum class ScanMode {
+        EQUALITY,
+        RANGE
+    };
+
+    IndexScanPhysicalOp(std::string variable, LabelId label_id, uint16_t prop_id, ScanMode mode,
+                        PropertyValue search_value, std::optional<PropertyValue> range_end, IAsyncGraphDataStore& store,
+                        std::unordered_map<LabelId, LabelDef> label_defs)
+        : variable_(std::move(variable)), label_id_(label_id), prop_id_(prop_id), mode_(mode),
+          search_value_(std::move(search_value)), range_end_(std::move(range_end)), store_(store),
+          label_defs_(std::move(label_defs)) {}
+
+    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    std::string toString() const override {
+        return "IndexScan";
+    }
+
+private:
+    std::string variable_;
+    LabelId label_id_;
+    uint16_t prop_id_;
+    ScanMode mode_;
+    PropertyValue search_value_;
+    std::optional<PropertyValue> range_end_;
+    IAsyncGraphDataStore& store_;
+    std::unordered_map<LabelId, LabelDef> label_defs_;
+};
+
 // ==================== Expand ====================
 
 class ExpandPhysicalOp : public PhysicalOperator {
@@ -167,9 +199,10 @@ class CreateNodePhysicalOp : public PhysicalOperator {
 public:
     CreateNodePhysicalOp(std::string variable, std::vector<LabelId> label_ids,
                          std::vector<std::pair<LabelId, Properties>> label_props, IAsyncGraphDataStore& store,
-                         VertexId assigned_vid, std::unique_ptr<PhysicalOperator> child = nullptr)
+                         VertexId assigned_vid, std::unique_ptr<PhysicalOperator> child = nullptr,
+                         const std::unordered_map<LabelId, LabelDef>* label_defs = nullptr)
         : variable_(std::move(variable)), label_ids_(std::move(label_ids)), label_props_(std::move(label_props)),
-          store_(store), assigned_vid_(assigned_vid), child_(std::move(child)) {}
+          store_(store), assigned_vid_(assigned_vid), child_(std::move(child)), label_defs_(label_defs) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
@@ -183,6 +216,7 @@ private:
     IAsyncGraphDataStore& store_;
     VertexId assigned_vid_;
     std::unique_ptr<PhysicalOperator> child_;
+    const std::unordered_map<LabelId, LabelDef>* label_defs_;
 };
 
 class CreateEdgePhysicalOp : public PhysicalOperator {
