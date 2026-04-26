@@ -781,3 +781,101 @@ TEST(QueryExecutorRestartTest, EdgeDataPersistsAcrossRestart) {
 
     std::filesystem::remove_all(db_path);
 }
+
+// ==================== EXPLAIN Tests ====================
+
+TEST_F(QueryExecutorTest, ExplainLabelScan) {
+    auto result = executor_->executeSync("EXPLAIN MATCH (n:Person) RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.columns.size(), 1u);
+    EXPECT_EQ(result.columns[0], "Plan");
+    ASSERT_FALSE(result.rows.empty());
+
+    std::string plan_text;
+    for (const auto& row : result.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0])) {
+            plan_text += std::get<std::string>(row[0]) + "\n";
+        }
+    }
+    EXPECT_NE(plan_text.find("Project"), std::string::npos);
+    EXPECT_NE(plan_text.find("LabelScan"), std::string::npos);
+    EXPECT_NE(plan_text.find("Person"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ExplainAllNodeScan) {
+    auto result = executor_->executeSync("EXPLAIN MATCH (n) RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.columns[0], "Plan");
+
+    std::string plan_text;
+    for (const auto& row : result.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0])) {
+            plan_text += std::get<std::string>(row[0]) + "\n";
+        }
+    }
+    EXPECT_NE(plan_text.find("Project"), std::string::npos);
+    EXPECT_NE(plan_text.find("AllNodeScan"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ExplainWithFilter) {
+    auto result = executor_->executeSync("EXPLAIN MATCH (n:Person) WHERE true RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    std::string plan_text;
+    for (const auto& row : result.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0])) {
+            plan_text += std::get<std::string>(row[0]) + "\n";
+        }
+    }
+    EXPECT_NE(plan_text.find("Project"), std::string::npos);
+    EXPECT_NE(plan_text.find("Filter"), std::string::npos);
+    EXPECT_NE(plan_text.find("LabelScan"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ExplainWithLimit) {
+    auto result = executor_->executeSync("EXPLAIN MATCH (n:Person) RETURN n LIMIT 5");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    std::string plan_text;
+    for (const auto& row : result.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0])) {
+            plan_text += std::get<std::string>(row[0]) + "\n";
+        }
+    }
+    EXPECT_NE(plan_text.find("Limit(5)"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ExplainCreateNode) {
+    auto result = executor_->executeSync("EXPLAIN CREATE (n:Person {name: 'test'})");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    std::string plan_text;
+    for (const auto& row : result.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0])) {
+            plan_text += std::get<std::string>(row[0]) + "\n";
+        }
+    }
+    EXPECT_NE(plan_text.find("CreateNode"), std::string::npos);
+    EXPECT_NE(plan_text.find("Person"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ExplainDoesNotExecute) {
+    auto before = executor_->executeSync("MATCH (n:Person) RETURN n");
+    size_t count_before = before.rows.size();
+
+    executor_->executeSync("EXPLAIN CREATE (n:Person {name: 'Ghost'})");
+
+    auto after = executor_->executeSync("MATCH (n:Person) RETURN n");
+    EXPECT_EQ(after.rows.size(), count_before) << "EXPLAIN should not execute the query";
+}
+
+TEST_F(QueryExecutorTest, ExplainCaseInsensitive) {
+    auto r1 = executor_->executeSync("explain MATCH (n:Person) RETURN n");
+    auto r2 = executor_->executeSync("Explain MATCH (n:Person) RETURN n");
+    auto r3 = executor_->executeSync("EXPLAIN MATCH (n:Person) RETURN n");
+    EXPECT_TRUE(r1.error.empty()) << r1.error;
+    EXPECT_TRUE(r2.error.empty()) << r2.error;
+    EXPECT_TRUE(r3.error.empty()) << r3.error;
+    EXPECT_EQ(r1.rows.size(), r2.rows.size());
+    EXPECT_EQ(r2.rows.size(), r3.rows.size());
+}

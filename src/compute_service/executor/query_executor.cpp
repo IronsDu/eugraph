@@ -7,6 +7,9 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cctype>
+
 namespace eugraph {
 namespace compute {
 
@@ -34,9 +37,32 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
             co_return;
         }
 
+        // 0.5. Check for EXPLAIN prefix
+        bool is_explain = false;
+        std::string query_to_parse;
+        {
+            std::string trimmed = cypher_query;
+            size_t start = trimmed.find_first_not_of(" \t\r\n");
+            if (start != std::string::npos) {
+                trimmed = trimmed.substr(start);
+            }
+            std::string prefix = trimmed.substr(0, 7);
+            std::transform(prefix.begin(), prefix.end(), prefix.begin(), ::toupper);
+            if (prefix == "EXPLAIN" && trimmed.size() > 7 && std::isspace(static_cast<unsigned char>(trimmed[7]))) {
+                is_explain = true;
+                query_to_parse = trimmed.substr(8);
+                size_t qstart = query_to_parse.find_first_not_of(" \t\r\n");
+                if (qstart != std::string::npos) {
+                    query_to_parse = query_to_parse.substr(qstart);
+                }
+            } else {
+                query_to_parse = cypher_query;
+            }
+        }
+
         // 1. Parse
         cypher::CypherQueryParser parser;
-        auto parse_result = parser.parse(cypher_query);
+        auto parse_result = parser.parse(query_to_parse);
         if (std::holds_alternative<cypher::ParseError>(parse_result)) {
             result.error = std::get<cypher::ParseError>(parse_result).message;
             co_return;
@@ -94,6 +120,13 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         }
         auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
 
+        // 5.5. If EXPLAIN, format plan and return without executing
+        if (is_explain) {
+            formatExplainPlan(*phys_op, result);
+            co_await async_data_.rollbackTran(txn);
+            co_return;
+        }
+
         // 6. Execute
         auto gen = phys_op->execute();
         while (auto batch = co_await gen.next()) {
@@ -133,6 +166,50 @@ void QueryExecutor::extractColumnsFromLogicalPlan(const LogicalOperator& op, Sch
             }
         },
         op);
+}
+
+void QueryExecutor::formatExplainPlan(PhysicalOperator& root, ExecutionResult& result) {
+    result.columns.clear();
+    result.rows.clear();
+
+    // Collect operators in root-to-leaf order
+    std::vector<std::string> op_lines;
+    std::function<void(const PhysicalOperator&)> collect;
+    collect = [&](const PhysicalOperator& op) {
+        op_lines.push_back(op.toString());
+        for (const auto* child : op.children()) {
+            collect(*child);
+        }
+    };
+    collect(root);
+
+    if (op_lines.empty()) {
+        result.columns.push_back("Plan");
+        return;
+    }
+
+    // Find max width for centering
+    size_t max_len = 0;
+    for (const auto& line : op_lines) {
+        max_len = std::max(max_len, line.size());
+    }
+
+    result.columns.push_back("Plan");
+    for (size_t i = 0; i < op_lines.size(); i++) {
+        // Center the operator line
+        size_t left_pad = (max_len - op_lines[i].size()) / 2;
+        Row row;
+        row.push_back(std::string(left_pad, ' ') + op_lines[i]);
+        result.rows.push_back(std::move(row));
+
+        // Insert down arrow between operators
+        if (i + 1 < op_lines.size()) {
+            size_t arrow_pad = max_len / 2;
+            Row arrow_row;
+            arrow_row.push_back(std::string(arrow_pad, ' ') + "\xe2\x86\x93");
+            result.rows.push_back(std::move(arrow_row));
+        }
+    }
 }
 
 folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result) {

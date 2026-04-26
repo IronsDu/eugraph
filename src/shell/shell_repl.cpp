@@ -379,17 +379,12 @@ static void runEmbeddedRepl(const ShellConfig& config) {
                     std::vector<std::string> cells;
                     for (const auto& val : *row.values()) {
                         std::string s = resultValueToString(val);
-                        // Quote strings
-                        if (val.getType() == ResultValue::Type::string_val) {
-                            cells.push_back("\"" + s + "\"");
-                        } else {
-                            cells.push_back(s);
-                        }
+                        cells.push_back(s);
                     }
                     rows.push_back(std::move(cells));
                 }
                 std::cout << formatTable(*resp->columns(), rows);
-                std::cout << resp->rows()->size() << " row" << (resp->rows()->size() == 1 ? "" : "s") << std::endl;
+                std::cout << resp->rows()->size() << " row" << (resp->rows()->size() == 1 ? "" : "s");
             }
         } else {
             std::cerr << "Unknown command: " << cmd << std::endl;
@@ -507,16 +502,12 @@ static void runRpcRepl(const ShellConfig& config) {
                         std::vector<std::string> cells;
                         for (const auto& val : *row.values()) {
                             std::string s = resultValueToString(val);
-                            if (val.getType() == ResultValue::Type::string_val) {
-                                cells.push_back("\"" + s + "\"");
-                            } else {
-                                cells.push_back(s);
-                            }
+                            cells.push_back(s);
                         }
                         rows.push_back(std::move(cells));
                     }
                     std::cout << formatTable(*resp.columns(), rows);
-                    std::cout << resp.rows()->size() << " row" << (resp.rows()->size() == 1 ? "" : "s") << std::endl;
+                    std::cout << resp.rows()->size() << " row" << (resp.rows()->size() == 1 ? "" : "s");
                 }
             } else {
                 std::cerr << "Unknown command: " << cmd << std::endl;
