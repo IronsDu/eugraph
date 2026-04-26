@@ -201,8 +201,8 @@ static const char* kMultilinePrompt = "\033[36m......>\033[0m ";
 
 static void completionCallback(const char* buf, linenoiseCompletions* lc) {
     if (buf[0] == ':') {
-        const char* cmds[] = {":help", ":exit", ":quit", ":create-label", ":create-edge-label",
-                              ":list-labels", ":list-edge-labels"};
+        const char* cmds[] = {
+            ":help", ":exit", ":quit", ":create-label", ":create-edge-label", ":list-labels", ":list-edge-labels"};
         for (const auto* c : cmds) {
             if (strncmp(c, buf, strlen(buf)) == 0) {
                 linenoiseAddCompletion(lc, c);
