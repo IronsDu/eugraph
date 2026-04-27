@@ -70,6 +70,23 @@ public:
     virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
                              const std::optional<PropertyValue>& end) = 0;
+
+    // Batch write (single transaction, single dispatch)
+    struct BatchVertexEntry {
+        VertexId vid;
+        Properties props;
+        PropertyValue pk_value;
+    };
+    struct BatchEdgeEntry {
+        EdgeId eid;
+        VertexId src_id;
+        VertexId dst_id;
+        uint64_t seq;
+        Properties props;
+    };
+    virtual folly::coro::Task<void> batchInsertVertices(LabelId label_id, std::vector<BatchVertexEntry> entries) = 0;
+    virtual folly::coro::Task<void> batchInsertEdges(EdgeLabelId edge_label_id,
+                                                     std::vector<BatchEdgeEntry> entries) = 0;
 };
 
 } // namespace eugraph

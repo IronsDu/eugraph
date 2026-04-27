@@ -45,6 +45,8 @@ public:
     // ID allocation
     virtual folly::coro::Task<VertexId> nextVertexId() = 0;
     virtual folly::coro::Task<EdgeId> nextEdgeId() = 0;
+    virtual folly::coro::Task<VertexId> nextVertexIdRange(uint64_t count) = 0;
+    virtual folly::coro::Task<EdgeId> nextEdgeIdRange(uint64_t count) = 0;
 
     // Index management
     struct IndexInfo {

@@ -42,6 +42,8 @@ public:
     // ID allocation
     folly::coro::Task<VertexId> nextVertexId() override;
     folly::coro::Task<EdgeId> nextEdgeId() override;
+    folly::coro::Task<VertexId> nextVertexIdRange(uint64_t count) override;
+    folly::coro::Task<EdgeId> nextEdgeIdRange(uint64_t count) override;
 
     // Index management
     folly::coro::Task<bool> createVertexIndex(const std::string& name, const std::string& label_name,

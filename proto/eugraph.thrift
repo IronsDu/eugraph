@@ -41,6 +41,24 @@ struct EdgeLabelInfo {
   4: bool directed = true
 }
 
+// ==================== Batch Import ====================
+
+struct VertexRecord {
+  1: PropertyValueThrift pk_value
+  2: list<PropertyValueThrift> properties
+}
+
+struct EdgeRecord {
+  1: i64 src_vertex_id
+  2: i64 dst_vertex_id
+  3: list<PropertyValueThrift> properties
+}
+
+struct BatchInsertVerticesResult {
+  1: list<i64> vertex_ids
+  2: i32 count
+}
+
 // ==================== Query Result ====================
 
 union ResultValue {
@@ -76,4 +94,8 @@ service EuGraphService {
 
   // DML: Cypher query execution
   QueryResult executeCypher(1: string query)
+
+  // Batch import
+  BatchInsertVerticesResult batchInsertVertices(1: string label_name, 2: list<VertexRecord> records)
+  i32 batchInsertEdges(1: string edge_label_name, 2: list<EdgeRecord> records)
 }

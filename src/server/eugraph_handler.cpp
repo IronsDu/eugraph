@@ -354,5 +354,110 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
     co_return resp;
 }
 
+// ==================== Batch Import ====================
+
+PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift::PropertyValueThrift& v) {
+    switch (v.getType()) {
+    case thrift::PropertyValueThrift::Type::bool_val:
+        return v.get_bool_val();
+    case thrift::PropertyValueThrift::Type::int_val:
+        return v.get_int_val();
+    case thrift::PropertyValueThrift::Type::double_val:
+        return v.get_double_val();
+    case thrift::PropertyValueThrift::Type::string_val:
+        return std::string(v.get_string_val());
+    case thrift::PropertyValueThrift::Type::int_array: {
+        const auto& arr = v.get_int_array();
+        return std::vector<int64_t>(arr.begin(), arr.end());
+    }
+    case thrift::PropertyValueThrift::Type::double_array: {
+        const auto& arr = v.get_double_array();
+        return std::vector<double>(arr.begin(), arr.end());
+    }
+    case thrift::PropertyValueThrift::Type::string_array: {
+        const auto& arr = v.get_string_array();
+        return std::vector<std::string>(arr.begin(), arr.end());
+    }
+    default:
+        return std::monostate{};
+    }
+}
+
+folly::coro::Task<std::unique_ptr<thrift::BatchInsertVerticesResult>>
+EuGraphHandler::co_batchInsertVertices(std::unique_ptr<std::string> label_name,
+                                       std::unique_ptr<std::vector<thrift::VertexRecord>> records) {
+    auto t0 = nowMs();
+    auto count = records->size();
+    spdlog::info("[handler] batchInsertVertices start, label='{}', count={}", *label_name, count);
+
+    auto label_id_opt = co_await async_meta_.getLabelId(*label_name);
+    if (!label_id_opt.has_value()) {
+        throw std::runtime_error("Label not found: " + *label_name);
+    }
+    LabelId label_id = *label_id_opt;
+
+    VertexId start_vid = co_await async_meta_.nextVertexIdRange(count);
+
+    std::vector<IAsyncGraphDataStore::BatchVertexEntry> entries;
+    entries.reserve(count);
+    for (size_t i = 0; i < count; i++) {
+        auto& rec = (*records)[i];
+        IAsyncGraphDataStore::BatchVertexEntry entry;
+        entry.vid = start_vid + i;
+        entry.pk_value = thriftToPropertyValue(rec.pk_value().value());
+        for (const auto& pv : *rec.properties()) {
+            entry.props.push_back(thriftToPropertyValue(pv));
+        }
+        entries.push_back(std::move(entry));
+    }
+
+    co_await async_data_.batchInsertVertices(label_id, std::move(entries));
+
+    auto resp = std::make_unique<thrift::BatchInsertVerticesResult>();
+    resp->vertex_ids()->reserve(count);
+    for (size_t i = 0; i < count; i++) {
+        resp->vertex_ids()->push_back(static_cast<int64_t>(start_vid + i));
+    }
+    resp->count() = static_cast<int32_t>(count);
+    spdlog::info("[handler] batchInsertVertices done, count={}, took={}ms", count, nowMs() - t0);
+    co_return resp;
+}
+
+folly::coro::Task<std::int32_t>
+EuGraphHandler::co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
+                                    std::unique_ptr<std::vector<thrift::EdgeRecord>> records) {
+    auto t0 = nowMs();
+    auto count = records->size();
+    spdlog::info("[handler] batchInsertEdges start, edgeLabel='{}', count={}", *edge_label_name, count);
+
+    auto elabel_id_opt = co_await async_meta_.getEdgeLabelId(*edge_label_name);
+    if (!elabel_id_opt.has_value()) {
+        throw std::runtime_error("EdgeLabel not found: " + *edge_label_name);
+    }
+    EdgeLabelId elabel_id = *elabel_id_opt;
+
+    EdgeId start_eid = co_await async_meta_.nextEdgeIdRange(count);
+
+    std::vector<IAsyncGraphDataStore::BatchEdgeEntry> entries;
+    entries.reserve(count);
+    for (size_t i = 0; i < count; i++) {
+        auto& rec = (*records)[i];
+        IAsyncGraphDataStore::BatchEdgeEntry entry;
+        entry.eid = start_eid + i;
+        entry.src_id = static_cast<VertexId>(rec.src_vertex_id().value());
+        entry.dst_id = static_cast<VertexId>(rec.dst_vertex_id().value());
+        entry.seq = i;
+        for (const auto& pv : *rec.properties()) {
+            entry.props.push_back(thriftToPropertyValue(pv));
+        }
+        entries.push_back(std::move(entry));
+    }
+
+    co_await async_data_.batchInsertEdges(elabel_id, std::move(entries));
+
+    spdlog::info("[handler] batchInsertEdges done, count={}, took={}ms", count, nowMs() - t0);
+    co_return static_cast<std::int32_t>(count);
+}
+
 } // namespace server
 } // namespace eugraph

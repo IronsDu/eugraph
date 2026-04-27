@@ -451,6 +451,20 @@ folly::coro::Task<EdgeId> AsyncGraphMetaStore::nextEdgeId() {
     co_return id;
 }
 
+folly::coro::Task<VertexId> AsyncGraphMetaStore::nextVertexIdRange(uint64_t count) {
+    VertexId start = schema_.next_vertex_id;
+    schema_.next_vertex_id += count;
+    co_await saveNextIds();
+    co_return start;
+}
+
+folly::coro::Task<EdgeId> AsyncGraphMetaStore::nextEdgeIdRange(uint64_t count) {
+    EdgeId start = schema_.next_edge_id;
+    schema_.next_edge_id += count;
+    co_await saveNextIds();
+    co_return start;
+}
+
 // ==================== Private ====================
 
 folly::coro::Task<void> AsyncGraphMetaStore::saveNextIds() {
