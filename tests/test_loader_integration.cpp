@@ -133,7 +133,9 @@ protected:
 
 TEST_F(LoaderIntegrationTest, ScanAndClassifyFiles) {
     auto data_dir = getDataDir();
-    ASSERT_TRUE(std::filesystem::exists(data_dir)) << "Data dir not found: " << data_dir;
+    if (!std::filesystem::exists(data_dir)) {
+        GTEST_SKIP() << "Skipping: LDBC data dir not found: " << data_dir;
+    }
 
     auto files = loader::scanCsvFiles(data_dir);
 
@@ -153,6 +155,10 @@ TEST_F(LoaderIntegrationTest, ScanAndClassifyFiles) {
 
 TEST_F(LoaderIntegrationTest, BuildLabelSchemas) {
     auto data_dir = getDataDir();
+    if (!std::filesystem::exists(data_dir)) {
+        GTEST_SKIP() << "Skipping: LDBC data dir not found: " << data_dir;
+    }
+
     auto files = loader::scanCsvFiles(data_dir);
 
     std::vector<loader::CsvFileInfo> vertex_files;
@@ -176,7 +182,9 @@ TEST_F(LoaderIntegrationTest, BuildLabelSchemas) {
 
 TEST_F(LoaderIntegrationTest, FullLoadAndVerify) {
     auto data_dir = getDataDir();
-    ASSERT_TRUE(std::filesystem::exists(data_dir)) << "Data dir not found: " << data_dir;
+    if (!std::filesystem::exists(data_dir)) {
+        GTEST_SKIP() << "Skipping: LDBC data dir not found: " << data_dir;
+    }
 
     auto files = loader::scanCsvFiles(data_dir);
 
@@ -228,6 +236,10 @@ TEST_F(LoaderIntegrationTest, FullLoadAndVerify) {
 
 TEST_F(LoaderIntegrationTest, EdgeConnectivity) {
     auto data_dir = getDataDir();
+    if (!std::filesystem::exists(data_dir)) {
+        GTEST_SKIP() << "Skipping: LDBC data dir not found: " << data_dir;
+    }
+
     auto files = loader::scanCsvFiles(data_dir);
 
     std::vector<loader::CsvFileInfo> vertex_files, edge_files;
