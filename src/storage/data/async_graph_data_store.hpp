@@ -226,6 +226,29 @@ public:
         }
     }
 
+    // ==================== Batch Write ====================
+
+    folly::coro::Task<void> batchInsertVertices(LabelId label_id, std::vector<BatchVertexEntry> entries) override {
+        co_await io_->dispatchVoid([this, label_id, entries = std::move(entries)]() {
+            auto txn = store_->beginTransaction();
+            for (const auto& e : entries) {
+                std::pair<LabelId, Properties> lp{label_id, e.props};
+                store_->insertVertex(txn, e.vid, std::span<const std::pair<LabelId, Properties>>{&lp, 1}, &e.pk_value);
+            }
+            store_->commitTransaction(txn);
+        });
+    }
+
+    folly::coro::Task<void> batchInsertEdges(EdgeLabelId edge_label_id, std::vector<BatchEdgeEntry> entries) override {
+        co_await io_->dispatchVoid([this, edge_label_id, entries = std::move(entries)]() {
+            auto txn = store_->beginTransaction();
+            for (const auto& e : entries) {
+                store_->insertEdge(txn, e.eid, e.src_id, e.dst_id, edge_label_id, e.seq, e.props);
+            }
+            store_->commitTransaction(txn);
+        });
+    }
+
 private:
     ISyncGraphDataStore* store_;
     IoScheduler* io_;

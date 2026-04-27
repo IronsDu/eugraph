@@ -35,6 +35,11 @@ public:
     // DML
     thrift::QueryResult executeCypher(const std::string& query);
 
+    // Batch import
+    thrift::BatchInsertVerticesResult batchInsertVertices(const std::string& label_name,
+                                                          std::vector<thrift::VertexRecord> records);
+    std::int32_t batchInsertEdges(const std::string& edge_label_name, std::vector<thrift::EdgeRecord> records);
+
 private:
     std::string host_;
     int port_;

@@ -79,5 +79,22 @@ thrift::QueryResult EuGraphRpcClient::executeCypher(const std::string& query) {
     return resp;
 }
 
+thrift::BatchInsertVerticesResult
+EuGraphRpcClient::batchInsertVertices(const std::string& label_name, std::vector<thrift::VertexRecord> records) {
+    auto t0 = nowMs();
+    thrift::BatchInsertVerticesResult resp;
+    client_->sync_batchInsertVertices(resp, label_name, std::move(records));
+    spdlog::info("[rpc_client] batchInsertVertices: {} records, {}ms", *resp.count(), nowMs() - t0);
+    return resp;
+}
+
+std::int32_t EuGraphRpcClient::batchInsertEdges(const std::string& edge_label_name,
+                                                 std::vector<thrift::EdgeRecord> records) {
+    auto t0 = nowMs();
+    auto resp = client_->sync_batchInsertEdges(edge_label_name, std::move(records));
+    spdlog::info("[rpc_client] batchInsertEdges: {} records, {}ms", resp, nowMs() - t0);
+    return resp;
+}
+
 } // namespace shell
 } // namespace eugraph

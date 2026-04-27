@@ -233,6 +233,37 @@ target_link_libraries(eugraph-shell PRIVATE
     dl
 )
 
+# ==================== CSV Loader ====================
+
+add_library(eugraph_loader_lib STATIC
+    src/loader/csv_loader.cpp
+    src/shell/rpc_client.cpp
+)
+
+target_include_directories(eugraph_loader_lib PUBLIC
+    "${PROJECT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(eugraph_loader_lib PUBLIC
+    eugraph_thrift
+    Folly::folly
+    Folly::folly_deps
+    spdlog::spdlog
+)
+
+add_executable(eugraph-loader
+    src/loader/loader_main.cpp
+)
+
+target_include_directories(eugraph-loader PRIVATE
+    "${PROJECT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(eugraph-loader PRIVATE
+    eugraph_loader_lib
+    dl
+)
+
 # Test targets
 if(EUGRAPH_BUILD_TESTS)
     enable_testing()
@@ -471,4 +502,29 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(index_e2e_tests wiredtiger_ext)
     gtest_add_tests(TARGET index_e2e_tests)
+
+    # CSV Loader integration tests
+    add_executable(loader_integration_tests
+        tests/test_loader_integration.cpp
+    )
+
+    target_include_directories(loader_integration_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(loader_integration_tests PRIVATE
+        eugraph_loader_lib
+        eugraph_shell_lib
+        eugraph_query_engine
+        eugraph_metadata
+        eugraph_thrift
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        dl
+    )
+
+    add_dependencies(loader_integration_tests wiredtiger_ext)
+    gtest_add_tests(TARGET loader_integration_tests)
 endif()

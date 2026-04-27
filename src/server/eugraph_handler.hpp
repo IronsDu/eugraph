@@ -37,12 +37,22 @@ public:
     folly::coro::Task<std::unique_ptr<thrift::QueryResult>>
     co_executeCypher(std::unique_ptr<std::string> query) override;
 
+    // Batch import
+    folly::coro::Task<std::unique_ptr<thrift::BatchInsertVerticesResult>>
+    co_batchInsertVertices(std::unique_ptr<std::string> label_name,
+                           std::unique_ptr<std::vector<thrift::VertexRecord>> records) override;
+
+    folly::coro::Task<std::int32_t>
+    co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
+                        std::unique_ptr<std::vector<thrift::EdgeRecord>> records) override;
+
 private:
     thrift::ResultValue valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
                                       const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs);
 
     static ::eugraph::PropertyType toPropertyType(thrift::PropertyType t);
     static PropertyDef toPropertyDef(const thrift::PropertyDefThrift& req, uint16_t id);
+    static PropertyValue thriftToPropertyValue(const thrift::PropertyValueThrift& v);
 
     IAsyncGraphDataStore& async_data_;
     IAsyncGraphMetaStore& async_meta_;
