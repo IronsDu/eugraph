@@ -126,7 +126,9 @@ protected:
         std::filesystem::remove_all(db_path_);
     }
 
-    QueryResult execCypher(const std::string& query) { return client_->executeCypher(query); }
+    QueryResult execCypher(const std::string& query) {
+        return client_->executeCypher(query);
+    }
 };
 
 TEST_F(LoaderIntegrationTest, ScanAndClassifyFiles) {

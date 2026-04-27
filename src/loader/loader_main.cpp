@@ -1,6 +1,7 @@
 #include "loader/csv_loader.hpp"
 #include "shell/rpc_client.hpp"
 
+#include <folly/init/Init.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -16,6 +17,7 @@ static void printUsage() {
 }
 
 int main(int argc, char* argv[]) {
+    // Parse our args before folly::Init to avoid gflags conflicts
     std::string host = "127.0.0.1";
     int port = 9090;
     std::string data_dir;
@@ -42,6 +44,10 @@ int main(int argc, char* argv[]) {
         printUsage();
         return 1;
     }
+
+    // folly::Init only needs program name; our custom flags confuse gflags
+    int folly_argc = 1;
+    folly::Init init(&folly_argc, &argv);
 
     spdlog::set_level(spdlog::level::info);
 

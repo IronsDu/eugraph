@@ -84,8 +84,7 @@ public:
         uint64_t seq;
         Properties props;
     };
-    virtual folly::coro::Task<void> batchInsertVertices(LabelId label_id,
-                                                        std::vector<BatchVertexEntry> entries) = 0;
+    virtual folly::coro::Task<void> batchInsertVertices(LabelId label_id, std::vector<BatchVertexEntry> entries) = 0;
     virtual folly::coro::Task<void> batchInsertEdges(EdgeLabelId edge_label_id,
                                                      std::vector<BatchEdgeEntry> entries) = 0;
 };
