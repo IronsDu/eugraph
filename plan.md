@@ -42,7 +42,7 @@
 ### 已完成的工作
 
 #### 1.1 项目骨架搭建 ✅
-- CMakeLists.txt 配置（vcpkg 依赖管理：rocksdb, gtest, spdlog, lz4, zlib, zstd）
+- CMakeLists.txt 配置（vcpkg 依赖管理：antlr4, gtest, spdlog, lz4, zlib, zstd, folly, fbthrift）
 - src/ 目录结构创建
 - 基础类型定义（graph_types.hpp, error.hpp, constants.hpp）
 
@@ -136,13 +136,13 @@ Cypher → ANTLR Parser → AST → LogicalPlanBuilder → LogicalPlan
 ```
 
 ### 构建方式
+
+详见 [docs/build-guide.md](docs/build-guide.md)。
+
 ```bash
-cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=/mnt/f/code/vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build build
-./build/eugraph_tests          # RocksDB 后端测试
-./build/wt_tests               # WiredTiger 原生 API 测试
-./build/cypher_parser_tests    # Cypher 解析器测试（32 个）
-./build/logical_plan_tests     # 逻辑计划测试（待实现）
+cmake --preset=release
+cmake --build --preset=release
+ctest --preset=release --verbose
 ```
 
 ---
@@ -174,7 +174,7 @@ cmake --build build
 | 2025-03-31 | 主键明确定义为全局唯一标识，每顶点一个 | 主键是顶点的全局标识，不属于任何标签 |
 | 2025-03-31 | 新增主键反向索引 R\|{vertex_id} → {pk_value} | 支持从 vertex_id 反查全局主键 |
 | 2025-03-31 | 移除 LabelDef 中的 primary_key_prop_id 字段 | 标签内唯一约束由 IndexDef(unique=true) 表达 |
-| 2026-04-01 | KV 存储引擎从 WiredTiger 切换为 RocksDB | WiredTiger 在 GCC 15 下存在 DT_INIT 链接问题，RocksDB 更成熟且 vcpkg 支持更好 |
+| 2026-04-01 | KV 存储引擎从 RocksDB 切换为 WiredTiger | 最终选择 WiredTiger，提供引擎级快照隔离能力，支持后续 MVCC 实现 |
 | 2026-04-01 | 引入 IKVEngine 抽象接口 + IGraphStore 图语义层 | 解耦存储引擎与图操作，支持后续替换底层引擎 |
 | 2026-04-01 | 新增 putVertexProperties 批量属性设置接口 | 一次写入某标签下所有属性，减少多次单独调用 |
 | 2026-04-01 | insertVertex 允许不指定标签 | 支持先创建顶点再逐步补充标签和属性的场景 |

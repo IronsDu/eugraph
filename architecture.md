@@ -1,3 +1,6 @@
+> **已废弃**：本文档为早期设计方案，部分内容已过时（如 GSQL → Cypher、RocksDB → WiredTiger）。
+> 请以 [docs/overview.md](docs/overview.md) 中的文档为准。本文件仅作历史参考。
+
 # EuGraph 图数据库设计方案
 
 ## 一、项目概述

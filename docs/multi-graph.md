@@ -2,31 +2,63 @@
 
 > 参见 [overview.md](overview.md) 返回文档导航
 
-## 一、多图支持 — 列簇隔离方案
+**状态**：设计阶段，尚未实现。当前为单图模式（每个 server 进程对应一个图）。
 
-### 1.1 设计目标
+## 一、当前实现
 
-- 支持在同一个 RocksDB 实例中创建多个图（Graph）
+当前每个 `eugraph-server` 进程管理一个图，使用两个独立的 WiredTiger 数据库：
+
+```
+data-dir/
+├── data/     ← 图数据（WT_CONNECTION，按 label 分表存储）
+└── meta/     ← 元数据（WT_CONNECTION，schema 信息）
+```
+
+WiredTiger 表按 label/edge_label ID 分表（详见 [kv-encoding.md](kv-encoding.md)）：
+
+| 表名 | 说明 |
+|------|------|
+| `table:label_reverse` | 顶点→标签反向索引（全局） |
+| `table:pk_forward` / `table:pk_reverse` | 主键正反向查询（全局） |
+| `table:edge_index` | 邻接索引（全局） |
+| `table:label_fwd_{label_id}` | 标签正向索引（per-label） |
+| `table:vprop_{label_id}` | 顶点属性（per-label） |
+| `table:etype_{edge_label_id}` | 边类型索引（per-edge-label） |
+| `table:eprop_{edge_label_id}` | 边属性（per-edge-label） |
+
+如需运行多个图，目前只能启动多个 server 进程，各自使用不同的 `--data-dir`。
+
+## 二、多图设计方案 — WiredTiger 多数据库隔离
+
+### 2.1 设计目标
+
+- 支持在同一个 eugraph-server 进程中创建和管理多个图
 - 删除图的速度要快（接近 O(1)）
 - 各图数据物理隔离，互不影响
 
-### 1.2 方案概述
+### 2.2 方案概述
 
-利用 RocksDB 的 Column Family（列簇）机制实现图的隔离：
+利用 WiredTiger 的独立数据库（不同目录）实现图的隔离：
 
 ```
-RocksDB 实例
-├── "default" 列簇              ← 全局元数据（图名 → graph_id 映射等）
-├── "graph_1" 列簇              ← 图1 的全部数据（L/I/P/R/X/E/G/D/M）
-├── "graph_2" 列簇              ← 图2 的全部数据
-└── "graph_N" 列簇              ← 图N 的全部数据
+data-dir/
+├── catalog/          ← 图目录（graph_name → db_path 映射）
+├── graph_1/
+│   ├── data/         ← 图1 的 WT 数据库
+│   └── meta/         ← 图1 的 WT 元数据库
+├── graph_2/
+│   ├── data/
+│   └── meta/
+└── graph_N/
+    ├── data/
+    └── meta/
 ```
 
-- **`default` 列簇**：存储全局信息，包括图名到 graph_id 的映射、graph_id 分配计数器
-- **`graph_{id}` 列簇**：存储单个图的所有数据，Key 编码与现有设计完全一致（L/I/P/R/X/E/G/D/M），无需额外前缀
-- **删除图** = 删除 `default` 中的映射记录 + `DropColumnFamily("graph_{id}")`，近乎 O(1)
+- **catalog**：存储全局信息，包括图名到路径的映射、graph_id 分配计数器
+- **`graph_{id}/`**：每个图独立的 WT 数据库目录，内部结构与当前单图完全一致
+- **删除图** = 从 catalog 删除映射 + 异步清理目录，近乎 O(1)
 
-### 1.3 default 列簇的 Key 编码
+### 2.3 catalog 的 Key 编码
 
 ```
 图名映射:
@@ -36,134 +68,103 @@ RocksDB 实例
 graph_id 分配计数器:
   Key:   N|next_graph_id
   Value: {next_graph_id:uint32 BE}
-
-已删除图待清理标记（可选）:
-  Key:   D|{graph_id:uint32 BE}
-  Value: {graph_name:string}|{删除时间}
 ```
 
-### 1.4 操作流程
+### 2.4 操作流程
 
 #### 创建图
 
 ```
-1. 开启事务
+1. 开启 catalog 事务
 2. 检查 G|{graph_name} 是否已存在
 3. 读取 N|next_graph_id，分配新 graph_id，递增并写回
-4. 在 default 列簇写入 G|{graph_name} → {graph_id}|{created_at}
-5. 调用 RocksDB::CreateColumnFamily("graph_{id}")
-6. 提交事务
+4. 在 catalog 写入 G|{graph_name} → {graph_id}|{created_at}
+5. 创建 data-dir/graph_{id}/data/ 和 data-dir/graph_{id}/meta/ 目录
+6. 打开 WT_CONNECTION（data 和 meta 各一个）
+7. 提交事务
 ```
 
 #### 删除图
 
 ```
-1. 开启事务
-2. 读取 G|{graph_name} 获取 graph_id
-3. 从 default 列簇删除 G|{graph_name}
-4. 调用 RocksDB::DropColumnFamily("graph_{id}")
-5. 释放内存中的列簇句柄
-6. 提交事务
+1. 标记图为 "删除中"（写回 catalog）
+2. 停止接受该图的新请求，等待进行中操作完成
+3. 关闭该图的 WT_CONNECTION
+4. 从 catalog 删除 G|{graph_name} 映射
+5. 后台异步删除 graph_{id}/ 目录（不阻塞）
 ```
 
 #### 使用图（切换当前图）
 
 ```
-1. 读取 G|{graph_name} 获取 graph_id
-2. 获取 "graph_{id}" 列簇的句柄
-3. 后续所有操作使用该句柄执行
+1. 读取 catalog 中 G|{graph_name} 获取 graph_id
+2. 获取该图的 WT_CONNECTION 句柄
+3. 后续所有操作使用该图的存储实例
 ```
 
-### 1.5 列簇句柄管理
+### 2.5 连接管理
 
 ```cpp
-class ColumnFamilyManager {
-public:
-    // 启动时：ListColumnFamilies → 打开所有列簇 → 从 default 加载映射
-    // 运行时：通过 graph_name 或 graph_id 获取对应 Handle*
-    // 创建/删除图时：动态维护 Handle 的增删
+// 每个图拥有独立的 WT_CONNECTION 对
+struct GraphConnection {
+    WT_CONNECTION* data_conn;
+    WT_CONNECTION* meta_conn;
+    std::unique_ptr<GraphSchema> schema;
+};
 
-    rocksdb::ColumnFamilyHandle* getDefaultHandle();       // default 列簇
-    rocksdb::ColumnFamilyHandle* getGraphHandle(uint32_t graph_id);  // 某个图的列簇
+class GraphManager {
+    // 启动时：从 catalog 加载所有图映射，打开各图的 WT 连接
+    // 运行时：通过 graph_name 获取 GraphConnection
+    // 创建/删除图时：动态维护连接的增删
+    std::unordered_map<std::string, std::unique_ptr<GraphConnection>> graphs_;
+    std::shared_mutex mu_;
 };
 ```
 
-- 所有句柄由 ColumnFamilyManager 统一管理
+- 所有连接由 GraphManager 统一管理
 - 使用 `std::shared_mutex` 保护：读操作用共享锁，创建/删除图用独占锁
-- 删除图时，先标记停用该句柄，等待进行中的操作完成后释放
+- 删除图时，先标记停用，等待进行中操作完成后关闭连接
 
-### 1.6 启动与恢复
-
-RocksDB 要求打开数据库时指定所有列簇名。启动流程：
+### 2.6 启动与恢复
 
 ```
-1. 调用 RocksDB::ListColumnFamilies() 获取所有列簇名
-2. 组装 ColumnFamilyDescriptors（default + 所有 graph_* 列簇）
-3. 调用 RocksDB::Open() 打开数据库
-4. 从 default 列簇读取所有 G|{name} 映射，构建内存索引
-5. 一致性校验：
-   a. 对比映射中的 graph_id 集合与实际列簇名集合
-   b. 若存在映射中有但列簇不存在的 graph_id → 映射不完整（创建过程中崩溃）
-      → 从 default 列簇中删除该映射记录（视为创建失败）
-   c. 若存在列簇但映射中没有的 graph_id → 删除不完整（删除过程中崩溃）
-      → 调用 DropColumnFamily 清理孤儿列簇
-   d. 修复完成后，映射与列簇应完全一致
-6. 启动完成
+1. 打开 catalog 的 WT 数据库
+2. 扫描所有 G|{name} 映射
+3. 逐个打开 graph_{id}/ 的 WT 连接，加载 schema
+4. 一致性校验：
+   a. 映射中有但目录不存在的 graph_id → 创建过程中崩溃
+      → 从 catalog 中删除该映射（视为创建失败）
+   b. 目录存在但映射中没有的 graph_id → 删除不完整
+      → 异步清理孤儿目录
+5. 启动完成
 ```
 
-### 1.7 对 IKVEngine 接口的影响
-
-当前 IKVEngine 是单列簇设计。需要扩展以支持多列簇：
-
-**方案：引入 graph_id 参数**
-
-```cpp
-// 方案一：在现有接口中增加 graph_id 参数（可选，默认无）
-class IKVEngine {
-public:
-    virtual Result<void> put(GraphId graph_id, std::string_view key, std::string_view value) = 0;
-    virtual Result<std::optional<std::string>> get(GraphId graph_id, std::string_view key) = 0;
-    // ...
-};
-
-// 方案二：为每个图创建独立的 IKVEngine 实例（代理模式）
-class IKVEngine {
-public:
-    // 原有接口不变，内部通过不同的 ColumnFamilyHandle* 操作
-    static std::unique_ptr<IKVEngine> create(RocksDB*, ColumnFamilyHandle*);
-};
-```
-
-具体选哪种方案在实现阶段确定，两种都可以。
-
-### 1.8 graph_id 分配
+### 2.7 graph_id 分配
 
 - graph_id 使用 uint32，单调递增，不回收
-- 分配计数器存储在 `default` 列簇的 `N|next_graph_id` 中
+- 分配计数器存储在 catalog 的 `N|next_graph_id` 中
 - 即使图被删除，其 graph_id 也不会被复用，避免歧义
 
-### 1.9 测试用例
+### 2.8 测试用例
 
 | # | 测试场景 | 验证点 |
 |---|---------|--------|
-| 1 | 创建图 | 创建后能通过图名查到 graph_id，对应列簇存在 |
+| 1 | 创建图 | 创建后能通过图名查到 graph_id，对应目录存在 |
 | 2 | 创建重名图 | 返回错误，不产生副作用 |
-| 3 | 删除图 | 映射记录消失，列簇不存在，操作快速完成 |
+| 3 | 删除图 | 映射记录消失，目录被清理，操作快速完成 |
 | 4 | 删除不存在的图 | 返回错误，无副作用 |
-| 5 | 删除图后数据不可访问 | 删除后 get/scan 均返回错误或空 |
+| 5 | 删除图后数据不可访问 | 删除后所有操作返回错误或空 |
 | 6 | 多图隔离 | 图A 和图B 各自写入数据，互不可见 |
-| 7 | 启动恢复 - 创建中途崩溃 | default 有映射但无对应列簇 → 自动清理映射 |
-| 8 | 启动恢复 - 删除中途崩溃 | 有孤儿列簇但无映射 → 自动清理列簇 |
+| 7 | 启动恢复 - 创建中途崩溃 | catalog 有映射但无目录 → 自动清理映射 |
+| 8 | 启动恢复 - 删除中途崩溃 | 有孤儿目录但无映射 → 自动清理 |
 | 9 | 删除图后 graph_id 不复用 | 删除图1后再创建新图，id 应为2而非1 |
 
-### 1.10 已知风险与注意事项
+### 2.9 已知风险与注意事项
 
-| # | 问题 | 影响 | 应对策略 |
-|---|------|------|----------|
-| 1 | 创建/删除图的原子性 | 两步操作（写映射 + 操作列簇）之间崩溃会导致不一致 | 启动时做一致性校验并自动修复（见 1.6） |
-| 2 | 打开数据库需预知所有列簇 | 无法直接 Open，必须先 ListColumnFamilies 再 Open | 封装在启动流程中，对上层透明 |
-| 3 | WAL 共享 | 所有列簇共享同一个 WAL，崩溃恢复时需要回放所有图的日志 | RocksDB 内部已处理，无额外工作；但恢复时间与总写入量成正比 |
-| 4 | 列簇句柄的生命周期 | 删除图后，仍有进行中的操作持有旧句柄会导致崩溃 | 引用计数 + 标记停用，等待进行中操作完成后释放 |
-| 5 | graph_id 不回收 | 大量创建又删除图后，graph_id 会越来越大，列簇名变长 | uint32 上限约 42 亿，实际不会用完 |
-| 6 | 磁盘空间延迟释放 | DropColumnFamily 是元数据操作，数据空间由后台 Compaction 异步回收 | 对用户透明 |
-
+| # | 问题 | 应对策略 |
+|---|------|----------|
+| 1 | 创建/删除图的原子性 | 启动时一致性校验并自动修复 |
+| 2 | WT_CONNECTION 的生命周期 | 引用计数 + 标记停用，等待进行中操作完成 |
+| 3 | graph_id 不回收 | uint32 上限约 42 亿，实际不会用完 |
+| 4 | 磁盘空间释放 | 删除图时异步清理目录，不阻塞服务 |
+| 5 | 打开连接数 | 每图 2 个 WT_CONNECTION，需限制最大图数量 |
