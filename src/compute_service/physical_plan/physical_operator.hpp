@@ -123,10 +123,18 @@ private:
 class ExpandPhysicalOp : public PhysicalOperator {
 public:
     ExpandPhysicalOp(std::string src_var, std::string dst_var, std::string edge_var,
-                     std::optional<EdgeLabelId> label_filter, cypher::RelationshipDirection direction,
-                     IAsyncGraphDataStore& store, std::unique_ptr<PhysicalOperator> child)
+                     std::optional<std::vector<EdgeLabelId>> label_filters, cypher::RelationshipDirection direction,
+                     IAsyncGraphDataStore& store, Schema input_schema, std::unique_ptr<PhysicalOperator> child)
         : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)),
-          label_filter_(label_filter), direction_(direction), store_(store), child_(std::move(child)) {}
+          label_filters_(std::move(label_filters)), direction_(direction), store_(store),
+          input_schema_(std::move(input_schema)), child_(std::move(child)) {
+        for (size_t i = 0; i < input_schema_.size(); ++i) {
+            if (input_schema_[i] == src_var_) {
+                src_col_idx_ = static_cast<int>(i);
+                break;
+            }
+        }
+    }
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {
@@ -145,6 +153,15 @@ public:
         auto s = "Expand(src=" + src_var_ + ", dst=" + dst_var_;
         if (!edge_var_.empty())
             s += ", edge=" + edge_var_;
+        if (label_filters_ && !label_filters_->empty()) {
+            s += ", labels=[";
+            for (size_t i = 0; i < label_filters_->size(); ++i) {
+                if (i > 0)
+                    s += ",";
+                s += std::to_string((*label_filters_)[i]);
+            }
+            s += "]";
+        }
         s += ", direction=" + dir + ")";
         return s;
     }
@@ -156,9 +173,11 @@ private:
     std::string src_var_;
     std::string dst_var_;
     std::string edge_var_;
-    std::optional<EdgeLabelId> label_filter_;
+    std::optional<std::vector<EdgeLabelId>> label_filters_;
     cypher::RelationshipDirection direction_;
     IAsyncGraphDataStore& store_;
+    Schema input_schema_;
+    int src_col_idx_ = -1;
     std::unique_ptr<PhysicalOperator> child_;
 };
 

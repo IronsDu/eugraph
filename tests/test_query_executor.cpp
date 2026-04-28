@@ -102,6 +102,37 @@ protected:
         ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, {}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
+
+    // Helper: insert vertices and edges of two types for filtering tests
+    void insertMixedEdges() {
+        insertTestVertices();
+        auto txn = sync_data_->beginTransaction();
+        // 2 KNOWS edges: 1->2, 1->3
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, {}));
+        // 2 LIVES_IN edges: 1->4, 1->5
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 1, 4, LIVES_IN_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 4, 1, 5, LIVES_IN_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
+
+    // Helper: set up a multi-hop chain for 2/3-hop tests
+    // Vertices 1-6 (all Person), KNOWS chain: 1->2->3->4, LIVES_IN: 1->5, 2->6
+    void insertMultiHopEdges() {
+        insertTestVertices();
+        // Add vertex 6
+        auto txn = sync_data_->beginTransaction();
+        std::vector<std::pair<LabelId, Properties>> lp = {{PERSON_LABEL, Properties{}}};
+        ASSERT_TRUE(sync_data_->insertVertex(txn, 6, lp, nullptr));
+        // KNOWS chain: 1->2, 2->3, 3->4
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 4, KNOWS_LABEL, 0, {}));
+        // LIVES_IN: 1->5, 2->6
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 4, 1, 5, LIVES_IN_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 5, 2, 6, LIVES_IN_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
 };
 
 } // anonymous namespace
@@ -369,6 +400,65 @@ TEST_F(QueryExecutorTest, ExpandWithLimit) {
 
     auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b LIMIT 2").rows;
     EXPECT_EQ(rows.size(), 2);
+}
+
+TEST_F(QueryExecutorTest, ExpandFilterBySingleType) {
+    insertMixedEdges();
+    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
+    EXPECT_EQ(rows.size(), 2);
+}
+
+TEST_F(QueryExecutorTest, ExpandFilterByOtherType) {
+    insertMixedEdges();
+    auto rows = executor_->executeSync("MATCH (a:Person)-[:LIVES_IN]->(b) RETURN a, b").rows;
+    EXPECT_EQ(rows.size(), 2);
+}
+
+TEST_F(QueryExecutorTest, ExpandFilterByMultipleTypes) {
+    insertMixedEdges();
+    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS|LIVES_IN]->(b) RETURN a, b").rows;
+    EXPECT_EQ(rows.size(), 4);
+}
+
+TEST_F(QueryExecutorTest, ExpandNonExistentTypeReturnsEmpty) {
+    insertMixedEdges();
+    auto rows = executor_->executeSync("MATCH (a:Person)-[:NONEXISTENT]->(b) RETURN a, b").rows;
+    EXPECT_EQ(rows.size(), 0);
+}
+
+TEST_F(QueryExecutorTest, ExpandWithoutTypeReturnsAll) {
+    insertMixedEdges();
+    auto rows = executor_->executeSync("MATCH (a:Person)-->(b) RETURN a, b").rows;
+    EXPECT_EQ(rows.size(), 4);
+}
+
+TEST_F(QueryExecutorTest, ExpandTwoHopSameType) {
+    insertMultiHopEdges();
+    // KNOWS 2-hop: 1->2->3, 2->3->4 = 2 rows
+    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c) RETURN a, b, c").rows;
+    EXPECT_EQ(rows.size(), 2);
+}
+
+TEST_F(QueryExecutorTest, ExpandTwoHopMixedTypes) {
+    insertMultiHopEdges();
+    // KNOWS then LIVES_IN: 1->2->6 = 1 row
+    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:LIVES_IN]->(c) RETURN a, b, c").rows;
+    EXPECT_EQ(rows.size(), 1);
+}
+
+TEST_F(QueryExecutorTest, ExpandThreeHopSameType) {
+    insertMultiHopEdges();
+    // KNOWS 3-hop: 1->2->3->4 = 1 row
+    auto rows =
+        executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b)-[:KNOWS]->(c)-[:KNOWS]->(d) RETURN a, b, c, d").rows;
+    EXPECT_EQ(rows.size(), 1);
+}
+
+TEST_F(QueryExecutorTest, ExpandTwoHopNoMatch) {
+    insertMultiHopEdges();
+    // LIVES_IN then KNOWS: no vertex reached via LIVES_IN has outgoing KNOWS edges
+    auto rows = executor_->executeSync("MATCH (a:Person)-[:LIVES_IN]->(b)-[:KNOWS]->(c) RETURN a, b, c").rows;
+    EXPECT_EQ(rows.size(), 0);
 }
 
 // ==================== Create Node Tests ====================

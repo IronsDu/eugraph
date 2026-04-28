@@ -55,17 +55,20 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
                 auto child_op = std::move(child_res.op);
                 auto child_schema = std::move(child_res.output_schema);
 
-                std::optional<EdgeLabelId> label_filter;
+                std::optional<std::vector<EdgeLabelId>> label_filters;
                 if (!ptr->rel_types.empty()) {
-                    auto it = ctx.edge_label_name_to_id.find(ptr->rel_types[0]);
-                    if (it != ctx.edge_label_name_to_id.end()) {
-                        label_filter = it->second;
+                    label_filters = std::vector<EdgeLabelId>();
+                    for (const auto& type_name : ptr->rel_types) {
+                        auto it = ctx.edge_label_name_to_id.find(type_name);
+                        if (it != ctx.edge_label_name_to_id.end()) {
+                            label_filters->push_back(it->second);
+                        }
                     }
                 }
 
-                auto result =
-                    std::make_unique<ExpandPhysicalOp>(ptr->src_variable, ptr->dst_variable, ptr->edge_variable,
-                                                       label_filter, ptr->direction, store, std::move(child_op));
+                auto result = std::make_unique<ExpandPhysicalOp>(
+                    ptr->src_variable, ptr->dst_variable, ptr->edge_variable, std::move(label_filters), ptr->direction,
+                    store, child_schema, std::move(child_op));
 
                 // Extend schema with destination and edge variables
                 Schema output_schema = child_schema;
