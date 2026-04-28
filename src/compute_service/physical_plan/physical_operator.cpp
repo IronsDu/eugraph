@@ -88,73 +88,86 @@ folly::coro::AsyncGenerator<RowBatch> IndexScanPhysicalOp::execute() {
 folly::coro::AsyncGenerator<RowBatch> ExpandPhysicalOp::execute() {
     auto child_gen = child_->execute();
 
+    // Precompute the list of label filters for scanEdges calls:
+    // empty vector → scan all edges, non-empty → scan each label separately.
+    auto dir = Direction::OUT;
+    if (direction_ == cypher::RelationshipDirection::RIGHT_TO_LEFT) {
+        dir = Direction::IN;
+    } else if (direction_ == cypher::RelationshipDirection::UNDIRECTED) {
+        dir = Direction::BOTH;
+    }
+
+    // Build the list of (label_filter) args for scanEdges calls:
+    // - label_filters_ == nullopt → no type specified, scan all edges (single call with nullopt)
+    // - label_filters_ == empty vector → types specified but none found, scan nothing
+    // - label_filters_ == {id1, id2, ...} → scan each label separately
+    std::vector<std::optional<EdgeLabelId>> scan_filters;
+    if (!label_filters_.has_value()) {
+        scan_filters.push_back(std::nullopt);
+    } else {
+        for (auto lid : *label_filters_) {
+            scan_filters.push_back(lid);
+        }
+    }
+
     while (auto child_batch = co_await child_gen.next()) {
         RowBatch output;
 
         for (const auto& row : child_batch->rows) {
-            // Find the source vertex ID in the row
             VertexId src_id = INVALID_VERTEX_ID;
-            for (const auto& val : row) {
-                if (std::holds_alternative<int64_t>(val)) {
-                    src_id = static_cast<VertexId>(std::get<int64_t>(val));
-                    break;
-                } else if (std::holds_alternative<VertexValue>(val)) {
+            if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < row.size()) {
+                const auto& val = row[src_col_idx_];
+                if (std::holds_alternative<VertexValue>(val)) {
                     src_id = std::get<VertexValue>(val).id;
-                    break;
+                } else if (std::holds_alternative<int64_t>(val)) {
+                    src_id = static_cast<VertexId>(std::get<int64_t>(val));
                 }
             }
             if (src_id == INVALID_VERTEX_ID) {
                 continue;
             }
 
-            // Scan edges from this vertex
-            Direction dir = Direction::OUT;
-            if (direction_ == cypher::RelationshipDirection::RIGHT_TO_LEFT) {
-                dir = Direction::IN;
-            } else if (direction_ == cypher::RelationshipDirection::UNDIRECTED) {
-                dir = Direction::BOTH;
-            }
-            auto edge_gen = store_.scanEdges(src_id, dir, label_filter_);
-            while (auto edge_batch = co_await edge_gen.next()) {
-                for (const auto& entry : *edge_batch) {
-                    Row new_row = row; // copy original columns
+            for (const auto& label_filter : scan_filters) {
+                auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
+                while (auto edge_batch = co_await edge_gen.next()) {
+                    for (const auto& entry : *edge_batch) {
+                        Row new_row = row;
 
-                    // Load destination vertex labels and properties
-                    auto dst_labels = co_await store_.getVertexLabels(entry.neighbor_id);
-                    VertexValue dst_vv;
-                    dst_vv.id = entry.neighbor_id;
-                    dst_vv.labels = dst_labels;
-                    Properties merged_props;
-                    for (LabelId lid : dst_labels) {
-                        auto props = co_await store_.getVertexProperties(entry.neighbor_id, lid);
-                        if (props) {
-                            if (merged_props.size() < props->size()) {
-                                merged_props.resize(props->size());
-                            }
-                            for (size_t i = 0; i < props->size(); i++) {
-                                if ((*props)[i].has_value()) {
-                                    merged_props[i] = std::move((*props)[i]);
+                        auto dst_labels = co_await store_.getVertexLabels(entry.neighbor_id);
+                        VertexValue dst_vv;
+                        dst_vv.id = entry.neighbor_id;
+                        dst_vv.labels = dst_labels;
+                        Properties merged_props;
+                        for (LabelId lid : dst_labels) {
+                            auto props = co_await store_.getVertexProperties(entry.neighbor_id, lid);
+                            if (props) {
+                                if (merged_props.size() < props->size()) {
+                                    merged_props.resize(props->size());
+                                }
+                                for (size_t i = 0; i < props->size(); i++) {
+                                    if ((*props)[i].has_value()) {
+                                        merged_props[i] = std::move((*props)[i]);
+                                    }
                                 }
                             }
                         }
-                    }
-                    dst_vv.properties = std::move(merged_props);
-                    new_row.push_back(Value(std::move(dst_vv)));
+                        dst_vv.properties = std::move(merged_props);
+                        new_row.push_back(Value(std::move(dst_vv)));
 
-                    // Add edge value if edge variable is bound
-                    if (!edge_var_.empty()) {
-                        EdgeValue ev;
-                        ev.id = entry.edge_id;
-                        ev.src_id = src_id;
-                        ev.dst_id = entry.neighbor_id;
-                        ev.label_id = entry.edge_label_id;
-                        new_row.push_back(Value(std::move(ev)));
-                    }
-                    output.push_back(std::move(new_row));
+                        if (!edge_var_.empty()) {
+                            EdgeValue ev;
+                            ev.id = entry.edge_id;
+                            ev.src_id = src_id;
+                            ev.dst_id = entry.neighbor_id;
+                            ev.label_id = entry.edge_label_id;
+                            new_row.push_back(Value(std::move(ev)));
+                        }
+                        output.push_back(std::move(new_row));
 
-                    if (output.size() >= RowBatch::CAPACITY) {
-                        co_yield std::move(output);
-                        output.clear();
+                        if (output.size() >= RowBatch::CAPACITY) {
+                            co_yield std::move(output);
+                            output.clear();
+                        }
                     }
                 }
             }
