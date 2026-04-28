@@ -18,6 +18,10 @@ public:
     virtual void visit(const ExpandOp& op) = 0;
     virtual void visit(const FilterOp& op) = 0;
     virtual void visit(const ProjectOp& op) = 0;
+    virtual void visit(const AggregateOp& op) = 0;
+    virtual void visit(const SortOp& op) = 0;
+    virtual void visit(const SkipOp& op) = 0;
+    virtual void visit(const DistinctOp& op) = 0;
     virtual void visit(const LimitOp& op) = 0;
     virtual void visit(const CreateNodeOp& op) = 0;
     virtual void visit(const CreateEdgeOp& op) = 0;

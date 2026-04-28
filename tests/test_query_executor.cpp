@@ -879,3 +879,312 @@ TEST_F(QueryExecutorTest, ExplainCaseInsensitive) {
     EXPECT_EQ(r1.rows.size(), r2.rows.size());
     EXPECT_EQ(r2.rows.size(), r3.rows.size());
 }
+
+// ==================== M4: SKIP Tests ====================
+
+TEST_F(QueryExecutorTest, SkipRows) {
+    insertTestVertices();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n SKIP 2");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 3);
+}
+
+TEST_F(QueryExecutorTest, SkipZero) {
+    insertTestVertices();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n SKIP 0");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 5);
+}
+
+TEST_F(QueryExecutorTest, SkipAll) {
+    insertTestVertices();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n SKIP 10");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0);
+}
+
+TEST_F(QueryExecutorTest, SkipWithLimit) {
+    insertTestVertices();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n SKIP 2 LIMIT 2");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 2);
+}
+
+TEST_F(QueryExecutorTest, SkipWithOrderBy) {
+    insertTestVertices();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id SKIP 1 LIMIT 2");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2);
+    // After ORDER BY id ASC, skip 1, limit 2: should get ids 2 and 3
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][0]), 3);
+}
+
+// ==================== M4: ORDER BY Tests ====================
+
+TEST_F(QueryExecutorTest, OrderByPropertyAsc) {
+    insertTestVertices();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id ASC");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5);
+    for (size_t i = 0; i < result.rows.size() - 1; ++i) {
+        EXPECT_LE(std::get<int64_t>(result.rows[i][0]), std::get<int64_t>(result.rows[i + 1][0]));
+    }
+}
+
+TEST_F(QueryExecutorTest, OrderByPropertyDesc) {
+    insertTestVertices();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id DESC");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5);
+    for (size_t i = 0; i < result.rows.size() - 1; ++i) {
+        EXPECT_GE(std::get<int64_t>(result.rows[i][0]), std::get<int64_t>(result.rows[i + 1][0]));
+    }
+}
+
+TEST_F(QueryExecutorTest, OrderByDefaultDirection) {
+    insertTestVertices();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5);
+    // Default should be ASC
+    for (size_t i = 0; i < result.rows.size() - 1; ++i) {
+        EXPECT_LE(std::get<int64_t>(result.rows[i][0]), std::get<int64_t>(result.rows[i + 1][0]));
+    }
+}
+
+TEST_F(QueryExecutorTest, OrderByMultipleKeys) {
+    insertTestVertices();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id ASC, id DESC");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 5);
+}
+
+TEST_F(QueryExecutorTest, OrderByEmptyResult) {
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0);
+}
+
+// ==================== M4: DISTINCT Tests ====================
+
+TEST_F(QueryExecutorTest, DistinctProperty) {
+    insertTestVertices();
+
+    // All vertices have the same name pattern but unique names, test with a constant
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN DISTINCT 1 AS x");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1);
+}
+
+TEST_F(QueryExecutorTest, DistinctNoDuplicate) {
+    insertTestVertices();
+
+    // All ids are unique, DISTINCT should keep all rows
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN DISTINCT n.id AS id");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 5);
+}
+
+TEST_F(QueryExecutorTest, DistinctWithOrderBy) {
+    insertTestVertices();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN DISTINCT n.id AS id ORDER BY id ASC");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5);
+    for (size_t i = 0; i < result.rows.size() - 1; ++i) {
+        EXPECT_LE(std::get<int64_t>(result.rows[i][0]), std::get<int64_t>(result.rows[i + 1][0]));
+    }
+}
+
+// ==================== M4: Aggregation Tests ====================
+
+class QueryExecutorAggTest : public ::testing::Test {
+protected:
+    std::string db_path_;
+    std::unique_ptr<SyncGraphDataStore> sync_data_;
+    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<AsyncGraphMetaStore> async_meta_;
+    std::unique_ptr<IoScheduler> io_scheduler_;
+    std::unique_ptr<AsyncGraphDataStore> async_data_;
+    std::unique_ptr<QueryExecutor> executor_;
+
+    LabelId PERSON_LABEL = INVALID_LABEL_ID;
+    EdgeLabelId KNOWS_LABEL = INVALID_EDGE_LABEL_ID;
+
+    void SetUp() override {
+        db_path_ = "/tmp/eugraph_agg_test_" + std::to_string(getpid());
+        std::filesystem::remove_all(db_path_);
+        std::filesystem::create_directories(db_path_ + "/data");
+        std::filesystem::create_directories(db_path_ + "/meta");
+
+        sync_data_ = std::make_unique<SyncGraphDataStore>();
+        ASSERT_TRUE(sync_data_->open(db_path_ + "/data"));
+
+        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
+
+        async_meta_ = std::make_unique<AsyncGraphMetaStore>();
+        io_scheduler_ = std::make_unique<IoScheduler>(2);
+        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
+
+        auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
+        ASSERT_TRUE(opened);
+
+        // Create Person label with age and city properties (prop IDs assigned by metadata store starting from 1)
+        auto person_label_def = blockingWait(
+            async_meta_->createLabel("Person", {PropertyDef{0, "age", PropertyType::INT64, false, std::nullopt},
+                                                PropertyDef{0, "city", PropertyType::STRING, false, std::nullopt}}));
+        PERSON_LABEL = person_label_def;
+        KNOWS_LABEL = blockingWait(async_meta_->createEdgeLabel("KNOWS"));
+
+        ASSERT_NE(PERSON_LABEL, INVALID_LABEL_ID);
+
+        blockingWait(async_data_->createLabel(PERSON_LABEL));
+        blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
+
+        executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    }
+
+    void TearDown() override {
+        executor_.reset();
+        async_data_.reset();
+        io_scheduler_.reset();
+        blockingWait(async_meta_->close());
+        sync_data_->close();
+        sync_meta_->close();
+        std::filesystem::remove_all(db_path_);
+    }
+
+    void insertPersonData() {
+        // Metadata store assigns prop_ids starting from 1: age=1, city=2
+        auto txn = sync_data_->beginTransaction();
+        struct PersonData {
+            VertexId vid;
+            int64_t age;
+            std::string city;
+        };
+        std::vector<PersonData> data = {
+            {1, 25, "Beijing"}, {2, 30, "Beijing"}, {3, 35, "Beijing"}, {4, 28, "Shanghai"}, {5, 32, "Shanghai"}};
+
+        for (const auto& p : data) {
+            Properties props;
+            props.resize(3); // prop_id 1=age, prop_id 2=city
+            props[1] = PropertyValue(p.age);
+            props[2] = PropertyValue(p.city);
+            std::vector<std::pair<LabelId, Properties>> label_props = {{PERSON_LABEL, std::move(props)}};
+            ASSERT_TRUE(sync_data_->insertVertex(txn, p.vid, label_props, nullptr));
+        }
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
+};
+
+TEST_F(QueryExecutorAggTest, CountStar) {
+    insertPersonData();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN count(*)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 5);
+}
+
+TEST_F(QueryExecutorAggTest, CountByGroup) {
+    insertPersonData();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 2); // 2 cities
+}
+
+TEST_F(QueryExecutorAggTest, SumAge) {
+    insertPersonData();
+    auto res = executor_->executeSync("MATCH (n:Person) RETURN sum(n.age) AS total");
+    ASSERT_TRUE(res.error.empty()) << "Sum error: " << res.error;
+    ASSERT_EQ(res.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(res.rows[0][0]), 150);
+}
+
+TEST_F(QueryExecutorAggTest, AvgAge) {
+    insertPersonData();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN avg(n.age) AS avg_age");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 30.0); // 150/5
+}
+
+TEST_F(QueryExecutorAggTest, MinMaxAge) {
+    insertPersonData();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN min(n.age) AS min_age, max(n.age) AS max_age");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 25);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 35);
+}
+
+TEST_F(QueryExecutorAggTest, CountDistinct) {
+    insertPersonData();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN count(DISTINCT n.city) AS cities");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+}
+
+TEST_F(QueryExecutorAggTest, MultipleAggregates) {
+    insertPersonData();
+
+    auto result =
+        executor_->executeSync("MATCH (n:Person) RETURN count(*) AS cnt, sum(n.age) AS total, avg(n.age) AS avg_age");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 5);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 150);
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][2]), 30.0);
+}
+
+TEST_F(QueryExecutorAggTest, AggregateWithGroupBy) {
+    insertPersonData();
+
+    auto result =
+        executor_->executeSync("MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt, avg(n.age) AS avg_age");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2);
+}
+
+TEST_F(QueryExecutorAggTest, AggregateEmptyResult) {
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN count(*) AS cnt");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
+}
+
+TEST_F(QueryExecutorAggTest, AggregateWithOrderBy) {
+    insertPersonData();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt ORDER BY cnt DESC");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2);
+    // Beijing has 3, Shanghai has 2; DESC order → Beijing first
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 3);
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][1]), 2);
+}
+
+TEST_F(QueryExecutorAggTest, AggregateWithSkipLimit) {
+    insertPersonData();
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt SKIP 1 LIMIT 2");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // Only 2 groups, skip 1 → should get 1 row
+    EXPECT_EQ(result.rows.size(), 1);
+}

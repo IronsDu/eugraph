@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <variant>
@@ -104,6 +105,62 @@ struct RowBatch {
 inline bool isList(const Value& v) {
     return std::holds_alternative<ListValue>(v);
 }
+
+// ==================== Hash Support ====================
+
+struct ValueHash {
+    size_t operator()(const Value& v) const noexcept {
+        return std::visit(
+            [](const auto& val) -> size_t {
+                using T = std::decay_t<decltype(val)>;
+                if constexpr (std::is_same_v<T, std::monostate>) {
+                    return 0;
+                } else if constexpr (std::is_same_v<T, bool>) {
+                    return std::hash<bool>{}(val);
+                } else if constexpr (std::is_same_v<T, int64_t>) {
+                    return std::hash<int64_t>{}(val);
+                } else if constexpr (std::is_same_v<T, double>) {
+                    return std::hash<double>{}(val);
+                } else if constexpr (std::is_same_v<T, std::string>) {
+                    return std::hash<std::string>{}(val);
+                } else if constexpr (std::is_same_v<T, VertexValue>) {
+                    return std::hash<uint64_t>{}(val.id);
+                } else if constexpr (std::is_same_v<T, EdgeValue>) {
+                    return std::hash<uint64_t>{}(val.id);
+                } else if constexpr (std::is_same_v<T, ListValue>) {
+                    size_t h = 0;
+                    for (const auto& elem : val.elements) {
+                        h ^= ValueHash{}(elem.value) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    }
+                    return h;
+                }
+                return 0;
+            },
+            v);
+    }
+};
+
+struct RowHash {
+    size_t operator()(const Row& row) const noexcept {
+        size_t h = 0;
+        for (const auto& val : row) {
+            h ^= ValueHash{}(val) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        }
+        return h;
+    }
+};
+
+struct RowEqual {
+    bool operator()(const Row& a, const Row& b) const noexcept {
+        if (a.size() != b.size())
+            return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (!(a[i] == b[i]))
+                return false;
+        }
+        return true;
+    }
+};
 
 // ==================== Execution Result ====================
 

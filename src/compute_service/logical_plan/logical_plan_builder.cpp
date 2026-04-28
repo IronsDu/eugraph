@@ -177,30 +177,118 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
 
 // ==================== RETURN ====================
 
+namespace {
+bool isAggregateFunction(const std::string& name) {
+    return name == "count" || name == "sum" || name == "avg" || name == "min" || name == "max";
+}
+
+bool containsAggregate(const cypher::Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> bool {
+            using T = std::decay_t<decltype(ptr)>;
+            using OpType = typename T::element_type;
+            if constexpr (std::is_same_v<OpType, cypher::FunctionCall>) {
+                return isAggregateFunction(ptr->name);
+            }
+            return false;
+        },
+        expr);
+}
+} // namespace
+
 std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildReturn(cypher::ReturnClause& ret,
                                                                            LogicalOperator input) {
-    auto project = std::make_unique<ProjectOp>();
+    LogicalOperator current;
 
-    if (ret.return_all) {
-        for (const auto& [name, idx] : symbols_) {
-            ProjectOp::ProjectItem item;
-            item.expr = cypher::makeVariable(name);
-            item.alias = name;
-            project->items.push_back(std::move(item));
-        }
-    } else {
-        for (auto& retItem : ret.items) {
-            ProjectOp::ProjectItem item;
-            item.expr = std::move(retItem.expr);
-            item.alias = std::move(retItem.alias);
-            project->items.push_back(std::move(item));
+    // Check if any RETURN item contains an aggregate function
+    bool has_aggregate = false;
+    if (!ret.return_all) {
+        for (const auto& item : ret.items) {
+            if (containsAggregate(item.expr)) {
+                has_aggregate = true;
+                break;
+            }
         }
     }
 
-    project->distinct = ret.distinct;
-    project->children.push_back(std::move(input));
+    if (has_aggregate) {
+        // Build AggregateOp instead of ProjectOp
+        auto aggregate = std::make_unique<AggregateOp>();
+        std::vector<std::string> output_names;
 
-    LogicalOperator current = std::move(project);
+        for (auto& retItem : ret.items) {
+            if (std::holds_alternative<std::unique_ptr<cypher::FunctionCall>>(retItem.expr)) {
+                auto& fc = std::get<std::unique_ptr<cypher::FunctionCall>>(retItem.expr);
+                if (isAggregateFunction(fc->name)) {
+                    // Compute name before moving from fc->args
+                    std::string name = retItem.alias.value_or(cypher::expressionToString(retItem.expr));
+                    AggregateFunc af;
+                    af.func_name = fc->name;
+                    af.distinct = fc->distinct;
+                    if (fc->args.empty()) {
+                        af.arg = cypher::makeLiteral(cypher::NullValue{});
+                    } else {
+                        af.arg = std::move(fc->args[0]);
+                    }
+                    output_names.push_back(name);
+                    aggregate->aggregates.push_back(std::move(af));
+                    continue;
+                }
+            }
+            // Non-aggregate item → group key
+            output_names.push_back(retItem.alias.value_or(cypher::expressionToString(retItem.expr)));
+            aggregate->group_keys.push_back(std::move(retItem.expr));
+        }
+
+        aggregate->output_names = std::move(output_names);
+        aggregate->children.push_back(std::move(input));
+        current = std::move(aggregate);
+    } else {
+        auto project = std::make_unique<ProjectOp>();
+
+        if (ret.return_all) {
+            for (const auto& [name, idx] : symbols_) {
+                ProjectOp::ProjectItem item;
+                item.expr = cypher::makeVariable(name);
+                item.alias = name;
+                project->items.push_back(std::move(item));
+            }
+        } else {
+            for (auto& retItem : ret.items) {
+                ProjectOp::ProjectItem item;
+                item.expr = std::move(retItem.expr);
+                item.alias = std::move(retItem.alias);
+                project->items.push_back(std::move(item));
+            }
+        }
+
+        project->distinct = ret.distinct;
+        project->children.push_back(std::move(input));
+        current = std::move(project);
+    }
+
+    // ORDER BY
+    if (ret.order_by.has_value()) {
+        auto sortOp = std::make_unique<SortOp>();
+        sortOp->sort_items = std::move(ret.order_by->items);
+        sortOp->children.push_back(std::move(current));
+        current = std::move(sortOp);
+    }
+
+    // SKIP
+    if (ret.skip.has_value()) {
+        int64_t skipVal = 0;
+        if (std::holds_alternative<std::unique_ptr<cypher::Literal>>(*ret.skip)) {
+            auto& lit = std::get<std::unique_ptr<cypher::Literal>>(*ret.skip);
+            if (std::holds_alternative<int64_t>(lit->value)) {
+                skipVal = std::get<int64_t>(lit->value);
+            }
+        }
+        auto skipOp = std::make_unique<SkipOp>();
+        skipOp->skip = skipVal;
+        skipOp->children.push_back(std::move(current));
+        current = std::move(skipOp);
+    }
 
     // LIMIT
     if (ret.limit.has_value()) {
@@ -215,6 +303,13 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildReturn(cyphe
         limitOp->limit = limitVal;
         limitOp->children.push_back(std::move(current));
         current = std::move(limitOp);
+    }
+
+    // DISTINCT (after all other operators)
+    if (ret.distinct && !has_aggregate) {
+        auto distinctOp = std::make_unique<DistinctOp>();
+        distinctOp->children.push_back(std::move(current));
+        current = std::move(distinctOp);
     }
 
     return current;
@@ -339,6 +434,27 @@ struct OperatorPrinter {
     }
     void operator()(const std::unique_ptr<ProjectOp>& op) {
         os << indentStr(level) << "Project(distinct=" << (op->distinct ? "true" : "false") << ")\n";
+        for (const auto& child : op->children)
+            printChild(child);
+    }
+    void operator()(const std::unique_ptr<AggregateOp>& op) {
+        os << indentStr(level) << "Aggregate(keys=" << op->group_keys.size() << ", aggs=" << op->aggregates.size()
+           << ")\n";
+        for (const auto& child : op->children)
+            printChild(child);
+    }
+    void operator()(const std::unique_ptr<SortOp>& op) {
+        os << indentStr(level) << "Sort(items=" << op->sort_items.size() << ")\n";
+        for (const auto& child : op->children)
+            printChild(child);
+    }
+    void operator()(const std::unique_ptr<SkipOp>& op) {
+        os << indentStr(level) << "Skip(" << op->skip << ")\n";
+        for (const auto& child : op->children)
+            printChild(child);
+    }
+    void operator()(const std::unique_ptr<DistinctOp>& op) {
+        os << indentStr(level) << "Distinct\n";
         for (const auto& child : op->children)
             printChild(child);
     }

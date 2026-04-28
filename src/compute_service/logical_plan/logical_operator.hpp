@@ -18,6 +18,10 @@ struct LabelScanOp;
 struct ExpandOp;
 struct FilterOp;
 struct ProjectOp;
+struct AggregateOp;
+struct SortOp;
+struct SkipOp;
+struct DistinctOp;
 struct LimitOp;
 struct CreateNodeOp;
 struct CreateEdgeOp;
@@ -26,8 +30,9 @@ struct CreateEdgeOp;
 
 using LogicalOperator =
     std::variant<std::unique_ptr<AllNodeScanOp>, std::unique_ptr<LabelScanOp>, std::unique_ptr<ExpandOp>,
-                 std::unique_ptr<FilterOp>, std::unique_ptr<ProjectOp>, std::unique_ptr<LimitOp>,
-                 std::unique_ptr<CreateNodeOp>, std::unique_ptr<CreateEdgeOp>>;
+                 std::unique_ptr<FilterOp>, std::unique_ptr<ProjectOp>, std::unique_ptr<AggregateOp>,
+                 std::unique_ptr<SortOp>, std::unique_ptr<SkipOp>, std::unique_ptr<DistinctOp>,
+                 std::unique_ptr<LimitOp>, std::unique_ptr<CreateNodeOp>, std::unique_ptr<CreateEdgeOp>>;
 
 // ==================== Scan Operators ====================
 
@@ -75,6 +80,41 @@ struct ProjectOp {
     };
     std::vector<ProjectItem> items;
     bool distinct = false;
+    std::vector<LogicalOperator> children;
+};
+
+// ==================== Aggregate ====================
+
+struct AggregateFunc {
+    std::string func_name; // "count", "sum", "avg", "min", "max"
+    cypher::Expression arg;
+    bool distinct = false;
+};
+
+struct AggregateOp {
+    std::vector<cypher::Expression> group_keys;
+    std::vector<AggregateFunc> aggregates;
+    std::vector<std::string> output_names;
+    std::vector<LogicalOperator> children;
+};
+
+// ==================== Sort ====================
+
+struct SortOp {
+    std::vector<cypher::OrderBy::SortItem> sort_items;
+    std::vector<LogicalOperator> children;
+};
+
+// ==================== Skip ====================
+
+struct SkipOp {
+    int64_t skip = 0;
+    std::vector<LogicalOperator> children;
+};
+
+// ==================== Distinct ====================
+
+struct DistinctOp {
     std::vector<LogicalOperator> children;
 };
 

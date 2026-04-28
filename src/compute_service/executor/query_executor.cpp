@@ -159,7 +159,13 @@ void QueryExecutor::extractColumnsFromLogicalPlan(const LogicalOperator& op, Sch
                         columns.push_back(cypher::expressionToString(item.expr));
                     }
                 }
-            } else if constexpr (std::is_same_v<OpType, LimitOp> || std::is_same_v<OpType, FilterOp>) {
+            } else if constexpr (std::is_same_v<OpType, AggregateOp>) {
+                for (const auto& name : ptr->output_names) {
+                    columns.push_back(name);
+                }
+            } else if constexpr (std::is_same_v<OpType, LimitOp> || std::is_same_v<OpType, FilterOp> ||
+                                 std::is_same_v<OpType, SortOp> || std::is_same_v<OpType, SkipOp> ||
+                                 std::is_same_v<OpType, DistinctOp>) {
                 if (!ptr->children.empty()) {
                     extractColumnsFromLogicalPlan(ptr->children[0], columns);
                 }

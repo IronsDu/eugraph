@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -243,6 +244,114 @@ public:
 private:
     int64_t limit_;
     std::unique_ptr<PhysicalOperator> child_;
+};
+
+// ==================== Skip ====================
+
+class SkipPhysicalOp : public PhysicalOperator {
+public:
+    SkipPhysicalOp(int64_t skip, std::unique_ptr<PhysicalOperator> child) : skip_(skip), child_(std::move(child)) {}
+
+    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    std::string toString() const override {
+        return "Skip(" + std::to_string(skip_) + ")";
+    }
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
+    }
+
+private:
+    int64_t skip_;
+    std::unique_ptr<PhysicalOperator> child_;
+};
+
+// ==================== Sort ====================
+
+class SortPhysicalOp : public PhysicalOperator {
+public:
+    struct SortItem {
+        cypher::Expression expr;
+        cypher::OrderBy::Direction direction;
+    };
+
+    SortPhysicalOp(std::vector<SortItem> sort_items, Schema input_schema, std::unique_ptr<PhysicalOperator> child,
+                   const std::unordered_map<LabelId, LabelDef>* label_defs)
+        : sort_items_(std::move(sort_items)), input_schema_(std::move(input_schema)), child_(std::move(child)) {
+        evaluator_.setLabelDefs(label_defs);
+    }
+
+    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    std::string toString() const override {
+        return "Sort(items=" + std::to_string(sort_items_.size()) + ")";
+    }
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
+    }
+
+private:
+    std::vector<SortItem> sort_items_;
+    Schema input_schema_;
+    std::unique_ptr<PhysicalOperator> child_;
+    ExpressionEvaluator evaluator_;
+};
+
+// ==================== Distinct ====================
+
+class DistinctPhysicalOp : public PhysicalOperator {
+public:
+    DistinctPhysicalOp(std::unique_ptr<PhysicalOperator> child) : child_(std::move(child)) {}
+
+    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    std::string toString() const override {
+        return "Distinct";
+    }
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
+    }
+
+private:
+    std::unique_ptr<PhysicalOperator> child_;
+};
+
+// ==================== Aggregate ====================
+
+class AggregatePhysicalOp : public PhysicalOperator {
+public:
+    struct GroupKey {
+        cypher::Expression expr;
+        std::string name;
+    };
+
+    struct AggregateExpr {
+        std::string func_name; // "count", "sum", "avg", "min", "max"
+        cypher::Expression arg;
+        bool distinct;
+        std::string name;
+    };
+
+    AggregatePhysicalOp(std::vector<GroupKey> group_keys, std::vector<AggregateExpr> aggregates,
+                        std::unique_ptr<PhysicalOperator> child, Schema input_schema,
+                        const std::unordered_map<LabelId, LabelDef>* label_defs)
+        : group_keys_(std::move(group_keys)), aggregates_(std::move(aggregates)), child_(std::move(child)),
+          input_schema_(std::move(input_schema)) {
+        evaluator_.setLabelDefs(label_defs);
+    }
+
+    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    std::string toString() const override {
+        return "Aggregate(keys=" + std::to_string(group_keys_.size()) + ", aggs=" + std::to_string(aggregates_.size()) +
+               ")";
+    }
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
+    }
+
+private:
+    std::vector<GroupKey> group_keys_;
+    std::vector<AggregateExpr> aggregates_;
+    std::unique_ptr<PhysicalOperator> child_;
+    Schema input_schema_;
+    ExpressionEvaluator evaluator_;
 };
 
 // ==================== Create Operators ====================

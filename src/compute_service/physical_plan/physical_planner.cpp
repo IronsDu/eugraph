@@ -153,8 +153,114 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
                 auto child_schema = std::move(child_res.output_schema);
 
                 auto result = std::make_unique<LimitPhysicalOp>(ptr->limit, std::move(child_op));
-                // Limit passes through schema
                 return PlanOperatorResult{std::move(result), std::move(child_schema)};
+
+            } else if constexpr (std::is_same_v<OpType, SkipOp>) {
+                if (ptr->children.size() != 1) {
+                    return "Skip requires exactly one child";
+                }
+                auto child_result = planOperator(ptr->children[0], store, ctx, input_schema);
+                if (std::holds_alternative<std::string>(child_result)) {
+                    return std::get<std::string>(child_result);
+                }
+                auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_op = std::move(child_res.op);
+                auto child_schema = std::move(child_res.output_schema);
+
+                auto result = std::make_unique<SkipPhysicalOp>(ptr->skip, std::move(child_op));
+                return PlanOperatorResult{std::move(result), std::move(child_schema)};
+
+            } else if constexpr (std::is_same_v<OpType, SortOp>) {
+                if (ptr->children.size() != 1) {
+                    return "Sort requires exactly one child";
+                }
+                auto child_result = planOperator(ptr->children[0], store, ctx, input_schema);
+                if (std::holds_alternative<std::string>(child_result)) {
+                    return std::get<std::string>(child_result);
+                }
+                auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_op = std::move(child_res.op);
+                auto child_schema = std::move(child_res.output_schema);
+
+                std::vector<SortPhysicalOp::SortItem> items;
+                for (auto& si : ptr->sort_items) {
+                    SortPhysicalOp::SortItem item;
+                    item.expr = std::move(si.expr);
+                    item.direction = si.direction;
+                    items.push_back(std::move(item));
+                }
+
+                auto result = std::make_unique<SortPhysicalOp>(std::move(items), Schema(child_schema),
+                                                               std::move(child_op), &ctx.label_defs);
+                return PlanOperatorResult{std::move(result), std::move(child_schema)};
+
+            } else if constexpr (std::is_same_v<OpType, DistinctOp>) {
+                if (ptr->children.size() != 1) {
+                    return "Distinct requires exactly one child";
+                }
+                auto child_result = planOperator(ptr->children[0], store, ctx, input_schema);
+                if (std::holds_alternative<std::string>(child_result)) {
+                    return std::get<std::string>(child_result);
+                }
+                auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_op = std::move(child_res.op);
+                auto child_schema = std::move(child_res.output_schema);
+
+                auto result = std::make_unique<DistinctPhysicalOp>(std::move(child_op));
+                return PlanOperatorResult{std::move(result), std::move(child_schema)};
+
+            } else if constexpr (std::is_same_v<OpType, AggregateOp>) {
+                if (ptr->children.size() != 1) {
+                    return "Aggregate requires exactly one child";
+                }
+                auto child_result = planOperator(ptr->children[0], store, ctx, input_schema);
+                if (std::holds_alternative<std::string>(child_result)) {
+                    return std::get<std::string>(child_result);
+                }
+                auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+                auto child_op = std::move(child_res.op);
+                auto child_schema = std::move(child_res.output_schema);
+
+                std::vector<AggregatePhysicalOp::GroupKey> group_keys;
+                for (auto& gk : ptr->group_keys) {
+                    AggregatePhysicalOp::GroupKey key;
+                    key.expr = std::move(gk);
+                    // Name will be set from output_names
+                    group_keys.push_back(std::move(key));
+                }
+
+                std::vector<AggregatePhysicalOp::AggregateExpr> aggregates;
+                for (auto& af : ptr->aggregates) {
+                    AggregatePhysicalOp::AggregateExpr ae;
+                    ae.func_name = std::move(af.func_name);
+                    ae.arg = std::move(af.arg);
+                    ae.distinct = af.distinct;
+                    aggregates.push_back(std::move(ae));
+                }
+
+                // Build output schema: group_key_names + aggregate_names
+                Schema output_schema;
+                size_t gk_idx = 0;
+                for (size_t i = 0; i < ptr->output_names.size(); ++i) {
+                    if (gk_idx < group_keys.size() && i < group_keys.size() + aggregates.size()) {
+                        output_schema.push_back(ptr->output_names[i]);
+                    }
+                }
+                // Simpler: just use output_names directly
+                output_schema = Schema(ptr->output_names);
+
+                // Set group key names
+                for (size_t i = 0; i < group_keys.size() && i < ptr->output_names.size(); ++i) {
+                    group_keys[i].name = ptr->output_names[i];
+                }
+                for (size_t i = 0; i < aggregates.size() && group_keys.size() + i < ptr->output_names.size(); ++i) {
+                    aggregates[i].name = ptr->output_names[group_keys.size() + i];
+                }
+
+                auto result =
+                    std::make_unique<AggregatePhysicalOp>(std::move(group_keys), std::move(aggregates),
+                                                          std::move(child_op), Schema(child_schema), &ctx.label_defs);
+                return PlanOperatorResult{std::move(result), std::move(output_schema)};
 
             } else if constexpr (std::is_same_v<OpType, CreateNodeOp>) {
                 std::unique_ptr<PhysicalOperator> child_op;
