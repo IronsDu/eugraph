@@ -78,6 +78,5 @@ eugraph/
 │   ├── test_query_executor.cpp          # 查询执行器测试 (47 tests)
 │   └── test_rpc_integration.cpp         # RPC 集成测试 (8 tests)
 │
-├── docs/                                # 设计文档
-└── plan.md                              # 开发计划与进度
+└── docs/                                # 设计文档
 ```
