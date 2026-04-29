@@ -45,6 +45,31 @@ private:
     std::variant<PlanOperatorResult, std::string> planOperator(LogicalOperator& op, IAsyncGraphDataStore& store,
                                                                PlanContext& ctx, Schema input_schema);
 
+    std::variant<PlanOperatorResult, std::string> planAllNodeScan(AllNodeScanOp& op, IAsyncGraphDataStore& store,
+                                                                  PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planLabelScan(LabelScanOp& op, IAsyncGraphDataStore& store,
+                                                                PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planExpand(ExpandOp& op, IAsyncGraphDataStore& store,
+                                                             PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planFilter(FilterOp& op, IAsyncGraphDataStore& store,
+                                                             PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planProject(ProjectOp& op, IAsyncGraphDataStore& store,
+                                                              PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planLimit(LimitOp& op, IAsyncGraphDataStore& store, PlanContext& ctx,
+                                                            Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planSkip(SkipOp& op, IAsyncGraphDataStore& store, PlanContext& ctx,
+                                                           Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planSort(SortOp& op, IAsyncGraphDataStore& store, PlanContext& ctx,
+                                                           Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planDistinct(DistinctOp& op, IAsyncGraphDataStore& store,
+                                                               PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planAggregate(AggregateOp& op, IAsyncGraphDataStore& store,
+                                                                PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planCreateNode(CreateNodeOp& op, IAsyncGraphDataStore& store,
+                                                                 PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planCreateEdge(CreateEdgeOp& op, IAsyncGraphDataStore& store,
+                                                                 PlanContext& ctx, Schema input_schema);
+
     std::optional<PlanOperatorResult> tryIndexScan(LabelScanOp& scan_op, cypher::BinaryOp& binop, LabelId label_id,
                                                    const LabelDef& label_def, IAsyncGraphDataStore& store,
                                                    PlanContext& ctx);
