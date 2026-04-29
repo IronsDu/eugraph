@@ -125,7 +125,19 @@ add_library(eugraph_query_engine STATIC
     src/compute_service/logical_plan/logical_plan_builder.cpp
     src/storage/data/async_graph_data_store.cpp
     src/compute_service/executor/expression_evaluator.cpp
-    src/compute_service/physical_plan/physical_operator.cpp
+    src/compute_service/physical_plan/operator/aggregate_physical_op.cpp
+    src/compute_service/physical_plan/operator/all_node_scan_physical_op.cpp
+    src/compute_service/physical_plan/operator/create_edge_physical_op.cpp
+    src/compute_service/physical_plan/operator/create_node_physical_op.cpp
+    src/compute_service/physical_plan/operator/distinct_physical_op.cpp
+    src/compute_service/physical_plan/operator/expand_physical_op.cpp
+    src/compute_service/physical_plan/operator/filter_physical_op.cpp
+    src/compute_service/physical_plan/operator/index_scan_physical_op.cpp
+    src/compute_service/physical_plan/operator/label_scan_physical_op.cpp
+    src/compute_service/physical_plan/operator/limit_physical_op.cpp
+    src/compute_service/physical_plan/operator/project_physical_op.cpp
+    src/compute_service/physical_plan/operator/skip_physical_op.cpp
+    src/compute_service/physical_plan/operator/sort_physical_op.cpp
     src/compute_service/physical_plan/physical_planner.cpp
     src/compute_service/executor/query_executor.cpp
 )
