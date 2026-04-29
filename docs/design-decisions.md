@@ -1,6 +1,6 @@
 # 设计调整记录
 
-> 参见 [overview.md](overview.md) 返回文档导航
+> [历史记录] 参见 [overview.md](overview.md) 返回文档导航
 
 记录项目过程中的关键设计决策变更，供后续开发参考。
 

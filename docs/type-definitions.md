@@ -1,131 +1,131 @@
 # 核心类型定义
 
-> 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+
+源码：`src/common/types/graph_types.hpp`
+
+---
+
+## ID 类型
 
 ```cpp
-// src/common/types/graph_types.hpp
-
-#pragma once
-
-#include <string>
-#include <cstdint>
-#include <optional>
-#include <variant>
-#include <unordered_map>
-#include <set>
-#include <vector>
-
-namespace eugraph {
-
-// ==================== ID 类型 ====================
 using VertexId = uint64_t;
 using EdgeId = uint64_t;
-using TransactionId = uint64_t;
-using SnapshotId = uint64_t;
-using SessionId = uint64_t;
-
 using LabelId = uint16_t;
 using EdgeLabelId = uint16_t;
-
 using LabelName = std::string;
 using EdgeLabelName = std::string;
+using GraphTxnHandle = void*;  // 不透明事务句柄，指向内部 TxnState
 
-// 特殊值
 constexpr VertexId INVALID_VERTEX_ID = 0;
 constexpr EdgeId INVALID_EDGE_ID = 0;
 constexpr LabelId INVALID_LABEL_ID = 0;
 constexpr EdgeLabelId INVALID_EDGE_LABEL_ID = 0;
+constexpr GraphTxnHandle INVALID_GRAPH_TXN = nullptr;
+```
 
-// ==================== Label ID 集合 ====================
-using LabelIdSet = std::set<LabelId>;
+---
 
-// ==================== 属性值类型 ====================
-using PropertyValue = std::variant<
-    std::monostate,
-    bool,
-    int64_t,
-    double,
-    std::string,
-    std::vector<int64_t>,
-    std::vector<double>,
-    std::vector<std::string>
->;
+## 属性值
 
-// 属性值按 prop_id 索引存储，prop_id 作为数组下标
-// 示例：properties[1] 存储 prop_id=1 的属性值
-using Properties = std::vector<std::optional<PropertyValue>>;
+```cpp
+using PropertyValue = variant<monostate, bool, int64_t, double, string,
+                              vector<int64_t>, vector<double>, vector<string>>;
+using Properties = vector<optional<PropertyValue>>;  // 按 prop_id 索引的稀疏数组
 
-// ==================== 顶点 ====================
+enum class PropertyType { BOOL, INT64, DOUBLE, STRING, INT64_ARRAY, DOUBLE_ARRAY, STRING_ARRAY };
+
+struct PropertyDef {
+    uint16_t id = 0;
+    string name;
+    PropertyType type;
+    bool required = false;
+    optional<PropertyValue> default_value;
+};
+```
+
+Properties 向量以 prop_id 为下标，prop_id 从 1 开始（索引 0 不使用）。prop_id 在每个 Label/EdgeLabel 内独立编号、永不复用。
+
+---
+
+## 顶点与边
+
+```cpp
 struct Vertex {
     VertexId id;
-    Properties properties;
+    Properties properties;  // 注意：不含 labels（labels 通过 L| 索引单独查询）
 };
 
-// ==================== 边 ====================
 struct Edge {
     EdgeId id;
     VertexId src_id;
     VertexId dst_id;
     EdgeLabelId label_id;
-    Direction direction;    // 仅内存对象，不持久化（从索引 key 解析）
+    Direction direction;     // 仅内存对象，不持久化
     Properties properties;
 };
 
-// ==================== 方向 ====================
-enum class Direction : uint8_t {
-    OUT = 0x00,
-    IN  = 0x01,
-    BOTH = 0x02
-};
+enum class Direction : uint8_t { OUT = 0x00, IN = 0x01, BOTH = 0x02 };
+using LabelIdSet = set<LabelId>;
+```
 
-// ==================== 隔离级别 ====================
-enum class IsolationLevel {
-    READ_UNCOMMITTED,
-    READ_COMMITTED,
-    REPEATABLE_READ,
-    SERIALIZABLE
-};
+---
 
-// ==================== 属性类型 ====================
-enum class PropertyType {
-    BOOL,
-    INT64,
-    DOUBLE,
-    STRING,
-    INT64_ARRAY,
-    DOUBLE_ARRAY,
-    STRING_ARRAY
-};
+## 索引
 
-struct PropertyDef {
-    uint16_t id = 0;                    // 属性 ID（在 Label/EdgeLabel 内独立编号）
-    std::string name;
-    PropertyType type;
-    bool required = false;
-    std::optional<PropertyValue> default_value;
+```cpp
+enum class IndexState : uint8_t {
+    WRITE_ONLY  = 0,  // 创建中：写入维护索引，查询不可用
+    PUBLIC      = 1,  // 已就绪：完全可用
+    DELETE_ONLY = 2,  // 删除中：仅清理残留条目
+    ERROR       = 3,  // 异常：唯一索引回填发现重复值
 };
+```
 
-// ==================== 标签定义 ====================
+---
+
+## Label / EdgeLabel 定义
+
+```cpp
 struct LabelDef {
     LabelId id = INVALID_LABEL_ID;
     LabelName name;
-    std::vector<PropertyDef> properties;
+    vector<PropertyDef> properties;
 
     struct IndexDef {
-        std::string name;
-        std::vector<uint16_t> prop_ids;  // 索引包含的属性 ID 列表
+        string name;
+        vector<uint16_t> prop_ids;
         bool unique = false;
+        IndexState state = IndexState::WRITE_ONLY;
     };
-    std::vector<IndexDef> indexes;
+    vector<IndexDef> indexes;
 };
 
-// ==================== 边标签定义 ====================
 struct EdgeLabelDef {
     EdgeLabelId id = INVALID_EDGE_LABEL_ID;
     EdgeLabelName name;
-    std::vector<PropertyDef> properties;
+    vector<PropertyDef> properties;
     bool directed = true;
+    vector<LabelDef::IndexDef> indexes;  // 边属性索引
 };
+```
 
-} // namespace eugraph
+---
+
+## 运行时类型
+
+```cpp
+// 查询执行中的值类型（src/compute_service/executor/row.hpp）
+struct VertexValue { VertexId id; LabelIdSet labels; Properties properties; };
+struct EdgeValue { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; Properties properties; };
+using ListValue = vector<Value>;
+using Value = variant<monostate, bool, int64_t, double, string, VertexValue, EdgeValue, ListValue>;
+
+using Row = vector<Value>;         // 位置式行
+using Schema = vector<string>;     // 列名列表
+
+struct RowBatch {
+    static constexpr size_t CAPACITY = 1024;
+    vector<Row> rows;
+};
 ```

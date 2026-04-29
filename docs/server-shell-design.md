@@ -1,158 +1,110 @@
-# fbthrift 服务层 + eugraph-shell 设计
+# fbthrift 服务层 + Shell 设计
 
-## 目标
-
-让用户可以通过交互式 Shell 手动体验 EuGraph 的完整流程：
-DDL（创建标签/关系类型）→ DML（写入点/边）→ 查询（邻接、过滤等）
+> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
 
 ## 架构
 
 ```
 ┌──────────────────────┐               ┌──────────────────────────────────────┐
 │    eugraph-shell     │               │         eugraph-server               │
-│    (CLI REPL)        │               │         (全功能单机节点)              │
+│    (CLI REPL)        │               │                                      │
+│                      │               │  EuGraphHandler                      │
+│  :create-label  ─────┤               │  ├─ DDL: createLabel / createEdgeLabel
+│  :create-edge-l ─────┤── fbthrift ──►│  ├─ DML: executeCypher (流式)        │
+│  Cypher queries ─────┤    (TCP)      │  ├─ Batch: batchInsertVertices/Edges │
+│  :help / :exit       │               │  └─ Index: createIndex / dropIndex    │
 │                      │               │                                      │
-│  :create-label  ─────┤               │  ┌──────────────────────────────┐    │
-│  :create-edge-l ─────┤── fbthrift ──►│  │  EuGraphHandler              │    │
-│  :list-labels   ─────┤    (TCP)      │  │  (依赖 async 接口)            │    │
-│  Cypher queries ─────┤               │  └──────────┬───────────────────┘    │
-│  :help / :exit       │               │             │                        │
-│                      │               │    ┌────────▼────────┐              │
-└──────────────────────┘               │    │ IAsyncGraphMeta  │              │
-                                       │    │ IAsyncGraphData  │              │
-                                       │    │ QueryExecutor    │              │
-                                       │    └─────────────────┘              │
-                                       └──────────────────────────────────────┘
+└──────────────────────┘               └──────────────────────────────────────┘
 ```
 
 ## 1. eugraph-server
 
-文件位置：`src/server/`
+### 启动参数
 
-### 组件
+```
+eugraph-server --port 9090 --data-dir ./eugraph-data --threads 4
+```
 
-- `eugraph_server_main.cpp` — 入口，解析命令行参数，初始化存储层，启动服务
-- `eugraph_handler.hpp/cpp` — Thrift handler，将 Thrift 请求路由到 async 接口
+`--threads` 控制 compute 线程数，IO 线程数固定为 4。
 
 ### 启动流程
 
-```
-1. 解析命令行参数（--port, --data-dir, --threads）
-2. 创建 SyncGraphDataStore，open({data_dir}/data)
-3. 创建 SyncGraphMetaStore，open({data_dir}/meta)
-4. 创建共享 IoScheduler(io_threads)
-5. 创建 AsyncGraphDataStore(sync_data, io_scheduler)
-6. 创建 AsyncGraphMetaStore，open(sync_meta, io_scheduler)
-7. 创建 QueryExecutor(async_data, async_meta, config)
-8. 创建 EuGraphHandler(async_data, async_meta, executor)
-9. 启动 fbthrift server
-```
+1. 创建 SyncGraphDataStore（`{data_dir}/data`）+ SyncGraphMetaStore（`{data_dir}/meta`）
+2. 创建共享 `IoScheduler(io_threads=4)`
+3. 创建 AsyncGraphDataStore + AsyncGraphMetaStore
+4. 创建 QueryExecutor(async_data, async_meta, config{compute_threads})
+5. 创建 EuGraphHandler
+6. Thrift server 使用 `IOThreadPoolExecutor` 同时作为 IO 和 handler 线程池
 
-### 命令行参数
+### Handler 方法
 
-```
-eugraph-server [--port 9090] [--data-dir ./eugraph-data] [--threads 4]
-```
+| 方法 | 实现 |
+|------|------|
+| `co_createLabel` | `async_meta_.createLabel()` → `async_data_.createLabel()` |
+| `co_createEdgeLabel` | `async_meta_.createEdgeLabel()` → `async_data_.createEdgeLabel()` |
+| `co_listLabels` / `co_listEdgeLabels` | 直接查 meta store |
+| `co_executeCypher` | `executor_.prepareStream()` → `StreamContext` → `makeStreamGenerator` → `ServerStream<ResultRowBatch>` |
+| `co_batchInsertVertices` / `co_batchInsertEdges` | 批量写入（独立事务，供 loader 使用） |
 
-### Handler 实现
+### 流式执行
 
-`EuGraphHandler` 依赖 `IAsyncGraphDataStore` 和 `IAsyncGraphMetaStore`：
+`co_executeCypher` 返回 `ResponseAndServerStream<QueryStreamMeta, ResultRowBatch>`：
 
-```cpp
-EuGraphHandler(IAsyncGraphDataStore& async_data,
-               IAsyncGraphMetaStore& async_meta,
-               compute::QueryExecutor& executor);
-```
+1. `prepareStream()` 返回 `shared_ptr<StreamContext>`（含物理算子树 + AsyncGenerator + 事务）
+2. `makeStreamGenerator` 将 `AsyncGenerator<RowBatch>` 包装：逐批转换 Value → Thrift 类型，`co_yield ResultRowBatch`
+3. 流正常结束时 `commitTran`；客户端断连则隐式回滚
 
-- `co_createLabel` → `co_await async_meta_.createLabel()` + `co_await async_data_.createLabel()`
-- `co_createEdgeLabel` → `co_await async_meta_.createEdgeLabel()` + `co_await async_data_.createEdgeLabel()`
-- `co_listLabels` → `co_await async_meta_.listLabels()`
-- `co_listEdgeLabels` → `co_await async_meta_.listEdgeLabels()`
-- `co_executeCypher` → `executor_.executeAsync()`，结果转 Thrift QueryResult
+详细见 [execution-model.md](execution-model.md)。
 
-### Value 转换
+### Value → Thrift 转换
 
-QueryExecutor 返回 `Row`（`vector<Value>`），Handler 遍历 Row 转换为 `ResultValue`：
 - `monostate` → null
-- `bool/int64_t/double/string` → 对应 thrift 字段
-- `VertexValue` → JSON string (vertex_json)
-- `EdgeValue` → JSON string (edge_json)
+- `bool/int64_t/double/string` → 对应 Thrift 字段
+- `VertexValue` / `EdgeValue` → JSON string
 
 ## 2. eugraph-shell
 
-文件位置：`src/shell/`
-
 ### 双模式
-
-Shell 支持两种运行模式：
 
 | 模式 | 启动参数 | 说明 |
 |------|----------|------|
-| RPC 模式 | `--host ::1 --port 9090` | 连接远程 server |
-| 嵌入式模式 | `-d /path/to/data` | 本地嵌入式，不需要 server |
+| RPC 模式 | `--host ::1 --port 9090` | 连接远程 server，流式消费 `ClientBufferedStream` |
+| 嵌入式模式 | `-d /path/to/data` | 本地直连存储层，绕过 RPC |
 
-### REPL 设计
-
-```
-eugraph> :create-label Person name:STRING age:INT64
-Label created: Person (id=1)
-
-eugraph> :create-edge-label KNOWS since:INT64
-EdgeLabel created: KNOWS (id=1)
-
-eugraph> :list-labels
-+----+--------+---------------------+
-| ID | Name   | Properties          |
-+----+--------+---------------------+
-|  1 | Person | name, age           |
-+----+--------+---------------------+
-
-eugraph> CREATE (alice:Person {name: "Alice", age: 30});
-OK
-
-eugraph> MATCH (n:Person) RETURN n.name, n.age;
-+---------+-------+
-| n.name  | n.age |
-+---------+-------+
-| "Alice" | 30    |
-+---------+-------+
-1 rows
-
-eugraph> :exit
-Bye!
-```
+RPC 模式下查询结果通过 `subscribeInline` 流式打印；嵌入式模式下调用 `executor_.executeAsync()` 全量获取。
 
 ### Shell 命令
 
-| 命令 | 说明 | Thrift API |
-|------|------|-----------|
-| `:create-label <name> <prop1>:<type1> ...` | 创建标签 | `createLabel` |
-| `:create-edge-label <name> <prop1>:<type1> ...` | 创建关系类型 | `createEdgeLabel` |
-| `:list-labels` | 列出所有标签 | `listLabels` |
-| `:list-edge-labels` | 列出所有关系类型 | `listEdgeLabels` |
-| `:help` | 显示帮助 | 本地 |
-| `:exit` / `:quit` | 退出 Shell | 本地 |
-| 其他（不以 `:` 开头） | 作为 Cypher 查询发送 | `executeCypher` |
+| 命令 | 说明 |
+|------|------|
+| `:create-label <name> <prop1>:<type1> ...` | 创建标签 |
+| `:create-edge-label <name> <prop1>:<type1> ...` | 创建关系类型 |
+| `:list-labels` / `:list-edge-labels` | 列出标签/关系类型 |
+| `:help` / `:exit` / `:quit` | 帮助/退出 |
+| 其他（不以 `:` 开头） | 作为 Cypher 查询发送，`;` 结尾 |
 
 ### 多行输入
 
-Cypher 查询以 `;` 结尾。如果输入不以 `;` 结尾，进入多行模式：
+不以 `;` 结尾时进入多行续写模式（`......> ` 提示符）。
 
-```
-eugraph> MATCH (n:Person)
-......> WHERE n.age > 25
-......> RETURN n.name, n.age;
-```
+## 3. RPC 客户端
 
-## 3. 目录结构
+`EuGraphRpcClient` 管理独立的 `folly::EventBase` 后台线程（`loopForever()`）。
+
+- DDL 调用使用 `semifuture_*().via(evb).get()` 模式（避免与 `loopForever()` 冲突）
+- 查询使用 `sync_executeCypher` 获取 `ResponseAndClientBufferedStream`，`subscribeInline` 消费
+- 初始化时 `evb_->runInEventBaseThreadAndWait()` 完成连接
+
+## 4. 文件结构
 
 ```
 src/server/
-├── eugraph_server_main.cpp     # 服务入口
-└── eugraph_handler.hpp/cpp     # Thrift handler
-
+  eugraph_server_main.cpp     # 服务入口
+  eugraph_handler.hpp/cpp     # Thrift handler
 src/shell/
-├── shell_main.cpp              # Shell 入口
-├── shell_repl.hpp/cpp          # REPL 逻辑 (embedded + RPC)
-└── rpc_client.hpp/cpp          # Thrift 客户端
+  shell_main.cpp              # Shell 入口
+  shell_repl.hpp/cpp          # REPL 逻辑 (embedded + RPC)
+  rpc_client.hpp/cpp          # Thrift 客户端封装
+proto/
+  eugraph.thrift              # IDL 定义 (含 QueryStreamMeta, ResultRowBatch, batchInsert)
 ```

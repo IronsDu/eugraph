@@ -1,5 +1,7 @@
 # CSV Loader 设计文档
 
+> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+
 ## 1. 概述
 
 批量 CSV 数据装载工具（`eugraph-loader`），通过 RPC 连接 eugraph server，将 LDBC SNB 格式的 CSV 数据导入图数据库。

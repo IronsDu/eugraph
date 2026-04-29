@@ -1,6 +1,6 @@
 # DDL（数据定义语言）设计
 
-> 参见 [overview.md](overview.md) 返回文档导航
+> [设计规划] 参见 [overview.md](overview.md) 返回文档导航
 
 本文档描述 schema 级别的 DDL 操作设计，包括删除标签类型、删除关系类型、列的增删改等。
 
