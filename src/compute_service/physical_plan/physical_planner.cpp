@@ -23,8 +23,8 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
             using OpType = typename T::element_type;
 
             if constexpr (std::is_same_v<OpType, AllNodeScanOp>) {
-                auto result =
-                    std::make_unique<AllNodeScanPhysicalOp>(ptr->variable, store, ctx.label_name_to_id, *ctx.label_defs);
+                auto result = std::make_unique<AllNodeScanPhysicalOp>(ptr->variable, store, ctx.label_name_to_id,
+                                                                      *ctx.label_defs);
                 Schema output_schema;
                 if (!ptr->variable.empty()) {
                     output_schema.push_back(ptr->variable);

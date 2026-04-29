@@ -15,12 +15,11 @@ int64_t nowMs() {
         .count();
 }
 
-folly::coro::AsyncGenerator<eugraph::thrift::ResultRowBatch&&> makeStreamGenerator(
-    std::shared_ptr<eugraph::compute::StreamContext> ctx,
-    std::unordered_map<eugraph::LabelId, eugraph::LabelDef> label_defs,
-    std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
-    eugraph::server::EuGraphHandler* handler,
-    int64_t t0) {
+folly::coro::AsyncGenerator<eugraph::thrift::ResultRowBatch&&>
+makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
+                    std::unordered_map<eugraph::LabelId, eugraph::LabelDef> label_defs,
+                    std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
+                    eugraph::server::EuGraphHandler* handler, int64_t t0) {
     size_t total_rows = 0;
     while (auto batch = co_await ctx->gen.next()) {
         eugraph::thrift::ResultRowBatch thrift_batch;
@@ -355,8 +354,8 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
 
     auto gen = makeStreamGenerator(std::move(ctx), std::move(label_defs), std::move(edge_label_defs), this, t0);
 
-    co_return apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>{
-        std::move(meta), std::move(gen)};
+    co_return apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>{std::move(meta),
+                                                                                                       std::move(gen)};
 }
 
 // ==================== Batch Import ====================

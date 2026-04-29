@@ -51,7 +51,6 @@ public:
                                       const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs);
 
 private:
-
     static ::eugraph::PropertyType toPropertyType(thrift::PropertyType t);
     static PropertyDef toPropertyDef(const thrift::PropertyDefThrift& req, uint16_t id);
     static PropertyValue thriftToPropertyValue(const thrift::PropertyValueThrift& v);

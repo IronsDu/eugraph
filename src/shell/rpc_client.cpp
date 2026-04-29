@@ -23,8 +23,8 @@ EuGraphRpcClient::EuGraphRpcClient(const std::string& host, int port)
 }
 
 EuGraphRpcClient::EuGraphRpcClient(std::unique_ptr<apache::thrift::Client<thrift::EuGraphService>> client)
-    : port_(0), evb_(std::make_unique<folly::EventBase>()),
-      evb_thread_([this] { evb_->loopForever(); }), client_(std::move(client)) {
+    : port_(0), evb_(std::make_unique<folly::EventBase>()), evb_thread_([this] { evb_->loopForever(); }),
+      client_(std::move(client)) {
     evb_->waitUntilRunning();
 }
 

@@ -26,7 +26,9 @@ public:
 
     bool connect();
 
-    folly::EventBase* evb() { return evb_.get(); }
+    folly::EventBase* evb() {
+        return evb_.get();
+    }
 
     // DDL
     thrift::LabelInfo createLabel(const std::string& name, const std::vector<thrift::PropertyDefThrift>& properties);

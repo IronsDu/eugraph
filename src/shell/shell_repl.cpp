@@ -560,16 +560,15 @@ static void runRpcRepl(const ShellConfig& config) {
                 } catch (const std::exception& e) {
                     std::cerr << "Error: " << e.what() << std::endl;
                 }
+            } else {
+                std::cerr << "Unknown command: " << cmd << std::endl;
             }
-        else {
-            std::cerr << "Unknown command: " << cmd << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "RPC error: " << e.what() << std::endl;
         }
-    } catch (const std::exception& e) {
-        std::cerr << "RPC error: " << e.what() << std::endl;
-    }
-};
+    };
 
-runReplLoop("rpc", cmd_handler);
+    runReplLoop("rpc", cmd_handler);
 }
 
 // ==================== Public REPL entry ====================
