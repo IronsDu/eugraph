@@ -1,5 +1,7 @@
 #include "server/eugraph_handler.hpp"
 
+#include <thrift/lib/cpp2/async/ServerStream.h>
+
 #include <spdlog/spdlog.h>
 
 #include <chrono>
@@ -11,6 +13,28 @@ namespace {
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
         .count();
+}
+
+folly::coro::AsyncGenerator<eugraph::thrift::ResultRowBatch&&>
+makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
+                    std::unordered_map<eugraph::LabelId, eugraph::LabelDef> label_defs,
+                    std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
+                    eugraph::server::EuGraphHandler* handler, int64_t t0) {
+    size_t total_rows = 0;
+    while (auto batch = co_await ctx->gen.next()) {
+        eugraph::thrift::ResultRowBatch thrift_batch;
+        for (auto& row : batch->rows) {
+            eugraph::thrift::ResultRow row_resp;
+            for (auto& val : row) {
+                row_resp.values()->push_back(handler->valueToThrift(val, label_defs, edge_label_defs));
+            }
+            thrift_batch.rows()->push_back(std::move(row_resp));
+        }
+        total_rows += batch->rows.size();
+        co_yield std::move(thrift_batch);
+    }
+    co_await ctx->store->commitTran(ctx->txn);
+    spdlog::info("[handler] executeCypher stream done, {} rows, took={}ms", total_rows, nowMs() - t0);
 }
 } // namespace
 
@@ -301,32 +325,18 @@ folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> EuGraphHa
     co_return resp;
 }
 
-// ==================== DML: Cypher ====================
+// ==================== DML: Cypher (streaming) ====================
 
-folly::coro::Task<std::unique_ptr<thrift::QueryResult>>
+folly::coro::Task<apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
 EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
     auto t0 = nowMs();
     spdlog::info("[handler] executeCypher start, query='{}'", *query);
 
-    spdlog::info("{} 11111111", __FUNCTION__);
-    auto result = co_await executor_.executeAsync(*query);
-    spdlog::info("{} 2222222222", __FUNCTION__);
+    auto ctx = co_await executor_.prepareStream(*query);
 
-    // In RPC mode, IO threads run an EventBase loop. Switch back to the
-    // originating EventBase so the Thrift response is sent promptly.
-    // In embedded mode (shell), there is no running EventBase loop — skip.
-    auto* ioEvb = folly::EventBaseManager::get()->getExistingEventBase();
-    if (ioEvb && ioEvb->isRunning()) {
-        co_await folly::coro::co_withExecutor(ioEvb,
-                                              folly::coro::co_invoke([]() -> folly::coro::Task<void> { co_return; }));
-    }
-
-    spdlog::info("{} 3333333333", __FUNCTION__);
-    auto resp = std::make_unique<thrift::QueryResult>();
-
-    if (!result.error.empty()) {
-        resp->error() = std::move(result.error);
-        co_return resp;
+    if (!ctx->error.empty()) {
+        spdlog::info("[handler] executeCypher error: {}, took={}ms", ctx->error, nowMs() - t0);
+        throw std::runtime_error(ctx->error);
     }
 
     // Fetch label definitions for vertex/edge JSON serialization
@@ -339,19 +349,13 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
     for (const auto& el : edge_labels)
         edge_label_defs[el.id] = el;
 
-    resp->columns() = std::move(result.columns);
+    thrift::QueryStreamMeta meta;
+    meta.columns() = std::move(ctx->columns);
 
-    for (const auto& row : result.rows) {
-        thrift::ResultRow row_resp;
-        for (const auto& val : row) {
-            row_resp.values()->push_back(valueToThrift(val, label_defs, edge_label_defs));
-        }
-        resp->rows()->push_back(std::move(row_resp));
-    }
+    auto gen = makeStreamGenerator(std::move(ctx), std::move(label_defs), std::move(edge_label_defs), this, t0);
 
-    resp->rows_affected() = static_cast<int64_t>(result.rows.size());
-    spdlog::info("[handler] executeCypher done, {} rows, took={}ms", result.rows.size(), nowMs() - t0);
-    co_return resp;
+    co_return apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>{std::move(meta),
+                                                                                                       std::move(gen)};
 }
 
 // ==================== Batch Import ====================

@@ -17,12 +17,21 @@ static int64_t nowMs() {
 }
 
 EuGraphRpcClient::EuGraphRpcClient(const std::string& host, int port)
-    : host_(host), port_(port), evb_(std::make_unique<folly::EventBase>()) {}
+    : host_(host), port_(port), evb_(std::make_unique<folly::EventBase>()),
+      evb_thread_([this] { evb_->loopForever(); }) {
+    evb_->waitUntilRunning();
+}
 
 EuGraphRpcClient::EuGraphRpcClient(std::unique_ptr<apache::thrift::Client<thrift::EuGraphService>> client)
-    : port_(0), evb_(std::make_unique<folly::EventBase>()), client_(std::move(client)) {}
+    : port_(0), evb_(std::make_unique<folly::EventBase>()), evb_thread_([this] { evb_->loopForever(); }),
+      client_(std::move(client)) {
+    evb_->waitUntilRunning();
+}
 
-EuGraphRpcClient::~EuGraphRpcClient() = default;
+EuGraphRpcClient::~EuGraphRpcClient() {
+    evb_->runInEventBaseThread([this] { evb_->terminateLoopSoon(); });
+    evb_thread_.join();
+}
 
 bool EuGraphRpcClient::connect() {
     if (client_) {
@@ -31,15 +40,14 @@ bool EuGraphRpcClient::connect() {
 
     try {
         auto t0 = nowMs();
-        auto socket = folly::AsyncSocket::UniquePtr(new folly::AsyncSocket(evb_.get(), host_.c_str(), port_));
+        evb_->runInEventBaseThreadAndWait([&] {
+            auto socket = folly::AsyncSocket::UniquePtr(new folly::AsyncSocket(evb_.get(), host_.c_str(), port_));
+            auto channel = apache::thrift::RocketClientChannel::newChannel(std::move(socket));
+            channel->setTimeout(30000);
+            client_ = std::make_unique<apache::thrift::Client<thrift::EuGraphService>>(std::move(channel));
+        });
         auto t1 = nowMs();
-        auto channel = apache::thrift::RocketClientChannel::newChannel(std::move(socket));
-        auto t2 = nowMs();
-        channel->setTimeout(30000);
-        client_ = std::make_unique<apache::thrift::Client<thrift::EuGraphService>>(std::move(channel));
-        auto t3 = nowMs();
-        spdlog::info("[rpc_client] connect: socket={}ms, channel={}ms, client={}ms, total={}ms", t1 - t0, t2 - t1,
-                     t3 - t2, t3 - t0);
+        spdlog::info("[rpc_client] connect: total={}ms", t1 - t0);
         return true;
     } catch (const std::exception& e) {
         spdlog::error("Failed to connect to server at {}:{}: {}", host_, port_, e.what());
@@ -49,41 +57,36 @@ bool EuGraphRpcClient::connect() {
 
 thrift::LabelInfo EuGraphRpcClient::createLabel(const std::string& name,
                                                 const std::vector<thrift::PropertyDefThrift>& properties) {
-    thrift::LabelInfo resp;
-    client_->sync_createLabel(resp, name, properties);
-    return resp;
+    return client_->semifuture_createLabel(name, properties).via(evb_.get()).get();
 }
 
 std::vector<thrift::LabelInfo> EuGraphRpcClient::listLabels() {
-    std::vector<thrift::LabelInfo> resp;
-    client_->sync_listLabels(resp);
-    return resp;
+    return client_->semifuture_listLabels().via(evb_.get()).get();
 }
 
 thrift::EdgeLabelInfo EuGraphRpcClient::createEdgeLabel(const std::string& name,
                                                         const std::vector<thrift::PropertyDefThrift>& properties) {
-    thrift::EdgeLabelInfo resp;
-    client_->sync_createEdgeLabel(resp, name, properties);
-    return resp;
+    return client_->semifuture_createEdgeLabel(name, properties).via(evb_.get()).get();
 }
 
 std::vector<thrift::EdgeLabelInfo> EuGraphRpcClient::listEdgeLabels() {
-    std::vector<thrift::EdgeLabelInfo> resp;
-    client_->sync_listEdgeLabels(resp);
-    return resp;
+    return client_->semifuture_listEdgeLabels().via(evb_.get()).get();
 }
 
-thrift::QueryResult EuGraphRpcClient::executeCypher(const std::string& query) {
-    thrift::QueryResult resp;
-    client_->sync_executeCypher(resp, query);
-    return resp;
+apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>
+EuGraphRpcClient::executeCypher(const std::string& query) {
+    return client_->semifuture_executeCypher(query).via(evb_.get()).get();
+}
+
+folly::coro::Task<apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
+EuGraphRpcClient::co_executeCypher(const std::string& query) {
+    co_return client_->semifuture_executeCypher(query).via(evb_.get()).get();
 }
 
 thrift::BatchInsertVerticesResult EuGraphRpcClient::batchInsertVertices(const std::string& label_name,
                                                                         std::vector<thrift::VertexRecord> records) {
     auto t0 = nowMs();
-    thrift::BatchInsertVerticesResult resp;
-    client_->sync_batchInsertVertices(resp, label_name, std::move(records));
+    auto resp = client_->semifuture_batchInsertVertices(label_name, std::move(records)).via(evb_.get()).get();
     spdlog::info("[rpc_client] batchInsertVertices: {} records, {}ms", *resp.count(), nowMs() - t0);
     return resp;
 }
@@ -91,7 +94,7 @@ thrift::BatchInsertVerticesResult EuGraphRpcClient::batchInsertVertices(const st
 std::int32_t EuGraphRpcClient::batchInsertEdges(const std::string& edge_label_name,
                                                 std::vector<thrift::EdgeRecord> records) {
     auto t0 = nowMs();
-    auto resp = client_->sync_batchInsertEdges(edge_label_name, std::move(records));
+    auto resp = client_->semifuture_batchInsertEdges(edge_label_name, std::move(records)).via(evb_.get()).get();
     spdlog::info("[rpc_client] batchInsertEdges: {} records, {}ms", resp, nowMs() - t0);
     return resp;
 }

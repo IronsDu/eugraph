@@ -150,7 +150,38 @@ ctest --preset=debug --verbose
 ./build/release/eugraph-loader --data-dir /path/to/csv --host 127.0.0.1 --port 9090
 ```
 
-## 7. 代码格式化
+## 7. Thrift 代码生成
+
+当修改了 `proto/eugraph.thrift` 后，需要重新生成 C++ 代码。
+
+### 生成命令
+
+```bash
+# thrift1 编译器位置（由 vcpkg fbthrift 包安装）
+THRIFT1=./vcpkg/packages/fbthrift_x64-linux/tools/fbthrift/thrift1
+
+# 生成到 src/gen-cpp2/
+$THRIFT1 --gen mstch_cpp2 -o src/ proto/eugraph.thrift
+```
+
+### include 路径修复
+
+thrift1 生成的文件中 `#include` 路径带前导斜杠（如 `"/gen-cpp2/eugraph_types.h"`），但 CMake 的 include 目录是 `${PROJECT_SOURCE_DIR}/src`，需要相对路径（如 `"gen-cpp2/eugraph_types.h"`）。
+
+**每次重新生成后必须执行以下修复**：
+
+```bash
+sed -i 's|"/gen-cpp2/|"gen-cpp2/|g' src/gen-cpp2/*.h src/gen-cpp2/*.cpp src/gen-cpp2/*.tcc
+```
+
+### 验证
+
+```bash
+# 检查是否还有错误的绝对路径
+grep -r '"/gen-cpp2/' src/gen-cpp2/ && echo "ERROR: 仍有错误的 include 路径" || echo "OK"
+```
+
+## 8. 代码格式化
 
 ```bash
 # 检查格式（不修改）
@@ -162,7 +193,7 @@ ctest --preset=debug --verbose
 
 要求 clang-format v18。脚本支持通过 Docker 容器运行（本地无 clang-format 18 时自动使用容器）。
 
-## 8. CI
+## 9. CI
 
 项目使用 GitHub Actions，配置在 `.github/workflows/`：
 

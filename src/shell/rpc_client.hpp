@@ -2,6 +2,8 @@
 
 #include "gen-cpp2/EuGraphService.h"
 
+#include <thrift/lib/cpp2/async/ClientBufferedStream.h>
+
 #include <folly/io/async/EventBase.h>
 
 #include <memory>
@@ -24,6 +26,10 @@ public:
 
     bool connect();
 
+    folly::EventBase* evb() {
+        return evb_.get();
+    }
+
     // DDL
     thrift::LabelInfo createLabel(const std::string& name, const std::vector<thrift::PropertyDefThrift>& properties);
     std::vector<thrift::LabelInfo> listLabels();
@@ -32,8 +38,12 @@ public:
                                           const std::vector<thrift::PropertyDefThrift>& properties);
     std::vector<thrift::EdgeLabelInfo> listEdgeLabels();
 
-    // DML
-    thrift::QueryResult executeCypher(const std::string& query);
+    // DML - returns streaming response
+    apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>
+    executeCypher(const std::string& query);
+
+    folly::coro::Task<apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
+    co_executeCypher(const std::string& query);
 
     // Batch import
     thrift::BatchInsertVerticesResult batchInsertVertices(const std::string& label_name,
@@ -44,6 +54,7 @@ private:
     std::string host_;
     int port_;
     std::unique_ptr<folly::EventBase> evb_;
+    std::thread evb_thread_;
     std::unique_ptr<apache::thrift::Client<thrift::EuGraphService>> client_;
 };
 

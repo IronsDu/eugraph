@@ -23,6 +23,82 @@ ExecutionResult QueryExecutor::executeSync(const std::string& cypher_query) {
     return folly::coro::blockingWait(executeAsync(cypher_query));
 }
 
+folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(const std::string& cypher_query) {
+    auto ctx = std::make_shared<StreamContext>();
+
+    // Parse + logical plan (CPU-bound, no async needed)
+    cypher::CypherQueryParser parser;
+    auto parse_result = parser.parse(cypher_query);
+    if (std::holds_alternative<cypher::ParseError>(parse_result)) {
+        ctx->error = std::get<cypher::ParseError>(parse_result).message;
+        co_return ctx;
+    }
+    auto stmt = std::move(std::get<cypher::Statement>(parse_result));
+
+    LogicalPlanBuilder plan_builder;
+    auto logical_result = plan_builder.build(std::move(stmt));
+    if (std::holds_alternative<std::string>(logical_result)) {
+        ctx->error = std::get<std::string>(logical_result);
+        co_return ctx;
+    }
+    auto& logical_plan = std::get<LogicalPlan>(logical_result);
+
+    extractColumnsFromLogicalPlan(logical_plan.root, ctx->columns);
+
+    // Load label/edge_label mappings from metadata service
+    auto labels = co_await async_meta_.listLabels();
+    auto edge_labels = co_await async_meta_.listEdgeLabels();
+
+    std::unordered_map<std::string, LabelId> label_name_to_id;
+    for (const auto& l : labels)
+        label_name_to_id[l.name] = l.id;
+
+    std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
+    for (const auto& el : edge_labels)
+        edge_label_name_to_id[el.name] = el.id;
+
+    // Begin transaction
+    GraphTxnHandle txn = co_await async_data_.beginTran();
+    async_data_.setTransaction(txn);
+
+    // Store label/edge_label defs in StreamContext so physical operator raw pointers
+    // remain valid throughout streaming consumption
+    for (const auto& l : labels)
+        ctx->label_defs[l.id] = l;
+    for (const auto& el : edge_labels)
+        ctx->edge_label_defs[el.id] = el;
+
+    // PlanContext references StreamContext's maps — physical operators get pointers to those maps
+    PlanContext plan_ctx;
+    plan_ctx.label_name_to_id = std::move(label_name_to_id);
+    plan_ctx.edge_label_name_to_id = std::move(edge_label_name_to_id);
+    plan_ctx.label_defs = &ctx->label_defs;
+    plan_ctx.edge_label_defs = &ctx->edge_label_defs;
+
+    plan_ctx.next_vertex_id = co_await async_meta_.nextVertexId();
+    plan_ctx.next_edge_id = co_await async_meta_.nextEdgeId();
+
+    // Plan physical operators — operators hold raw pointers to plan_ctx.label_defs which
+    // is a copy of ctx->label_defs. After planning, the pointers are to plan_ctx's copy.
+    // We need them to point to ctx's copy instead.
+    // Solution: after planning, we re-bind the pointers.
+    PhysicalPlanner physical_planner;
+    auto phys_result = physical_planner.plan(logical_plan, async_data_, plan_ctx);
+    if (std::holds_alternative<std::string>(phys_result)) {
+        ctx->error = std::get<std::string>(phys_result);
+        co_await async_data_.rollbackTran(txn);
+        co_return ctx;
+    }
+    auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
+
+    ctx->phys_op = std::move(phys_op);
+    ctx->gen = ctx->phys_op->execute();
+    ctx->txn = txn;
+    ctx->store = &async_data_;
+
+    co_return ctx;
+}
+
 folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string& cypher_query) {
     ExecutionResult result;
 
@@ -98,14 +174,18 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         async_data_.setTransaction(txn);
 
         spdlog::info("{} 4444444444", __FUNCTION__);
+        std::unordered_map<LabelId, LabelDef> label_defs;
+        std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
+        for (const auto& l : labels)
+            label_defs[l.id] = l;
+        for (const auto& el : edge_labels)
+            edge_label_defs[el.id] = el;
+
         PlanContext ctx;
         ctx.label_name_to_id = std::move(label_name_to_id);
         ctx.edge_label_name_to_id = std::move(edge_label_name_to_id);
-
-        for (const auto& l : labels)
-            ctx.label_defs[l.id] = l;
-        for (const auto& el : edge_labels)
-            ctx.edge_label_defs[el.id] = el;
+        ctx.label_defs = &label_defs;
+        ctx.edge_label_defs = &edge_label_defs;
 
         ctx.next_vertex_id = co_await async_meta_.nextVertexId();
         ctx.next_edge_id = co_await async_meta_.nextEdgeId();

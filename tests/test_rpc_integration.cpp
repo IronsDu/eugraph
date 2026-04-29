@@ -133,8 +133,30 @@ protected:
         std::filesystem::remove_all(db_path_);
     }
 
-    QueryResult execCypher(const std::string& query) {
-        return client_->executeCypher(query);
+    struct CypherResult {
+        std::string error;
+        std::vector<ResultRow> rows;
+        std::vector<std::string> columns;
+    };
+
+    CypherResult execCypher(const std::string& query) {
+        CypherResult result;
+        try {
+            auto [meta, stream] = client_->executeCypher(query);
+            result.columns = *meta.columns();
+            std::move(stream).subscribeInline([&](folly::Try<ResultRowBatch> batch) {
+                if (batch.hasValue()) {
+                    for (auto& row : *batch->rows()) {
+                        result.rows.push_back(std::move(row));
+                    }
+                } else if (batch.hasException()) {
+                    result.error = batch.exception().what();
+                }
+            });
+        } catch (const std::exception& e) {
+            result.error = e.what();
+        }
+        return result;
     }
 
     LabelInfo createLabel(const std::string& name, std::vector<PropertyDefThrift> props = {}) {
@@ -174,13 +196,13 @@ TEST_F(RpcIntegrationTest, CreateVerticesWithPropertiesAndQuery) {
                            makePropDef("age", eugraph::thrift::PropertyType::INT64)});
 
     auto r1 = execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})");
-    EXPECT_TRUE(r1.error().value().empty()) << "CREATE error: " << r1.error().value();
+    EXPECT_TRUE(r1.error.empty()) << "CREATE error: " << r1.error;
 
     auto r2 = execCypher("MATCH (n:Person) RETURN n.name, n.age");
-    EXPECT_TRUE(r2.error().value().empty()) << "MATCH error: " << r2.error().value();
-    ASSERT_EQ(r2.rows()->size(), 1);
+    EXPECT_TRUE(r2.error.empty()) << "MATCH error: " << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
 
-    const auto& row = r2.rows()->at(0);
+    const auto& row = r2.rows.at(0);
     ASSERT_EQ(row.values()->size(), 2);
     EXPECT_EQ(row.values()->at(0).getType(), ResultValue::Type::string_val);
     EXPECT_EQ(row.values()->at(0).get_string_val(), "Alice");
@@ -196,15 +218,15 @@ TEST_F(RpcIntegrationTest, CreateEdgeInSingleStatementAndExpand) {
     createEdgeLabel("KNOWS");
 
     auto r1 = execCypher("CREATE (alice:Person {name: \"Alice\"})-[:KNOWS]->(bob:Person {name: \"Bob\"})");
-    EXPECT_TRUE(r1.error().value().empty()) << "CREATE edge: " << r1.error().value();
+    EXPECT_TRUE(r1.error.empty()) << "CREATE edge: " << r1.error;
 
     auto r2 = execCypher("MATCH (n:Person) RETURN n.name");
-    ASSERT_EQ(r2.rows()->size(), 2) << "Should have 2 Person vertices";
+    ASSERT_EQ(r2.rows.size(), 2) << "Should have 2 Person vertices";
 
     auto r3 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name");
-    EXPECT_TRUE(r3.error().value().empty()) << "Expand error: " << r3.error().value();
-    ASSERT_EQ(r3.rows()->size(), 1) << "Alice should have 1 KNOWS neighbor";
-    EXPECT_EQ(r3.rows()->at(0).values()->at(0).get_string_val(), "Bob");
+    EXPECT_TRUE(r3.error.empty()) << "Expand error: " << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1) << "Alice should have 1 KNOWS neighbor";
+    EXPECT_EQ(r3.rows.at(0).values()->at(0).get_string_val(), "Bob");
 }
 
 TEST_F(RpcIntegrationTest, FullAdjacencyScenario) {
@@ -217,16 +239,16 @@ TEST_F(RpcIntegrationTest, FullAdjacencyScenario) {
     execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})-[:KNOWS]->(carol:Person {name: \"Carol\", age: 28})");
 
     auto r1 = execCypher("MATCH (n:Person) RETURN n.name");
-    EXPECT_TRUE(r1.error().value().empty()) << "Scan error: " << r1.error().value();
-    EXPECT_GE(r1.rows()->size(), 3);
+    EXPECT_TRUE(r1.error.empty()) << "Scan error: " << r1.error;
+    EXPECT_GE(r1.rows.size(), 3);
 
     auto r2 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(f) RETURN f.name");
-    EXPECT_TRUE(r2.error().value().empty()) << "Alice expand error: " << r2.error().value();
-    EXPECT_GE(r2.rows()->size(), 1) << "Alice should have at least 1 friend";
+    EXPECT_TRUE(r2.error.empty()) << "Alice expand error: " << r2.error;
+    EXPECT_GE(r2.rows.size(), 1) << "Alice should have at least 1 friend";
 
     auto r3 = execCypher("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name");
-    EXPECT_TRUE(r3.error().value().empty()) << "All edges error: " << r3.error().value();
-    EXPECT_GE(r3.rows()->size(), 1) << "Should have at least 1 edge";
+    EXPECT_TRUE(r3.error.empty()) << "All edges error: " << r3.error;
+    EXPECT_GE(r3.rows.size(), 1) << "Should have at least 1 edge";
 }
 
 // ==================== Performance Benchmark ====================
@@ -247,25 +269,25 @@ TEST_F(RpcIntegrationTest, PerformanceBenchmark) {
         execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})-[:KNOWS]->(bob:Person {name: \"Bob\", age: 25})");
     t1 = Clock::now();
     std::cout << "[PERF] CREATE (vertex+edge): " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
-              << " error=" << r1.error().value() << "\n";
+              << " error=" << r1.error << "\n";
 
     t0 = Clock::now();
     auto r2 = execCypher("MATCH (n:Person) RETURN n.name, n.age");
     t1 = Clock::now();
     std::cout << "[PERF] MATCH scan (2 vertices): " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
-              << " rows=" << r2.rows()->size() << "\n";
+              << " rows=" << r2.rows.size() << "\n";
 
     t0 = Clock::now();
     auto r3 = execCypher("MATCH (n:Person {name: \"Alice\"}) RETURN n.name, n.age");
     t1 = Clock::now();
     std::cout << "[PERF] MATCH filter: " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
-              << " rows=" << r3.rows()->size() << "\n";
+              << " rows=" << r3.rows.size() << "\n";
 
     t0 = Clock::now();
     auto r4 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name, b.age");
     t1 = Clock::now();
     std::cout << "[PERF] MATCH expand: " << std::chrono::duration_cast<ms>(t1 - t0).count() << " ms"
-              << " rows=" << r4.rows()->size() << " error=" << r4.error().value() << "\n";
+              << " rows=" << r4.rows.size() << " error=" << r4.error << "\n";
 
     t0 = Clock::now();
     auto r5 = execCypher("MATCH (a:Person {name: \"Alice\"})-[:KNOWS]->(b) RETURN b.name");
