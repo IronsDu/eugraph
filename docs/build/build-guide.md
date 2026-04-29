@@ -1,6 +1,6 @@
 # 构建与运行指南
 
-> 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [README.md](../README.md) 返回文档导航
 
 ## 1. 前置条件
 
@@ -134,7 +134,7 @@ ctest --preset=debug --verbose
 
 ## 6. 启动服务
 
-详细使用说明见 [usage.md](usage.md)。
+详细使用说明见 [program_usage/](../program_usage/)。
 
 ```bash
 # 服务端

@@ -1,6 +1,6 @@
 # 多图支持设计
 
-> 参见 [overview.md](overview.md) 返回文档导航
+> [设计规划] 参见 [README.md](../README.md) 返回文档导航
 
 **状态**：设计阶段，尚未实现。当前为单图模式（每个 server 进程对应一个图）。
 
