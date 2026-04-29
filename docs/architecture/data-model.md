@@ -1,6 +1,6 @@
 # 数据模型
 
-> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [README.md](../README.md) 返回文档导航
 
 ---
 

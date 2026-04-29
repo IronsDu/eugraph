@@ -1,6 +1,6 @@
 # 元数据服务设计
 
-> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [README.md](../README.md) 返回文档导航
 
 ---
 
@@ -23,11 +23,17 @@ class IAsyncGraphMetaStore {
     // Label 管理
     virtual folly::coro::Task<LabelId> createLabel(name, properties) = 0;
     virtual folly::coro::Task<optional<LabelId>> getLabelId(name) = 0;
+    virtual folly::coro::Task<optional<string>> getLabelName(id) = 0;
     virtual folly::coro::Task<optional<LabelDef>> getLabelDef(name) = 0;
+    virtual folly::coro::Task<optional<LabelDef>> getLabelDefById(id) = 0;
     virtual folly::coro::Task<vector<LabelDef>> listLabels() = 0;
 
     // EdgeLabel 管理
     virtual folly::coro::Task<EdgeLabelId> createEdgeLabel(name, properties, directed) = 0;
+    virtual folly::coro::Task<optional<EdgeLabelId>> getEdgeLabelId(name) = 0;
+    virtual folly::coro::Task<optional<string>> getEdgeLabelName(id) = 0;
+    virtual folly::coro::Task<optional<EdgeLabelDef>> getEdgeLabelDef(name) = 0;
+    virtual folly::coro::Task<optional<EdgeLabelDef>> getEdgeLabelDefById(id) = 0;
     virtual folly::coro::Task<vector<EdgeLabelDef>> listEdgeLabels() = 0;
 
     // ID 分配

@@ -1,6 +1,6 @@
 # AST 节点参考
 
-> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [README.md](../../README.md) 返回文档导航
 
 源码：`src/compute_service/parser/ast.hpp`
 

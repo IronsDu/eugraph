@@ -1,6 +1,6 @@
 # Cypher 语法参考
 
-> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [README.md](../../README.md) 返回文档导航
 
 本文档描述 EuGraph 当前支持的 Cypher 语法。标注为「仅解析」表示 ANTLR 能正确解析但执行层尚未实现。
 

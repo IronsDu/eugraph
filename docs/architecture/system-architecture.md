@@ -1,6 +1,6 @@
 # 系统架构
 
-> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [README.md](../README.md) 返回文档导航
 
 ## 系统架构图
 
@@ -20,7 +20,7 @@
 │  │                    Compute Layer (计算线程池)                           │  │
 │  │                   (CPUThreadPoolExecutor)                              │  │
 │  │                                                                       │  │
-│  │  Cypher Parser → LogicalPlanBuilder → PhysicalPlanner → Execute      │  │
+│  │  Cypher Parser → LogicalPlanBuilder → PhysicalPlanner (含 IndexScan 优化) → Execute │  │
 │  │                                                                       │  │
 │  │  依赖: IAsyncGraphDataStore, IAsyncGraphMetaStore                     │  │
 │  │  不依赖任何 sync 接口                                                  │  │
@@ -92,7 +92,7 @@
 |----|------|------|
 | `QueryExecutor` | `compute_service/executor/` | 查询编排（parse → plan → execute），事务管理 |
 | `PhysicalPlanner` | `compute_service/physical_plan/` | 逻辑计划 → 物理算子 |
-| `PhysicalOperator` | `compute_service/physical_plan/` | 8 种物理算子（Scan/Expand/Filter/Project/Limit/CreateNode/CreateEdge） |
+| `PhysicalOperator` | `compute_service/physical_plan/` | 13 种物理算子（Scan/Expand/IndexScan/Filter/Project/Aggregate/Sort/Skip/Limit/Distinct/CreateNode/CreateEdge） |
 
 关键设计：
 - **只依赖 async 接口**：`IAsyncGraphDataStore` + `IAsyncGraphMetaStore`
@@ -119,15 +119,17 @@ fbthrift RPC 服务 + 交互式 Shell。
 ┌──────────────────────────────────────────────────────┐
 │  Thrift IO 线程 (fbthrift IOThreadPoolExecutor)       │
 │  ├─ 接收请求                                          │
-│  ├─ DDL 操作直接在此线程执行 (通过 IoScheduler)        │
-│  └─ DML 委托给 compute 线程池                         │
+│  ├─ DDL/DML 通过 IoScheduler::dispatch （server 模式   │
+│  │   因 co_viaIfAsync 内联，实际在 IO 线程上执行）     │
+│  └─ 嵌入式模式下 DML 通过 co_withExecutor 委托给       │
+│       compute 线程池                                  │
 └──────────────────────┬───────────────────────────────┘
-                       │ co_withExecutor
+                       │ co_withExecutor (仅嵌入式模式)
                        ▼
 ┌──────────────────────────────────────────────────────┐
 │  Compute 线程池 (CPUThreadPoolExecutor)               │
-│  ├─ Cypher 解析、逻辑计划、物理计划                    │
-│  ├─ 表达式求值、过滤、投影                             │
+│  ├─ 嵌入式模式：解析、逻辑/物理计划、表达式求值        │
+│  ├─ Server 模式：co_viaIfAsync 内联，实际在 IO 线程    │
 │  └─ 需要 IO 时 co_await 挂起，让出 CPU                │
 └──────────────────────┬───────────────────────────────┘
                        │ co_viaIfAsync (IoScheduler)

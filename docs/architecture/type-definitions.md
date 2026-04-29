@@ -1,6 +1,6 @@
 # 核心类型定义
 
-> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [README.md](../README.md) 返回文档导航
 
 源码：`src/common/types/graph_types.hpp`
 
@@ -11,6 +11,7 @@
 ```cpp
 using VertexId = uint64_t;
 using EdgeId = uint64_t;
+using TransactionId = uint64_t;
 using LabelId = uint16_t;
 using EdgeLabelId = uint16_t;
 using LabelName = std::string;
@@ -116,8 +117,8 @@ struct EdgeLabelDef {
 
 ```cpp
 // 查询执行中的值类型（src/compute_service/executor/row.hpp）
-struct VertexValue { VertexId id; LabelIdSet labels; Properties properties; };
-struct EdgeValue { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; Properties properties; };
+struct VertexValue { VertexId id; std::optional<LabelIdSet> labels; std::optional<Properties> properties; };
+struct EdgeValue { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; std::optional<Properties> properties; };
 using ListValue = vector<Value>;
 using Value = variant<monostate, bool, int64_t, double, string, VertexValue, EdgeValue, ListValue>;
 
@@ -127,5 +128,39 @@ using Schema = vector<string>;     // 列名列表
 struct RowBatch {
     static constexpr size_t CAPACITY = 1024;
     vector<Row> rows;
+};
+
+struct ExecutionResult {
+    Schema columns;
+    vector<Row> rows;
+    string error;
+};
+
+// 哈希工具（用于 DistinctOp / AggregateOp）
+struct ValueHash { size_t operator()(const Value& v) const; };
+struct RowHash { size_t operator()(const Row& r) const; };
+struct RowEqual { bool operator()(const Row& a, const Row& b) const; };
+```
+
+---
+
+## 错误类型
+
+源码：`src/common/types/error.hpp`
+
+```cpp
+enum class ErrorCode : uint8_t {
+    OK = 0,
+    NOT_FOUND,
+    ALREADY_EXISTS,
+    INVALID_ARGUMENT,
+    IO_ERROR,
+    INTERNAL_ERROR,
+    TRANSACTION_CONFLICT,
+};
+
+struct Error {
+    ErrorCode code;
+    std::string message;
 };
 ```

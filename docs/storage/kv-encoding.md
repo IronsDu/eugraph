@@ -1,6 +1,6 @@
 # KV 编码设计
 
-> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [README.md](../README.md) 返回文档导航
 
 源码：`src/storage/kv/key_codec.hpp`、`src/storage/kv/index_key_codec.hpp`
 

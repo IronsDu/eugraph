@@ -1,6 +1,6 @@
 # 辅助索引设计
 
-> [当前实现（部分）] 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现（部分）] 参见 [README.md](../README.md) 返回文档导航
 
 ---
 

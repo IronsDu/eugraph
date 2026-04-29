@@ -1,6 +1,6 @@
 # 查询引擎设计
 
-> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [README.md](../../README.md) 返回文档导航
 
 ---
 
@@ -169,7 +169,7 @@ struct RowBatch { static constexpr size_t CAPACITY = 1024; vector<Row> rows; };
 | `PropertyAccess` | 属性访问 + 特殊属性 `id` 返回 int64_t |
 | `FunctionCall` | `id(node)` 返回顶点/边 ID |
 
-多个表达式类型仅解析未求值，详见 [cypher-syntax.md](cypher-syntax.md)。
+多个表达式类型仅解析未求值，详见 [cypher-syntax.md](../syntax/cypher-syntax.md)。
 
 ---
 

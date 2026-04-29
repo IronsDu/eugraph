@@ -1,6 +1,6 @@
 # Server 使用指南
 
-> [当前实现] 参见 [overview.md](overview.md) 返回文档导航
+> [当前实现] 参见 [README.md](../README.md) 返回文档导航
 
 ---
 
@@ -34,4 +34,4 @@ eugraph-shell -d ./eugraph-data        # 嵌入式模式（无需 server）
 
 ## 架构参考
 
-设计文档见 [server-shell-design.md](server-shell-design.md)。
+设计文档见 [server-shell-design.md](../program_design/server-shell-design.md)。
