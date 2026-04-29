@@ -10,6 +10,26 @@
 - **协程库**：folly
 - **RPC 框架**：fbthrift
 
+## 请求处理流程
+
+一条 Cypher 查询从输入到结果的完整链路（以 `MATCH (n:Person) RETURN n` 为例）：
+
+```
+Shell/Client（src/shell/）
+  → fbthrift RPC（src/server/，EuGraphHandler）
+    → QueryExecutor（src/compute_service/executor/）：编排全流程
+      → CypherQueryParser（src/compute_service/parser/）：字符串 → AST
+      → LogicalPlanBuilder（src/compute_service/logical_plan/）：AST → LogicalPlan
+      → PhysicalPlanner（src/compute_service/physical_plan/）：LogicalPlan → PhysicalPlan
+      → 协程执行器（Pull-based 火山模型，1024 行/批）
+        → 物理算子 → AsyncGraphDataStore（src/storage/data/，header-only 协程包装）
+          → IoScheduler（src/storage/io_scheduler.hpp）→ SyncGraphDataStore（src/storage/data/）
+            → WiredTiger
+  ← 结果通过 AsyncGenerator<Row> 流式返回
+```
+
+DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调元数据服务，不经过查询引擎。
+
 ## 模块职责速查
 
 接到模糊或跨模块需求时，通过此表建立心智模型，推理涉及的模块，再查阅对应设计文档。
