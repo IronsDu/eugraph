@@ -126,8 +126,27 @@ protected:
         std::filesystem::remove_all(db_path_);
     }
 
-    QueryResult execCypher(const std::string& query) {
-        return client_->executeCypher(query);
+    struct CypherResult {
+        std::string error;
+        std::vector<ResultRow> rows;
+    };
+
+    CypherResult execCypher(const std::string& query) {
+        CypherResult result;
+        try {
+            auto [meta, stream] = client_->executeCypher(query);
+            auto gen = std::move(stream).toAsyncGenerator();
+            folly::coro::blockingWait([&]() -> folly::coro::Task<void> {
+                while (auto batch = co_await gen.next()) {
+                    for (auto& row : *batch->rows()) {
+                        result.rows.push_back(std::move(row));
+                    }
+                }
+            }());
+        } catch (const std::exception& e) {
+            result.error = e.what();
+        }
+        return result;
     }
 };
 
@@ -217,7 +236,7 @@ TEST_F(LoaderIntegrationTest, FullLoadAndVerify) {
     // Verify vertex counts via Cypher (use LIMIT 1 + rows_affected since count() may not be supported)
     for (const auto& [label_name, label_map] : id_map) {
         auto result = execCypher("MATCH (n:" + label_name + ") RETURN n LIMIT 1");
-        EXPECT_TRUE(result.error()->empty()) << "Query error for " << label_name << ": " << result.error().value();
+        EXPECT_TRUE(result.error.empty()) << "Query error for " << label_name << ": " << result.error;
         // Just verify we can scan - exact count checked via rows_affected
     }
 
@@ -226,7 +245,7 @@ TEST_F(LoaderIntegrationTest, FullLoadAndVerify) {
 
     // Verify edge counts via Cypher (expand)
     auto edge_result = execCypher("MATCH (a)-[r]->(b) RETURN r LIMIT 1");
-    EXPECT_TRUE(edge_result.error()->empty()) << "Edge query error: " << edge_result.error().value();
+    EXPECT_TRUE(edge_result.error.empty()) << "Edge query error: " << edge_result.error;
 
     int64_t total_v = 0;
     for (const auto& [_, m] : id_map)
@@ -261,11 +280,11 @@ TEST_F(LoaderIntegrationTest, EdgeConnectivity) {
 
     // Verify: expand knows edges
     auto knows_result = execCypher("MATCH (:person)-[r:knows]->(:person) RETURN r LIMIT 1");
-    EXPECT_TRUE(knows_result.error()->empty()) << "knows query error: " << knows_result.error().value();
+    EXPECT_TRUE(knows_result.error.empty()) << "knows query error: " << knows_result.error;
 
     // Verify: expand isLocatedIn edges
     auto loc_result = execCypher("MATCH (:person)-[r:isLocatedIn]->(:place) RETURN r LIMIT 1");
-    EXPECT_TRUE(loc_result.error()->empty()) << "isLocatedIn query error: " << loc_result.error().value();
+    EXPECT_TRUE(loc_result.error.empty()) << "isLocatedIn query error: " << loc_result.error;
 }
 
 } // anonymous namespace

@@ -52,6 +52,29 @@ std::string resultValueToString(const ResultValue& rv) {
     return "?";
 }
 
+// Format a compute::Value (from executor) to display string.
+std::string valueToString(const Value& val) {
+    if (std::holds_alternative<std::monostate>(val)) {
+        return "null";
+    } else if (std::holds_alternative<bool>(val)) {
+        return std::get<bool>(val) ? "true" : "false";
+    } else if (std::holds_alternative<int64_t>(val)) {
+        return std::to_string(std::get<int64_t>(val));
+    } else if (std::holds_alternative<double>(val)) {
+        return std::to_string(std::get<double>(val));
+    } else if (std::holds_alternative<std::string>(val)) {
+        return std::get<std::string>(val);
+    } else if (std::holds_alternative<VertexValue>(val)) {
+        return "v[" + std::to_string(std::get<VertexValue>(val).id) + "]";
+    } else if (std::holds_alternative<EdgeValue>(val)) {
+        auto& e = std::get<EdgeValue>(val);
+        return "e[" + std::to_string(e.id) + "]";
+    } else if (std::holds_alternative<ListValue>(val)) {
+        return "[...]";
+    }
+    return "?";
+}
+
 std::string formatTable(const std::vector<std::string>& columns, const std::vector<std::vector<std::string>>& rows) {
     if (columns.empty()) {
         return "(no results)\n";
@@ -314,7 +337,8 @@ static void runEmbeddedRepl(const ShellConfig& config) {
 
     std::cout << "Database: " << db_path << std::endl;
 
-    auto cmd_handler = [&handler](const std::string& cmd, const std::string& args, const std::string& accumulated) {
+    auto cmd_handler = [&handler, &executor](const std::string& cmd, const std::string& args,
+                                             const std::string& accumulated) {
         if (cmd == ":help") {
             std::cout << "Available commands:" << std::endl;
             std::cout << "  :create-label <name> [prop1:type1 prop2:type2 ...]" << std::endl;
@@ -386,28 +410,27 @@ static void runEmbeddedRepl(const ShellConfig& config) {
                 std::cout << formatEdgeLabelList(rows);
             }
         } else if (cmd.empty()) {
-            // Cypher query
+            // Cypher query - use executor directly for embedded mode
             std::string query = accumulated;
             if (!query.empty() && query.back() == ';') {
                 query.pop_back();
             }
-            auto resp = folly::coro::blockingWait(handler.co_executeCypher(std::make_unique<std::string>(query)));
-            if (!resp->error().value().empty()) {
-                std::cerr << "Error: " << resp->error().value() << std::endl;
-            } else if (resp->columns()->empty()) {
+            auto result = folly::coro::blockingWait(executor.executeAsync(query));
+            if (!result.error.empty()) {
+                std::cerr << "Error: " << result.error << std::endl;
+            } else if (result.columns.empty()) {
                 std::cout << "OK" << std::endl;
             } else {
                 std::vector<std::vector<std::string>> rows;
-                for (const auto& row : *resp->rows()) {
+                for (const auto& row : result.rows) {
                     std::vector<std::string> cells;
-                    for (const auto& val : *row.values()) {
-                        std::string s = resultValueToString(val);
-                        cells.push_back(s);
+                    for (const auto& val : row) {
+                        cells.push_back(valueToString(val));
                     }
                     rows.push_back(std::move(cells));
                 }
-                std::cout << formatTable(*resp->columns(), rows);
-                std::cout << resp->rows()->size() << " row" << (resp->rows()->size() == 1 ? "" : "s");
+                std::cout << formatTable(result.columns, rows);
+                std::cout << result.rows.size() << " row" << (result.rows.size() == 1 ? "" : "s");
             }
         } else {
             std::cerr << "Unknown command: " << cmd << std::endl;
@@ -512,33 +535,41 @@ static void runRpcRepl(const ShellConfig& config) {
                 if (!query.empty() && query.back() == ';') {
                     query.pop_back();
                 }
-                auto resp = client.executeCypher(query);
-                if (!resp.error().value().empty()) {
-                    std::cerr << "Error: " << resp.error().value() << std::endl;
-                } else if (resp.columns()->empty()) {
-                    std::cout << "OK" << std::endl;
-                } else {
-                    std::vector<std::vector<std::string>> rows;
-                    for (const auto& row : *resp.rows()) {
-                        std::vector<std::string> cells;
-                        for (const auto& val : *row.values()) {
-                            std::string s = resultValueToString(val);
-                            cells.push_back(s);
-                        }
-                        rows.push_back(std::move(cells));
+                try {
+                    auto [meta, stream] = client.executeCypher(query);
+                    if (meta.columns()->empty()) {
+                        std::cout << "OK" << std::endl;
+                    } else {
+                        size_t total_rows = 0;
+                        std::vector<std::vector<std::string>> all_rows;
+                        std::move(stream).subscribeInline([&](folly::Try<ResultRowBatch> batch) {
+                            if (batch.hasValue()) {
+                                for (const auto& row : *batch->rows()) {
+                                    std::vector<std::string> cells;
+                                    for (const auto& val : *row.values()) {
+                                        cells.push_back(resultValueToString(val));
+                                    }
+                                    all_rows.push_back(std::move(cells));
+                                    ++total_rows;
+                                }
+                            }
+                        });
+                        std::cout << formatTable(*meta.columns(), all_rows);
+                        std::cout << total_rows << " row" << (total_rows == 1 ? "" : "s");
                     }
-                    std::cout << formatTable(*resp.columns(), rows);
-                    std::cout << resp.rows()->size() << " row" << (resp.rows()->size() == 1 ? "" : "s");
+                } catch (const std::exception& e) {
+                    std::cerr << "Error: " << e.what() << std::endl;
                 }
-            } else {
-                std::cerr << "Unknown command: " << cmd << std::endl;
             }
-        } catch (const std::exception& e) {
-            std::cerr << "RPC error: " << e.what() << std::endl;
+        else {
+            std::cerr << "Unknown command: " << cmd << std::endl;
         }
-    };
+    } catch (const std::exception& e) {
+        std::cerr << "RPC error: " << e.what() << std::endl;
+    }
+};
 
-    runReplLoop("rpc", cmd_handler);
+runReplLoop("rpc", cmd_handler);
 }
 
 // ==================== Public REPL entry ====================

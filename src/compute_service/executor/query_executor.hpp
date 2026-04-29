@@ -20,6 +20,18 @@
 namespace eugraph {
 namespace compute {
 
+struct StreamContext {
+    Schema columns;
+    std::string error;
+    std::unique_ptr<PhysicalOperator> phys_op;
+    folly::coro::AsyncGenerator<RowBatch> gen;
+    GraphTxnHandle txn;
+    IAsyncGraphDataStore* store;
+    // Owned by StreamContext so raw pointers in physical operators remain valid
+    std::unordered_map<LabelId, LabelDef> label_defs;
+    std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
+};
+
 /// Top-level query execution engine.
 /// Orchestrates: parse → logical plan → physical plan → execute.
 /// Depends only on async interfaces — no direct sync store dependency.
@@ -35,6 +47,8 @@ public:
 
     ExecutionResult executeSync(const std::string& cypher_query);
     folly::coro::Task<ExecutionResult> executeAsync(const std::string& cypher_query);
+
+    folly::coro::Task<std::shared_ptr<StreamContext>> prepareStream(const std::string& cypher_query);
 
 private:
     folly::coro::Task<void> handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result);

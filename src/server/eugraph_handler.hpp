@@ -34,7 +34,7 @@ public:
 
     folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> co_listEdgeLabels() override;
 
-    folly::coro::Task<std::unique_ptr<thrift::QueryResult>>
+    folly::coro::Task<apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
     co_executeCypher(std::unique_ptr<std::string> query) override;
 
     // Batch import
@@ -46,9 +46,11 @@ public:
     co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
                         std::unique_ptr<std::vector<thrift::EdgeRecord>> records) override;
 
-private:
+public:
     thrift::ResultValue valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
                                       const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs);
+
+private:
 
     static ::eugraph::PropertyType toPropertyType(thrift::PropertyType t);
     static PropertyDef toPropertyDef(const thrift::PropertyDefThrift& req, uint16_t id);

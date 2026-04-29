@@ -37,6 +37,7 @@
 | 1.10 | 元数据服务（Label/EdgeLabel 管理、ID 分配） | ✅ 已完成 |
 | 1.11 | eugraph-shell（REPL 交互式 CLI，embedded 模式） | ✅ 已完成 |
 | 1.12 | fbthrift 服务层（RPC） | 进行中 |
+| 1.12a | Cypher 执行流式改造（全链路 streaming） | 进行中 |
 | 1.13 | 基础事务支持（MVCC） | 待开始 |
 
 ### 已完成的工作
@@ -181,6 +182,7 @@ ctest --preset=release --verbose
 | 2026-04-10 | 查询语言从 GSQL 切换为 Cypher（OpenCypher） | Cypher 生态更成熟，ANTLR4 语法可直接复用 |
 | 2026-04-10 | 采用 ANTLR4 预生成 C++ 代码（不依赖 Java 构建） | 避免构建复杂性，预生成代码提交到仓库 |
 | 2026-04-10 | AstBuilder 直接遍历 Parse Tree（不继承 BaseVisitor） | ANTLR BaseVisitor 返回 std::any，与 move-only AST 类型不兼容 |
+| 2026-04-28 | Cypher 执行流式改造：executeCypher 改为 fbthrift streaming RPC | 解决内存压力、首字节延迟、无反压、RPC 超时等问题，设计文档：[docs/query-engine-design.md#八流式执行](docs/query-engine-design.md) |
 
 ---
 

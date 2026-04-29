@@ -74,11 +74,13 @@ struct ResultRow {
   1: list<ResultValue> values
 }
 
-struct QueryResult {
+// Streaming response types
+struct QueryStreamMeta {
   1: list<string> columns
-  2: list<ResultRow> rows
-  3: i64 rows_affected = 0
-  4: string error
+}
+
+struct ResultRowBatch {
+  1: list<ResultRow> rows
 }
 
 // ==================== Service ====================
@@ -92,8 +94,8 @@ service EuGraphService {
   EdgeLabelInfo createEdgeLabel(1: string name, 2: list<PropertyDefThrift> properties)
   list<EdgeLabelInfo> listEdgeLabels()
 
-  // DML: Cypher query execution
-  QueryResult executeCypher(1: string query)
+  // DML: Cypher query execution (streaming)
+  QueryStreamMeta,stream<ResultRowBatch> executeCypher(1: string query)
 
   // Batch import
   BatchInsertVerticesResult batchInsertVertices(1: string label_name, 2: list<VertexRecord> records)
