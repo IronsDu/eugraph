@@ -1672,3 +1672,57 @@ TEST_F(QueryExecutorMultiLabelTest, ScanByNoPropertyLabelReturnsAllProperties) {
     auto& vv = std::get<VertexValue>(r3.rows[0][0]);
     EXPECT_TRUE(vv.properties.count(PERSON_LABEL)) << "VIP scan should include Person properties";
 }
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastNonExistentPropertyErrors) {
+    // n::Person.noname should error at planning time because Person has no "noname"
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::Person.noname");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("has no property"), std::string::npos) << r2.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastNonExistentLabelErrors) {
+    // n::NoSuchLabel.prop should error at planning time
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::NoSuchLabel.name");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("not found"), std::string::npos) << r2.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastAllPropertiesNonExistentLabelErrors) {
+    // RETURN n::NoSuchLabel (standalone) should error
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::NoSuchLabel");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("not found"), std::string::npos) << r2.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastValidPropertySucceeds) {
+    // n::Person.name should succeed (property exists)
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::Person.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, FilterLabelCastNonExistentPropertyErrors) {
+    // WHERE n::Person.noname = 'x' should error
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) WHERE n::Person.noname = 'x' RETURN n");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("has no property"), std::string::npos) << r2.error;
+}

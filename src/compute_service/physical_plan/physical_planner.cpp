@@ -134,6 +134,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planFilter(Filter
         return "Filter requires exactly one child";
     }
 
+    if (auto err = validateExpression(op.predicate, ctx); !err.empty())
+        return err;
+
     // Try index scan optimization: if child is LabelScan and predicate is indexable
     if (std::holds_alternative<std::unique_ptr<LabelScanOp>>(op.children[0])) {
         auto& scan_op = std::get<std::unique_ptr<LabelScanOp>>(op.children[0]);
@@ -174,6 +177,12 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planProject(Proje
     if (op.children.size() != 1) {
         return "Project requires exactly one child";
     }
+
+    for (auto& item : op.items) {
+        if (auto err = validateExpression(item.expr, ctx); !err.empty())
+            return err;
+    }
+
     auto child_result = planOperator(op.children[0], store, ctx, input_schema);
     if (std::holds_alternative<std::string>(child_result)) {
         return std::get<std::string>(child_result);
@@ -236,6 +245,12 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSort(SortOp& 
     if (op.children.size() != 1) {
         return "Sort requires exactly one child";
     }
+
+    for (auto& si : op.sort_items) {
+        if (auto err = validateExpression(si.expr, ctx); !err.empty())
+            return err;
+    }
+
     auto child_result = planOperator(op.children[0], store, ctx, input_schema);
     if (std::holds_alternative<std::string>(child_result)) {
         return std::get<std::string>(child_result);
@@ -280,6 +295,16 @@ PhysicalPlanner::planAggregate(AggregateOp& op, IAsyncGraphDataStore& store, Pla
     if (op.children.size() != 1) {
         return "Aggregate requires exactly one child";
     }
+
+    for (auto& gk : op.group_keys) {
+        if (auto err = validateExpression(gk, ctx); !err.empty())
+            return err;
+    }
+    for (auto& af : op.aggregates) {
+        if (auto err = validateExpression(af.arg, ctx); !err.empty())
+            return err;
+    }
+
     auto child_result = planOperator(op.children[0], store, ctx, input_schema);
     if (std::holds_alternative<std::string>(child_result)) {
         return std::get<std::string>(child_result);
@@ -488,6 +513,82 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planRemove(Remove
     auto result = std::make_unique<RemovePhysicalOp>(std::move(op.items), child_schema, store, ctx.label_defs,
                                                      ctx.label_name_to_id, std::move(child_op));
     return PlanOperatorResult{std::move(result), child_schema};
+}
+
+// ==================== Expression Validation ====================
+
+std::string PhysicalPlanner::validateExpression(const cypher::Expression& expr, const PlanContext& ctx) const {
+    return std::visit(
+        [&](const auto& ptr) -> std::string {
+            using T = std::decay_t<decltype(ptr)>;
+            using Elem = typename T::element_type;
+
+            // Recursively validate sub-expressions first
+            if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                if (auto err = validateExpression(ptr->left, ctx); !err.empty())
+                    return err;
+                if (auto err = validateExpression(ptr->right, ctx); !err.empty())
+                    return err;
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                if (auto err = validateExpression(ptr->operand, ctx); !err.empty())
+                    return err;
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args) {
+                    if (auto err = validateExpression(arg, ctx); !err.empty())
+                        return err;
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                // Validate the sub-expression first (e.g. LabelCastExpr inside)
+                if (auto err = validateExpression(ptr->object, ctx); !err.empty())
+                    return err;
+
+                // If object is a LabelCastExpr, validate property exists in that label
+                if (std::holds_alternative<std::unique_ptr<cypher::LabelCastExpr>>(ptr->object)) {
+                    auto& lc = std::get<std::unique_ptr<cypher::LabelCastExpr>>(ptr->object);
+                    if (!ctx.label_defs)
+                        return std::string{};
+                    for (const auto& [lid, ldef] : *ctx.label_defs) {
+                        if (ldef.name == lc->label) {
+                            for (const auto& pd : ldef.properties) {
+                                if (pd.name == ptr->property)
+                                    return std::string{}; // found, valid
+                            }
+                            return "Label '" + lc->label + "' has no property '" + ptr->property + "'";
+                        }
+                    }
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
+                // Validate the sub-expression first
+                if (auto err = validateExpression(ptr->object, ctx); !err.empty())
+                    return err;
+
+                // Validate the label exists
+                if (!ctx.label_defs)
+                    return "Label '" + ptr->label + "' not found";
+                for (const auto& [lid, ldef] : *ctx.label_defs) {
+                    if (ldef.name == ptr->label)
+                        return std::string{}; // found
+                }
+                return "Label '" + ptr->label + "' not found";
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject) {
+                    if (auto err = validateExpression(*ptr->subject, ctx); !err.empty())
+                        return err;
+                }
+                for (const auto& [when, then] : ptr->when_thens) {
+                    if (auto err = validateExpression(when, ctx); !err.empty())
+                        return err;
+                    if (auto err = validateExpression(then, ctx); !err.empty())
+                        return err;
+                }
+                if (ptr->else_expr) {
+                    if (auto err = validateExpression(*ptr->else_expr, ctx); !err.empty())
+                        return err;
+                }
+            }
+            return std::string{};
+        },
+        expr);
 }
 
 // ==================== Index Scan Optimization ====================
