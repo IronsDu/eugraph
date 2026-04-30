@@ -43,7 +43,8 @@ public:
     bool dropEdgeLabel(EdgeLabelId edge_label_id) override;
 
     // Vertex
-    bool insertVertex(GraphTxnHandle txn, VertexId vid, std::span<const std::pair<LabelId, Properties>> label_props) override;
+    bool insertVertex(GraphTxnHandle txn, VertexId vid,
+                      std::span<const std::pair<LabelId, Properties>> label_props) override;
     bool deleteVertex(GraphTxnHandle txn, VertexId vid) override;
 
     // Vertex Properties

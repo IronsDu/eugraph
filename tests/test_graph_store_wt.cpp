@@ -99,8 +99,7 @@ TEST_F(WTGraphStoreTest, CreateAndDropEdgeLabel) {
 TEST_F(WTGraphStoreTest, InsertFailsWithoutLabelCreation) {
     // Try to insert a vertex with a label that was never created
     auto txn = writeTxn();
-    bool result =
-        store_->insertVertex(txn, 9999, std::vector<std::pair<LabelId, Properties>>{{200, Properties{}}});
+    bool result = store_->insertVertex(txn, 9999, std::vector<std::pair<LabelId, Properties>>{{200, Properties{}}});
     // Should fail because table doesn't exist
     EXPECT_FALSE(result);
     store_->rollbackTransaction(txn);
@@ -111,8 +110,7 @@ TEST_F(WTGraphStoreTest, DropLabelDoesNotAffectOtherLabels) {
     auto props1 = makeProps({{0, std::string("under_label_1")}});
     auto props2 = makeProps({{0, std::string("under_label_2")}});
 
-    ASSERT_TRUE(
-        store_->insertVertex(txn, 500, std::vector<std::pair<LabelId, Properties>>{{1, props1}, {2, props2}}));
+    ASSERT_TRUE(store_->insertVertex(txn, 500, std::vector<std::pair<LabelId, Properties>>{{1, props1}, {2, props2}}));
     commit(txn);
 
     // Drop label 1
@@ -155,8 +153,7 @@ TEST_F(WTGraphStoreTest, InsertAndGetVertex) {
     auto props = makeProps({{0, std::string("Alice")}, {1, int64_t(30)}});
 
     auto txn = writeTxn();
-    ASSERT_TRUE(
-        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, props}}));
+    ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, props}}));
     commit(txn);
 
     auto result = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label_id);
@@ -174,8 +171,7 @@ TEST_F(WTGraphStoreTest, DeleteVertex) {
     auto props = makeProps({{0, std::string("Bob")}});
 
     auto txn = writeTxn();
-    ASSERT_TRUE(
-        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, props}}));
+    ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, props}}));
     commit(txn);
 
     auto txn2 = writeTxn();
@@ -190,12 +186,9 @@ TEST_F(WTGraphStoreTest, ScanVerticesByLabel) {
     LabelId label_id = 10;
 
     auto txn = writeTxn();
-    ASSERT_TRUE(
-        store_->insertVertex(txn, 500, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}));
-    ASSERT_TRUE(
-        store_->insertVertex(txn, 501, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}));
-    ASSERT_TRUE(
-        store_->insertVertex(txn, 502, std::vector<std::pair<LabelId, Properties>>{{11, Properties{}}}));
+    ASSERT_TRUE(store_->insertVertex(txn, 500, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}));
+    ASSERT_TRUE(store_->insertVertex(txn, 501, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}));
+    ASSERT_TRUE(store_->insertVertex(txn, 502, std::vector<std::pair<LabelId, Properties>>{{11, Properties{}}}));
     commit(txn);
 
     std::vector<VertexId> found;
@@ -254,8 +247,7 @@ TEST_F(WTGraphStoreTest, DeleteVertexWithLabels) {
     VertexId vid = 201;
 
     auto txn = writeTxn();
-    ASSERT_TRUE(
-        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}));
+    ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}));
     commit(txn);
 
     auto txn2 = writeTxn();
@@ -275,8 +267,7 @@ TEST_F(WTGraphStoreTest, PutAndGetVertexProperty) {
     LabelId label_id = 1;
 
     auto txn = writeTxn();
-    ASSERT_TRUE(
-        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}));
+    ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}));
     ASSERT_TRUE(store_->putVertexProperty(txn, vid, label_id, 0, std::string("Charlie")));
     commit(txn);
 
@@ -291,8 +282,7 @@ TEST_F(WTGraphStoreTest, DeleteVertexProperty) {
     auto props = makeProps({{0, std::string("Dave")}, {1, int64_t(25)}});
 
     auto txn = writeTxn();
-    ASSERT_TRUE(
-        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, props}}));
+    ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, props}}));
     commit(txn);
 
     auto txn2 = writeTxn();
@@ -328,8 +318,8 @@ TEST_F(WTGraphStoreTest, MultiLabelProperties) {
     auto props2 = makeProps({{0, int64_t(999)}});
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid, std::vector<std::pair<LabelId, Properties>>{{label1, props1}, {label2, props2}}));
+    ASSERT_TRUE(store_->insertVertex(txn, vid,
+                                     std::vector<std::pair<LabelId, Properties>>{{label1, props1}, {label2, props2}}));
     commit(txn);
 
     auto r1 = store_->getVertexProperties(INVALID_GRAPH_TXN, vid, label1);
@@ -379,8 +369,7 @@ TEST_F(WTGraphStoreTest, PutVertexProperties) {
 
     // Insert with label but no properties
     auto txn = writeTxn();
-    ASSERT_TRUE(
-        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}));
+    ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{label_id, Properties{}}}));
     // Batch-set properties
     auto props = makeProps({{0, std::string("Eve")}, {1, int64_t(28)}, {2, 3.14}});
     ASSERT_TRUE(store_->putVertexProperties(txn, vid, label_id, props));
@@ -437,8 +426,7 @@ TEST_F(WTGraphStoreTest, AddVertexLabel) {
     VertexId vid = 401;
 
     auto txn = writeTxn();
-    ASSERT_TRUE(
-        store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
+    ASSERT_TRUE(store_->insertVertex(txn, vid, std::vector<std::pair<LabelId, Properties>>{{1, Properties{}}}));
     ASSERT_TRUE(store_->addVertexLabel(txn, vid, 2));
     commit(txn);
 
@@ -454,8 +442,8 @@ TEST_F(WTGraphStoreTest, RemoveVertexLabel) {
     auto props2 = makeProps({{0, int64_t(42)}});
 
     auto txn = writeTxn();
-    ASSERT_TRUE(store_->insertVertex(
-        txn, vid, std::vector<std::pair<LabelId, Properties>>{{label1, props1}, {label2, props2}}));
+    ASSERT_TRUE(store_->insertVertex(txn, vid,
+                                     std::vector<std::pair<LabelId, Properties>>{{label1, props1}, {label2, props2}}));
     commit(txn);
 
     auto txn2 = writeTxn();

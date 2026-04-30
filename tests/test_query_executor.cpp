@@ -90,7 +90,7 @@ protected:
         for (VertexId vid = 1; vid <= 5; ++vid) {
             std::vector<std::pair<LabelId, Properties>> label_props = {
                 {PERSON_LABEL, Properties{PropertyValue(std::string("name") + std::to_string(vid))}}};
-            ASSERT_TRUE(sync_data_->insertVertex(txn, vid, label_props, nullptr));
+            ASSERT_TRUE(sync_data_->insertVertex(txn, vid, label_props));
         }
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
@@ -123,7 +123,7 @@ protected:
         // Add vertex 6
         auto txn = sync_data_->beginTransaction();
         std::vector<std::pair<LabelId, Properties>> lp = {{PERSON_LABEL, Properties{}}};
-        ASSERT_TRUE(sync_data_->insertVertex(txn, 6, lp, nullptr));
+        ASSERT_TRUE(sync_data_->insertVertex(txn, 6, lp));
         // KNOWS chain: 1->2, 2->3, 3->4
         ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
         ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, 0, {}));
@@ -327,11 +327,11 @@ TEST_F(QueryExecutorTest, LabelScanMultipleLabelsIndependently) {
     auto txn = sync_data_->beginTransaction();
     for (VertexId vid = 1; vid <= 3; ++vid) {
         std::vector<std::pair<LabelId, Properties>> lp = {{PERSON_LABEL, Properties{}}};
-        ASSERT_TRUE(sync_data_->insertVertex(txn, vid, lp, nullptr));
+        ASSERT_TRUE(sync_data_->insertVertex(txn, vid, lp));
     }
     for (VertexId vid = 10; vid <= 12; ++vid) {
         std::vector<std::pair<LabelId, Properties>> lp = {{CITY_LABEL, Properties{}}};
-        ASSERT_TRUE(sync_data_->insertVertex(txn, vid, lp, nullptr));
+        ASSERT_TRUE(sync_data_->insertVertex(txn, vid, lp));
     }
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
@@ -1177,7 +1177,7 @@ protected:
             props[1] = PropertyValue(p.age);
             props[2] = PropertyValue(p.city);
             std::vector<std::pair<LabelId, Properties>> label_props = {{PERSON_LABEL, std::move(props)}};
-            ASSERT_TRUE(sync_data_->insertVertex(txn, p.vid, label_props, nullptr));
+            ASSERT_TRUE(sync_data_->insertVertex(txn, p.vid, label_props));
         }
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
@@ -1361,7 +1361,7 @@ protected:
     // Each label's properties are given as {prop_id: PropertyValue} pairs.
     void insertMultiLabelVertex(VertexId vid, std::vector<std::pair<LabelId, Properties>> label_props) {
         auto txn = sync_data_->beginTransaction();
-        ASSERT_TRUE(sync_data_->insertVertex(txn, vid, label_props, nullptr));
+        ASSERT_TRUE(sync_data_->insertVertex(txn, vid, label_props));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
 };

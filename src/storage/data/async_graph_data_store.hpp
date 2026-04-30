@@ -177,10 +177,10 @@ public:
 
     // ==================== Write Operations ====================
 
-    folly::coro::Task<bool> insertVertex(VertexId vid, std::span<const std::pair<LabelId, Properties>> label_props) override {
-        auto result = co_await io_->dispatch([this, vid, label_props]() -> bool {
-            return store_->insertVertex(txn_, vid, label_props);
-        });
+    folly::coro::Task<bool> insertVertex(VertexId vid,
+                                         std::span<const std::pair<LabelId, Properties>> label_props) override {
+        auto result = co_await io_->dispatch(
+            [this, vid, label_props]() -> bool { return store_->insertVertex(txn_, vid, label_props); });
         co_return result;
     }
 

@@ -90,7 +90,7 @@ static void insertVertexWithIndex(TestEnv& env, LabelId label_id, VertexId vid, 
                                   const std::vector<LabelDef::IndexDef>& indexes) {
     auto txn = env.data_store->beginTransaction();
     std::pair<LabelId, Properties> lp{label_id, props};
-    env.data_store->insertVertex(txn, vid, {&lp, 1}, nullptr);
+    env.data_store->insertVertex(txn, vid, {&lp, 1});
     // Manually insert index entries for all WRITE_ONLY/PUBLIC indexes
     for (const auto& idx : indexes) {
         if (idx.state == IndexState::WRITE_ONLY || idx.state == IndexState::PUBLIC) {
