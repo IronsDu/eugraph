@@ -26,6 +26,28 @@ ExecutionResult QueryExecutor::executeSync(const std::string& cypher_query) {
 folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(const std::string& cypher_query) {
     auto ctx = std::make_shared<StreamContext>();
 
+    // 0. Try index DDL (same as executeAsync)
+    auto ddl_stmt = IndexDdlParser::tryParse(cypher_query);
+    if (ddl_stmt.has_value()) {
+        ExecutionResult ddl_result;
+        co_await handleIndexDdl(*ddl_stmt, ddl_result);
+        if (!ddl_result.error.empty()) {
+            ctx->error = std::move(ddl_result.error);
+            co_return ctx;
+        }
+        ctx->columns = std::move(ddl_result.columns);
+        ctx->store = &async_data_;
+        ctx->gen = folly::coro::co_invoke(
+            [rows = std::move(ddl_result.rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
+                if (!rows.empty()) {
+                    RowBatch batch;
+                    batch.rows = std::move(rows);
+                    co_yield std::move(batch);
+                }
+            });
+        co_return ctx;
+    }
+
     // Parse + logical plan (CPU-bound, no async needed)
     cypher::CypherQueryParser parser;
     auto parse_result = parser.parse(cypher_query);
