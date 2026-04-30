@@ -14,7 +14,7 @@
 namespace eugraph {
 
 /// Synchronous graph data storage interface.
-/// Provides vertex/edge CRUD, label management, edge traversal, primary key lookup, and DDL.
+/// Provides vertex/edge CRUD, label management, edge traversal, and DDL.
 class ISyncGraphDataStore {
 public:
     virtual ~ISyncGraphDataStore() = default;

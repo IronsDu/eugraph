@@ -11,7 +11,6 @@
 - `id: uint64` — 系统生成的全局唯一 ID
 - 通过 `LabelIdSet` 持有多个标签（Person, User 等）
 - 属性按标签独立存储（每标签一个 `vprop_{id}` 表），按 prop_id 索引
-- 主键（用户定义）：全局唯一标识（如 email），通过 `pk_forward`/`pk_reverse` 索引
 
 ### Edge（边）
 
@@ -44,16 +43,7 @@
 
 ---
 
-## 四、主键
-
-- 每顶点一个全局唯一主键值，不属于任何标签
-- `pk_forward`：pk_value → vertex_id
-- `pk_reverse`：vertex_id → pk_value
-- 主键可选（插入时可不指定）
-
----
-
-## 五、二级索引
+## 四、二级索引
 
 - 支持顶点属性和边属性的 B-tree 二级索引
 - 每个索引有独立的状态机：WRITE_ONLY → PUBLIC / DELETE_ONLY
@@ -63,7 +53,7 @@
 
 ---
 
-## 六、运行时类型
+## 五、运行时类型
 
 查询执行中使用的值类型：
 

@@ -19,7 +19,6 @@ WiredTiger 表按 label/edge_label ID 分表（详见 [kv-encoding.md](kv-encodi
 | 表名 | 说明 |
 |------|------|
 | `table:label_reverse` | 顶点→标签反向索引（全局） |
-| `table:pk_forward` / `table:pk_reverse` | 主键正反向查询（全局） |
 | `table:edge_index` | 邻接索引（全局） |
 | `table:label_fwd_{label_id}` | 标签正向索引（per-label） |
 | `table:vprop_{label_id}` | 顶点属性（per-label） |
