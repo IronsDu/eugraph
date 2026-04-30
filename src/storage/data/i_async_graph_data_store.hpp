@@ -72,6 +72,7 @@ public:
                                                      uint64_t entity_id) = 0;
     virtual folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
                                                      uint64_t entity_id) = 0;
+    virtual folly::coro::Task<bool> checkUniqueConstraint(const std::string& table, const PropertyValue& value) = 0;
 
     // Index Scan
     virtual folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByIndex(LabelId label_id, uint16_t prop_id,

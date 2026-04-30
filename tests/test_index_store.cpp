@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
 #include "common/types/constants.hpp"
+#include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/io_scheduler.hpp"
 #include "storage/kv/index_key_codec.hpp"
 
 #include <filesystem>
+#include <folly/coro/BlockingWait.h>
 #include <spdlog/spdlog.h>
 
 using namespace eugraph;
@@ -167,4 +170,29 @@ TEST_F(IndexStoreTest, DropAllEntries) {
     });
     store_->commitTransaction(txn);
     EXPECT_TRUE(results.empty());
+}
+
+// ==================== Async Wrapper Tests ====================
+
+TEST_F(IndexStoreTest, AsyncWrapper_UniqueConstraint) {
+    auto table = vidxTable(1, 0);
+    ASSERT_TRUE(store_->createIndex(table));
+
+    IoScheduler io(1);
+    AsyncGraphDataStore async_store(*store_, io);
+
+    // First insert — constraint satisfied
+    auto ok = folly::coro::blockingWait(async_store.checkUniqueConstraint(table, int64_t(42)));
+    EXPECT_TRUE(ok);
+
+    ok = folly::coro::blockingWait(async_store.insertIndexEntry(table, int64_t(42), 1));
+    EXPECT_TRUE(ok);
+
+    // Second check with same value — constraint violated
+    ok = folly::coro::blockingWait(async_store.checkUniqueConstraint(table, int64_t(42)));
+    EXPECT_FALSE(ok);
+
+    // Different value — constraint satisfied
+    ok = folly::coro::blockingWait(async_store.checkUniqueConstraint(table, int64_t(99)));
+    EXPECT_TRUE(ok);
 }

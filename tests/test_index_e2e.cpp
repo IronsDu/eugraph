@@ -395,3 +395,111 @@ TEST_F(IndexE2ETest, EndToEndCreateIndexAndQuery) {
     ASSERT_EQ(show.rows.size(), 1u);
     EXPECT_EQ(std::get<std::string>(show.rows[0][0]), "idx_age");
 }
+
+// ==================== Duplicate Index Detection ====================
+
+TEST_F(IndexE2ETest, DdlCreateDuplicateIndex) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    // First index on name should succeed
+    auto result = blockingWait(executor.executeAsync("CREATE INDEX idx_name FOR (n:Person) ON (n.name)"));
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    // Same name should fail
+    result = blockingWait(executor.executeAsync("CREATE INDEX idx_name FOR (n:Person) ON (n.name)"));
+    EXPECT_FALSE(result.error.empty());
+
+    // Different name but same property should fail (duplicate prop set)
+    result = blockingWait(executor.executeAsync("CREATE INDEX idx_name2 FOR (n:Person) ON (n.name)"));
+    EXPECT_FALSE(result.error.empty());
+
+    // Different property on same label should succeed
+    result = blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+    ASSERT_TRUE(result.error.empty()) << result.error;
+}
+
+// ==================== Unique Index Backfill ====================
+
+TEST_F(IndexE2ETest, DdlCreateUniqueIndexWithDuplicateData) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    // Insert two vertices with the same name
+    runQuery(executor, "CREATE (n:Person {name: 'alice'})");
+    runQuery(executor, "CREATE (n:Person {name: 'alice'})");
+
+    // Create unique index — should fail due to duplicate values
+    auto result = blockingWait(executor.executeAsync("CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)"));
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("duplicate"), std::string::npos);
+
+    // Verify index is in ERROR state
+    auto info = blockingWait(env.async_meta->getIndex("idx_name"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::ERROR);
+}
+
+TEST_F(IndexE2ETest, DdlCreateUniqueIndexWithUniqueData) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    // Insert two vertices with different names
+    runQuery(executor, "CREATE (n:Person {name: 'alice'})");
+    runQuery(executor, "CREATE (n:Person {name: 'bob'})");
+
+    // Create unique index — should succeed
+    auto result = blockingWait(executor.executeAsync("CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)"));
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    // Verify index is in PUBLIC state
+    auto info = blockingWait(env.async_meta->getIndex("idx_name"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+    EXPECT_TRUE(info->unique);
+}
+
+// ==================== Write Path Unique Constraint ====================
+
+TEST_F(IndexE2ETest, InsertDuplicateValueOnUniqueIndex) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    // Create unique index on clean data
+    runQuery(executor, "CREATE (n:Person {name: 'alice'})");
+    auto ddl = blockingWait(executor.executeAsync("CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)"));
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    // Verify it's PUBLIC
+    auto info = blockingWait(env.async_meta->getIndex("idx_name"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+
+    // Insert a different name — should succeed
+    auto result = blockingWait(executor.executeAsync("CREATE (n:Person {name: 'bob'})"));
+    EXPECT_TRUE(result.error.empty()) << result.error;
+
+    // Insert duplicate name — should fail (unique constraint), vertex not created
+    result = blockingWait(executor.executeAsync("CREATE (n:Person {name: 'alice'})"));
+    EXPECT_TRUE(result.rows.empty());
+    // Verify only 1 'alice' vertex exists
+    auto scan_result = blockingWait(executor.executeAsync("MATCH (n:Person) WHERE n.name = 'alice' RETURN n"));
+    EXPECT_EQ(scan_result.rows.size(), 1u);
+}

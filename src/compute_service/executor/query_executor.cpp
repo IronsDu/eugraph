@@ -325,21 +325,42 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         }
 
         // Backfill: scan existing vertices and insert index entries
+        bool hasConflict = false;
         {
             GraphTxnHandle txn = co_await async_data_.beginTran();
             async_data_.setTransaction(txn);
 
-            auto gen = async_data_.scanVerticesByLabel(label_def->id);
-            while (auto batch = co_await gen.next()) {
-                for (auto vid : *batch) {
-                    auto props = co_await async_data_.getVertexProperties(vid, label_def->id);
-                    if (props.has_value() && prop_id < props->size() && (*props)[prop_id].has_value()) {
-                        co_await async_data_.insertIndexEntry(table, (*props)[prop_id].value(), vid);
+            {
+                auto gen = async_data_.scanVerticesByLabel(label_def->id);
+                while (auto batch = co_await gen.next()) {
+                    for (auto vid : *batch) {
+                        auto props = co_await async_data_.getVertexProperties(vid, label_def->id);
+                        if (props.has_value() && prop_id < props->size() && (*props)[prop_id].has_value()) {
+                            const auto& value = (*props)[prop_id].value();
+                            if (stmt.unique) {
+                                bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, value);
+                                if (!constraint_ok) {
+                                    spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
+                                                 stmt.index_name, vid);
+                                    hasConflict = true;
+                                    break;
+                                }
+                            }
+                            co_await async_data_.insertIndexEntry(table, value, vid);
+                        }
                     }
+                    if (hasConflict)
+                        break;
                 }
-            }
+            } // gen destroyed before commit
 
             co_await async_data_.commitTran(txn);
+        }
+
+        if (hasConflict) {
+            ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
+            result.error = "Unique index creation failed: duplicate values found during backfill";
+            co_return;
         }
 
         ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::PUBLIC);

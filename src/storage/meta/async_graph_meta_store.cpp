@@ -143,8 +143,9 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createVertexIndex(const std::string
         co_return false;
     }
 
+    std::vector<uint16_t> new_prop_ids = {*prop_id};
     for (const auto& idx : label_opt->indexes) {
-        if (idx.prop_ids.size() == 1 && idx.prop_ids[0] == *prop_id) {
+        if (idx.prop_ids == new_prop_ids) {
             spdlog::error("Index already exists on {}.{}", label_name, prop_name);
             co_return false;
         }
@@ -194,8 +195,9 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& 
         co_return false;
     }
 
+    std::vector<uint16_t> new_prop_ids = {*prop_id};
     for (const auto& idx : elabel_opt->indexes) {
-        if (idx.prop_ids.size() == 1 && idx.prop_ids[0] == *prop_id) {
+        if (idx.prop_ids == new_prop_ids) {
             spdlog::error("Index already exists on {}.{}", edge_label_name, prop_name);
             co_return false;
         }
