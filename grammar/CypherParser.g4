@@ -264,7 +264,11 @@ propertyOrLabelExpression
     ;
 
 propertyExpression
-    : atom (DOT name)*
+    : atom (DOT name)* (COLONCOLON labelCast)?
+    ;
+
+labelCast
+    : name (DOT name)*
     ;
 
 patternPart

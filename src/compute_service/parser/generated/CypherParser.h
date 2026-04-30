@@ -1,5 +1,5 @@
 
-// Generated from grammar/CypherParser.g4 by ANTLR 4.13.2
+// Generated from /mnt/f/code/eugraph/grammar/CypherParser.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -15,20 +15,20 @@ public:
     ASSIGN = 1, ADD_ASSIGN = 2, LE = 3, GE = 4, GT = 5, LT = 6, NOT_EQUAL = 7, 
     RANGE = 8, SEMI = 9, DOT = 10, COMMA = 11, LPAREN = 12, RPAREN = 13, 
     LBRACE = 14, RBRACE = 15, LBRACK = 16, RBRACK = 17, SUB = 18, PLUS = 19, 
-    DIV = 20, MOD = 21, CARET = 22, MULT = 23, ESC = 24, COLON = 25, STICK = 26, 
-    DOLLAR = 27, CALL = 28, YIELD = 29, FILTER = 30, EXTRACT = 31, COUNT = 32, 
-    ANY = 33, NONE = 34, SINGLE = 35, ALL = 36, ASC = 37, ASCENDING = 38, 
-    BY = 39, CREATE = 40, DELETE = 41, DESC = 42, DESCENDING = 43, DETACH = 44, 
-    EXISTS = 45, LIMIT = 46, MATCH = 47, MERGE = 48, ON = 49, OPTIONAL = 50, 
-    ORDER = 51, REMOVE = 52, RETURN = 53, SET = 54, SKIP_W = 55, WHERE = 56, 
-    WITH = 57, UNION = 58, UNWIND = 59, AND = 60, AS = 61, CONTAINS = 62, 
-    DISTINCT = 63, ENDS = 64, IN = 65, IS = 66, NOT = 67, OR = 68, STARTS = 69, 
-    XOR = 70, FALSE = 71, TRUE = 72, NULL_W = 73, CONSTRAINT = 74, DO = 75, 
-    FOR = 76, REQUIRE = 77, UNIQUE = 78, CASE = 79, WHEN = 80, THEN = 81, 
-    ELSE = 82, END = 83, MANDATORY = 84, SCALAR = 85, OF = 86, ADD = 87, 
-    DROP = 88, ID = 89, ESC_LITERAL = 90, CHAR_LITERAL = 91, STRING_LITERAL = 92, 
-    DIGIT = 93, FLOAT = 94, WS = 95, COMMENT = 96, LINE_COMMENT = 97, ERRCHAR = 98, 
-    Letter = 99
+    DIV = 20, MOD = 21, CARET = 22, MULT = 23, ESC = 24, COLON = 25, COLONCOLON = 26, 
+    STICK = 27, DOLLAR = 28, CALL = 29, YIELD = 30, FILTER = 31, EXTRACT = 32, 
+    COUNT = 33, ANY = 34, NONE = 35, SINGLE = 36, ALL = 37, ASC = 38, ASCENDING = 39, 
+    BY = 40, CREATE = 41, DELETE = 42, DESC = 43, DESCENDING = 44, DETACH = 45, 
+    EXISTS = 46, LIMIT = 47, MATCH = 48, MERGE = 49, ON = 50, OPTIONAL = 51, 
+    ORDER = 52, REMOVE = 53, RETURN = 54, SET = 55, SKIP_W = 56, WHERE = 57, 
+    WITH = 58, UNION = 59, UNWIND = 60, AND = 61, AS = 62, CONTAINS = 63, 
+    DISTINCT = 64, ENDS = 65, IN = 66, IS = 67, NOT = 68, OR = 69, STARTS = 70, 
+    XOR = 71, FALSE = 72, TRUE = 73, NULL_W = 74, CONSTRAINT = 75, DO = 76, 
+    FOR = 77, REQUIRE = 78, UNIQUE = 79, CASE = 80, WHEN = 81, THEN = 82, 
+    ELSE = 83, END = 84, MANDATORY = 85, SCALAR = 86, OF = 87, ADD = 88, 
+    DROP = 89, ID = 90, ESC_LITERAL = 91, CHAR_LITERAL = 92, STRING_LITERAL = 93, 
+    DIGIT = 94, FLOAT = 95, WS = 96, COMMENT = 97, LINE_COMMENT = 98, ERRCHAR = 99, 
+    Letter = 100
   };
 
   enum {
@@ -46,17 +46,17 @@ public:
     RuleAddSubExpression = 42, RuleMultDivExpression = 43, RulePowerExpression = 44, 
     RuleUnaryAddSubExpression = 45, RuleAtomicExpression = 46, RuleListExpression = 47, 
     RuleStringExpression = 48, RuleStringExpPrefix = 49, RuleNullExpression = 50, 
-    RulePropertyOrLabelExpression = 51, RulePropertyExpression = 52, RulePatternPart = 53, 
-    RulePatternElem = 54, RulePatternElemChain = 55, RuleProperties = 56, 
-    RuleNodePattern = 57, RuleAtom = 58, RuleLhs = 59, RuleRelationshipPattern = 60, 
-    RuleRelationDetail = 61, RuleRelationshipTypes = 62, RuleUnionSt = 63, 
-    RuleSubqueryExist = 64, RuleInvocationName = 65, RuleFunctionInvocation = 66, 
-    RuleParenthesizedExpression = 67, RuleFilterWith = 68, RulePatternComprehension = 69, 
-    RuleRelationshipsChainPattern = 70, RuleListComprehension = 71, RuleFilterExpression = 72, 
-    RuleCountAll = 73, RuleExpressionChain = 74, RuleCaseExpression = 75, 
-    RuleParameter = 76, RuleLiteral = 77, RuleRangeLit = 78, RuleBoolLit = 79, 
-    RuleNumLit = 80, RuleStringLit = 81, RuleCharLit = 82, RuleListLit = 83, 
-    RuleMapLit = 84, RuleMapPair = 85, RuleName = 86, RuleSymbol = 87, RuleReservedWord = 88
+    RulePropertyOrLabelExpression = 51, RulePropertyExpression = 52, RuleLabelCast = 53, 
+    RulePatternPart = 54, RulePatternElem = 55, RulePatternElemChain = 56, 
+    RuleProperties = 57, RuleNodePattern = 58, RuleAtom = 59, RuleLhs = 60, 
+    RuleRelationshipPattern = 61, RuleRelationDetail = 62, RuleRelationshipTypes = 63, 
+    RuleUnionSt = 64, RuleSubqueryExist = 65, RuleInvocationName = 66, RuleFunctionInvocation = 67, 
+    RuleParenthesizedExpression = 68, RuleFilterWith = 69, RulePatternComprehension = 70, 
+    RuleRelationshipsChainPattern = 71, RuleListComprehension = 72, RuleFilterExpression = 73, 
+    RuleCountAll = 74, RuleExpressionChain = 75, RuleCaseExpression = 76, 
+    RuleParameter = 77, RuleLiteral = 78, RuleRangeLit = 79, RuleBoolLit = 80, 
+    RuleNumLit = 81, RuleStringLit = 82, RuleCharLit = 83, RuleListLit = 84, 
+    RuleMapLit = 85, RuleMapPair = 86, RuleName = 87, RuleSymbol = 88, RuleReservedWord = 89
   };
 
   explicit CypherParser(antlr4::TokenStream *input);
@@ -129,6 +129,7 @@ public:
   class NullExpressionContext;
   class PropertyOrLabelExpressionContext;
   class PropertyExpressionContext;
+  class LabelCastContext;
   class PatternPartContext;
   class PatternElemContext;
   class PatternElemChainContext;
@@ -1005,6 +1006,8 @@ public:
     antlr4::tree::TerminalNode* DOT(size_t i);
     std::vector<NameContext *> name();
     NameContext* name(size_t i);
+    antlr4::tree::TerminalNode *COLONCOLON();
+    LabelCastContext *labelCast();
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
@@ -1012,6 +1015,22 @@ public:
   };
 
   PropertyExpressionContext* propertyExpression();
+
+  class  LabelCastContext : public antlr4::ParserRuleContext {
+  public:
+    LabelCastContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    std::vector<NameContext *> name();
+    NameContext* name(size_t i);
+    std::vector<antlr4::tree::TerminalNode *> DOT();
+    antlr4::tree::TerminalNode* DOT(size_t i);
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  LabelCastContext* labelCast();
 
   class  PatternPartContext : public antlr4::ParserRuleContext {
   public:

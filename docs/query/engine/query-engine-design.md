@@ -31,7 +31,7 @@ Cypher 查询文本
 
 ## 一、逻辑计划
 
-### 算子类型（12 种）
+### 算子类型（14 种）
 
 `vector<LogicalOperator> children` 形成火山模型算子树。
 
@@ -49,6 +49,8 @@ Cypher 查询文本
 | `LimitOp` | 限制行数 | 1 |
 | `CreateNodeOp` | 创建顶点 | 0-1 |
 | `CreateEdgeOp` | 创建边 | 1 |
+| `SetOp` | 设置属性/标签 | 1 |
+| `RemoveOp` | 移除属性/标签 | 1 |
 
 ### 关键设计决策
 
@@ -71,6 +73,8 @@ Cypher 查询文本
 | `RETURN DISTINCT ...` | `DistinctOp` |
 | `CREATE (n:Label)` | `CreateNodeOp` |
 | `CREATE (a)-[r:TYPE]->(b)` | `CreateEdgeOp` |
+| `SET n:Label` / `SET n.prop = val` / `SET n::Label.prop = val` | `SetOp` |
+| `REMOVE n:Label` / `REMOVE n.prop` | `RemoveOp` |
 
 ---
 
@@ -95,6 +99,8 @@ Cypher 查询文本
 | `LimitPhysicalOp` | `int64_t limit` |
 | `CreateNodePhysicalOp` | `IAsyncGraphDataStore&`, `VertexId`, label_props |
 | `CreateEdgePhysicalOp` | `IAsyncGraphDataStore&`, `EdgeId`, src/dst |
+| `SetPhysicalOp` | `IAsyncGraphDataStore&`, items, label/edge_label 定义 |
+| `RemovePhysicalOp` | `IAsyncGraphDataStore&`, items, label/edge_label 定义 |
 
 关键转换：
 - 字符串 label/rel_type → `LabelId`/`EdgeLabelId`
@@ -167,6 +173,7 @@ struct RowBatch { static constexpr size_t CAPACITY = 1024; vector<Row> rows; };
 | `BinaryOp` | 比较（=, <>, <, >, <=, >=）、算术（+, -, *, /）、逻辑（AND, OR） |
 | `UnaryOp` | NOT, 取负, IS NULL, IS NOT NULL |
 | `PropertyAccess` | 属性访问 + 特殊属性 `id` 返回 int64_t |
+| `LabelCastExpr` | `n::Label` 转型语法，限定属性查找范围到指定标签 |
 | `FunctionCall` | `id(node)` 返回顶点/边 ID |
 
 多个表达式类型仅解析未求值，详见 [cypher-syntax.md](../syntax/cypher-syntax.md)。
@@ -201,19 +208,20 @@ struct RowBatch { static constexpr size_t CAPACITY = 1024; vector<Row> rows; };
 ## 六、当前实现状态
 
 ### 已完成
-- Cypher Parser + AST
-- 逻辑计划构建（12 种算子）
+- Cypher Parser + AST（含 `n::Label` 转型语法 + `LabelCastExpr`）
+- 逻辑计划构建（14 种算子）
 - 物理计划 + 协程执行基础设施
 - 读算子：Scan / Expand / Filter / Project / Limit / Sort / Skip / Distinct / Aggregate
 - 聚合：count/sum/avg/min/max + GROUP BY + DISTINCT
-- 写算子：CreateNode / CreateEdge（含索引维护）
+- 写算子：CreateNode / CreateEdge / SetOp / RemoveOp（含索引维护）
+- 多标签查询：per-label 属性存储（`map<LabelId, Properties>`）、便捷模式、转型模式
 - EXPLAIN 语句
 - IndexScan 优化（Filter+LabelScan → IndexScan）
 - 流式执行（StreamContext + Thrift ServerStream）
 - 索引 DDL（CREATE/DROP/SHOW INDEX，同步回填）
 
 ### 待实现
-- SET, DELETE, MERGE, REMOVE 执行
+- DELETE, MERGE 执行
 - 多 MATCH + JOIN
 - 查询优化器（谓词下推、投影裁剪）
 - WITH 子句

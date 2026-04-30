@@ -11,5 +11,7 @@
 #include "compute_service/logical_plan/operator/label_scan_op.hpp"
 #include "compute_service/logical_plan/operator/limit_op.hpp"
 #include "compute_service/logical_plan/operator/project_op.hpp"
+#include "compute_service/logical_plan/operator/remove_op.hpp"
+#include "compute_service/logical_plan/operator/set_op.hpp"
 #include "compute_service/logical_plan/operator/skip_op.hpp"
 #include "compute_service/logical_plan/operator/sort_op.hpp"

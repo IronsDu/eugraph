@@ -136,6 +136,8 @@ add_library(eugraph_query_engine STATIC
     src/compute_service/physical_plan/operator/label_scan_physical_op.cpp
     src/compute_service/physical_plan/operator/limit_physical_op.cpp
     src/compute_service/physical_plan/operator/project_physical_op.cpp
+    src/compute_service/physical_plan/operator/remove_physical_op.cpp
+    src/compute_service/physical_plan/operator/set_physical_op.cpp
     src/compute_service/physical_plan/operator/skip_physical_op.cpp
     src/compute_service/physical_plan/operator/sort_physical_op.cpp
     src/compute_service/physical_plan/physical_planner.cpp

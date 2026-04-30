@@ -44,6 +44,10 @@ private:
     // Build operators for a CREATE clause.
     std::variant<LogicalOperator, std::string> buildCreate(cypher::CreateClause& create);
 
+    // Build operators for SET / REMOVE clauses (wrap input pipeline).
+    std::variant<LogicalOperator, std::string> buildSet(cypher::SetClause& set, LogicalOperator input);
+    std::variant<LogicalOperator, std::string> buildRemove(cypher::RemoveClause& rem, LogicalOperator input);
+
     // Build operators for a WHERE predicate (wraps input in FilterOp).
     std::variant<LogicalOperator, std::string> buildFilter(cypher::Expression predicate, LogicalOperator input);
 

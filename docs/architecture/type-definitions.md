@@ -117,7 +117,7 @@ struct EdgeLabelDef {
 
 ```cpp
 // 查询执行中的值类型（src/compute_service/executor/row.hpp）
-struct VertexValue { VertexId id; std::optional<LabelIdSet> labels; std::optional<Properties> properties; };
+struct VertexValue { VertexId id; std::optional<LabelIdSet> labels; std::unordered_map<LabelId, Properties> properties; };
 struct EdgeValue { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; std::optional<Properties> properties; };
 using ListValue = vector<Value>;
 using Value = variant<monostate, bool, int64_t, double, string, VertexValue, EdgeValue, ListValue>;

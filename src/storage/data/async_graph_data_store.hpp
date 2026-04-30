@@ -139,6 +139,42 @@ public:
         }
     }
 
+    // ==================== Vertex Property Write ====================
+
+    folly::coro::Task<bool> putVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id,
+                                              const PropertyValue& value) override {
+        auto ok = co_await io_->dispatch([this, vid, label_id, prop_id, &value]() {
+            return store_->putVertexProperty(txn_, vid, label_id, prop_id, value);
+        });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> putVertexProperties(VertexId vid, LabelId label_id, const Properties& props) override {
+        auto ok = co_await io_->dispatch(
+            [this, vid, label_id, &props]() { return store_->putVertexProperties(txn_, vid, label_id, props); });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> deleteVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id) override {
+        auto ok = co_await io_->dispatch(
+            [this, vid, label_id, prop_id]() { return store_->deleteVertexProperty(txn_, vid, label_id, prop_id); });
+        co_return ok;
+    }
+
+    // ==================== Vertex Label Write ====================
+
+    folly::coro::Task<bool> addVertexLabel(VertexId vid, LabelId label_id) override {
+        auto ok =
+            co_await io_->dispatch([this, vid, label_id]() { return store_->addVertexLabel(txn_, vid, label_id); });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> removeVertexLabel(VertexId vid, LabelId label_id) override {
+        auto ok =
+            co_await io_->dispatch([this, vid, label_id]() { return store_->removeVertexLabel(txn_, vid, label_id); });
+        co_return ok;
+    }
+
     // ==================== Write Operations ====================
 
     folly::coro::Task<bool> insertVertex(VertexId vid, std::span<const std::pair<LabelId, Properties>> label_props,

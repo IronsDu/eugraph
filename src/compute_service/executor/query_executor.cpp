@@ -61,27 +61,25 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     GraphTxnHandle txn = co_await async_data_.beginTran();
     async_data_.setTransaction(txn);
 
-    // Store label/edge_label defs in StreamContext so physical operator raw pointers
-    // remain valid throughout streaming consumption
+    // Store label/edge_label defs + name→id maps in StreamContext so physical operator
+    // raw pointers remain valid throughout streaming consumption
     for (const auto& l : labels)
         ctx->label_defs[l.id] = l;
     for (const auto& el : edge_labels)
         ctx->edge_label_defs[el.id] = el;
+    ctx->label_name_to_id = std::move(label_name_to_id);
+    ctx->edge_label_name_to_id = std::move(edge_label_name_to_id);
 
     // PlanContext references StreamContext's maps — physical operators get pointers to those maps
     PlanContext plan_ctx;
-    plan_ctx.label_name_to_id = std::move(label_name_to_id);
-    plan_ctx.edge_label_name_to_id = std::move(edge_label_name_to_id);
+    plan_ctx.label_name_to_id = &ctx->label_name_to_id;
+    plan_ctx.edge_label_name_to_id = &ctx->edge_label_name_to_id;
     plan_ctx.label_defs = &ctx->label_defs;
     plan_ctx.edge_label_defs = &ctx->edge_label_defs;
 
     plan_ctx.next_vertex_id = co_await async_meta_.nextVertexId();
     plan_ctx.next_edge_id = co_await async_meta_.nextEdgeId();
 
-    // Plan physical operators — operators hold raw pointers to plan_ctx.label_defs which
-    // is a copy of ctx->label_defs. After planning, the pointers are to plan_ctx's copy.
-    // We need them to point to ctx's copy instead.
-    // Solution: after planning, we re-bind the pointers.
     PhysicalPlanner physical_planner;
     auto phys_result = physical_planner.plan(logical_plan, async_data_, plan_ctx);
     if (std::holds_alternative<std::string>(phys_result)) {
@@ -102,10 +100,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
 folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string& cypher_query) {
     ExecutionResult result;
 
-    spdlog::info("{} 11111111", __FUNCTION__);
     auto inner = folly::coro::co_invoke([this, &cypher_query, &result]() -> folly::coro::Task<void> {
-        spdlog::info("{} 222222222", __FUNCTION__);
-
         // 0. Try index DDL
         auto ddl_stmt = IndexDdlParser::tryParse(cypher_query);
         if (ddl_stmt.has_value()) {
@@ -160,7 +155,6 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         auto labels = co_await async_meta_.listLabels();
         auto edge_labels = co_await async_meta_.listEdgeLabels();
 
-        spdlog::info("{} 333333333", __FUNCTION__);
         std::unordered_map<std::string, LabelId> label_name_to_id;
         for (const auto& l : labels)
             label_name_to_id[l.name] = l.id;
@@ -173,7 +167,6 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         GraphTxnHandle txn = co_await async_data_.beginTran();
         async_data_.setTransaction(txn);
 
-        spdlog::info("{} 4444444444", __FUNCTION__);
         std::unordered_map<LabelId, LabelDef> label_defs;
         std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
         for (const auto& l : labels)
@@ -182,8 +175,8 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
             edge_label_defs[el.id] = el;
 
         PlanContext ctx;
-        ctx.label_name_to_id = std::move(label_name_to_id);
-        ctx.edge_label_name_to_id = std::move(edge_label_name_to_id);
+        ctx.label_name_to_id = &label_name_to_id;
+        ctx.edge_label_name_to_id = &edge_label_name_to_id;
         ctx.label_defs = &label_defs;
         ctx.edge_label_defs = &edge_label_defs;
 
@@ -216,12 +209,10 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
         }
 
         co_await async_data_.commitTran(txn);
-        spdlog::info("{} 55555555555", __FUNCTION__);
     });
 
     co_await folly::coro::co_withExecutor(compute_pool_.get(), std::move(inner));
 
-    spdlog::info("{} 66666666666666", __FUNCTION__);
     co_return result;
 }
 

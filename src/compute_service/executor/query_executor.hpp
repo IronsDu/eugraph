@@ -30,6 +30,8 @@ struct StreamContext {
     // Owned by StreamContext so raw pointers in physical operators remain valid
     std::unordered_map<LabelId, LabelDef> label_defs;
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
+    std::unordered_map<std::string, LabelId> label_name_to_id;
+    std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
 };
 
 /// Top-level query execution engine.

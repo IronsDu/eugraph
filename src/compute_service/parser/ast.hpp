@@ -32,17 +32,19 @@ struct AllExpr;
 struct AnyExpr;
 struct NoneExpr;
 struct SingleExpr;
+struct LabelCastExpr;
 
 // ==================== Expression ====================
 // 递归类型用 unique_ptr 包装
 
-using Expression = std::variant<std::unique_ptr<Literal>, std::unique_ptr<Variable>, std::unique_ptr<Parameter>,
-                                std::unique_ptr<BinaryOp>, std::unique_ptr<UnaryOp>, std::unique_ptr<FunctionCall>,
-                                std::unique_ptr<PropertyAccess>, std::unique_ptr<ListExpr>, std::unique_ptr<MapExpr>,
-                                std::unique_ptr<CaseExpr>, std::unique_ptr<ListComprehension>,
-                                std::unique_ptr<PatternComprehension>, std::unique_ptr<SubscriptExpr>,
-                                std::unique_ptr<SliceExpr>, std::unique_ptr<ExistsExpr>, std::unique_ptr<AllExpr>,
-                                std::unique_ptr<AnyExpr>, std::unique_ptr<NoneExpr>, std::unique_ptr<SingleExpr>>;
+using Expression =
+    std::variant<std::unique_ptr<Literal>, std::unique_ptr<Variable>, std::unique_ptr<Parameter>,
+                 std::unique_ptr<BinaryOp>, std::unique_ptr<UnaryOp>, std::unique_ptr<FunctionCall>,
+                 std::unique_ptr<PropertyAccess>, std::unique_ptr<LabelCastExpr>, std::unique_ptr<ListExpr>,
+                 std::unique_ptr<MapExpr>, std::unique_ptr<CaseExpr>, std::unique_ptr<ListComprehension>,
+                 std::unique_ptr<PatternComprehension>, std::unique_ptr<SubscriptExpr>, std::unique_ptr<SliceExpr>,
+                 std::unique_ptr<ExistsExpr>, std::unique_ptr<AllExpr>, std::unique_ptr<AnyExpr>,
+                 std::unique_ptr<NoneExpr>, std::unique_ptr<SingleExpr>>;
 
 // ==================== Literal ====================
 
@@ -123,6 +125,12 @@ struct FunctionCall {
 struct PropertyAccess {
     Expression object;
     std::string property;
+};
+
+/// Label-scoped access: n::Label or n::Label.prop
+struct LabelCastExpr {
+    Expression object;
+    std::string label;
 };
 
 // ==================== ListExpr ====================
@@ -407,6 +415,10 @@ inline Expression makePropertyAccess(Expression object, std::string property) {
     return std::make_unique<PropertyAccess>(PropertyAccess{std::move(object), std::move(property)});
 }
 
+inline Expression makeLabelCast(Expression object, std::string label) {
+    return std::make_unique<LabelCastExpr>(LabelCastExpr{std::move(object), std::move(label)});
+}
+
 inline Expression makeFunctionCall(std::string name, std::vector<Expression> args, bool distinct = false) {
     return std::make_unique<FunctionCall>(FunctionCall{std::move(name), distinct, std::move(args)});
 }
@@ -424,6 +436,8 @@ inline std::string expressionToString(const Expression& expr) {
                 return ptr->name;
             } else if constexpr (std::is_same_v<OpType, PropertyAccess>) {
                 return expressionToString(ptr->object) + "." + ptr->property;
+            } else if constexpr (std::is_same_v<OpType, LabelCastExpr>) {
+                return expressionToString(ptr->object) + "::" + ptr->label;
             } else if constexpr (std::is_same_v<OpType, Literal>) {
                 if (std::holds_alternative<std::string>(ptr->value))
                     return std::get<std::string>(ptr->value);

@@ -1,5 +1,5 @@
 
-// Generated from grammar/CypherParser.g4 by ANTLR 4.13.2
+// Generated from /mnt/f/code/eugraph/grammar/CypherParser.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -224,6 +224,10 @@ public:
   }
 
   virtual std::any visitPropertyExpression(CypherParser::PropertyExpressionContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitLabelCast(CypherParser::LabelCastContext *ctx) override {
     return visitChildren(ctx);
   }
 

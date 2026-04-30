@@ -77,6 +77,28 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildSingleQuery(
             }
             current = std::move(std::get<LogicalOperator>(result));
 
+        } else if (std::holds_alternative<std::unique_ptr<cypher::SetClause>>(clause)) {
+            if (!current.has_value()) {
+                return "SET must follow MATCH or CREATE";
+            }
+            auto& set = std::get<std::unique_ptr<cypher::SetClause>>(clause);
+            auto result = buildSet(*set, std::move(*current));
+            if (std::holds_alternative<std::string>(result)) {
+                return std::get<std::string>(result);
+            }
+            current = std::move(std::get<LogicalOperator>(result));
+
+        } else if (std::holds_alternative<std::unique_ptr<cypher::RemoveClause>>(clause)) {
+            if (!current.has_value()) {
+                return "REMOVE must follow MATCH or CREATE";
+            }
+            auto& rem = std::get<std::unique_ptr<cypher::RemoveClause>>(clause);
+            auto result = buildRemove(*rem, std::move(*current));
+            if (std::holds_alternative<std::string>(result)) {
+                return std::get<std::string>(result);
+            }
+            current = std::move(std::get<LogicalOperator>(result));
+
         } else {
             return "Clause type not yet supported in this phase";
         }
@@ -333,6 +355,10 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildCreate(cyphe
             ensureVariable(nodeVar);
         }
 
+        if (node.labels.size() > 1) {
+            return "Multi-label CREATE not supported. Create with a single label and add more labels via SET.";
+        }
+
         auto createNode = std::make_unique<CreateNodeOp>();
         createNode->variable = nodeVar;
         createNode->labels = std::move(node.labels);
@@ -351,6 +377,10 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildCreate(cyphe
             }
             if (!edgeVar.empty()) {
                 ensureVariable(edgeVar);
+            }
+
+            if (nextNode.labels.size() > 1) {
+                return "Multi-label CREATE not supported. Create with a single label and add more labels via SET.";
             }
 
             auto createDst = std::make_unique<CreateNodeOp>();
@@ -385,6 +415,25 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildCreate(cyphe
     }
 
     return std::move(*lastOp);
+}
+
+// ==================== SET ====================
+
+std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildSet(cypher::SetClause& set, LogicalOperator input) {
+    auto op = std::make_unique<SetOp>();
+    op->items = std::move(set.items);
+    op->children.push_back(std::move(input));
+    return op;
+}
+
+// ==================== REMOVE ====================
+
+std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildRemove(cypher::RemoveClause& rem,
+                                                                           LogicalOperator input) {
+    auto op = std::make_unique<RemoveOp>();
+    op->items = std::move(rem.items);
+    op->children.push_back(std::move(input));
+    return op;
 }
 
 // ==================== Filter ====================
@@ -470,6 +519,16 @@ struct OperatorPrinter {
     }
     void operator()(const std::unique_ptr<CreateEdgeOp>& op) {
         os << indentStr(level) << "CreateEdge(src=" << op->src_variable << ", dst=" << op->dst_variable << ")\n";
+        for (const auto& child : op->children)
+            printChild(child);
+    }
+    void operator()(const std::unique_ptr<SetOp>& op) {
+        os << indentStr(level) << "Set(items=" << op->items.size() << ")\n";
+        for (const auto& child : op->children)
+            printChild(child);
+    }
+    void operator()(const std::unique_ptr<RemoveOp>& op) {
+        os << indentStr(level) << "Remove(items=" << op->items.size() << ")\n";
         for (const auto& child : op->children)
             printChild(child);
     }

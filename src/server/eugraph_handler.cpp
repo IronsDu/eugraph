@@ -166,14 +166,18 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         oss << "{\"id\":" << v.id;
 
         // Collect property name→value pairs from all labels of this vertex
-        if (v.properties.has_value() && v.labels.has_value()) {
+        if (v.labels.has_value()) {
             for (LabelId lid : *v.labels) {
                 auto it = label_defs.find(lid);
                 if (it == label_defs.end())
                     continue;
+                auto prop_it = v.properties.find(lid);
+                if (prop_it == v.properties.end())
+                    continue;
+                const auto& props = prop_it->second;
                 for (const auto& pd : it->second.properties) {
-                    if (pd.id < v.properties->size()) {
-                        const auto& pv = (*v.properties)[pd.id];
+                    if (pd.id < props.size()) {
+                        const auto& pv = props[pd.id];
                         if (pv.has_value()) {
                             oss << ",\"" << pd.name << "\":";
                             appendJsonValue(oss, *pv);

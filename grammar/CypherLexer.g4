@@ -63,6 +63,7 @@ CARET      : '^';
 MULT       : '*';
 ESC        : '`';
 COLON      : ':';
+COLONCOLON : '::';
 STICK      : '|';
 DOLLAR     : '$';
 

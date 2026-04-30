@@ -53,8 +53,15 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
 
     RowBatch output;
     if (ok) {
+        // Build VertexValue with the created labels and properties
+        VertexValue vv;
+        vv.id = assigned_vid_;
+        vv.labels = LabelIdSet(label_ids_.begin(), label_ids_.end());
+        for (const auto& [lid, props] : label_props_) {
+            vv.properties[lid] = props;
+        }
         Row row;
-        row.push_back(Value(static_cast<int64_t>(assigned_vid_)));
+        row.push_back(Value(std::move(vv)));
         output.push_back(std::move(row));
     }
     if (!output.empty()) {

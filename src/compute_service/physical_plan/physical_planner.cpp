@@ -50,6 +50,10 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
                 return planCreateNode(*ptr, store, ctx, input_schema);
             else if constexpr (std::is_same_v<OpType, CreateEdgeOp>)
                 return planCreateEdge(*ptr, store, ctx, input_schema);
+            else if constexpr (std::is_same_v<OpType, SetOp>)
+                return planSet(*ptr, store, ctx, input_schema);
+            else if constexpr (std::is_same_v<OpType, RemoveOp>)
+                return planRemove(*ptr, store, ctx, input_schema);
             else
                 return std::string("Unknown logical operator type");
         },
@@ -60,7 +64,7 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
 
 std::variant<PlanOperatorResult, std::string>
 PhysicalPlanner::planAllNodeScan(AllNodeScanOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema) {
-    auto result = std::make_unique<AllNodeScanPhysicalOp>(op.variable, store, ctx.label_name_to_id, *ctx.label_defs);
+    auto result = std::make_unique<AllNodeScanPhysicalOp>(op.variable, store, *ctx.label_name_to_id, *ctx.label_defs);
     Schema output_schema;
     if (!op.variable.empty()) {
         output_schema.push_back(op.variable);
@@ -70,8 +74,8 @@ PhysicalPlanner::planAllNodeScan(AllNodeScanOp& op, IAsyncGraphDataStore& store,
 
 std::variant<PlanOperatorResult, std::string>
 PhysicalPlanner::planLabelScan(LabelScanOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema) {
-    auto it = ctx.label_name_to_id.find(op.label);
-    if (it == ctx.label_name_to_id.end()) {
+    auto it = ctx.label_name_to_id->find(op.label);
+    if (it == ctx.label_name_to_id->end()) {
         return "Unknown label: " + op.label;
     }
     auto result = std::make_unique<LabelScanPhysicalOp>(op.variable, it->second, store, *ctx.label_defs);
@@ -101,8 +105,8 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planExpand(Expand
     if (!op.rel_types.empty()) {
         label_filters = std::vector<EdgeLabelId>();
         for (const auto& type_name : op.rel_types) {
-            auto it = ctx.edge_label_name_to_id.find(type_name);
-            if (it != ctx.edge_label_name_to_id.end()) {
+            auto it = ctx.edge_label_name_to_id->find(type_name);
+            if (it != ctx.edge_label_name_to_id->end()) {
                 label_filters->push_back(it->second);
             }
         }
@@ -130,11 +134,14 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planFilter(Filter
         return "Filter requires exactly one child";
     }
 
+    if (auto err = validateExpression(op.predicate, ctx); !err.empty())
+        return err;
+
     // Try index scan optimization: if child is LabelScan and predicate is indexable
     if (std::holds_alternative<std::unique_ptr<LabelScanOp>>(op.children[0])) {
         auto& scan_op = std::get<std::unique_ptr<LabelScanOp>>(op.children[0]);
-        auto label_it = ctx.label_name_to_id.find(scan_op->label);
-        if (label_it != ctx.label_name_to_id.end()) {
+        auto label_it = ctx.label_name_to_id->find(scan_op->label);
+        if (label_it != ctx.label_name_to_id->end()) {
             LabelId label_id = label_it->second;
             auto def_it = ctx.label_defs->find(label_id);
             if (def_it != ctx.label_defs->end()) {
@@ -170,6 +177,12 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planProject(Proje
     if (op.children.size() != 1) {
         return "Project requires exactly one child";
     }
+
+    for (auto& item : op.items) {
+        if (auto err = validateExpression(item.expr, ctx); !err.empty())
+            return err;
+    }
+
     auto child_result = planOperator(op.children[0], store, ctx, input_schema);
     if (std::holds_alternative<std::string>(child_result)) {
         return std::get<std::string>(child_result);
@@ -232,6 +245,12 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSort(SortOp& 
     if (op.children.size() != 1) {
         return "Sort requires exactly one child";
     }
+
+    for (auto& si : op.sort_items) {
+        if (auto err = validateExpression(si.expr, ctx); !err.empty())
+            return err;
+    }
+
     auto child_result = planOperator(op.children[0], store, ctx, input_schema);
     if (std::holds_alternative<std::string>(child_result)) {
         return std::get<std::string>(child_result);
@@ -276,6 +295,16 @@ PhysicalPlanner::planAggregate(AggregateOp& op, IAsyncGraphDataStore& store, Pla
     if (op.children.size() != 1) {
         return "Aggregate requires exactly one child";
     }
+
+    for (auto& gk : op.group_keys) {
+        if (auto err = validateExpression(gk, ctx); !err.empty())
+            return err;
+    }
+    for (auto& af : op.aggregates) {
+        if (auto err = validateExpression(af.arg, ctx); !err.empty())
+            return err;
+    }
+
     auto child_result = planOperator(op.children[0], store, ctx, input_schema);
     if (std::holds_alternative<std::string>(child_result)) {
         return std::get<std::string>(child_result);
@@ -338,8 +367,8 @@ PhysicalPlanner::planCreateNode(CreateNodeOp& op, IAsyncGraphDataStore& store, P
     std::vector<LabelId> label_ids;
     std::vector<std::pair<LabelId, Properties>> label_props;
     for (const auto& label_name : op.labels) {
-        auto it = ctx.label_name_to_id.find(label_name);
-        if (it != ctx.label_name_to_id.end()) {
+        auto it = ctx.label_name_to_id->find(label_name);
+        if (it != ctx.label_name_to_id->end()) {
             LabelId lid = it->second;
             label_ids.push_back(lid);
 
@@ -425,8 +454,8 @@ PhysicalPlanner::planCreateEdge(CreateEdgeOp& op, IAsyncGraphDataStore& store, P
 
     EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
     if (!op.rel_types.empty()) {
-        auto it = ctx.edge_label_name_to_id.find(op.rel_types[0]);
-        if (it != ctx.edge_label_name_to_id.end()) {
+        auto it = ctx.edge_label_name_to_id->find(op.rel_types[0]);
+        if (it != ctx.edge_label_name_to_id->end()) {
             label_id = it->second;
         }
     }
@@ -442,6 +471,124 @@ PhysicalPlanner::planCreateEdge(CreateEdgeOp& op, IAsyncGraphDataStore& store, P
         output_schema.push_back(op.variable);
     }
     return PlanOperatorResult{std::move(result), std::move(output_schema)};
+}
+
+// ==================== SET ====================
+
+std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSet(SetOp& op, IAsyncGraphDataStore& store,
+                                                                       PlanContext& ctx, Schema input_schema) {
+    std::unique_ptr<PhysicalOperator> child_op;
+    Schema child_schema = input_schema;
+    if (!op.children.empty()) {
+        auto child_result = planOperator(op.children[0], store, ctx, input_schema);
+        if (std::holds_alternative<std::string>(child_result)) {
+            return std::get<std::string>(child_result);
+        }
+        auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+        child_op = std::move(child_res.op);
+        child_schema = std::move(child_res.output_schema);
+    }
+
+    auto result = std::make_unique<SetPhysicalOp>(std::move(op.items), child_schema, store, ctx.label_defs,
+                                                  ctx.label_name_to_id, std::move(child_op));
+    return PlanOperatorResult{std::move(result), child_schema};
+}
+
+// ==================== REMOVE ====================
+
+std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planRemove(RemoveOp& op, IAsyncGraphDataStore& store,
+                                                                          PlanContext& ctx, Schema input_schema) {
+    std::unique_ptr<PhysicalOperator> child_op;
+    Schema child_schema = input_schema;
+    if (!op.children.empty()) {
+        auto child_result = planOperator(op.children[0], store, ctx, input_schema);
+        if (std::holds_alternative<std::string>(child_result)) {
+            return std::get<std::string>(child_result);
+        }
+        auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+        child_op = std::move(child_res.op);
+        child_schema = std::move(child_res.output_schema);
+    }
+
+    auto result = std::make_unique<RemovePhysicalOp>(std::move(op.items), child_schema, store, ctx.label_defs,
+                                                     ctx.label_name_to_id, std::move(child_op));
+    return PlanOperatorResult{std::move(result), child_schema};
+}
+
+// ==================== Expression Validation ====================
+
+std::string PhysicalPlanner::validateExpression(const cypher::Expression& expr, const PlanContext& ctx) const {
+    return std::visit(
+        [&](const auto& ptr) -> std::string {
+            using T = std::decay_t<decltype(ptr)>;
+            using Elem = typename T::element_type;
+
+            // Recursively validate sub-expressions first
+            if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                if (auto err = validateExpression(ptr->left, ctx); !err.empty())
+                    return err;
+                if (auto err = validateExpression(ptr->right, ctx); !err.empty())
+                    return err;
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                if (auto err = validateExpression(ptr->operand, ctx); !err.empty())
+                    return err;
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args) {
+                    if (auto err = validateExpression(arg, ctx); !err.empty())
+                        return err;
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                // Validate the sub-expression first (e.g. LabelCastExpr inside)
+                if (auto err = validateExpression(ptr->object, ctx); !err.empty())
+                    return err;
+
+                // If object is a LabelCastExpr, validate property exists in that label
+                if (std::holds_alternative<std::unique_ptr<cypher::LabelCastExpr>>(ptr->object)) {
+                    auto& lc = std::get<std::unique_ptr<cypher::LabelCastExpr>>(ptr->object);
+                    if (!ctx.label_defs)
+                        return std::string{};
+                    for (const auto& [lid, ldef] : *ctx.label_defs) {
+                        if (ldef.name == lc->label) {
+                            for (const auto& pd : ldef.properties) {
+                                if (pd.name == ptr->property)
+                                    return std::string{}; // found, valid
+                            }
+                            return "Label '" + lc->label + "' has no property '" + ptr->property + "'";
+                        }
+                    }
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
+                // Validate the sub-expression first
+                if (auto err = validateExpression(ptr->object, ctx); !err.empty())
+                    return err;
+
+                // Validate the label exists
+                if (!ctx.label_defs)
+                    return "Label '" + ptr->label + "' not found";
+                for (const auto& [lid, ldef] : *ctx.label_defs) {
+                    if (ldef.name == ptr->label)
+                        return std::string{}; // found
+                }
+                return "Label '" + ptr->label + "' not found";
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject) {
+                    if (auto err = validateExpression(*ptr->subject, ctx); !err.empty())
+                        return err;
+                }
+                for (const auto& [when, then] : ptr->when_thens) {
+                    if (auto err = validateExpression(when, ctx); !err.empty())
+                        return err;
+                    if (auto err = validateExpression(then, ctx); !err.empty())
+                        return err;
+                }
+                if (ptr->else_expr) {
+                    if (auto err = validateExpression(*ptr->else_expr, ctx); !err.empty())
+                        return err;
+                }
+            }
+            return std::string{};
+        },
+        expr);
 }
 
 // ==================== Index Scan Optimization ====================

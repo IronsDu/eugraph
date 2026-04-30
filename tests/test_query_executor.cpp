@@ -464,24 +464,29 @@ TEST_F(QueryExecutorTest, ExpandTwoHopNoMatch) {
 // ==================== Create Node Tests ====================
 
 TEST_F(QueryExecutorTest, CreateNodeReturnsId) {
-    auto rows = executor_->executeSync("CREATE (n:Person)").rows;
-    ASSERT_EQ(rows.size(), 1);
-    ASSERT_EQ(rows[0].size(), 1);
-    ASSERT_TRUE(std::holds_alternative<int64_t>(rows[0][0]));
+    auto result = executor_->executeSync("CREATE (n:Person)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    ASSERT_EQ(result.rows[0].size(), 1);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(result.rows[0][0]));
     // ID comes from metadata service, should be > 0
-    EXPECT_GT(std::get<int64_t>(rows[0][0]), 0);
+    EXPECT_GT(std::get<VertexValue>(result.rows[0][0]).id, 0);
 }
 
 TEST_F(QueryExecutorTest, CreateMultipleNodesSequentially) {
-    auto rows1 = executor_->executeSync("CREATE (n:Person)").rows;
-    ASSERT_EQ(rows1.size(), 1);
+    auto result1 = executor_->executeSync("CREATE (n:Person)");
+    ASSERT_TRUE(result1.error.empty()) << result1.error;
+    ASSERT_EQ(result1.rows.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(result1.rows[0][0]));
+    auto id1 = std::get<VertexValue>(result1.rows[0][0]).id;
 
-    auto rows2 = executor_->executeSync("CREATE (n:Person)").rows;
-    ASSERT_EQ(rows2.size(), 1);
-    ASSERT_TRUE(std::holds_alternative<int64_t>(rows2[0][0]));
+    auto result2 = executor_->executeSync("CREATE (n:Person)");
+    ASSERT_TRUE(result2.error.empty()) << result2.error;
+    ASSERT_EQ(result2.rows.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(result2.rows[0][0]));
+    auto id2 = std::get<VertexValue>(result2.rows[0][0]).id;
+
     // Second vertex gets a different ID
-    auto id1 = std::get<int64_t>(rows1[0][0]);
-    auto id2 = std::get<int64_t>(rows2[0][0]);
     EXPECT_NE(id1, id2);
 
     // Verify both vertices exist via scan
@@ -1277,4 +1282,447 @@ TEST_F(QueryExecutorAggTest, AggregateWithSkipLimit) {
     ASSERT_TRUE(result.error.empty()) << result.error;
     // Only 2 groups, skip 1 → should get 1 row
     EXPECT_EQ(result.rows.size(), 1);
+}
+
+// ==================== M6: Multi-Label Tests ====================
+
+class QueryExecutorMultiLabelTest : public ::testing::Test {
+protected:
+    std::string db_path_;
+    std::unique_ptr<SyncGraphDataStore> sync_data_;
+    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
+    std::unique_ptr<AsyncGraphMetaStore> async_meta_;
+    std::unique_ptr<IoScheduler> io_scheduler_;
+    std::unique_ptr<AsyncGraphDataStore> async_data_;
+    std::unique_ptr<QueryExecutor> executor_;
+
+    LabelId PERSON_LABEL = INVALID_LABEL_ID;
+    LabelId EMPLOYEE_LABEL = INVALID_LABEL_ID;
+    LabelId VIP_LABEL = INVALID_LABEL_ID;
+
+    void SetUp() override {
+        db_path_ = "/tmp/eugraph_multilabel_test_" + std::to_string(getpid());
+        std::filesystem::remove_all(db_path_);
+        std::filesystem::create_directories(db_path_ + "/data");
+        std::filesystem::create_directories(db_path_ + "/meta");
+
+        sync_data_ = std::make_unique<SyncGraphDataStore>();
+        ASSERT_TRUE(sync_data_->open(db_path_ + "/data"));
+
+        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
+        ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
+
+        async_meta_ = std::make_unique<AsyncGraphMetaStore>();
+        io_scheduler_ = std::make_unique<IoScheduler>(2);
+        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
+
+        auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
+        ASSERT_TRUE(opened);
+
+        // Create Person label with name and age
+        auto person_def = blockingWait(
+            async_meta_->createLabel("Person", {PropertyDef{0, "name", PropertyType::STRING, false, std::nullopt},
+                                                PropertyDef{0, "age", PropertyType::INT64, false, std::nullopt}}));
+        PERSON_LABEL = person_def;
+
+        // Create Employee label with salary and name (shared property name for conflict testing)
+        auto employee_def = blockingWait(
+            async_meta_->createLabel("Employee", {PropertyDef{0, "salary", PropertyType::INT64, false, std::nullopt},
+                                                  PropertyDef{0, "name", PropertyType::STRING, false, std::nullopt}}));
+        EMPLOYEE_LABEL = employee_def;
+
+        // Create VIP label with no properties (pure tag)
+        auto vip_def = blockingWait(async_meta_->createLabel("VIP"));
+        VIP_LABEL = vip_def;
+
+        ASSERT_NE(PERSON_LABEL, INVALID_LABEL_ID);
+        ASSERT_NE(EMPLOYEE_LABEL, INVALID_LABEL_ID);
+        ASSERT_NE(VIP_LABEL, INVALID_LABEL_ID);
+
+        // Create physical tables
+        blockingWait(async_data_->createLabel(PERSON_LABEL));
+        blockingWait(async_data_->createLabel(EMPLOYEE_LABEL));
+        blockingWait(async_data_->createLabel(VIP_LABEL));
+
+        executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    }
+
+    void TearDown() override {
+        executor_.reset();
+        async_data_.reset();
+        io_scheduler_.reset();
+        blockingWait(async_meta_->close());
+        sync_data_->close();
+        sync_meta_->close();
+        std::filesystem::remove_all(db_path_);
+    }
+
+    // Insert a vertex with multiple labels directly via sync store.
+    // Each label's properties are given as {prop_id: PropertyValue} pairs.
+    void insertMultiLabelVertex(VertexId vid, std::vector<std::pair<LabelId, Properties>> label_props) {
+        auto txn = sync_data_->beginTransaction();
+        ASSERT_TRUE(sync_data_->insertVertex(txn, vid, label_props, nullptr));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
+};
+
+// Helper: get prop_id by name from a label_defs map
+namespace {
+uint16_t propIdByName(const std::unordered_map<LabelId, LabelDef>& defs, LabelId lid, const std::string& name) {
+    auto it = defs.find(lid);
+    if (it == defs.end())
+        return UINT16_MAX;
+    for (const auto& pd : it->second.properties) {
+        if (pd.name == name)
+            return pd.id;
+    }
+    return UINT16_MAX;
+}
+} // anonymous namespace
+
+TEST_F(QueryExecutorMultiLabelTest, PropertyNoConflictScalar) {
+    // Vertex with only Person label: n.name is scalar "Alice"
+    // Need to get prop_ids from the metadata
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    uint16_t name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    ASSERT_NE(name_pid, UINT16_MAX);
+
+    Properties person_props;
+    person_props.resize(name_pid + 1);
+    person_props[name_pid] = PropertyValue(std::string("Alice"));
+
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}});
+
+    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Alice");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, PropertyConflictToList) {
+    // Vertex with Person{name: "Alice"} AND Employee{name: "Engineer"}
+    // n.name should return ["Alice", "Engineer"] since both labels define "name"
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(employee_def.has_value());
+
+    uint16_t person_name_pid = UINT16_MAX, employee_name_pid = UINT16_MAX;
+    for (const auto& pd : person_def->properties) {
+        if (pd.name == "name")
+            person_name_pid = pd.id;
+    }
+    for (const auto& pd : employee_def->properties) {
+        if (pd.name == "name")
+            employee_name_pid = pd.id;
+    }
+    ASSERT_NE(person_name_pid, UINT16_MAX);
+    ASSERT_NE(employee_name_pid, UINT16_MAX);
+
+    Properties person_props, employee_props;
+    person_props.resize(person_name_pid + 1);
+    person_props[person_name_pid] = PropertyValue(std::string("Alice"));
+    employee_props.resize(employee_name_pid + 1);
+    employee_props[employee_name_pid] = PropertyValue(std::string("Engineer"));
+
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
+
+    // Use MATCH (n) (AllNodeScan) to load ALL labels' properties, triggering conflict
+    auto result = executor_->executeSync("MATCH (n) RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+
+    // Should be a ListValue with both names
+    auto& val = result.rows[0][0];
+    ASSERT_TRUE(std::holds_alternative<ListValue>(val)) << "Expected ListValue, got variant index " << val.index();
+    auto& lv = std::get<ListValue>(val);
+    ASSERT_EQ(lv.elements.size(), 2);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyAccess) {
+    // Vertex with Employee{salary: 10000}. n::Employee.salary should return 10000
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(employee_def.has_value());
+    uint16_t salary_pid = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "salary");
+    ASSERT_NE(salary_pid, UINT16_MAX);
+
+    Properties employee_props;
+    employee_props.resize(salary_pid + 1);
+    employee_props[salary_pid] = PropertyValue(int64_t(10000));
+
+    insertMultiLabelVertex(1, {{EMPLOYEE_LABEL, std::move(employee_props)}});
+
+    auto result = executor_->executeSync("MATCH (n:Employee) RETURN n::Employee.salary");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 10000);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastAllProperties) {
+    // RETURN n::Employee should return a scoped VertexValue with only Employee properties
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(employee_def.has_value());
+    uint16_t salary_pid = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "salary");
+    ASSERT_NE(salary_pid, UINT16_MAX);
+
+    Properties employee_props;
+    employee_props.resize(salary_pid + 1);
+    employee_props[salary_pid] = PropertyValue(int64_t(9999));
+
+    insertMultiLabelVertex(1, {{EMPLOYEE_LABEL, std::move(employee_props)}});
+
+    auto result = executor_->executeSync("MATCH (n:Employee) RETURN n::Employee");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+
+    // Result should be a VertexValue with only the Employee label's properties
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(result.rows[0][0]));
+    auto& vv = std::get<VertexValue>(result.rows[0][0]);
+    EXPECT_EQ(vv.properties.size(), 1);
+    EXPECT_NE(vv.properties.find(EMPLOYEE_LABEL), vv.properties.end());
+}
+
+TEST_F(QueryExecutorMultiLabelTest, SetVertexLabel) {
+    // CREATE (n:Person), SET n:Employee
+    auto result = executor_->executeSync("CREATE (n:Person) SET n:Employee");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, RemoveVertexLabel) {
+    // CREATE (n:Person), SET n:Employee, then REMOVE n:Employee
+    auto r1 = executor_->executeSync("CREATE (n:Person) SET n:Employee");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) REMOVE n:Employee");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, SetVertexProperty) {
+    // CREATE (n:Person {name: 'Alice'}), SET n.age = 30
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) SET n.age = 30");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = executor_->executeSync("MATCH (n:Person) RETURN n.age");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 30);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, SetLabelCastProperty) {
+    // CREATE (n:Person), SET n:Employee, then SET n::Employee.salary = 50000
+    auto r1 = executor_->executeSync("CREATE (n:Person) SET n:Employee");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) SET n::Employee.salary = 50000");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = executor_->executeSync("MATCH (n) RETURN n::Employee.salary");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 50000);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, NoPropertyLabel) {
+    // VIP label has no properties - should be usable as pure tag
+    auto r1 = executor_->executeSync("CREATE (n:Person) SET n:VIP");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:VIP) RETURN n");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(r2.rows[0][0]));
+    auto& vv = std::get<VertexValue>(r2.rows[0][0]);
+    EXPECT_EQ(vv.id, 1);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelRejected) {
+    // CREATE (n:Person:Employee {name: 'Bob'}) should fail
+    auto result = executor_->executeSync("CREATE (n:Person:Employee {name: 'Bob'})");
+    EXPECT_FALSE(result.error.empty());
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyConvenienceFallback) {
+    // Multiple labels both have "name" - typed access picks the right one
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(employee_def.has_value());
+
+    uint16_t person_name_pid = UINT16_MAX, employee_name_pid = UINT16_MAX;
+    uint16_t employee_salary_pid = UINT16_MAX;
+    for (const auto& pd : person_def->properties) {
+        if (pd.name == "name")
+            person_name_pid = pd.id;
+    }
+    for (const auto& pd : employee_def->properties) {
+        if (pd.name == "name")
+            employee_name_pid = pd.id;
+        if (pd.name == "salary")
+            employee_salary_pid = pd.id;
+    }
+
+    size_t max_sz = std::max({person_name_pid, employee_name_pid, employee_salary_pid}) + 1;
+    Properties person_props(max_sz), employee_props(max_sz);
+    person_props[person_name_pid] = PropertyValue(std::string("Alice"));
+    employee_props[employee_name_pid] = PropertyValue(std::string("Worker"));
+    employee_props[employee_salary_pid] = PropertyValue(int64_t(7777));
+
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
+
+    // Typed access to Employee.name gives "Worker" only
+    auto r1 = executor_->executeSync("MATCH (n) RETURN n::Employee.name");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_EQ(r1.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r1.rows[0][0]), "Worker");
+
+    // Typed access to Employee.salary gives 7777
+    auto r2 = executor_->executeSync("MATCH (n) RETURN n::Employee.salary");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 7777);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, StreamingSetLabelSurvivesPlanContextLifetime) {
+    // This test exercises prepareStream (the streaming code path used by the server).
+    // In prepareStream, plan_ctx goes out of scope when the coroutine returns,
+    // but the physical operators must still access label_name_to_id during stream
+    // consumption. This would crash with heap-use-after-free without the fix that
+    // stores the name-to-id maps in StreamContext.
+
+    auto ctx = blockingWait(executor_->prepareStream("CREATE (n:Person) SET n:Employee"));
+    ASSERT_TRUE(ctx->error.empty()) << ctx->error;
+
+    auto consumeStream = [&]() -> folly::coro::Task<size_t> {
+        size_t count = 0;
+        while (auto batch = co_await ctx->gen.next()) {
+            count += batch->rows.size();
+        }
+        co_await ctx->store->commitTran(ctx->txn);
+        co_return count;
+    };
+    size_t row_count = blockingWait(consumeStream());
+    EXPECT_GT(row_count, 0);
+
+    // Verify the label was actually set
+    auto result = executor_->executeSync("MATCH (n:Employee) RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    auto& vv = std::get<VertexValue>(result.rows[0][0]);
+    EXPECT_TRUE(vv.labels.has_value());
+    EXPECT_TRUE(vv.labels->count(EMPLOYEE_LABEL)) << "Employee label should be set";
+}
+
+TEST_F(QueryExecutorMultiLabelTest, ScanByLabelLoadsAllLabelProperties) {
+    // When scanning by a label that was added via SET, properties from the
+    // original label should still be visible. Regresion test for the bug where
+    // LabelScanPhysicalOp only loaded the scanned label's properties.
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    uint16_t name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    ASSERT_NE(name_pid, UINT16_MAX);
+
+    // Create vertex with Person label
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Add Employee label (has different properties: salary, name)
+    auto r2 = executor_->executeSync("MATCH (n:Person) SET n:Employee");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // Query by Employee label — should still see name from Person label
+    auto r3 = executor_->executeSync("MATCH (n:Employee) RETURN n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+
+    // Query by Employee label — full vertex should include all properties
+    auto r4 = executor_->executeSync("MATCH (n:Employee) RETURN n");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    ASSERT_EQ(r4.rows.size(), 1);
+    auto& vv = std::get<VertexValue>(r4.rows[0][0]);
+    ASSERT_TRUE(vv.properties.count(PERSON_LABEL)) << "Should have Person label properties";
+    EXPECT_EQ(std::get<std::string>((*vv.properties.at(PERSON_LABEL).at(name_pid))), "Alice");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, ScanByNoPropertyLabelReturnsAllProperties) {
+    // Regression: scanning by a label with no properties (VIP) should still
+    // return properties from other labels.
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    uint16_t name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    ASSERT_NE(name_pid, UINT16_MAX);
+
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'}) SET n:VIP");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Query by VIP label (no properties)
+    auto r2 = executor_->executeSync("MATCH (n:VIP) RETURN n.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
+
+    // Full vertex should include Person properties
+    auto r3 = executor_->executeSync("MATCH (n:VIP) RETURN n");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    auto& vv = std::get<VertexValue>(r3.rows[0][0]);
+    EXPECT_TRUE(vv.properties.count(PERSON_LABEL)) << "VIP scan should include Person properties";
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastNonExistentPropertyErrors) {
+    // n::Person.noname should error at planning time because Person has no "noname"
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::Person.noname");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("has no property"), std::string::npos) << r2.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastNonExistentLabelErrors) {
+    // n::NoSuchLabel.prop should error at planning time
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::NoSuchLabel.name");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("not found"), std::string::npos) << r2.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastAllPropertiesNonExistentLabelErrors) {
+    // RETURN n::NoSuchLabel (standalone) should error
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::NoSuchLabel");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("not found"), std::string::npos) << r2.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, LabelCastValidPropertySucceeds) {
+    // n::Person.name should succeed (property exists)
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::Person.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, FilterLabelCastNonExistentPropertyErrors) {
+    // WHERE n::Person.noname = 'x' should error
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = executor_->executeSync("MATCH (n:Person) WHERE n::Person.noname = 'x' RETURN n");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("has no property"), std::string::npos) << r2.error;
 }
