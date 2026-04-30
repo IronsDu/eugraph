@@ -156,7 +156,7 @@ TEST_F(RestartPersistenceTest, VertexDataPersistsAcrossRestart) {
             props[1] = PropertyValue(static_cast<int64_t>(vid * 10));
 
             std::vector<std::pair<LabelId, Properties>> lp = {{person_label, std::move(props)}};
-            ASSERT_TRUE(s->sync_data->insertVertex(txn, vid, lp, nullptr));
+            ASSERT_TRUE(s->sync_data->insertVertex(txn, vid, lp));
         }
         ASSERT_TRUE(s->sync_data->commitTransaction(txn));
 
@@ -225,7 +225,7 @@ TEST_F(RestartPersistenceTest, EdgeDataPersistsAcrossRestart) {
         // Insert 2 vertices
         for (VertexId vid = 1; vid <= 2; ++vid) {
             std::vector<std::pair<LabelId, Properties>> lp = {{person_label, Properties{}}};
-            ASSERT_TRUE(s->sync_data->insertVertex(txn, vid, lp, nullptr));
+            ASSERT_TRUE(s->sync_data->insertVertex(txn, vid, lp));
         }
 
         // Insert edge: 1 -[KNOWS]-> 2

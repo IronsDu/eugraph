@@ -43,8 +43,8 @@ public:
     bool dropEdgeLabel(EdgeLabelId edge_label_id) override;
 
     // Vertex
-    bool insertVertex(GraphTxnHandle txn, VertexId vid, std::span<const std::pair<LabelId, Properties>> label_props,
-                      const PropertyValue* pk_value) override;
+    bool insertVertex(GraphTxnHandle txn, VertexId vid,
+                      std::span<const std::pair<LabelId, Properties>> label_props) override;
     bool deleteVertex(GraphTxnHandle txn, VertexId vid) override;
 
     // Vertex Properties
@@ -60,10 +60,6 @@ public:
     LabelIdSet getVertexLabels(GraphTxnHandle txn, VertexId vid) override;
     bool addVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) override;
     bool removeVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) override;
-
-    // Primary Key
-    std::optional<VertexId> getVertexIdByPk(const PropertyValue& pk_value) override;
-    std::optional<PropertyValue> getPkByVertexId(VertexId vid) override;
 
     // Label Index Scan
     void scanVerticesByLabel(GraphTxnHandle txn, LabelId label_id,

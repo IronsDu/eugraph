@@ -65,25 +65,6 @@ VertexId KeyCodec::decodeLabelForwardKey(std::string_view key) {
     return decodeU64BE(key, 0);
 }
 
-// ==================== Primary Key Forward Index ====================
-
-std::string KeyCodec::encodePkForwardKey(std::string_view pk_value) {
-    return std::string(pk_value);
-}
-
-// ==================== Primary Key Reverse Index ====================
-
-std::string KeyCodec::encodePkReverseKey(VertexId vertex_id) {
-    std::string key;
-    key.reserve(8);
-    encodeU64BE(key, vertex_id);
-    return key;
-}
-
-VertexId KeyCodec::decodePkReverseKey(std::string_view key) {
-    return decodeU64BE(key, 0);
-}
-
 // ==================== Vertex Property Storage ====================
 
 std::string KeyCodec::encodeVPropKey(VertexId vertex_id, uint16_t prop_id) {

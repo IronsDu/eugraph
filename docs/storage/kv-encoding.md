@@ -16,8 +16,6 @@
 |---------|------|----------|
 | `label_reverse` | 顶点→标签反向索引 | `{vertex_id:u64BE}{label_id:u16BE}` |
 | `label_fwd_{id}` | 标签→顶点正向索引（每标签一表） | `{vertex_id:u64BE}` |
-| `pk_forward` | 主键→顶点 ID | `{pk_value:raw}` |
-| `pk_reverse` | 顶点 ID→主键 | `{vertex_id:u64BE}` |
 | `vprop_{id}` | 顶点属性存储（每标签一表） | `{vertex_id:u64BE}{prop_id:u16BE}` |
 | `edge_index` | 边邻接索引 | `{vertex_id:u64BE}{direction:u8}{label_id:u16BE}{neighbor_id:u64BE}{seq:u64BE}` |
 | `etype_{id}` | 边类型索引（每关系类型一表） | `{src_id:u64BE}{dst_id:u64BE}{seq:u64BE}` |
@@ -44,10 +42,6 @@
 ```
 查询：全表扫描 → 获取该标签下所有顶点 ID
 ```
-
-### 主键索引（pk_forward / pk_reverse）
-
-全局主键，每顶点一个。pk_forward 用于 pk→vid 查找，pk_reverse 用于 vid→pk 反查。
 
 ### 顶点属性（vprop_{id}）
 

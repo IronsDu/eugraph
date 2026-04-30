@@ -25,15 +25,6 @@ public:
     static std::string encodeLabelForwardKey(VertexId vertex_id);
     static VertexId decodeLabelForwardKey(std::string_view key);
 
-    // ==================== Primary Key Forward Index (table:pk_forward) ====================
-    // Key: {pk_value:raw}
-    static std::string encodePkForwardKey(std::string_view pk_value);
-
-    // ==================== Primary Key Reverse Index (table:pk_reverse) ====================
-    // Key: {vertex_id:uint64 BE}
-    static std::string encodePkReverseKey(VertexId vertex_id);
-    static VertexId decodePkReverseKey(std::string_view key);
-
     // ==================== Vertex Property Storage (table:vprop_{id}) ====================
     // Key: {vertex_id:uint64 BE}{prop_id:uint16 BE}
     static std::string encodeVPropKey(VertexId vertex_id, uint16_t prop_id);

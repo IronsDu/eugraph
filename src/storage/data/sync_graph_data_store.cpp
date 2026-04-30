@@ -47,8 +47,6 @@ bool SyncGraphDataStore::open(const std::string& db_path) {
         return false;
 
     if (!ensureGlobalTable(defaultSession_, TABLE_LABEL_REVERSE) ||
-        !ensureGlobalTable(defaultSession_, TABLE_PK_FORWARD) ||
-        !ensureGlobalTable(defaultSession_, TABLE_PK_REVERSE) ||
         !ensureGlobalTable(defaultSession_, TABLE_EDGE_INDEX)) {
         close();
         return false;
@@ -296,8 +294,7 @@ bool SyncGraphDataStore::dropEdgeLabel(EdgeLabelId edge_label_id) {
 // ==================== Vertex ====================
 
 bool SyncGraphDataStore::insertVertex(GraphTxnHandle txn, VertexId vid,
-                                      std::span<const std::pair<LabelId, Properties>> label_props,
-                                      const PropertyValue* pk_value) {
+                                      std::span<const std::pair<LabelId, Properties>> label_props) {
     auto session = getSession(txn);
     if (!session)
         return false;
@@ -321,17 +318,6 @@ bool SyncGraphDataStore::insertVertex(GraphTxnHandle txn, VertexId vid,
         }
     }
 
-    if (pk_value) {
-        auto pk_encoded = ValueCodec::encode(*pk_value);
-        auto pf_key = KeyCodec::encodePkForwardKey(pk_encoded);
-        if (!tablePut(session, TABLE_PK_FORWARD, pf_key, ValueCodec::encodeU64(vid)))
-            return false;
-
-        auto pr_key = KeyCodec::encodePkReverseKey(vid);
-        if (!tablePut(session, TABLE_PK_REVERSE, pr_key, pk_encoded))
-            return false;
-    }
-
     return true;
 }
 
@@ -350,12 +336,6 @@ bool SyncGraphDataStore::deleteVertex(GraphTxnHandle txn, VertexId vid) {
             tableDel(session, vpropTable(label_id), key);
             return true;
         });
-    }
-
-    auto pk_encoded = tableGet(session, TABLE_PK_REVERSE, KeyCodec::encodePkReverseKey(vid));
-    if (pk_encoded) {
-        tableDel(session, TABLE_PK_FORWARD, KeyCodec::encodePkForwardKey(*pk_encoded));
-        tableDel(session, TABLE_PK_REVERSE, KeyCodec::encodePkReverseKey(vid));
     }
 
     return true;
@@ -479,25 +459,6 @@ bool SyncGraphDataStore::removeVertexLabel(GraphTxnHandle txn, VertexId vid, Lab
     });
 
     return true;
-}
-
-// ==================== Primary Key ====================
-
-std::optional<VertexId> SyncGraphDataStore::getVertexIdByPk(const PropertyValue& pk_value) {
-    auto pk_encoded = ValueCodec::encode(pk_value);
-    auto key = KeyCodec::encodePkForwardKey(pk_encoded);
-    auto val = tableGet(defaultSession_, TABLE_PK_FORWARD, key);
-    if (!val)
-        return std::nullopt;
-    return ValueCodec::decodeU64(*val);
-}
-
-std::optional<PropertyValue> SyncGraphDataStore::getPkByVertexId(VertexId vid) {
-    auto key = KeyCodec::encodePkReverseKey(vid);
-    auto val = tableGet(defaultSession_, TABLE_PK_REVERSE, key);
-    if (!val)
-        return std::nullopt;
-    return ValueCodec::decode(*val);
 }
 
 // ==================== Label Index Scan ====================

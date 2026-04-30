@@ -51,8 +51,7 @@ public:
 
     // Vertex CRUD
     virtual bool insertVertex(GraphTxnHandle txn, VertexId vid,
-                              std::span<const std::pair<LabelId, Properties>> label_props,
-                              const PropertyValue* pk_value) = 0;
+                              std::span<const std::pair<LabelId, Properties>> label_props) = 0;
     virtual bool deleteVertex(GraphTxnHandle txn, VertexId vid) = 0;
 
     // Vertex Properties
@@ -66,10 +65,6 @@ public:
     virtual LabelIdSet getVertexLabels(GraphTxnHandle txn, VertexId vid) = 0;
     virtual bool addVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) = 0;
     virtual bool removeVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) = 0;
-
-    // Primary Key
-    virtual std::optional<VertexId> getVertexIdByPk(const PropertyValue& pk_value) = 0;
-    virtual std::optional<PropertyValue> getPkByVertexId(GraphTxnHandle txn, VertexId vid) = 0;
 
     // Vertex Scan
     virtual void scanVerticesByLabel(GraphTxnHandle txn, LabelId label_id,
@@ -152,8 +147,7 @@ public:
 
     // Vertex Write
     virtual folly::coro::Task<bool> insertVertex(VertexId vid,
-                                                  std::span<const std::pair<LabelId, Properties>> label_props,
-                                                  const PropertyValue* pk_value) = 0;
+                                                  std::span<const std::pair<LabelId, Properties>> label_props) = 0;
     virtual folly::coro::Task<bool> deleteVertex(VertexId vid) = 0;
 
     // Edge Write

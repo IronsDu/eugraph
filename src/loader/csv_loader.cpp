@@ -88,7 +88,6 @@ std::vector<LabelSchema> buildLabelSchemas(const std::vector<CsvFileInfo>& verte
             continue;
 
         auto headers = parseCsvLine(header_line);
-        // First column is 'id', skip it
 
         // Sample up to 100 rows for type inference
         std::vector<std::string> samples;
@@ -102,18 +101,18 @@ std::vector<LabelSchema> buildLabelSchemas(const std::vector<CsvFileInfo>& verte
         LabelSchema schema;
         schema.name = fi.label;
 
-        // Parse sample rows column by column
+        // Parse sample rows column by column (all columns are properties)
         int num_cols = headers.size();
-        std::vector<std::vector<std::string>> col_samples(num_cols - 1);
+        std::vector<std::vector<std::string>> col_samples(num_cols);
         for (const auto& sample_line : samples) {
             auto fields = parseCsvLine(sample_line);
-            for (int i = 1; i < num_cols && i < (int)fields.size(); i++) {
-                col_samples[i - 1].push_back(fields[i]);
+            for (int i = 0; i < num_cols && i < (int)fields.size(); i++) {
+                col_samples[i].push_back(fields[i]);
             }
         }
 
-        for (int i = 1; i < num_cols; i++) {
-            auto pi = inferPropertyType(headers[i], col_samples[i - 1]);
+        for (int i = 0; i < num_cols; i++) {
+            auto pi = inferPropertyType(headers[i], col_samples[i]);
             schema.properties.push_back(std::move(pi));
         }
 
@@ -281,12 +280,10 @@ CsvIdMap loadVertices(shell::EuGraphRpcClient& client, const std::vector<CsvFile
             csv_ids.push_back(csv_id);
 
             thrift::VertexRecord rec;
-            rec.pk_value() = toThriftValue(fields[0], true);
-
             auto& props = *rec.properties();
             for (size_t i = 0; i < schema.properties.size(); i++) {
-                if (i + 1 < fields.size()) {
-                    props.push_back(toThriftValue(fields[i + 1], schema.properties[i].is_int64));
+                if (i < fields.size()) {
+                    props.push_back(toThriftValue(fields[i], schema.properties[i].is_int64));
                 } else {
                     props.push_back(thrift::PropertyValueThrift{});
                 }

@@ -9,8 +9,6 @@ namespace eugraph {
 
 // WiredTiger 全局表名常量
 constexpr const char* TABLE_LABEL_REVERSE = "table:label_reverse";
-constexpr const char* TABLE_PK_FORWARD = "table:pk_forward";
-constexpr const char* TABLE_PK_REVERSE = "table:pk_reverse";
 constexpr const char* TABLE_EDGE_INDEX = "table:edge_index";
 constexpr const char* TABLE_METADATA = "table:metadata";
 
