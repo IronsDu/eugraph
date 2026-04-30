@@ -412,7 +412,6 @@ EuGraphHandler::co_batchInsertVertices(std::unique_ptr<std::string> label_name,
         auto& rec = (*records)[i];
         IAsyncGraphDataStore::BatchVertexEntry entry;
         entry.vid = start_vid + i;
-        entry.pk_value = thriftToPropertyValue(rec.pk_value().value());
         for (const auto& pv : *rec.properties()) {
             entry.props.push_back(thriftToPropertyValue(pv));
         }

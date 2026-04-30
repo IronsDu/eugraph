@@ -44,8 +44,7 @@ struct EdgeLabelInfo {
 // ==================== Batch Import ====================
 
 struct VertexRecord {
-  1: PropertyValueThrift pk_value
-  2: list<PropertyValueThrift> properties
+  1: list<PropertyValueThrift> properties
 }
 
 struct EdgeRecord {

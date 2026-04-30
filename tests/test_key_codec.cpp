@@ -52,28 +52,6 @@ TEST_F(KeyCodecTest, LabelForwardKeySortOrder) {
     EXPECT_LT(key1, key2);
 }
 
-// ==================== Primary Key Forward Index (table:pk_forward) ====================
-
-TEST_F(KeyCodecTest, EncodePkForwardKey) {
-    auto key = KeyCodec::encodePkForwardKey("alice@example.com");
-    EXPECT_EQ(key, "alice@example.com");
-}
-
-TEST_F(KeyCodecTest, EncodePkForwardKeyEmpty) {
-    auto key = KeyCodec::encodePkForwardKey("");
-    EXPECT_EQ(key.size(), 0u);
-}
-
-// ==================== Primary Key Reverse Index (table:pk_reverse) ====================
-
-TEST_F(KeyCodecTest, EncodeDecodePkReverseKey) {
-    auto key = KeyCodec::encodePkReverseKey(12345);
-    EXPECT_EQ(key.size(), 8u);
-
-    auto vid = KeyCodec::decodePkReverseKey(key);
-    EXPECT_EQ(vid, 12345u);
-}
-
 // ==================== Vertex Property Storage (table:vprop_{id}) ====================
 
 TEST_F(KeyCodecTest, EncodeDecodeVPropKey) {

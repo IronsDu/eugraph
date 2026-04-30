@@ -177,10 +177,9 @@ public:
 
     // ==================== Write Operations ====================
 
-    folly::coro::Task<bool> insertVertex(VertexId vid, std::span<const std::pair<LabelId, Properties>> label_props,
-                                         const PropertyValue* pk_value) override {
-        auto result = co_await io_->dispatch([this, vid, label_props, pk_value]() -> bool {
-            return store_->insertVertex(txn_, vid, label_props, pk_value);
+    folly::coro::Task<bool> insertVertex(VertexId vid, std::span<const std::pair<LabelId, Properties>> label_props) override {
+        auto result = co_await io_->dispatch([this, vid, label_props]() -> bool {
+            return store_->insertVertex(txn_, vid, label_props);
         });
         co_return result;
     }
@@ -269,7 +268,7 @@ public:
             auto txn = store_->beginTransaction();
             for (const auto& e : entries) {
                 std::pair<LabelId, Properties> lp{label_id, e.props};
-                store_->insertVertex(txn, e.vid, std::span<const std::pair<LabelId, Properties>>{&lp, 1}, &e.pk_value);
+                store_->insertVertex(txn, e.vid, std::span<const std::pair<LabelId, Properties>>{&lp, 1});
             }
             store_->commitTransaction(txn);
         });
