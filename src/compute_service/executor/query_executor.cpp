@@ -61,27 +61,25 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     GraphTxnHandle txn = co_await async_data_.beginTran();
     async_data_.setTransaction(txn);
 
-    // Store label/edge_label defs in StreamContext so physical operator raw pointers
-    // remain valid throughout streaming consumption
+    // Store label/edge_label defs + name→id maps in StreamContext so physical operator
+    // raw pointers remain valid throughout streaming consumption
     for (const auto& l : labels)
         ctx->label_defs[l.id] = l;
     for (const auto& el : edge_labels)
         ctx->edge_label_defs[el.id] = el;
+    ctx->label_name_to_id = std::move(label_name_to_id);
+    ctx->edge_label_name_to_id = std::move(edge_label_name_to_id);
 
     // PlanContext references StreamContext's maps — physical operators get pointers to those maps
     PlanContext plan_ctx;
-    plan_ctx.label_name_to_id = std::move(label_name_to_id);
-    plan_ctx.edge_label_name_to_id = std::move(edge_label_name_to_id);
+    plan_ctx.label_name_to_id = &ctx->label_name_to_id;
+    plan_ctx.edge_label_name_to_id = &ctx->edge_label_name_to_id;
     plan_ctx.label_defs = &ctx->label_defs;
     plan_ctx.edge_label_defs = &ctx->edge_label_defs;
 
     plan_ctx.next_vertex_id = co_await async_meta_.nextVertexId();
     plan_ctx.next_edge_id = co_await async_meta_.nextEdgeId();
 
-    // Plan physical operators — operators hold raw pointers to plan_ctx.label_defs which
-    // is a copy of ctx->label_defs. After planning, the pointers are to plan_ctx's copy.
-    // We need them to point to ctx's copy instead.
-    // Solution: after planning, we re-bind the pointers.
     PhysicalPlanner physical_planner;
     auto phys_result = physical_planner.plan(logical_plan, async_data_, plan_ctx);
     if (std::holds_alternative<std::string>(phys_result)) {
@@ -177,8 +175,8 @@ folly::coro::Task<ExecutionResult> QueryExecutor::executeAsync(const std::string
             edge_label_defs[el.id] = el;
 
         PlanContext ctx;
-        ctx.label_name_to_id = std::move(label_name_to_id);
-        ctx.edge_label_name_to_id = std::move(edge_label_name_to_id);
+        ctx.label_name_to_id = &label_name_to_id;
+        ctx.edge_label_name_to_id = &edge_label_name_to_id;
         ctx.label_defs = &label_defs;
         ctx.edge_label_defs = &edge_label_defs;
 

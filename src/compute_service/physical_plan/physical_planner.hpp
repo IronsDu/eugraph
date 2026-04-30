@@ -17,8 +17,8 @@ namespace compute {
 /// Context passed through physical planning: maps label/edge-label names to IDs,
 /// tracks variable schemas, and provides storage access.
 struct PlanContext {
-    std::unordered_map<std::string, LabelId> label_name_to_id;
-    std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
+    const std::unordered_map<std::string, LabelId>* label_name_to_id = nullptr; // non-owning
+    const std::unordered_map<std::string, EdgeLabelId>* edge_label_name_to_id = nullptr; // non-owning
     std::unordered_map<LabelId, LabelDef>* label_defs = nullptr; // non-owning, points to owner's map
     std::unordered_map<EdgeLabelId, EdgeLabelDef>* edge_label_defs = nullptr;
     std::unordered_map<std::string, VertexId> variable_vertex_ids; // for CREATE: assigned IDs

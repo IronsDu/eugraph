@@ -64,7 +64,7 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
 
 std::variant<PlanOperatorResult, std::string>
 PhysicalPlanner::planAllNodeScan(AllNodeScanOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema) {
-    auto result = std::make_unique<AllNodeScanPhysicalOp>(op.variable, store, ctx.label_name_to_id, *ctx.label_defs);
+    auto result = std::make_unique<AllNodeScanPhysicalOp>(op.variable, store, *ctx.label_name_to_id, *ctx.label_defs);
     Schema output_schema;
     if (!op.variable.empty()) {
         output_schema.push_back(op.variable);
@@ -74,8 +74,8 @@ PhysicalPlanner::planAllNodeScan(AllNodeScanOp& op, IAsyncGraphDataStore& store,
 
 std::variant<PlanOperatorResult, std::string>
 PhysicalPlanner::planLabelScan(LabelScanOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema) {
-    auto it = ctx.label_name_to_id.find(op.label);
-    if (it == ctx.label_name_to_id.end()) {
+    auto it = ctx.label_name_to_id->find(op.label);
+    if (it == ctx.label_name_to_id->end()) {
         return "Unknown label: " + op.label;
     }
     auto result = std::make_unique<LabelScanPhysicalOp>(op.variable, it->second, store, *ctx.label_defs);
@@ -105,8 +105,8 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planExpand(Expand
     if (!op.rel_types.empty()) {
         label_filters = std::vector<EdgeLabelId>();
         for (const auto& type_name : op.rel_types) {
-            auto it = ctx.edge_label_name_to_id.find(type_name);
-            if (it != ctx.edge_label_name_to_id.end()) {
+            auto it = ctx.edge_label_name_to_id->find(type_name);
+            if (it != ctx.edge_label_name_to_id->end()) {
                 label_filters->push_back(it->second);
             }
         }
@@ -137,8 +137,8 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planFilter(Filter
     // Try index scan optimization: if child is LabelScan and predicate is indexable
     if (std::holds_alternative<std::unique_ptr<LabelScanOp>>(op.children[0])) {
         auto& scan_op = std::get<std::unique_ptr<LabelScanOp>>(op.children[0]);
-        auto label_it = ctx.label_name_to_id.find(scan_op->label);
-        if (label_it != ctx.label_name_to_id.end()) {
+        auto label_it = ctx.label_name_to_id->find(scan_op->label);
+        if (label_it != ctx.label_name_to_id->end()) {
             LabelId label_id = label_it->second;
             auto def_it = ctx.label_defs->find(label_id);
             if (def_it != ctx.label_defs->end()) {
@@ -342,8 +342,8 @@ PhysicalPlanner::planCreateNode(CreateNodeOp& op, IAsyncGraphDataStore& store, P
     std::vector<LabelId> label_ids;
     std::vector<std::pair<LabelId, Properties>> label_props;
     for (const auto& label_name : op.labels) {
-        auto it = ctx.label_name_to_id.find(label_name);
-        if (it != ctx.label_name_to_id.end()) {
+        auto it = ctx.label_name_to_id->find(label_name);
+        if (it != ctx.label_name_to_id->end()) {
             LabelId lid = it->second;
             label_ids.push_back(lid);
 
@@ -429,8 +429,8 @@ PhysicalPlanner::planCreateEdge(CreateEdgeOp& op, IAsyncGraphDataStore& store, P
 
     EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
     if (!op.rel_types.empty()) {
-        auto it = ctx.edge_label_name_to_id.find(op.rel_types[0]);
-        if (it != ctx.edge_label_name_to_id.end()) {
+        auto it = ctx.edge_label_name_to_id->find(op.rel_types[0]);
+        if (it != ctx.edge_label_name_to_id->end()) {
             label_id = it->second;
         }
     }
@@ -465,7 +465,7 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSet(SetOp& op
     }
 
     auto result = std::make_unique<SetPhysicalOp>(std::move(op.items), child_schema, store, ctx.label_defs,
-                                                  &ctx.label_name_to_id, std::move(child_op));
+                                                  ctx.label_name_to_id, std::move(child_op));
     return PlanOperatorResult{std::move(result), child_schema};
 }
 
@@ -486,7 +486,7 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planRemove(Remove
     }
 
     auto result = std::make_unique<RemovePhysicalOp>(std::move(op.items), child_schema, store, ctx.label_defs,
-                                                     &ctx.label_name_to_id, std::move(child_op));
+                                                     ctx.label_name_to_id, std::move(child_op));
     return PlanOperatorResult{std::move(result), child_schema};
 }
 
