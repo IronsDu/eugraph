@@ -1585,3 +1585,90 @@ TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyConvenienceFallback) {
     ASSERT_EQ(r2.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 7777);
 }
+
+TEST_F(QueryExecutorMultiLabelTest, StreamingSetLabelSurvivesPlanContextLifetime) {
+    // This test exercises prepareStream (the streaming code path used by the server).
+    // In prepareStream, plan_ctx goes out of scope when the coroutine returns,
+    // but the physical operators must still access label_name_to_id during stream
+    // consumption. This would crash with heap-use-after-free without the fix that
+    // stores the name-to-id maps in StreamContext.
+
+    auto ctx = blockingWait(executor_->prepareStream("CREATE (n:Person) SET n:Employee"));
+    ASSERT_TRUE(ctx->error.empty()) << ctx->error;
+
+    auto consumeStream = [&]() -> folly::coro::Task<size_t> {
+        size_t count = 0;
+        while (auto batch = co_await ctx->gen.next()) {
+            count += batch->rows.size();
+        }
+        co_await ctx->store->commitTran(ctx->txn);
+        co_return count;
+    };
+    size_t row_count = blockingWait(consumeStream());
+    EXPECT_GT(row_count, 0);
+
+    // Verify the label was actually set
+    auto result = executor_->executeSync("MATCH (n:Employee) RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    auto& vv = std::get<VertexValue>(result.rows[0][0]);
+    EXPECT_TRUE(vv.labels.has_value());
+    EXPECT_TRUE(vv.labels->count(EMPLOYEE_LABEL)) << "Employee label should be set";
+}
+
+TEST_F(QueryExecutorMultiLabelTest, ScanByLabelLoadsAllLabelProperties) {
+    // When scanning by a label that was added via SET, properties from the
+    // original label should still be visible. Regresion test for the bug where
+    // LabelScanPhysicalOp only loaded the scanned label's properties.
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    uint16_t name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    ASSERT_NE(name_pid, UINT16_MAX);
+
+    // Create vertex with Person label
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Add Employee label (has different properties: salary, name)
+    auto r2 = executor_->executeSync("MATCH (n:Person) SET n:Employee");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // Query by Employee label — should still see name from Person label
+    auto r3 = executor_->executeSync("MATCH (n:Employee) RETURN n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+
+    // Query by Employee label — full vertex should include all properties
+    auto r4 = executor_->executeSync("MATCH (n:Employee) RETURN n");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    ASSERT_EQ(r4.rows.size(), 1);
+    auto& vv = std::get<VertexValue>(r4.rows[0][0]);
+    ASSERT_TRUE(vv.properties.count(PERSON_LABEL)) << "Should have Person label properties";
+    EXPECT_EQ(std::get<std::string>((*vv.properties.at(PERSON_LABEL).at(name_pid))), "Alice");
+}
+
+TEST_F(QueryExecutorMultiLabelTest, ScanByNoPropertyLabelReturnsAllProperties) {
+    // Regression: scanning by a label with no properties (VIP) should still
+    // return properties from other labels.
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    ASSERT_TRUE(person_def.has_value());
+    uint16_t name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    ASSERT_NE(name_pid, UINT16_MAX);
+
+    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'}) SET n:VIP");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Query by VIP label (no properties)
+    auto r2 = executor_->executeSync("MATCH (n:VIP) RETURN n.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
+
+    // Full vertex should include Person properties
+    auto r3 = executor_->executeSync("MATCH (n:VIP) RETURN n");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    auto& vv = std::get<VertexValue>(r3.rows[0][0]);
+    EXPECT_TRUE(vv.properties.count(PERSON_LABEL)) << "VIP scan should include Person properties";
+}
