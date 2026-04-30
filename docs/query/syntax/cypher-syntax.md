@@ -50,6 +50,19 @@ WHERE x IS NULL / x IS NOT NULL
 
 **索引优化**：当 Filter 在 LabelScan 之上且谓词为 `n.prop = literal` 模式，且该属性存在 PUBLIC 索引时，自动使用 IndexScan（还支持 `>`, `>=`, `<`, `<=` 的范围扫描）。
 
+### 多标签属性访问
+
+```cypher
+-- 便捷模式：自动搜索所有标签，单标签命中返回标量，多标签同名属性合并为列表
+MATCH (n:Person) RETURN n.name
+
+-- 转型模式：限定在指定标签内查找属性
+MATCH (n:Person) RETURN n::Employee.salary
+
+-- 返回指定标签的全部属性（map/dict 形式）
+MATCH (n) RETURN n::Employee
+```
+
 ### RETURN — 返回
 
 ```cypher
@@ -57,6 +70,7 @@ RETURN n.name, n.age
 RETURN n.name AS name, n.age AS age
 RETURN *                     -- 返回所有变量
 RETURN DISTINCT n.city       -- 去重
+RETURN n::Employee           -- 返回指定标签全部属性
 ```
 
 ### ORDER BY — 排序
@@ -97,6 +111,22 @@ CREATE (n:Person)-[:KNOWS {since: 2020}]->(m:Person)
 - 属性值仅支持字面量（字符串/整数/浮点/布尔），不支持表达式
 - 仅解析第一个关系类型名
 - CREATE 不能跟在 MATCH 等子句之后（仅支持独立 CREATE）
+- 不支持多标签 CREATE（`CREATE (n:Person:Employee)` 和 `CREATE (n:Person:Employee {...})` 均报错），多标签需通过 `SET n:Label` 添加
+
+### SET — 属性/标签设置
+
+```cypher
+SET n:Employee                    -- 给顶点添加标签
+SET n.name = 'Bob'                -- 设置属性（便捷模式，自动查找标签）
+SET n::Employee.salary = 10000    -- 设置指定标签下的属性
+```
+
+### REMOVE — 属性/标签移除
+
+```cypher
+REMOVE n:Employee                 -- 移除顶点标签
+REMOVE n.name                     -- 移除属性（便捷模式）
+```
 
 ---
 
@@ -105,8 +135,6 @@ CREATE (n:Person)-[:KNOWS {since: 2020}]->(m:Person)
 | 子句/特性 | 说明 |
 |-----------|------|
 | `DELETE` / `DETACH DELETE` | 删除顶点/边 |
-| `SET` | 属性赋值/标签设置（4 种模式） |
-| `REMOVE` | 属性/标签移除 |
 | `MERGE` | 条件创建（含 ON CREATE/MATCH SET） |
 | `UNWIND` | 列表展开为行 |
 | `WITH` | 多部查询断点 |

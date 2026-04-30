@@ -17,10 +17,13 @@ folly::coro::AsyncGenerator<RowBatch> IndexScanPhysicalOp::execute() {
         RowBatch output;
         for (VertexId vid : *batch) {
             auto props = co_await store_.getVertexProperties(vid, label_id_);
+            auto labels = co_await store_.getVertexLabels(vid);
             VertexValue vv;
             vv.id = vid;
-            vv.labels = LabelIdSet{label_id_};
-            vv.properties = std::move(props);
+            vv.labels = std::move(labels);
+            if (props) {
+                vv.properties[label_id_] = std::move(*props);
+            }
             Row row;
             row.push_back(Value(std::move(vv)));
             output.push_back(std::move(row));

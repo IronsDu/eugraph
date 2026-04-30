@@ -69,6 +69,10 @@ private:
                                                                  PlanContext& ctx, Schema input_schema);
     std::variant<PlanOperatorResult, std::string> planCreateEdge(CreateEdgeOp& op, IAsyncGraphDataStore& store,
                                                                  PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planSet(SetOp& op, IAsyncGraphDataStore& store, PlanContext& ctx,
+                                                          Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planRemove(RemoveOp& op, IAsyncGraphDataStore& store,
+                                                             PlanContext& ctx, Schema input_schema);
 
     std::optional<PlanOperatorResult> tryIndexScan(LabelScanOp& scan_op, cypher::BinaryOp& binop, LabelId label_id,
                                                    const LabelDef& label_def, IAsyncGraphDataStore& store,

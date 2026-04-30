@@ -407,10 +407,21 @@ private:
 
     Expression buildPropertyExpression(AP::PropertyExpressionContext* ctx) {
         auto* atom = ctx->atom();
-        auto names = ctx->name();
         Expression r = buildAtomNode(atom);
+        // Process DOT name chains before ::
+        auto names = ctx->name();
         for (auto* n : names)
             r = makePropertyAccess(std::move(r), n->getText());
+        // Process COLONCOLON labelCast if present
+        if (ctx->COLONCOLON()) {
+            auto* lc = ctx->labelCast();
+            auto lc_names = lc->name();
+            // First name after :: is the label
+            r = makeLabelCast(std::move(r), lc_names[0]->getText());
+            // Remaining names are property accesses
+            for (size_t i = 1; i < lc_names.size(); i++)
+                r = makePropertyAccess(std::move(r), lc_names[i]->getText());
+        }
         return r;
     }
 

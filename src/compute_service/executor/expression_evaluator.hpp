@@ -26,6 +26,7 @@ private:
     Value evalBinaryOp(const cypher::BinaryOp& op, const Row& row, const Schema& schema);
     Value evalUnaryOp(const cypher::UnaryOp& op, const Row& row, const Schema& schema);
     Value evalPropertyAccess(const cypher::PropertyAccess& pa, const Row& row, const Schema& schema);
+    Value evalLabelCast(const cypher::LabelCastExpr& lc, const Row& row, const Schema& schema);
     Value evalFunctionCall(const cypher::FunctionCall& fc, const Row& row, const Schema& schema);
 
     const std::unordered_map<LabelId, LabelDef>* label_defs_ = nullptr;

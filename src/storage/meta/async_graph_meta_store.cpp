@@ -386,17 +386,12 @@ folly::coro::Task<EdgeLabelId> AsyncGraphMetaStore::createEdgeLabel(const std::s
     std::string name_key = std::string("M|edge_label:") + name;
     std::string id_key = std::string("M|edge_label_id:") + std::to_string(id);
 
-    spdlog::info("{} 11111111", __FUNCTION__);
     co_await io_->dispatchVoid([&]() {
-        spdlog::info("{} meta put", __FUNCTION__);
         store_->metadataPut(name_key, encoded);
         store_->metadataPut(id_key, encoded);
     });
-
-    spdlog::info("{} 2222222222222", __FUNCTION__);
     co_await saveNextIds();
 
-    spdlog::info("{} 33333333333", __FUNCTION__);
     // NOTE: No longer calls store_->createEdgeLabel(id).
 
     schema_.edge_labels[id] = def;

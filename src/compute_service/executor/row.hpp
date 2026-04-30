@@ -6,6 +6,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -15,7 +16,7 @@ namespace eugraph {
 
 struct VertexValue {
     VertexId id = INVALID_VERTEX_ID;
-    std::optional<Properties> properties;
+    std::unordered_map<LabelId, Properties> properties;
     std::optional<LabelIdSet> labels;
     bool operator==(const VertexValue& o) const {
         return id == o.id;

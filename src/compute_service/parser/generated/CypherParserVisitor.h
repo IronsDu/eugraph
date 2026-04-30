@@ -1,5 +1,5 @@
 
-// Generated from grammar/CypherParser.g4 by ANTLR 4.13.2
+// Generated from /mnt/f/code/eugraph/grammar/CypherParser.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -124,6 +124,8 @@ public:
     virtual std::any visitPropertyOrLabelExpression(CypherParser::PropertyOrLabelExpressionContext *context) = 0;
 
     virtual std::any visitPropertyExpression(CypherParser::PropertyExpressionContext *context) = 0;
+
+    virtual std::any visitLabelCast(CypherParser::LabelCastContext *context) = 0;
 
     virtual std::any visitPatternPart(CypherParser::PatternPartContext *context) = 0;
 

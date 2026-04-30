@@ -81,21 +81,12 @@ folly::coro::AsyncGenerator<RowBatch> ExpandPhysicalOp::execute() {
                         VertexValue dst_vv;
                         dst_vv.id = entry.neighbor_id;
                         dst_vv.labels = dst_labels;
-                        Properties merged_props;
                         for (LabelId lid : dst_labels) {
                             auto props = co_await store_.getVertexProperties(entry.neighbor_id, lid);
                             if (props) {
-                                if (merged_props.size() < props->size()) {
-                                    merged_props.resize(props->size());
-                                }
-                                for (size_t i = 0; i < props->size(); i++) {
-                                    if ((*props)[i].has_value()) {
-                                        merged_props[i] = std::move((*props)[i]);
-                                    }
-                                }
+                                dst_vv.properties[lid] = std::move(*props);
                             }
                         }
-                        dst_vv.properties = std::move(merged_props);
                         new_row.push_back(Value(std::move(dst_vv)));
 
                         if (!edge_var_.empty()) {

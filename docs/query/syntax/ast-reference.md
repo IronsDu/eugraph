@@ -84,6 +84,7 @@ Expression = variant<
     unique_ptr<UnaryOp>,        // 一元运算
     unique_ptr<FunctionCall>,   // 函数调用
     unique_ptr<PropertyAccess>, // .属性访问
+    unique_ptr<LabelCastExpr>,  // n::Label 转型表达式
     unique_ptr<ListExpr>,       // [1, 2, 3]
     unique_ptr<MapExpr>,        // {k: v}
     unique_ptr<CaseExpr>,       // CASE WHEN THEN ELSE END
@@ -133,6 +134,14 @@ FunctionCall { string name; bool distinct; vector<Expression> args; }
 PropertyAccess { Expression object; string property; }
 ```
 
+### LabelCastExpr
+
+```cpp
+LabelCastExpr { Expression object; string label; }
+```
+
+用于 `n::Label` 转型语法，将属性查找范围限定到指定标签。可嵌套 PropertyAccess（`n::Label.prop`）或单独使用（`RETURN n::Label` 返回该标签全部属性）。
+
 ### 其他表达式类型
 
 | 类型 | 关键字段 |
@@ -148,10 +157,10 @@ PropertyAccess { Expression object; string property; }
 
 详细执行状态见 [cypher-syntax.md](cypher-syntax.md)，此处简述：
 
-**已执行**的子句：MATCH, CREATE, RETURN + ORDER BY/SKIP/LIMIT/DISTINCT + 聚合
+**已执行**的子句：MATCH, CREATE, SET, REMOVE, RETURN + ORDER BY/SKIP/LIMIT/DISTINCT + 聚合
 
-**仅解析**的子句：DELETE, SET, REMOVE, MERGE, UNWIND, WITH, CALL, UNION
+**仅解析**的子句：DELETE, MERGE, UNWIND, WITH, CALL, UNION
 
-**已执行的表达式**：Literal, Variable, PropertyAccess, FunctionCall(`id`/聚合), BinaryOp(比较/算术/逻辑), UnaryOp(NOT/NEGATE/IS_NULL)
+**已执行的表达式**：Literal, Variable, PropertyAccess, LabelCastExpr, FunctionCall(`id`/聚合), BinaryOp(比较/算术/逻辑), UnaryOp(NOT/NEGATE/IS_NULL)
 
 **仅解析的表达式**：% ^, STARTS_WITH/ENDS_WITH/CONTAINS/IN/XOR, CASE, ListComprehension, PatternComprehension, 量词, Exists, Subscript/Slice, $param

@@ -824,3 +824,101 @@ TEST_F(CypherParserTest, MultipleClauses) {
         LIMIT 5
     )");
 }
+
+// ==================== 6. Multi-Label :: Syntax ====================
+
+TEST_F(CypherParserTest, LabelCastReturnAllProperties) {
+    // RETURN n::B → LabelCastExpr(Variable("n"), "B")
+    auto stmt = parseSuccess("MATCH (n) RETURN n::Employee");
+
+    auto& query = getRegularQuery(stmt);
+    auto& ret = std::get<std::unique_ptr<ReturnClause>>(query.first.clauses[1]);
+    ASSERT_EQ(ret->items.size(), 1);
+
+    auto* lc = std::get_if<std::unique_ptr<LabelCastExpr>>(&ret->items[0].expr);
+    ASSERT_NE(lc, nullptr);
+    EXPECT_EQ((*lc)->label, "Employee");
+
+    auto* var = std::get_if<std::unique_ptr<Variable>>(&(*lc)->object);
+    ASSERT_NE(var, nullptr);
+    EXPECT_EQ((*var)->name, "n");
+}
+
+TEST_F(CypherParserTest, LabelCastPropertyAccess) {
+    // RETURN n::Employee.salary → PropertyAccess(LabelCastExpr(Variable("n"), "Employee"), "salary")
+    auto stmt = parseSuccess("MATCH (n) RETURN n::Employee.salary");
+
+    auto& query = getRegularQuery(stmt);
+    auto& ret = std::get<std::unique_ptr<ReturnClause>>(query.first.clauses[1]);
+    ASSERT_EQ(ret->items.size(), 1);
+
+    auto* pa = std::get_if<std::unique_ptr<PropertyAccess>>(&ret->items[0].expr);
+    ASSERT_NE(pa, nullptr);
+    EXPECT_EQ((*pa)->property, "salary");
+
+    auto* lc = std::get_if<std::unique_ptr<LabelCastExpr>>(&(*pa)->object);
+    ASSERT_NE(lc, nullptr);
+    EXPECT_EQ((*lc)->label, "Employee");
+
+    auto* var = std::get_if<std::unique_ptr<Variable>>(&(*lc)->object);
+    ASSERT_NE(var, nullptr);
+    EXPECT_EQ((*var)->name, "n");
+}
+
+TEST_F(CypherParserTest, LabelCastWithDotBeforeColonColon) {
+    // RETURN n.name::B → LabelCastExpr(PropertyAccess(Variable("n"), "name"), "B")
+    auto stmt = parseSuccess("MATCH (n) RETURN n.name::B");
+
+    auto& query = getRegularQuery(stmt);
+    auto& ret = std::get<std::unique_ptr<ReturnClause>>(query.first.clauses[1]);
+
+    auto* lc = std::get_if<std::unique_ptr<LabelCastExpr>>(&ret->items[0].expr);
+    ASSERT_NE(lc, nullptr);
+    EXPECT_EQ((*lc)->label, "B");
+
+    auto* pa = std::get_if<std::unique_ptr<PropertyAccess>>(&(*lc)->object);
+    ASSERT_NE(pa, nullptr);
+    EXPECT_EQ((*pa)->property, "name");
+}
+
+TEST_F(CypherParserTest, SetLabelCastProperty) {
+    // SET n::Employee.salary = 10000
+    auto stmt = parseSuccess("MATCH (n) SET n::Employee.salary = 10000");
+
+    auto& query = getRegularQuery(stmt);
+    auto& set = std::get<std::unique_ptr<SetClause>>(query.first.clauses[1]);
+    ASSERT_EQ(set->items.size(), 1);
+    EXPECT_EQ(set->items[0].kind, SetItemKind::SET_PROPERTY);
+    ASSERT_TRUE(set->items[0].value.has_value());
+
+    // Target: PropertyAccess(LabelCastExpr(Variable("n"), "Employee"), "salary")
+    auto* pa = std::get_if<std::unique_ptr<PropertyAccess>>(&set->items[0].target);
+    ASSERT_NE(pa, nullptr);
+    EXPECT_EQ((*pa)->property, "salary");
+
+    auto* lc = std::get_if<std::unique_ptr<LabelCastExpr>>(&(*pa)->object);
+    ASSERT_NE(lc, nullptr);
+    EXPECT_EQ((*lc)->label, "Employee");
+}
+
+TEST_F(CypherParserTest, SetVertexLabel) {
+    // SET n:Employee
+    auto stmt = parseSuccess("MATCH (n) SET n:Employee");
+
+    auto& query = getRegularQuery(stmt);
+    auto& set = std::get<std::unique_ptr<SetClause>>(query.first.clauses[1]);
+    ASSERT_EQ(set->items.size(), 1);
+    EXPECT_EQ(set->items[0].kind, SetItemKind::SET_LABELS);
+    EXPECT_EQ(set->items[0].label, "Employee");
+}
+
+TEST_F(CypherParserTest, RemoveVertexLabel) {
+    // REMOVE n:Employee
+    auto stmt = parseSuccess("MATCH (n) REMOVE n:Employee");
+
+    auto& query = getRegularQuery(stmt);
+    auto& remove = std::get<std::unique_ptr<RemoveClause>>(query.first.clauses[1]);
+    ASSERT_EQ(remove->items.size(), 1);
+    EXPECT_EQ(remove->items[0].kind, RemoveItem::Kind::LABEL);
+    EXPECT_EQ(remove->items[0].name, "Employee");
+}

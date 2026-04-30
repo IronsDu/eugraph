@@ -38,6 +38,16 @@ public:
     virtual folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id) = 0;
     virtual folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) = 0;
 
+    // Vertex Property Write
+    virtual folly::coro::Task<bool> putVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id,
+                                                      const PropertyValue& value) = 0;
+    virtual folly::coro::Task<bool> putVertexProperties(VertexId vid, LabelId label_id, const Properties& props) = 0;
+    virtual folly::coro::Task<bool> deleteVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id) = 0;
+
+    // Vertex Label Write
+    virtual folly::coro::Task<bool> addVertexLabel(VertexId vid, LabelId label_id) = 0;
+    virtual folly::coro::Task<bool> removeVertexLabel(VertexId vid, LabelId label_id) = 0;
+
     // Vertex Scan
     virtual folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByLabel(LabelId label_id) = 0;
 
