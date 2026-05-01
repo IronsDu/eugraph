@@ -73,7 +73,7 @@ folly::coro::Task<LabelId> AsyncGraphMetaStore::createLabel(const std::string& n
     LabelDef def;
     def.id = id;
     def.name = name;
-    uint16_t prop_id = 1;
+    uint16_t prop_id = 0;
     for (const auto& p : properties) {
         PropertyDef pd = p;
         pd.id = prop_id++;
@@ -377,7 +377,7 @@ folly::coro::Task<EdgeLabelId> AsyncGraphMetaStore::createEdgeLabel(const std::s
     EdgeLabelDef def;
     def.id = id;
     def.name = name;
-    uint16_t prop_id = 1;
+    uint16_t prop_id = 0;
     for (const auto& p : properties) {
         PropertyDef pd = p;
         pd.id = prop_id++;

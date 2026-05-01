@@ -165,7 +165,7 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
     } else if (std::holds_alternative<VertexValue>(val)) {
         auto& v = std::get<VertexValue>(val);
         std::ostringstream oss;
-        oss << "{\"id\":" << v.id;
+        oss << "{\"_vid\":" << v.id;
 
         // Collect property name→value pairs from all labels of this vertex
         if (v.labels.has_value()) {

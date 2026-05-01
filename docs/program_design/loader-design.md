@@ -14,7 +14,8 @@
 3. 创建所有标签（DDL）
 4. 创建所有关系类型（DDL）
 5. 逐文件写入点数据 → 收集 (label, csv_id) → VertexId 映射
-6. 逐文件写入边数据（使用映射解析顶点）
+6. 为每个标签的 ID 属性创建唯一索引（CREATE UNIQUE INDEX）
+7. 逐文件写入边数据（使用映射解析顶点）
 ```
 
 映射使用 `unordered_map<string, unordered_map<int64_t, VertexId>>`（label_name → csv_id → vertex_id）。

@@ -95,11 +95,11 @@ TEST_F(MetadataServiceTest, GetLabelDef) {
     EXPECT_EQ(def->id, label_id);
     EXPECT_EQ(def->name, "Person");
     ASSERT_EQ(def->properties.size(), 2u);
-    EXPECT_EQ(def->properties[0].id, 1);
+    EXPECT_EQ(def->properties[0].id, 0);
     EXPECT_EQ(def->properties[0].name, "name");
     EXPECT_EQ(def->properties[0].type, PropertyType::STRING);
     EXPECT_TRUE(def->properties[0].required);
-    EXPECT_EQ(def->properties[1].id, 2);
+    EXPECT_EQ(def->properties[1].id, 1);
     EXPECT_EQ(def->properties[1].name, "age");
     EXPECT_EQ(def->properties[1].type, PropertyType::INT64);
     EXPECT_FALSE(def->properties[1].required);
@@ -157,9 +157,9 @@ TEST_F(MetadataServiceTest, GetEdgeLabelDef) {
     EXPECT_EQ(def->id, elabel_id);
     EXPECT_EQ(def->name, "KNOWS");
     ASSERT_EQ(def->properties.size(), 2u);
-    EXPECT_EQ(def->properties[0].id, 1);
+    EXPECT_EQ(def->properties[0].id, 0);
     EXPECT_EQ(def->properties[0].name, "since");
-    EXPECT_EQ(def->properties[1].id, 2);
+    EXPECT_EQ(def->properties[1].id, 1);
     EXPECT_EQ(def->properties[1].name, "weight");
 
     auto def_by_id = blockingWait(async_meta_->getEdgeLabelDefById(elabel_id));

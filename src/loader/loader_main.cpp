@@ -89,6 +89,10 @@ int main(int argc, char* argv[]) {
     auto id_map = eugraph::loader::loadVertices(client, vertex_files, label_schemas, batch_size);
     spdlog::info("[loader] Vertex loading complete. {} labels in ID map", id_map.size());
 
+    // Step 5.5: Create unique indexes on ID properties
+    spdlog::info("[loader] Creating unique indexes on ID properties...");
+    eugraph::loader::createUniqueIdIndexes(client, label_schemas);
+
     // Step 6: Load edge data
     spdlog::info("[loader] Loading edge data...");
     eugraph::loader::loadEdges(client, edge_files, edge_schemas, id_map, batch_size);
