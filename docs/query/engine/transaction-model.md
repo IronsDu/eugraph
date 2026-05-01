@@ -20,13 +20,15 @@
 
 ---
 
-## 二、嵌入式模式事务
+## 二、事务流程
 
-`QueryExecutor::executeAsync()` 流程：
+`prepareStream()` → 物理计划 → generator 消费 → commitTran
 
 ```
-beginTran → setTransaction → 物理计划 → execute (全量收集) → commitTran
+beginTran → setTransaction → 物理计划 → execute → (drain generator) → commitTran
 ```
+
+调用方（server handler / test helper）负责 drain generator 并在结束后 commit。
 
 - 事务 cover 整个查询执行期间
 - 全量结果物化到内存后才提交

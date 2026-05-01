@@ -135,6 +135,29 @@ protected:
     }
 };
 
+// Helper: drain prepareStream into ExecutionResult (replaces the old executeSync/executeAsync)
+ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
+    auto ctx = blockingWait(executor.prepareStream(query));
+    ExecutionResult result;
+    if (!ctx->error.empty()) {
+        result.error = std::move(ctx->error);
+        return result;
+    }
+    result.columns = std::move(ctx->columns);
+    auto gen = std::move(ctx->gen);
+    blockingWait(co_invoke([&]() -> Task<void> {
+        while (auto batch = co_await gen.next()) {
+            for (auto& row : batch->rows) {
+                result.rows.push_back(std::move(row));
+            }
+        }
+        if (ctx->should_commit) {
+            co_await ctx->store->commitTran(ctx->txn);
+        }
+    }));
+    return result;
+}
+
 } // anonymous namespace
 
 // ==================== Basic Scan Tests ====================
@@ -142,14 +165,14 @@ protected:
 TEST_F(QueryExecutorTest, LabelScanReturnVertex) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, AllNodeScanWithLimit) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n) RETURN n LIMIT 3").rows;
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n LIMIT 3").rows;
     EXPECT_EQ(rows.size(), 3);
 }
 
@@ -159,14 +182,14 @@ TEST_F(QueryExecutorTest, ExpandNeighbors) {
     insertTestVertices();
     insertTestEdges();
 
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
 // ==================== Create Tests ====================
 
 TEST_F(QueryExecutorTest, CreateNode) {
-    auto rows = executor_->executeSync("CREATE (n:Person)").rows;
+    auto rows = execSync(*executor_, "CREATE (n:Person)").rows;
     EXPECT_EQ(rows.size(), 1);
 
     auto txn = sync_data_->beginTransaction();
@@ -184,7 +207,7 @@ TEST_F(QueryExecutorTest, CreateNode) {
 // ==================== Empty Results ====================
 
 TEST_F(QueryExecutorTest, EmptyScan) {
-    auto rows = executor_->executeSync("MATCH (n:Person) RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
@@ -193,82 +216,82 @@ TEST_F(QueryExecutorTest, EmptyScan) {
 TEST_F(QueryExecutorTest, WhereTruePassesAllRows) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE true RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE true RETURN n").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, WhereFalseFiltersAllRows) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE false RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE false RETURN n").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
 TEST_F(QueryExecutorTest, WhereTrueWithLimit) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE true RETURN n LIMIT 2").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE true RETURN n LIMIT 2").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
 TEST_F(QueryExecutorTest, WhereAndTrueTrue) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE true AND true RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE true AND true RETURN n").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, WhereAndTrueFalse) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE true AND false RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE true AND false RETURN n").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
 TEST_F(QueryExecutorTest, WhereOrFalseTrue) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE false OR true RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE false OR true RETURN n").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, WhereOrFalseFalse) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE false OR false RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE false OR false RETURN n").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
 TEST_F(QueryExecutorTest, WhereNotTrue) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE NOT false RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE NOT false RETURN n").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, WhereNotFalse) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE NOT true RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE NOT true RETURN n").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
 TEST_F(QueryExecutorTest, WhereComplexExpression) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE (true AND true) OR false RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE (true AND true) OR false RETURN n").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, WhereComplexExpressionFiltersAll) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE (true AND false) OR false RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE (true AND false) OR false RETURN n").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
 TEST_F(QueryExecutorTest, WhereOnEmptyData) {
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE true RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE true RETURN n").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
@@ -277,26 +300,26 @@ TEST_F(QueryExecutorTest, WhereOnEmptyData) {
 TEST_F(QueryExecutorTest, AllNodeScanAllVertices) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n) RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, AllNodeScanNoData) {
-    auto rows = executor_->executeSync("MATCH (n) RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
 TEST_F(QueryExecutorTest, AllNodeScanLimitZero) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n) RETURN n LIMIT 0").rows;
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n LIMIT 0").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
 TEST_F(QueryExecutorTest, AllNodeScanLimitOne) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n) RETURN n LIMIT 1").rows;
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n LIMIT 1").rows;
     EXPECT_EQ(rows.size(), 1);
 }
 
@@ -305,21 +328,21 @@ TEST_F(QueryExecutorTest, AllNodeScanLimitOne) {
 TEST_F(QueryExecutorTest, LabelScanSpecificLabel) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, LabelScanOtherLabelEmpty) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:City) RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:City) RETURN n").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
 TEST_F(QueryExecutorTest, LabelScanWithWhereTrueAndLimit) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE true RETURN n LIMIT 3").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE true RETURN n LIMIT 3").rows;
     EXPECT_EQ(rows.size(), 3);
 }
 
@@ -335,13 +358,13 @@ TEST_F(QueryExecutorTest, LabelScanMultipleLabelsIndependently) {
     }
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
-    auto person_rows = executor_->executeSync("MATCH (n:Person) RETURN n").rows;
+    auto person_rows = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
     EXPECT_EQ(person_rows.size(), 3);
 
-    auto city_rows = executor_->executeSync("MATCH (n:City) RETURN n").rows;
+    auto city_rows = execSync(*executor_, "MATCH (n:City) RETURN n").rows;
     EXPECT_EQ(city_rows.size(), 3);
 
-    auto all_rows = executor_->executeSync("MATCH (n) RETURN n").rows;
+    auto all_rows = execSync(*executor_, "MATCH (n) RETURN n").rows;
     EXPECT_EQ(all_rows.size(), 6);
 }
 
@@ -351,14 +374,14 @@ TEST_F(QueryExecutorTest, ExpandOutgoingEdges) {
     insertTestVertices();
     insertTestEdges();
 
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
 TEST_F(QueryExecutorTest, ExpandNoEdgesReturnsEmpty) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
@@ -370,7 +393,7 @@ TEST_F(QueryExecutorTest, ExpandMultipleEdgesFromSameSource) {
     }
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 4);
 }
 
@@ -378,7 +401,7 @@ TEST_F(QueryExecutorTest, ExpandWithWhereFilter) {
     insertTestVertices();
     insertTestEdges();
 
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) WHERE true RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) WHERE true RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
@@ -386,7 +409,7 @@ TEST_F(QueryExecutorTest, ExpandWithWhereFalseFiltersAll) {
     insertTestVertices();
     insertTestEdges();
 
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) WHERE false RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) WHERE false RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
@@ -398,51 +421,51 @@ TEST_F(QueryExecutorTest, ExpandWithLimit) {
     }
     ASSERT_TRUE(sync_data_->commitTransaction(txn));
 
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b LIMIT 2").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b LIMIT 2").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
 TEST_F(QueryExecutorTest, ExpandFilterBySingleType) {
     insertMixedEdges();
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
 TEST_F(QueryExecutorTest, ExpandFilterByOtherType) {
     insertMixedEdges();
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:LIVES_IN]->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:LIVES_IN]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
 TEST_F(QueryExecutorTest, ExpandFilterByMultipleTypes) {
     insertMixedEdges();
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS|LIVES_IN]->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS|LIVES_IN]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 4);
 }
 
 TEST_F(QueryExecutorTest, ExpandNonExistentTypeReturnsEmpty) {
     insertMixedEdges();
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:NONEXISTENT]->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:NONEXISTENT]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
 TEST_F(QueryExecutorTest, ExpandWithoutTypeReturnsAll) {
     insertMixedEdges();
-    auto rows = executor_->executeSync("MATCH (a:Person)-->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 4);
 }
 
 TEST_F(QueryExecutorTest, ExpandTwoHopSameType) {
     insertMultiHopEdges();
     // KNOWS 2-hop: 1->2->3, 2->3->4 = 2 rows
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c) RETURN a, b, c").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c) RETURN a, b, c").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
 TEST_F(QueryExecutorTest, ExpandTwoHopMixedTypes) {
     insertMultiHopEdges();
     // KNOWS then LIVES_IN: 1->2->6 = 1 row
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:LIVES_IN]->(c) RETURN a, b, c").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b:Person)-[:LIVES_IN]->(c) RETURN a, b, c").rows;
     EXPECT_EQ(rows.size(), 1);
 }
 
@@ -450,21 +473,21 @@ TEST_F(QueryExecutorTest, ExpandThreeHopSameType) {
     insertMultiHopEdges();
     // KNOWS 3-hop: 1->2->3->4 = 1 row
     auto rows =
-        executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b)-[:KNOWS]->(c)-[:KNOWS]->(d) RETURN a, b, c, d").rows;
+        execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b)-[:KNOWS]->(c)-[:KNOWS]->(d) RETURN a, b, c, d").rows;
     EXPECT_EQ(rows.size(), 1);
 }
 
 TEST_F(QueryExecutorTest, ExpandTwoHopNoMatch) {
     insertMultiHopEdges();
     // LIVES_IN then KNOWS: no vertex reached via LIVES_IN has outgoing KNOWS edges
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:LIVES_IN]->(b)-[:KNOWS]->(c) RETURN a, b, c").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:LIVES_IN]->(b)-[:KNOWS]->(c) RETURN a, b, c").rows;
     EXPECT_EQ(rows.size(), 0);
 }
 
 // ==================== Create Node Tests ====================
 
 TEST_F(QueryExecutorTest, CreateNodeReturnsId) {
-    auto result = executor_->executeSync("CREATE (n:Person)");
+    auto result = execSync(*executor_, "CREATE (n:Person)");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
     ASSERT_EQ(result.rows[0].size(), 1);
@@ -474,13 +497,13 @@ TEST_F(QueryExecutorTest, CreateNodeReturnsId) {
 }
 
 TEST_F(QueryExecutorTest, CreateMultipleNodesSequentially) {
-    auto result1 = executor_->executeSync("CREATE (n:Person)");
+    auto result1 = execSync(*executor_, "CREATE (n:Person)");
     ASSERT_TRUE(result1.error.empty()) << result1.error;
     ASSERT_EQ(result1.rows.size(), 1);
     ASSERT_TRUE(std::holds_alternative<VertexValue>(result1.rows[0][0]));
     auto id1 = std::get<VertexValue>(result1.rows[0][0]).id;
 
-    auto result2 = executor_->executeSync("CREATE (n:Person)");
+    auto result2 = execSync(*executor_, "CREATE (n:Person)");
     ASSERT_TRUE(result2.error.empty()) << result2.error;
     ASSERT_EQ(result2.rows.size(), 1);
     ASSERT_TRUE(std::holds_alternative<VertexValue>(result2.rows[0][0]));
@@ -490,12 +513,12 @@ TEST_F(QueryExecutorTest, CreateMultipleNodesSequentially) {
     EXPECT_NE(id1, id2);
 
     // Verify both vertices exist via scan
-    auto scan_rows = executor_->executeSync("MATCH (n:Person) RETURN n").rows;
+    auto scan_rows = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
     EXPECT_EQ(scan_rows.size(), 2);
 }
 
 TEST_F(QueryExecutorTest, CreateNodeVerifyInStore) {
-    executor_->executeSync("CREATE (n:Person)");
+    execSync(*executor_, "CREATE (n:Person)");
 
     auto txn = sync_data_->beginTransaction();
     auto cursor = sync_data_->createVertexScanCursor(txn, PERSON_LABEL);
@@ -510,23 +533,23 @@ TEST_F(QueryExecutorTest, CreateNodeVerifyInStore) {
 }
 
 TEST_F(QueryExecutorTest, CreateNodeDifferentLabels) {
-    auto r1 = executor_->executeSync("CREATE (n:Person)").rows;
-    auto r2 = executor_->executeSync("CREATE (n:City)").rows;
+    auto r1 = execSync(*executor_, "CREATE (n:Person)").rows;
+    auto r2 = execSync(*executor_, "CREATE (n:City)").rows;
 
     ASSERT_EQ(r1.size(), 1);
     ASSERT_EQ(r2.size(), 1);
 
-    auto person_rows = executor_->executeSync("MATCH (n:Person) RETURN n").rows;
+    auto person_rows = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
     EXPECT_EQ(person_rows.size(), 1);
 
-    auto city_rows = executor_->executeSync("MATCH (n:City) RETURN n").rows;
+    auto city_rows = execSync(*executor_, "MATCH (n:City) RETURN n").rows;
     EXPECT_EQ(city_rows.size(), 1);
 }
 
 // ==================== Create Edge Tests ====================
 
 TEST_F(QueryExecutorTest, CreateEdgeReturnsId) {
-    auto rows = executor_->executeSync("CREATE (a:Person)-[:KNOWS]->(b:Person)").rows;
+    auto rows = execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person)").rows;
     ASSERT_EQ(rows.size(), 1);
     ASSERT_EQ(rows[0].size(), 1);
     ASSERT_TRUE(std::holds_alternative<int64_t>(rows[0][0]));
@@ -534,41 +557,41 @@ TEST_F(QueryExecutorTest, CreateEdgeReturnsId) {
 }
 
 TEST_F(QueryExecutorTest, CreateEdgeVerifyInStore) {
-    executor_->executeSync("CREATE (a:Person)-[:KNOWS]->(b:Person)");
+    execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person)");
 
-    auto person_rows = executor_->executeSync("MATCH (n:Person) RETURN n").rows;
+    auto person_rows = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
     EXPECT_EQ(person_rows.size(), 2);
 
-    auto expand_rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
+    auto expand_rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
     EXPECT_EQ(expand_rows.size(), 1);
 }
 
 TEST_F(QueryExecutorTest, CreateEdgeThenExpand) {
-    executor_->executeSync("CREATE (a:Person)-[:KNOWS]->(b:Person)");
+    execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person)");
 
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 1);
 }
 
 // ==================== Combined Scenario Tests ====================
 
 TEST_F(QueryExecutorTest, CreateThenScanThenFilter) {
-    executor_->executeSync("CREATE (n:Person)");
-    executor_->executeSync("CREATE (n:Person)");
-    executor_->executeSync("CREATE (n:Person)");
+    execSync(*executor_, "CREATE (n:Person)");
+    execSync(*executor_, "CREATE (n:Person)");
+    execSync(*executor_, "CREATE (n:Person)");
 
-    auto rows = executor_->executeSync("MATCH (n:Person) WHERE true RETURN n").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE true RETURN n").rows;
     EXPECT_EQ(rows.size(), 3);
 }
 
 TEST_F(QueryExecutorTest, CreateThenScanWithLimit) {
-    executor_->executeSync("CREATE (n:Person)");
-    executor_->executeSync("CREATE (n:Person)");
-    executor_->executeSync("CREATE (n:Person)");
-    executor_->executeSync("CREATE (n:Person)");
-    executor_->executeSync("CREATE (n:Person)");
+    execSync(*executor_, "CREATE (n:Person)");
+    execSync(*executor_, "CREATE (n:Person)");
+    execSync(*executor_, "CREATE (n:Person)");
+    execSync(*executor_, "CREATE (n:Person)");
+    execSync(*executor_, "CREATE (n:Person)");
 
-    auto rows = executor_->executeSync("MATCH (n:Person) RETURN n LIMIT 2").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) RETURN n LIMIT 2").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
@@ -576,18 +599,18 @@ TEST_F(QueryExecutorTest, CreateNodesAndEdgesThenExpand) {
     insertTestVertices();
     insertTestEdges();
 
-    auto rows = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows;
     EXPECT_EQ(rows.size(), 2);
 
-    auto filtered = executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) WHERE true RETURN a, b").rows;
+    auto filtered = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) WHERE true RETURN a, b").rows;
     EXPECT_EQ(filtered.size(), 2);
 }
 
 TEST_F(QueryExecutorTest, EmptyGraphAllOperations) {
-    EXPECT_EQ(executor_->executeSync("MATCH (n:Person) RETURN n").rows.size(), 0);
-    EXPECT_EQ(executor_->executeSync("MATCH (n) RETURN n").rows.size(), 0);
-    EXPECT_EQ(executor_->executeSync("MATCH (n:Person) WHERE true RETURN n").rows.size(), 0);
-    EXPECT_EQ(executor_->executeSync("MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows.size(), 0);
+    EXPECT_EQ(execSync(*executor_, "MATCH (n:Person) RETURN n").rows.size(), 0);
+    EXPECT_EQ(execSync(*executor_, "MATCH (n) RETURN n").rows.size(), 0);
+    EXPECT_EQ(execSync(*executor_, "MATCH (n:Person) WHERE true RETURN n").rows.size(), 0);
+    EXPECT_EQ(execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows.size(), 0);
 }
 
 // ==================== Limit Edge Cases ====================
@@ -595,21 +618,21 @@ TEST_F(QueryExecutorTest, EmptyGraphAllOperations) {
 TEST_F(QueryExecutorTest, LimitGreaterThanRowCount) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) RETURN n LIMIT 100").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) RETURN n LIMIT 100").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, LimitExactlyRowCount) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) RETURN n LIMIT 5").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) RETURN n LIMIT 5").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, LimitOne) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) RETURN n LIMIT 1").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) RETURN n LIMIT 1").rows;
     EXPECT_EQ(rows.size(), 1);
 }
 
@@ -618,14 +641,14 @@ TEST_F(QueryExecutorTest, LimitOne) {
 TEST_F(QueryExecutorTest, ReturnStar) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) RETURN *").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) RETURN *").rows;
     EXPECT_EQ(rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, ReturnStarWithLimit) {
     insertTestVertices();
 
-    auto rows = executor_->executeSync("MATCH (n:Person) RETURN * LIMIT 2").rows;
+    auto rows = execSync(*executor_, "MATCH (n:Person) RETURN * LIMIT 2").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
@@ -663,13 +686,13 @@ TEST(QueryExecutorRestartTest, DataPersistsAcrossRestart) {
 
         auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
 
-        auto r1 = executor->executeSync("CREATE (n:Person)");
+        auto r1 = execSync(*executor, "CREATE (n:Person)");
         ASSERT_TRUE(r1.error.empty()) << "CREATE error: " << r1.error;
 
-        auto r2 = executor->executeSync("CREATE (n:Person)");
+        auto r2 = execSync(*executor, "CREATE (n:Person)");
         ASSERT_TRUE(r2.error.empty()) << "CREATE error: " << r2.error;
 
-        auto before = executor->executeSync("MATCH (n:Person) RETURN n");
+        auto before = execSync(*executor, "MATCH (n:Person) RETURN n");
         ASSERT_TRUE(before.error.empty()) << "MATCH before shutdown error: " << before.error;
         ASSERT_EQ(before.rows.size(), 2) << "Should have 2 vertices before shutdown";
 
@@ -704,14 +727,14 @@ TEST(QueryExecutorRestartTest, DataPersistsAcrossRestart) {
 
         auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
 
-        auto after = executor->executeSync("MATCH (n:Person) RETURN n");
+        auto after = execSync(*executor, "MATCH (n:Person) RETURN n");
         EXPECT_TRUE(after.error.empty()) << "MATCH after restart error: " << after.error;
         EXPECT_EQ(after.rows.size(), 2) << "Data should persist across restart";
 
-        auto r3 = executor->executeSync("CREATE (n:Person)");
+        auto r3 = execSync(*executor, "CREATE (n:Person)");
         EXPECT_TRUE(r3.error.empty()) << "CREATE after restart error: " << r3.error;
 
-        auto scan2 = executor->executeSync("MATCH (n:Person) RETURN n");
+        auto scan2 = execSync(*executor, "MATCH (n:Person) RETURN n");
         EXPECT_EQ(scan2.rows.size(), 3) << "Should have 3 vertices after post-restart insert";
 
         executor.reset();
@@ -756,9 +779,9 @@ TEST(QueryExecutorRestartTest, DataWithPropertiesPersistsAcrossRestart) {
 
         auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
 
-        auto r1 = executor->executeSync("CREATE (n:Person {name: 'Alice'})");
+        auto r1 = execSync(*executor, "CREATE (n:Person {name: 'Alice'})");
         ASSERT_TRUE(r1.error.empty()) << r1.error;
-        auto r2 = executor->executeSync("CREATE (n:Person {name: 'Bob'})");
+        auto r2 = execSync(*executor, "CREATE (n:Person {name: 'Bob'})");
         ASSERT_TRUE(r2.error.empty()) << r2.error;
 
         executor.reset();
@@ -784,7 +807,7 @@ TEST(QueryExecutorRestartTest, DataWithPropertiesPersistsAcrossRestart) {
 
         auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
 
-        auto result = executor->executeSync("MATCH (n:Person) RETURN n.name ORDER BY n.name");
+        auto result = execSync(*executor, "MATCH (n:Person) RETURN n.name ORDER BY n.name");
         EXPECT_TRUE(result.error.empty()) << result.error;
         EXPECT_EQ(result.rows.size(), 2);
 
@@ -828,11 +851,11 @@ TEST(QueryExecutorRestartTest, EdgeDataPersistsAcrossRestart) {
 
         auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
 
-        auto r1 = executor->executeSync("CREATE (a:Person)-[:KNOWS]->(b:Person)");
+        auto r1 = execSync(*executor, "CREATE (a:Person)-[:KNOWS]->(b:Person)");
         ASSERT_TRUE(r1.error.empty()) << r1.error;
 
         // Verify before shutdown
-        auto before = executor->executeSync("MATCH (a:Person)-[e:KNOWS]->(b:Person) RETURN a, b");
+        auto before = execSync(*executor, "MATCH (a:Person)-[e:KNOWS]->(b:Person) RETURN a, b");
         ASSERT_TRUE(before.error.empty()) << before.error;
         ASSERT_EQ(before.rows.size(), 1) << "Should have 1 edge before shutdown";
 
@@ -859,11 +882,11 @@ TEST(QueryExecutorRestartTest, EdgeDataPersistsAcrossRestart) {
 
         auto executor = std::make_unique<QueryExecutor>(*async_data, *async_meta, QueryExecutor::Config{});
 
-        auto result = executor->executeSync("MATCH (a:Person)-[e:KNOWS]->(b:Person) RETURN a, b");
+        auto result = execSync(*executor, "MATCH (a:Person)-[e:KNOWS]->(b:Person) RETURN a, b");
         EXPECT_TRUE(result.error.empty()) << result.error;
         EXPECT_EQ(result.rows.size(), 1) << "Edge should persist across restart";
 
-        auto vertices = executor->executeSync("MATCH (n:Person) RETURN n");
+        auto vertices = execSync(*executor, "MATCH (n:Person) RETURN n");
         EXPECT_EQ(vertices.rows.size(), 2) << "Vertices should persist across restart";
 
         executor.reset();
@@ -880,7 +903,7 @@ TEST(QueryExecutorRestartTest, EdgeDataPersistsAcrossRestart) {
 // ==================== EXPLAIN Tests ====================
 
 TEST_F(QueryExecutorTest, ExplainLabelScan) {
-    auto result = executor_->executeSync("EXPLAIN MATCH (n:Person) RETURN n");
+    auto result = execSync(*executor_, "EXPLAIN MATCH (n:Person) RETURN n");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.columns.size(), 1u);
     EXPECT_EQ(result.columns[0], "Plan");
@@ -898,7 +921,7 @@ TEST_F(QueryExecutorTest, ExplainLabelScan) {
 }
 
 TEST_F(QueryExecutorTest, ExplainAllNodeScan) {
-    auto result = executor_->executeSync("EXPLAIN MATCH (n) RETURN n");
+    auto result = execSync(*executor_, "EXPLAIN MATCH (n) RETURN n");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.columns[0], "Plan");
 
@@ -913,7 +936,7 @@ TEST_F(QueryExecutorTest, ExplainAllNodeScan) {
 }
 
 TEST_F(QueryExecutorTest, ExplainWithFilter) {
-    auto result = executor_->executeSync("EXPLAIN MATCH (n:Person) WHERE true RETURN n");
+    auto result = execSync(*executor_, "EXPLAIN MATCH (n:Person) WHERE true RETURN n");
     ASSERT_TRUE(result.error.empty()) << result.error;
 
     std::string plan_text;
@@ -928,7 +951,7 @@ TEST_F(QueryExecutorTest, ExplainWithFilter) {
 }
 
 TEST_F(QueryExecutorTest, ExplainWithLimit) {
-    auto result = executor_->executeSync("EXPLAIN MATCH (n:Person) RETURN n LIMIT 5");
+    auto result = execSync(*executor_, "EXPLAIN MATCH (n:Person) RETURN n LIMIT 5");
     ASSERT_TRUE(result.error.empty()) << result.error;
 
     std::string plan_text;
@@ -941,7 +964,7 @@ TEST_F(QueryExecutorTest, ExplainWithLimit) {
 }
 
 TEST_F(QueryExecutorTest, ExplainCreateNode) {
-    auto result = executor_->executeSync("EXPLAIN CREATE (n:Person {name: 'test'})");
+    auto result = execSync(*executor_, "EXPLAIN CREATE (n:Person {name: 'test'})");
     ASSERT_TRUE(result.error.empty()) << result.error;
 
     std::string plan_text;
@@ -955,19 +978,19 @@ TEST_F(QueryExecutorTest, ExplainCreateNode) {
 }
 
 TEST_F(QueryExecutorTest, ExplainDoesNotExecute) {
-    auto before = executor_->executeSync("MATCH (n:Person) RETURN n");
+    auto before = execSync(*executor_, "MATCH (n:Person) RETURN n");
     size_t count_before = before.rows.size();
 
-    executor_->executeSync("EXPLAIN CREATE (n:Person {name: 'Ghost'})");
+    execSync(*executor_, "EXPLAIN CREATE (n:Person {name: 'Ghost'})");
 
-    auto after = executor_->executeSync("MATCH (n:Person) RETURN n");
+    auto after = execSync(*executor_, "MATCH (n:Person) RETURN n");
     EXPECT_EQ(after.rows.size(), count_before) << "EXPLAIN should not execute the query";
 }
 
 TEST_F(QueryExecutorTest, ExplainCaseInsensitive) {
-    auto r1 = executor_->executeSync("explain MATCH (n:Person) RETURN n");
-    auto r2 = executor_->executeSync("Explain MATCH (n:Person) RETURN n");
-    auto r3 = executor_->executeSync("EXPLAIN MATCH (n:Person) RETURN n");
+    auto r1 = execSync(*executor_, "explain MATCH (n:Person) RETURN n");
+    auto r2 = execSync(*executor_, "Explain MATCH (n:Person) RETURN n");
+    auto r3 = execSync(*executor_, "EXPLAIN MATCH (n:Person) RETURN n");
     EXPECT_TRUE(r1.error.empty()) << r1.error;
     EXPECT_TRUE(r2.error.empty()) << r2.error;
     EXPECT_TRUE(r3.error.empty()) << r3.error;
@@ -980,7 +1003,7 @@ TEST_F(QueryExecutorTest, ExplainCaseInsensitive) {
 TEST_F(QueryExecutorTest, SkipRows) {
     insertTestVertices();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n SKIP 2");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n SKIP 2");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 3);
 }
@@ -988,7 +1011,7 @@ TEST_F(QueryExecutorTest, SkipRows) {
 TEST_F(QueryExecutorTest, SkipZero) {
     insertTestVertices();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n SKIP 0");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n SKIP 0");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 5);
 }
@@ -996,7 +1019,7 @@ TEST_F(QueryExecutorTest, SkipZero) {
 TEST_F(QueryExecutorTest, SkipAll) {
     insertTestVertices();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n SKIP 10");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n SKIP 10");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 0);
 }
@@ -1004,7 +1027,7 @@ TEST_F(QueryExecutorTest, SkipAll) {
 TEST_F(QueryExecutorTest, SkipWithLimit) {
     insertTestVertices();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n SKIP 2 LIMIT 2");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n SKIP 2 LIMIT 2");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 2);
 }
@@ -1012,7 +1035,7 @@ TEST_F(QueryExecutorTest, SkipWithLimit) {
 TEST_F(QueryExecutorTest, SkipWithOrderBy) {
     insertTestVertices();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id SKIP 1 LIMIT 2");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id SKIP 1 LIMIT 2");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2);
     // After ORDER BY id ASC, skip 1, limit 2: should get ids 2 and 3
@@ -1025,7 +1048,7 @@ TEST_F(QueryExecutorTest, SkipWithOrderBy) {
 TEST_F(QueryExecutorTest, OrderByPropertyAsc) {
     insertTestVertices();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id ASC");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id ASC");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5);
     for (size_t i = 0; i < result.rows.size() - 1; ++i) {
@@ -1036,7 +1059,7 @@ TEST_F(QueryExecutorTest, OrderByPropertyAsc) {
 TEST_F(QueryExecutorTest, OrderByPropertyDesc) {
     insertTestVertices();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id DESC");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id DESC");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5);
     for (size_t i = 0; i < result.rows.size() - 1; ++i) {
@@ -1047,7 +1070,7 @@ TEST_F(QueryExecutorTest, OrderByPropertyDesc) {
 TEST_F(QueryExecutorTest, OrderByDefaultDirection) {
     insertTestVertices();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5);
     // Default should be ASC
@@ -1059,13 +1082,13 @@ TEST_F(QueryExecutorTest, OrderByDefaultDirection) {
 TEST_F(QueryExecutorTest, OrderByMultipleKeys) {
     insertTestVertices();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id ASC, id DESC");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id ASC, id DESC");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, OrderByEmptyResult) {
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.id AS id ORDER BY id");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 0);
 }
@@ -1076,7 +1099,7 @@ TEST_F(QueryExecutorTest, DistinctProperty) {
     insertTestVertices();
 
     // All vertices have the same name pattern but unique names, test with a constant
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN DISTINCT 1 AS x");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN DISTINCT 1 AS x");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 1);
 }
@@ -1085,7 +1108,7 @@ TEST_F(QueryExecutorTest, DistinctNoDuplicate) {
     insertTestVertices();
 
     // All ids are unique, DISTINCT should keep all rows
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN DISTINCT n.id AS id");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN DISTINCT n.id AS id");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 5);
 }
@@ -1093,7 +1116,7 @@ TEST_F(QueryExecutorTest, DistinctNoDuplicate) {
 TEST_F(QueryExecutorTest, DistinctWithOrderBy) {
     insertTestVertices();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN DISTINCT n.id AS id ORDER BY id ASC");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN DISTINCT n.id AS id ORDER BY id ASC");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5);
     for (size_t i = 0; i < result.rows.size() - 1; ++i) {
@@ -1186,7 +1209,7 @@ protected:
 TEST_F(QueryExecutorAggTest, CountStar) {
     insertPersonData();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN count(*)");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN count(*)");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 5);
@@ -1195,14 +1218,14 @@ TEST_F(QueryExecutorAggTest, CountStar) {
 TEST_F(QueryExecutorAggTest, CountByGroup) {
     insertPersonData();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 2); // 2 cities
 }
 
 TEST_F(QueryExecutorAggTest, SumAge) {
     insertPersonData();
-    auto res = executor_->executeSync("MATCH (n:Person) RETURN sum(n.age) AS total");
+    auto res = execSync(*executor_, "MATCH (n:Person) RETURN sum(n.age) AS total");
     ASSERT_TRUE(res.error.empty()) << "Sum error: " << res.error;
     ASSERT_EQ(res.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(res.rows[0][0]), 150);
@@ -1211,7 +1234,7 @@ TEST_F(QueryExecutorAggTest, SumAge) {
 TEST_F(QueryExecutorAggTest, AvgAge) {
     insertPersonData();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN avg(n.age) AS avg_age");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN avg(n.age) AS avg_age");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
     EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 30.0); // 150/5
@@ -1220,7 +1243,7 @@ TEST_F(QueryExecutorAggTest, AvgAge) {
 TEST_F(QueryExecutorAggTest, MinMaxAge) {
     insertPersonData();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN min(n.age) AS min_age, max(n.age) AS max_age");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN min(n.age) AS min_age, max(n.age) AS max_age");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 25);
@@ -1230,7 +1253,7 @@ TEST_F(QueryExecutorAggTest, MinMaxAge) {
 TEST_F(QueryExecutorAggTest, CountDistinct) {
     insertPersonData();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN count(DISTINCT n.city) AS cities");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN count(DISTINCT n.city) AS cities");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
@@ -1240,7 +1263,7 @@ TEST_F(QueryExecutorAggTest, MultipleAggregates) {
     insertPersonData();
 
     auto result =
-        executor_->executeSync("MATCH (n:Person) RETURN count(*) AS cnt, sum(n.age) AS total, avg(n.age) AS avg_age");
+        execSync(*executor_, "MATCH (n:Person) RETURN count(*) AS cnt, sum(n.age) AS total, avg(n.age) AS avg_age");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 5);
@@ -1252,13 +1275,13 @@ TEST_F(QueryExecutorAggTest, AggregateWithGroupBy) {
     insertPersonData();
 
     auto result =
-        executor_->executeSync("MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt, avg(n.age) AS avg_age");
+        execSync(*executor_, "MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt, avg(n.age) AS avg_age");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2);
 }
 
 TEST_F(QueryExecutorAggTest, AggregateEmptyResult) {
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN count(*) AS cnt");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN count(*) AS cnt");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
@@ -1267,7 +1290,7 @@ TEST_F(QueryExecutorAggTest, AggregateEmptyResult) {
 TEST_F(QueryExecutorAggTest, AggregateWithOrderBy) {
     insertPersonData();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt ORDER BY cnt DESC");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt ORDER BY cnt DESC");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2);
     // Beijing has 3, Shanghai has 2; DESC order → Beijing first
@@ -1278,7 +1301,7 @@ TEST_F(QueryExecutorAggTest, AggregateWithOrderBy) {
 TEST_F(QueryExecutorAggTest, AggregateWithSkipLimit) {
     insertPersonData();
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt SKIP 1 LIMIT 2");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt SKIP 1 LIMIT 2");
     ASSERT_TRUE(result.error.empty()) << result.error;
     // Only 2 groups, skip 1 → should get 1 row
     EXPECT_EQ(result.rows.size(), 1);
@@ -1394,7 +1417,7 @@ TEST_F(QueryExecutorMultiLabelTest, PropertyNoConflictScalar) {
 
     insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}});
 
-    auto result = executor_->executeSync("MATCH (n:Person) RETURN n.name");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Alice");
@@ -1429,7 +1452,7 @@ TEST_F(QueryExecutorMultiLabelTest, PropertyConflictToList) {
     insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
 
     // Use MATCH (n) (AllNodeScan) to load ALL labels' properties, triggering conflict
-    auto result = executor_->executeSync("MATCH (n) RETURN n.name");
+    auto result = execSync(*executor_, "MATCH (n) RETURN n.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
 
@@ -1453,7 +1476,7 @@ TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyAccess) {
 
     insertMultiLabelVertex(1, {{EMPLOYEE_LABEL, std::move(employee_props)}});
 
-    auto result = executor_->executeSync("MATCH (n:Employee) RETURN n::Employee.salary");
+    auto result = execSync(*executor_, "MATCH (n:Employee) RETURN n::Employee.salary");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 10000);
@@ -1472,7 +1495,7 @@ TEST_F(QueryExecutorMultiLabelTest, LabelCastAllProperties) {
 
     insertMultiLabelVertex(1, {{EMPLOYEE_LABEL, std::move(employee_props)}});
 
-    auto result = executor_->executeSync("MATCH (n:Employee) RETURN n::Employee");
+    auto result = execSync(*executor_, "MATCH (n:Employee) RETURN n::Employee");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
 
@@ -1485,28 +1508,28 @@ TEST_F(QueryExecutorMultiLabelTest, LabelCastAllProperties) {
 
 TEST_F(QueryExecutorMultiLabelTest, SetVertexLabel) {
     // CREATE (n:Person), SET n:Employee
-    auto result = executor_->executeSync("CREATE (n:Person) SET n:Employee");
+    auto result = execSync(*executor_, "CREATE (n:Person) SET n:Employee");
     ASSERT_TRUE(result.error.empty()) << result.error;
 }
 
 TEST_F(QueryExecutorMultiLabelTest, RemoveVertexLabel) {
     // CREATE (n:Person), SET n:Employee, then REMOVE n:Employee
-    auto r1 = executor_->executeSync("CREATE (n:Person) SET n:Employee");
+    auto r1 = execSync(*executor_, "CREATE (n:Person) SET n:Employee");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
-    auto r2 = executor_->executeSync("MATCH (n:Person) REMOVE n:Employee");
+    auto r2 = execSync(*executor_, "MATCH (n:Person) REMOVE n:Employee");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
 }
 
 TEST_F(QueryExecutorMultiLabelTest, SetVertexProperty) {
     // CREATE (n:Person {name: 'Alice'}), SET n.age = 30
-    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
-    auto r2 = executor_->executeSync("MATCH (n:Person) SET n.age = 30");
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n.age = 30");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
 
-    auto r3 = executor_->executeSync("MATCH (n:Person) RETURN n.age");
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n.age");
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 30);
@@ -1514,13 +1537,13 @@ TEST_F(QueryExecutorMultiLabelTest, SetVertexProperty) {
 
 TEST_F(QueryExecutorMultiLabelTest, SetLabelCastProperty) {
     // CREATE (n:Person), SET n:Employee, then SET n::Employee.salary = 50000
-    auto r1 = executor_->executeSync("CREATE (n:Person) SET n:Employee");
+    auto r1 = execSync(*executor_, "CREATE (n:Person) SET n:Employee");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
-    auto r2 = executor_->executeSync("MATCH (n:Person) SET n::Employee.salary = 50000");
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n::Employee.salary = 50000");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
 
-    auto r3 = executor_->executeSync("MATCH (n) RETURN n::Employee.salary");
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN n::Employee.salary");
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 50000);
@@ -1528,10 +1551,10 @@ TEST_F(QueryExecutorMultiLabelTest, SetLabelCastProperty) {
 
 TEST_F(QueryExecutorMultiLabelTest, NoPropertyLabel) {
     // VIP label has no properties - should be usable as pure tag
-    auto r1 = executor_->executeSync("CREATE (n:Person) SET n:VIP");
+    auto r1 = execSync(*executor_, "CREATE (n:Person) SET n:VIP");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
-    auto r2 = executor_->executeSync("MATCH (n:VIP) RETURN n");
+    auto r2 = execSync(*executor_, "MATCH (n:VIP) RETURN n");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
     ASSERT_EQ(r2.rows.size(), 1);
     ASSERT_TRUE(std::holds_alternative<VertexValue>(r2.rows[0][0]));
@@ -1541,7 +1564,7 @@ TEST_F(QueryExecutorMultiLabelTest, NoPropertyLabel) {
 
 TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelRejected) {
     // CREATE (n:Person:Employee {name: 'Bob'}) should fail
-    auto result = executor_->executeSync("CREATE (n:Person:Employee {name: 'Bob'})");
+    auto result = execSync(*executor_, "CREATE (n:Person:Employee {name: 'Bob'})");
     EXPECT_FALSE(result.error.empty());
 }
 
@@ -1574,13 +1597,13 @@ TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyConvenienceFallback) {
     insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
 
     // Typed access to Employee.name gives "Worker" only
-    auto r1 = executor_->executeSync("MATCH (n) RETURN n::Employee.name");
+    auto r1 = execSync(*executor_, "MATCH (n) RETURN n::Employee.name");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
     ASSERT_EQ(r1.rows.size(), 1);
     EXPECT_EQ(std::get<std::string>(r1.rows[0][0]), "Worker");
 
     // Typed access to Employee.salary gives 7777
-    auto r2 = executor_->executeSync("MATCH (n) RETURN n::Employee.salary");
+    auto r2 = execSync(*executor_, "MATCH (n) RETURN n::Employee.salary");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
     ASSERT_EQ(r2.rows.size(), 1);
     EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 7777);
@@ -1608,7 +1631,7 @@ TEST_F(QueryExecutorMultiLabelTest, StreamingSetLabelSurvivesPlanContextLifetime
     EXPECT_GT(row_count, 0);
 
     // Verify the label was actually set
-    auto result = executor_->executeSync("MATCH (n:Employee) RETURN n");
+    auto result = execSync(*executor_, "MATCH (n:Employee) RETURN n");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
     auto& vv = std::get<VertexValue>(result.rows[0][0]);
@@ -1626,21 +1649,21 @@ TEST_F(QueryExecutorMultiLabelTest, ScanByLabelLoadsAllLabelProperties) {
     ASSERT_NE(name_pid, UINT16_MAX);
 
     // Create vertex with Person label
-    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
     // Add Employee label (has different properties: salary, name)
-    auto r2 = executor_->executeSync("MATCH (n:Person) SET n:Employee");
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n:Employee");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
 
     // Query by Employee label — should still see name from Person label
-    auto r3 = executor_->executeSync("MATCH (n:Employee) RETURN n.name");
+    auto r3 = execSync(*executor_, "MATCH (n:Employee) RETURN n.name");
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 1);
     EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
 
     // Query by Employee label — full vertex should include all properties
-    auto r4 = executor_->executeSync("MATCH (n:Employee) RETURN n");
+    auto r4 = execSync(*executor_, "MATCH (n:Employee) RETURN n");
     ASSERT_TRUE(r4.error.empty()) << r4.error;
     ASSERT_EQ(r4.rows.size(), 1);
     auto& vv = std::get<VertexValue>(r4.rows[0][0]);
@@ -1656,17 +1679,17 @@ TEST_F(QueryExecutorMultiLabelTest, ScanByNoPropertyLabelReturnsAllProperties) {
     uint16_t name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
     ASSERT_NE(name_pid, UINT16_MAX);
 
-    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'}) SET n:VIP");
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'}) SET n:VIP");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
     // Query by VIP label (no properties)
-    auto r2 = executor_->executeSync("MATCH (n:VIP) RETURN n.name");
+    auto r2 = execSync(*executor_, "MATCH (n:VIP) RETURN n.name");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
     ASSERT_EQ(r2.rows.size(), 1);
     EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
 
     // Full vertex should include Person properties
-    auto r3 = executor_->executeSync("MATCH (n:VIP) RETURN n");
+    auto r3 = execSync(*executor_, "MATCH (n:VIP) RETURN n");
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 1);
     auto& vv = std::get<VertexValue>(r3.rows[0][0]);
@@ -1678,40 +1701,40 @@ TEST_F(QueryExecutorMultiLabelTest, LabelCastNonExistentPropertyErrors) {
     auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
     ASSERT_TRUE(person_def.has_value());
 
-    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
-    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::Person.noname");
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.noname");
     EXPECT_FALSE(r2.error.empty());
     EXPECT_NE(r2.error.find("has no property"), std::string::npos) << r2.error;
 }
 
 TEST_F(QueryExecutorMultiLabelTest, LabelCastNonExistentLabelErrors) {
     // n::NoSuchLabel.prop should error at planning time
-    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
-    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::NoSuchLabel.name");
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n::NoSuchLabel.name");
     EXPECT_FALSE(r2.error.empty());
     EXPECT_NE(r2.error.find("not found"), std::string::npos) << r2.error;
 }
 
 TEST_F(QueryExecutorMultiLabelTest, LabelCastAllPropertiesNonExistentLabelErrors) {
     // RETURN n::NoSuchLabel (standalone) should error
-    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
-    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::NoSuchLabel");
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n::NoSuchLabel");
     EXPECT_FALSE(r2.error.empty());
     EXPECT_NE(r2.error.find("not found"), std::string::npos) << r2.error;
 }
 
 TEST_F(QueryExecutorMultiLabelTest, LabelCastValidPropertySucceeds) {
     // n::Person.name should succeed (property exists)
-    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
-    auto r2 = executor_->executeSync("MATCH (n:Person) RETURN n::Person.name");
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.name");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
     ASSERT_EQ(r2.rows.size(), 1);
     EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
@@ -1719,10 +1742,10 @@ TEST_F(QueryExecutorMultiLabelTest, LabelCastValidPropertySucceeds) {
 
 TEST_F(QueryExecutorMultiLabelTest, FilterLabelCastNonExistentPropertyErrors) {
     // WHERE n::Person.noname = 'x' should error
-    auto r1 = executor_->executeSync("CREATE (n:Person {name: 'Alice'})");
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 
-    auto r2 = executor_->executeSync("MATCH (n:Person) WHERE n::Person.noname = 'x' RETURN n");
+    auto r2 = execSync(*executor_, "MATCH (n:Person) WHERE n::Person.noname = 'x' RETURN n");
     EXPECT_FALSE(r2.error.empty());
     EXPECT_NE(r2.error.find("has no property"), std::string::npos) << r2.error;
 }

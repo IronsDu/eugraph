@@ -62,7 +62,7 @@ src/server/
   eugraph_handler.hpp/cpp     # Thrift handler
 src/shell/
   shell_main.cpp              # Shell 入口
-  shell_repl.hpp/cpp          # REPL 逻辑 (embedded + RPC)
+  shell_repl.hpp/cpp          # REPL 逻辑
   rpc_client.hpp/cpp          # Thrift 客户端封装
 proto/
   eugraph.thrift              # IDL 定义 (含 QueryStreamMeta, ResultRowBatch, batchInsert)

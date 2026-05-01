@@ -16,18 +16,12 @@ static ShellConfig parseArgs(int argc, char* argv[]) {
             config.host = argv[++i];
         } else if ((arg == "--port" || arg == "-p") && i + 1 < argc) {
             config.port = std::atoi(argv[++i]);
-        } else if ((arg == "--data-dir" || arg == "-d") && i + 1 < argc) {
-            config.data_dir = argv[++i];
         } else if (arg == "--help") {
             std::cout << "Usage: eugraph-shell [options]\n"
                       << "Options:\n"
                       << "  --host, -h <host>      Server host (default: 127.0.0.1)\n"
                       << "  --port, -p <port>      Server port (default: 9090)\n"
-                      << "  --data-dir, -d <path>  Local data dir (enables embedded mode)\n"
-                      << "  --help                 Show this help\n"
-                      << "\n"
-                      << "Without --data-dir, the shell connects to a remote server.\n"
-                      << "With --data-dir, the shell runs in embedded mode (no server needed).\n";
+                      << "  --help                 Show this help\n";
             std::exit(0);
         }
     }

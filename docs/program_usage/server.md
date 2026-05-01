@@ -28,8 +28,7 @@ eugraph-server -d ./eugraph-data
 eugraph-loader --data-dir ./social_network-sf0.1-CsvComposite-LongDateFormatter
 
 # 3. 连接 shell
-eugraph-shell                          # RPC 模式
-eugraph-shell -d ./eugraph-data        # 嵌入式模式（无需 server）
+eugraph-shell --host 127.0.0.1 --port 9090
 ```
 
 ## 架构参考

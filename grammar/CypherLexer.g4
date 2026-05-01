@@ -85,6 +85,7 @@ DESC       : 'DESC';
 DESCENDING : 'DESCENDING';
 DETACH     : 'DETACH';
 EXISTS     : 'EXISTS';
+EXPLAIN    : 'EXPLAIN';
 LIMIT      : 'LIMIT';
 MATCH      : 'MATCH';
 MERGE      : 'MERGE';

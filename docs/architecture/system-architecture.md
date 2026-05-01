@@ -110,7 +110,7 @@ fbthrift RPC 服务 + 交互式 Shell。
 |----|------|------|
 | `EuGraphHandler` | `server/` | Thrift handler，DDL 协调，DML 委托 QueryExecutor |
 | `EuGraphRpcClient` | `shell/` | Thrift 客户端封装 |
-| Shell REPL | `shell/` | 交互式命令行（embedded / RPC 双模式） |
+| Shell REPL | `shell/` | 交互式命令行（RPC 连接 server） |
 
 关键设计：
 - **EuGraphHandler 依赖 async 接口**：`IAsyncGraphDataStore` + `IAsyncGraphMetaStore`
@@ -122,17 +122,15 @@ fbthrift RPC 服务 + 交互式 Shell。
 ┌──────────────────────────────────────────────────────┐
 │  Thrift IO 线程 (fbthrift IOThreadPoolExecutor)       │
 │  ├─ 接收请求                                          │
-│  ├─ DDL/DML 通过 IoScheduler::dispatch （server 模式   │
-│  │   因 co_viaIfAsync 内联，实际在 IO 线程上执行）     │
-│  └─ 嵌入式模式下 DML 通过 co_withExecutor 委托给       │
-│       compute 线程池                                  │
+│  ├─ DDL/DML 通过 IoScheduler::dispatch 调度到 IO 线程  │
+│  └─ 需要 IO 时 co_await 挂起，让出 CPU                │
 └──────────────────────┬───────────────────────────────┘
-                       │ co_withExecutor (仅嵌入式模式)
+                       │ co_viaIfAsync (IoScheduler)
                        ▼
 ┌──────────────────────────────────────────────────────┐
 │  Compute 线程池 (CPUThreadPoolExecutor)               │
-│  ├─ 嵌入式模式：解析、逻辑/物理计划、表达式求值        │
-│  ├─ Server 模式：co_viaIfAsync 内联，实际在 IO 线程    │
+│  ├─ 解析、逻辑/物理计划、表达式求值                    │
+│  ├─ co_viaIfAsync 内联，实际在 IO 线程                │
 │  └─ 需要 IO 时 co_await 挂起，让出 CPU                │
 └──────────────────────┬───────────────────────────────┘
                        │ co_viaIfAsync (IoScheduler)

@@ -186,15 +186,13 @@ struct RowBatch { static constexpr size_t CAPACITY = 1024; vector<Row> rows; };
 
 ```
 1. IndexDdlParser::tryParse() → 若为索引 DDL，handleIndexDdl，short-circuit
-2. 检测 EXPLAIN 前缀
-3. parse: 字符串 → AST
-4. buildLogicalPlan: AST → LogicalPlan
-5. 加载元数据: listLabels() + listEdgeLabels() + nextVertexId/EdgeId
-6. beginTran + setTransaction
-7. plan: LogicalPlan → PhysicalOperator
-8. 若 EXPLAIN: formatExplainPlan，rollback，返回
-9. execute: 全量消费 AsyncGenerator<RowBatch> → vector<Row>
-10. commitTran
+2. parse: 字符串 → AST（EXPLAIN 已内置于语法规则，解析为 ExplainStatement 节点）
+3. buildLogicalPlan: AST → LogicalPlan
+4. 加载元数据: listLabels() + listEdgeLabels() + nextVertexId/EdgeId
+5. beginTran + setTransaction
+6. plan: LogicalPlan → PhysicalOperator
+7. 若 EXPLAIN: 收集物理算子 toString，rollback，返回
+8. execute: AsyncGenerator<RowBatch> 由调用方 drain
 ```
 
 ### 流式执行

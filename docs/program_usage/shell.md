@@ -7,20 +7,13 @@
 ## 启动
 
 ```bash
-# RPC 模式（连接远程 server）
 eugraph-shell --host 127.0.0.1 --port 9090
-
-# 嵌入式模式（无需 server，直接本地运行）
-eugraph-shell --data-dir ./eugraph-data
 ```
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--host, -h` | 127.0.0.1 | Server 地址（RPC 模式） |
-| `--port, -p` | 9090 | Server 端口（RPC 模式） |
-| `--data-dir, -d` | 无 | 本地数据目录，指定后进入嵌入式模式 |
-
-嵌入式模式下绕过 RPC，直接调用本地存储层，适用于开发和调试。
+| `--host, -h` | 127.0.0.1 | Server 地址 |
+| `--port, -p` | 9090 | Server 端口 |
 
 ## Shell 命令
 

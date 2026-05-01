@@ -389,9 +389,16 @@ struct StandaloneCall {
     std::optional<Expression> where_pred;
 };
 
+// ==================== EXPLAIN ====================
+
+struct ExplainStatement {
+    std::unique_ptr<RegularQuery> query;
+};
+
 // ==================== 顶层 Statement ====================
 
-using Statement = std::variant<std::unique_ptr<RegularQuery>, std::unique_ptr<StandaloneCall>>;
+using Statement =
+    std::variant<std::unique_ptr<RegularQuery>, std::unique_ptr<StandaloneCall>, std::unique_ptr<ExplainStatement>>;
 
 // ==================== 辅助：创建 Expression 的便捷函数 ====================
 
