@@ -248,8 +248,7 @@ TEST_F(RpcIntegrationTest, CreateIndexLabelNotFound) {
 }
 
 TEST_F(RpcIntegrationTest, UniqueIndexConstraintViaRpc) {
-    createLabel("Person",
-                {makePropDef("name", eugraph::thrift::PropertyType::STRING)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING)});
 
     // Insert a vertex first so backfill has data to check
     auto r0 = execCypher("CREATE (n:Person {name: \"alice\"})");
