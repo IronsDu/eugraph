@@ -24,7 +24,6 @@ std::string formatEdgeLabelList(const std::vector<std::tuple<int, std::string, s
 struct ShellConfig {
     std::string host = "127.0.0.1";
     int port = 9090;
-    std::string data_dir; // if non-empty, run in embedded mode (no server needed)
 };
 
 // Run the interactive REPL. Blocks until :exit.

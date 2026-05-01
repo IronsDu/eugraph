@@ -1,5 +1,5 @@
 
-// Generated from /mnt/f/code/eugraph/grammar/CypherParser.g4 by ANTLR 4.13.2
+// Generated from /home/dodo/code/fuck/eugraph/grammar/CypherParser.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -19,16 +19,16 @@ public:
     STICK = 27, DOLLAR = 28, CALL = 29, YIELD = 30, FILTER = 31, EXTRACT = 32, 
     COUNT = 33, ANY = 34, NONE = 35, SINGLE = 36, ALL = 37, ASC = 38, ASCENDING = 39, 
     BY = 40, CREATE = 41, DELETE = 42, DESC = 43, DESCENDING = 44, DETACH = 45, 
-    EXISTS = 46, LIMIT = 47, MATCH = 48, MERGE = 49, ON = 50, OPTIONAL = 51, 
-    ORDER = 52, REMOVE = 53, RETURN = 54, SET = 55, SKIP_W = 56, WHERE = 57, 
-    WITH = 58, UNION = 59, UNWIND = 60, AND = 61, AS = 62, CONTAINS = 63, 
-    DISTINCT = 64, ENDS = 65, IN = 66, IS = 67, NOT = 68, OR = 69, STARTS = 70, 
-    XOR = 71, FALSE = 72, TRUE = 73, NULL_W = 74, CONSTRAINT = 75, DO = 76, 
-    FOR = 77, REQUIRE = 78, UNIQUE = 79, CASE = 80, WHEN = 81, THEN = 82, 
-    ELSE = 83, END = 84, MANDATORY = 85, SCALAR = 86, OF = 87, ADD = 88, 
-    DROP = 89, ID = 90, ESC_LITERAL = 91, CHAR_LITERAL = 92, STRING_LITERAL = 93, 
-    DIGIT = 94, FLOAT = 95, WS = 96, COMMENT = 97, LINE_COMMENT = 98, ERRCHAR = 99, 
-    Letter = 100
+    EXISTS = 46, EXPLAIN = 47, LIMIT = 48, MATCH = 49, MERGE = 50, ON = 51, 
+    OPTIONAL = 52, ORDER = 53, REMOVE = 54, RETURN = 55, SET = 56, SKIP_W = 57, 
+    WHERE = 58, WITH = 59, UNION = 60, UNWIND = 61, AND = 62, AS = 63, CONTAINS = 64, 
+    DISTINCT = 65, ENDS = 66, IN = 67, IS = 68, NOT = 69, OR = 70, STARTS = 71, 
+    XOR = 72, FALSE = 73, TRUE = 74, NULL_W = 75, CONSTRAINT = 76, DO = 77, 
+    FOR = 78, REQUIRE = 79, UNIQUE = 80, CASE = 81, WHEN = 82, THEN = 83, 
+    ELSE = 84, END = 85, MANDATORY = 86, SCALAR = 87, OF = 88, ADD = 89, 
+    DROP = 90, ID = 91, ESC_LITERAL = 92, CHAR_LITERAL = 93, STRING_LITERAL = 94, 
+    DIGIT = 95, FLOAT = 96, WS = 97, COMMENT = 98, LINE_COMMENT = 99, ERRCHAR = 100, 
+    Letter = 101
   };
 
   enum {
@@ -187,6 +187,7 @@ public:
     QueryContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
     RegularQueryContext *regularQuery();
+    antlr4::tree::TerminalNode *EXPLAIN();
     StandaloneCallContext *standaloneCall();
 
 

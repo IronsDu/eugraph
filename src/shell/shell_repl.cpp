@@ -1,25 +1,15 @@
 #include "shell/shell_repl.hpp"
-#include "server/eugraph_handler.hpp"
 #include "shell/rpc_client.hpp"
 
-#include "compute_service/executor/query_executor.hpp"
 #include "gen-cpp2/eugraph_types.h"
-#include "storage/data/async_graph_data_store.hpp"
-#include "storage/data/sync_graph_data_store.hpp"
-#include "storage/io_scheduler.hpp"
-#include "storage/meta/async_graph_meta_store.hpp"
-#include "storage/meta/sync_graph_meta_store.hpp"
 
 #include <linenoise.h>
 
-#include <folly/coro/BlockingWait.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <chrono>
-#include <filesystem>
 #include <iostream>
-#include <memory>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -48,29 +38,6 @@ std::string resultValueToString(const ResultValue& rv) {
         return rv.get_vertex_json();
     case ResultValue::Type::edge_json:
         return rv.get_edge_json();
-    }
-    return "?";
-}
-
-// Format a compute::Value (from executor) to display string.
-std::string valueToString(const Value& val) {
-    if (std::holds_alternative<std::monostate>(val)) {
-        return "null";
-    } else if (std::holds_alternative<bool>(val)) {
-        return std::get<bool>(val) ? "true" : "false";
-    } else if (std::holds_alternative<int64_t>(val)) {
-        return std::to_string(std::get<int64_t>(val));
-    } else if (std::holds_alternative<double>(val)) {
-        return std::to_string(std::get<double>(val));
-    } else if (std::holds_alternative<std::string>(val)) {
-        return std::get<std::string>(val);
-    } else if (std::holds_alternative<VertexValue>(val)) {
-        return "v[" + std::to_string(std::get<VertexValue>(val).id) + "]";
-    } else if (std::holds_alternative<EdgeValue>(val)) {
-        auto& e = std::get<EdgeValue>(val);
-        return "e[" + std::to_string(e.id) + "]";
-    } else if (std::holds_alternative<ListValue>(val)) {
-        return "[...]";
     }
     return "?";
 }
@@ -298,153 +265,6 @@ static void runReplLoop(const std::string& mode_label, CommandHandler handler) {
     }
 }
 
-// ==================== Embedded mode REPL ====================
-
-static void runEmbeddedRepl(const ShellConfig& config) {
-    // Initialize embedded database
-    std::string db_path = config.data_dir;
-    if (db_path.empty()) {
-        db_path = "/tmp/eugraph-shell-" + std::to_string(getpid());
-    }
-
-    std::filesystem::create_directories(db_path + "/data");
-    std::filesystem::create_directories(db_path + "/meta");
-
-    auto sync_data = std::make_unique<SyncGraphDataStore>();
-    if (!sync_data->open(db_path + "/data")) {
-        std::cerr << "Error: Failed to open data store at " << db_path << "/data" << std::endl;
-        return;
-    }
-
-    auto sync_meta = std::make_unique<SyncGraphMetaStore>();
-    if (!sync_meta->open(db_path + "/meta")) {
-        std::cerr << "Error: Failed to open meta store at " << db_path << "/meta" << std::endl;
-        return;
-    }
-
-    auto io_scheduler = std::make_shared<IoScheduler>(2);
-    auto async_data = std::make_unique<AsyncGraphDataStore>(*sync_data, *io_scheduler);
-
-    auto async_meta = std::make_unique<AsyncGraphMetaStore>();
-    auto opened = folly::coro::blockingWait(async_meta->open(*sync_meta, *io_scheduler));
-    if (!opened) {
-        std::cerr << "Error: Failed to initialize async meta store" << std::endl;
-        return;
-    }
-
-    compute::QueryExecutor executor(*async_data, *async_meta, compute::QueryExecutor::Config{});
-    server::EuGraphHandler handler(*async_data, *async_meta, executor);
-
-    std::cout << "Database: " << db_path << std::endl;
-
-    auto cmd_handler = [&handler, &executor](const std::string& cmd, const std::string& args,
-                                             const std::string& accumulated) {
-        if (cmd == ":help") {
-            std::cout << "Available commands:" << std::endl;
-            std::cout << "  :create-label <name> [prop1:type1 prop2:type2 ...]" << std::endl;
-            std::cout << "  :create-edge-label <name> [prop1:type1 ...]" << std::endl;
-            std::cout << "  :list-labels                    List all labels" << std::endl;
-            std::cout << "  :list-edge-labels               List all edge labels" << std::endl;
-            std::cout << "  :help                           Show this help" << std::endl;
-            std::cout << "  :exit / :quit                   Exit shell" << std::endl;
-            std::cout << std::endl;
-            std::cout << "Any other input is treated as a Cypher query (end with ;)." << std::endl;
-        } else if (cmd == ":create-label") {
-            if (args.empty()) {
-                std::cerr << "Usage: :create-label <name> [prop1:type1 ...]" << std::endl;
-                return;
-            }
-            std::istringstream iss(args);
-            std::string name;
-            iss >> name;
-            std::string rest;
-            std::getline(iss, rest);
-            auto props = parsePropertyDefs(rest);
-            auto resp = folly::coro::blockingWait(
-                handler.co_createLabel(std::make_unique<std::string>(name),
-                                       std::make_unique<std::vector<PropertyDefThrift>>(std::move(props))));
-            std::cout << formatLabelCreated(resp->name().value(), resp->id().value());
-        } else if (cmd == ":create-edge-label") {
-            if (args.empty()) {
-                std::cerr << "Usage: :create-edge-label <name> [prop1:type1 ...]" << std::endl;
-                return;
-            }
-            std::istringstream iss(args);
-            std::string name;
-            iss >> name;
-            std::string rest;
-            std::getline(iss, rest);
-            auto props = parsePropertyDefs(rest);
-            auto resp = folly::coro::blockingWait(
-                handler.co_createEdgeLabel(std::make_unique<std::string>(name),
-                                           std::make_unique<std::vector<PropertyDefThrift>>(std::move(props))));
-            std::cout << formatEdgeLabelCreated(resp->name().value(), resp->id().value());
-        } else if (cmd == ":list-labels") {
-            auto labels = folly::coro::blockingWait(handler.co_listLabels());
-            if (labels->empty()) {
-                std::cout << "(no labels)" << std::endl;
-            } else {
-                std::vector<std::tuple<int, std::string, std::string>> rows;
-                for (const auto& l : *labels) {
-                    std::string props_str;
-                    for (size_t i = 0; i < l.properties()->size(); i++) {
-                        if (i > 0)
-                            props_str += ", ";
-                        props_str += l.properties()->at(i).name().value();
-                    }
-                    if (props_str.empty())
-                        props_str = "(none)";
-                    rows.push_back({l.id().value(), l.name().value(), props_str});
-                }
-                std::cout << formatLabelList(rows);
-            }
-        } else if (cmd == ":list-edge-labels") {
-            auto labels = folly::coro::blockingWait(handler.co_listEdgeLabels());
-            if (labels->empty()) {
-                std::cout << "(no edge labels)" << std::endl;
-            } else {
-                std::vector<std::tuple<int, std::string, std::string, bool>> rows;
-                for (const auto& l : *labels) {
-                    rows.push_back({l.id().value(), l.name().value(), "(none)", l.directed().value()});
-                }
-                std::cout << formatEdgeLabelList(rows);
-            }
-        } else if (cmd.empty()) {
-            // Cypher query - use executor directly for embedded mode
-            std::string query = accumulated;
-            if (!query.empty() && query.back() == ';') {
-                query.pop_back();
-            }
-            auto result = folly::coro::blockingWait(executor.executeAsync(query));
-            if (!result.error.empty()) {
-                std::cerr << "Error: " << result.error << std::endl;
-            } else if (result.columns.empty()) {
-                std::cout << "OK" << std::endl;
-            } else {
-                std::vector<std::vector<std::string>> rows;
-                for (const auto& row : result.rows) {
-                    std::vector<std::string> cells;
-                    for (const auto& val : row) {
-                        cells.push_back(valueToString(val));
-                    }
-                    rows.push_back(std::move(cells));
-                }
-                std::cout << formatTable(result.columns, rows);
-                std::cout << result.rows.size() << " row" << (result.rows.size() == 1 ? "" : "s");
-            }
-        } else {
-            std::cerr << "Unknown command: " << cmd << std::endl;
-            std::cerr << "Type :help for available commands." << std::endl;
-        }
-    };
-
-    runReplLoop("embedded", cmd_handler);
-
-    folly::coro::blockingWait(async_meta->close());
-    sync_data->close();
-    sync_meta->close();
-}
-
 // ==================== RPC mode REPL ====================
 
 static void runRpcRepl(const ShellConfig& config) {
@@ -574,13 +394,7 @@ static void runRpcRepl(const ShellConfig& config) {
 // ==================== Public REPL entry ====================
 
 void runRepl(const ShellConfig& config) {
-    if (config.data_dir.empty()) {
-        // No data dir → RPC mode
-        runRpcRepl(config);
-    } else {
-        // Data dir provided → embedded mode
-        runEmbeddedRepl(config);
-    }
+    runRpcRepl(config);
 }
 
 } // namespace shell

@@ -7,16 +7,13 @@
 ## 一、整体流水线
 
 ```
-Cypher 文本 → Parser → AST → LogicalPlanBuilder → LogicalPlan
+Cypher 文本 → Parser → AST（含 EXPLAIN） → LogicalPlanBuilder → LogicalPlan
 → PhysicalPlanner → PhysicalOperator 树
 → execute() → AsyncGenerator<RowBatch>
 → (streaming) Thrift ServerStream → Client
-→ (embedded) 全量物化 → vector<Row>
 ```
 
-两种执行路径：
-- **嵌入式**（Shell embedded 模式）：`QueryExecutor::executeAsync()` → 全量收集 → `ExecutionResult`
-- **流式**（RPC 模式）：`QueryExecutor::prepareStream()` → `StreamContext` → `makeStreamGenerator` → fbthrift `ServerStream<ResultRowBatch>`
+执行路径：`QueryExecutor::prepareStream()` → `StreamContext` → `makeStreamGenerator` → fbthrift `ServerStream<ResultRowBatch>`。全量物化由调用方自行 drain generator。
 
 ---
 
@@ -62,7 +59,7 @@ Compute 线程                     IO 线程
 
 Thrift server 的 handler 和 IO 共用同一 `IOThreadPoolExecutor`。因此 RPC 模式下 handler 已在 IO 线程上，`IoScheduler::dispatch` 全部内联——物理算子执行（包括表达式求值）实际上都在 IO 线程上运行，Compute 线程池未被使用。
 
-嵌入式模式下，`executeAsync` 通过 `co_withExecutor(compute_pool_)` 调度到 Compute 线程池，IO 调用正常跨线程调度。
+Server 模式下 handler 已在 IO 线程上，`IoScheduler::dispatch` 全部内联。调用方可自行通过 `co_withExecutor` 调度到 Compute 线程池。
 
 ---
 
@@ -127,7 +124,7 @@ AsyncGenerator<RowBatch>
 
 2. **Sort/Aggregate 是阻断算子**：无界数据集会导致 OOM，当前无溢写磁盘机制。
 
-3. **Embedded 模式全量物化**：`executeAsync` 收集所有 batch 到内存后才 commit，大结果集内存压力大。
+3. **全量物化**：调用方若 drain 整个 generator 到内存后才 commit，大结果集内存压力大。
 
 4. **`co_viaIfAsync` 内联语义**：RPC 模式下整个物理算子树在 IO 线程上执行，无计算隔离。
 

@@ -49,8 +49,16 @@ private:
     // === Query ===
 
     Statement buildQuery(AP::QueryContext* ctx) {
-        if (ctx->regularQuery())
-            return Statement(buildRegularQuery(ctx->regularQuery()));
+        bool is_explain = (ctx->EXPLAIN() != nullptr);
+        if (ctx->regularQuery()) {
+            auto rq = buildRegularQuery(ctx->regularQuery());
+            if (is_explain) {
+                auto es = std::make_unique<ExplainStatement>();
+                es->query = std::move(rq);
+                return Statement(std::move(es));
+            }
+            return Statement(std::move(rq));
+        }
         return Statement(buildStandaloneCall(ctx->standaloneCall()));
     }
 

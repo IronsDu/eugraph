@@ -140,11 +140,8 @@ ctest --preset=debug --verbose
 # 服务端
 ./build/release/eugraph-server -d /path/to/data
 
-# 客户端 Shell（RPC 模式）
+# 客户端 Shell
 ./build/release/eugraph-shell --host ::1 --port 9090
-
-# 客户端 Shell（嵌入式模式，无需 server）
-./build/release/eugraph-shell -d /path/to/data
 
 # CSV 批量导入
 ./build/release/eugraph-loader --data-dir /path/to/csv --host 127.0.0.1 --port 9090

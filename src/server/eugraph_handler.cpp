@@ -33,7 +33,9 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
         total_rows += batch->rows.size();
         co_yield std::move(thrift_batch);
     }
-    co_await ctx->store->commitTran(ctx->txn);
+    if (ctx->should_commit) {
+        co_await ctx->store->commitTran(ctx->txn);
+    }
     spdlog::info("[handler] executeCypher stream done, {} rows, took={}ms", total_rows, nowMs() - t0);
 }
 } // namespace

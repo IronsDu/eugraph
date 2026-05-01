@@ -72,9 +72,48 @@ protected:
     }
 };
 
-// Helper: run query and collect all rows
+// Helper: drain prepareStream into ExecutionResult
+static ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
+    auto ctx = blockingWait(executor.prepareStream(query));
+    ExecutionResult result;
+    if (!ctx->error.empty()) {
+        result.error = std::move(ctx->error);
+        return result;
+    }
+    result.columns = std::move(ctx->columns);
+    auto gen = std::move(ctx->gen);
+    blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        while (auto batch = co_await gen.next()) {
+            for (auto& row : batch->rows) {
+                result.rows.push_back(std::move(row));
+            }
+        }
+        if (ctx->should_commit) {
+            co_await ctx->store->commitTran(ctx->txn);
+        }
+    }));
+    return result;
+}
+
+// Helper: drain prepareStream into rows
 static std::vector<Row> runQuery(QueryExecutor& executor, const std::string& query) {
-    auto result = blockingWait(executor.executeAsync(query));
+    ExecutionResult result;
+    auto ctx = blockingWait(executor.prepareStream(query));
+    if (!ctx->error.empty()) {
+        return {};
+    }
+    result.columns = std::move(ctx->columns);
+    auto gen = std::move(ctx->gen);
+    blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+        while (auto batch = co_await gen.next()) {
+            for (auto& row : batch->rows) {
+                result.rows.push_back(std::move(row));
+            }
+        }
+        if (ctx->should_commit) {
+            co_await ctx->store->commitTran(ctx->txn);
+        }
+    }));
     return result.rows;
 }
 
@@ -293,7 +332,7 @@ TEST_F(IndexE2ETest, DdlCreateIndexViaExecutor) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
-    auto result = blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+    auto result = execSync(executor, "CREATE INDEX idx_age FOR (n:Person) ON (n.age)");
 
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
@@ -317,17 +356,17 @@ TEST_F(IndexE2ETest, DdlShowIndexesViaExecutor) {
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
 
     // No indexes initially
-    auto result = blockingWait(executor.executeAsync("SHOW INDEXES"));
+    auto result = execSync(executor, "SHOW INDEXES");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 0u);
     ASSERT_EQ(result.columns.size(), 5u);
     EXPECT_EQ(result.columns[0], "name");
 
     // Create an index
-    blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+    execSync(executor, "CREATE INDEX idx_age FOR (n:Person) ON (n.age)");
 
     // Now SHOW INDEXES should return 1 row
-    result = blockingWait(executor.executeAsync("SHOW INDEXES"));
+    result = execSync(executor, "SHOW INDEXES");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "idx_age");
@@ -344,10 +383,10 @@ TEST_F(IndexE2ETest, DdlDropIndexViaExecutor) {
                 });
 
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
-    blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+    execSync(executor, "CREATE INDEX idx_age FOR (n:Person) ON (n.age)");
 
     // Drop it
-    auto result = blockingWait(executor.executeAsync("DROP INDEX idx_age"));
+    auto result = execSync(executor, "DROP INDEX idx_age");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_NE(std::get<std::string>(result.rows[0][0]).find("dropped"), std::string::npos);
 
@@ -358,7 +397,7 @@ TEST_F(IndexE2ETest, DdlDropIndexViaExecutor) {
 
 TEST_F(IndexE2ETest, DdlCreateIndexLabelNotFound) {
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
-    auto result = blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:NoSuchLabel) ON (n.age)"));
+    auto result = execSync(executor, "CREATE INDEX idx_age FOR (n:NoSuchLabel) ON (n.age)");
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("Label not found"), std::string::npos);
 }
@@ -383,7 +422,7 @@ TEST_F(IndexE2ETest, EndToEndCreateIndexAndQuery) {
     ASSERT_EQ(rows.size(), 1u);
 
     // Create index (data already exists — backfill should populate index)
-    auto ddl_result = blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+    auto ddl_result = execSync(executor, "CREATE INDEX idx_age FOR (n:Person) ON (n.age)");
     ASSERT_TRUE(ddl_result.error.empty()) << ddl_result.error;
 
     // Query via IndexScan should now return correct results after backfill
@@ -391,7 +430,7 @@ TEST_F(IndexE2ETest, EndToEndCreateIndexAndQuery) {
     ASSERT_EQ(rows.size(), 1u);
 
     // SHOW INDEXES
-    auto show = blockingWait(executor.executeAsync("SHOW INDEXES"));
+    auto show = execSync(executor, "SHOW INDEXES");
     ASSERT_EQ(show.rows.size(), 1u);
     EXPECT_EQ(std::get<std::string>(show.rows[0][0]), "idx_age");
 }
@@ -408,19 +447,19 @@ TEST_F(IndexE2ETest, DdlCreateDuplicateIndex) {
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
 
     // First index on name should succeed
-    auto result = blockingWait(executor.executeAsync("CREATE INDEX idx_name FOR (n:Person) ON (n.name)"));
+    auto result = execSync(executor, "CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
     ASSERT_TRUE(result.error.empty()) << result.error;
 
     // Same name should fail
-    result = blockingWait(executor.executeAsync("CREATE INDEX idx_name FOR (n:Person) ON (n.name)"));
+    result = execSync(executor, "CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
     EXPECT_FALSE(result.error.empty());
 
     // Different name but same property should fail (duplicate prop set)
-    result = blockingWait(executor.executeAsync("CREATE INDEX idx_name2 FOR (n:Person) ON (n.name)"));
+    result = execSync(executor, "CREATE INDEX idx_name2 FOR (n:Person) ON (n.name)");
     EXPECT_FALSE(result.error.empty());
 
     // Different property on same label should succeed
-    result = blockingWait(executor.executeAsync("CREATE INDEX idx_age FOR (n:Person) ON (n.age)"));
+    result = execSync(executor, "CREATE INDEX idx_age FOR (n:Person) ON (n.age)");
     ASSERT_TRUE(result.error.empty()) << result.error;
 }
 
@@ -439,7 +478,7 @@ TEST_F(IndexE2ETest, DdlCreateUniqueIndexWithDuplicateData) {
     runQuery(executor, "CREATE (n:Person {name: 'alice'})");
 
     // Create unique index — should fail due to duplicate values
-    auto result = blockingWait(executor.executeAsync("CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)"));
+    auto result = execSync(executor, "CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)");
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("duplicate"), std::string::npos);
 
@@ -462,7 +501,7 @@ TEST_F(IndexE2ETest, DdlCreateUniqueIndexWithUniqueData) {
     runQuery(executor, "CREATE (n:Person {name: 'bob'})");
 
     // Create unique index — should succeed
-    auto result = blockingWait(executor.executeAsync("CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)"));
+    auto result = execSync(executor, "CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)");
     ASSERT_TRUE(result.error.empty()) << result.error;
 
     // Verify index is in PUBLIC state
@@ -484,7 +523,7 @@ TEST_F(IndexE2ETest, InsertDuplicateValueOnUniqueIndex) {
 
     // Create unique index on clean data
     runQuery(executor, "CREATE (n:Person {name: 'alice'})");
-    auto ddl = blockingWait(executor.executeAsync("CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)"));
+    auto ddl = execSync(executor, "CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)");
     ASSERT_TRUE(ddl.error.empty()) << ddl.error;
 
     // Verify it's PUBLIC
@@ -493,13 +532,13 @@ TEST_F(IndexE2ETest, InsertDuplicateValueOnUniqueIndex) {
     EXPECT_EQ(info->state, IndexState::PUBLIC);
 
     // Insert a different name — should succeed
-    auto result = blockingWait(executor.executeAsync("CREATE (n:Person {name: 'bob'})"));
+    auto result = execSync(executor, "CREATE (n:Person {name: 'bob'})");
     EXPECT_TRUE(result.error.empty()) << result.error;
 
     // Insert duplicate name — should fail (unique constraint), vertex not created
-    result = blockingWait(executor.executeAsync("CREATE (n:Person {name: 'alice'})"));
+    result = execSync(executor, "CREATE (n:Person {name: 'alice'})");
     EXPECT_TRUE(result.rows.empty());
     // Verify only 1 'alice' vertex exists
-    auto scan_result = blockingWait(executor.executeAsync("MATCH (n:Person) WHERE n.name = 'alice' RETURN n"));
+    auto scan_result = execSync(executor, "MATCH (n:Person) WHERE n.name = 'alice' RETURN n");
     EXPECT_EQ(scan_result.rows.size(), 1u);
 }
