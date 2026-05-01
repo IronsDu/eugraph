@@ -304,6 +304,31 @@ CsvIdMap loadVertices(shell::EuGraphRpcClient& client, const std::vector<CsvFile
     return id_map;
 }
 
+void createUniqueIdIndexes(shell::EuGraphRpcClient& client, const std::vector<LabelSchema>& schemas) {
+    for (const auto& schema : schemas) {
+        if (schema.properties.empty())
+            continue;
+
+        const auto& id_prop_name = schema.properties[0].name;
+        std::string index_name = fmt::format("idx_{}_{}_unique", schema.name, id_prop_name);
+        std::string query =
+            fmt::format("CREATE UNIQUE INDEX {} FOR (n:{}) ON (n.{})", index_name, schema.name, id_prop_name);
+
+        try {
+            spdlog::info("[loader] Creating unique index '{}' on label '{}' property '{}'", index_name, schema.name,
+                         id_prop_name);
+            auto [meta, stream] = client.executeCypher(query);
+            if (meta.columns()->empty()) {
+                spdlog::info("[loader] Unique index '{}' created successfully", index_name);
+            } else {
+                spdlog::warn("[loader] Unexpected response from CREATE UNIQUE INDEX '{}'", index_name);
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("[loader] Failed to create unique index '{}': {}", index_name, e.what());
+        }
+    }
+}
+
 void loadEdges(shell::EuGraphRpcClient& client, const std::vector<CsvFileInfo>& edge_files,
                const std::vector<EdgeTypeSchema>& edge_schemas, const CsvIdMap& id_map, int batch_size) {
     // Build edge type -> schema lookup
