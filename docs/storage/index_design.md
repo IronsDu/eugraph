@@ -58,7 +58,8 @@ DROP INDEX → DELETE_ONLY → (清理完成) → 删除元数据
 `IndexKeyCodec`（`src/storage/kv/index_key_codec.hpp`）：
 
 ```
-索引键格式：{sortable_property_value}{entity_id:uint64 BE}
+单属性索引键格式：{sortable_property_value}{entity_id:uint64 BE}
+复合索引键格式：{sortable_value1}{sortable_value2}...{entity_id:uint64 BE}
 ```
 
 ### 可排序属性值编码
@@ -81,7 +82,9 @@ DROP INDEX → DELETE_ONLY → (清理完成) → 删除元数据
 
 ```cypher
 CREATE INDEX idx_name FOR (n:Label) ON (n.prop)
+CREATE INDEX idx_name FOR (n:Label) ON (n.prop1, n.prop2)             -- 复合索引
 CREATE UNIQUE INDEX idx_name FOR (n:Label) ON (n.prop)
+CREATE UNIQUE INDEX idx_name FOR (n:Label) ON (n.prop1, n.prop2)     -- 复合唯一索引
 CREATE INDEX idx_name FOR ()-[r:TYPE]-() ON (r.prop)
 DROP INDEX idx_name
 SHOW INDEXES
@@ -152,11 +155,12 @@ WT 表格式：`key_format=u,value_format=u`（raw bytes）。
 - IndexScanPhysicalOp + PhysicalPlanner 索引优化
 - CreateNodePhysicalOp 写入路径索引维护（含唯一约束前置检查）
 - 重复索引检测（同标签同属性组合拒绝建索引）
+- 复合索引（多属性索引编码、多值唯一约束、AND 联合 IndexScan 优化）
 
 ### 待完成
+- 边索引完整支持（CREATE EDGE INDEX 仅完成元数据层，回填、写入路径维护、IndexScan 均未实现）
 - 写入路径完整索引维护（deleteVertex、putVertexProperty、SET/REMOVE 等）
 - DdlWorker 后台异步执行
 - 崩溃恢复（重启后恢复未完成 DDL 状态）
 - Thrift RPC 索引接口
 - 延迟物理删表（DROP INDEX 后不立即删 WT 表，重启时清理）
-- 复合索引（多属性索引编码、多值唯一约束）

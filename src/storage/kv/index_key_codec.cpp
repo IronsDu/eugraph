@@ -70,8 +70,27 @@ uint64_t IndexKeyCodec::decodeEntityId(std::string_view key) {
     return id;
 }
 
+std::string IndexKeyCodec::encodeSortableValues(const std::vector<PropertyValue>& values) {
+    std::string buf;
+    buf.reserve(values.size() * 16);
+    for (const auto& v : values)
+        buf.append(encodeSortableValue(v));
+    return buf;
+}
+
+std::string IndexKeyCodec::encodeIndexKey(const std::vector<PropertyValue>& values, uint64_t entity_id) {
+    auto buf = encodeSortableValues(values);
+    for (int i = 7; i >= 0; --i)
+        buf.push_back(static_cast<char>((entity_id >> (i * 8)) & 0xFF));
+    return buf;
+}
+
 std::string IndexKeyCodec::encodeEqualityPrefix(const PropertyValue& value) {
     return encodeSortableValue(value);
+}
+
+std::string IndexKeyCodec::encodeEqualityPrefix(const std::vector<PropertyValue>& values) {
+    return encodeSortableValues(values);
 }
 
 } // namespace eugraph
