@@ -170,7 +170,7 @@ TEST_F(IndexE2ETest, QueryByIndexEquality) {
     // Insert test data
     auto updated_def = blockingWait(env.async_meta->getLabelDef("Person"));
     for (int i = 1; i <= 5; ++i) {
-        Properties props(3); // index 0 unused, 1=name, 2=age
+        Properties props(2);
         props[name_prop_id] = std::string("person_") + std::to_string(i);
         props[age_prop_id] = int64_t(i * 10);
         insertVertexWithIndex(env, label_id, static_cast<VertexId>(i), props, updated_def->indexes);
@@ -301,9 +301,9 @@ TEST_F(IndexE2ETest, IndexRangeQuery) {
 
     auto updated_def = blockingWait(env.async_meta->getLabelDef("Person"));
     for (int i = 1; i <= 10; ++i) {
-        Properties props(3);
-        props[1] = std::string("p") + std::to_string(i);
-        props[2] = int64_t(i * 10);
+        Properties props(2);
+        props[0] = std::string("p") + std::to_string(i);
+        props[1] = int64_t(i * 10);
         insertVertexWithIndex(env, label_id, static_cast<VertexId>(i), props, updated_def->indexes);
     }
 

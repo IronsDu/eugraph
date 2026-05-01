@@ -1196,9 +1196,9 @@ protected:
 
         for (const auto& p : data) {
             Properties props;
-            props.resize(3); // prop_id 1=age, prop_id 2=city
-            props[1] = PropertyValue(p.age);
-            props[2] = PropertyValue(p.city);
+            props.resize(2);
+            props[0] = PropertyValue(p.age);
+            props[1] = PropertyValue(p.city);
             std::vector<std::pair<LabelId, Properties>> label_props = {{PERSON_LABEL, std::move(props)}};
             ASSERT_TRUE(sync_data_->insertVertex(txn, p.vid, label_props));
         }

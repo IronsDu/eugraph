@@ -317,12 +317,8 @@ void createUniqueIdIndexes(shell::EuGraphRpcClient& client, const std::vector<La
         try {
             spdlog::info("[loader] Creating unique index '{}' on label '{}' property '{}'", index_name, schema.name,
                          id_prop_name);
-            auto [meta, stream] = client.executeCypher(query);
-            if (meta.columns()->empty()) {
-                spdlog::info("[loader] Unique index '{}' created successfully", index_name);
-            } else {
-                spdlog::warn("[loader] Unexpected response from CREATE UNIQUE INDEX '{}'", index_name);
-            }
+            client.executeCypher(query);
+            spdlog::info("[loader] Unique index '{}' created successfully", index_name);
         } catch (const std::exception& e) {
             spdlog::warn("[loader] Failed to create unique index '{}': {}", index_name, e.what());
         }
