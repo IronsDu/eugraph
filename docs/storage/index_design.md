@@ -144,17 +144,19 @@ WT 表格式：`key_format=u,value_format=u`（raw bytes）。
 - IndexState 枚举、IndexDef.state、EdgeLabelDef.indexes
 - IndexKeyCodec（可排序编码 + 等值/范围扫描）
 - ISyncGraphDataStore 索引方法 + SyncGraphDataStore 实现
-- IAsyncGraphDataStore async 包装
+- IAsyncGraphDataStore async 包装（含 checkUniqueConstraint）
 - IAsyncGraphMetaStore 索引元数据 CRUD（createVertexIndex/createEdgeIndex/dropIndex/listIndexes）
 - MetadataCodec 索引序列化/反序列化
-- IndexDdlParser（CREATE/DROP/SHOW INDEX）
-- QueryExecutor DDL 路由 + 同步回填
+- IndexDdlParser（CREATE/DROP/SHOW INDEX，含 UNIQUE）
+- QueryExecutor DDL 路由 + 同步回填（含唯一索引重复检测 → ERROR）
 - IndexScanPhysicalOp + PhysicalPlanner 索引优化
-- CreateNodePhysicalOp 写入路径索引维护
+- CreateNodePhysicalOp 写入路径索引维护（含唯一约束前置检查）
+- 重复索引检测（同标签同属性组合拒绝建索引）
 
 ### 待完成
-- 写入路径完整索引维护（deleteVertex、putVertexProperty 等）
+- 写入路径完整索引维护（deleteVertex、putVertexProperty、SET/REMOVE 等）
 - DdlWorker 后台异步执行
 - 崩溃恢复（重启后恢复未完成 DDL 状态）
 - Thrift RPC 索引接口
 - 延迟物理删表（DROP INDEX 后不立即删 WT 表，重启时清理）
+- 复合索引（多属性索引编码、多值唯一约束）

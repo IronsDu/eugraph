@@ -189,6 +189,99 @@ TEST_F(RpcIntegrationTest, CreateAndListEdgeLabels) {
     EXPECT_EQ(labels.size(), 1);
 }
 
+// ==================== Index DDL via RPC ====================
+
+TEST_F(RpcIntegrationTest, CreateAndShowIndexes) {
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift::PropertyType::INT64),
+                           makePropDef("city", eugraph::thrift::PropertyType::STRING)});
+
+    // CREATE INDEX (non-unique)
+    auto r1 = execCypher("CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
+    EXPECT_TRUE(r1.error.empty()) << "CREATE INDEX error: " << r1.error;
+    ASSERT_EQ(r1.rows.size(), 1);
+    EXPECT_NE(r1.rows[0].values()->at(0).get_string_val().find("Index created"), std::string::npos);
+
+    // CREATE UNIQUE INDEX
+    auto r2 = execCypher("CREATE UNIQUE INDEX idx_city FOR (n:Person) ON (n.city)");
+    EXPECT_TRUE(r2.error.empty()) << "CREATE UNIQUE INDEX error: " << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    EXPECT_NE(r2.rows[0].values()->at(0).get_string_val().find("Index created"), std::string::npos);
+
+    // SHOW INDEXES (list all)
+    auto r3 = execCypher("SHOW INDEXES");
+    EXPECT_TRUE(r3.error.empty()) << "SHOW INDEXES error: " << r3.error;
+    ASSERT_EQ(r3.rows.size(), 2);
+    // Verify idx_name (non-unique)
+    EXPECT_EQ(r3.rows[0].values()->at(0).get_string_val(), "idx_name");
+    EXPECT_EQ(r3.rows[0].values()->at(1).get_string_val(), "Person");
+    EXPECT_EQ(r3.rows[0].values()->at(2).get_string_val(), "name");
+    EXPECT_EQ(r3.rows[0].values()->at(3).get_string_val(), "false");
+    EXPECT_EQ(r3.rows[0].values()->at(4).get_string_val(), "PUBLIC");
+    // Verify idx_city (unique)
+    EXPECT_EQ(r3.rows[1].values()->at(0).get_string_val(), "idx_city");
+    EXPECT_EQ(r3.rows[1].values()->at(1).get_string_val(), "Person");
+    EXPECT_EQ(r3.rows[1].values()->at(2).get_string_val(), "city");
+    EXPECT_EQ(r3.rows[1].values()->at(3).get_string_val(), "true");
+    EXPECT_EQ(r3.rows[1].values()->at(4).get_string_val(), "PUBLIC");
+}
+
+TEST_F(RpcIntegrationTest, DropIndex) {
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING)});
+    execCypher("CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
+
+    auto r1 = execCypher("DROP INDEX idx_name");
+    EXPECT_TRUE(r1.error.empty()) << "DROP INDEX error: " << r1.error;
+    ASSERT_EQ(r1.rows.size(), 1);
+    EXPECT_NE(r1.rows[0].values()->at(0).get_string_val().find("Index dropped"), std::string::npos);
+
+    // Verify it's gone
+    auto r2 = execCypher("SHOW INDEXES");
+    EXPECT_TRUE(r2.error.empty());
+    ASSERT_EQ(r2.rows.size(), 0);
+}
+
+TEST_F(RpcIntegrationTest, CreateIndexLabelNotFound) {
+    auto r = execCypher("CREATE INDEX idx_x FOR (n:NoSuchLabel) ON (n.prop)");
+    EXPECT_FALSE(r.error.empty());
+    EXPECT_NE(r.error.find("Label not found"), std::string::npos);
+}
+
+TEST_F(RpcIntegrationTest, UniqueIndexConstraintViaRpc) {
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING)});
+
+    // Insert a vertex first so backfill has data to check
+    auto r0 = execCypher("CREATE (n:Person {name: \"alice\"})");
+    EXPECT_TRUE(r0.error.empty()) << "CREATE error: " << r0.error;
+
+    // Create unique index after data exists — backfill should succeed
+    auto r1 = execCypher("CREATE UNIQUE INDEX idx_name FOR (n:Person) ON (n.name)");
+    EXPECT_TRUE(r1.error.empty()) << "CREATE UNIQUE INDEX error: " << r1.error;
+    ASSERT_EQ(r1.rows.size(), 1);
+
+    // Verify PUBLIC state
+    auto r2 = execCypher("SHOW INDEXES");
+    EXPECT_TRUE(r2.error.empty());
+    ASSERT_EQ(r2.rows.size(), 1);
+    EXPECT_EQ(r2.rows[0].values()->at(3).get_string_val(), "true");
+    EXPECT_EQ(r2.rows[0].values()->at(4).get_string_val(), "PUBLIC");
+
+    // Insert different name — should succeed
+    auto r3 = execCypher("CREATE (n:Person {name: \"bob\"})");
+    EXPECT_TRUE(r3.error.empty()) << "Insert different name should succeed: " << r3.error;
+
+    // Insert duplicate name — should be rejected by unique constraint
+    // (currently enforced silently: 0 rows returned, no error string)
+    auto r4 = execCypher("CREATE (n:Person {name: \"alice\"})");
+    EXPECT_TRUE(r4.error.empty());
+    EXPECT_TRUE(r4.rows.empty()) << "Duplicate insert should return 0 rows (rejected)";
+
+    // Verify only 1 'alice' vertex
+    auto r5 = execCypher("MATCH (n:Person) WHERE n.name = 'alice' RETURN n.name");
+    EXPECT_TRUE(r5.error.empty()) << "Scan error: " << r5.error;
+    EXPECT_EQ(r5.rows.size(), 1u) << "Should have exactly 1 'alice' vertex";
+}
+
 // ==================== Vertex CRUD ====================
 
 TEST_F(RpcIntegrationTest, CreateVerticesWithPropertiesAndQuery) {

@@ -218,6 +218,12 @@ public:
         co_return ok;
     }
 
+    folly::coro::Task<bool> checkUniqueConstraint(const std::string& table, const PropertyValue& value) override {
+        auto ok =
+            co_await io_->dispatch([this, &table, &value]() { return store_->checkUniqueConstraint(table, value); });
+        co_return ok;
+    }
+
     // ==================== Index Scan ====================
 
     folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByIndex(LabelId label_id, uint16_t prop_id,

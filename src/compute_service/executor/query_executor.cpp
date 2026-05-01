@@ -26,6 +26,28 @@ ExecutionResult QueryExecutor::executeSync(const std::string& cypher_query) {
 folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(const std::string& cypher_query) {
     auto ctx = std::make_shared<StreamContext>();
 
+    // 0. Try index DDL (same as executeAsync)
+    auto ddl_stmt = IndexDdlParser::tryParse(cypher_query);
+    if (ddl_stmt.has_value()) {
+        ExecutionResult ddl_result;
+        co_await handleIndexDdl(*ddl_stmt, ddl_result);
+        if (!ddl_result.error.empty()) {
+            ctx->error = std::move(ddl_result.error);
+            co_return ctx;
+        }
+        ctx->columns = std::move(ddl_result.columns);
+        ctx->store = &async_data_;
+        ctx->gen = folly::coro::co_invoke(
+            [rows = std::move(ddl_result.rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
+                if (!rows.empty()) {
+                    RowBatch batch;
+                    batch.rows = std::move(rows);
+                    co_yield std::move(batch);
+                }
+            });
+        co_return ctx;
+    }
+
     // Parse + logical plan (CPU-bound, no async needed)
     cypher::CypherQueryParser parser;
     auto parse_result = parser.parse(cypher_query);
@@ -325,21 +347,42 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         }
 
         // Backfill: scan existing vertices and insert index entries
+        bool hasConflict = false;
         {
             GraphTxnHandle txn = co_await async_data_.beginTran();
             async_data_.setTransaction(txn);
 
-            auto gen = async_data_.scanVerticesByLabel(label_def->id);
-            while (auto batch = co_await gen.next()) {
-                for (auto vid : *batch) {
-                    auto props = co_await async_data_.getVertexProperties(vid, label_def->id);
-                    if (props.has_value() && prop_id < props->size() && (*props)[prop_id].has_value()) {
-                        co_await async_data_.insertIndexEntry(table, (*props)[prop_id].value(), vid);
+            {
+                auto gen = async_data_.scanVerticesByLabel(label_def->id);
+                while (auto batch = co_await gen.next()) {
+                    for (auto vid : *batch) {
+                        auto props = co_await async_data_.getVertexProperties(vid, label_def->id);
+                        if (props.has_value() && prop_id < props->size() && (*props)[prop_id].has_value()) {
+                            const auto& value = (*props)[prop_id].value();
+                            if (stmt.unique) {
+                                bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, value);
+                                if (!constraint_ok) {
+                                    spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
+                                                 stmt.index_name, vid);
+                                    hasConflict = true;
+                                    break;
+                                }
+                            }
+                            co_await async_data_.insertIndexEntry(table, value, vid);
+                        }
                     }
+                    if (hasConflict)
+                        break;
                 }
-            }
+            } // gen destroyed before commit
 
             co_await async_data_.commitTran(txn);
+        }
+
+        if (hasConflict) {
+            ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
+            result.error = "Unique index creation failed: duplicate values found during backfill";
+            co_return;
         }
 
         ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::PUBLIC);
