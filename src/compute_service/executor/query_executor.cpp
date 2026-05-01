@@ -230,35 +230,38 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             result.error = "Label not found: " + stmt.label_name;
             co_return;
         }
-        uint16_t prop_id = 0;
-        bool found = false;
-        for (const auto& p : label_def->properties) {
-            if (p.name == stmt.property_name) {
-                prop_id = p.id;
-                found = true;
-                break;
+        // Resolve all property names to property IDs
+        std::vector<uint16_t> prop_ids;
+        for (const auto& pn : stmt.property_names) {
+            bool found = false;
+            for (const auto& p : label_def->properties) {
+                if (p.name == pn) {
+                    prop_ids.push_back(p.id);
+                    found = true;
+                    break;
+                }
             }
-        }
-        if (!found) {
-            result.error = "Property not found: " + stmt.property_name;
-            co_return;
+            if (!found) {
+                result.error = "Property not found: " + pn;
+                co_return;
+            }
         }
 
         bool ok =
-            co_await async_meta_.createVertexIndex(stmt.index_name, stmt.label_name, stmt.property_name, stmt.unique);
+            co_await async_meta_.createVertexIndex(stmt.index_name, stmt.label_name, stmt.property_names, stmt.unique);
         if (!ok) {
             result.error = "Failed to create index (duplicate name?)";
             co_return;
         }
 
-        auto table = vidxTable(label_def->id, prop_id);
+        auto table = vidxCompositeTable(label_def->id, prop_ids);
         ok = co_await async_data_.createIndex(table);
         if (!ok) {
             result.error = "Failed to create index storage table";
             co_return;
         }
 
-        // Backfill: scan existing vertices and insert index entries
+        // Backfill: scan existing vertices and insert composite index entries
         bool hasConflict = false;
         {
             GraphTxnHandle txn = co_await async_data_.beginTran();
@@ -268,20 +271,34 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 auto gen = async_data_.scanVerticesByLabel(label_def->id);
                 while (auto batch = co_await gen.next()) {
                     for (auto vid : *batch) {
-                        auto props = co_await async_data_.getVertexProperties(vid, label_def->id);
-                        if (props.has_value() && prop_id < props->size() && (*props)[prop_id].has_value()) {
-                            const auto& value = (*props)[prop_id].value();
-                            if (stmt.unique) {
-                                bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, value);
-                                if (!constraint_ok) {
-                                    spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
-                                                 stmt.index_name, vid);
-                                    hasConflict = true;
-                                    break;
-                                }
+                        auto props_opt = co_await async_data_.getVertexProperties(vid, label_def->id);
+                        if (!props_opt.has_value())
+                            continue;
+                        auto& props = *props_opt;
+                        // Collect all indexed property values; skip if any is missing
+                        std::vector<PropertyValue> values;
+                        bool allPresent = true;
+                        for (auto pid : prop_ids) {
+                            if (pid < props.size() && props[pid].has_value()) {
+                                values.push_back(props[pid].value());
+                            } else {
+                                allPresent = false;
+                                break;
                             }
-                            co_await async_data_.insertIndexEntry(table, value, vid);
                         }
+                        if (!allPresent)
+                            continue;
+
+                        if (stmt.unique) {
+                            bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
+                            if (!constraint_ok) {
+                                spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
+                                             stmt.index_name, vid);
+                                hasConflict = true;
+                                break;
+                            }
+                        }
+                        co_await async_data_.insertIndexEntry(table, values, vid);
                     }
                     if (hasConflict)
                         break;
@@ -310,7 +327,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
     } else if (stmt.type == IndexDdlStatement::CREATE_EDGE_INDEX) {
         bool ok =
-            co_await async_meta_.createEdgeIndex(stmt.index_name, stmt.label_name, stmt.property_name, stmt.unique);
+            co_await async_meta_.createEdgeIndex(stmt.index_name, stmt.label_name, stmt.property_names, stmt.unique);
         if (!ok) {
             result.error = "Failed to create edge index";
             co_return;
@@ -336,10 +353,17 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         result.columns = {"name", "label", "property", "unique", "state"};
 
         for (const auto& idx : indexes) {
+            // Join property names with commas
+            std::string prop_names_joined;
+            for (size_t i = 0; i < idx.property_names.size(); ++i) {
+                if (i > 0)
+                    prop_names_joined += ", ";
+                prop_names_joined += idx.property_names[i];
+            }
             Row row;
             row.push_back(std::string(idx.name));
             row.push_back(std::string(idx.label_name));
-            row.push_back(std::string(idx.property_name));
+            row.push_back(std::move(prop_names_joined));
             row.push_back(idx.unique ? std::string("true") : std::string("false"));
             std::string state_str;
             switch (idx.state) {

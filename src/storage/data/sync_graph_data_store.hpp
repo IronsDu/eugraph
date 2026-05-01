@@ -103,14 +103,25 @@ public:
 
     // Index Entry Operations
     bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) override;
+    bool insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                          uint64_t entity_id) override;
     bool deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) override;
+    bool deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                          uint64_t entity_id) override;
     bool checkUniqueConstraint(const std::string& table, const PropertyValue& value) override;
+    bool checkUniqueConstraint(const std::string& table, const std::vector<PropertyValue>& values) override;
 
     // Index Scan
     void scanIndexEquality(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                            const std::function<bool(uint64_t)>& callback) override;
+    void scanIndexEquality(GraphTxnHandle txn, const std::string& table, const std::vector<PropertyValue>& values,
+                           const std::function<bool(uint64_t)>& callback) override;
     void scanIndexRange(GraphTxnHandle txn, const std::string& table, const std::optional<PropertyValue>& start,
                         const std::optional<PropertyValue>& end,
+                        const std::function<bool(uint64_t)>& callback) override;
+    void scanIndexRange(GraphTxnHandle txn, const std::string& table,
+                        const std::optional<std::vector<PropertyValue>>& start,
+                        const std::optional<std::vector<PropertyValue>>& end,
                         const std::function<bool(uint64_t)>& callback) override;
 
     // Index Cleanup

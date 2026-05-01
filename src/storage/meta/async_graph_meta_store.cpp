@@ -125,7 +125,8 @@ std::optional<uint16_t> findPropId(const std::vector<PropertyDef>& props, const 
 } // namespace
 
 folly::coro::Task<bool> AsyncGraphMetaStore::createVertexIndex(const std::string& name, const std::string& label_name,
-                                                               const std::string& prop_name, bool unique) {
+                                                               const std::vector<std::string>& prop_names,
+                                                               bool unique) {
     if (schema_.findIndexByName(name).has_value()) {
         spdlog::error("Index '{}' already exists", name);
         co_return false;
@@ -137,23 +138,26 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createVertexIndex(const std::string
         co_return false;
     }
 
-    auto prop_id = findPropId(label_opt->properties, prop_name);
-    if (!prop_id) {
-        spdlog::error("Property '{}' not found in label '{}'", prop_name, label_name);
-        co_return false;
+    std::vector<uint16_t> new_prop_ids;
+    for (const auto& pn : prop_names) {
+        auto prop_id = findPropId(label_opt->properties, pn);
+        if (!prop_id) {
+            spdlog::error("Property '{}' not found in label '{}'", pn, label_name);
+            co_return false;
+        }
+        new_prop_ids.push_back(*prop_id);
     }
 
-    std::vector<uint16_t> new_prop_ids = {*prop_id};
     for (const auto& idx : label_opt->indexes) {
         if (idx.prop_ids == new_prop_ids) {
-            spdlog::error("Index already exists on {}.{}", label_name, prop_name);
+            spdlog::error("Index already exists on same property set for label '{}'", label_name);
             co_return false;
         }
     }
 
     LabelDef::IndexDef idx_def;
     idx_def.name = name;
-    idx_def.prop_ids = {*prop_id};
+    idx_def.prop_ids = new_prop_ids;
     idx_def.unique = unique;
     idx_def.state = IndexState::WRITE_ONLY;
 
@@ -165,19 +169,29 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createVertexIndex(const std::string
         std::string idx_val;
         idx_val.push_back(static_cast<char>(label_opt->id >> 8));
         idx_val.push_back(static_cast<char>(label_opt->id & 0xFF));
-        idx_val.push_back(static_cast<char>(*prop_id >> 8));
-        idx_val.push_back(static_cast<char>(*prop_id & 0xFF));
+        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(new_prop_ids.size()) >> 8));
+        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(new_prop_ids.size()) & 0xFF));
+        for (auto pid : new_prop_ids) {
+            idx_val.push_back(static_cast<char>(pid >> 8));
+            idx_val.push_back(static_cast<char>(pid & 0xFF));
+        }
         idx_val.push_back(static_cast<char>(0)); // is_edge = false
         store_->metadataPut(idx_key, idx_val);
     });
 
-    spdlog::info("Created vertex index '{}' on {}.{}", name, label_name, prop_name);
+    std::string prop_list;
+    for (size_t i = 0; i < prop_names.size(); ++i) {
+        if (i > 0)
+            prop_list += ", ";
+        prop_list += prop_names[i];
+    }
+    spdlog::info("Created vertex index '{}' on {}.({})", name, label_name, prop_list);
     co_return true;
 }
 
 folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& name,
                                                              const std::string& edge_label_name,
-                                                             const std::string& prop_name, bool unique) {
+                                                             const std::vector<std::string>& prop_names, bool unique) {
     if (schema_.findIndexByName(name).has_value()) {
         spdlog::error("Index '{}' already exists", name);
         co_return false;
@@ -189,23 +203,26 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& 
         co_return false;
     }
 
-    auto prop_id = findPropId(elabel_opt->properties, prop_name);
-    if (!prop_id) {
-        spdlog::error("Property '{}' not found in edge_label '{}'", prop_name, edge_label_name);
-        co_return false;
+    std::vector<uint16_t> new_prop_ids;
+    for (const auto& pn : prop_names) {
+        auto prop_id = findPropId(elabel_opt->properties, pn);
+        if (!prop_id) {
+            spdlog::error("Property '{}' not found in edge_label '{}'", pn, edge_label_name);
+            co_return false;
+        }
+        new_prop_ids.push_back(*prop_id);
     }
 
-    std::vector<uint16_t> new_prop_ids = {*prop_id};
     for (const auto& idx : elabel_opt->indexes) {
         if (idx.prop_ids == new_prop_ids) {
-            spdlog::error("Index already exists on {}.{}", edge_label_name, prop_name);
+            spdlog::error("Index already exists on same property set for edge_label '{}'", edge_label_name);
             co_return false;
         }
     }
 
     LabelDef::IndexDef idx_def;
     idx_def.name = name;
-    idx_def.prop_ids = {*prop_id};
+    idx_def.prop_ids = new_prop_ids;
     idx_def.unique = unique;
     idx_def.state = IndexState::WRITE_ONLY;
 
@@ -217,13 +234,23 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createEdgeIndex(const std::string& 
         std::string idx_val;
         idx_val.push_back(static_cast<char>(elabel_opt->id >> 8));
         idx_val.push_back(static_cast<char>(elabel_opt->id & 0xFF));
-        idx_val.push_back(static_cast<char>(*prop_id >> 8));
-        idx_val.push_back(static_cast<char>(*prop_id & 0xFF));
+        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(new_prop_ids.size()) >> 8));
+        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(new_prop_ids.size()) & 0xFF));
+        for (auto pid : new_prop_ids) {
+            idx_val.push_back(static_cast<char>(pid >> 8));
+            idx_val.push_back(static_cast<char>(pid & 0xFF));
+        }
         idx_val.push_back(static_cast<char>(1)); // is_edge = true
         store_->metadataPut(idx_key, idx_val);
     });
 
-    spdlog::info("Created edge index '{}' on {}.{}", name, edge_label_name, prop_name);
+    std::string edge_prop_list;
+    for (size_t i = 0; i < prop_names.size(); ++i) {
+        if (i > 0)
+            edge_prop_list += ", ";
+        edge_prop_list += prop_names[i];
+    }
+    spdlog::info("Created edge index '{}' on {}.({})", name, edge_label_name, edge_prop_list);
     co_return true;
 }
 
@@ -289,10 +316,10 @@ folly::coro::Task<std::vector<IAsyncGraphMetaStore::IndexInfo>> AsyncGraphMetaSt
             info.unique = idx.unique;
             info.is_edge = false;
             info.state = idx.state;
-            if (idx.prop_ids.size() == 1) {
+            for (auto pid : idx.prop_ids) {
                 for (auto& p : label.properties) {
-                    if (p.id == idx.prop_ids[0]) {
-                        info.property_name = p.name;
+                    if (p.id == pid) {
+                        info.property_names.push_back(p.name);
                         break;
                     }
                 }
@@ -308,10 +335,10 @@ folly::coro::Task<std::vector<IAsyncGraphMetaStore::IndexInfo>> AsyncGraphMetaSt
             info.unique = idx.unique;
             info.is_edge = true;
             info.state = idx.state;
-            if (idx.prop_ids.size() == 1) {
+            for (auto pid : idx.prop_ids) {
                 for (auto& p : elabel.properties) {
-                    if (p.id == idx.prop_ids[0]) {
-                        info.property_name = p.name;
+                    if (p.id == pid) {
+                        info.property_names.push_back(p.name);
                         break;
                     }
                 }

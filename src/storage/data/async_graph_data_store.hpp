@@ -211,6 +211,13 @@ public:
         co_return ok;
     }
 
+    folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                             uint64_t entity_id) override {
+        auto ok = co_await io_->dispatch(
+            [this, &table, &values, entity_id]() { return store_->insertIndexEntry(table, values, entity_id); });
+        co_return ok;
+    }
+
     folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
                                              uint64_t entity_id) override {
         auto ok = co_await io_->dispatch(
@@ -218,9 +225,23 @@ public:
         co_return ok;
     }
 
+    folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                             uint64_t entity_id) override {
+        auto ok = co_await io_->dispatch(
+            [this, &table, &values, entity_id]() { return store_->deleteIndexEntry(table, values, entity_id); });
+        co_return ok;
+    }
+
     folly::coro::Task<bool> checkUniqueConstraint(const std::string& table, const PropertyValue& value) override {
         auto ok =
             co_await io_->dispatch([this, &table, &value]() { return store_->checkUniqueConstraint(table, value); });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> checkUniqueConstraint(const std::string& table,
+                                                  const std::vector<PropertyValue>& values) override {
+        auto ok =
+            co_await io_->dispatch([this, &table, &values]() { return store_->checkUniqueConstraint(table, values); });
         co_return ok;
     }
 
@@ -247,10 +268,53 @@ public:
     }
 
     folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
+                                 const std::vector<PropertyValue>& values) override {
+        constexpr size_t BATCH = 1024;
+        std::string table = vidxCompositeTable(label_id, prop_ids);
+        while (true) {
+            std::vector<VertexId> batch;
+            co_await io_->dispatchVoid([&]() {
+                store_->scanIndexEquality(txn_, table, values, [&](uint64_t entity_id) {
+                    batch.push_back(entity_id);
+                    return batch.size() < BATCH;
+                });
+            });
+            if (batch.empty())
+                co_return;
+            co_yield std::move(batch);
+            if (batch.size() < BATCH)
+                co_return;
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<VertexId>>
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
                              const std::optional<PropertyValue>& end) override {
         constexpr size_t BATCH = 1024;
         std::string table = vidxTable(label_id, prop_id);
+        while (true) {
+            std::vector<VertexId> batch;
+            co_await io_->dispatchVoid([&]() {
+                store_->scanIndexRange(txn_, table, start, end, [&](uint64_t entity_id) {
+                    batch.push_back(entity_id);
+                    return batch.size() < BATCH;
+                });
+            });
+            if (batch.empty())
+                co_return;
+            co_yield std::move(batch);
+            if (batch.size() < BATCH)
+                co_return;
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexRangeComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
+                                      const std::optional<std::vector<PropertyValue>>& start,
+                                      const std::optional<std::vector<PropertyValue>>& end) override {
+        constexpr size_t BATCH = 1024;
+        std::string table = vidxCompositeTable(label_id, prop_ids);
         while (true) {
             std::vector<VertexId> batch;
             co_await io_->dispatchVoid([&]() {

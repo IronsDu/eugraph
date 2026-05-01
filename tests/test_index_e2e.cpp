@@ -160,7 +160,7 @@ TEST_F(IndexE2ETest, QueryByIndexEquality) {
     auto age_prop_id = label_def->properties[1].id;
 
     // Create index on age (manually set to PUBLIC for immediate use)
-    ASSERT_TRUE(blockingWait(env.async_meta->createVertexIndex("idx_age", "Person", "age", false)));
+    ASSERT_TRUE(blockingWait(env.async_meta->createVertexIndex("idx_age", "Person", {"age"}, false)));
     ASSERT_TRUE(blockingWait(env.async_meta->updateIndexState("idx_age", IndexState::PUBLIC)));
 
     // Create the index storage table
@@ -214,7 +214,8 @@ TEST_F(IndexE2ETest, DdlParserCreateVertexIndex) {
     EXPECT_EQ(stmt->type, IndexDdlStatement::CREATE_VERTEX_INDEX);
     EXPECT_EQ(stmt->index_name, "idx_age");
     EXPECT_EQ(stmt->label_name, "Person");
-    EXPECT_EQ(stmt->property_name, "age");
+    ASSERT_EQ(stmt->property_names.size(), 1u);
+    EXPECT_EQ(stmt->property_names[0], "age");
     EXPECT_FALSE(stmt->unique);
 }
 
@@ -231,7 +232,8 @@ TEST_F(IndexE2ETest, DdlParserCreateEdgeIndex) {
     ASSERT_TRUE(stmt.has_value());
     EXPECT_EQ(stmt->type, IndexDdlStatement::CREATE_EDGE_INDEX);
     EXPECT_EQ(stmt->label_name, "KNOWS");
-    EXPECT_EQ(stmt->property_name, "weight");
+    ASSERT_EQ(stmt->property_names.size(), 1u);
+    EXPECT_EQ(stmt->property_names[0], "weight");
 }
 
 TEST_F(IndexE2ETest, DdlParserDropIndex) {
@@ -260,13 +262,14 @@ TEST_F(IndexE2ETest, MetaStoreIndexCRUD) {
                 });
 
     // Create index
-    ASSERT_TRUE(blockingWait(env.async_meta->createVertexIndex("idx_age", "Person", "age", false)));
+    ASSERT_TRUE(blockingWait(env.async_meta->createVertexIndex("idx_age", "Person", {"age"}, false)));
 
     // List indexes
     auto indexes = blockingWait(env.async_meta->listIndexes());
     ASSERT_EQ(indexes.size(), 1u);
     EXPECT_EQ(indexes[0].name, "idx_age");
-    EXPECT_EQ(indexes[0].property_name, "age");
+    ASSERT_EQ(indexes[0].property_names.size(), 1u);
+    EXPECT_EQ(indexes[0].property_names[0], "age");
     EXPECT_EQ(indexes[0].state, IndexState::WRITE_ONLY);
 
     // Update state
@@ -293,7 +296,7 @@ TEST_F(IndexE2ETest, IndexRangeQuery) {
     LabelId label_id = label_def->id;
     auto age_prop_id = label_def->properties[1].id;
 
-    ASSERT_TRUE(blockingWait(env.async_meta->createVertexIndex("idx_age", "Person", "age", false)));
+    ASSERT_TRUE(blockingWait(env.async_meta->createVertexIndex("idx_age", "Person", {"age"}, false)));
     ASSERT_TRUE(blockingWait(env.async_meta->updateIndexState("idx_age", IndexState::PUBLIC)));
 
     auto index_table = vidxTable(label_id, age_prop_id);
@@ -541,4 +544,158 @@ TEST_F(IndexE2ETest, InsertDuplicateValueOnUniqueIndex) {
     // Verify only 1 'alice' vertex exists
     auto scan_result = execSync(executor, "MATCH (n:Person) WHERE n.name = 'alice' RETURN n");
     EXPECT_EQ(scan_result.rows.size(), 1u);
+}
+
+// ==================== Composite Index Tests ====================
+
+TEST_F(IndexE2ETest, DdlParserCreateCompositeIndex) {
+    auto stmt = IndexDdlParser::tryParse("CREATE INDEX idx_age_name FOR (n:Person) ON (n.age, n.name)");
+    ASSERT_TRUE(stmt.has_value());
+    EXPECT_EQ(stmt->type, IndexDdlStatement::CREATE_VERTEX_INDEX);
+    EXPECT_EQ(stmt->index_name, "idx_age_name");
+    EXPECT_EQ(stmt->label_name, "Person");
+    ASSERT_EQ(stmt->property_names.size(), 2u);
+    EXPECT_EQ(stmt->property_names[0], "age");
+    EXPECT_EQ(stmt->property_names[1], "name");
+    EXPECT_FALSE(stmt->unique);
+}
+
+TEST_F(IndexE2ETest, DdlParserCreateCompositeUniqueIndex) {
+    auto stmt = IndexDdlParser::tryParse("CREATE UNIQUE INDEX idx_id_email FOR (n:User) ON (n.id, n.email)");
+    ASSERT_TRUE(stmt.has_value());
+    EXPECT_TRUE(stmt->unique);
+    ASSERT_EQ(stmt->property_names.size(), 2u);
+    EXPECT_EQ(stmt->property_names[0], "id");
+    EXPECT_EQ(stmt->property_names[1], "email");
+}
+
+TEST_F(IndexE2ETest, DdlCreateCompositeIndexViaExecutor) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                    {0, "city", PropertyType::STRING, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    // Insert some data first
+    runQuery(executor, "CREATE (n:Person {name: 'alice', age: 30, city: 'NYC'})");
+    runQuery(executor, "CREATE (n:Person {name: 'bob', age: 25, city: 'LA'})");
+    runQuery(executor, "CREATE (n:Person {name: 'charlie', age: 30, city: 'SF'})");
+
+    // Create composite index on (age, city)
+    auto result = execSync(executor, "CREATE INDEX idx_age_city FOR (n:Person) ON (n.age, n.city)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    // Verify index is PUBLIC
+    auto info = blockingWait(env.async_meta->getIndex("idx_age_city"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+    ASSERT_EQ(info->property_names.size(), 2u);
+    EXPECT_EQ(info->property_names[0], "age");
+    EXPECT_EQ(info->property_names[1], "city");
+
+    // Query using both indexed columns should use index scan
+    auto rows = runQuery(executor, "MATCH (n:Person) WHERE n.age = 30 AND n.city = 'NYC' RETURN n");
+    ASSERT_EQ(rows.size(), 1u);
+    auto& val = rows[0][0];
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(val));
+    auto& vv = std::get<VertexValue>(val);
+    // Verify the correct vertex was returned
+    auto props = vv.properties;
+    // Should be vertex with age=30 and city='NYC' (alice)
+    EXPECT_EQ(vv.id, 1u);
+}
+
+TEST_F(IndexE2ETest, DdlCreateCompositeUniqueIndexNoConflict) {
+    createLabel(env, "User",
+                {
+                    {0, "id", PropertyType::INT64, false, std::nullopt},
+                    {0, "email", PropertyType::STRING, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    // Insert data with unique (id, email) pairs
+    runQuery(executor, "CREATE (n:User {id: 1, email: 'a@b.com'})");
+    runQuery(executor, "CREATE (n:User {id: 1, email: 'c@d.com'})"); // same id, different email → OK
+    runQuery(executor, "CREATE (n:User {id: 2, email: 'a@b.com'})"); // different id, same email → OK
+
+    // Create composite unique index on (id, email)
+    auto result = execSync(executor, "CREATE UNIQUE INDEX idx_user_id_email FOR (n:User) ON (n.id, n.email)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    auto info = blockingWait(env.async_meta->getIndex("idx_user_id_email"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+    EXPECT_TRUE(info->unique);
+}
+
+TEST_F(IndexE2ETest, DdlCreateCompositeUniqueIndexDuplicate) {
+    createLabel(env, "User",
+                {
+                    {0, "id", PropertyType::INT64, false, std::nullopt},
+                    {0, "email", PropertyType::STRING, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    // Insert two vertices with the same (id, email) pair
+    runQuery(executor, "CREATE (n:User {id: 1, email: 'dup@test.com'})");
+    runQuery(executor, "CREATE (n:User {id: 1, email: 'dup@test.com'})");
+
+    // Create composite unique index — should fail due to duplicate composite values
+    auto result = execSync(executor, "CREATE UNIQUE INDEX idx_user_id_email FOR (n:User) ON (n.id, n.email)");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("duplicate"), std::string::npos);
+
+    // Verify index is in ERROR state
+    auto info = blockingWait(env.async_meta->getIndex("idx_user_id_email"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::ERROR);
+}
+
+TEST_F(IndexE2ETest, InsertViolatesCompositeUniqueConstraint) {
+    createLabel(env, "User",
+                {
+                    {0, "id", PropertyType::INT64, false, std::nullopt},
+                    {0, "email", PropertyType::STRING, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    // Create composite unique index on clean data
+    runQuery(executor, "CREATE (n:User {id: 1, email: 'a@b.com'})");
+    auto ddl = execSync(executor, "CREATE UNIQUE INDEX idx_user_id_email FOR (n:User) ON (n.id, n.email)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    // Insert a different pair — should succeed
+    auto result = execSync(executor, "CREATE (n:User {id: 1, email: 'c@d.com'})");
+    EXPECT_TRUE(result.error.empty()) << result.error;
+
+    // Insert duplicate composite pair — should fail
+    result = execSync(executor, "CREATE (n:User {id: 1, email: 'a@b.com'})");
+    EXPECT_TRUE(result.rows.empty());
+}
+
+TEST_F(IndexE2ETest, ShowCompositeIndex) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                    {0, "age", PropertyType::INT64, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    execSync(executor, "CREATE INDEX idx_age_name FOR (n:Person) ON (n.age, n.name)");
+
+    auto result = execSync(executor, "SHOW INDEXES");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "idx_age_name");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "Person");
+    // property column should show comma-separated list
+    EXPECT_EQ(std::get<std::string>(result.rows[0][2]), "age, name");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][4]), "PUBLIC");
 }

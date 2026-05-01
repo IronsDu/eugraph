@@ -78,9 +78,10 @@ private:
     /// a label and property that actually exist. Returns error string on failure.
     std::string validateExpression(const cypher::Expression& expr, const PlanContext& ctx) const;
 
-    std::optional<PlanOperatorResult> tryIndexScan(LabelScanOp& scan_op, cypher::BinaryOp& binop, LabelId label_id,
-                                                   const LabelDef& label_def, IAsyncGraphDataStore& store,
-                                                   PlanContext& ctx);
+    std::optional<PlanOperatorResult> tryIndexScan(LabelScanOp& scan_op,
+                                                   const std::vector<const cypher::BinaryOp*>& conditions,
+                                                   LabelId label_id, const LabelDef& label_def,
+                                                   IAsyncGraphDataStore& store, PlanContext& ctx);
 };
 
 } // namespace compute

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <vector>
 
 namespace eugraph {
 
@@ -25,26 +26,40 @@ static bool expectWord(std::istringstream& iss, const std::string& expected) {
     return toUpper(word) == toUpper(expected);
 }
 
-static std::optional<std::string> readQuoted(std::istringstream& iss) {
-    std::string result;
+// Read comma-separated properties from (n.prop1, n.prop2, ...)
+// Returns empty vector on parse failure
+static std::vector<std::string> readPropertyList(std::istringstream& iss) {
+    std::vector<std::string> result;
+    std::string token;
     char c;
     // skip whitespace
     while (iss.peek() == ' ')
         iss.get();
     if (!(iss >> c) || c != '(')
-        return std::nullopt;
+        return {};
     // Read until closing )
     while (iss.get(c)) {
         if (c == ')')
             break;
-        if (c != ' ' && c != '\t')
-            result += c;
+        if (c == ',') {
+            if (!token.empty()) {
+                auto dot_pos = token.find('.');
+                if (dot_pos != std::string::npos)
+                    token = token.substr(dot_pos + 1);
+                result.push_back(trim(token));
+                token.clear();
+            }
+        } else if (c != ' ' && c != '\t') {
+            token += c;
+        }
     }
-    // Extract part after the dot (format: var.prop)
-    auto dot_pos = result.find('.');
-    if (dot_pos != std::string::npos)
-        result = result.substr(dot_pos + 1);
-    return trim(result);
+    if (!token.empty()) {
+        auto dot_pos = token.find('.');
+        if (dot_pos != std::string::npos)
+            token = token.substr(dot_pos + 1);
+        result.push_back(trim(token));
+    }
+    return result;
 }
 
 std::optional<IndexDdlStatement> IndexDdlParser::tryParse(const std::string& query) {
@@ -147,11 +162,11 @@ std::optional<IndexDdlStatement> IndexDdlParser::tryParse(const std::string& que
         if (!expectWord(iss, "ON"))
             return std::nullopt;
 
-        // (var.prop)
-        auto prop = readQuoted(iss);
-        if (!prop)
+        // (var.prop1, var.prop2, ...)
+        auto props = readPropertyList(iss);
+        if (props.empty())
             return std::nullopt;
-        stmt.property_name = *prop;
+        stmt.property_names = std::move(props);
 
         return stmt;
     }

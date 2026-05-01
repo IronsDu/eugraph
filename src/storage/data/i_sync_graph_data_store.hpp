@@ -159,15 +159,27 @@ public:
     // ==================== Index Entry Operations ====================
 
     virtual bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) = 0;
+    virtual bool insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                  uint64_t entity_id) = 0;
     virtual bool deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) = 0;
+    virtual bool deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                  uint64_t entity_id) = 0;
     virtual bool checkUniqueConstraint(const std::string& table, const PropertyValue& value) = 0;
+    virtual bool checkUniqueConstraint(const std::string& table, const std::vector<PropertyValue>& values) = 0;
 
     // ==================== Index Scan ====================
 
     virtual void scanIndexEquality(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                                    const std::function<bool(uint64_t)>& callback) = 0;
+    virtual void scanIndexEquality(GraphTxnHandle txn, const std::string& table,
+                                   const std::vector<PropertyValue>& values,
+                                   const std::function<bool(uint64_t)>& callback) = 0;
     virtual void scanIndexRange(GraphTxnHandle txn, const std::string& table, const std::optional<PropertyValue>& start,
                                 const std::optional<PropertyValue>& end,
+                                const std::function<bool(uint64_t)>& callback) = 0;
+    virtual void scanIndexRange(GraphTxnHandle txn, const std::string& table,
+                                const std::optional<std::vector<PropertyValue>>& start,
+                                const std::optional<std::vector<PropertyValue>>& end,
                                 const std::function<bool(uint64_t)>& callback) = 0;
 
     // ==================== Index Cleanup ====================

@@ -42,19 +42,28 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
                     continue;
                 if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
                     continue;
+                // Collect all indexed property values; skip if any is missing
+                std::vector<PropertyValue> values;
+                bool allPresent = true;
                 for (auto prop_id : idx.prop_ids) {
                     if (prop_id < props.size() && props[prop_id].has_value()) {
-                        auto table = vidxTable(label_id, prop_id);
-                        bool constraint_ok = co_await store_.checkUniqueConstraint(table, props[prop_id].value());
-                        if (!constraint_ok) {
-                            spdlog::warn("Unique index constraint violated on index '{}'", idx.name);
-                            ok = false;
-                            break;
-                        }
+                        values.push_back(props[prop_id].value());
+                    } else {
+                        allPresent = false;
+                        break;
                     }
                 }
-                if (!ok)
+                if (!allPresent)
+                    continue;
+                // Use composite table if multiple prop_ids, single table otherwise
+                auto table = idx.prop_ids.size() == 1 ? vidxTable(label_id, idx.prop_ids[0])
+                                                      : vidxCompositeTable(label_id, idx.prop_ids);
+                bool constraint_ok = co_await store_.checkUniqueConstraint(table, values);
+                if (!constraint_ok) {
+                    spdlog::warn("Unique index constraint violated on index '{}'", idx.name);
+                    ok = false;
                     break;
+                }
             }
             if (!ok)
                 break;
@@ -72,12 +81,22 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
             for (const auto& idx : def_it->second.indexes) {
                 if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
                     continue;
+                // Collect all indexed property values; skip if any is missing
+                std::vector<PropertyValue> values;
+                bool allPresent = true;
                 for (auto prop_id : idx.prop_ids) {
                     if (prop_id < props.size() && props[prop_id].has_value()) {
-                        auto table = vidxTable(label_id, prop_id);
-                        co_await store_.insertIndexEntry(table, props[prop_id].value(), assigned_vid_);
+                        values.push_back(props[prop_id].value());
+                    } else {
+                        allPresent = false;
+                        break;
                     }
                 }
+                if (!allPresent)
+                    continue;
+                auto table = idx.prop_ids.size() == 1 ? vidxTable(label_id, idx.prop_ids[0])
+                                                      : vidxCompositeTable(label_id, idx.prop_ids);
+                co_await store_.insertIndexEntry(table, values, assigned_vid_);
             }
         }
     }

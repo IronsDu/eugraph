@@ -146,9 +146,30 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planFilter(Filter
             auto def_it = ctx.label_defs->find(label_id);
             if (def_it != ctx.label_defs->end()) {
                 auto& pred = op.predicate;
+                // Collect all indexable conditions (supports AND-conjunctions for composite indexes)
+                std::vector<const cypher::BinaryOp*> conditions;
                 if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(pred)) {
                     auto& binop = std::get<std::unique_ptr<cypher::BinaryOp>>(pred);
-                    auto idx_result = tryIndexScan(*scan_op, *binop, label_id, def_it->second, store, ctx);
+                    if (binop->op == cypher::BinaryOperator::AND) {
+                        // Flatten AND tree
+                        auto collect = [](auto& self, const cypher::BinaryOp& node,
+                                          std::vector<const cypher::BinaryOp*>& out) -> void {
+                            if (node.op == cypher::BinaryOperator::AND) {
+                                if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(node.left))
+                                    self(self, *std::get<std::unique_ptr<cypher::BinaryOp>>(node.left), out);
+                                if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(node.right))
+                                    self(self, *std::get<std::unique_ptr<cypher::BinaryOp>>(node.right), out);
+                            } else {
+                                out.push_back(&node);
+                            }
+                        };
+                        collect(collect, *binop, conditions);
+                    } else {
+                        conditions.push_back(binop.get());
+                    }
+                }
+                if (!conditions.empty()) {
+                    auto idx_result = tryIndexScan(*scan_op, conditions, label_id, def_it->second, store, ctx);
                     if (idx_result.has_value()) {
                         return std::move(idx_result.value());
                     }
@@ -593,62 +614,155 @@ std::string PhysicalPlanner::validateExpression(const cypher::Expression& expr, 
 
 // ==================== Index Scan Optimization ====================
 
-std::optional<PlanOperatorResult> PhysicalPlanner::tryIndexScan(LabelScanOp& scan_op, cypher::BinaryOp& binop,
-                                                                LabelId label_id, const LabelDef& label_def,
-                                                                IAsyncGraphDataStore& store, PlanContext& ctx) {
+// Extract PropertyValue from a cypher::Literal
+static std::optional<PropertyValue> literalToPropValue(const cypher::Literal& lit) {
+    if (std::holds_alternative<std::string>(lit.value))
+        return std::get<std::string>(lit.value);
+    if (std::holds_alternative<int64_t>(lit.value))
+        return std::get<int64_t>(lit.value);
+    if (std::holds_alternative<double>(lit.value))
+        return std::get<double>(lit.value);
+    if (std::holds_alternative<bool>(lit.value))
+        return std::get<bool>(lit.value);
+    return std::nullopt;
+}
+
+// Check if a condition is PropertyAccess op Literal, returning (prop_name, op, value)
+struct IndexableCondition {
+    std::string prop_name;
+    cypher::BinaryOperator op;
+    PropertyValue value;
+};
+
+static std::optional<IndexableCondition> tryExtractCondition(const cypher::BinaryOp& binop) {
     if (!std::holds_alternative<std::unique_ptr<cypher::PropertyAccess>>(binop.left) ||
         !std::holds_alternative<std::unique_ptr<cypher::Literal>>(binop.right)) {
         return std::nullopt;
     }
-
     auto& pa = std::get<std::unique_ptr<cypher::PropertyAccess>>(binop.left);
     auto& lit = std::get<std::unique_ptr<cypher::Literal>>(binop.right);
+    auto pv = literalToPropValue(*lit);
+    if (!pv)
+        return std::nullopt;
+    return IndexableCondition{pa->property, binop.op, std::move(*pv)};
+}
 
-    for (const auto& prop_def : label_def.properties) {
-        if (prop_def.name != pa->property) {
+std::optional<PlanOperatorResult> PhysicalPlanner::tryIndexScan(LabelScanOp& scan_op,
+                                                                const std::vector<const cypher::BinaryOp*>& conditions,
+                                                                LabelId label_id, const LabelDef& label_def,
+                                                                IAsyncGraphDataStore& store, PlanContext& ctx) {
+    // Extract all indexable conditions and map property name -> (op, value)
+    struct CondInfo {
+        cypher::BinaryOperator op;
+        PropertyValue value;
+    };
+    std::unordered_map<std::string, CondInfo> prop_conditions;
+    for (auto* cond : conditions) {
+        auto extracted = tryExtractCondition(*cond);
+        if (extracted.has_value())
+            prop_conditions[extracted->prop_name] = {extracted->op, std::move(extracted->value)};
+    }
+
+    if (prop_conditions.empty())
+        return std::nullopt;
+
+    // Build prop_name -> prop_id mapping
+    std::unordered_map<std::string, uint16_t> name_to_id;
+    for (const auto& pd : label_def.properties)
+        name_to_id[pd.name] = pd.id;
+
+    // Try to match each index
+    for (const auto& idx : label_def.indexes) {
+        if (idx.state != IndexState::PUBLIC)
             continue;
-        }
 
-        for (const auto& idx : label_def.indexes) {
-            if (idx.state != IndexState::PUBLIC || idx.prop_ids.size() != 1 || idx.prop_ids[0] != prop_def.id) {
-                continue;
+        // Check if the conditions match a prefix of this index
+        // Conditions must be in the same order as the index columns
+        // All prefix columns must have EQ conditions; only the last may have a range condition
+        size_t match_count = 0;
+        bool last_is_range = false;
+        std::vector<PropertyValue> eq_values;
+        std::optional<PropertyValue> range_start;
+        std::optional<PropertyValue> range_end;
+
+        for (size_t i = 0; i < idx.prop_ids.size(); ++i) {
+            uint16_t pid = idx.prop_ids[i];
+            // Find property name for this prop_id
+            std::string pname;
+            for (const auto& pd : label_def.properties) {
+                if (pd.id == pid) {
+                    pname = pd.name;
+                    break;
+                }
             }
+            auto it = prop_conditions.find(pname);
+            if (it == prop_conditions.end())
+                break; // no condition on this column
 
-            PropertyValue search_val;
-            if (std::holds_alternative<std::string>(lit->value))
-                search_val = std::get<std::string>(lit->value);
-            else if (std::holds_alternative<int64_t>(lit->value))
-                search_val = std::get<int64_t>(lit->value);
-            else if (std::holds_alternative<double>(lit->value))
-                search_val = std::get<double>(lit->value);
-            else if (std::holds_alternative<bool>(lit->value))
-                search_val = std::get<bool>(lit->value);
-
-            using ScanMode = IndexScanPhysicalOp::ScanMode;
-            std::unique_ptr<IndexScanPhysicalOp> result;
-
-            if (binop.op == cypher::BinaryOperator::EQ) {
-                result =
-                    std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, prop_def.id, ScanMode::EQUALITY,
-                                                          std::move(search_val), std::nullopt, store, *ctx.label_defs);
-            } else if (binop.op == cypher::BinaryOperator::GT || binop.op == cypher::BinaryOperator::GTE) {
-                result =
-                    std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, prop_def.id, ScanMode::RANGE,
-                                                          std::move(search_val), std::nullopt, store, *ctx.label_defs);
-            } else if (binop.op == cypher::BinaryOperator::LT || binop.op == cypher::BinaryOperator::LTE) {
-                result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, prop_def.id, ScanMode::RANGE,
-                                                               PropertyValue{std::monostate{}}, std::move(search_val),
-                                                               store, *ctx.label_defs);
+            auto& cond = it->second;
+            if (i < idx.prop_ids.size() - 1) {
+                // Prefix columns must be exact equality matches
+                if (cond.op != cypher::BinaryOperator::EQ)
+                    break;
+                eq_values.push_back(std::move(cond.value));
+                match_count++;
             } else {
-                return std::nullopt;
+                // Last column: accept EQ, GT, GTE, LT, LTE
+                if (cond.op == cypher::BinaryOperator::EQ) {
+                    eq_values.push_back(std::move(cond.value));
+                    match_count++;
+                } else if (cond.op == cypher::BinaryOperator::GT || cond.op == cypher::BinaryOperator::GTE) {
+                    range_start = std::move(cond.value);
+                    last_is_range = true;
+                    match_count++;
+                } else if (cond.op == cypher::BinaryOperator::LT || cond.op == cypher::BinaryOperator::LTE) {
+                    range_end = std::move(cond.value);
+                    last_is_range = true;
+                    match_count++;
+                } else {
+                    break;
+                }
             }
-
-            Schema output_schema;
-            if (!scan_op.variable.empty()) {
-                output_schema.push_back(scan_op.variable);
-            }
-            return PlanOperatorResult{std::move(result), std::move(output_schema)};
         }
+
+        if (match_count == 0)
+            continue;
+
+        // Build the IndexScanPhysicalOp
+        using ScanMode = IndexScanPhysicalOp::ScanMode;
+        std::unique_ptr<IndexScanPhysicalOp> result;
+
+        if (!last_is_range) {
+            // Full equality match on the matched prefix
+            result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, ScanMode::EQUALITY,
+                                                           std::move(eq_values), std::nullopt, std::nullopt, store,
+                                                           *ctx.label_defs);
+        } else {
+            // Range scan on last column
+            std::optional<std::vector<PropertyValue>> composite_start;
+            std::optional<std::vector<PropertyValue>> composite_end;
+            if (range_start.has_value()) {
+                auto start_vec = eq_values; // copy
+                start_vec.push_back(std::move(*range_start));
+                composite_start = std::move(start_vec);
+            } else if (!eq_values.empty()) {
+                composite_start = eq_values; // prefix only as start
+            }
+            if (range_end.has_value()) {
+                auto end_vec = eq_values; // copy
+                end_vec.push_back(std::move(*range_end));
+                composite_end = std::move(end_vec);
+            }
+            result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, ScanMode::RANGE,
+                                                           std::vector<PropertyValue>{}, std::move(composite_start),
+                                                           std::move(composite_end), store, *ctx.label_defs);
+        }
+
+        Schema output_schema;
+        if (!scan_op.variable.empty()) {
+            output_schema.push_back(scan_op.variable);
+        }
+        return PlanOperatorResult{std::move(result), std::move(output_schema)};
     }
     return std::nullopt;
 }

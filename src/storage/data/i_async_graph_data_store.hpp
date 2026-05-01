@@ -70,16 +70,29 @@ public:
     virtual folly::coro::Task<bool> dropIndex(const std::string& table_name) = 0;
     virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,
                                                      uint64_t entity_id) = 0;
+    virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                                     uint64_t entity_id) = 0;
     virtual folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
                                                      uint64_t entity_id) = 0;
+    virtual folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                                     uint64_t entity_id) = 0;
     virtual folly::coro::Task<bool> checkUniqueConstraint(const std::string& table, const PropertyValue& value) = 0;
+    virtual folly::coro::Task<bool> checkUniqueConstraint(const std::string& table,
+                                                          const std::vector<PropertyValue>& values) = 0;
 
     // Index Scan
     virtual folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByIndex(LabelId label_id, uint16_t prop_id,
                                                                                    const PropertyValue& value) = 0;
     virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
+                                 const std::vector<PropertyValue>& values) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
                              const std::optional<PropertyValue>& end) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexRangeComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
+                                      const std::optional<std::vector<PropertyValue>>& start,
+                                      const std::optional<std::vector<PropertyValue>>& end) = 0;
 
     // Batch write (single transaction, single dispatch)
     struct BatchVertexEntry {

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace eugraph {
 
@@ -34,6 +35,20 @@ inline std::string vidxTable(LabelId label_id, uint16_t prop_id) {
 }
 inline std::string eidxTable(EdgeLabelId label_id, uint16_t prop_id) {
     return "table:eidx_" + std::to_string(label_id) + "_" + std::to_string(prop_id);
+}
+
+// 复合索引表（按 label_id + 多个 prop_id）
+inline std::string vidxCompositeTable(LabelId label_id, const std::vector<uint16_t>& prop_ids) {
+    std::string name = "table:vidx_" + std::to_string(label_id);
+    for (auto pid : prop_ids)
+        name += "_" + std::to_string(pid);
+    return name;
+}
+inline std::string eidxCompositeTable(EdgeLabelId label_id, const std::vector<uint16_t>& prop_ids) {
+    std::string name = "table:eidx_" + std::to_string(label_id);
+    for (auto pid : prop_ids)
+        name += "_" + std::to_string(pid);
+    return name;
 }
 
 // WiredTiger 表配置
