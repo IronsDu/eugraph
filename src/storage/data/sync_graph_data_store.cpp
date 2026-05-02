@@ -651,7 +651,7 @@ SyncGraphDataStore::createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId lab
 // ==================== VertexScanCursorImpl ====================
 
 VertexScanCursorImpl::VertexScanCursorImpl(WT_SESSION* session, const std::string& table_name)
-    : session_(session), cursor_(session, table_name) {
+    : cursor_(session, table_name), session_(session) {
     if (!cursor_)
         return;
 
@@ -688,7 +688,7 @@ void VertexScanCursorImpl::next() {
 // ==================== EdgeScanCursorImpl ====================
 
 EdgeScanCursorImpl::EdgeScanCursorImpl(WT_SESSION* session, std::string_view prefix)
-    : session_(session), prefix_(prefix), cursor_(session, TABLE_EDGE_INDEX) {
+    : cursor_(session, TABLE_EDGE_INDEX), session_(session), prefix_(prefix) {
     if (!cursor_)
         return;
 
@@ -743,7 +743,7 @@ void EdgeScanCursorImpl::next() {
 
 EdgeTypeScanCursorImpl::EdgeTypeScanCursorImpl(WT_SESSION* session, const std::string& table_name,
                                                std::string_view prefix)
-    : session_(session), prefix_(prefix), cursor_(session, table_name) {
+    : cursor_(session, table_name), session_(session), prefix_(prefix) {
     if (!cursor_)
         return;
 

@@ -1,4 +1,5 @@
 #include "storage/wt_session.hpp"
+#include <cerrno>
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
@@ -38,7 +39,7 @@ WtCursor WtSession::openCursor(const std::string& table_name) {
 
 bool WtSession::createTable(const char* name, const char* config) {
     int ret = session_->create(session_, name, config);
-    if (ret != 0) {
+    if (ret != 0 && ret != EBUSY) {
         spdlog::error("Failed to create table {}: error {}", name, ret);
         return false;
     }

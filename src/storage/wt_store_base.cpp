@@ -1,5 +1,6 @@
 #include "storage/wt_store_base.hpp"
 
+#include <cerrno>
 #include <cstring>
 #include <filesystem>
 #include <spdlog/spdlog.h>
@@ -114,7 +115,7 @@ void WtStoreBase::closeTxnCursors(TxnState* state) {
 
 bool WtStoreBase::ensureGlobalTable(WT_SESSION* session, const char* table_name) {
     int ret = session->create(session, table_name, WT_TABLE_CONFIG);
-    if (ret != 0) {
+    if (ret != 0 && ret != EBUSY) {
         spdlog::error("Failed to create table {}: error {}", table_name, ret);
         return false;
     }
