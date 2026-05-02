@@ -12,9 +12,9 @@ std::string CreateNodePhysicalOp::toString() const {
     for (size_t i = 0; i < label_ids_.size(); i++) {
         if (i > 0)
             s += ", ";
-        if (label_defs_) {
-            auto it = label_defs_->find(label_ids_[i]);
-            s += (it != label_defs_->end()) ? it->second.name : std::to_string(label_ids_[i]);
+        if (!label_defs_.empty()) {
+            auto it = label_defs_.find(label_ids_[i]);
+            s += (it != label_defs_.end()) ? it->second.name : std::to_string(label_ids_[i]);
         } else {
             s += std::to_string(label_ids_[i]);
         }
@@ -32,10 +32,10 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
 
     // Check unique constraints before inserting vertex
     bool ok = true;
-    if (label_defs_) {
+    if (!label_defs_.empty()) {
         for (const auto& [label_id, props] : label_props_) {
-            auto def_it = label_defs_->find(label_id);
-            if (def_it == label_defs_->end())
+            auto def_it = label_defs_.find(label_id);
+            if (def_it == label_defs_.end())
                 continue;
             for (const auto& idx : def_it->second.indexes) {
                 if (!idx.unique)
@@ -73,10 +73,10 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
     if (ok)
         ok = co_await store_.insertVertex(assigned_vid_, label_props_);
 
-    if (ok && label_defs_) {
+    if (ok && !label_defs_.empty()) {
         for (const auto& [label_id, props] : label_props_) {
-            auto def_it = label_defs_->find(label_id);
-            if (def_it == label_defs_->end())
+            auto def_it = label_defs_.find(label_id);
+            if (def_it == label_defs_.end())
                 continue;
             for (const auto& idx : def_it->second.indexes) {
                 if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)

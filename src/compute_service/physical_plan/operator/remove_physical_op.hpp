@@ -19,8 +19,8 @@ namespace compute {
 class RemovePhysicalOp : public PhysicalOperator {
 public:
     RemovePhysicalOp(std::vector<cypher::RemoveItem> items, Schema input_schema, IAsyncGraphDataStore& store,
-                     const std::unordered_map<LabelId, LabelDef>* label_defs,
-                     const std::unordered_map<std::string, LabelId>* label_name_to_id,
+                     const std::unordered_map<LabelId, LabelDef>& label_defs,
+                     const std::unordered_map<std::string, LabelId>& label_name_to_id,
                      std::unique_ptr<PhysicalOperator> child)
         : items_(std::move(items)), input_schema_(std::move(input_schema)), store_(store), label_defs_(label_defs),
           label_name_to_id_(label_name_to_id), child_(std::move(child)) {}
@@ -37,8 +37,8 @@ private:
     std::vector<cypher::RemoveItem> items_;
     Schema input_schema_;
     IAsyncGraphDataStore& store_;
-    const std::unordered_map<LabelId, LabelDef>* label_defs_;
-    const std::unordered_map<std::string, LabelId>* label_name_to_id_;
+    const std::unordered_map<LabelId, LabelDef>& label_defs_;
+    const std::unordered_map<std::string, LabelId>& label_name_to_id_;
     std::unique_ptr<PhysicalOperator> child_;
 };
 

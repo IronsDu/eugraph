@@ -2,6 +2,7 @@
 
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
+#include "storage/wt_connection.hpp"
 
 #include <functional>
 #include <memory>
@@ -10,8 +11,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-
-#include <wiredtiger.h>
 
 namespace eugraph {
 
@@ -26,7 +25,7 @@ public:
     WtStoreBase& operator=(const WtStoreBase&) = delete;
 
     bool isOpen() const {
-        return conn_ != nullptr;
+        return conn_.operator bool();
     }
 
 protected:
@@ -34,8 +33,8 @@ protected:
 
     // Per-transaction state: own session + cursor cache
     struct TxnState {
-        WT_SESSION* session = nullptr;
-        std::unordered_map<std::string, WT_CURSOR*> cursors;
+        WtSession session;
+        std::unordered_map<std::string, WtCursor> cursors;
     };
 
     /// Open WT connection and default session.
@@ -48,7 +47,7 @@ protected:
     WT_SESSION* getSession(GraphTxnHandle txn);
 
     /// Open a cursor on a table.
-    WT_CURSOR* getCursor(WT_SESSION* session, const std::string& table_name);
+    WtCursor openCursor(WT_SESSION* session, const std::string& table_name);
 
     /// Table-level KV operations.
     bool tablePut(WT_SESSION* session, const std::string& table, std::string_view key, std::string_view value);
@@ -66,8 +65,8 @@ protected:
     /// Force a WT checkpoint (flush all committed data to disk).
     bool checkpoint();
 
-    WT_CONNECTION* conn_ = nullptr;
-    WT_SESSION* defaultSession_ = nullptr;
+    WtConnection conn_;
+    WtSession defaultSession_;
 
     std::mutex txnMutex_;
     std::unordered_map<GraphTxnHandle, std::unique_ptr<TxnState>> txns_;

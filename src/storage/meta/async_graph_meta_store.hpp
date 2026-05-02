@@ -4,6 +4,8 @@
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
+#include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -63,8 +65,8 @@ public:
 private:
     folly::coro::Task<void> saveNextIds();
 
-    ISyncGraphMetaStore* store_ = nullptr;
-    IoScheduler* io_ = nullptr;
+    std::optional<std::reference_wrapper<ISyncGraphMetaStore>> store_;
+    std::optional<std::reference_wrapper<IoScheduler>> io_;
     GraphSchema schema_;
 };
 

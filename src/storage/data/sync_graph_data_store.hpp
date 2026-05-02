@@ -4,6 +4,7 @@
 #include "storage/data/i_sync_graph_data_store.hpp"
 #include "storage/kv/key_codec.hpp"
 #include "storage/kv/value_codec.hpp"
+#include "storage/wt_cursor.hpp"
 #include "storage/wt_store_base.hpp"
 
 #include <memory>
@@ -11,8 +12,6 @@
 #include <set>
 #include <string>
 #include <unordered_map>
-
-#include <wiredtiger.h>
 
 namespace eugraph {
 
@@ -142,7 +141,7 @@ public:
 private:
     void readCurrent();
 
-    WT_CURSOR* cursor_ = nullptr;
+    WtCursor cursor_;
     WT_SESSION* session_ = nullptr;
     bool valid_ = false;
     VertexId current_vid_ = 0;
@@ -161,7 +160,7 @@ public:
 private:
     void readCurrent();
 
-    WT_CURSOR* cursor_ = nullptr;
+    WtCursor cursor_;
     WT_SESSION* session_ = nullptr;
     std::string prefix_;
     bool valid_ = false;
@@ -182,7 +181,7 @@ public:
 private:
     void readCurrent();
 
-    WT_CURSOR* cursor_ = nullptr;
+    WtCursor cursor_;
     WT_SESSION* session_ = nullptr;
     std::string prefix_;
     bool valid_ = false;

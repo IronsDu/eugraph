@@ -32,11 +32,9 @@ public:
 
     AggregatePhysicalOp(std::vector<GroupKey> group_keys, std::vector<AggregateExpr> aggregates,
                         std::unique_ptr<PhysicalOperator> child, Schema input_schema,
-                        const std::unordered_map<LabelId, LabelDef>* label_defs)
+                        const std::unordered_map<LabelId, LabelDef>& label_defs)
         : group_keys_(std::move(group_keys)), aggregates_(std::move(aggregates)), child_(std::move(child)),
-          input_schema_(std::move(input_schema)) {
-        evaluator_.setLabelDefs(label_defs);
-    }
+          input_schema_(std::move(input_schema)), evaluator_(label_defs) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {

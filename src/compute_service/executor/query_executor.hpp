@@ -26,13 +26,15 @@ struct StreamContext {
     std::unique_ptr<PhysicalOperator> phys_op;
     folly::coro::AsyncGenerator<RowBatch> gen;
     GraphTxnHandle txn = INVALID_GRAPH_TXN;
-    IAsyncGraphDataStore* store = nullptr;
+    IAsyncGraphDataStore& store;
     bool should_commit = true;
-    // Owned by StreamContext so raw pointers in physical operators remain valid
+    // Owned by StreamContext so references in physical operators remain valid
     std::unordered_map<LabelId, LabelDef> label_defs;
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
     std::unordered_map<std::string, LabelId> label_name_to_id;
     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
+
+    explicit StreamContext(IAsyncGraphDataStore& s) : store(s) {}
 };
 
 /// Top-level query execution engine.

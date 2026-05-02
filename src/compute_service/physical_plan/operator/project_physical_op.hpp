@@ -24,10 +24,9 @@ public:
     };
 
     ProjectPhysicalOp(std::vector<ProjectItem> items, Schema input_schema, std::unique_ptr<PhysicalOperator> child,
-                      const std::unordered_map<LabelId, LabelDef>* label_defs)
-        : items_(std::move(items)), input_schema_(std::move(input_schema)), child_(std::move(child)) {
-        evaluator_.setLabelDefs(label_defs);
-    }
+                      const std::unordered_map<LabelId, LabelDef>& label_defs)
+        : items_(std::move(items)), input_schema_(std::move(input_schema)), child_(std::move(child)),
+          evaluator_(label_defs) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override;

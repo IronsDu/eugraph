@@ -89,7 +89,7 @@ static ExecutionResult execSync(QueryExecutor& executor, const std::string& quer
             }
         }
         if (ctx->should_commit) {
-            co_await ctx->store->commitTran(ctx->txn);
+            co_await ctx->store.commitTran(ctx->txn);
         }
     }));
     return result;
@@ -111,7 +111,7 @@ static std::vector<Row> runQuery(QueryExecutor& executor, const std::string& que
             }
         }
         if (ctx->should_commit) {
-            co_await ctx->store->commitTran(ctx->txn);
+            co_await ctx->store.commitTran(ctx->txn);
         }
     }));
     return result.rows;

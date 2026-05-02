@@ -54,6 +54,9 @@ add_library(eugraph_lib STATIC
     src/storage/kv/key_codec.cpp
     src/storage/kv/value_codec.cpp
     src/storage/kv/index_key_codec.cpp
+    src/storage/wt_cursor.cpp
+    src/storage/wt_session.cpp
+    src/storage/wt_connection.cpp
     src/storage/wt_store_base.cpp
     src/storage/data/sync_graph_data_store.cpp
     src/storage/meta/sync_graph_meta_store.cpp

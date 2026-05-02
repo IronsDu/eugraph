@@ -12,13 +12,10 @@ namespace compute {
 /// Evaluates Cypher AST expressions against a Row context.
 class ExpressionEvaluator {
 public:
+    explicit ExpressionEvaluator(const std::unordered_map<LabelId, LabelDef>& label_defs) : label_defs_(label_defs) {}
+
     /// Evaluate an expression given the current row and its schema (column names).
     Value evaluate(const cypher::Expression& expr, const Row& row, const Schema& schema);
-
-    /// Set label definitions for property name→prop_id resolution.
-    void setLabelDefs(const std::unordered_map<LabelId, LabelDef>* defs) {
-        label_defs_ = defs;
-    }
 
 private:
     Value evalLiteral(const cypher::Literal& lit);
@@ -29,7 +26,7 @@ private:
     Value evalLabelCast(const cypher::LabelCastExpr& lc, const Row& row, const Schema& schema);
     Value evalFunctionCall(const cypher::FunctionCall& fc, const Row& row, const Schema& schema);
 
-    const std::unordered_map<LabelId, LabelDef>* label_defs_ = nullptr;
+    const std::unordered_map<LabelId, LabelDef>& label_defs_;
 };
 
 } // namespace compute

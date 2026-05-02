@@ -54,21 +54,14 @@ void WtStoreBase::closeConnection() {
         for (auto& [h, ts] : txns_) {
             closeTxnCursors(ts.get());
             if (ts->session) {
-                ts->session->rollback_transaction(ts->session, nullptr);
-                ts->session->close(ts->session, nullptr);
+                ts->session.get()->rollback_transaction(ts->session.get(), nullptr);
             }
         }
         txns_.clear();
     }
-
-    if (defaultSession_) {
-        defaultSession_->close(defaultSession_, nullptr);
-        defaultSession_ = nullptr;
-    }
-    if (conn_) {
-        conn_->close(conn_, nullptr);
-        conn_ = nullptr;
-    }
+    // defaultSession_ and conn_ are automatically cleaned up by their destructors
+    defaultSession_ = WtSession{};
+    conn_.close();
 }
 
 bool WtStoreBase::openConnection(const std::string& db_path) {
@@ -85,18 +78,14 @@ bool WtStoreBase::openConnection(const std::string& db_path) {
     // Enable WAL with fsync on commit for crash durability.
     // transaction_sync=(enabled=true) is required: without it, log records are
     // only buffered in memory and flushed on checkpoint or clean shutdown.
-    int ret = wiredtiger_open(db_path.c_str(), nullptr,
-                              "create,log=(enabled=true),transaction_sync=(enabled=true,method=fsync)", &conn_);
-    if (ret != 0) {
-        spdlog::error("Failed to open WiredTiger: error {}", ret);
+    if (!conn_.open(db_path, "create,log=(enabled=true),transaction_sync=(enabled=true,method=fsync)")) {
         return false;
     }
 
-    ret = conn_->open_session(conn_, nullptr, nullptr, &defaultSession_);
-    if (ret != 0) {
-        spdlog::error("Failed to open default session: error {}", ret);
-        conn_->close(conn_, nullptr);
-        conn_ = nullptr;
+    defaultSession_ = conn_.openSession();
+    if (!defaultSession_) {
+        spdlog::error("Failed to open default session");
+        conn_.close();
         return false;
     }
 
@@ -107,29 +96,19 @@ bool WtStoreBase::openConnection(const std::string& db_path) {
 
 WT_SESSION* WtStoreBase::getSession(GraphTxnHandle txn) {
     if (txn == INVALID_GRAPH_TXN)
-        return defaultSession_;
+        return defaultSession_.get();
     std::lock_guard<std::mutex> lock(txnMutex_);
     auto it = txns_.find(txn);
-    return it != txns_.end() ? it->second->session : nullptr;
+    return it != txns_.end() ? it->second->session.get() : nullptr;
 }
 
-WT_CURSOR* WtStoreBase::getCursor(WT_SESSION* session, const std::string& table_name) {
-    WT_CURSOR* cursor = nullptr;
-    int ret = session->open_cursor(session, table_name.c_str(), nullptr, nullptr, &cursor);
-    if (ret != 0) {
-        spdlog::error("Failed to open cursor on {}: error {}", table_name, ret);
-        return nullptr;
-    }
-    return cursor;
+WtCursor WtStoreBase::openCursor(WT_SESSION* session, const std::string& table_name) {
+    return WtCursor(session, table_name);
 }
 
 void WtStoreBase::closeTxnCursors(TxnState* state) {
     if (!state)
         return;
-    for (auto& [name, cursor] : state->cursors) {
-        if (cursor)
-            cursor->close(cursor);
-    }
     state->cursors.clear();
 }
 
@@ -145,7 +124,7 @@ bool WtStoreBase::ensureGlobalTable(WT_SESSION* session, const char* table_name)
 bool WtStoreBase::checkpoint() {
     if (!defaultSession_)
         return false;
-    int ret = defaultSession_->checkpoint(defaultSession_, nullptr);
+    int ret = defaultSession_.get()->checkpoint(defaultSession_.get(), nullptr);
     if (ret != 0) {
         spdlog::error("Checkpoint failed: error {}", ret);
         return false;
@@ -157,14 +136,13 @@ bool WtStoreBase::checkpoint() {
 
 bool WtStoreBase::tablePut(WT_SESSION* session, const std::string& table, std::string_view key,
                            std::string_view value) {
-    WT_CURSOR* cursor = getCursor(session, table);
+    auto cursor = openCursor(session, table);
     if (!cursor)
         return false;
 
-    setItem(cursor, key);
-    setValueItem(cursor, value);
-    int ret = cursor->insert(cursor);
-    cursor->close(cursor);
+    setItem(cursor.get(), key);
+    setValueItem(cursor.get(), value);
+    int ret = cursor.get()->insert(cursor.get());
 
     if (ret != 0) {
         spdlog::error("tablePut failed on {}: error {}", table, ret);
@@ -174,30 +152,26 @@ bool WtStoreBase::tablePut(WT_SESSION* session, const std::string& table, std::s
 }
 
 std::optional<std::string> WtStoreBase::tableGet(WT_SESSION* session, const std::string& table, std::string_view key) {
-    WT_CURSOR* cursor = getCursor(session, table);
+    auto cursor = openCursor(session, table);
     if (!cursor)
         return std::nullopt;
 
-    setItem(cursor, key);
-    int ret = cursor->search(cursor);
+    setItem(cursor.get(), key);
+    int ret = cursor.get()->search(cursor.get());
     if (ret != 0) {
-        cursor->close(cursor);
         return std::nullopt;
     }
 
-    std::string value = getValueFromCursor(cursor);
-    cursor->close(cursor);
-    return value;
+    return getValueFromCursor(cursor.get());
 }
 
 bool WtStoreBase::tableDel(WT_SESSION* session, const std::string& table, std::string_view key) {
-    WT_CURSOR* cursor = getCursor(session, table);
+    auto cursor = openCursor(session, table);
     if (!cursor)
         return false;
 
-    setItem(cursor, key);
-    int ret = cursor->remove(cursor);
-    cursor->close(cursor);
+    setItem(cursor.get(), key);
+    int ret = cursor.get()->remove(cursor.get());
 
     if (ret != 0 && ret != WT_NOTFOUND) {
         spdlog::error("tableDel failed on {}: error {}", table, ret);
@@ -208,49 +182,46 @@ bool WtStoreBase::tableDel(WT_SESSION* session, const std::string& table, std::s
 
 void WtStoreBase::tableScan(WT_SESSION* session, const std::string& table, std::string_view prefix,
                             const std::function<bool(std::string_view, std::string_view)>& callback) {
-    WT_CURSOR* cursor = getCursor(session, table);
+    auto cursor = openCursor(session, table);
     if (!cursor)
         return;
 
+    auto* c = cursor.get();
     std::string pfx(prefix);
 
     if (pfx.empty()) {
-        int ret = cursor->reset(cursor);
-        if (ret != 0) {
-            cursor->close(cursor);
+        int ret = c->reset(c);
+        if (ret != 0)
             return;
-        }
-        ret = cursor->next(cursor);
+        ret = c->next(c);
         while (ret == 0) {
-            std::string key = getKeyFromCursor(cursor);
-            std::string value = getValueFromCursor(cursor);
+            std::string key = getKeyFromCursor(c);
+            std::string value = getValueFromCursor(c);
             if (!callback(key, value))
                 break;
-            ret = cursor->next(cursor);
+            ret = c->next(c);
         }
     } else {
-        setItem(cursor, prefix);
+        setItem(c, prefix);
         int exact = 0;
-        int ret = cursor->search_near(cursor, &exact);
+        int ret = c->search_near(c, &exact);
 
         if (ret != 0 || exact < 0) {
-            ret = cursor->next(cursor);
+            ret = c->next(c);
         }
 
         while (ret == 0) {
-            std::string key = getKeyFromCursor(cursor);
+            std::string key = getKeyFromCursor(c);
             if (!key.starts_with(prefix))
                 break;
 
-            std::string value = getValueFromCursor(cursor);
+            std::string value = getValueFromCursor(c);
             if (!callback(key, value))
                 break;
 
-            ret = cursor->next(cursor);
+            ret = c->next(c);
         }
     }
-
-    cursor->close(cursor);
 }
 
 } // namespace eugraph

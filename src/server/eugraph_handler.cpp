@@ -19,14 +19,14 @@ folly::coro::AsyncGenerator<eugraph::thrift::ResultRowBatch&&>
 makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
                     std::unordered_map<eugraph::LabelId, eugraph::LabelDef> label_defs,
                     std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
-                    eugraph::server::EuGraphHandler* handler, int64_t t0) {
+                    eugraph::server::EuGraphHandler& handler, int64_t t0) {
     size_t total_rows = 0;
     while (auto batch = co_await ctx->gen.next()) {
         eugraph::thrift::ResultRowBatch thrift_batch;
         for (auto& row : batch->rows) {
             eugraph::thrift::ResultRow row_resp;
             for (auto& val : row) {
-                row_resp.values()->push_back(handler->valueToThrift(val, label_defs, edge_label_defs));
+                row_resp.values()->push_back(handler.valueToThrift(val, label_defs, edge_label_defs));
             }
             thrift_batch.rows()->push_back(std::move(row_resp));
         }
@@ -34,7 +34,7 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
         co_yield std::move(thrift_batch);
     }
     if (ctx->should_commit) {
-        co_await ctx->store->commitTran(ctx->txn);
+        co_await ctx->store.commitTran(ctx->txn);
     }
     spdlog::info("[handler] executeCypher stream done, {} rows, took={}ms", total_rows, nowMs() - t0);
 }
@@ -358,7 +358,7 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
     thrift::QueryStreamMeta meta;
     meta.columns() = std::move(ctx->columns);
 
-    auto gen = makeStreamGenerator(std::move(ctx), std::move(label_defs), std::move(edge_label_defs), this, t0);
+    auto gen = makeStreamGenerator(std::move(ctx), std::move(label_defs), std::move(edge_label_defs), *this, t0);
 
     co_return apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>{std::move(meta),
                                                                                                        std::move(gen)};
