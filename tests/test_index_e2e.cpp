@@ -124,6 +124,13 @@ static void createLabel(TestEnv& env, const std::string& name, const std::vector
     ASSERT_TRUE(blockingWait(env.async_data->createLabel(label_id)));
 }
 
+// Helper: create edge label with properties via meta + data stores
+static void createEdgeLabel(TestEnv& env, const std::string& name, const std::vector<PropertyDef>& props) {
+    auto edge_label_id = blockingWait(env.async_meta->createEdgeLabel(name, props));
+    ASSERT_NE(edge_label_id, INVALID_EDGE_LABEL_ID);
+    ASSERT_TRUE(blockingWait(env.async_data->createEdgeLabel(edge_label_id)));
+}
+
 // Helper: manually insert vertices with properties and index entries
 static void insertVertexWithIndex(TestEnv& env, LabelId label_id, VertexId vid, const Properties& props,
                                   const std::vector<LabelDef::IndexDef>& indexes) {
@@ -698,4 +705,215 @@ TEST_F(IndexE2ETest, ShowCompositeIndex) {
     // property column should show comma-separated list
     EXPECT_EQ(std::get<std::string>(result.rows[0][2]), "age, name");
     EXPECT_EQ(std::get<std::string>(result.rows[0][4]), "PUBLIC");
+}
+
+// ==================== Edge Index E2E Tests ====================
+
+TEST_F(IndexE2ETest, DdlCreateEdgeIndexViaExecutor) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    auto result = execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
+    EXPECT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_NE(std::get<std::string>(result.rows[0][0]).find("Edge index created"), std::string::npos);
+
+    // Verify state is PUBLIC
+    auto info = blockingWait(env.async_meta->getIndex("idx_knows_since"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+}
+
+TEST_F(IndexE2ETest, DdlCreateEdgeIndexLabelNotFound) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    auto result = execSync(executor, "CREATE INDEX idx_bad FOR ()-[r:NONEXISTENT]-() ON (r.prop)");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("Edge label not found"), std::string::npos);
+}
+
+TEST_F(IndexE2ETest, DdlCreateEdgeIndexPropertyNotFound) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    auto result = execSync(executor, "CREATE INDEX idx_bad FOR ()-[r:KNOWS]-() ON (r.nonexistent)");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("Property not found"), std::string::npos);
+}
+
+TEST_F(IndexE2ETest, DdlCreateEdgeIndexBackfill) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    runQuery(executor, "CREATE (n:Person {name: 'Alice'})");
+    runQuery(executor, "CREATE (n:Person {name: 'Bob'})");
+    // Note: edges currently created without properties, so backfill won't find any
+
+    auto result = execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
+    EXPECT_TRUE(result.error.empty()) << result.error;
+
+    auto info = blockingWait(env.async_meta->getIndex("idx_knows_since"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+}
+
+TEST_F(IndexE2ETest, DdlCreateUniqueEdgeIndexNoConflict) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    auto result = execSync(executor, "CREATE UNIQUE INDEX idx_uknows_since FOR ()-[r:KNOWS]-() ON (r.since)");
+    EXPECT_TRUE(result.error.empty()) << result.error;
+
+    auto info = blockingWait(env.async_meta->getIndex("idx_uknows_since"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+    EXPECT_TRUE(info->unique);
+}
+
+TEST_F(IndexE2ETest, ShowEdgeIndexes) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
+
+    auto result = execSync(executor, "SHOW INDEXES");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "idx_knows_since");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "KNOWS");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][2]), "since");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][3]), "false");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][4]), "PUBLIC");
+}
+
+TEST_F(IndexE2ETest, DropEdgeIndex) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
+
+    auto drop_result = execSync(executor, "DROP INDEX idx_knows_since");
+    EXPECT_TRUE(drop_result.error.empty()) << drop_result.error;
+
+    auto show_result = execSync(executor, "SHOW INDEXES");
+    EXPECT_EQ(show_result.rows.size(), 0u);
+}
+
+TEST_F(IndexE2ETest, DdlCreateCompositeEdgeIndex) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                        {0, "weight", PropertyType::DOUBLE, false, std::nullopt},
+                    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    auto result =
+        execSync(executor, "CREATE INDEX idx_knows_sw FOR ()-[r:KNOWS]-() ON (r.since, r.weight)");
+    EXPECT_TRUE(result.error.empty()) << result.error;
+
+    auto info = blockingWait(env.async_meta->getIndex("idx_knows_sw"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+    EXPECT_EQ(info->property_names.size(), 2u);
+
+    auto show = execSync(executor, "SHOW INDEXES");
+    ASSERT_EQ(show.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(show.rows[0][2]), "since, weight");
+}
+
+TEST_F(IndexE2ETest, DdlCreateCompositeUniqueEdgeIndex) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                        {0, "weight", PropertyType::DOUBLE, false, std::nullopt},
+                    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    auto result =
+        execSync(executor, "CREATE UNIQUE INDEX idx_uknows_sw FOR ()-[r:KNOWS]-() ON (r.since, r.weight)");
+    EXPECT_TRUE(result.error.empty()) << result.error;
+
+    auto info = blockingWait(env.async_meta->getIndex("idx_uknows_sw"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_TRUE(info->unique);
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+}
+
+TEST_F(IndexE2ETest, DdlCreateDuplicateEdgeIndex) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
+    auto result = execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("duplicate"), std::string::npos);
 }

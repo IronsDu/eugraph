@@ -5,6 +5,7 @@
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
 #include "storage/io_scheduler.hpp"
+#include "storage/kv/value_codec.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
@@ -65,6 +66,14 @@ public:
 
     folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) override {
         auto result = co_await io_.dispatch([this, vid]() { return store_.getVertexLabels(txn_, vid); });
+        co_return std::move(result);
+    }
+
+    // ==================== Edge Properties ====================
+
+    folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) override {
+        auto result = co_await io_.dispatch(
+            [this, label_id, eid]() { return store_.getEdgeProperties(txn_, label_id, eid); });
         co_return std::move(result);
     }
 
@@ -217,6 +226,22 @@ public:
         co_return ok;
     }
 
+    folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id,
+                                             std::string payload) override {
+        auto ok = co_await io_.dispatch([this, &table, &value, entity_id, payload = std::move(payload)]() {
+            return store_.insertIndexEntry(table, value, entity_id, payload);
+        });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                             uint64_t entity_id, std::string payload) override {
+        auto ok = co_await io_.dispatch([this, &table, &values, entity_id, payload = std::move(payload)]() {
+            return store_.insertIndexEntry(table, values, entity_id, payload);
+        });
+        co_return ok;
+    }
+
     folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
                                              uint64_t entity_id) override {
         auto ok = co_await io_.dispatch(
@@ -327,6 +352,98 @@ public:
             co_yield std::move(batch);
             if (batch.size() < BATCH)
                 co_return;
+        }
+    }
+
+    // ==================== Edge Index Scan ====================
+
+    folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    scanEdgesByIndex(EdgeLabelId label_id, uint16_t prop_id, const PropertyValue& value) override {
+        constexpr size_t BATCH = 1024;
+        std::string table = eidxTable(label_id, prop_id);
+        while (true) {
+            std::vector<EdgeIndexScanEntry> batch;
+            co_await io_.dispatchVoid([&]() {
+                store_.scanIndexEqualityWithValue(txn_, table, value, [&](uint64_t entity_id, std::string_view val) {
+                    EdgeIndexScanEntry entry;
+                    entry.edge_id = entity_id;
+                    ValueCodec::decodeEdgeAdjacency(val, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                    batch.push_back(entry);
+                    return batch.size() < BATCH;
+                });
+            });
+            if (batch.empty()) co_return;
+            co_yield std::move(batch);
+            if (batch.size() < BATCH) co_return;
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    scanEdgesByIndexComposite(EdgeLabelId label_id, const std::vector<uint16_t>& prop_ids,
+                              const std::vector<PropertyValue>& values) override {
+        constexpr size_t BATCH = 1024;
+        std::string table = eidxCompositeTable(label_id, prop_ids);
+        while (true) {
+            std::vector<EdgeIndexScanEntry> batch;
+            co_await io_.dispatchVoid([&]() {
+                store_.scanIndexEqualityWithValue(txn_, table, values, [&](uint64_t entity_id, std::string_view val) {
+                    EdgeIndexScanEntry entry;
+                    entry.edge_id = entity_id;
+                    ValueCodec::decodeEdgeAdjacency(val, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                    batch.push_back(entry);
+                    return batch.size() < BATCH;
+                });
+            });
+            if (batch.empty()) co_return;
+            co_yield std::move(batch);
+            if (batch.size() < BATCH) co_return;
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    scanEdgesByIndexRange(EdgeLabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
+                          const std::optional<PropertyValue>& end) override {
+        constexpr size_t BATCH = 1024;
+        std::string table = eidxTable(label_id, prop_id);
+        while (true) {
+            std::vector<EdgeIndexScanEntry> batch;
+            co_await io_.dispatchVoid([&]() {
+                store_.scanIndexRangeWithValue(txn_, table, start, end, [&](uint64_t entity_id, std::string_view val) {
+                    EdgeIndexScanEntry entry;
+                    entry.edge_id = entity_id;
+                    ValueCodec::decodeEdgeAdjacency(val, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                    batch.push_back(entry);
+                    return batch.size() < BATCH;
+                });
+            });
+            if (batch.empty()) co_return;
+            co_yield std::move(batch);
+            if (batch.size() < BATCH) co_return;
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    scanEdgesByIndexRangeComposite(EdgeLabelId label_id, const std::vector<uint16_t>& prop_ids,
+                                   const std::optional<std::vector<PropertyValue>>& start,
+                                   const std::optional<std::vector<PropertyValue>>& end) override {
+        constexpr size_t BATCH = 1024;
+        std::string table = eidxCompositeTable(label_id, prop_ids);
+        while (true) {
+            std::vector<EdgeIndexScanEntry> batch;
+            co_await io_.dispatchVoid([&]() {
+                store_.scanIndexRangeWithValue(txn_, table, start, end,
+                                                [&](uint64_t entity_id, std::string_view val) {
+                                                    EdgeIndexScanEntry entry;
+                                                    entry.edge_id = entity_id;
+                                                    ValueCodec::decodeEdgeAdjacency(val, entry.src_id, entry.dst_id,
+                                                                                    entry.seq, entry.label_id);
+                                                    batch.push_back(entry);
+                                                    return batch.size() < BATCH;
+                                                });
+            });
+            if (batch.empty()) co_return;
+            co_yield std::move(batch);
+            if (batch.size() < BATCH) co_return;
         }
     }
 

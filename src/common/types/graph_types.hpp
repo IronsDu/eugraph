@@ -115,4 +115,15 @@ struct EdgeLabelDef {
     std::vector<LabelDef::IndexDef> indexes;
 };
 
+// ==================== Edge Index Scan Entry ====================
+/// Full edge information returned by edge index scans.
+/// Contains both the edge_id (from the key) and adjacency info (from the stored value).
+struct EdgeIndexScanEntry {
+    EdgeId edge_id = INVALID_EDGE_ID;
+    VertexId src_id = INVALID_VERTEX_ID;
+    VertexId dst_id = INVALID_VERTEX_ID;
+    uint64_t seq = 0;
+    EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
+};
+
 } // namespace eugraph

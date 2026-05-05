@@ -552,8 +552,8 @@ TEST_F(QueryExecutorTest, CreateEdgeReturnsId) {
     auto rows = execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person)").rows;
     ASSERT_EQ(rows.size(), 1);
     ASSERT_EQ(rows[0].size(), 1);
-    ASSERT_TRUE(std::holds_alternative<int64_t>(rows[0][0]));
-    EXPECT_GT(std::get<int64_t>(rows[0][0]), 0);
+    ASSERT_TRUE(std::holds_alternative<EdgeValue>(rows[0][0]));
+    EXPECT_GT(std::get<EdgeValue>(rows[0][0]).id, 0);
 }
 
 TEST_F(QueryExecutorTest, CreateEdgeVerifyInStore) {
@@ -1748,4 +1748,67 @@ TEST_F(QueryExecutorMultiLabelTest, FilterLabelCastNonExistentPropertyErrors) {
     auto r2 = execSync(*executor_, "MATCH (n:Person) WHERE n::Person.noname = 'x' RETURN n");
     EXPECT_FALSE(r2.error.empty());
     EXPECT_NE(r2.error.find("has no property"), std::string::npos) << r2.error;
+}
+
+// ==================== CreateEdge With Edge Index ====================
+
+TEST_F(QueryExecutorTest, CreateEdgeMaintainsIndex) {
+    // Create edge label with a property
+    PropertyDef weight_prop{0, "weight", PropertyType::INT64, false, std::nullopt};
+    auto edge_label_id = blockingWait(async_meta_->createEdgeLabel("RATED", {weight_prop}));
+    ASSERT_NE(edge_label_id, INVALID_EDGE_LABEL_ID);
+    ASSERT_TRUE(blockingWait(async_data_->createEdgeLabel(edge_label_id)));
+
+    // Create index on edge property
+    QueryExecutor executor(*async_data_, *async_meta_, {});
+    auto ddl = execSync(executor, "CREATE INDEX idx_rated_weight FOR ()-[r:RATED]-() ON (r.weight)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    // Verify index is PUBLIC
+    auto info = blockingWait(async_meta_->getIndex("idx_rated_weight"));
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->state, IndexState::PUBLIC);
+
+    // Create vertices
+    execSync(executor, "CREATE (n:Person {name: 'Alice'})");
+    execSync(executor, "CREATE (n:Person {name: 'Bob'})");
+
+    // Create edge with property — should insert index entry
+    auto result = execSync(executor, "CREATE (a:Person)-[:RATED {weight: 5}]->(b:Person)");
+    EXPECT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+
+    // Verify RATED edge was created (has an edge ID)
+    auto edge_val = result.rows[0][0];
+    ASSERT_TRUE(std::holds_alternative<EdgeValue>(edge_val));
+    auto& ev = std::get<EdgeValue>(edge_val);
+    EXPECT_GT(ev.id, 0u);
+    EXPECT_EQ(ev.label_id, edge_label_id);
+}
+
+TEST_F(QueryExecutorTest, CreateEdgeViolatesUniqueEdgeIndex) {
+    // Create edge label with a property
+    PropertyDef since_prop{0, "since", PropertyType::INT64, false, std::nullopt};
+    auto edge_label_id = blockingWait(async_meta_->createEdgeLabel("REVIEWED", {since_prop}));
+    ASSERT_NE(edge_label_id, INVALID_EDGE_LABEL_ID);
+    ASSERT_TRUE(blockingWait(async_data_->createEdgeLabel(edge_label_id)));
+
+    QueryExecutor executor(*async_data_, *async_meta_, {});
+
+    // Create unique edge index
+    auto ddl = execSync(executor, "CREATE UNIQUE INDEX idx_reviewed_since FOR ()-[r:REVIEWED]-() ON (r.since)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    // Create vertices
+    execSync(executor, "CREATE (n:Person {name: 'Alice'})");
+    execSync(executor, "CREATE (n:Person {name: 'Bob'})");
+
+    // First edge should succeed
+    auto r1 = execSync(executor, "CREATE (a:Person)-[:REVIEWED {since: 2020}]->(b:Person)");
+    EXPECT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_EQ(r1.rows.size(), 1u);
+
+    // Second edge with same 'since' value should be rejected by unique constraint
+    auto r2 = execSync(executor, "CREATE (a:Person)-[:REVIEWED {since: 2020}]->(b:Person)");
+    EXPECT_TRUE(r2.rows.empty()) << "Expected 0 rows (unique constraint violation)";
 }

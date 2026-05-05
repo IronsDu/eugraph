@@ -38,6 +38,9 @@ public:
     virtual folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id) = 0;
     virtual folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) = 0;
 
+    // Edge Properties
+    virtual folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) = 0;
+
     // Vertex Property Write
     virtual folly::coro::Task<bool> putVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id,
                                                       const PropertyValue& value) = 0;
@@ -72,6 +75,11 @@ public:
                                                      uint64_t entity_id) = 0;
     virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                                      uint64_t entity_id) = 0;
+    virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,
+                                                     uint64_t entity_id, std::string payload) = 0;
+    virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table,
+                                                     const std::vector<PropertyValue>& values, uint64_t entity_id,
+                                                     std::string payload) = 0;
     virtual folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
                                                      uint64_t entity_id) = 0;
     virtual folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
@@ -93,6 +101,20 @@ public:
     scanVerticesByIndexRangeComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
                                       const std::optional<std::vector<PropertyValue>>& start,
                                       const std::optional<std::vector<PropertyValue>>& end) = 0;
+
+    // Edge Index Scan
+    virtual folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    scanEdgesByIndex(EdgeLabelId label_id, uint16_t prop_id, const PropertyValue& value) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    scanEdgesByIndexComposite(EdgeLabelId label_id, const std::vector<uint16_t>& prop_ids,
+                              const std::vector<PropertyValue>& values) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    scanEdgesByIndexRange(EdgeLabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
+                          const std::optional<PropertyValue>& end) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
+    scanEdgesByIndexRangeComposite(EdgeLabelId label_id, const std::vector<uint16_t>& prop_ids,
+                                   const std::optional<std::vector<PropertyValue>>& start,
+                                   const std::optional<std::vector<PropertyValue>>& end) = 0;
 
     // Batch write (single transaction, single dispatch)
     struct BatchVertexEntry {
