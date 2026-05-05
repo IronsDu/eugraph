@@ -81,6 +81,15 @@ enum class IndexState : uint8_t {
     DELETE_ONLY = 2,  // 删除中：仅清理残留条目
     ERROR       = 3,  // 异常：唯一索引回填发现重复值
 };
+
+// 边索引扫描结果（含邻接信息，来自 index value）
+struct EdgeIndexScanEntry {
+    EdgeId edge_id = INVALID_EDGE_ID;
+    VertexId src_id = INVALID_VERTEX_ID;
+    VertexId dst_id = INVALID_VERTEX_ID;
+    uint64_t seq = 0;
+    EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
+};
 ```
 
 ---
