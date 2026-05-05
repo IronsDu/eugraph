@@ -126,7 +126,7 @@ target_link_libraries(eugraph_metadata PUBLIC
 
 add_library(eugraph_query_engine STATIC
     src/compute_service/logical_plan/logical_plan_builder.cpp
-    src/storage/data/async_graph_data_store.cpp
+    src/compute_service/physical_plan/operator/edge_index_scan_physical_op.cpp
     src/compute_service/executor/expression_evaluator.cpp
     src/compute_service/physical_plan/operator/aggregate_physical_op.cpp
     src/compute_service/physical_plan/operator/all_node_scan_physical_op.cpp

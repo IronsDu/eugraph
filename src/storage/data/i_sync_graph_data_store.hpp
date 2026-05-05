@@ -161,6 +161,10 @@ public:
     virtual bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) = 0;
     virtual bool insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                   uint64_t entity_id) = 0;
+    virtual bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id,
+                                  std::string_view payload) = 0;
+    virtual bool insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                  uint64_t entity_id, std::string_view payload) = 0;
     virtual bool deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) = 0;
     virtual bool deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                   uint64_t entity_id) = 0;
@@ -181,6 +185,21 @@ public:
                                 const std::optional<std::vector<PropertyValue>>& start,
                                 const std::optional<std::vector<PropertyValue>>& end,
                                 const std::function<bool(uint64_t)>& callback) = 0;
+
+    // Index scan that also returns the stored value (for edge indexes with adjacency info)
+    virtual void scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
+                                            const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+    virtual void scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table,
+                                            const std::vector<PropertyValue>& values,
+                                            const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+    virtual void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
+                                         const std::optional<PropertyValue>& start,
+                                         const std::optional<PropertyValue>& end,
+                                         const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+    virtual void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
+                                         const std::optional<std::vector<PropertyValue>>& start,
+                                         const std::optional<std::vector<PropertyValue>>& end,
+                                         const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
 
     // ==================== Index Cleanup ====================
 

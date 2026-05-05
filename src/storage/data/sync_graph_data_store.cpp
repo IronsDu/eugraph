@@ -827,10 +827,22 @@ bool SyncGraphDataStore::deleteIndexEntry(const std::string& table, const Proper
     return tableDel(defaultSession_.get(), table, key);
 }
 
+bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id,
+                                          std::string_view payload) {
+    auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
+    return tablePut(defaultSession_.get(), table, key, payload);
+}
+
 bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                           uint64_t entity_id) {
     auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
     return tablePut(defaultSession_.get(), table, key, {});
+}
+
+bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                          uint64_t entity_id, std::string_view payload) {
+    auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
+    return tablePut(defaultSession_.get(), table, key, payload);
 }
 
 bool SyncGraphDataStore::deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
@@ -1021,6 +1033,176 @@ void SyncGraphDataStore::scanIndexRange(GraphTxnHandle txn, const std::string& t
 
         auto entity_id = IndexKeyCodec::decodeEntityId(key);
         if (!callback(entity_id))
+            break;
+
+        ret = c->next(c);
+        if (ret != 0)
+            break;
+    }
+}
+
+// ==================== Index Scan With Value ====================
+
+void SyncGraphDataStore::scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table,
+                                                    const PropertyValue& value,
+                                                    const std::function<bool(uint64_t, std::string_view)>& callback) {
+    auto prefix = IndexKeyCodec::encodeEqualityPrefix(value);
+    auto* session = getSession(txn);
+    tableScan(session, table, prefix, [&](std::string_view key, std::string_view val) {
+        auto entity_id = IndexKeyCodec::decodeEntityId(key);
+        return callback(entity_id, val);
+    });
+}
+
+void SyncGraphDataStore::scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table,
+                                                    const std::vector<PropertyValue>& values,
+                                                    const std::function<bool(uint64_t, std::string_view)>& callback) {
+    auto prefix = IndexKeyCodec::encodeEqualityPrefix(values);
+    auto* session = getSession(txn);
+    tableScan(session, table, prefix, [&](std::string_view key, std::string_view val) {
+        auto entity_id = IndexKeyCodec::decodeEntityId(key);
+        return callback(entity_id, val);
+    });
+}
+
+void SyncGraphDataStore::scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
+                                                 const std::optional<PropertyValue>& start,
+                                                 const std::optional<PropertyValue>& end,
+                                                 const std::function<bool(uint64_t, std::string_view)>& callback) {
+    auto* session = getSession(txn);
+    auto cursor = openCursor(session, table);
+    if (!cursor)
+        return;
+
+    auto* c = cursor.get();
+    std::string start_encoded;
+    if (start.has_value()) {
+        start_encoded = IndexKeyCodec::encodeSortableValue(*start);
+        start_encoded.append(8, '\xFF');
+    }
+
+    std::string end_encoded;
+    if (end.has_value())
+        end_encoded = IndexKeyCodec::encodeSortableValue(*end);
+
+    int ret;
+    if (!start_encoded.empty()) {
+        WT_ITEM item;
+        item.data = start_encoded.data();
+        item.size = start_encoded.size();
+        c->set_key(c, &item);
+        int cmp;
+        ret = c->search_near(c, &cmp);
+        if (ret != 0)
+            return;
+        if (cmp <= 0) {
+            ret = c->next(c);
+            if (ret != 0)
+                return;
+        }
+    } else {
+        ret = c->reset(c);
+        if (ret != 0)
+            return;
+        ret = c->next(c);
+        if (ret != 0)
+            return;
+    }
+
+    while (true) {
+        WT_ITEM key_item;
+        ret = c->get_key(c, &key_item);
+        if (ret != 0)
+            break;
+        std::string_view key(static_cast<const char*>(key_item.data), key_item.size);
+
+        if (!end_encoded.empty()) {
+            auto key_sortable = key.substr(0, key.size() - 8);
+            if (key_sortable >= end_encoded)
+                break;
+        }
+
+        auto entity_id = IndexKeyCodec::decodeEntityId(key);
+
+        WT_ITEM val_item;
+        ret = c->get_value(c, &val_item);
+        std::string_view val((ret == 0 && val_item.data) ? static_cast<const char*>(val_item.data) : "",
+                             (ret == 0) ? val_item.size : 0);
+
+        if (!callback(entity_id, val))
+            break;
+
+        ret = c->next(c);
+        if (ret != 0)
+            break;
+    }
+}
+
+void SyncGraphDataStore::scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
+                                                 const std::optional<std::vector<PropertyValue>>& start,
+                                                 const std::optional<std::vector<PropertyValue>>& end,
+                                                 const std::function<bool(uint64_t, std::string_view)>& callback) {
+    auto* session = getSession(txn);
+    auto cursor = openCursor(session, table);
+    if (!cursor)
+        return;
+
+    auto* c = cursor.get();
+    std::string start_encoded;
+    if (start.has_value()) {
+        start_encoded = IndexKeyCodec::encodeSortableValues(*start);
+        start_encoded.append(8, '\xFF');
+    }
+
+    std::string end_encoded;
+    if (end.has_value())
+        end_encoded = IndexKeyCodec::encodeSortableValues(*end);
+
+    int ret;
+    if (!start_encoded.empty()) {
+        WT_ITEM item;
+        item.data = start_encoded.data();
+        item.size = start_encoded.size();
+        c->set_key(c, &item);
+        int cmp;
+        ret = c->search_near(c, &cmp);
+        if (ret != 0)
+            return;
+        if (cmp <= 0) {
+            ret = c->next(c);
+            if (ret != 0)
+                return;
+        }
+    } else {
+        ret = c->reset(c);
+        if (ret != 0)
+            return;
+        ret = c->next(c);
+        if (ret != 0)
+            return;
+    }
+
+    while (true) {
+        WT_ITEM key_item;
+        ret = c->get_key(c, &key_item);
+        if (ret != 0)
+            break;
+        std::string_view key(static_cast<const char*>(key_item.data), key_item.size);
+
+        if (!end_encoded.empty()) {
+            auto key_sortable = key.substr(0, key.size() - 8);
+            if (key_sortable >= end_encoded)
+                break;
+        }
+
+        auto entity_id = IndexKeyCodec::decodeEntityId(key);
+
+        WT_ITEM val_item;
+        ret = c->get_value(c, &val_item);
+        std::string_view val((ret == 0 && val_item.data) ? static_cast<const char*>(val_item.data) : "",
+                             (ret == 0) ? val_item.size : 0);
+
+        if (!callback(entity_id, val))
             break;
 
         ret = c->next(c);

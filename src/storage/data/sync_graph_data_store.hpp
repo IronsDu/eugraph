@@ -104,6 +104,10 @@ public:
     bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) override;
     bool insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                           uint64_t entity_id) override;
+    bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id,
+                          std::string_view payload) override;
+    bool insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values, uint64_t entity_id,
+                          std::string_view payload) override;
     bool deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) override;
     bool deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                           uint64_t entity_id) override;
@@ -122,6 +126,18 @@ public:
                         const std::optional<std::vector<PropertyValue>>& start,
                         const std::optional<std::vector<PropertyValue>>& end,
                         const std::function<bool(uint64_t)>& callback) override;
+    void scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
+                                    const std::function<bool(uint64_t, std::string_view)>& callback) override;
+    void scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table,
+                                    const std::vector<PropertyValue>& values,
+                                    const std::function<bool(uint64_t, std::string_view)>& callback) override;
+    void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
+                                 const std::optional<PropertyValue>& start, const std::optional<PropertyValue>& end,
+                                 const std::function<bool(uint64_t, std::string_view)>& callback) override;
+    void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
+                                 const std::optional<std::vector<PropertyValue>>& start,
+                                 const std::optional<std::vector<PropertyValue>>& end,
+                                 const std::function<bool(uint64_t, std::string_view)>& callback) override;
 
     // Index Cleanup
     void dropAllIndexEntries(const std::string& table) override;

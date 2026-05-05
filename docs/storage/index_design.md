@@ -120,22 +120,46 @@ DROP INDEX:
 
 `ISyncGraphDataStore` 索引方法：
 - `createIndex(table_name)` / `dropIndex(table_name)` — DDL 级表操作
-- `insertIndexEntry(table, value, entity_id)` / `deleteIndexEntry(table, value, entity_id)` — 条目 CRUD
+- `insertIndexEntry(table, value, entity_id)` / `insertIndexEntry(table, value, entity_id, payload)` — 条目 CRUD（带 payload 变体用于边索引邻接信息）
+- `deleteIndexEntry(table, value, entity_id)` — 条目删除
 - `checkUniqueConstraint(table, value)` — 唯一性校验
-- `scanIndexEquality(txn, table, value, callback)` / `scanIndexRange(...)` — 索引扫描
+- `scanIndexEquality(txn, table, value, callback)` / `scanIndexRange(...)` — 索引扫描（仅返回 entity_id）
+- `scanIndexEqualityWithValue(txn, table, value, callback)` / `scanIndexRangeWithValue(...)` — 索引扫描（返回 entity_id + stored value），用于边属性索引读取邻接信息
 - `dropAllIndexEntries(table)` — 清理所有条目
+
+`IAsyncGraphDataStore` 边索引扫描方法：
+- `scanEdgesByIndex(label_id, prop_id, value)` — 单属性等值扫描
+- `scanEdgesByIndexComposite(label_id, prop_ids, values)` — 复合等值扫描
+- `scanEdgesByIndexRange(label_id, prop_id, start, end)` — 单属性范围扫描
+- `scanEdgesByIndexRangeComposite(label_id, prop_ids, start, end)` — 复合范围扫描
+
+以上方法返回 `AsyncGenerator<vector<EdgeIndexScanEntry>>`，`EdgeIndexScanEntry` 包含 `edge_id` + `src_id` + `dst_id` + `seq` + `label_id`。
 
 WT 表格式：`key_format=u,value_format=u`（raw bytes）。
 
 ---
 
-## 六、查询优化（IndexScanPhysicalOp）
+## 六、查询优化
+
+### IndexScanPhysicalOp（顶点）
 
 `PhysicalPlanner` 在遇到 `Filter(LabelScan)` 模式时，分析谓词表达式：
 
 - 提取 `PropertyAccess(variable, prop) op Literal` 模式
 - 检查该属性是否存在 **state==PUBLIC** 的索引
 - 匹配则用 `IndexScanPhysicalOp` 替换 `Filter+LabelScan`
+
+### EdgeIndexScanPhysicalOp（边）
+
+`PhysicalPlanner` 在遇到 `Filter(Expand)` 且 Expand 为单类型时，分析谓词表达式：
+
+- 提取 `PropertyAccess(edge_var, prop) op Literal` 模式
+- 检查该边属性是否存在 **state==PUBLIC** 的索引
+- 匹配则用 `EdgeIndexScanPhysicalOp` 替换 `Filter+Expand`
+
+边索引 value 中存储了邻接信息（src_id, dst_id, seq, label_id），因此 `EdgeIndexScanPhysicalOp` 可直接产出包含 src/dst/edge 的 Row，无需二次查询。
+
+### 支持的模式
 
 支持 `EQ`（等值扫描）、`GT/GTE/LT/LTE`（范围扫描）和 `GT/GTE AND LT/LTE` 组合。
 
@@ -146,20 +170,23 @@ WT 表格式：`key_format=u,value_format=u`（raw bytes）。
 ### 已完成
 - IndexState 枚举、IndexDef.state、EdgeLabelDef.indexes
 - IndexKeyCodec（可排序编码 + 等值/范围扫描）
-- ISyncGraphDataStore 索引方法 + SyncGraphDataStore 实现
-- IAsyncGraphDataStore async 包装（含 checkUniqueConstraint）
+- ISyncGraphDataStore 索引方法（含 `scanIndex*WithValue`）+ SyncGraphDataStore 实现
+- IAsyncGraphDataStore async 包装（含 checkUniqueConstraint + 边索引扫描）
 - IAsyncGraphMetaStore 索引元数据 CRUD（createVertexIndex/createEdgeIndex/dropIndex/listIndexes）
 - MetadataCodec 索引序列化/反序列化
 - IndexDdlParser（CREATE/DROP/SHOW INDEX，含 UNIQUE）
-- QueryExecutor DDL 路由 + 同步回填（含唯一索引重复检测 → ERROR）
-- IndexScanPhysicalOp + PhysicalPlanner 索引优化
+- QueryExecutor DDL 路由 + 同步回填（含唯一索引重复检测 → ERROR、边索引回填）
+- IndexScanPhysicalOp + EdgeIndexScanPhysicalOp
+- PhysicalPlanner 索引优化（tryIndexScan + tryEdgeIndexScan）
 - CreateNodePhysicalOp 写入路径索引维护（含唯一约束前置检查）
+- CreateEdgePhysicalOp 写入路径索引维护（含唯一约束前置检查 + 邻接信息编码）
+- ValueCodec::encodeEdgeAdjacency / decodeEdgeAdjacency
+- EdgeIndexScanEntry 结构体
 - 重复索引检测（同标签同属性组合拒绝建索引）
 - 复合索引（多属性索引编码、多值唯一约束、AND 联合 IndexScan 优化）
 
 ### 待完成
-- 边索引完整支持（CREATE EDGE INDEX 仅完成元数据层，回填、写入路径维护、IndexScan 均未实现）
-- 写入路径完整索引维护（deleteVertex、putVertexProperty、SET/REMOVE 等）
+- 写入路径完整索引维护（deleteVertex、putVertexProperty、SET/REMOVE、边属性 SET、边 DELETE）
 - DdlWorker 后台异步执行
 - 崩溃恢复（重启后恢复未完成 DDL 状态）
 - Thrift RPC 索引接口

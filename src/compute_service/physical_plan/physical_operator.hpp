@@ -5,6 +5,7 @@
 #include "compute_service/physical_plan/operator/create_edge_physical_op.hpp"
 #include "compute_service/physical_plan/operator/create_node_physical_op.hpp"
 #include "compute_service/physical_plan/operator/distinct_physical_op.hpp"
+#include "compute_service/physical_plan/operator/edge_index_scan_physical_op.hpp"
 #include "compute_service/physical_plan/operator/expand_physical_op.hpp"
 #include "compute_service/physical_plan/operator/filter_physical_op.hpp"
 #include "compute_service/physical_plan/operator/index_scan_physical_op.hpp"

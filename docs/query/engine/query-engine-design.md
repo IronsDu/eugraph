@@ -89,6 +89,7 @@ Cypher 查询文本
 | `AllNodeScanPhysicalOp` | `IAsyncGraphDataStore&`, label 定义 |
 | `LabelScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId`, label 定义 |
 | `IndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId`, `prop_id`, `ScanMode` |
+| `EdgeIndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `EdgeLabelId`, `prop_ids`, `ScanMode` |
 | `ExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, Schema |
 | `FilterPhysicalOp` | `ExpressionEvaluator`, label 定义 |
 | `ProjectPhysicalOp` | `ExpressionEvaluator`, label 定义 |
@@ -113,6 +114,8 @@ Cypher 查询文本
 
 **IndexScan**：由物理优化阶段从 `Filter(LabelScan)` 推导产生，支持等值（`ScanMode::EQUALITY`）和范围（`ScanMode::RANGE`）扫描。
 
+**EdgeIndexScan**：由物理优化阶段从 `Filter(Expand)` 推导产生（Expand 为单类型时）。边索引 value 包含邻接信息，可直接产出 src/dst/edge 列，等价于替换 Expand + Filter 的组合。
+
 **Expand**：嵌套循环——对输入的每一行，调用 `scanEdges(src_id, dir, label_filter)`，每条边产生一行输出。多类型时对每个类型分别调用 scanEdges 合并结果。关系类型不存在时返回 0 行。
 
 **Filter/Project**：纯计算算子，在 Compute 线程上执行表达式求值。
@@ -125,7 +128,7 @@ Cypher 查询文本
 
 **Skip/Limit**：流式——计数后跳过/截断。
 
-**CreateNode/CreateEdge**：通过 `co_await store_.insertVertex/insertEdge` 异步写入。`CreateNodePhysicalOp` 额外维护索引条目（遍历 `label_defs` 中 `WRITE_ONLY` 和 `PUBLIC` 状态的索引写入）。
+**CreateNode/CreateEdge**：通过 `co_await store_.insertVertex/insertEdge` 异步写入。额外维护索引条目：遍历 label/edge_label 定义中 `WRITE_ONLY` 和 `PUBLIC` 状态的索引，写入索引条目（边索引入口额外编码邻接信息作为 value）。写入前检查唯一约束，违反时拒绝创建。
 
 ### PhysicalPlanner
 
@@ -137,7 +140,9 @@ Cypher 查询文本
 
 **Schema 跟踪**：每个算子的 `planOperator` 返回 `output_schema`。Scan 建立初始 schema，Expand 扩展，Filter/Limit/Sort/Skip/Distinct 透传，Project/Aggregate 覆盖。
 
-**索引扫描优化**：当 Filter 的子节点是 LabelScan 且谓词匹配可索引模式时，`tryIndexScan` 将 Filter+LabelScan 替换为 `IndexScanPhysicalOp`。
+**索引扫描优化**：
+- 当 Filter 的子节点是 LabelScan 且谓词匹配可索引模式时，`tryIndexScan` 将 Filter+LabelScan 替换为 `IndexScanPhysicalOp`
+- 当 Filter 的子节点是 Expand（单类型）且谓词匹配可索引模式时，`tryEdgeIndexScan` 将 Filter+Expand 替换为 `EdgeIndexScanPhysicalOp`
 
 ---
 
@@ -215,8 +220,10 @@ struct RowBatch { static constexpr size_t CAPACITY = 1024; vector<Row> rows; };
 - 多标签查询：per-label 属性存储（`map<LabelId, Properties>`）、便捷模式、转型模式
 - EXPLAIN 语句
 - IndexScan 优化（Filter+LabelScan → IndexScan）
+- EdgeIndexScan 优化（Filter+Expand → EdgeIndexScan，单类型时）
 - 流式执行（StreamContext + Thrift ServerStream）
-- 索引 DDL（CREATE/DROP/SHOW INDEX，同步回填）
+- 索引 DDL（CREATE/DROP/SHOW INDEX，同步回填，含边索引）
+- 边索引写入路径维护（CreateEdgePhysicalOp 含唯一约束 + 邻接信息编码）
 
 ### 待实现
 - DELETE, MERGE 执行

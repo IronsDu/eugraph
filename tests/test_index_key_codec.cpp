@@ -2,6 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "storage/kv/index_key_codec.hpp"
+#include "storage/kv/value_codec.hpp"
 #include "storage/meta/meta_codec.hpp"
 
 using namespace eugraph;
@@ -162,4 +163,60 @@ TEST(MetadataCodec, EdgeLabelDefWithIndexes) {
     EXPECT_EQ(decoded.indexes.size(), 1u);
     EXPECT_EQ(decoded.indexes[0].name, "idx_knows_weight");
     EXPECT_EQ(decoded.indexes[0].state, IndexState::PUBLIC);
+}
+
+// ==================== Edge Adjacency Value Codec ====================
+
+TEST(EdgeAdjacencyCodec, RoundTrip) {
+    VertexId src_id = 42;
+    VertexId dst_id = 100;
+    uint64_t seq = 5;
+    EdgeLabelId label_id = 3;
+
+    auto encoded = ValueCodec::encodeEdgeAdjacency(src_id, dst_id, seq, label_id);
+    EXPECT_EQ(encoded.size(), 26u);
+
+    VertexId decoded_src = 0;
+    VertexId decoded_dst = 0;
+    uint64_t decoded_seq = 0;
+    EdgeLabelId decoded_label = 0;
+    ValueCodec::decodeEdgeAdjacency(encoded, decoded_src, decoded_dst, decoded_seq, decoded_label);
+
+    EXPECT_EQ(decoded_src, src_id);
+    EXPECT_EQ(decoded_dst, dst_id);
+    EXPECT_EQ(decoded_seq, seq);
+    EXPECT_EQ(decoded_label, label_id);
+}
+
+TEST(EdgeAdjacencyCodec, MaxValues) {
+    VertexId src_id = 0xFFFFFFFFFFFFFFFFULL;
+    VertexId dst_id = 0xFFFFFFFFFFFFFFFFULL;
+    uint64_t seq = 0xFFFFFFFFFFFFFFFFULL;
+    EdgeLabelId label_id = 0xFFFF;
+
+    auto encoded = ValueCodec::encodeEdgeAdjacency(src_id, dst_id, seq, label_id);
+    EXPECT_EQ(encoded.size(), 26u);
+
+    VertexId decoded_src = 0;
+    VertexId decoded_dst = 0;
+    uint64_t decoded_seq = 0;
+    EdgeLabelId decoded_label = 0;
+    ValueCodec::decodeEdgeAdjacency(encoded, decoded_src, decoded_dst, decoded_seq, decoded_label);
+
+    EXPECT_EQ(decoded_src, src_id);
+    EXPECT_EQ(decoded_dst, dst_id);
+    EXPECT_EQ(decoded_seq, seq);
+    EXPECT_EQ(decoded_label, label_id);
+}
+
+TEST(EdgeAdjacencyCodec, ShortDataReturnsZeroes) {
+    VertexId src = 99, dst = 99;
+    uint64_t seq = 99;
+    EdgeLabelId label = 99;
+    std::string_view short_data("too_short", 5);
+    ValueCodec::decodeEdgeAdjacency(short_data, src, dst, seq, label);
+    EXPECT_EQ(src, 0u);
+    EXPECT_EQ(dst, 0u);
+    EXPECT_EQ(seq, 0u);
+    EXPECT_EQ(label, 0u);
 }

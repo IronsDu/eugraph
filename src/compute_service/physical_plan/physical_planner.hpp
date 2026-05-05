@@ -82,6 +82,11 @@ private:
                                                    const std::vector<const cypher::BinaryOp*>& conditions,
                                                    LabelId label_id, const LabelDef& label_def,
                                                    IAsyncGraphDataStore& store, PlanContext& ctx);
+
+    std::optional<PlanOperatorResult> tryEdgeIndexScan(ExpandOp& expand_op,
+                                                       const std::vector<const cypher::BinaryOp*>& conditions,
+                                                       EdgeLabelId label_id, const EdgeLabelDef& edge_label_def,
+                                                       IAsyncGraphDataStore& store, PlanContext& ctx);
 };
 
 } // namespace compute

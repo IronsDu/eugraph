@@ -137,7 +137,30 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planFilter(Filter
     if (auto err = validateExpression(op.predicate, ctx); !err.empty())
         return err;
 
-    // Try index scan optimization: if child is LabelScan and predicate is indexable
+    // Helper lambda to collect indexable conditions from a predicate
+    auto collectConditions = [](const cypher::Expression& pred, std::vector<const cypher::BinaryOp*>& conditions) {
+        if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(pred)) {
+            auto& binop = std::get<std::unique_ptr<cypher::BinaryOp>>(pred);
+            if (binop->op == cypher::BinaryOperator::AND) {
+                auto collect = [](auto& self, const cypher::BinaryOp& node,
+                                  std::vector<const cypher::BinaryOp*>& out) -> void {
+                    if (node.op == cypher::BinaryOperator::AND) {
+                        if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(node.left))
+                            self(self, *std::get<std::unique_ptr<cypher::BinaryOp>>(node.left), out);
+                        if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(node.right))
+                            self(self, *std::get<std::unique_ptr<cypher::BinaryOp>>(node.right), out);
+                    } else {
+                        out.push_back(&node);
+                    }
+                };
+                collect(collect, *binop, conditions);
+            } else {
+                conditions.push_back(binop.get());
+            }
+        }
+    };
+
+    // Try vertex index scan optimization: if child is LabelScan and predicate is indexable
     if (std::holds_alternative<std::unique_ptr<LabelScanOp>>(op.children[0])) {
         auto& scan_op = std::get<std::unique_ptr<LabelScanOp>>(op.children[0]);
         auto label_it = ctx.label_name_to_id.find(scan_op->label);
@@ -145,33 +168,35 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planFilter(Filter
             LabelId label_id = label_it->second;
             auto def_it = ctx.label_defs.find(label_id);
             if (def_it != ctx.label_defs.end()) {
-                auto& pred = op.predicate;
-                // Collect all indexable conditions (supports AND-conjunctions for composite indexes)
                 std::vector<const cypher::BinaryOp*> conditions;
-                if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(pred)) {
-                    auto& binop = std::get<std::unique_ptr<cypher::BinaryOp>>(pred);
-                    if (binop->op == cypher::BinaryOperator::AND) {
-                        // Flatten AND tree
-                        auto collect = [](auto& self, const cypher::BinaryOp& node,
-                                          std::vector<const cypher::BinaryOp*>& out) -> void {
-                            if (node.op == cypher::BinaryOperator::AND) {
-                                if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(node.left))
-                                    self(self, *std::get<std::unique_ptr<cypher::BinaryOp>>(node.left), out);
-                                if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(node.right))
-                                    self(self, *std::get<std::unique_ptr<cypher::BinaryOp>>(node.right), out);
-                            } else {
-                                out.push_back(&node);
-                            }
-                        };
-                        collect(collect, *binop, conditions);
-                    } else {
-                        conditions.push_back(binop.get());
-                    }
-                }
+                collectConditions(op.predicate, conditions);
                 if (!conditions.empty()) {
                     auto idx_result = tryIndexScan(*scan_op, conditions, label_id, def_it->second, store, ctx);
                     if (idx_result.has_value()) {
                         return std::move(idx_result.value());
+                    }
+                }
+            }
+        }
+    }
+
+    // Try edge index scan optimization: if child is Expand with a single label filter
+    if (std::holds_alternative<std::unique_ptr<ExpandOp>>(op.children[0])) {
+        auto& expand_op = std::get<std::unique_ptr<ExpandOp>>(op.children[0]);
+        if (expand_op->rel_types.size() == 1) {
+            auto edge_label_it = ctx.edge_label_name_to_id.find(expand_op->rel_types[0]);
+            if (edge_label_it != ctx.edge_label_name_to_id.end()) {
+                EdgeLabelId edge_label_id = edge_label_it->second;
+                auto def_it = ctx.edge_label_defs.find(edge_label_id);
+                if (def_it != ctx.edge_label_defs.end()) {
+                    std::vector<const cypher::BinaryOp*> conditions;
+                    collectConditions(op.predicate, conditions);
+                    if (!conditions.empty()) {
+                        auto idx_result =
+                            tryEdgeIndexScan(*expand_op, conditions, edge_label_id, def_it->second, store, ctx);
+                        if (idx_result.has_value()) {
+                            return std::move(idx_result.value());
+                        }
                     }
                 }
             }
@@ -484,8 +509,48 @@ PhysicalPlanner::planCreateEdge(CreateEdgeOp& op, IAsyncGraphDataStore& store, P
         return "Cannot resolve edge label";
     }
 
-    auto result =
-        std::make_unique<CreateEdgePhysicalOp>(op.variable, src_id, dst_id, label_id, eid, store, std::move(child_op));
+    // Build edge properties from the query (if any)
+    Properties props;
+    if (op.properties.has_value()) {
+        auto def_it = ctx.edge_label_defs.find(label_id);
+        if (def_it != ctx.edge_label_defs.end()) {
+            const auto& def = def_it->second;
+            std::unordered_map<std::string, uint16_t> name_to_id;
+            for (const auto& pd : def.properties) {
+                name_to_id[pd.name] = pd.id;
+            }
+            if (!name_to_id.empty()) {
+                uint16_t max_id = 0;
+                for (const auto& [name, pid] : name_to_id) {
+                    (void)name;
+                    if (pid > max_id)
+                        max_id = pid;
+                }
+                props.resize(max_id + 1);
+            }
+            for (const auto& [pname, expr] : op.properties->entries) {
+                auto pi_it = name_to_id.find(pname);
+                if (pi_it != name_to_id.end()) {
+                    PropertyValue val;
+                    if (std::holds_alternative<std::unique_ptr<cypher::Literal>>(expr)) {
+                        auto& lit = std::get<std::unique_ptr<cypher::Literal>>(expr);
+                        if (std::holds_alternative<std::string>(lit->value))
+                            val = std::get<std::string>(lit->value);
+                        else if (std::holds_alternative<int64_t>(lit->value))
+                            val = std::get<int64_t>(lit->value);
+                        else if (std::holds_alternative<double>(lit->value))
+                            val = std::get<double>(lit->value);
+                        else if (std::holds_alternative<bool>(lit->value))
+                            val = std::get<bool>(lit->value);
+                    }
+                    props[pi_it->second] = std::move(val);
+                }
+            }
+        }
+    }
+
+    auto result = std::make_unique<CreateEdgePhysicalOp>(op.variable, src_id, dst_id, label_id, eid, std::move(props),
+                                                         store, ctx.edge_label_defs, std::move(child_op));
 
     Schema output_schema;
     if (!op.variable.empty()) {
@@ -758,6 +823,121 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryIndexScan(LabelScanOp& sca
         if (!scan_op.variable.empty()) {
             output_schema.push_back(scan_op.variable);
         }
+        return PlanOperatorResult{std::move(result), std::move(output_schema)};
+    }
+    return std::nullopt;
+}
+
+std::optional<PlanOperatorResult>
+PhysicalPlanner::tryEdgeIndexScan(ExpandOp& expand_op, const std::vector<const cypher::BinaryOp*>& conditions,
+                                  EdgeLabelId label_id, const EdgeLabelDef& edge_label_def, IAsyncGraphDataStore& store,
+                                  PlanContext& ctx) {
+    // Extract all indexable conditions and map property name -> (op, value)
+    struct CondInfo {
+        cypher::BinaryOperator op;
+        PropertyValue value;
+    };
+    std::unordered_map<std::string, CondInfo> prop_conditions;
+    for (auto* cond : conditions) {
+        auto extracted = tryExtractCondition(*cond);
+        if (extracted.has_value())
+            prop_conditions[extracted->prop_name] = {extracted->op, std::move(extracted->value)};
+    }
+
+    if (prop_conditions.empty())
+        return std::nullopt;
+
+    // Build prop_name -> prop_id mapping
+    std::unordered_map<std::string, uint16_t> name_to_id;
+    for (const auto& pd : edge_label_def.properties)
+        name_to_id[pd.name] = pd.id;
+
+    // Try to match each index
+    for (const auto& idx : edge_label_def.indexes) {
+        if (idx.state != IndexState::PUBLIC)
+            continue;
+
+        size_t match_count = 0;
+        bool last_is_range = false;
+        std::vector<PropertyValue> eq_values;
+        std::optional<PropertyValue> range_start;
+        std::optional<PropertyValue> range_end;
+
+        for (size_t i = 0; i < idx.prop_ids.size(); ++i) {
+            uint16_t pid = idx.prop_ids[i];
+            std::string pname;
+            for (const auto& pd : edge_label_def.properties) {
+                if (pd.id == pid) {
+                    pname = pd.name;
+                    break;
+                }
+            }
+            auto it = prop_conditions.find(pname);
+            if (it == prop_conditions.end())
+                break;
+
+            auto& cond = it->second;
+            if (i < idx.prop_ids.size() - 1) {
+                if (cond.op != cypher::BinaryOperator::EQ)
+                    break;
+                eq_values.push_back(std::move(cond.value));
+                match_count++;
+            } else {
+                if (cond.op == cypher::BinaryOperator::EQ) {
+                    eq_values.push_back(std::move(cond.value));
+                    match_count++;
+                } else if (cond.op == cypher::BinaryOperator::GT || cond.op == cypher::BinaryOperator::GTE) {
+                    range_start = std::move(cond.value);
+                    last_is_range = true;
+                    match_count++;
+                } else if (cond.op == cypher::BinaryOperator::LT || cond.op == cypher::BinaryOperator::LTE) {
+                    range_end = std::move(cond.value);
+                    last_is_range = true;
+                    match_count++;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if (match_count == 0)
+            continue;
+
+        using ScanMode = EdgeIndexScanPhysicalOp::ScanMode;
+        std::unique_ptr<EdgeIndexScanPhysicalOp> result;
+
+        if (!last_is_range) {
+            result = std::make_unique<EdgeIndexScanPhysicalOp>(
+                expand_op.src_variable, expand_op.dst_variable, expand_op.edge_variable, label_id, idx.prop_ids,
+                ScanMode::EQUALITY, std::move(eq_values), std::nullopt, std::nullopt, store, ctx.edge_label_defs);
+        } else {
+            std::optional<std::vector<PropertyValue>> composite_start;
+            std::optional<std::vector<PropertyValue>> composite_end;
+            if (range_start.has_value()) {
+                auto start_vec = eq_values;
+                start_vec.push_back(std::move(*range_start));
+                composite_start = std::move(start_vec);
+            } else if (!eq_values.empty()) {
+                composite_start = eq_values;
+            }
+            if (range_end.has_value()) {
+                auto end_vec = eq_values;
+                end_vec.push_back(std::move(*range_end));
+                composite_end = std::move(end_vec);
+            }
+            result = std::make_unique<EdgeIndexScanPhysicalOp>(
+                expand_op.src_variable, expand_op.dst_variable, expand_op.edge_variable, label_id, idx.prop_ids,
+                ScanMode::RANGE, std::vector<PropertyValue>{}, std::move(composite_start), std::move(composite_end),
+                store, ctx.edge_label_defs);
+        }
+
+        Schema output_schema;
+        if (!expand_op.src_variable.empty())
+            output_schema.push_back(expand_op.src_variable);
+        if (!expand_op.dst_variable.empty())
+            output_schema.push_back(expand_op.dst_variable);
+        if (!expand_op.edge_variable.empty())
+            output_schema.push_back(expand_op.edge_variable);
         return PlanOperatorResult{std::move(result), std::move(output_schema)};
     }
     return std::nullopt;

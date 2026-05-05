@@ -2,6 +2,7 @@
 
 #include "common/types/constants.hpp"
 #include "compute_service/parser/index_ddl_parser.hpp"
+#include "storage/kv/value_codec.hpp"
 
 #include <folly/coro/BlockingWait.h>
 
@@ -327,12 +328,105 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         result.rows.push_back(std::move(row));
 
     } else if (stmt.type == IndexDdlStatement::CREATE_EDGE_INDEX) {
+        auto edge_label_def = co_await async_meta_.getEdgeLabelDef(stmt.label_name);
+        if (!edge_label_def.has_value()) {
+            result.error = "Edge label not found: " + stmt.label_name;
+            co_return;
+        }
+        // Resolve all property names to property IDs
+        std::vector<uint16_t> prop_ids;
+        for (const auto& pn : stmt.property_names) {
+            bool found = false;
+            for (const auto& p : edge_label_def->properties) {
+                if (p.name == pn) {
+                    prop_ids.push_back(p.id);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                result.error = "Property not found: " + pn;
+                co_return;
+            }
+        }
+
         bool ok =
             co_await async_meta_.createEdgeIndex(stmt.index_name, stmt.label_name, stmt.property_names, stmt.unique);
         if (!ok) {
-            result.error = "Failed to create edge index";
+            result.error = "Failed to create edge index (duplicate name?)";
             co_return;
         }
+
+        auto table = eidxCompositeTable(edge_label_def->id, prop_ids);
+        ok = co_await async_data_.createIndex(table);
+        if (!ok) {
+            result.error = "Failed to create edge index storage table";
+            co_return;
+        }
+
+        // Backfill: scan existing edges and insert index entries
+        bool hasConflict = false;
+        {
+            GraphTxnHandle txn = co_await async_data_.beginTran();
+            async_data_.setTransaction(txn);
+
+            {
+                auto gen = async_data_.scanEdgesByType(edge_label_def->id, std::nullopt, std::nullopt);
+                while (auto batch = co_await gen.next()) {
+                    for (const auto& entry : *batch) {
+                        auto props_opt = co_await async_data_.getEdgeProperties(edge_label_def->id, entry.edge_id);
+                        // Note: getEdgeProperties not currently exposed in IAsyncGraphDataStore
+                        // For now skip properties; index entries will be created when properties API is added
+                        if (!props_opt.has_value())
+                            continue;
+                        auto& props = *props_opt;
+                        // Collect all indexed property values; skip if any is missing
+                        std::vector<PropertyValue> values;
+                        bool allPresent = true;
+                        for (auto pid : prop_ids) {
+                            if (pid < props.size() && props[pid].has_value()) {
+                                values.push_back(props[pid].value());
+                            } else {
+                                allPresent = false;
+                                break;
+                            }
+                        }
+                        if (!allPresent)
+                            continue;
+
+                        if (stmt.unique) {
+                            bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
+                            if (!constraint_ok) {
+                                spdlog::warn("Unique edge index '{}' backfill found duplicate value on edge {}",
+                                             stmt.index_name, entry.edge_id);
+                                hasConflict = true;
+                                break;
+                            }
+                        }
+                        auto adj_value = ValueCodec::encodeEdgeAdjacency(entry.src_vertex_id, entry.dst_vertex_id,
+                                                                         entry.seq, edge_label_def->id);
+                        co_await async_data_.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
+                    }
+                    if (hasConflict)
+                        break;
+                }
+            } // gen destroyed before commit
+
+            co_await async_data_.commitTran(txn);
+        }
+
+        if (hasConflict) {
+            ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
+            result.error = "Unique edge index creation failed: duplicate values found during backfill";
+            co_return;
+        }
+
+        ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::PUBLIC);
+        if (!ok) {
+            result.error = "Failed to set edge index state to PUBLIC";
+            co_return;
+        }
+
         result.columns.push_back("result");
         Row row;
         row.push_back(std::string("Edge index created: " + stmt.index_name));

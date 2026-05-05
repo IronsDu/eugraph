@@ -205,4 +205,37 @@ uint64_t ValueCodec::decodeU64(std::string_view data) {
     return val;
 }
 
+std::string ValueCodec::encodeEdgeAdjacency(VertexId src_id, VertexId dst_id, uint64_t seq, EdgeLabelId label_id) {
+    std::string result(26, '\0');
+    size_t off = 0;
+    for (int i = 7; i >= 0; --i)
+        result[off++] = static_cast<char>((src_id >> (i * 8)) & 0xFF);
+    for (int i = 7; i >= 0; --i)
+        result[off++] = static_cast<char>((dst_id >> (i * 8)) & 0xFF);
+    for (int i = 7; i >= 0; --i)
+        result[off++] = static_cast<char>((seq >> (i * 8)) & 0xFF);
+    for (int i = 1; i >= 0; --i)
+        result[off++] = static_cast<char>((label_id >> (i * 8)) & 0xFF);
+    return result;
+}
+
+void ValueCodec::decodeEdgeAdjacency(std::string_view data, VertexId& src_id, VertexId& dst_id, uint64_t& seq,
+                                     EdgeLabelId& label_id) {
+    src_id = 0;
+    dst_id = 0;
+    seq = 0;
+    label_id = 0;
+    if (data.size() < 26)
+        return;
+    size_t off = 0;
+    for (int i = 0; i < 8; ++i)
+        src_id = (src_id << 8) | static_cast<uint8_t>(data[off++]);
+    for (int i = 0; i < 8; ++i)
+        dst_id = (dst_id << 8) | static_cast<uint8_t>(data[off++]);
+    for (int i = 0; i < 8; ++i)
+        seq = (seq << 8) | static_cast<uint8_t>(data[off++]);
+    for (int i = 0; i < 2; ++i)
+        label_id = (label_id << 8) | static_cast<uint8_t>(data[off++]);
+}
+
 } // namespace eugraph
