@@ -17,10 +17,9 @@ namespace compute {
 class FilterPhysicalOp : public PhysicalOperator {
 public:
     FilterPhysicalOp(cypher::Expression predicate, Schema schema, std::unique_ptr<PhysicalOperator> child,
-                     const std::unordered_map<LabelId, LabelDef>* label_defs)
-        : predicate_(std::move(predicate)), schema_(std::move(schema)), child_(std::move(child)) {
-        evaluator_.setLabelDefs(label_defs);
-    }
+                     const std::unordered_map<LabelId, LabelDef>& label_defs)
+        : predicate_(std::move(predicate)), schema_(std::move(schema)), child_(std::move(child)),
+          evaluator_(label_defs) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override {

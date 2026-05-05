@@ -46,8 +46,8 @@ bool SyncGraphDataStore::open(const std::string& db_path) {
     if (!openConnection(db_path))
         return false;
 
-    if (!ensureGlobalTable(defaultSession_, TABLE_LABEL_REVERSE) ||
-        !ensureGlobalTable(defaultSession_, TABLE_EDGE_INDEX)) {
+    if (!ensureGlobalTable(defaultSession_.get(), TABLE_LABEL_REVERSE) ||
+        !ensureGlobalTable(defaultSession_.get(), TABLE_EDGE_INDEX)) {
         close();
         return false;
     }
@@ -72,16 +72,15 @@ GraphTxnHandle SyncGraphDataStore::beginTransaction() {
         return INVALID_GRAPH_TXN;
 
     auto ts = std::make_unique<TxnState>();
-    int ret = conn_->open_session(conn_, nullptr, nullptr, &ts->session);
-    if (ret != 0) {
-        spdlog::error("Failed to open transaction session: error {}", ret);
+    ts->session = conn_.openSession();
+    if (!ts->session) {
+        spdlog::error("Failed to open transaction session");
         return INVALID_GRAPH_TXN;
     }
 
-    ret = ts->session->begin_transaction(ts->session, "isolation=snapshot");
+    int ret = ts->session.get()->begin_transaction(ts->session.get(), "isolation=snapshot");
     if (ret != 0) {
         spdlog::error("Failed to begin transaction: error {}", ret);
-        ts->session->close(ts->session, nullptr);
         return INVALID_GRAPH_TXN;
     }
 
@@ -101,9 +100,8 @@ bool SyncGraphDataStore::commitTransaction(GraphTxnHandle txn) {
         ts = it->second.get();
     }
 
-    int ret = ts->session->commit_transaction(ts->session, nullptr);
+    int ret = ts->session.get()->commit_transaction(ts->session.get(), nullptr);
     closeTxnCursors(ts);
-    ts->session->close(ts->session, nullptr);
 
     std::lock_guard<std::mutex> lock(txnMutex_);
     txns_.erase(txn);
@@ -125,9 +123,8 @@ bool SyncGraphDataStore::rollbackTransaction(GraphTxnHandle txn) {
         ts = it->second.get();
     }
 
-    int ret = ts->session->rollback_transaction(ts->session, nullptr);
+    int ret = ts->session.get()->rollback_transaction(ts->session.get(), nullptr);
     closeTxnCursors(ts);
-    ts->session->close(ts->session, nullptr);
 
     std::lock_guard<std::mutex> lock(txnMutex_);
     txns_.erase(txn);
@@ -145,28 +142,15 @@ bool SyncGraphDataStore::createLabel(LabelId label_id) {
     auto fwd = labelFwdTable(label_id);
     auto vprop = vpropTable(label_id);
 
-    WT_SESSION* ddl_session = nullptr;
-    int ret = conn_->open_session(conn_, nullptr, nullptr, &ddl_session);
-    if (ret != 0) {
-        spdlog::error("Failed to open DDL session: error {}", ret);
+    WtSession ddl_session(conn_.get());
+    if (!ddl_session)
         return false;
-    }
 
-    ret = ddl_session->create(ddl_session, fwd.c_str(), WT_TABLE_CONFIG);
-    if (ret != 0) {
-        spdlog::error("Failed to create label fwd table {}: error {}", fwd, ret);
-        ddl_session->close(ddl_session, nullptr);
+    if (!ddl_session.createTable(fwd.c_str()))
         return false;
-    }
-
-    ret = ddl_session->create(ddl_session, vprop.c_str(), WT_TABLE_CONFIG);
-    if (ret != 0) {
-        spdlog::error("Failed to create vprop table {}: error {}", vprop, ret);
-        ddl_session->close(ddl_session, nullptr);
+    if (!ddl_session.createTable(vprop.c_str()))
         return false;
-    }
 
-    ddl_session->close(ddl_session, nullptr);
     return true;
 }
 
@@ -174,74 +158,49 @@ bool SyncGraphDataStore::dropLabel(LabelId label_id) {
     auto fwd = labelFwdTable(label_id);
     auto vprop = vpropTable(label_id);
 
-    if (defaultSession_) {
-        defaultSession_->close(defaultSession_, nullptr);
-        defaultSession_ = nullptr;
-    }
+    // Drop requires exclusive access; close default session first
+    defaultSession_ = WtSession{};
+    auto reopen = [this]() { defaultSession_ = conn_.openSession(); };
 
-    WT_SESSION* ddl_session = nullptr;
-    int ret = conn_->open_session(conn_, nullptr, nullptr, &ddl_session);
-    if (ret != 0) {
-        spdlog::error("Failed to open DDL session: error {}", ret);
-        conn_->open_session(conn_, nullptr, nullptr, &defaultSession_);
+    WtSession ddl_session(conn_.get());
+    if (!ddl_session) {
+        reopen();
         return false;
     }
 
-    ddl_session->checkpoint(ddl_session, nullptr);
+    ddl_session.get()->checkpoint(ddl_session.get(), nullptr);
 
-    ret = ddl_session->drop(ddl_session, fwd.c_str(), nullptr);
+    int ret = ddl_session.get()->drop(ddl_session.get(), fwd.c_str(), nullptr);
     if (ret != 0) {
-        spdlog::error("Failed to drop label fwd table {}: error {}", fwd, ret);
-        ddl_session->close(ddl_session, nullptr);
-        conn_->open_session(conn_, nullptr, nullptr, &defaultSession_);
+        spdlog::error("Failed to drop label fwd table {}: error {}", fwd, wiredtiger_strerror(ret));
+        reopen();
         return false;
     }
 
-    ret = ddl_session->drop(ddl_session, vprop.c_str(), nullptr);
+    ret = ddl_session.get()->drop(ddl_session.get(), vprop.c_str(), nullptr);
     if (ret != 0) {
-        spdlog::error("Failed to drop vprop table {}: error {}", vprop, ret);
-        ddl_session->close(ddl_session, nullptr);
-        conn_->open_session(conn_, nullptr, nullptr, &defaultSession_);
+        spdlog::error("Failed to drop vprop table {}: error {}", vprop, wiredtiger_strerror(ret));
+        reopen();
         return false;
     }
 
-    ddl_session->close(ddl_session, nullptr);
-
-    ret = conn_->open_session(conn_, nullptr, nullptr, &defaultSession_);
-    if (ret != 0) {
-        spdlog::error("Failed to reopen default session: error {}", ret);
-        return false;
-    }
-
-    return true;
+    reopen();
+    return defaultSession_.operator bool();
 }
 
 bool SyncGraphDataStore::createEdgeLabel(EdgeLabelId edge_label_id) {
     auto etype = etypeTable(edge_label_id);
     auto eprop = epropTable(edge_label_id);
 
-    WT_SESSION* ddl_session = nullptr;
-    int ret = conn_->open_session(conn_, nullptr, nullptr, &ddl_session);
-    if (ret != 0) {
-        spdlog::error("Failed to open DDL session: error {}", ret);
+    WtSession ddl_session(conn_.get());
+    if (!ddl_session)
         return false;
-    }
 
-    ret = ddl_session->create(ddl_session, etype.c_str(), WT_TABLE_CONFIG);
-    if (ret != 0) {
-        spdlog::error("Failed to create etype table {}: error {}", etype, ret);
-        ddl_session->close(ddl_session, nullptr);
+    if (!ddl_session.createTable(etype.c_str()))
         return false;
-    }
-
-    ret = ddl_session->create(ddl_session, eprop.c_str(), WT_TABLE_CONFIG);
-    if (ret != 0) {
-        spdlog::error("Failed to create eprop table {}: error {}", eprop, ret);
-        ddl_session->close(ddl_session, nullptr);
+    if (!ddl_session.createTable(eprop.c_str()))
         return false;
-    }
 
-    ddl_session->close(ddl_session, nullptr);
     return true;
 }
 
@@ -249,46 +208,34 @@ bool SyncGraphDataStore::dropEdgeLabel(EdgeLabelId edge_label_id) {
     auto etype = etypeTable(edge_label_id);
     auto eprop = epropTable(edge_label_id);
 
-    if (defaultSession_) {
-        defaultSession_->close(defaultSession_, nullptr);
-        defaultSession_ = nullptr;
-    }
+    // Drop requires exclusive access; close default session first
+    defaultSession_ = WtSession{};
+    auto reopen = [this]() { defaultSession_ = conn_.openSession(); };
 
-    WT_SESSION* ddl_session = nullptr;
-    int ret = conn_->open_session(conn_, nullptr, nullptr, &ddl_session);
-    if (ret != 0) {
-        spdlog::error("Failed to open DDL session: error {}", ret);
-        conn_->open_session(conn_, nullptr, nullptr, &defaultSession_);
+    WtSession ddl_session(conn_.get());
+    if (!ddl_session) {
+        reopen();
         return false;
     }
 
-    ddl_session->checkpoint(ddl_session, nullptr);
+    ddl_session.get()->checkpoint(ddl_session.get(), nullptr);
 
-    ret = ddl_session->drop(ddl_session, etype.c_str(), nullptr);
+    int ret = ddl_session.get()->drop(ddl_session.get(), etype.c_str(), nullptr);
     if (ret != 0) {
-        spdlog::error("Failed to drop etype table {}: error {}", etype, ret);
-        ddl_session->close(ddl_session, nullptr);
-        conn_->open_session(conn_, nullptr, nullptr, &defaultSession_);
+        spdlog::error("Failed to drop etype table {}: error {}", etype, wiredtiger_strerror(ret));
+        reopen();
         return false;
     }
 
-    ret = ddl_session->drop(ddl_session, eprop.c_str(), nullptr);
+    ret = ddl_session.get()->drop(ddl_session.get(), eprop.c_str(), nullptr);
     if (ret != 0) {
-        spdlog::error("Failed to drop eprop table {}: error {}", eprop, ret);
-        ddl_session->close(ddl_session, nullptr);
-        conn_->open_session(conn_, nullptr, nullptr, &defaultSession_);
+        spdlog::error("Failed to drop eprop table {}: error {}", eprop, wiredtiger_strerror(ret));
+        reopen();
         return false;
     }
 
-    ddl_session->close(ddl_session, nullptr);
-
-    ret = conn_->open_session(conn_, nullptr, nullptr, &defaultSession_);
-    if (ret != 0) {
-        spdlog::error("Failed to reopen default session: error {}", ret);
-        return false;
-    }
-
-    return true;
+    reopen();
+    return defaultSession_.operator bool();
 }
 
 // ==================== Vertex ====================
@@ -703,26 +650,21 @@ SyncGraphDataStore::createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId lab
 
 // ==================== VertexScanCursorImpl ====================
 
-VertexScanCursorImpl::VertexScanCursorImpl(WT_SESSION* session, const std::string& table_name) : session_(session) {
-    int ret = session_->open_cursor(session_, table_name.c_str(), nullptr, nullptr, &cursor_);
-    if (ret != 0) {
-        spdlog::error("Failed to open vertex scan cursor on {}: error {}", table_name, ret);
+VertexScanCursorImpl::VertexScanCursorImpl(WT_SESSION* session, const std::string& table_name)
+    : cursor_(session, table_name), session_(session) {
+    if (!cursor_)
         return;
-    }
 
-    ret = cursor_->next(cursor_);
+    int ret = cursor_.get()->next(cursor_.get());
     if (ret == 0) {
         readCurrent();
     }
 }
 
-VertexScanCursorImpl::~VertexScanCursorImpl() {
-    if (cursor_)
-        cursor_->close(cursor_);
-}
+VertexScanCursorImpl::~VertexScanCursorImpl() = default;
 
 void VertexScanCursorImpl::readCurrent() {
-    currentKey_ = getKeyFromCursor(cursor_);
+    currentKey_ = getKeyFromCursor(cursor_.get());
     current_vid_ = KeyCodec::decodeLabelForwardKey(currentKey_);
     valid_ = true;
 }
@@ -735,7 +677,7 @@ VertexId VertexScanCursorImpl::vertexId() const {
 }
 
 void VertexScanCursorImpl::next() {
-    int ret = cursor_->next(cursor_);
+    int ret = cursor_.get()->next(cursor_.get());
     if (ret != 0) {
         valid_ = false;
         return;
@@ -746,19 +688,17 @@ void VertexScanCursorImpl::next() {
 // ==================== EdgeScanCursorImpl ====================
 
 EdgeScanCursorImpl::EdgeScanCursorImpl(WT_SESSION* session, std::string_view prefix)
-    : session_(session), prefix_(prefix) {
-    int ret = session_->open_cursor(session_, TABLE_EDGE_INDEX, nullptr, nullptr, &cursor_);
-    if (ret != 0) {
-        spdlog::error("Failed to open edge scan cursor: error {}", ret);
+    : cursor_(session, TABLE_EDGE_INDEX), session_(session), prefix_(prefix) {
+    if (!cursor_)
         return;
-    }
 
-    setItem(cursor_, prefix_);
+    auto* c = cursor_.get();
+    setItem(c, prefix_);
     int exact = 0;
-    ret = cursor_->search_near(cursor_, &exact);
+    int ret = c->search_near(c, &exact);
 
     if (ret != 0 || exact < 0) {
-        ret = cursor_->next(cursor_);
+        ret = c->next(c);
     }
 
     if (ret == 0) {
@@ -766,19 +706,17 @@ EdgeScanCursorImpl::EdgeScanCursorImpl(WT_SESSION* session, std::string_view pre
     }
 }
 
-EdgeScanCursorImpl::~EdgeScanCursorImpl() {
-    if (cursor_)
-        cursor_->close(cursor_);
-}
+EdgeScanCursorImpl::~EdgeScanCursorImpl() = default;
 
 void EdgeScanCursorImpl::readCurrent() {
-    currentKey_ = getKeyFromCursor(cursor_);
+    auto* c = cursor_.get();
+    currentKey_ = getKeyFromCursor(c);
     if (!currentKey_.starts_with(prefix_)) {
         valid_ = false;
         return;
     }
 
-    currentValue_ = getValueFromCursor(cursor_);
+    currentValue_ = getValueFromCursor(c);
     auto decoded = KeyCodec::decodeEdgeIndexKey(currentKey_);
     current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(currentValue_)};
     valid_ = true;
@@ -792,7 +730,8 @@ const ISyncGraphDataStore::EdgeIndexEntry& EdgeScanCursorImpl::entry() const {
 }
 
 void EdgeScanCursorImpl::next() {
-    int ret = cursor_->next(cursor_);
+    auto* c = cursor_.get();
+    int ret = c->next(c);
     if (ret != 0) {
         valid_ = false;
         return;
@@ -804,21 +743,20 @@ void EdgeScanCursorImpl::next() {
 
 EdgeTypeScanCursorImpl::EdgeTypeScanCursorImpl(WT_SESSION* session, const std::string& table_name,
                                                std::string_view prefix)
-    : session_(session), prefix_(prefix) {
-    int ret = session_->open_cursor(session_, table_name.c_str(), nullptr, nullptr, &cursor_);
-    if (ret != 0) {
-        spdlog::error("Failed to open edge type scan cursor on {}: error {}", table_name, ret);
+    : cursor_(session, table_name), session_(session), prefix_(prefix) {
+    if (!cursor_)
         return;
-    }
 
+    auto* c = cursor_.get();
+    int ret;
     if (prefix_.empty()) {
-        ret = cursor_->next(cursor_);
+        ret = c->next(c);
     } else {
-        setItem(cursor_, prefix_);
+        setItem(c, prefix_);
         int exact = 0;
-        ret = cursor_->search_near(cursor_, &exact);
+        ret = c->search_near(c, &exact);
         if (ret != 0 || exact < 0) {
-            ret = cursor_->next(cursor_);
+            ret = c->next(c);
         }
     }
 
@@ -827,19 +765,17 @@ EdgeTypeScanCursorImpl::EdgeTypeScanCursorImpl(WT_SESSION* session, const std::s
     }
 }
 
-EdgeTypeScanCursorImpl::~EdgeTypeScanCursorImpl() {
-    if (cursor_)
-        cursor_->close(cursor_);
-}
+EdgeTypeScanCursorImpl::~EdgeTypeScanCursorImpl() = default;
 
 void EdgeTypeScanCursorImpl::readCurrent() {
-    currentKey_ = getKeyFromCursor(cursor_);
+    auto* c = cursor_.get();
+    currentKey_ = getKeyFromCursor(c);
     if (!prefix_.empty() && !currentKey_.starts_with(prefix_)) {
         valid_ = false;
         return;
     }
 
-    currentValue_ = getValueFromCursor(cursor_);
+    currentValue_ = getValueFromCursor(c);
     auto decoded = KeyCodec::decodeEdgeTypeIndexKey(currentKey_);
     current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq, ValueCodec::decodeU64(currentValue_)};
     valid_ = true;
@@ -853,7 +789,8 @@ const ISyncGraphDataStore::EdgeTypeIndexEntry& EdgeTypeScanCursorImpl::entry() c
 }
 
 void EdgeTypeScanCursorImpl::next() {
-    int ret = cursor_->next(cursor_);
+    auto* c = cursor_.get();
+    int ret = c->next(c);
     if (ret != 0) {
         valid_ = false;
         return;
@@ -864,13 +801,13 @@ void EdgeTypeScanCursorImpl::next() {
 // ==================== Index DDL ====================
 
 bool SyncGraphDataStore::createIndex(const std::string& table_name) {
-    return ensureGlobalTable(defaultSession_, table_name.c_str());
+    return ensureGlobalTable(defaultSession_.get(), table_name.c_str());
 }
 
 bool SyncGraphDataStore::dropIndex(const std::string& table_name) {
     std::string uri = table_name;
     // ensureGlobalTable stores as "table:xxx", drop needs "table:xxx"
-    int ret = defaultSession_->drop(defaultSession_, uri.c_str(), nullptr);
+    int ret = defaultSession_->drop(defaultSession_.get(), uri.c_str(), nullptr);
     if (ret != 0 && ret != ENOENT) {
         spdlog::error("dropIndex: failed to drop {}: {}", uri, wiredtiger_strerror(ret));
         return false;
@@ -882,30 +819,30 @@ bool SyncGraphDataStore::dropIndex(const std::string& table_name) {
 
 bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) {
     auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
-    return tablePut(defaultSession_, table, key, {});
+    return tablePut(defaultSession_.get(), table, key, {});
 }
 
 bool SyncGraphDataStore::deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) {
     auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
-    return tableDel(defaultSession_, table, key);
+    return tableDel(defaultSession_.get(), table, key);
 }
 
 bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                           uint64_t entity_id) {
     auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
-    return tablePut(defaultSession_, table, key, {});
+    return tablePut(defaultSession_.get(), table, key, {});
 }
 
 bool SyncGraphDataStore::deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                           uint64_t entity_id) {
     auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
-    return tableDel(defaultSession_, table, key);
+    return tableDel(defaultSession_.get(), table, key);
 }
 
 bool SyncGraphDataStore::checkUniqueConstraint(const std::string& table, const PropertyValue& value) {
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(value);
     bool found = false;
-    tableScan(defaultSession_, table, prefix, [&](std::string_view key, std::string_view /*val*/) {
+    tableScan(defaultSession_.get(), table, prefix, [&](std::string_view key, std::string_view /*val*/) {
         if (key.size() >= prefix.size()) {
             found = true;
             return false;
@@ -918,7 +855,7 @@ bool SyncGraphDataStore::checkUniqueConstraint(const std::string& table, const P
 bool SyncGraphDataStore::checkUniqueConstraint(const std::string& table, const std::vector<PropertyValue>& values) {
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(values);
     bool found = false;
-    tableScan(defaultSession_, table, prefix, [&](std::string_view key, std::string_view /*val*/) {
+    tableScan(defaultSession_.get(), table, prefix, [&](std::string_view key, std::string_view /*val*/) {
         if (key.size() >= prefix.size()) {
             found = true;
             return false;
@@ -956,10 +893,11 @@ void SyncGraphDataStore::scanIndexRange(GraphTxnHandle txn, const std::string& t
                                         const std::optional<PropertyValue>& end,
                                         const std::function<bool(uint64_t)>& callback) {
     auto* session = getSession(txn);
-    WT_CURSOR* cursor = getCursor(session, table);
+    auto cursor = openCursor(session, table);
     if (!cursor)
         return;
 
+    auto* c = cursor.get();
     std::string start_encoded;
     if (start.has_value()) {
         // Append max entity_id suffix so search_near skips past all entries
@@ -977,30 +915,30 @@ void SyncGraphDataStore::scanIndexRange(GraphTxnHandle txn, const std::string& t
         WT_ITEM item;
         item.data = start_encoded.data();
         item.size = start_encoded.size();
-        cursor->set_key(cursor, &item);
+        c->set_key(c, &item);
         int cmp;
-        ret = cursor->search_near(cursor, &cmp);
+        ret = c->search_near(c, &cmp);
         if (ret != 0)
             return;
         // cmp < 0: returned key < search key → advance
         // cmp == 0: exact match → also advance (exclusive lower bound)
         if (cmp <= 0) {
-            ret = cursor->next(cursor);
+            ret = c->next(c);
             if (ret != 0)
                 return;
         }
     } else {
-        ret = cursor->reset(cursor);
+        ret = c->reset(c);
         if (ret != 0)
             return;
-        ret = cursor->next(cursor);
+        ret = c->next(c);
         if (ret != 0)
             return;
     }
 
     while (true) {
         WT_ITEM key_item;
-        ret = cursor->get_key(cursor, &key_item);
+        ret = c->get_key(c, &key_item);
         if (ret != 0)
             break;
 
@@ -1017,7 +955,7 @@ void SyncGraphDataStore::scanIndexRange(GraphTxnHandle txn, const std::string& t
         if (!callback(entity_id))
             break;
 
-        ret = cursor->next(cursor);
+        ret = c->next(c);
         if (ret != 0)
             break;
     }
@@ -1028,10 +966,11 @@ void SyncGraphDataStore::scanIndexRange(GraphTxnHandle txn, const std::string& t
                                         const std::optional<std::vector<PropertyValue>>& end,
                                         const std::function<bool(uint64_t)>& callback) {
     auto* session = getSession(txn);
-    WT_CURSOR* cursor = getCursor(session, table);
+    auto cursor = openCursor(session, table);
     if (!cursor)
         return;
 
+    auto* c = cursor.get();
     std::string start_encoded;
     if (start.has_value()) {
         start_encoded = IndexKeyCodec::encodeSortableValues(*start);
@@ -1047,28 +986,28 @@ void SyncGraphDataStore::scanIndexRange(GraphTxnHandle txn, const std::string& t
         WT_ITEM item;
         item.data = start_encoded.data();
         item.size = start_encoded.size();
-        cursor->set_key(cursor, &item);
+        c->set_key(c, &item);
         int cmp;
-        ret = cursor->search_near(cursor, &cmp);
+        ret = c->search_near(c, &cmp);
         if (ret != 0)
             return;
         if (cmp <= 0) {
-            ret = cursor->next(cursor);
+            ret = c->next(c);
             if (ret != 0)
                 return;
         }
     } else {
-        ret = cursor->reset(cursor);
+        ret = c->reset(c);
         if (ret != 0)
             return;
-        ret = cursor->next(cursor);
+        ret = c->next(c);
         if (ret != 0)
             return;
     }
 
     while (true) {
         WT_ITEM key_item;
-        ret = cursor->get_key(cursor, &key_item);
+        ret = c->get_key(c, &key_item);
         if (ret != 0)
             break;
 
@@ -1084,7 +1023,7 @@ void SyncGraphDataStore::scanIndexRange(GraphTxnHandle txn, const std::string& t
         if (!callback(entity_id))
             break;
 
-        ret = cursor->next(cursor);
+        ret = c->next(c);
         if (ret != 0)
             break;
     }
@@ -1093,8 +1032,8 @@ void SyncGraphDataStore::scanIndexRange(GraphTxnHandle txn, const std::string& t
 // ==================== Index Cleanup ====================
 
 void SyncGraphDataStore::dropAllIndexEntries(const std::string& table) {
-    tableScan(defaultSession_, table, {}, [&](std::string_view key, std::string_view /*val*/) {
-        tableDel(defaultSession_, table, key);
+    tableScan(defaultSession_.get(), table, {}, [&](std::string_view key, std::string_view /*val*/) {
+        tableDel(defaultSession_.get(), table, key);
         return true; // continue
     });
 }

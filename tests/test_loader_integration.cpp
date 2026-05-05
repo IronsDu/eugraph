@@ -115,6 +115,9 @@ protected:
 
     void TearDown() override {
         client_.reset();
+        // Server teardown can deadlock when IO pool is shared with ThreadManager.
+        // Release the pointer without blocking; OS will reclaim resources.
+        // LSAN is suppressed around server construction in SetUp to avoid leak reports.
         (void)server_.release();
         handler_.reset();
         executor_.reset();

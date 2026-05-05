@@ -20,7 +20,7 @@ QueryExecutor::QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaSt
 QueryExecutor::~QueryExecutor() = default;
 
 folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(const std::string& cypher_query) {
-    auto ctx = std::make_shared<StreamContext>();
+    auto ctx = std::make_shared<StreamContext>(async_data_);
 
     // 0. Quick guard: skip DDL if query starts with EXPLAIN (so DDL isn't executed for EXPLAIN queries)
     // The actual EXPLAIN handling is in the grammar/AST below.
@@ -51,7 +51,6 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
                 co_return ctx;
             }
             ctx->columns = std::move(ddl_result.columns);
-            ctx->store = &async_data_;
             ctx->gen = folly::coro::co_invoke(
                 [rows = std::move(ddl_result.rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
                     if (!rows.empty()) {
@@ -118,12 +117,15 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     ctx->label_name_to_id = std::move(label_name_to_id);
     ctx->edge_label_name_to_id = std::move(edge_label_name_to_id);
 
-    // PlanContext references StreamContext's maps — physical operators get pointers to those maps
-    PlanContext plan_ctx;
-    plan_ctx.label_name_to_id = &ctx->label_name_to_id;
-    plan_ctx.edge_label_name_to_id = &ctx->edge_label_name_to_id;
-    plan_ctx.label_defs = &ctx->label_defs;
-    plan_ctx.edge_label_defs = &ctx->edge_label_defs;
+    // PlanContext references StreamContext's maps — physical operators get references to those maps
+    PlanContext plan_ctx{
+        .label_name_to_id = ctx->label_name_to_id,
+        .edge_label_name_to_id = ctx->edge_label_name_to_id,
+        .label_defs = ctx->label_defs,
+        .edge_label_defs = ctx->edge_label_defs,
+        .variable_vertex_ids = {},
+        .variable_edge_ids = {},
+    };
 
     plan_ctx.next_vertex_id = co_await async_meta_.nextVertexId();
     plan_ctx.next_edge_id = co_await async_meta_.nextEdgeId();
@@ -189,7 +191,6 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     ctx->phys_op = std::move(phys_op);
     ctx->gen = ctx->phys_op->execute();
     ctx->txn = txn;
-    ctx->store = &async_data_;
 
     co_return ctx;
 }

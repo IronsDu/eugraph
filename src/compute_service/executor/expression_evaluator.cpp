@@ -234,30 +234,28 @@ Value ExpressionEvaluator::evalPropertyAccess(const cypher::PropertyAccess& pa, 
         if (pa.property == "id") {
             return Value(static_cast<int64_t>(vertex.id));
         }
-        if (label_defs_) {
-            std::vector<Value> found;
-            for (const auto& [lid, props] : vertex.properties) {
-                auto ldef_it = label_defs_->find(lid);
-                if (ldef_it == label_defs_->end())
-                    continue;
-                for (const auto& pd : ldef_it->second.properties) {
-                    if (pd.name == pa.property && pd.id < props.size()) {
-                        const auto& val = props[pd.id];
-                        if (val.has_value()) {
-                            found.push_back(propToValue(*val));
-                        }
+        std::vector<Value> found;
+        for (const auto& [lid, props] : vertex.properties) {
+            auto ldef_it = label_defs_.find(lid);
+            if (ldef_it == label_defs_.end())
+                continue;
+            for (const auto& pd : ldef_it->second.properties) {
+                if (pd.name == pa.property && pd.id < props.size()) {
+                    const auto& val = props[pd.id];
+                    if (val.has_value()) {
+                        found.push_back(propToValue(*val));
                     }
                 }
             }
-            if (found.size() == 1)
-                return std::move(found[0]);
-            if (found.size() > 1) {
-                ListValue lv;
-                for (auto& v : found) {
-                    lv.elements.push_back(ValueStorage{std::move(v)});
-                }
-                return Value(std::move(lv));
+        }
+        if (found.size() == 1)
+            return std::move(found[0]);
+        if (found.size() > 1) {
+            ListValue lv;
+            for (auto& v : found) {
+                lv.elements.push_back(ValueStorage{std::move(v)});
             }
+            return Value(std::move(lv));
         }
         return Value{};
     }
@@ -268,8 +266,8 @@ Value ExpressionEvaluator::evalPropertyAccess(const cypher::PropertyAccess& pa, 
         if (pa.property == "id") {
             return Value(static_cast<int64_t>(edge.id));
         }
-        if (edge.properties.has_value() && label_defs_) {
-            for (const auto& [lid, ldef] : *label_defs_) {
+        if (edge.properties.has_value()) {
+            for (const auto& [lid, ldef] : label_defs_) {
                 for (const auto& pd : ldef.properties) {
                     if (pd.name == pa.property && pd.id < edge.properties->size()) {
                         const auto& val = (*edge.properties)[pd.id];
@@ -292,12 +290,10 @@ Value ExpressionEvaluator::evalLabelCast(const cypher::LabelCastExpr& lc, const 
         return Value{};
 
     const auto& vertex = std::get<VertexValue>(obj);
-    if (!label_defs_)
-        return Value{};
 
     // Resolve label name → LabelId
     LabelId target_lid = INVALID_LABEL_ID;
-    for (const auto& [lid, ldef] : *label_defs_) {
+    for (const auto& [lid, ldef] : label_defs_) {
         if (ldef.name == lc.label) {
             target_lid = lid;
             break;

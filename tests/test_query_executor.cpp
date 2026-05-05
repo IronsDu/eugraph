@@ -152,7 +152,7 @@ ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
             }
         }
         if (ctx->should_commit) {
-            co_await ctx->store->commitTran(ctx->txn);
+            co_await ctx->store.commitTran(ctx->txn);
         }
     }));
     return result;
@@ -1624,7 +1624,7 @@ TEST_F(QueryExecutorMultiLabelTest, StreamingSetLabelSurvivesPlanContextLifetime
         while (auto batch = co_await ctx->gen.next()) {
             count += batch->rows.size();
         }
-        co_await ctx->store->commitTran(ctx->txn);
+        co_await ctx->store.commitTran(ctx->txn);
         co_return count;
     };
     size_t row_count = blockingWait(consumeStream());

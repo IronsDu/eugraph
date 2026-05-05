@@ -20,7 +20,7 @@ namespace eugraph {
 class AsyncGraphDataStore : public IAsyncGraphDataStore {
 public:
     AsyncGraphDataStore(ISyncGraphDataStore& store, IoScheduler& io, GraphTxnHandle txn = INVALID_GRAPH_TXN)
-        : store_(&store), io_(&io), txn_(txn) {}
+        : store_(store), io_(io), txn_(txn) {}
 
     void setTransaction(GraphTxnHandle txn) override {
         txn_ = txn;
@@ -29,42 +29,42 @@ public:
     // ==================== Transaction ====================
 
     folly::coro::Task<GraphTxnHandle> beginTran() override {
-        auto txn = co_await io_->dispatch([this]() { return store_->beginTransaction(); });
+        auto txn = co_await io_.dispatch([this]() { return store_.beginTransaction(); });
         co_return txn;
     }
 
     folly::coro::Task<bool> commitTran(GraphTxnHandle txn) override {
-        auto ok = co_await io_->dispatch([this, txn]() { return store_->commitTransaction(txn); });
+        auto ok = co_await io_.dispatch([this, txn]() { return store_.commitTransaction(txn); });
         co_return ok;
     }
 
     folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) override {
-        auto ok = co_await io_->dispatch([this, txn]() { return store_->rollbackTransaction(txn); });
+        auto ok = co_await io_.dispatch([this, txn]() { return store_.rollbackTransaction(txn); });
         co_return ok;
     }
 
     // ==================== DDL ====================
 
     folly::coro::Task<bool> createLabel(LabelId label_id) override {
-        auto ok = co_await io_->dispatch([this, label_id]() { return store_->createLabel(label_id); });
+        auto ok = co_await io_.dispatch([this, label_id]() { return store_.createLabel(label_id); });
         co_return ok;
     }
 
     folly::coro::Task<bool> createEdgeLabel(EdgeLabelId edge_label_id) override {
-        auto ok = co_await io_->dispatch([this, edge_label_id]() { return store_->createEdgeLabel(edge_label_id); });
+        auto ok = co_await io_.dispatch([this, edge_label_id]() { return store_.createEdgeLabel(edge_label_id); });
         co_return ok;
     }
 
     // ==================== Vertex Properties ====================
 
     folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id) override {
-        auto result = co_await io_->dispatch(
-            [this, vid, label_id]() { return store_->getVertexProperties(txn_, vid, label_id); });
+        auto result =
+            co_await io_.dispatch([this, vid, label_id]() { return store_.getVertexProperties(txn_, vid, label_id); });
         co_return std::move(result);
     }
 
     folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) override {
-        auto result = co_await io_->dispatch([this, vid]() { return store_->getVertexLabels(txn_, vid); });
+        auto result = co_await io_.dispatch([this, vid]() { return store_.getVertexLabels(txn_, vid); });
         co_return std::move(result);
     }
 
@@ -73,11 +73,11 @@ public:
     folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByLabel(LabelId label_id) override {
         constexpr size_t BATCH = 1024;
         auto cursor =
-            co_await io_->dispatch([this, label_id]() { return store_->createVertexScanCursor(txn_, label_id); });
+            co_await io_.dispatch([this, label_id]() { return store_.createVertexScanCursor(txn_, label_id); });
 
         while (true) {
             std::vector<VertexId> batch;
-            co_await io_->dispatchVoid([&]() {
+            co_await io_.dispatchVoid([&]() {
                 for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
                     batch.push_back(cursor->vertexId());
                     cursor->next();
@@ -95,13 +95,13 @@ public:
     folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
     scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) override {
         constexpr size_t BATCH = 1024;
-        auto cursor = co_await io_->dispatch([this, vid, direction, label_filter]() {
-            return store_->createEdgeScanCursor(txn_, vid, direction, label_filter);
+        auto cursor = co_await io_.dispatch([this, vid, direction, label_filter]() {
+            return store_.createEdgeScanCursor(txn_, vid, direction, label_filter);
         });
 
         while (true) {
             std::vector<ISyncGraphDataStore::EdgeIndexEntry> batch;
-            co_await io_->dispatchVoid([&]() {
+            co_await io_.dispatchVoid([&]() {
                 for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
                     batch.push_back(cursor->entry());
                     cursor->next();
@@ -120,13 +120,13 @@ public:
     scanEdgesByType(EdgeLabelId label_id, std::optional<VertexId> src_filter,
                     std::optional<VertexId> dst_filter) override {
         constexpr size_t BATCH = 1024;
-        auto cursor = co_await io_->dispatch([this, label_id, src_filter, dst_filter]() {
-            return store_->createEdgeTypeScanCursor(txn_, label_id, src_filter, dst_filter);
+        auto cursor = co_await io_.dispatch([this, label_id, src_filter, dst_filter]() {
+            return store_.createEdgeTypeScanCursor(txn_, label_id, src_filter, dst_filter);
         });
 
         while (true) {
             std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> batch;
-            co_await io_->dispatchVoid([&]() {
+            co_await io_.dispatchVoid([&]() {
                 for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
                     batch.push_back(cursor->entry());
                     cursor->next();
@@ -143,35 +143,34 @@ public:
 
     folly::coro::Task<bool> putVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id,
                                               const PropertyValue& value) override {
-        auto ok = co_await io_->dispatch([this, vid, label_id, prop_id, &value]() {
-            return store_->putVertexProperty(txn_, vid, label_id, prop_id, value);
+        auto ok = co_await io_.dispatch([this, vid, label_id, prop_id, &value]() {
+            return store_.putVertexProperty(txn_, vid, label_id, prop_id, value);
         });
         co_return ok;
     }
 
     folly::coro::Task<bool> putVertexProperties(VertexId vid, LabelId label_id, const Properties& props) override {
-        auto ok = co_await io_->dispatch(
-            [this, vid, label_id, &props]() { return store_->putVertexProperties(txn_, vid, label_id, props); });
+        auto ok = co_await io_.dispatch(
+            [this, vid, label_id, &props]() { return store_.putVertexProperties(txn_, vid, label_id, props); });
         co_return ok;
     }
 
     folly::coro::Task<bool> deleteVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id) override {
-        auto ok = co_await io_->dispatch(
-            [this, vid, label_id, prop_id]() { return store_->deleteVertexProperty(txn_, vid, label_id, prop_id); });
+        auto ok = co_await io_.dispatch(
+            [this, vid, label_id, prop_id]() { return store_.deleteVertexProperty(txn_, vid, label_id, prop_id); });
         co_return ok;
     }
 
     // ==================== Vertex Label Write ====================
 
     folly::coro::Task<bool> addVertexLabel(VertexId vid, LabelId label_id) override {
-        auto ok =
-            co_await io_->dispatch([this, vid, label_id]() { return store_->addVertexLabel(txn_, vid, label_id); });
+        auto ok = co_await io_.dispatch([this, vid, label_id]() { return store_.addVertexLabel(txn_, vid, label_id); });
         co_return ok;
     }
 
     folly::coro::Task<bool> removeVertexLabel(VertexId vid, LabelId label_id) override {
         auto ok =
-            co_await io_->dispatch([this, vid, label_id]() { return store_->removeVertexLabel(txn_, vid, label_id); });
+            co_await io_.dispatch([this, vid, label_id]() { return store_.removeVertexLabel(txn_, vid, label_id); });
         co_return ok;
     }
 
@@ -179,15 +178,15 @@ public:
 
     folly::coro::Task<bool> insertVertex(VertexId vid,
                                          std::span<const std::pair<LabelId, Properties>> label_props) override {
-        auto result = co_await io_->dispatch(
-            [this, vid, label_props]() -> bool { return store_->insertVertex(txn_, vid, label_props); });
+        auto result = co_await io_.dispatch(
+            [this, vid, label_props]() -> bool { return store_.insertVertex(txn_, vid, label_props); });
         co_return result;
     }
 
     folly::coro::Task<bool> insertEdge(EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id, uint64_t seq,
                                        const Properties& props) override {
-        auto result = co_await io_->dispatch([this, eid, src_id, dst_id, label_id, seq, &props]() -> bool {
-            return store_->insertEdge(txn_, eid, src_id, dst_id, label_id, seq, props);
+        auto result = co_await io_.dispatch([this, eid, src_id, dst_id, label_id, seq, &props]() -> bool {
+            return store_.insertEdge(txn_, eid, src_id, dst_id, label_id, seq, props);
         });
         co_return result;
     }
@@ -195,53 +194,53 @@ public:
     // ==================== Index Operations ====================
 
     folly::coro::Task<bool> createIndex(const std::string& table_name) override {
-        auto ok = co_await io_->dispatch([this, &table_name]() { return store_->createIndex(table_name); });
+        auto ok = co_await io_.dispatch([this, &table_name]() { return store_.createIndex(table_name); });
         co_return ok;
     }
 
     folly::coro::Task<bool> dropIndex(const std::string& table_name) override {
-        auto ok = co_await io_->dispatch([this, &table_name]() { return store_->dropIndex(table_name); });
+        auto ok = co_await io_.dispatch([this, &table_name]() { return store_.dropIndex(table_name); });
         co_return ok;
     }
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,
                                              uint64_t entity_id) override {
-        auto ok = co_await io_->dispatch(
-            [this, &table, &value, entity_id]() { return store_->insertIndexEntry(table, value, entity_id); });
+        auto ok = co_await io_.dispatch(
+            [this, &table, &value, entity_id]() { return store_.insertIndexEntry(table, value, entity_id); });
         co_return ok;
     }
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                              uint64_t entity_id) override {
-        auto ok = co_await io_->dispatch(
-            [this, &table, &values, entity_id]() { return store_->insertIndexEntry(table, values, entity_id); });
+        auto ok = co_await io_.dispatch(
+            [this, &table, &values, entity_id]() { return store_.insertIndexEntry(table, values, entity_id); });
         co_return ok;
     }
 
     folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
                                              uint64_t entity_id) override {
-        auto ok = co_await io_->dispatch(
-            [this, &table, &value, entity_id]() { return store_->deleteIndexEntry(table, value, entity_id); });
+        auto ok = co_await io_.dispatch(
+            [this, &table, &value, entity_id]() { return store_.deleteIndexEntry(table, value, entity_id); });
         co_return ok;
     }
 
     folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                              uint64_t entity_id) override {
-        auto ok = co_await io_->dispatch(
-            [this, &table, &values, entity_id]() { return store_->deleteIndexEntry(table, values, entity_id); });
+        auto ok = co_await io_.dispatch(
+            [this, &table, &values, entity_id]() { return store_.deleteIndexEntry(table, values, entity_id); });
         co_return ok;
     }
 
     folly::coro::Task<bool> checkUniqueConstraint(const std::string& table, const PropertyValue& value) override {
         auto ok =
-            co_await io_->dispatch([this, &table, &value]() { return store_->checkUniqueConstraint(table, value); });
+            co_await io_.dispatch([this, &table, &value]() { return store_.checkUniqueConstraint(table, value); });
         co_return ok;
     }
 
     folly::coro::Task<bool> checkUniqueConstraint(const std::string& table,
                                                   const std::vector<PropertyValue>& values) override {
         auto ok =
-            co_await io_->dispatch([this, &table, &values]() { return store_->checkUniqueConstraint(table, values); });
+            co_await io_.dispatch([this, &table, &values]() { return store_.checkUniqueConstraint(table, values); });
         co_return ok;
     }
 
@@ -253,8 +252,8 @@ public:
         std::string table = vidxTable(label_id, prop_id);
         while (true) {
             std::vector<VertexId> batch;
-            co_await io_->dispatchVoid([&]() {
-                store_->scanIndexEquality(txn_, table, value, [&](uint64_t entity_id) {
+            co_await io_.dispatchVoid([&]() {
+                store_.scanIndexEquality(txn_, table, value, [&](uint64_t entity_id) {
                     batch.push_back(entity_id);
                     return batch.size() < BATCH;
                 });
@@ -274,8 +273,8 @@ public:
         std::string table = vidxCompositeTable(label_id, prop_ids);
         while (true) {
             std::vector<VertexId> batch;
-            co_await io_->dispatchVoid([&]() {
-                store_->scanIndexEquality(txn_, table, values, [&](uint64_t entity_id) {
+            co_await io_.dispatchVoid([&]() {
+                store_.scanIndexEquality(txn_, table, values, [&](uint64_t entity_id) {
                     batch.push_back(entity_id);
                     return batch.size() < BATCH;
                 });
@@ -295,8 +294,8 @@ public:
         std::string table = vidxTable(label_id, prop_id);
         while (true) {
             std::vector<VertexId> batch;
-            co_await io_->dispatchVoid([&]() {
-                store_->scanIndexRange(txn_, table, start, end, [&](uint64_t entity_id) {
+            co_await io_.dispatchVoid([&]() {
+                store_.scanIndexRange(txn_, table, start, end, [&](uint64_t entity_id) {
                     batch.push_back(entity_id);
                     return batch.size() < BATCH;
                 });
@@ -317,8 +316,8 @@ public:
         std::string table = vidxCompositeTable(label_id, prop_ids);
         while (true) {
             std::vector<VertexId> batch;
-            co_await io_->dispatchVoid([&]() {
-                store_->scanIndexRange(txn_, table, start, end, [&](uint64_t entity_id) {
+            co_await io_.dispatchVoid([&]() {
+                store_.scanIndexRange(txn_, table, start, end, [&](uint64_t entity_id) {
                     batch.push_back(entity_id);
                     return batch.size() < BATCH;
                 });
@@ -334,29 +333,29 @@ public:
     // ==================== Batch Write ====================
 
     folly::coro::Task<void> batchInsertVertices(LabelId label_id, std::vector<BatchVertexEntry> entries) override {
-        co_await io_->dispatchVoid([this, label_id, entries = std::move(entries)]() {
-            auto txn = store_->beginTransaction();
+        co_await io_.dispatchVoid([this, label_id, entries = std::move(entries)]() {
+            auto txn = store_.beginTransaction();
             for (const auto& e : entries) {
                 std::pair<LabelId, Properties> lp{label_id, e.props};
-                store_->insertVertex(txn, e.vid, std::span<const std::pair<LabelId, Properties>>{&lp, 1});
+                store_.insertVertex(txn, e.vid, std::span<const std::pair<LabelId, Properties>>{&lp, 1});
             }
-            store_->commitTransaction(txn);
+            store_.commitTransaction(txn);
         });
     }
 
     folly::coro::Task<void> batchInsertEdges(EdgeLabelId edge_label_id, std::vector<BatchEdgeEntry> entries) override {
-        co_await io_->dispatchVoid([this, edge_label_id, entries = std::move(entries)]() {
-            auto txn = store_->beginTransaction();
+        co_await io_.dispatchVoid([this, edge_label_id, entries = std::move(entries)]() {
+            auto txn = store_.beginTransaction();
             for (const auto& e : entries) {
-                store_->insertEdge(txn, e.eid, e.src_id, e.dst_id, edge_label_id, e.seq, e.props);
+                store_.insertEdge(txn, e.eid, e.src_id, e.dst_id, edge_label_id, e.seq, e.props);
             }
-            store_->commitTransaction(txn);
+            store_.commitTransaction(txn);
         });
     }
 
 private:
-    ISyncGraphDataStore* store_;
-    IoScheduler* io_;
+    ISyncGraphDataStore& store_;
+    IoScheduler& io_;
     GraphTxnHandle txn_;
 };
 

@@ -67,15 +67,11 @@ folly::coro::AsyncGenerator<RowBatch> SetPhysicalOp::execute() {
                 VertexId vid = vertex.id;
 
                 if (item.kind == cypher::SetItemKind::SET_LABELS) {
-                    if (!label_name_to_id_)
-                        continue;
-                    auto lit = label_name_to_id_->find(item.label);
-                    if (lit == label_name_to_id_->end())
+                    auto lit = label_name_to_id_.find(item.label);
+                    if (lit == label_name_to_id_.end())
                         continue;
                     co_await store_.addVertexLabel(vid, lit->second);
                 } else if (item.kind == cypher::SetItemKind::SET_PROPERTY) {
-                    if (!label_defs_)
-                        continue;
                     std::string prop_name;
                     if (std::holds_alternative<std::unique_ptr<cypher::PropertyAccess>>(item.target)) {
                         prop_name = std::get<std::unique_ptr<cypher::PropertyAccess>>(item.target)->property;
@@ -86,7 +82,7 @@ folly::coro::AsyncGenerator<RowBatch> SetPhysicalOp::execute() {
                     LabelId found_label = INVALID_LABEL_ID;
                     uint16_t found_prop_id = 0;
                     size_t match_count = 0;
-                    for (const auto& [lid, ldef] : *label_defs_) {
+                    for (const auto& [lid, ldef] : label_defs_) {
                         for (const auto& pd : ldef.properties) {
                             if (pd.name == prop_name) {
                                 found_label = lid;
@@ -102,8 +98,7 @@ folly::coro::AsyncGenerator<RowBatch> SetPhysicalOp::execute() {
 
                     if (!item.value.has_value())
                         continue;
-                    ExpressionEvaluator eval;
-                    eval.setLabelDefs(label_defs_);
+                    ExpressionEvaluator eval(label_defs_);
                     Value val = eval.evaluate(*item.value, row, input_schema_);
                     PropertyValue pv = valueToPropertyValue(val);
 

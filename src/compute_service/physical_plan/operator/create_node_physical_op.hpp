@@ -20,9 +20,9 @@ public:
     CreateNodePhysicalOp(std::string variable, std::vector<LabelId> label_ids,
                          std::vector<std::pair<LabelId, Properties>> label_props, IAsyncGraphDataStore& store,
                          VertexId assigned_vid, std::unique_ptr<PhysicalOperator> child = nullptr,
-                         const std::unordered_map<LabelId, LabelDef>* label_defs = nullptr)
+                         std::unordered_map<LabelId, LabelDef> label_defs = {})
         : variable_(std::move(variable)), label_ids_(std::move(label_ids)), label_props_(std::move(label_props)),
-          store_(store), assigned_vid_(assigned_vid), child_(std::move(child)), label_defs_(label_defs) {}
+          store_(store), assigned_vid_(assigned_vid), child_(std::move(child)), label_defs_(std::move(label_defs)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     std::string toString() const override;
@@ -39,7 +39,7 @@ private:
     IAsyncGraphDataStore& store_;
     VertexId assigned_vid_;
     std::unique_ptr<PhysicalOperator> child_;
-    const std::unordered_map<LabelId, LabelDef>* label_defs_;
+    std::unordered_map<LabelId, LabelDef> label_defs_;
 };
 
 } // namespace compute

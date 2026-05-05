@@ -53,19 +53,15 @@ folly::coro::AsyncGenerator<RowBatch> RemovePhysicalOp::execute() {
                 VertexId vid = vertex.id;
 
                 if (item.kind == cypher::RemoveItem::Kind::LABEL) {
-                    if (!label_name_to_id_)
-                        continue;
-                    auto lit = label_name_to_id_->find(item.name);
-                    if (lit == label_name_to_id_->end())
+                    auto lit = label_name_to_id_.find(item.name);
+                    if (lit == label_name_to_id_.end())
                         continue;
                     co_await store_.removeVertexLabel(vid, lit->second);
                 } else if (item.kind == cypher::RemoveItem::Kind::PROPERTY) {
-                    if (!label_defs_)
-                        continue;
                     LabelId found_label = INVALID_LABEL_ID;
                     uint16_t found_prop_id = 0;
                     size_t match_count = 0;
-                    for (const auto& [lid, ldef] : *label_defs_) {
+                    for (const auto& [lid, ldef] : label_defs_) {
                         for (const auto& pd : ldef.properties) {
                             if (pd.name == item.name) {
                                 found_label = lid;

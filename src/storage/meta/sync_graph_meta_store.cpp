@@ -14,7 +14,7 @@ bool SyncGraphMetaStore::open(const std::string& db_path) {
     if (!openConnection(db_path))
         return false;
 
-    if (!ensureGlobalTable(defaultSession_, TABLE_METADATA)) {
+    if (!ensureGlobalTable(defaultSession_.get(), TABLE_METADATA)) {
         close();
         return false;
     }
@@ -39,16 +39,15 @@ GraphTxnHandle SyncGraphMetaStore::beginTransaction() {
         return INVALID_GRAPH_TXN;
 
     auto ts = std::make_unique<TxnState>();
-    int ret = conn_->open_session(conn_, nullptr, nullptr, &ts->session);
-    if (ret != 0) {
-        spdlog::error("Failed to open transaction session: error {}", ret);
+    ts->session = conn_.openSession();
+    if (!ts->session) {
+        spdlog::error("Failed to open transaction session");
         return INVALID_GRAPH_TXN;
     }
 
-    ret = ts->session->begin_transaction(ts->session, "isolation=snapshot");
+    int ret = ts->session->begin_transaction(ts->session.get(), "isolation=snapshot");
     if (ret != 0) {
         spdlog::error("Failed to begin transaction: error {}", ret);
-        ts->session->close(ts->session, nullptr);
         return INVALID_GRAPH_TXN;
     }
 
@@ -68,9 +67,9 @@ bool SyncGraphMetaStore::commitTransaction(GraphTxnHandle txn) {
         ts = it->second.get();
     }
 
-    int ret = ts->session->commit_transaction(ts->session, nullptr);
+    int ret = ts->session->commit_transaction(ts->session.get(), nullptr);
     closeTxnCursors(ts);
-    ts->session->close(ts->session, nullptr);
+    // WtSession destructor auto-closes session when TxnState is erased
 
     std::lock_guard<std::mutex> lock(txnMutex_);
     txns_.erase(txn);
@@ -92,9 +91,9 @@ bool SyncGraphMetaStore::rollbackTransaction(GraphTxnHandle txn) {
         ts = it->second.get();
     }
 
-    int ret = ts->session->rollback_transaction(ts->session, nullptr);
+    int ret = ts->session->rollback_transaction(ts->session.get(), nullptr);
     closeTxnCursors(ts);
-    ts->session->close(ts->session, nullptr);
+    // WtSession destructor auto-closes session when TxnState is erased
 
     std::lock_guard<std::mutex> lock(txnMutex_);
     txns_.erase(txn);
@@ -109,20 +108,20 @@ bool SyncGraphMetaStore::rollbackTransaction(GraphTxnHandle txn) {
 // ==================== Metadata Raw KV ====================
 
 bool SyncGraphMetaStore::metadataPut(std::string_view key, std::string_view value) {
-    return tablePut(defaultSession_, TABLE_METADATA, key, value);
+    return tablePut(defaultSession_.get(), TABLE_METADATA, key, value);
 }
 
 std::optional<std::string> SyncGraphMetaStore::metadataGet(std::string_view key) {
-    return tableGet(defaultSession_, TABLE_METADATA, key);
+    return tableGet(defaultSession_.get(), TABLE_METADATA, key);
 }
 
 bool SyncGraphMetaStore::metadataDel(std::string_view key) {
-    return tableDel(defaultSession_, TABLE_METADATA, key);
+    return tableDel(defaultSession_.get(), TABLE_METADATA, key);
 }
 
 void SyncGraphMetaStore::metadataScan(std::string_view prefix,
                                       const std::function<bool(std::string_view, std::string_view)>& callback) {
-    tableScan(defaultSession_, TABLE_METADATA, prefix, callback);
+    tableScan(defaultSession_.get(), TABLE_METADATA, prefix, callback);
 }
 
 // ==================== DDL ====================
