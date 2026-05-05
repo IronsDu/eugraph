@@ -863,8 +863,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeEdgeIndex) {
 
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
 
-    auto result =
-        execSync(executor, "CREATE INDEX idx_knows_sw FOR ()-[r:KNOWS]-() ON (r.since, r.weight)");
+    auto result = execSync(executor, "CREATE INDEX idx_knows_sw FOR ()-[r:KNOWS]-() ON (r.since, r.weight)");
     EXPECT_TRUE(result.error.empty()) << result.error;
 
     auto info = blockingWait(env.async_meta->getIndex("idx_knows_sw"));
@@ -890,8 +889,7 @@ TEST_F(IndexE2ETest, DdlCreateCompositeUniqueEdgeIndex) {
 
     QueryExecutor executor(*env.async_data, *env.async_meta, {});
 
-    auto result =
-        execSync(executor, "CREATE UNIQUE INDEX idx_uknows_sw FOR ()-[r:KNOWS]-() ON (r.since, r.weight)");
+    auto result = execSync(executor, "CREATE UNIQUE INDEX idx_uknows_sw FOR ()-[r:KNOWS]-() ON (r.since, r.weight)");
     EXPECT_TRUE(result.error.empty()) << result.error;
 
     auto info = blockingWait(env.async_meta->getIndex("idx_uknows_sw"));
