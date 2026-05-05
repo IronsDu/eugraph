@@ -33,4 +33,4 @@ eugraph-shell --host 127.0.0.1 --port 9090
 
 ## 架构参考
 
-设计文档见 [server-shell-design.md](../program_design/server-shell-design.md)。
+设计文档见 [server-shell-design.md](../design/server-shell-design.md)。

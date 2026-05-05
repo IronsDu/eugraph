@@ -1,5 +1,5 @@
-#include "shell/shell_repl.hpp"
-#include "shell/rpc_client.hpp"
+#include "program/shell/shell_repl.hpp"
+#include "program/shell/rpc_client.hpp"
 
 #include "gen-cpp2/eugraph_types.h"
 

@@ -2,7 +2,7 @@
 
 > [当前实现] 参见 [README.md](README.md) 返回文档导航
 
-使用文档见 [program_usage/loader.md](../program_usage/loader.md)。
+使用文档见 [loader.md](../usage/loader.md)。
 
 ---
 
@@ -38,7 +38,7 @@ Loader 使用两个批量 RPC 端点：
 ## 文件结构
 
 ```
-src/loader/
+src/program/loader/
   loader_main.cpp       # 入口：参数解析、流程编排
   csv_loader.hpp/cpp    # 目录扫描、CSV 解析、Schema 构建、数据加载
 ```

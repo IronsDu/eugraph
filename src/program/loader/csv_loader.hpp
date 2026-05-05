@@ -2,7 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "gen-cpp2/EuGraphService.h"
-#include "shell/rpc_client.hpp"
+#include "program/shell/rpc_client.hpp"
 
 #include <filesystem>
 #include <string>
