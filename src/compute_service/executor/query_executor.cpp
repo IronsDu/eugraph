@@ -123,6 +123,8 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
         .edge_label_name_to_id = ctx->edge_label_name_to_id,
         .label_defs = ctx->label_defs,
         .edge_label_defs = ctx->edge_label_defs,
+        .variable_vertex_ids = {},
+        .variable_edge_ids = {},
     };
 
     plan_ctx.next_vertex_id = co_await async_meta_.nextVertexId();
