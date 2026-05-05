@@ -77,9 +77,8 @@ public:
                                                      uint64_t entity_id) = 0;
     virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,
                                                      uint64_t entity_id, std::string payload) = 0;
-    virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table,
-                                                     const std::vector<PropertyValue>& values, uint64_t entity_id,
-                                                     std::string payload) = 0;
+    virtual folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+                                                     uint64_t entity_id, std::string payload) = 0;
     virtual folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
                                                      uint64_t entity_id) = 0;
     virtual folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,

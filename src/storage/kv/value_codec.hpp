@@ -35,7 +35,7 @@ public:
     // Format: {src_id:u64BE}{dst_id:u64BE}{seq:u64BE}{label_id:u16BE} (26 bytes)
     static std::string encodeEdgeAdjacency(VertexId src_id, VertexId dst_id, uint64_t seq, EdgeLabelId label_id);
     static void decodeEdgeAdjacency(std::string_view data, VertexId& src_id, VertexId& dst_id, uint64_t& seq,
-                                     EdgeLabelId& label_id);
+                                    EdgeLabelId& label_id);
 
 private:
     static constexpr uint8_t TAG_NULL = 0x00;

@@ -138,8 +138,7 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planFilter(Filter
         return err;
 
     // Helper lambda to collect indexable conditions from a predicate
-    auto collectConditions = [](const cypher::Expression& pred,
-                                std::vector<const cypher::BinaryOp*>& conditions) {
+    auto collectConditions = [](const cypher::Expression& pred, std::vector<const cypher::BinaryOp*>& conditions) {
         if (std::holds_alternative<std::unique_ptr<cypher::BinaryOp>>(pred)) {
             auto& binop = std::get<std::unique_ptr<cypher::BinaryOp>>(pred);
             if (binop->op == cypher::BinaryOperator::AND) {
@@ -524,7 +523,8 @@ PhysicalPlanner::planCreateEdge(CreateEdgeOp& op, IAsyncGraphDataStore& store, P
                 uint16_t max_id = 0;
                 for (const auto& [name, pid] : name_to_id) {
                     (void)name;
-                    if (pid > max_id) max_id = pid;
+                    if (pid > max_id)
+                        max_id = pid;
                 }
                 props.resize(max_id + 1);
             }
@@ -828,9 +828,10 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryIndexScan(LabelScanOp& sca
     return std::nullopt;
 }
 
-std::optional<PlanOperatorResult> PhysicalPlanner::tryEdgeIndexScan(
-    ExpandOp& expand_op, const std::vector<const cypher::BinaryOp*>& conditions, EdgeLabelId label_id,
-    const EdgeLabelDef& edge_label_def, IAsyncGraphDataStore& store, PlanContext& ctx) {
+std::optional<PlanOperatorResult>
+PhysicalPlanner::tryEdgeIndexScan(ExpandOp& expand_op, const std::vector<const cypher::BinaryOp*>& conditions,
+                                  EdgeLabelId label_id, const EdgeLabelDef& edge_label_def, IAsyncGraphDataStore& store,
+                                  PlanContext& ctx) {
     // Extract all indexable conditions and map property name -> (op, value)
     struct CondInfo {
         cypher::BinaryOperator op;
@@ -931,9 +932,12 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryEdgeIndexScan(
         }
 
         Schema output_schema;
-        if (!expand_op.src_variable.empty()) output_schema.push_back(expand_op.src_variable);
-        if (!expand_op.dst_variable.empty()) output_schema.push_back(expand_op.dst_variable);
-        if (!expand_op.edge_variable.empty()) output_schema.push_back(expand_op.edge_variable);
+        if (!expand_op.src_variable.empty())
+            output_schema.push_back(expand_op.src_variable);
+        if (!expand_op.dst_variable.empty())
+            output_schema.push_back(expand_op.dst_variable);
+        if (!expand_op.edge_variable.empty())
+            output_schema.push_back(expand_op.edge_variable);
         return PlanOperatorResult{std::move(result), std::move(output_schema)};
     }
     return std::nullopt;

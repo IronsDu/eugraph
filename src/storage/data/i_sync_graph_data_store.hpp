@@ -193,13 +193,13 @@ public:
                                             const std::vector<PropertyValue>& values,
                                             const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
     virtual void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
-                                          const std::optional<PropertyValue>& start,
-                                          const std::optional<PropertyValue>& end,
-                                          const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                         const std::optional<PropertyValue>& start,
+                                         const std::optional<PropertyValue>& end,
+                                         const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
     virtual void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
-                                          const std::optional<std::vector<PropertyValue>>& start,
-                                          const std::optional<std::vector<PropertyValue>>& end,
-                                          const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                         const std::optional<std::vector<PropertyValue>>& start,
+                                         const std::optional<std::vector<PropertyValue>>& end,
+                                         const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
 
     // ==================== Index Cleanup ====================
 

@@ -72,8 +72,8 @@ public:
     // ==================== Edge Properties ====================
 
     folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) override {
-        auto result = co_await io_.dispatch(
-            [this, label_id, eid]() { return store_.getEdgeProperties(txn_, label_id, eid); });
+        auto result =
+            co_await io_.dispatch([this, label_id, eid]() { return store_.getEdgeProperties(txn_, label_id, eid); });
         co_return std::move(result);
     }
 
@@ -372,9 +372,11 @@ public:
                     return batch.size() < BATCH;
                 });
             });
-            if (batch.empty()) co_return;
+            if (batch.empty())
+                co_return;
             co_yield std::move(batch);
-            if (batch.size() < BATCH) co_return;
+            if (batch.size() < BATCH)
+                co_return;
         }
     }
 
@@ -394,9 +396,11 @@ public:
                     return batch.size() < BATCH;
                 });
             });
-            if (batch.empty()) co_return;
+            if (batch.empty())
+                co_return;
             co_yield std::move(batch);
-            if (batch.size() < BATCH) co_return;
+            if (batch.size() < BATCH)
+                co_return;
         }
     }
 
@@ -416,9 +420,11 @@ public:
                     return batch.size() < BATCH;
                 });
             });
-            if (batch.empty()) co_return;
+            if (batch.empty())
+                co_return;
             co_yield std::move(batch);
-            if (batch.size() < BATCH) co_return;
+            if (batch.size() < BATCH)
+                co_return;
         }
     }
 
@@ -431,19 +437,19 @@ public:
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
             co_await io_.dispatchVoid([&]() {
-                store_.scanIndexRangeWithValue(txn_, table, start, end,
-                                                [&](uint64_t entity_id, std::string_view val) {
-                                                    EdgeIndexScanEntry entry;
-                                                    entry.edge_id = entity_id;
-                                                    ValueCodec::decodeEdgeAdjacency(val, entry.src_id, entry.dst_id,
-                                                                                    entry.seq, entry.label_id);
-                                                    batch.push_back(entry);
-                                                    return batch.size() < BATCH;
-                                                });
+                store_.scanIndexRangeWithValue(txn_, table, start, end, [&](uint64_t entity_id, std::string_view val) {
+                    EdgeIndexScanEntry entry;
+                    entry.edge_id = entity_id;
+                    ValueCodec::decodeEdgeAdjacency(val, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                    batch.push_back(entry);
+                    return batch.size() < BATCH;
+                });
             });
-            if (batch.empty()) co_return;
+            if (batch.empty())
+                co_return;
             co_yield std::move(batch);
-            if (batch.size() < BATCH) co_return;
+            if (batch.size() < BATCH)
+                co_return;
         }
     }
 

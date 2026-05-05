@@ -30,8 +30,10 @@ folly::coro::AsyncGenerator<RowBatch> CreateEdgePhysicalOp::execute() {
     bool ok = true;
     if (edge_label_def) {
         for (const auto& idx : edge_label_def->indexes) {
-            if (!idx.unique) continue;
-            if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC) continue;
+            if (!idx.unique)
+                continue;
+            if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
+                continue;
 
             // Collect all indexed property values; skip if any is missing
             std::vector<PropertyValue> values;
@@ -44,10 +46,11 @@ folly::coro::AsyncGenerator<RowBatch> CreateEdgePhysicalOp::execute() {
                     break;
                 }
             }
-            if (!allPresent) continue;
+            if (!allPresent)
+                continue;
 
             auto table = idx.prop_ids.size() == 1 ? eidxTable(label_id_, idx.prop_ids[0])
-                                                   : eidxCompositeTable(label_id_, idx.prop_ids);
+                                                  : eidxCompositeTable(label_id_, idx.prop_ids);
             bool constraint_ok = co_await store_.checkUniqueConstraint(table, values);
             if (!constraint_ok) {
                 spdlog::warn("Unique edge index constraint violated on index '{}'", idx.name);
@@ -63,7 +66,8 @@ folly::coro::AsyncGenerator<RowBatch> CreateEdgePhysicalOp::execute() {
     // Pass 2: insert index entries for all WRITE_ONLY/PUBLIC indexes
     if (ok && edge_label_def) {
         for (const auto& idx : edge_label_def->indexes) {
-            if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC) continue;
+            if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
+                continue;
 
             // Collect all indexed property values; skip if any is missing
             std::vector<PropertyValue> values;
@@ -76,11 +80,12 @@ folly::coro::AsyncGenerator<RowBatch> CreateEdgePhysicalOp::execute() {
                     break;
                 }
             }
-            if (!allPresent) continue;
+            if (!allPresent)
+                continue;
 
             auto adj_value = ValueCodec::encodeEdgeAdjacency(src_id_, dst_id_, 0, label_id_);
             auto table = idx.prop_ids.size() == 1 ? eidxTable(label_id_, idx.prop_ids[0])
-                                                   : eidxCompositeTable(label_id_, idx.prop_ids);
+                                                  : eidxCompositeTable(label_id_, idx.prop_ids);
             co_await store_.insertIndexEntry(table, values, assigned_eid_, std::move(adj_value));
         }
     }

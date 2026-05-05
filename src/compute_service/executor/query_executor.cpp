@@ -350,8 +350,8 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             }
         }
 
-        bool ok = co_await async_meta_.createEdgeIndex(stmt.index_name, stmt.label_name, stmt.property_names,
-                                                        stmt.unique);
+        bool ok =
+            co_await async_meta_.createEdgeIndex(stmt.index_name, stmt.label_name, stmt.property_names, stmt.unique);
         if (!ok) {
             result.error = "Failed to create edge index (duplicate name?)";
             co_return;
