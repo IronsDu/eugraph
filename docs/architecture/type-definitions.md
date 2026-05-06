@@ -128,8 +128,9 @@ struct EdgeLabelDef {
 // 查询执行中的值类型（src/compute_service/executor/row.hpp）
 struct VertexValue { VertexId id; std::optional<LabelIdSet> labels; std::unordered_map<LabelId, Properties> properties; };
 struct EdgeValue { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; std::optional<Properties> properties; };
-using ListValue = vector<Value>;
-using Value = variant<monostate, bool, int64_t, double, string, VertexValue, EdgeValue, ListValue>;
+struct PathValue { std::vector<ValueStorage> elements; };  // 交替序列: [顶点, 边, 顶点, ...]
+struct ListValue { std::vector<ValueStorage> elements; };
+using Value = variant<monostate, bool, int64_t, double, string, VertexValue, EdgeValue, PathValue, ListValue>;
 
 using Row = vector<Value>;         // 位置式行
 using Schema = vector<string>;     // 列名列表

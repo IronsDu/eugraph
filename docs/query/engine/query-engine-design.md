@@ -31,7 +31,7 @@ Cypher 查询文本
 
 ## 一、逻辑计划
 
-### 算子类型（14 种）
+### 算子类型（15 种）
 
 `vector<LogicalOperator> children` 形成火山模型算子树。
 
@@ -51,6 +51,7 @@ Cypher 查询文本
 | `CreateEdgeOp` | 创建边 | 1 |
 | `SetOp` | 设置属性/标签 | 1 |
 | `RemoveOp` | 移除属性/标签 | 1 |
+| `PathBuildOp` | 组装路径变量（命名路径） | 1 |
 
 ### 关键设计决策
 
@@ -67,6 +68,7 @@ Cypher 查询文本
 | `MATCH (n:Label{prop: val})` | `LabelScanOp` + `FilterOp`（内联属性自动转换为等值过滤） |
 | `MATCH (a)-[r:TYPE]->(b)` | `ExpandOp`（子节点为 a 的 scan） |
 | `MATCH (a)-[r:TYPE{prop: val}]->(b)` | `ExpandOp` + `FilterOp`（内联边属性转换为等值过滤） |
+| `MATCH p = ...` （命名路径变量） | `PathBuildOp`（子节点为模式元素算子） |
 | `WHERE pred` | `FilterOp` |
 | `RETURN items` | `ProjectOp`（无聚合）/ `AggregateOp`（有聚合） |
 | `RETURN ... ORDER BY` | `SortOp` |
@@ -104,6 +106,7 @@ Cypher 查询文本
 | `CreateEdgePhysicalOp` | `IAsyncGraphDataStore&`, `EdgeId`, src/dst |
 | `SetPhysicalOp` | `IAsyncGraphDataStore&`, items, label/edge_label 定义 |
 | `RemovePhysicalOp` | `IAsyncGraphDataStore&`, items, label/edge_label 定义 |
+| `PathBuildPhysicalOp` | 路径变量名, 元素列名列表, 子算子 |
 
 关键转换：
 - 字符串 label/rel_type → `LabelId`/`EdgeLabelId`
@@ -154,7 +157,7 @@ Cypher 查询文本
 
 ```cpp
 using Value = variant<monostate, bool, int64_t, double, string,
-                      VertexValue, EdgeValue, ListValue>;
+                      VertexValue, EdgeValue, PathValue, ListValue>;
 ```
 
 `VertexValue`：id + labels + properties。`EdgeValue`：id + src + dst + label + properties。
@@ -181,7 +184,7 @@ struct RowBatch { static constexpr size_t CAPACITY = 1024; vector<Row> rows; };
 | `UnaryOp` | NOT, 取负, IS NULL, IS NOT NULL |
 | `PropertyAccess` | 属性访问 + 特殊属性 `id` 返回 int64_t |
 | `LabelCastExpr` | `n::Label` 转型语法，限定属性查找范围到指定标签 |
-| `FunctionCall` | `id(node)` 返回顶点/边 ID |
+| `FunctionCall` | `id(x)` 返回顶点/边 ID；`nodes(p)` / `relationships(p)` / `length(p)` 路径函数 |
 
 多个表达式类型仅解析未求值，详见 [cypher-syntax.md](../syntax/cypher-syntax.md)。
 
