@@ -1,4 +1,5 @@
 #include "compute_service/logical_plan/logical_plan_builder.hpp"
+#include "compute_service/logical_plan/operator/path_build_op.hpp"
 
 #include <sstream>
 #include <stdexcept>
@@ -120,11 +121,24 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildMatch(cypher
     std::optional<LogicalOperator> root;
 
     for (auto& part : match.patterns) {
-        auto elemOp = buildPatternElement(part.element);
-        if (std::holds_alternative<std::string>(elemOp)) {
-            return std::get<std::string>(elemOp);
+        auto elemResult = buildPatternElement(part.element);
+        if (std::holds_alternative<std::string>(elemResult)) {
+            return std::get<std::string>(elemResult);
         }
-        auto elemRoot = std::move(std::get<LogicalOperator>(elemOp));
+        auto elemRes = std::move(std::get<PatternElementResult>(elemResult));
+        auto elemRoot = std::move(elemRes.root);
+
+        // If the pattern has a path variable, wrap in PathBuildOp
+        if (part.variable.has_value()) {
+            std::string pathVar = *part.variable;
+            ensureVariable(pathVar);
+
+            auto pathOp = std::make_unique<PathBuildOp>();
+            pathOp->path_variable = pathVar;
+            pathOp->element_variables = std::move(elemRes.path_elements);
+            pathOp->children.push_back(std::move(elemRoot));
+            elemRoot = std::move(pathOp);
+        }
 
         if (!root.has_value()) {
             root = std::move(elemRoot);
@@ -146,7 +160,7 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildMatch(cypher
 
 // ==================== PatternElement ====================
 
-std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternElement(cypher::PatternElement& elem) {
+std::variant<PatternElementResult, std::string> LogicalPlanBuilder::buildPatternElement(cypher::PatternElement& elem) {
     auto& node = elem.node;
     std::string nodeVar = node.variable.value_or("");
 
@@ -154,6 +168,8 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
     if (nodeVar.empty() && node.properties.has_value() && !node.properties->entries.empty()) {
         nodeVar = "__anon_" + std::to_string(anon_counter_++);
     }
+
+    std::vector<std::string> path_elements;
 
     LogicalOperator scanOp;
     if (node.labels.empty()) {
@@ -174,6 +190,9 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
     }
 
     LogicalOperator current = std::move(scanOp);
+    if (!nodeVar.empty()) {
+        path_elements.push_back(nodeVar);
+    }
 
     // Wrap in FilterOp if node has inline properties
     if (node.properties.has_value() && !node.properties->entries.empty()) {
@@ -189,8 +208,8 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
         std::string dstVar = nextNode.variable.value_or("");
         std::string edgeVar = rel.variable.value_or("");
 
-        // Auto-generate variable name for anonymous edges with properties
-        if (edgeVar.empty() && rel.properties.has_value() && !rel.properties->entries.empty()) {
+        // Auto-generate variable name for anonymous edges
+        if (edgeVar.empty()) {
             edgeVar = "__anon_" + std::to_string(anon_counter_++);
         }
 
@@ -216,6 +235,14 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
         expandOp->children.push_back(std::move(current));
         current = std::move(expandOp);
 
+        // Track path elements in order: edge, destination node
+        if (!edgeVar.empty()) {
+            path_elements.push_back(edgeVar);
+        }
+        if (!dstVar.empty()) {
+            path_elements.push_back(dstVar);
+        }
+
         // Wrap in FilterOp if edge has inline properties
         if (rel.properties.has_value() && !rel.properties->entries.empty()) {
             auto filterExpr = buildPropertiesFilter(edgeVar, *rel.properties);
@@ -239,7 +266,7 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
         nodeVar = dstVar;
     }
 
-    return current;
+    return PatternElementResult{std::move(current), std::move(path_elements)};
 }
 
 // ==================== RETURN ====================
@@ -591,6 +618,17 @@ struct OperatorPrinter {
     }
     void operator()(const std::unique_ptr<RemoveOp>& op) {
         os << indentStr(level) << "Remove(items=" << op->items.size() << ")\n";
+        for (const auto& child : op->children)
+            printChild(child);
+    }
+    void operator()(const std::unique_ptr<PathBuildOp>& op) {
+        os << indentStr(level) << "PathBuild(path=" << op->path_variable << ", elements=[";
+        for (size_t i = 0; i < op->element_variables.size(); ++i) {
+            if (i > 0)
+                os << ", ";
+            os << op->element_variables[i];
+        }
+        os << "])\n";
         for (const auto& child : op->children)
             printChild(child);
     }

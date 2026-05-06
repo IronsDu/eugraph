@@ -215,6 +215,71 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         }
         oss << '}';
         rv.set_edge_json(oss.str());
+    } else if (std::holds_alternative<PathValue>(val)) {
+        auto& p = std::get<PathValue>(val);
+        std::ostringstream oss;
+        oss << "[";
+        for (size_t i = 0; i < p.elements.size(); ++i) {
+            if (i > 0)
+                oss << ",";
+            // Serialize each element inline as JSON
+            const auto& elem = p.elements[i].value;
+            if (std::holds_alternative<VertexValue>(elem)) {
+                auto& v = std::get<VertexValue>(elem);
+                oss << "{\"_vid\":" << v.id;
+                if (v.labels.has_value()) {
+                    for (LabelId lid : *v.labels) {
+                        auto it = label_defs.find(lid);
+                        if (it == label_defs.end())
+                            continue;
+                        auto prop_it = v.properties.find(lid);
+                        if (prop_it == v.properties.end())
+                            continue;
+                        for (const auto& pd : it->second.properties) {
+                            if (pd.id < prop_it->second.size()) {
+                                const auto& pv = prop_it->second[pd.id];
+                                if (pv.has_value()) {
+                                    oss << ",\"" << pd.name << "\":";
+                                    appendJsonValue(oss, *pv);
+                                }
+                            }
+                        }
+                    }
+                }
+                oss << "}";
+            } else if (std::holds_alternative<EdgeValue>(elem)) {
+                auto& e = std::get<EdgeValue>(elem);
+                oss << "{\"id\":" << e.id << ",\"src\":" << e.src_id << ",\"dst\":" << e.dst_id;
+                auto elit = edge_label_defs.find(e.label_id);
+                if (elit != edge_label_defs.end()) {
+                    oss << ",\"label\":\"" << elit->second.name << '"';
+                }
+                if (e.properties.has_value() && elit != edge_label_defs.end()) {
+                    for (const auto& pd : elit->second.properties) {
+                        if (pd.id < e.properties->size()) {
+                            const auto& pv = (*e.properties)[pd.id];
+                            if (pv.has_value()) {
+                                oss << ",\"" << pd.name << "\":";
+                                appendJsonValue(oss, *pv);
+                            }
+                        }
+                    }
+                }
+                oss << "}";
+            } else if (std::holds_alternative<int64_t>(elem)) {
+                oss << std::get<int64_t>(elem);
+            } else if (std::holds_alternative<double>(elem)) {
+                oss << std::get<double>(elem);
+            } else if (std::holds_alternative<std::string>(elem)) {
+                oss << '"' << std::get<std::string>(elem) << '"';
+            } else if (std::holds_alternative<bool>(elem)) {
+                oss << (std::get<bool>(elem) ? "true" : "false");
+            } else {
+                oss << "null";
+            }
+        }
+        oss << "]";
+        rv.set_path_json(oss.str());
     }
 
     return rv;

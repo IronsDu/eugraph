@@ -257,6 +257,28 @@ TEST(LogicalPlanTest, MultiLabelNodeWithPropertyFilter) {
     EXPECT_EQ(scan->label, "Person");
 }
 
+// ==================== Path Build Tests ====================
+
+TEST(LogicalPlanTest, NamedPathBuildOp) {
+    auto result = parseAndBuild("MATCH p = (a:Person)-[:KNOWS]->(b) RETURN p");
+    ASSERT_TRUE(std::holds_alternative<LogicalPlan>(result));
+    auto& plan = std::get<LogicalPlan>(result);
+
+    // Root = Project → PathBuild → Expand → LabelScan
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<ProjectOp>>(plan.root));
+    const auto& project = std::get<std::unique_ptr<ProjectOp>>(plan.root);
+    ASSERT_EQ(project->children.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<PathBuildOp>>(project->children[0]));
+    const auto& pathBuild = std::get<std::unique_ptr<PathBuildOp>>(project->children[0]);
+    EXPECT_EQ(pathBuild->path_variable, "p");
+    // Path elements: [a, edge, b]
+    ASSERT_EQ(pathBuild->element_variables.size(), 3);
+    EXPECT_EQ(pathBuild->element_variables[0], "a");
+    // element_variables[1] is the auto-generated edge variable
+    EXPECT_NE(pathBuild->element_variables[1].find("__anon_"), std::string::npos);
+    EXPECT_EQ(pathBuild->element_variables[2], "b");
+}
+
 // ==================== Error Cases ====================
 
 TEST(LogicalPlanTest, EmptyQuery) {

@@ -11,6 +11,7 @@
 #include "compute_service/physical_plan/operator/index_scan_physical_op.hpp"
 #include "compute_service/physical_plan/operator/label_scan_physical_op.hpp"
 #include "compute_service/physical_plan/operator/limit_physical_op.hpp"
+#include "compute_service/physical_plan/operator/path_build_physical_op.hpp"
 #include "compute_service/physical_plan/operator/project_physical_op.hpp"
 #include "compute_service/physical_plan/operator/remove_physical_op.hpp"
 #include "compute_service/physical_plan/operator/set_physical_op.hpp"

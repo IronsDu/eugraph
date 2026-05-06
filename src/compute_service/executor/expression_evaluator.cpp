@@ -308,15 +308,37 @@ Value ExpressionEvaluator::evalLabelCast(const cypher::LabelCastExpr& lc, const 
 }
 
 Value ExpressionEvaluator::evalFunctionCall(const cypher::FunctionCall& fc, const Row& row, const Schema& schema) {
-    // Phase 1: support basic functions
-    // count, sum, etc. are handled by Aggregate operator, not here.
-    // Just handle simple functions like type(), id(), labels()
     if (fc.name == "id" && fc.args.size() == 1) {
         Value arg = evaluate(fc.args[0], row, schema);
         if (std::holds_alternative<VertexValue>(arg)) {
             return Value(static_cast<int64_t>(std::get<VertexValue>(arg).id));
         } else if (std::holds_alternative<EdgeValue>(arg)) {
             return Value(static_cast<int64_t>(std::get<EdgeValue>(arg).id));
+        }
+    }
+    // Path functions
+    if (fc.args.size() == 1) {
+        Value arg = evaluate(fc.args[0], row, schema);
+        if (std::holds_alternative<PathValue>(arg)) {
+            const auto& pv = std::get<PathValue>(arg);
+            if (fc.name == "nodes") {
+                ListValue lv;
+                for (size_t i = 0; i < pv.elements.size(); i += 2) {
+                    lv.elements.push_back(pv.elements[i]);
+                }
+                return Value(std::move(lv));
+            }
+            if (fc.name == "relationships") {
+                ListValue lv;
+                for (size_t i = 1; i < pv.elements.size(); i += 2) {
+                    lv.elements.push_back(pv.elements[i]);
+                }
+                return Value(std::move(lv));
+            }
+            if (fc.name == "length") {
+                // Number of edges in the path
+                return Value(static_cast<int64_t>((pv.elements.size() - 1) / 2));
+            }
         }
     }
     return Value{};

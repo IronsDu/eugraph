@@ -38,6 +38,8 @@ std::string resultValueToString(const ResultValue& rv) {
         return rv.get_vertex_json();
     case ResultValue::Type::edge_json:
         return rv.get_edge_json();
+    case ResultValue::Type::path_json:
+        return rv.get_path_json();
     }
     return "?";
 }

@@ -505,6 +505,120 @@ TEST_F(QueryExecutorTest, ExpandTwoHopAnonymousEdgeAndNode) {
     EXPECT_EQ(rows.size(), 3);
 }
 
+// ==================== Path Return Tests ====================
+
+TEST_F(QueryExecutorTest, ReturnNamedPathSingleHop) {
+    insertTestVertices();
+    insertTestEdges();
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS]->(b) RETURN p");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2);
+    EXPECT_EQ(result.columns[0], "p");
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1);
+        ASSERT_TRUE(std::holds_alternative<PathValue>(row[0]));
+        const auto& pv = std::get<PathValue>(row[0]);
+        // Path has 3 elements: src vertex, edge, dst vertex
+        ASSERT_EQ(pv.elements.size(), 3);
+        EXPECT_TRUE(std::holds_alternative<VertexValue>(pv.elements[0].value));
+        EXPECT_TRUE(std::holds_alternative<EdgeValue>(pv.elements[1].value));
+        EXPECT_TRUE(std::holds_alternative<VertexValue>(pv.elements[2].value));
+    }
+}
+
+TEST_F(QueryExecutorTest, ReturnNamedPathTwoHop) {
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS]->()-[:KNOWS]->(c) RETURN p");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // KNOWS 2-hop: 1->2->3, 2->3->4 = 2 rows
+    ASSERT_EQ(result.rows.size(), 2);
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1);
+        ASSERT_TRUE(std::holds_alternative<PathValue>(row[0]));
+        const auto& pv = std::get<PathValue>(row[0]);
+        // Path has 5 elements: v1, e1, v2, e2, v3
+        ASSERT_EQ(pv.elements.size(), 5);
+        EXPECT_TRUE(std::holds_alternative<VertexValue>(pv.elements[0].value));
+        EXPECT_TRUE(std::holds_alternative<EdgeValue>(pv.elements[1].value));
+        EXPECT_TRUE(std::holds_alternative<VertexValue>(pv.elements[2].value));
+        EXPECT_TRUE(std::holds_alternative<EdgeValue>(pv.elements[3].value));
+        EXPECT_TRUE(std::holds_alternative<VertexValue>(pv.elements[4].value));
+    }
+}
+
+TEST_F(QueryExecutorTest, ReturnPathMixedWithNode) {
+    insertTestVertices();
+    insertTestEdges();
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS]->(b) RETURN a, p");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2);
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 2);
+        EXPECT_TRUE(std::holds_alternative<VertexValue>(row[0])); // a
+        EXPECT_TRUE(std::holds_alternative<PathValue>(row[1]));   // p
+    }
+}
+
+TEST_F(QueryExecutorTest, ReturnPathWithFilter) {
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS]->()-[:KNOWS]->(c) WHERE true RETURN p");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2);
+}
+
+TEST_F(QueryExecutorTest, PathNodes) {
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS]->()-[:KNOWS]->(c) RETURN nodes(p)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2);
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1);
+        ASSERT_TRUE(std::holds_alternative<ListValue>(row[0]));
+        const auto& lv = std::get<ListValue>(row[0]);
+        // 2-hop path has 3 vertices: start, intermediate, end
+        ASSERT_EQ(lv.elements.size(), 3);
+        for (const auto& elem : lv.elements) {
+            EXPECT_TRUE(std::holds_alternative<VertexValue>(elem.value));
+        }
+    }
+}
+
+TEST_F(QueryExecutorTest, PathRelationships) {
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS]->()-[:KNOWS]->(c) RETURN relationships(p)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2);
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1);
+        ASSERT_TRUE(std::holds_alternative<ListValue>(row[0]));
+        const auto& lv = std::get<ListValue>(row[0]);
+        // 2-hop path has 2 edges
+        ASSERT_EQ(lv.elements.size(), 2);
+        for (const auto& elem : lv.elements) {
+            EXPECT_TRUE(std::holds_alternative<EdgeValue>(elem.value));
+        }
+    }
+}
+
+TEST_F(QueryExecutorTest, PathLength) {
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS]->()-[:KNOWS]->(c) RETURN length(p)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2);
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1);
+        ASSERT_TRUE(std::holds_alternative<int64_t>(row[0]));
+        EXPECT_EQ(std::get<int64_t>(row[0]), 2);
+    }
+}
+
 // ==================== Create Node Tests ====================
 
 TEST_F(QueryExecutorTest, CreateNodeReturnsId) {
