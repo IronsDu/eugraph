@@ -64,7 +64,9 @@ Cypher 查询文本
 |-------------|----------|
 | `MATCH (n)` | `AllNodeScanOp` |
 | `MATCH (n:Label)` | `LabelScanOp` |
+| `MATCH (n:Label{prop: val})` | `LabelScanOp` + `FilterOp`（内联属性自动转换为等值过滤） |
 | `MATCH (a)-[r:TYPE]->(b)` | `ExpandOp`（子节点为 a 的 scan） |
+| `MATCH (a)-[r:TYPE{prop: val}]->(b)` | `ExpandOp` + `FilterOp`（内联边属性转换为等值过滤） |
 | `WHERE pred` | `FilterOp` |
 | `RETURN items` | `ProjectOp`（无聚合）/ `AggregateOp`（有聚合） |
 | `RETURN ... ORDER BY` | `SortOp` |
