@@ -150,6 +150,11 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
     auto& node = elem.node;
     std::string nodeVar = node.variable.value_or("");
 
+    // Auto-generate variable name for anonymous nodes with properties
+    if (nodeVar.empty() && node.properties.has_value() && !node.properties->entries.empty()) {
+        nodeVar = "__anon_" + std::to_string(anon_counter_++);
+    }
+
     LogicalOperator scanOp;
     if (node.labels.empty()) {
         auto op = std::make_unique<AllNodeScanOp>();
@@ -170,9 +175,29 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
 
     LogicalOperator current = std::move(scanOp);
 
+    // Wrap in FilterOp if node has inline properties
+    if (node.properties.has_value() && !node.properties->entries.empty()) {
+        auto filterExpr = buildPropertiesFilter(nodeVar, *node.properties);
+        auto result = buildFilter(std::move(filterExpr), std::move(current));
+        if (std::holds_alternative<std::string>(result)) {
+            return std::get<std::string>(result);
+        }
+        current = std::move(std::get<LogicalOperator>(result));
+    }
+
     for (auto& [rel, nextNode] : elem.chain) {
         std::string dstVar = nextNode.variable.value_or("");
         std::string edgeVar = rel.variable.value_or("");
+
+        // Auto-generate variable name for anonymous edges with properties
+        if (edgeVar.empty() && rel.properties.has_value() && !rel.properties->entries.empty()) {
+            edgeVar = "__anon_" + std::to_string(anon_counter_++);
+        }
+
+        // Auto-generate variable name for anonymous destination nodes with properties
+        if (dstVar.empty() && nextNode.properties.has_value() && !nextNode.properties->entries.empty()) {
+            dstVar = "__anon_" + std::to_string(anon_counter_++);
+        }
 
         if (!dstVar.empty()) {
             ensureVariable(dstVar);
@@ -190,6 +215,26 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
         expandOp->range = std::move(rel.range);
         expandOp->children.push_back(std::move(current));
         current = std::move(expandOp);
+
+        // Wrap in FilterOp if edge has inline properties
+        if (rel.properties.has_value() && !rel.properties->entries.empty()) {
+            auto filterExpr = buildPropertiesFilter(edgeVar, *rel.properties);
+            auto result = buildFilter(std::move(filterExpr), std::move(current));
+            if (std::holds_alternative<std::string>(result)) {
+                return std::get<std::string>(result);
+            }
+            current = std::move(std::get<LogicalOperator>(result));
+        }
+
+        // Wrap in FilterOp if destination node has inline properties
+        if (nextNode.properties.has_value() && !nextNode.properties->entries.empty()) {
+            auto filterExpr = buildPropertiesFilter(dstVar, *nextNode.properties);
+            auto result = buildFilter(std::move(filterExpr), std::move(current));
+            if (std::holds_alternative<std::string>(result)) {
+                return std::get<std::string>(result);
+            }
+            current = std::move(std::get<LogicalOperator>(result));
+        }
 
         nodeVar = dstVar;
     }
@@ -437,6 +482,23 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildRemove(cyphe
 }
 
 // ==================== Filter ====================
+
+cypher::Expression LogicalPlanBuilder::buildPropertiesFilter(const std::string& varName,
+                                                             cypher::PropertiesMap& properties) {
+    cypher::Expression current;
+    bool first = true;
+    for (auto& [key, value] : properties.entries) {
+        auto propAccess = cypher::makePropertyAccess(cypher::makeVariable(varName), key);
+        auto cond = cypher::makeBinaryOp(cypher::BinaryOperator::EQ, std::move(propAccess), std::move(value));
+        if (first) {
+            current = std::move(cond);
+            first = false;
+        } else {
+            current = cypher::makeBinaryOp(cypher::BinaryOperator::AND, std::move(current), std::move(cond));
+        }
+    }
+    return current;
+}
 
 std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildFilter(cypher::Expression predicate,
                                                                            LogicalOperator input) {

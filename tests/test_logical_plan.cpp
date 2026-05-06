@@ -141,6 +141,122 @@ TEST(LogicalPlanTest, ToString) {
     EXPECT_NE(str.find("LabelScan"), std::string::npos);
 }
 
+// ==================== Inline Property Filter Tests ====================
+
+TEST(LogicalPlanTest, NodeInlinePropertyFilter) {
+    auto result = parseAndBuild("MATCH (n:Person{name:'Alice'}) RETURN n");
+    ASSERT_TRUE(std::holds_alternative<LogicalPlan>(result)) << std::get<std::string>(result);
+
+    const auto& plan = std::get<LogicalPlan>(result);
+    // Root = Project → Filter → LabelScan
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<ProjectOp>>(plan.root));
+    const auto& project = std::get<std::unique_ptr<ProjectOp>>(plan.root);
+    ASSERT_EQ(project->children.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<FilterOp>>(project->children[0]));
+    const auto& filter = std::get<std::unique_ptr<FilterOp>>(project->children[0]);
+    ASSERT_EQ(filter->children.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<LabelScanOp>>(filter->children[0]));
+    const auto& scan = std::get<std::unique_ptr<LabelScanOp>>(filter->children[0]);
+    EXPECT_EQ(scan->variable, "n");
+    EXPECT_EQ(scan->label, "Person");
+}
+
+TEST(LogicalPlanTest, EdgeInlinePropertyFilter) {
+    auto result = parseAndBuild("MATCH (a:Person)-[r:KNOWS{since:2020}]->(b) RETURN a, b");
+    ASSERT_TRUE(std::holds_alternative<LogicalPlan>(result)) << std::get<std::string>(result);
+
+    const auto& plan = std::get<LogicalPlan>(result);
+    // Root = Project → Filter(edge) → Expand → LabelScan
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<ProjectOp>>(plan.root));
+    const auto& project = std::get<std::unique_ptr<ProjectOp>>(plan.root);
+    ASSERT_EQ(project->children.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<FilterOp>>(project->children[0]));
+    const auto& filter = std::get<std::unique_ptr<FilterOp>>(project->children[0]);
+    ASSERT_EQ(filter->children.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<ExpandOp>>(filter->children[0]));
+    const auto& expand = std::get<std::unique_ptr<ExpandOp>>(filter->children[0]);
+    EXPECT_EQ(expand->edge_variable, "r");
+}
+
+TEST(LogicalPlanTest, BothNodeAndEdgeInlinePropertyFilter) {
+    auto result =
+        parseAndBuild("MATCH (a:Person{name:'Alice'})-[r:KNOWS{since:2020}]->(b:Person{city:'NYC'}) RETURN a, b");
+    ASSERT_TRUE(std::holds_alternative<LogicalPlan>(result)) << std::get<std::string>(result);
+
+    const auto& plan = std::get<LogicalPlan>(result);
+    // Plan structure: Project → Filter(b) → Filter(r) → Expand → Filter(a) → LabelScan
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<ProjectOp>>(plan.root));
+    const auto& project = std::get<std::unique_ptr<ProjectOp>>(plan.root);
+    ASSERT_EQ(project->children.size(), 1);
+
+    // Filter for destination node (b) properties: b.city = 'NYC'
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<FilterOp>>(project->children[0]));
+    const auto& filterB = std::get<std::unique_ptr<FilterOp>>(project->children[0]);
+    ASSERT_EQ(filterB->children.size(), 1);
+
+    // Filter for edge (r) properties: r.since = 2020
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<FilterOp>>(filterB->children[0]));
+    const auto& filterR = std::get<std::unique_ptr<FilterOp>>(filterB->children[0]);
+    ASSERT_EQ(filterR->children.size(), 1);
+
+    // Expand (a)-[r]->(b)
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<ExpandOp>>(filterR->children[0]));
+    const auto& expand = std::get<std::unique_ptr<ExpandOp>>(filterR->children[0]);
+    EXPECT_EQ(expand->src_variable, "a");
+    EXPECT_EQ(expand->dst_variable, "b");
+    EXPECT_EQ(expand->edge_variable, "r");
+    ASSERT_EQ(expand->children.size(), 1);
+
+    // Filter for source node (a) properties: a.name = 'Alice'
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<FilterOp>>(expand->children[0]));
+    const auto& filterA = std::get<std::unique_ptr<FilterOp>>(expand->children[0]);
+    ASSERT_EQ(filterA->children.size(), 1);
+
+    // LabelScan for (a:Person)
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<LabelScanOp>>(filterA->children[0]));
+    const auto& scan = std::get<std::unique_ptr<LabelScanOp>>(filterA->children[0]);
+    EXPECT_EQ(scan->variable, "a");
+    EXPECT_EQ(scan->label, "Person");
+}
+
+TEST(LogicalPlanTest, AnonymousNodeWithProperties) {
+    auto result = parseAndBuild("MATCH (:Person{id:'933'}) RETURN 1");
+    ASSERT_TRUE(std::holds_alternative<LogicalPlan>(result)) << std::get<std::string>(result);
+
+    const auto& plan = std::get<LogicalPlan>(result);
+    // Root = Project → Filter → LabelScan (with auto-generated variable)
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<ProjectOp>>(plan.root));
+    const auto& project = std::get<std::unique_ptr<ProjectOp>>(plan.root);
+    ASSERT_EQ(project->children.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<FilterOp>>(project->children[0]));
+    const auto& filter = std::get<std::unique_ptr<FilterOp>>(project->children[0]);
+    ASSERT_EQ(filter->children.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<LabelScanOp>>(filter->children[0]));
+    // Verify the scan has an auto-generated anonymous variable
+    const auto& scan = std::get<std::unique_ptr<LabelScanOp>>(filter->children[0]);
+    EXPECT_FALSE(scan->variable.empty());
+    EXPECT_NE(scan->variable.find("__anon_"), std::string::npos);
+    EXPECT_EQ(scan->label, "Person");
+}
+
+TEST(LogicalPlanTest, MultiLabelNodeWithPropertyFilter) {
+    auto result = parseAndBuild("MATCH (n:Person:Employee{salary:50000}) RETURN n");
+    ASSERT_TRUE(std::holds_alternative<LogicalPlan>(result)) << std::get<std::string>(result);
+
+    const auto& plan = std::get<LogicalPlan>(result);
+    // Root = Project → Filter → LabelScan
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<ProjectOp>>(plan.root));
+    const auto& project = std::get<std::unique_ptr<ProjectOp>>(plan.root);
+    ASSERT_EQ(project->children.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<FilterOp>>(project->children[0]));
+    const auto& filter = std::get<std::unique_ptr<FilterOp>>(project->children[0]);
+    ASSERT_EQ(filter->children.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<LabelScanOp>>(filter->children[0]));
+    const auto& scan = std::get<std::unique_ptr<LabelScanOp>>(filter->children[0]);
+    EXPECT_EQ(scan->variable, "n");
+    EXPECT_EQ(scan->label, "Person");
+}
+
 // ==================== Error Cases ====================
 
 TEST(LogicalPlanTest, EmptyQuery) {

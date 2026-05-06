@@ -51,8 +51,14 @@ private:
     // Build operators for a WHERE predicate (wraps input in FilterOp).
     std::variant<LogicalOperator, std::string> buildFilter(cypher::Expression predicate, LogicalOperator input);
 
+    // Build a filter expression from a PropertiesMap (conjunction of var.key = value).
+    cypher::Expression buildPropertiesFilter(const std::string& varName, cypher::PropertiesMap& properties);
+
     // Get the last (topmost) operator in a chain (the rightmost child).
     static LogicalOperator& topOperator(LogicalOperator& op);
+
+    // Counter for auto-generated anonymous variable names.
+    uint32_t anon_counter_ = 0;
 };
 
 } // namespace compute
