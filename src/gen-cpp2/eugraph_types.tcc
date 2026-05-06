@@ -1566,6 +1566,16 @@ void ResultValue::readNoXfer(Protocol_* iprot) {
         }
         break;
       }
+      case 8:
+      {
+        if (_readState.isCompatibleWithType(iprot, apache::thrift::protocol::T_STRING)) {
+          this->list_json_ref().emplace();
+          ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::string, ::std::string>::readWithContext(*iprot, value_.list_json, _readState);
+        } else {
+          _readState.skip(iprot);
+        }
+        break;
+      }
       default:
       {
         _readState.skip(iprot);
@@ -1628,6 +1638,12 @@ uint32_t ResultValue::serializedSize(Protocol_ const* prot_) const {
       xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::string, ::std::string>::serializedSize<false>(*prot_, value_.path_json);
       break;
     }
+    case ResultValue::Type::list_json:
+    {
+      xfer += prot_->serializedFieldSize("list_json", apache::thrift::protocol::T_STRING, 8);
+      xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::string, ::std::string>::serializedSize<false>(*prot_, value_.list_json);
+      break;
+    }
     case ResultValue::Type::__EMPTY__:;
   }
   xfer += prot_->serializedSizeStop();
@@ -1679,6 +1695,12 @@ uint32_t ResultValue::serializedSizeZC(Protocol_ const* prot_) const {
     {
       xfer += prot_->serializedFieldSize("path_json", apache::thrift::protocol::T_STRING, 7);
       xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::string, ::std::string>::serializedSize<false>(*prot_, value_.path_json);
+      break;
+    }
+    case ResultValue::Type::list_json:
+    {
+      xfer += prot_->serializedFieldSize("list_json", apache::thrift::protocol::T_STRING, 8);
+      xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::string, ::std::string>::serializedSize<false>(*prot_, value_.list_json);
       break;
     }
     case ResultValue::Type::__EMPTY__:;
@@ -1745,6 +1767,14 @@ uint32_t ResultValue::write(Protocol_* prot_) const {
       constexpr int16_t kPrevFieldId = 6;
       xfer += ::apache::thrift::detail::writeFieldBegin<apache::thrift::protocol::T_STRING, 7, kPrevFieldId>(*prot_, "path_json", false);
       xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::string, ::std::string>::write(*prot_, value_.path_json);
+      xfer += prot_->writeFieldEnd();
+      break;
+    }
+    case ResultValue::Type::list_json:
+    {
+      constexpr int16_t kPrevFieldId = 7;
+      xfer += ::apache::thrift::detail::writeFieldBegin<apache::thrift::protocol::T_STRING, 8, kPrevFieldId>(*prot_, "list_json", false);
+      xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::string, ::std::string>::write(*prot_, value_.list_json);
       xfer += prot_->writeFieldEnd();
       break;
     }

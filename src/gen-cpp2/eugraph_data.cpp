@@ -175,7 +175,7 @@ THRIFT_DATA_MEMBER const std::array<int, 2> TStructDataStorage<::eugraph::thrift
 }};
 
 THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift::ResultValue>::name = "ResultValue";
-THRIFT_DATA_MEMBER const std::array<std::string_view, 7> TStructDataStorage<::eugraph::thrift::ResultValue>::fields_names = { {
+THRIFT_DATA_MEMBER const std::array<std::string_view, 8> TStructDataStorage<::eugraph::thrift::ResultValue>::fields_names = { {
   "bool_val"sv,
   "int_val"sv,
   "double_val"sv,
@@ -183,8 +183,9 @@ THRIFT_DATA_MEMBER const std::array<std::string_view, 7> TStructDataStorage<::eu
   "vertex_json"sv,
   "edge_json"sv,
   "path_json"sv,
+  "list_json"sv,
 }};
-THRIFT_DATA_MEMBER const std::array<int16_t, 7> TStructDataStorage<::eugraph::thrift::ResultValue>::fields_ids = { {
+THRIFT_DATA_MEMBER const std::array<int16_t, 8> TStructDataStorage<::eugraph::thrift::ResultValue>::fields_ids = { {
   1,
   2,
   3,
@@ -192,8 +193,9 @@ THRIFT_DATA_MEMBER const std::array<int16_t, 7> TStructDataStorage<::eugraph::th
   5,
   6,
   7,
+  8,
 }};
-THRIFT_DATA_MEMBER const std::array<protocol::TType, 7> TStructDataStorage<::eugraph::thrift::ResultValue>::fields_types = { {
+THRIFT_DATA_MEMBER const std::array<protocol::TType, 8> TStructDataStorage<::eugraph::thrift::ResultValue>::fields_types = { {
   TType::T_BOOL,
   TType::T_I64,
   TType::T_DOUBLE,
@@ -201,8 +203,9 @@ THRIFT_DATA_MEMBER const std::array<protocol::TType, 7> TStructDataStorage<::eug
   TType::T_STRING,
   TType::T_STRING,
   TType::T_STRING,
+  TType::T_STRING,
 }};
-THRIFT_DATA_MEMBER const std::array<int, 7> TStructDataStorage<::eugraph::thrift::ResultValue>::isset_indexes = { {
+THRIFT_DATA_MEMBER const std::array<int, 8> TStructDataStorage<::eugraph::thrift::ResultValue>::isset_indexes = { {
   0,
   1,
   2,
@@ -210,6 +213,7 @@ THRIFT_DATA_MEMBER const std::array<int, 7> TStructDataStorage<::eugraph::thrift
   4,
   5,
   6,
+  7,
 }};
 
 THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift::ResultRow>::name = "ResultRow";

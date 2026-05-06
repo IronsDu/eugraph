@@ -286,6 +286,46 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
             }
         }
         rv.set_path_json(oss.str());
+    } else if (std::holds_alternative<ListValue>(val)) {
+        auto& lv = std::get<ListValue>(val);
+        std::ostringstream oss;
+        oss << "[";
+        for (size_t i = 0; i < lv.elements.size(); ++i) {
+            if (i > 0)
+                oss << ", ";
+            auto elem_rv = valueToThrift(lv.elements[i].value, label_defs, edge_label_defs);
+            switch (elem_rv.getType()) {
+            case thrift::ResultValue::Type::__EMPTY__:
+                oss << "null";
+                break;
+            case thrift::ResultValue::Type::bool_val:
+                oss << (elem_rv.get_bool_val() ? "true" : "false");
+                break;
+            case thrift::ResultValue::Type::int_val:
+                oss << elem_rv.get_int_val();
+                break;
+            case thrift::ResultValue::Type::double_val:
+                oss << elem_rv.get_double_val();
+                break;
+            case thrift::ResultValue::Type::string_val:
+                oss << '"' << elem_rv.get_string_val() << '"';
+                break;
+            case thrift::ResultValue::Type::vertex_json:
+                oss << elem_rv.get_vertex_json();
+                break;
+            case thrift::ResultValue::Type::edge_json:
+                oss << elem_rv.get_edge_json();
+                break;
+            case thrift::ResultValue::Type::path_json:
+                oss << elem_rv.get_path_json();
+                break;
+            case thrift::ResultValue::Type::list_json:
+                oss << elem_rv.get_list_json();
+                break;
+            }
+        }
+        oss << "]";
+        rv.set_list_json(oss.str());
     }
 
     return rv;

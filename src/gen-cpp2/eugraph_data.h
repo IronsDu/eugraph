@@ -60,7 +60,7 @@ template <> struct TEnumDataStorage<::eugraph::thrift::PropertyValueThrift::Type
 
 template <> struct TEnumDataStorage<::eugraph::thrift::ResultValue::Type> {
   using type = ::eugraph::thrift::ResultValue::Type;
-  static constexpr const std::size_t size = 7;
+  static constexpr const std::size_t size = 8;
   static constexpr std::array<type, size> values = { {
       type::bool_val,
       type::int_val,
@@ -69,6 +69,7 @@ template <> struct TEnumDataStorage<::eugraph::thrift::ResultValue::Type> {
       type::vertex_json,
       type::edge_json,
       type::path_json,
+      type::list_json,
   }};
   static constexpr std::array<std::string_view, size> names = { {
       "bool_val"sv,
@@ -78,6 +79,7 @@ template <> struct TEnumDataStorage<::eugraph::thrift::ResultValue::Type> {
       "vertex_json"sv,
       "edge_json"sv,
       "path_json"sv,
+      "list_json"sv,
   }};
 };
 
@@ -187,7 +189,7 @@ template <> struct TStructDataStorage<::eugraph::thrift::BatchInsertVerticesResu
 };
 
 template <> struct TStructDataStorage<::eugraph::thrift::ResultValue> {
-  static constexpr const std::size_t fields_size = 7;
+  static constexpr const std::size_t fields_size = 8;
   static const std::string_view name;
   static const std::array<std::string_view, fields_size> fields_names;
   static const std::array<int16_t, fields_size> fields_ids;

@@ -68,6 +68,7 @@ union ResultValue {
   5: string vertex_json
   6: string edge_json
   7: string path_json
+  8: string list_json
 }
 
 struct ResultRow {
