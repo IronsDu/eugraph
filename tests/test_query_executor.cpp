@@ -487,24 +487,21 @@ TEST_F(QueryExecutorTest, ExpandTwoHopNoMatch) {
 TEST_F(QueryExecutorTest, ExpandTwoHopAnonymousNodes) {
     insertMultiHopEdges();
     // KNOWS 2-hop with anonymous intermediate node: 1->2->3, 2->3->4 = 2 rows
-    auto rows =
-        execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->()-[:KNOWS]->(c) RETURN c").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->()-[:KNOWS]->(c) RETURN c").rows;
     EXPECT_EQ(rows.size(), 2);
 }
 
 TEST_F(QueryExecutorTest, ExpandTwoHopAnonymousNodesNoLabels) {
     insertMultiHopEdges();
     // Undirected edges match KNOWS and LIVES_IN: 1->2->3, 1->2->6, 2->3->4 = 3 rows
-    auto rows =
-        execSync(*executor_, "MATCH (a:Person)-[]->()-[]->(c) RETURN c").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[]->()-[]->(c) RETURN c").rows;
     EXPECT_EQ(rows.size(), 3);
 }
 
 TEST_F(QueryExecutorTest, ExpandTwoHopAnonymousEdgeAndNode) {
     insertMultiHopEdges();
     // Undirected edges match KNOWS and LIVES_IN: 1->2->3, 1->2->6, 2->3->4 = 3 rows
-    auto rows =
-        execSync(*executor_, "MATCH (a:Person)-[]->()-[]->(c) RETURN a, c").rows;
+    auto rows = execSync(*executor_, "MATCH (a:Person)-[]->()-[]->(c) RETURN a, c").rows;
     EXPECT_EQ(rows.size(), 3);
 }
 
