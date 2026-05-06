@@ -14,6 +14,13 @@ namespace compute {
 /// Symbol table: maps variable names to column indices in the current row schema.
 using SymbolTable = std::unordered_map<std::string, uint32_t>;
 
+/// Result of building a PatternElement: the root operator plus the ordered list of
+/// element variables that form the path (v1, e1, v2, e2, …).
+struct PatternElementResult {
+    LogicalOperator root;
+    std::vector<std::string> path_elements;
+};
+
 /// Builds a LogicalPlan from a Cypher AST (Statement).
 class LogicalPlanBuilder {
 public:
@@ -36,7 +43,7 @@ private:
     std::variant<LogicalOperator, std::string> buildMatch(cypher::MatchClause& match);
 
     // Build a scan+expand chain from a PatternElement.
-    std::variant<LogicalOperator, std::string> buildPatternElement(cypher::PatternElement& elem);
+    std::variant<PatternElementResult, std::string> buildPatternElement(cypher::PatternElement& elem);
 
     // Build operators for a RETURN clause.
     std::variant<LogicalOperator, std::string> buildReturn(cypher::ReturnClause& ret, LogicalOperator input);

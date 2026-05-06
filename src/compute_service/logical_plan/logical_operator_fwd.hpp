@@ -25,6 +25,7 @@ struct CreateNodeOp;
 struct CreateEdgeOp;
 struct SetOp;
 struct RemoveOp;
+struct PathBuildOp;
 
 // ==================== Logical Operator ====================
 
@@ -33,7 +34,7 @@ using LogicalOperator =
                  std::unique_ptr<FilterOp>, std::unique_ptr<ProjectOp>, std::unique_ptr<AggregateOp>,
                  std::unique_ptr<SortOp>, std::unique_ptr<SkipOp>, std::unique_ptr<DistinctOp>,
                  std::unique_ptr<LimitOp>, std::unique_ptr<CreateNodeOp>, std::unique_ptr<CreateEdgeOp>,
-                 std::unique_ptr<SetOp>, std::unique_ptr<RemoveOp>>;
+                 std::unique_ptr<SetOp>, std::unique_ptr<RemoveOp>, std::unique_ptr<PathBuildOp>>;
 
 } // namespace compute
 } // namespace eugraph

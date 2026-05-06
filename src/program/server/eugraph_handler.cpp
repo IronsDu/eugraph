@@ -215,6 +215,117 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         }
         oss << '}';
         rv.set_edge_json(oss.str());
+    } else if (std::holds_alternative<PathValue>(val)) {
+        auto& p = std::get<PathValue>(val);
+        std::ostringstream oss;
+        // Neo4j-style path format: (:Label{prop:v,...})-[edgeType]->(:Label{prop:v,...})->...
+        for (size_t i = 0; i < p.elements.size(); ++i) {
+            const auto& elem = p.elements[i].value;
+            if (std::holds_alternative<VertexValue>(elem)) {
+                auto& v = std::get<VertexValue>(elem);
+                oss << "(";
+                if (v.labels.has_value() && !v.labels->empty()) {
+                    for (LabelId lid : *v.labels) {
+                        auto it = label_defs.find(lid);
+                        if (it != label_defs.end()) {
+                            oss << ":" << it->second.name;
+                            break; // show first label only
+                        }
+                    }
+                }
+                // Show properties
+                bool first_prop = true;
+                if (v.labels.has_value()) {
+                    for (LabelId lid : *v.labels) {
+                        auto it = label_defs.find(lid);
+                        if (it == label_defs.end())
+                            continue;
+                        auto prop_it = v.properties.find(lid);
+                        if (prop_it == v.properties.end())
+                            continue;
+                        for (const auto& pd : it->second.properties) {
+                            if (pd.id < prop_it->second.size()) {
+                                const auto& pv = prop_it->second[pd.id];
+                                if (pv.has_value()) {
+                                    if (first_prop) {
+                                        oss << " {";
+                                        first_prop = false;
+                                    } else {
+                                        oss << ", ";
+                                    }
+                                    oss << pd.name << ": ";
+                                    appendJsonValue(oss, *pv);
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!first_prop)
+                    oss << "}";
+                oss << ")";
+            } else if (std::holds_alternative<EdgeValue>(elem)) {
+                auto& e = std::get<EdgeValue>(elem);
+                // Determine arrow direction from the edge's src/dst relative to path order
+                bool outgoing = true;
+                if (i > 0 && i + 1 < p.elements.size()) {
+                    // Previous element is src vertex, next is dst vertex
+                    const auto& prev_v = p.elements[i - 1].value;
+                    const auto& next_v = p.elements[i + 1].value;
+                    if (std::holds_alternative<VertexValue>(prev_v) && std::holds_alternative<VertexValue>(next_v)) {
+                        auto prev_id = std::get<VertexValue>(prev_v).id;
+                        auto next_id = std::get<VertexValue>(next_v).id;
+                        outgoing = (e.src_id == prev_id && e.dst_id == next_id);
+                    }
+                }
+                oss << (outgoing ? "-[" : "<-[");
+                auto elit = edge_label_defs.find(e.label_id);
+                if (elit != edge_label_defs.end()) {
+                    oss << ":" << elit->second.name;
+                }
+                oss << (outgoing ? "]->" : "]-");
+            }
+        }
+        rv.set_path_json(oss.str());
+    } else if (std::holds_alternative<ListValue>(val)) {
+        auto& lv = std::get<ListValue>(val);
+        std::ostringstream oss;
+        oss << "[";
+        for (size_t i = 0; i < lv.elements.size(); ++i) {
+            if (i > 0)
+                oss << ", ";
+            auto elem_rv = valueToThrift(lv.elements[i].value, label_defs, edge_label_defs);
+            switch (elem_rv.getType()) {
+            case thrift::ResultValue::Type::__EMPTY__:
+                oss << "null";
+                break;
+            case thrift::ResultValue::Type::bool_val:
+                oss << (elem_rv.get_bool_val() ? "true" : "false");
+                break;
+            case thrift::ResultValue::Type::int_val:
+                oss << elem_rv.get_int_val();
+                break;
+            case thrift::ResultValue::Type::double_val:
+                oss << elem_rv.get_double_val();
+                break;
+            case thrift::ResultValue::Type::string_val:
+                oss << '"' << elem_rv.get_string_val() << '"';
+                break;
+            case thrift::ResultValue::Type::vertex_json:
+                oss << elem_rv.get_vertex_json();
+                break;
+            case thrift::ResultValue::Type::edge_json:
+                oss << elem_rv.get_edge_json();
+                break;
+            case thrift::ResultValue::Type::path_json:
+                oss << elem_rv.get_path_json();
+                break;
+            case thrift::ResultValue::Type::list_json:
+                oss << elem_rv.get_list_json();
+                break;
+            }
+        }
+        oss << "]";
+        rv.set_list_json(oss.str());
     }
 
     return rv;

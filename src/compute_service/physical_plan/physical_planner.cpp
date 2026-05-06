@@ -54,6 +54,8 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
                 return planSet(*ptr, store, ctx, input_schema);
             else if constexpr (std::is_same_v<OpType, RemoveOp>)
                 return planRemove(*ptr, store, ctx, input_schema);
+            else if constexpr (std::is_same_v<OpType, PathBuildOp>)
+                return planPathBuild(*ptr, store, ctx, input_schema);
             else
                 return std::string("Unknown logical operator type");
         },
@@ -599,6 +601,29 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planRemove(Remove
     auto result = std::make_unique<RemovePhysicalOp>(std::move(op.items), child_schema, store, ctx.label_defs,
                                                      ctx.label_name_to_id, std::move(child_op));
     return PlanOperatorResult{std::move(result), child_schema};
+}
+
+// ==================== Path Build ====================
+
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planPathBuild(PathBuildOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema) {
+    if (op.children.size() != 1) {
+        return "PathBuild requires exactly one child";
+    }
+    auto child_result = planOperator(op.children[0], store, ctx, input_schema);
+    if (std::holds_alternative<std::string>(child_result)) {
+        return std::get<std::string>(child_result);
+    }
+    auto child_res = std::move(std::get<PlanOperatorResult>(child_result));
+    auto child_op = std::move(child_res.op);
+    auto child_schema = std::move(child_res.output_schema);
+
+    Schema output_schema = child_schema;
+    output_schema.push_back(op.path_variable);
+
+    auto result = std::make_unique<PathBuildPhysicalOp>(op.path_variable, op.element_variables, Schema(child_schema),
+                                                        std::move(child_op));
+    return PlanOperatorResult{std::move(result), std::move(output_schema)};
 }
 
 // ==================== Expression Validation ====================

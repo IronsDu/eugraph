@@ -73,6 +73,8 @@ private:
                                                           Schema input_schema);
     std::variant<PlanOperatorResult, std::string> planRemove(RemoveOp& op, IAsyncGraphDataStore& store,
                                                              PlanContext& ctx, Schema input_schema);
+    std::variant<PlanOperatorResult, std::string> planPathBuild(PathBuildOp& op, IAsyncGraphDataStore& store,
+                                                                PlanContext& ctx, Schema input_schema);
 
     /// Validate that PropertyAccess on LabelCastExpr (n::Label.prop) references
     /// a label and property that actually exist. Returns error string on failure.

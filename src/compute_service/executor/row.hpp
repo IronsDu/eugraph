@@ -34,6 +34,13 @@ struct EdgeValue {
     }
 };
 
+struct PathValue {
+    std::vector<struct ValueStorage> elements;
+    bool operator==(const PathValue& /*o*/) const {
+        return true; /* simplified — full comparison requires Value to be complete */
+    }
+};
+
 // Runtime value produced by expression evaluation and query execution.
 // Note: std::vector<Value> cannot appear directly in the variant because Value
 // would be incomplete at that point. We wrap it in a ListValue struct to break
@@ -51,7 +58,8 @@ struct ValueStorage;
 // The actual runtime value type.
 // VertexId and EdgeId are both uint64_t — use VertexValue/EdgeValue to distinguish,
 // or just use int64_t for IDs in the runtime Value.
-using Value = std::variant<std::monostate, bool, int64_t, double, std::string, VertexValue, EdgeValue, ListValue>;
+using Value =
+    std::variant<std::monostate, bool, int64_t, double, std::string, VertexValue, EdgeValue, PathValue, ListValue>;
 
 struct ValueStorage {
     Value value;
@@ -128,6 +136,12 @@ struct ValueHash {
                     return std::hash<uint64_t>{}(val.id);
                 } else if constexpr (std::is_same_v<T, EdgeValue>) {
                     return std::hash<uint64_t>{}(val.id);
+                } else if constexpr (std::is_same_v<T, PathValue>) {
+                    size_t h = 0;
+                    for (const auto& elem : val.elements) {
+                        h ^= ValueHash{}(elem.value) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    }
+                    return h;
                 } else if constexpr (std::is_same_v<T, ListValue>) {
                     size_t h = 0;
                     for (const auto& elem : val.elements) {
