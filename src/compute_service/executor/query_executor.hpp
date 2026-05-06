@@ -1,6 +1,9 @@
 #pragma once
 
+#include "compute_service/binder/plan_binder.hpp"
+#include "compute_service/catalog/catalog.hpp"
 #include "compute_service/executor/row.hpp"
+#include "compute_service/function/function_registry.hpp"
 #include "compute_service/logical_plan/logical_plan_builder.hpp"
 #include "compute_service/parser/ast.hpp"
 #include "compute_service/parser/cypher_parser.hpp"
@@ -33,6 +36,10 @@ struct StreamContext {
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
     std::unordered_map<std::string, LabelId> label_name_to_id;
     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
+    // Binder results: catalog, function registry, bound expressions
+    std::unique_ptr<catalog::Catalog> catalog;
+    std::unique_ptr<function::FunctionRegistry> func_registry;
+    std::unique_ptr<binder::BoundPlanResult> bound_plan;
 
     explicit StreamContext(IAsyncGraphDataStore& s) : store(s) {}
 };
@@ -44,6 +51,7 @@ class QueryExecutor {
 public:
     struct Config {
         size_t compute_threads = 4;
+        bool enable_binder = false; // set to true to enable PlanBinder validation pass
         Config() = default;
     };
 

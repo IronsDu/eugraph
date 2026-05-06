@@ -125,6 +125,10 @@ target_link_libraries(eugraph_metadata PUBLIC
 # ==================== Query Engine (Logical Plan + Physical Plan + Executor) ====================
 
 add_library(eugraph_query_engine STATIC
+    src/compute_service/catalog/catalog.cpp
+    src/compute_service/function/function_registry.cpp
+    src/compute_service/binder/plan_binder.cpp
+    src/compute_service/executor/vectorized_evaluator.cpp
     src/compute_service/logical_plan/logical_plan_builder.cpp
     src/compute_service/physical_plan/operator/edge_index_scan_physical_op.cpp
     src/compute_service/executor/expression_evaluator.cpp

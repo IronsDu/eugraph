@@ -1,6 +1,9 @@
 #include "compute_service/executor/query_executor.hpp"
 
 #include "common/types/constants.hpp"
+#include "compute_service/binder/plan_binder.hpp"
+#include "compute_service/catalog/catalog.hpp"
+#include "compute_service/function/function_registry.hpp"
 #include "compute_service/parser/index_ddl_parser.hpp"
 #include "storage/kv/value_codec.hpp"
 
@@ -104,6 +107,39 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
     for (const auto& el : edge_labels)
         edge_label_name_to_id[el.name] = el.id;
+
+    // Build catalog and function registry for the binder
+    std::unordered_map<LabelId, LabelDef> label_defs_map;
+    for (const auto& l : labels)
+        label_defs_map[l.id] = l;
+    std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs_map;
+    for (const auto& el : edge_labels)
+        edge_label_defs_map[el.id] = el;
+
+    auto catalog = std::make_unique<catalog::Catalog>();
+    catalog->load(std::move(label_defs_map), std::move(edge_label_defs_map));
+
+    auto func_registry = std::make_unique<function::FunctionRegistry>();
+
+    // Store catalog and function registry for future use by physical operators
+    // (e.g., when operators are upgraded to use bound expressions + DataChunk).
+    ctx->catalog = std::move(catalog);
+    ctx->func_registry = std::move(func_registry);
+
+    // PlanBinder pass: disabled by default until physical operators are upgraded.
+    // Enable via Config::enable_binder to get expression type checking and
+    // property requirement collection.
+    if (config_.enable_binder) {
+        binder::PlanBinder plan_binder(*ctx->catalog, *ctx->func_registry);
+        auto bound_result = plan_binder.bind(logical_plan);
+        if (!bound_result.errors.empty()) {
+            spdlog::warn("PlanBinder warnings:");
+            for (const auto& e : bound_result.errors) {
+                spdlog::warn("  - {}", e);
+            }
+        }
+        ctx->bound_plan = std::make_unique<binder::BoundPlanResult>(std::move(bound_result));
+    }
 
     // Begin transaction
     GraphTxnHandle txn = co_await async_data_.beginTran();
