@@ -194,8 +194,8 @@ std::variant<LogicalOperator, std::string> LogicalPlanBuilder::buildPatternEleme
             edgeVar = "__anon_" + std::to_string(anon_counter_++);
         }
 
-        // Auto-generate variable name for anonymous destination nodes with properties
-        if (dstVar.empty() && nextNode.properties.has_value() && !nextNode.properties->entries.empty()) {
+        // Auto-generate variable name for anonymous destination nodes
+        if (dstVar.empty()) {
             dstVar = "__anon_" + std::to_string(anon_counter_++);
         }
 
