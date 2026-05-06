@@ -134,7 +134,7 @@ ctest --preset=debug --verbose
 
 ## 6. 启动服务
 
-详细使用说明见 [program_usage/](../program_usage/)。
+详细使用说明见 [program/usage/](../program/usage/)。
 
 ```bash
 # 服务端

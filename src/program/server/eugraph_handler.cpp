@@ -1,4 +1,4 @@
-#include "server/eugraph_handler.hpp"
+#include "program/server/eugraph_handler.hpp"
 
 #include <thrift/lib/cpp2/async/ServerStream.h>
 

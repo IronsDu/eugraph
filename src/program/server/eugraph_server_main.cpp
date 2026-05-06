@@ -1,6 +1,6 @@
 #include "compute_service/executor/query_executor.hpp"
 #include "gen-cpp2/EuGraphService.h"
-#include "server/eugraph_handler.hpp"
+#include "program/server/eugraph_handler.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/io_scheduler.hpp"

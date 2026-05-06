@@ -1,4 +1,4 @@
-#include "shell/rpc_client.hpp"
+#include "program/shell/rpc_client.hpp"
 
 #include <thrift/lib/cpp2/async/RocketClientChannel.h>
 

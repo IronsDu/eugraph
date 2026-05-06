@@ -1,4 +1,4 @@
-#include "shell/shell_repl.hpp"
+#include "program/shell/shell_repl.hpp"
 
 #include <folly/init/Init.h>
 

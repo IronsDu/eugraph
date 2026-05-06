@@ -193,9 +193,9 @@ target_link_libraries(eugraph_thrift PUBLIC
 # ==================== Shell (REPL) ====================
 
 add_library(eugraph_shell_lib STATIC
-    src/shell/shell_repl.cpp
-    src/shell/rpc_client.cpp
-    src/server/eugraph_handler.cpp
+    src/program/shell/shell_repl.cpp
+    src/program/shell/rpc_client.cpp
+    src/program/server/eugraph_handler.cpp
     third_party/linenoise/linenoise.c
 )
 
@@ -216,7 +216,7 @@ target_link_libraries(eugraph_shell_lib PUBLIC
 # ==================== Server + Shell executables ====================
 
 add_executable(eugraph-server
-    src/server/eugraph_server_main.cpp
+    src/program/server/eugraph_server_main.cpp
 )
 
 target_include_directories(eugraph-server PRIVATE
@@ -238,7 +238,7 @@ target_link_libraries(eugraph-server PRIVATE
 add_dependencies(eugraph-server wiredtiger_ext)
 
 add_executable(eugraph-shell
-    src/shell/shell_main.cpp
+    src/program/shell/shell_main.cpp
 )
 
 target_include_directories(eugraph-shell PRIVATE
@@ -253,8 +253,8 @@ target_link_libraries(eugraph-shell PRIVATE
 # ==================== CSV Loader ====================
 
 add_library(eugraph_loader_lib STATIC
-    src/loader/csv_loader.cpp
-    src/shell/rpc_client.cpp
+    src/program/loader/csv_loader.cpp
+    src/program/shell/rpc_client.cpp
 )
 
 target_include_directories(eugraph_loader_lib PUBLIC
@@ -269,7 +269,7 @@ target_link_libraries(eugraph_loader_lib PUBLIC
 )
 
 add_executable(eugraph-loader
-    src/loader/loader_main.cpp
+    src/program/loader/loader_main.cpp
 )
 
 target_include_directories(eugraph-loader PRIVATE
