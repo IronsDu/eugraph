@@ -1035,7 +1035,7 @@ TEST_F(QueryExecutorTest, SkipWithLimit) {
 TEST_F(QueryExecutorTest, SkipWithOrderBy) {
     insertTestVertices();
 
-    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id SKIP 1 LIMIT 2");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN id(n) AS id ORDER BY id SKIP 1 LIMIT 2");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 2);
     // After ORDER BY id ASC, skip 1, limit 2: should get ids 2 and 3
@@ -1048,7 +1048,7 @@ TEST_F(QueryExecutorTest, SkipWithOrderBy) {
 TEST_F(QueryExecutorTest, OrderByPropertyAsc) {
     insertTestVertices();
 
-    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id ASC");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN id(n) AS id ORDER BY id ASC");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5);
     for (size_t i = 0; i < result.rows.size() - 1; ++i) {
@@ -1059,7 +1059,7 @@ TEST_F(QueryExecutorTest, OrderByPropertyAsc) {
 TEST_F(QueryExecutorTest, OrderByPropertyDesc) {
     insertTestVertices();
 
-    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id DESC");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN id(n) AS id ORDER BY id DESC");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5);
     for (size_t i = 0; i < result.rows.size() - 1; ++i) {
@@ -1070,7 +1070,7 @@ TEST_F(QueryExecutorTest, OrderByPropertyDesc) {
 TEST_F(QueryExecutorTest, OrderByDefaultDirection) {
     insertTestVertices();
 
-    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN id(n) AS id ORDER BY id");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5);
     // Default should be ASC
@@ -1082,13 +1082,13 @@ TEST_F(QueryExecutorTest, OrderByDefaultDirection) {
 TEST_F(QueryExecutorTest, OrderByMultipleKeys) {
     insertTestVertices();
 
-    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id ASC, id DESC");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN id(n) AS id ORDER BY id ASC, id DESC");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 5);
 }
 
 TEST_F(QueryExecutorTest, OrderByEmptyResult) {
-    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.id AS id ORDER BY id");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN id(n) AS id ORDER BY id");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 0);
 }
@@ -1108,7 +1108,7 @@ TEST_F(QueryExecutorTest, DistinctNoDuplicate) {
     insertTestVertices();
 
     // All ids are unique, DISTINCT should keep all rows
-    auto result = execSync(*executor_, "MATCH (n:Person) RETURN DISTINCT n.id AS id");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN DISTINCT id(n) AS id");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 5);
 }
@@ -1116,7 +1116,7 @@ TEST_F(QueryExecutorTest, DistinctNoDuplicate) {
 TEST_F(QueryExecutorTest, DistinctWithOrderBy) {
     insertTestVertices();
 
-    auto result = execSync(*executor_, "MATCH (n:Person) RETURN DISTINCT n.id AS id ORDER BY id ASC");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN DISTINCT id(n) AS id ORDER BY id ASC");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5);
     for (size_t i = 0; i < result.rows.size() - 1; ++i) {

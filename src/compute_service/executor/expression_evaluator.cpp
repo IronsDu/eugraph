@@ -231,9 +231,6 @@ Value ExpressionEvaluator::evalPropertyAccess(const cypher::PropertyAccess& pa, 
     // Property access on VertexValue
     if (std::holds_alternative<VertexValue>(obj)) {
         const auto& vertex = std::get<VertexValue>(obj);
-        if (pa.property == "id") {
-            return Value(static_cast<int64_t>(vertex.id));
-        }
         std::vector<Value> found;
         for (const auto& [lid, props] : vertex.properties) {
             auto ldef_it = label_defs_.find(lid);
@@ -263,9 +260,6 @@ Value ExpressionEvaluator::evalPropertyAccess(const cypher::PropertyAccess& pa, 
     // Property access on EdgeValue
     if (std::holds_alternative<EdgeValue>(obj)) {
         const auto& edge = std::get<EdgeValue>(obj);
-        if (pa.property == "id") {
-            return Value(static_cast<int64_t>(edge.id));
-        }
         if (edge.properties.has_value()) {
             for (const auto& [lid, ldef] : label_defs_) {
                 for (const auto& pd : ldef.properties) {
