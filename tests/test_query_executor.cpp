@@ -484,6 +484,30 @@ TEST_F(QueryExecutorTest, ExpandTwoHopNoMatch) {
     EXPECT_EQ(rows.size(), 0);
 }
 
+TEST_F(QueryExecutorTest, ExpandTwoHopAnonymousNodes) {
+    insertMultiHopEdges();
+    // KNOWS 2-hop with anonymous intermediate node: 1->2->3, 2->3->4 = 2 rows
+    auto rows =
+        execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->()-[:KNOWS]->(c) RETURN c").rows;
+    EXPECT_EQ(rows.size(), 2);
+}
+
+TEST_F(QueryExecutorTest, ExpandTwoHopAnonymousNodesNoLabels) {
+    insertMultiHopEdges();
+    // Undirected edges match KNOWS and LIVES_IN: 1->2->3, 1->2->6, 2->3->4 = 3 rows
+    auto rows =
+        execSync(*executor_, "MATCH (a:Person)-[]->()-[]->(c) RETURN c").rows;
+    EXPECT_EQ(rows.size(), 3);
+}
+
+TEST_F(QueryExecutorTest, ExpandTwoHopAnonymousEdgeAndNode) {
+    insertMultiHopEdges();
+    // Undirected edges match KNOWS and LIVES_IN: 1->2->3, 1->2->6, 2->3->4 = 3 rows
+    auto rows =
+        execSync(*executor_, "MATCH (a:Person)-[]->()-[]->(c) RETURN a, c").rows;
+    EXPECT_EQ(rows.size(), 3);
+}
+
 // ==================== Create Node Tests ====================
 
 TEST_F(QueryExecutorTest, CreateNodeReturnsId) {
@@ -1748,6 +1772,68 @@ TEST_F(QueryExecutorMultiLabelTest, FilterLabelCastNonExistentPropertyErrors) {
     auto r2 = execSync(*executor_, "MATCH (n:Person) WHERE n::Person.noname = 'x' RETURN n");
     EXPECT_FALSE(r2.error.empty());
     EXPECT_NE(r2.error.find("has no property"), std::string::npos) << r2.error;
+}
+
+// ==================== Property Named 'id' ====================
+
+TEST_F(QueryExecutorTest, PropertyNamedIdReturnsStoredValue) {
+    // Create a label with a property named "id" (conflicts with pseudo-property behavior)
+    PropertyDef id_prop{0, "id", PropertyType::INT64, false, std::nullopt};
+    auto item_label = blockingWait(async_meta_->createLabel("Item", {id_prop}));
+    ASSERT_NE(item_label, INVALID_LABEL_ID);
+    ASSERT_TRUE(blockingWait(async_data_->createLabel(item_label)));
+
+    // Create executor with updated schema
+    QueryExecutor executor(*async_data_, *async_meta_, {});
+
+    // Create vertices: internal ID != stored property "id" value
+    execSync(executor, "CREATE (n:Item {id: 100})");
+    execSync(executor, "CREATE (n:Item {id: 200})");
+    execSync(executor, "CREATE (n:Item {id: 300})");
+
+    // n.id should return stored property value, not internal VertexId
+    auto result = execSync(executor, "MATCH (n:Item) RETURN n.id AS id ORDER BY id");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 100);
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][0]), 200);
+    EXPECT_EQ(std::get<int64_t>(result.rows[2][0]), 300);
+
+    // id(n) should still return internal VertexId
+    auto idResult = execSync(executor, "MATCH (n:Item) RETURN id(n) AS internalId ORDER BY internalId");
+    ASSERT_TRUE(idResult.error.empty()) << idResult.error;
+    ASSERT_EQ(idResult.rows.size(), 3);
+    // Internal IDs should be small positive integers (not the stored 100/200/300)
+    for (size_t i = 0; i < idResult.rows.size(); ++i) {
+        auto internalId = std::get<int64_t>(idResult.rows[i][0]);
+        EXPECT_GT(internalId, 0);
+        EXPECT_LT(internalId, 100); // internal IDs are small, not the stored property values
+    }
+}
+
+TEST_F(QueryExecutorTest, PropertyNamedIdWorksWithInlineFilter) {
+    // Create a label with a property named "id"
+    PropertyDef id_prop{0, "id", PropertyType::INT64, false, std::nullopt};
+    auto item_label = blockingWait(async_meta_->createLabel("Product", {id_prop}));
+    ASSERT_NE(item_label, INVALID_LABEL_ID);
+    ASSERT_TRUE(blockingWait(async_data_->createLabel(item_label)));
+
+    QueryExecutor executor(*async_data_, *async_meta_, {});
+
+    execSync(executor, "CREATE (n:Product {id: 500})");
+    execSync(executor, "CREATE (n:Product {id: 600})");
+    execSync(executor, "CREATE (n:Product {id: 700})");
+
+    // Inline property filter {id: 600} should match the stored property value
+    auto result = execSync(executor, "MATCH (n:Product {id: 600}) RETURN n.id AS id");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 600);
+
+    // Verify no match for non-existent value
+    auto noResult = execSync(executor, "MATCH (n:Product {id: 999}) RETURN n.id AS id");
+    ASSERT_TRUE(noResult.error.empty()) << noResult.error;
+    EXPECT_EQ(noResult.rows.size(), 0);
 }
 
 // ==================== CreateEdge With Edge Index ====================
