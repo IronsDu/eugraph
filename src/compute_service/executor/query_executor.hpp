@@ -1,6 +1,6 @@
 #pragma once
 
-#include "compute_service/binder/plan_binder.hpp"
+#include "compute_service/binder/binder.hpp"
 #include "compute_service/catalog/catalog.hpp"
 #include "compute_service/executor/data_chunk.hpp"
 #include "compute_service/executor/row.hpp"
@@ -40,7 +40,7 @@ struct StreamContext {
     // Binder results: catalog, function registry, bound expressions
     std::unique_ptr<catalog::Catalog> catalog;
     std::unique_ptr<function::FunctionRegistry> func_registry;
-    std::unique_ptr<binder::BoundPlanResult> bound_plan;
+    std::unique_ptr<binder::BoundStatement> bound_plan;
 
     explicit StreamContext(IAsyncGraphDataStore& s) : store(s) {}
 };

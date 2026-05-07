@@ -20,7 +20,7 @@
 │  │                    Compute Layer (计算线程池)                           │  │
 │  │                   (CPUThreadPoolExecutor)                              │  │
 │  │                                                                       │  │
-│  │  Cypher Parser → LogicalPlanBuilder → PhysicalPlanner (含 IndexScan 优化) → Execute │  │
+│  │  Cypher Parser → Binder → PhysicalPlanner (planBound) → Execute │  │
 │  │                                                                       │  │
 │  │  依赖: IAsyncGraphDataStore, IAsyncGraphMetaStore                     │  │
 │  │  不依赖任何 sync 接口                                                  │  │

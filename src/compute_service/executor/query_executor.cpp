@@ -88,16 +88,6 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
         stmt = std::move(stmt_var);
     }
 
-    LogicalPlanBuilder plan_builder;
-    auto logical_result = plan_builder.build(std::move(stmt));
-    if (std::holds_alternative<std::string>(logical_result)) {
-        ctx->error = std::get<std::string>(logical_result);
-        co_return ctx;
-    }
-    auto& logical_plan = std::get<LogicalPlan>(logical_result);
-
-    extractColumnsFromLogicalPlan(logical_plan.root, ctx->columns);
-
     // Load label/edge_label mappings from metadata service
     auto labels = co_await async_meta_.listLabels();
     auto edge_labels = co_await async_meta_.listEdgeLabels();
@@ -110,7 +100,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     for (const auto& el : edge_labels)
         edge_label_name_to_id[el.name] = el.id;
 
-    // Build catalog and function registry for the binder
+    // Build catalog and function registry
     std::unordered_map<LabelId, LabelDef> label_defs_map;
     for (const auto& l : labels)
         label_defs_map[l.id] = l;
@@ -123,24 +113,24 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
 
     auto func_registry = std::make_unique<function::FunctionRegistry>();
 
-    // Store catalog and function registry for future use by physical operators
-    // (e.g., when operators are upgraded to use bound expressions + DataChunk).
+    // 2. Bind: AST → BoundLogicalPlan
+    binder::Binder binder(*catalog, *func_registry);
+    auto bound_stmt = binder.bind(stmt);
+    if (!bound_stmt) {
+        std::string err = "Binding failed";
+        for (const auto& e : binder.errors())
+            err += "; " + e;
+        ctx->error = std::move(err);
+        co_return ctx;
+    }
+
+    // Extract output column names from the bound plan
+    for (const auto& ci : bound_stmt->plan.output_schema) {
+        ctx->columns.push_back(ci.name);
+    }
+
     ctx->catalog = std::move(catalog);
     ctx->func_registry = std::move(func_registry);
-
-    // PlanBinder pass: bind the logical plan for type checking and
-    // property requirement collection.
-    {
-        binder::PlanBinder plan_binder(*ctx->catalog, *ctx->func_registry);
-        auto bound_result = plan_binder.bind(logical_plan);
-        if (!bound_result.errors.empty()) {
-            spdlog::warn("PlanBinder warnings:");
-            for (const auto& e : bound_result.errors) {
-                spdlog::warn("  - {}", e);
-            }
-        }
-        ctx->bound_plan = std::make_unique<binder::BoundPlanResult>(std::move(bound_result));
-    }
 
     // Begin transaction
     GraphTxnHandle txn = co_await async_data_.beginTran();
@@ -155,7 +145,6 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     ctx->label_name_to_id = std::move(label_name_to_id);
     ctx->edge_label_name_to_id = std::move(edge_label_name_to_id);
 
-    // PlanContext references StreamContext's maps — physical operators get references to those maps
     PlanContext plan_ctx{
         .label_name_to_id = ctx->label_name_to_id,
         .edge_label_name_to_id = ctx->edge_label_name_to_id,
@@ -168,8 +157,9 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     plan_ctx.next_vertex_id = co_await async_meta_.nextVertexId();
     plan_ctx.next_edge_id = co_await async_meta_.nextEdgeId();
 
+    // 3. Physical planning from BoundLogicalPlan
     PhysicalPlanner physical_planner;
-    auto phys_result = physical_planner.plan(logical_plan, async_data_, plan_ctx, *ctx->catalog, *ctx->func_registry);
+    auto phys_result = physical_planner.planBound(bound_stmt->plan, async_data_, plan_ctx);
     if (std::holds_alternative<std::string>(phys_result)) {
         ctx->error = std::get<std::string>(phys_result);
         co_await async_data_.rollbackTran(txn);

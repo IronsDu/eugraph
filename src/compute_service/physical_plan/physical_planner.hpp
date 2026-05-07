@@ -1,5 +1,6 @@
 #pragma once
 
+#include "compute_service/binder/bound_logical_plan_fwd.hpp"
 #include "compute_service/binder/bound_type.hpp"
 #include "compute_service/catalog/catalog.hpp"
 #include "compute_service/executor/row.hpp"
@@ -40,14 +41,24 @@ struct PlanOperatorResult {
 /// Converts a LogicalPlan into a tree of PhysicalOperator.
 class PhysicalPlanner {
 public:
-    /// Plan a logical plan into physical operators.
-    /// Returns the physical operator tree root on success, or an error string.
+    /// Plan from a BoundLogicalPlan (Binder output).
+    std::variant<std::unique_ptr<PhysicalOperator>, std::string>
+    planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphDataStore& store, PlanContext& ctx);
+
+    /// Plan from a Legacy LogicalPlan (LogicalPlanBuilder output).
     std::variant<std::unique_ptr<PhysicalOperator>, std::string> plan(LogicalPlan& logical_plan,
                                                                       IAsyncGraphDataStore& store, PlanContext& ctx,
                                                                       const catalog::Catalog& catalog,
                                                                       const function::FunctionRegistry& func_registry);
 
 private:
+    // ── Bound plan dispatch ──
+    std::variant<PlanOperatorResult, std::string> planBoundOperator(binder::BoundLogicalOperator& op,
+                                                                    IAsyncGraphDataStore& store, PlanContext& ctx,
+                                                                    Schema input_schema,
+                                                                    const std::vector<binder::BoundType>& input_types);
+
+    // ── Legacy plan dispatch ──
     std::variant<PlanOperatorResult, std::string> planOperator(LogicalOperator& op, IAsyncGraphDataStore& store,
                                                                PlanContext& ctx, Schema input_schema,
                                                                const std::vector<binder::BoundType>& input_types);

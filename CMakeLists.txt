@@ -127,6 +127,7 @@ target_link_libraries(eugraph_metadata PUBLIC
 add_library(eugraph_query_engine STATIC
     src/compute_service/catalog/catalog.cpp
     src/compute_service/function/function_registry.cpp
+    src/compute_service/binder/binder.cpp
     src/compute_service/binder/plan_binder.cpp
     src/compute_service/executor/vectorized_evaluator.cpp
     src/compute_service/logical_plan/logical_plan_builder.cpp

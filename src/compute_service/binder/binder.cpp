@@ -5,6 +5,75 @@
 namespace eugraph {
 namespace binder {
 
+namespace {
+
+cypher::Expression cloneExpression(const cypher::Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> cypher::Expression {
+            using T = std::decay_t<decltype(ptr)>;
+            using Elem = typename T::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::Literal>) {
+                return std::make_unique<cypher::Literal>(*ptr);
+            } else if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                return std::make_unique<cypher::Variable>(*ptr);
+            } else if constexpr (std::is_same_v<Elem, cypher::Parameter>) {
+                return std::make_unique<cypher::Parameter>(*ptr);
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                auto c = std::make_unique<cypher::BinaryOp>();
+                c->op = ptr->op;
+                c->left = cloneExpression(ptr->left);
+                c->right = cloneExpression(ptr->right);
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                auto c = std::make_unique<cypher::UnaryOp>();
+                c->op = ptr->op;
+                c->operand = cloneExpression(ptr->operand);
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                auto c = std::make_unique<cypher::FunctionCall>();
+                c->name = ptr->name;
+                c->distinct = ptr->distinct;
+                for (const auto& a : ptr->args)
+                    c->args.push_back(cloneExpression(a));
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                auto c = std::make_unique<cypher::PropertyAccess>();
+                c->object = cloneExpression(ptr->object);
+                c->property = ptr->property;
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
+                auto c = std::make_unique<cypher::LabelCastExpr>();
+                c->object = cloneExpression(ptr->object);
+                c->label = ptr->label;
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                auto c = std::make_unique<cypher::ListExpr>();
+                for (const auto& e : ptr->elements)
+                    c->elements.push_back(cloneExpression(e));
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                auto c = std::make_unique<cypher::MapExpr>();
+                for (const auto& [k, v] : ptr->entries)
+                    c->entries.emplace_back(k, cloneExpression(v));
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                auto c = std::make_unique<cypher::CaseExpr>();
+                if (ptr->subject)
+                    c->subject = cloneExpression(*ptr->subject);
+                for (const auto& [w, t] : ptr->when_thens)
+                    c->when_thens.emplace_back(cloneExpression(w), cloneExpression(t));
+                if (ptr->else_expr)
+                    c->else_expr = cloneExpression(*ptr->else_expr);
+                return c;
+            } else {
+                return std::make_unique<cypher::Literal>();
+            }
+        },
+        expr);
+}
+
+} // anonymous namespace
+
 // ==================== Public Expression Binding API ====================
 
 void Binder::registerColumn(const std::string& name, BoundType type) {
@@ -183,14 +252,14 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 auto eq = std::make_unique<cypher::BinaryOp>();
                 eq->op = cypher::BinaryOperator::EQ;
                 eq->left = std::move(prop_access);
-                eq->right = prop_expr;
+                eq->right = cloneExpression(prop_expr);
 
                 auto filter_pred = bindExpression(cypher::Expression(std::move(eq)));
                 if (filter_pred && current) {
                     BoundFilterOp filter;
                     filter.predicate = std::move(*filter_pred);
                     filter.child = std::move(*current);
-                    current = std::move(filter);
+                    current = std::make_unique<BoundFilterOp>(std::move(filter));
                 }
             }
         }
@@ -243,14 +312,14 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     auto eq = std::make_unique<cypher::BinaryOp>();
                     eq->op = cypher::BinaryOperator::EQ;
                     eq->left = std::move(prop_access);
-                    eq->right = prop_expr;
+                    eq->right = cloneExpression(prop_expr);
 
                     auto filter_pred = bindExpression(cypher::Expression(std::move(eq)));
                     if (filter_pred && current) {
                         BoundFilterOp filter;
                         filter.predicate = std::move(*filter_pred);
                         filter.child = std::move(*current);
-                        current = std::move(filter);
+                        current = std::make_unique<BoundFilterOp>(std::move(filter));
                     }
                 }
             }
@@ -267,14 +336,14 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     auto eq = std::make_unique<cypher::BinaryOp>();
                     eq->op = cypher::BinaryOperator::EQ;
                     eq->left = std::move(prop_access);
-                    eq->right = prop_expr;
+                    eq->right = cloneExpression(prop_expr);
 
                     auto filter_pred = bindExpression(cypher::Expression(std::move(eq)));
                     if (filter_pred && current) {
                         BoundFilterOp filter;
                         filter.predicate = std::move(*filter_pred);
                         filter.child = std::move(*current);
-                        current = std::move(filter);
+                        current = std::make_unique<BoundFilterOp>(std::move(filter));
                     }
                 }
             }
@@ -506,9 +575,9 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
     if (!bound_pred)
         return std::nullopt;
 
-    BoundFilterOp filter;
-    filter.predicate = std::move(*bound_pred);
-    filter.child = std::move(child);
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = std::move(*bound_pred);
+    filter->child = std::move(child);
     return filter;
 }
 

@@ -34,5 +34,8 @@ using BoundLogicalOperator =
                  std::unique_ptr<BoundCreateNodeOp>, std::unique_ptr<BoundCreateEdgeOp>, std::unique_ptr<BoundSetOp>,
                  std::unique_ptr<BoundRemoveOp>, std::unique_ptr<BoundPathBuildOp>>;
 
+// Forward declaration
+struct BoundLogicalPlan;
+
 } // namespace binder
 } // namespace eugraph

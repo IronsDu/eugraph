@@ -83,8 +83,7 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
 
                 // count(*) accepts monostate (null) literal; skip nulls for other aggregates.
                 bool is_count_star =
-                    (agg.func_def->has_variadic_args &&
-                     std::holds_alternative<binder::BoundLiteral>(agg.arg) &&
+                    (agg.func_def->has_variadic_args && std::holds_alternative<binder::BoundLiteral>(agg.arg) &&
                      isNull(std::get<binder::BoundLiteral>(agg.arg).value));
                 if (!is_count_star && isNull(v))
                     continue;

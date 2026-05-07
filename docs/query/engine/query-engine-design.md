@@ -23,11 +23,13 @@
 ```
 Cypher 查询文本
     → CypherQueryParser: 字符串 → AST (Statement)
-    → LogicalPlanBuilder: AST → LogicalPlan (算子树，名称保持字符串)
+    → Binder: AST → BoundLogicalPlan (语义绑定，符号解析，类型推断)
+        ├── Catalog: label/property 解析
+        ├── FunctionRegistry: 函数签名匹配
+        └── BindContext: 变量→列索引映射，属性需求收集
     → PhysicalPlanner:
-        ├── 加载 Catalog + FunctionRegistry
-        ├── PlanBinder: 表达式绑定 (AST Expression → BoundExpression，类型推断，投影下推)
-        └── LogicalPlan → PhysicalOperator 树 (ID 解析，存储引用绑定)
+        ├── planBound: BoundLogicalPlan → PhysicalOperator 树
+        └── ID 解析，存储引用绑定
     → QueryExecutor: 协程管道执行 (Pull-based 火山模型，AsyncGenerator<DataChunk>)
 ```
 
@@ -37,7 +39,7 @@ Cypher 查询文本
 
 `src/compute_service/catalog/`
 
-Catalog 管理所有数据库对象的命名空间和元数据，为 PlanBinder 提供查找服务。在 `QueryExecutor::prepareStream` 中从 `IAsyncGraphMetaStore` 加载，每次查询加载最新元数据。
+Catalog 管理所有数据库对象的命名空间和元数据，为 Binder 提供查找服务。在 `QueryExecutor::prepareStream` 中从 `IAsyncGraphMetaStore` 加载，每次查询加载最新元数据。
 
 ```cpp
 class Catalog {
@@ -176,20 +178,24 @@ BoundExpression = variant<
 
 `src/compute_service/binder/`
 
-### PlanBinder（当前使用）
+### Binder（查询管线入口）
 
-PlanBinder 在 `PhysicalPlanner` 内部工作，对已有 `LogicalPlan` 的表达式进行绑定：
+`Binder` 类将 AST 直接绑定为 `BoundLogicalPlan`，是查询管线的核心阶段：
 
-1. 遍历逻辑算子树
-2. 将 `cypher::Expression` → `binder::BoundExpression`
-3. 通过 Catalog 解析 label/property → LabelId/PropId
-4. 通过 FunctionRegistry 解析函数调用 → FunctionDef 指针
-5. 推断表达式返回类型
-6. 收集投影下推所需属性信息
+1. 接收 `cypher::Statement`（AST）
+2. 递归绑定 MATCH/RETURN/WHERE/CREATE/SET/REMOVE 子句
+3. 将 `cypher::Expression` → `binder::BoundExpression`
+4. 通过 Catalog 解析 label/property → LabelId/PropId
+5. 通过 FunctionRegistry 解析函数调用 → FunctionDef 指针
+6. 推断表达式返回类型
+7. 收集投影下推所需属性信息
+8. 产出 `BoundStatement`（含 `BoundLogicalPlan` + `BindContext`）
 
-### Binder（完整绑定器，尚未接入管线）
+`BoundLogicalPlan` 的 root 是 `BoundLogicalOperator`（variant），包含 15 种 Bound\*Op 类型，所有符号引用已解析为具体 ID 和列索引。
 
-`Binder` 类将 AST 直接绑定为 `BoundLogicalPlan`，当前未接入查询管线（管线仍走 `LogicalPlanBuilder` → `PlanBinder` 路径）。待管线重构时启用。
+### PlanBinder（旧管线兼容）
+
+PlanBinder 在旧管线的 `PhysicalPlanner` 内部工作，对 `LogicalPlanBuilder` 产出的 `LogicalPlan` 表达式进行绑定。当前查询管线已切换到 `Binder` 路径（`Binder` → `planBound`），PlanBinder 仅保留用于兼容。
 
 ---
 
@@ -265,7 +271,7 @@ struct SelectionVector {
 | `RemoveOp` | 移除属性/标签 | 1 |
 | `PathBuildOp` | 组装路径变量 | 1 |
 
-**符号表**：`LogicalPlanBuilder` 内部维护 `SymbolTable`（变量名→列索引），MATCH 中每个变量分配列索引，RETURN/WHERE 通过索引访问。
+**符号表**：`Binder` 通过 `BindContext` 维护变量→列索引映射，MATCH 中每个变量分配列索引，RETURN/WHERE 通过索引访问。
 
 ### Cypher 子句映射
 
@@ -393,13 +399,12 @@ class PhysicalOperator {
 ```
 1. IndexDdlParser::tryParse() → 若为索引 DDL，handleIndexDdl，short-circuit
 2. parse: 字符串 → AST（EXPLAIN 已内置于语法规则）
-3. buildLogicalPlan: AST → LogicalPlan
-4. 加载元数据: listLabels() + listEdgeLabels() → 构建 Catalog + FunctionRegistry
-5. PlanBinder::bind(logical_plan) → 绑定验证（始终执行）
-6. beginTran + setTransaction
-7. plan: LogicalPlan → PhysicalOperator（内部 PlanBinder 绑定表达式）
-8. 若 EXPLAIN: 收集物理算子 toString，rollback，返回
-9. executeChunk: AsyncGenerator<DataChunk> 由调用方 drain
+3. 加载元数据: listLabels() + listEdgeLabels() → 构建 Catalog + FunctionRegistry
+4. bind: AST → BoundLogicalPlan（Binder 语义绑定，符号解析，类型推断）
+5. beginTran + setTransaction
+6. planBound: BoundLogicalPlan → PhysicalOperator（ID 解析，存储引用绑定）
+7. 若 EXPLAIN: 收集物理算子 toString，rollback，返回
+8. executeChunk: AsyncGenerator<DataChunk> 由调用方 drain
 ```
 
 ### 流式执行
@@ -438,7 +443,7 @@ using Schema = vector<string>;   // 列名列表
 - Cypher Parser + AST（含 `n::Label` 转型语法 + `LabelCastExpr`）
 - 逻辑计划构建（15 种算子）
 - Catalog 目录系统 + FunctionRegistry 函数注册表（含执行回调）
-- BoundExpression 13 种类型 + PlanBinder 表达式绑定
+- BoundExpression 13 种类型 + Binder 语义绑定（已接入管线）
 - BoundType 类型系统（隐式转换代价、类型合并）
 - DataChunk 列存数据块（FLAT/CONSTANT/DICTIONARY + SelectionVector）
 - VectorizedEvaluator 表达式求值器
@@ -457,9 +462,11 @@ using Schema = vector<string>;   // 列名列表
 
 **BoundBinaryOp/BoundUnaryOp 无函数指针**：当前通过 `switch(op)` 枚举分发。设计目标是绑定时确定具体的操作函数指针（如 DuckDB 的 `BinaryOpFunc`），求值时直接调用，消除 switch 开销。
 
-**完整 Binder 尚未接入管线**：`PlanBinder` 已在管线上工作（表达式绑定、类型推断），但完整的 `Binder` 类（直接从 AST 产出 `BoundLogicalPlan`，替代 `LogicalPlanBuilder`）尚未启用。当前管线仍走 `LogicalPlanBuilder` → `PlanBinder` 路径，`BoundLogicalPlan` 和 `Bound*Op` 类型已定义但未消费。待管线重构时用 `Binder` 替换 `LogicalPlanBuilder`。
+**完整 Binder 已接入管线**：查询管线已从 `LogicalPlanBuilder` → `PlanBinder` 路径切换到 `Binder` → `planBound` 路径。`Binder` 类直接从 AST 产出 `BoundLogicalPlan`，`PhysicalPlanner::planBound()` 将其转换为 `PhysicalOperator` 树。旧的 `LogicalPlanBuilder` + `PlanBinder` 路径仍保留但不再作为默认管线。
 
-**投影下推未实际生效**：`PlanBinder` 收集了属性需求（`BindContext::property_requirements`），但 Scan 算子尚未利用这些信息减少属性加载量，仍然获取全部属性。
+**索引扫描优化暂未接入新管线**：`planBound` 路径当前不含 `tryIndexScan`/`tryEdgeIndexScan` 优化（Filter+LabelScan 不会自动转换为 IndexScan）。查询功能不受影响，但无法利用索引加速。待后续优化器阶段接入。
+
+**投影下推未实际生效**：`Binder` 收集了属性需求（`BindContext::property_requirements`），但 Scan 算子尚未利用这些信息减少属性加载量，仍然获取全部属性。
 
 ### 待实现
 - DELETE, MERGE 执行

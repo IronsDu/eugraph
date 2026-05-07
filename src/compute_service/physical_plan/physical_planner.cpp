@@ -1,4 +1,5 @@
 #include "compute_service/physical_plan/physical_planner.hpp"
+#include "compute_service/binder/bound_logical_plan.hpp"
 #include "compute_service/binder/plan_binder.hpp"
 
 #include <stdexcept>
@@ -1169,6 +1170,356 @@ PhysicalPlanner::tryEdgeIndexScan(ExpandOp& expand_op, const std::vector<const c
         return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
     }
     return std::nullopt;
+}
+
+// Convert a Value (runtime literal) to PropertyValue for storage.
+static PropertyValue valueToPropertyValue(const Value& v) {
+    if (std::holds_alternative<bool>(v))
+        return std::get<bool>(v);
+    if (std::holds_alternative<int64_t>(v))
+        return std::get<int64_t>(v);
+    if (std::holds_alternative<double>(v))
+        return std::get<double>(v);
+    if (std::holds_alternative<std::string>(v))
+        return std::get<std::string>(v);
+    return PropertyValue{};
+}
+
+// ==================== Bound Plan Pipeline ====================
+
+std::variant<std::unique_ptr<PhysicalOperator>, std::string>
+PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphDataStore& store, PlanContext& ctx) {
+    Schema empty_schema;
+    std::vector<binder::BoundType> empty_types;
+    auto result = planBoundOperator(bound_plan.root, store, ctx, empty_schema, empty_types);
+    if (std::holds_alternative<std::string>(result))
+        return std::get<std::string>(result);
+    return std::move(std::get<PlanOperatorResult>(result).op);
+}
+
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraphDataStore& store, PlanContext& ctx,
+                                   Schema input_schema, const std::vector<binder::BoundType>& input_types) {
+    return std::visit(
+        [this, &store, &ctx, &input_schema, &input_types](auto& val) -> std::variant<PlanOperatorResult, std::string> {
+            using T = std::decay_t<decltype(val)>;
+
+            if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
+                // AllNodeScan
+                Schema output_schema;
+                std::vector<binder::BoundType> output_types;
+                if (!val.variable.empty()) {
+                    output_schema.push_back(val.variable);
+                    output_types.push_back(binder::BoundType::Vertex());
+                }
+                auto result =
+                    std::make_unique<AllNodeScanPhysicalOp>(val.variable, std::vector<binder::BoundType>(output_types),
+                                                            store, ctx.label_name_to_id, ctx.label_defs);
+                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+            } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
+                // LabelScan
+                Schema output_schema;
+                std::vector<binder::BoundType> output_types;
+                if (!val.variable.empty()) {
+                    output_schema.push_back(val.variable);
+                    output_types.push_back(binder::BoundType::Vertex());
+                }
+                auto result = std::make_unique<LabelScanPhysicalOp>(
+                    val.variable, val.label_id, std::vector<binder::BoundType>(output_types), store, ctx.label_defs);
+                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+            } else {
+                // unique_ptr types — dereference
+                using Elem = typename T::element_type;
+                auto& v = *val;
+
+                if constexpr (std::is_same_v<Elem, binder::BoundExpandOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto child_op = std::move(cr.op);
+                    auto child_schema = std::move(cr.output_schema);
+                    auto output_types = std::move(cr.output_types);
+
+                    std::optional<std::vector<EdgeLabelId>> label_filters;
+                    if (!v.edge_label_ids.empty())
+                        label_filters = v.edge_label_ids;
+
+                    Schema output_schema = child_schema;
+                    if (!v.dst_variable.empty()) {
+                        output_schema.push_back(v.dst_variable);
+                        output_types.push_back(binder::BoundType::Vertex());
+                    }
+                    if (!v.edge_variable.empty()) {
+                        output_schema.push_back(v.edge_variable);
+                        output_types.push_back(binder::BoundType::Edge());
+                    }
+
+                    auto result = std::make_unique<ExpandPhysicalOp>(
+                        v.src_variable, v.dst_variable, v.edge_variable, std::move(label_filters), v.direction, store,
+                        std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op));
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+
+                    auto result = std::make_unique<FilterPhysicalOp>(std::move(v.predicate),
+                                                                     std::move(cr.output_schema), std::move(cr.op));
+                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
+                                              std::move(cr.output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundProjectOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto child_op = std::move(cr.op);
+
+                    std::vector<ProjectPhysicalOp::ProjectItem> items;
+                    Schema output_schema;
+                    std::vector<binder::BoundType> output_types;
+                    for (auto& item : v.items) {
+                        ProjectPhysicalOp::ProjectItem pi;
+                        pi.expr = std::move(item.expr);
+                        pi.name = std::move(item.alias);
+                        items.push_back(std::move(pi));
+                        output_schema.push_back(items.back().name);
+                        output_types.push_back(std::move(item.result_type));
+                    }
+
+                    auto result = std::make_unique<ProjectPhysicalOp>(std::move(items), std::move(cr.output_schema),
+                                                                      std::move(child_op));
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundAggregateOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto child_op = std::move(cr.op);
+
+                    std::vector<AggregatePhysicalOp::GroupKey> group_keys;
+                    for (size_t i = 0; i < v.group_keys.size() && i < v.output_names.size(); ++i) {
+                        AggregatePhysicalOp::GroupKey gk;
+                        gk.expr = std::move(v.group_keys[i]);
+                        gk.name = v.output_names[i];
+                        group_keys.push_back(std::move(gk));
+                    }
+
+                    std::vector<AggregatePhysicalOp::AggregateExpr> aggregates;
+                    for (size_t i = 0; i < v.aggregates.size(); ++i) {
+                        auto& ai = v.aggregates[i];
+                        AggregatePhysicalOp::AggregateExpr ae;
+                        ae.func_def = ai.func_def;
+                        ae.arg = std::move(ai.argument);
+                        ae.distinct = ai.distinct;
+                        if (v.group_keys.size() + i < v.output_names.size())
+                            ae.name = v.output_names[v.group_keys.size() + i];
+                        aggregates.push_back(std::move(ae));
+                    }
+
+                    Schema output_schema(v.output_names.begin(), v.output_names.end());
+                    std::vector<binder::BoundType> output_types;
+                    for (size_t i = 0; i < group_keys.size(); ++i)
+                        output_types.push_back(binder::BoundType::Any());
+                    for (const auto& ae : aggregates) {
+                        if (ae.func_def)
+                            output_types.push_back(ae.func_def->return_type);
+                        else
+                            output_types.push_back(binder::BoundType::Any());
+                    }
+
+                    auto result = std::make_unique<AggregatePhysicalOp>(std::move(group_keys), std::move(aggregates),
+                                                                        std::move(child_op));
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundSortOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+
+                    std::vector<SortPhysicalOp::SortItem> sort_items;
+                    for (auto& si : v.items) {
+                        SortPhysicalOp::SortItem item;
+                        item.expr = std::move(si.expr);
+                        item.ascending = (si.direction == cypher::OrderBy::Direction::ASC);
+                        sort_items.push_back(std::move(item));
+                    }
+
+                    auto result = std::make_unique<SortPhysicalOp>(std::move(sort_items), std::move(cr.op));
+                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
+                                              std::move(cr.output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundSkipOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto result = std::make_unique<SkipPhysicalOp>(v.count, std::move(cr.op));
+                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
+                                              std::move(cr.output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundLimitOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto result = std::make_unique<LimitPhysicalOp>(v.count, std::move(cr.op));
+                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
+                                              std::move(cr.output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundDistinctOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto result = std::make_unique<DistinctPhysicalOp>(std::move(cr.op));
+                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
+                                              std::move(cr.output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundPathBuildOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto child_op = std::move(cr.op);
+                    auto child_schema = std::move(cr.output_schema);
+                    auto output_types = std::move(cr.output_types);
+
+                    Schema output_schema = child_schema;
+                    output_types.push_back(binder::BoundType::Path());
+
+                    auto result = std::make_unique<PathBuildPhysicalOp>(
+                        v.path_variable, v.element_variables, std::move(child_schema),
+                        std::vector<binder::BoundType>(output_types), std::move(child_op));
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundCreateNodeOp>) {
+                    VertexId vid = ctx.next_vertex_id++;
+                    ctx.variable_vertex_ids[v.variable] = vid;
+
+                    std::vector<LabelId> label_ids;
+                    std::vector<std::pair<LabelId, Properties>> label_props;
+
+                    if (v.label_id != INVALID_LABEL_ID) {
+                        label_ids.push_back(v.label_id);
+                        Properties props;
+                        for (auto& [pid, expr] : v.properties) {
+                            if (std::holds_alternative<binder::BoundLiteral>(expr)) {
+                                auto& lit = std::get<binder::BoundLiteral>(expr);
+                                if (!isNull(lit.value))
+                                    props[pid] = valueToPropertyValue(lit.value);
+                            }
+                        }
+                        label_props.emplace_back(v.label_id, std::move(props));
+                    }
+
+                    std::unique_ptr<PhysicalOperator> child;
+                    if (v.child) {
+                        auto child_result = planBoundOperator(*v.child, store, ctx, input_schema, input_types);
+                        if (std::holds_alternative<std::string>(child_result))
+                            return std::get<std::string>(child_result);
+                        child = std::move(std::get<PlanOperatorResult>(child_result).op);
+                    }
+
+                    auto result =
+                        std::make_unique<CreateNodePhysicalOp>(v.variable, std::move(label_ids), std::move(label_props),
+                                                               store, vid, std::move(child), ctx.label_defs);
+                    return PlanOperatorResult{std::move(result), Schema{}, {}};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundCreateEdgeOp>) {
+                    EdgeId eid = ctx.next_edge_id++;
+                    ctx.variable_edge_ids[v.variable] = eid;
+
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto child_op = std::move(std::get<PlanOperatorResult>(child_result).op);
+
+                    VertexId src_id = 0, dst_id = 0;
+                    auto sit = ctx.variable_vertex_ids.find(v.src_variable);
+                    if (sit != ctx.variable_vertex_ids.end())
+                        src_id = sit->second;
+                    auto dit = ctx.variable_vertex_ids.find(v.dst_variable);
+                    if (dit != ctx.variable_vertex_ids.end())
+                        dst_id = dit->second;
+
+                    Properties props;
+                    for (auto& [pid, expr] : v.properties) {
+                        if (std::holds_alternative<binder::BoundLiteral>(expr)) {
+                            auto& lit = std::get<binder::BoundLiteral>(expr);
+                            if (!isNull(lit.value))
+                                props[pid] = valueToPropertyValue(lit.value);
+                        }
+                    }
+
+                    auto result = std::make_unique<CreateEdgePhysicalOp>(v.variable, src_id, dst_id, v.label_id, eid,
+                                                                         std::move(props), store, ctx.edge_label_defs,
+                                                                         std::move(child_op));
+                    return PlanOperatorResult{std::move(result), Schema{}, {}};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundSetOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+
+                    std::vector<SetPhysicalOp::BoundSetItem> items;
+                    for (auto& si : v.items) {
+                        SetPhysicalOp::BoundSetItem bsi;
+                        switch (si.kind) {
+                        case binder::BoundSetOp::ItemKind::SET_PROPERTY:
+                            bsi.kind = cypher::SetItemKind::SET_PROPERTY;
+                            break;
+                        case binder::BoundSetOp::ItemKind::SET_LABELS:
+                            bsi.kind = cypher::SetItemKind::SET_LABELS;
+                            break;
+                        default:
+                            bsi.kind = cypher::SetItemKind::SET_PROPERTY;
+                            break;
+                        }
+                        bsi.var_name = si.target_variable;
+                        if (si.prop_id)
+                            bsi.prop_name = "prop_" + std::to_string(*si.prop_id);
+                        if (si.label_id) {
+                            auto it = ctx.label_name_to_id.end();
+                            for (auto& [name, id] : ctx.label_name_to_id) {
+                                if (id == *si.label_id) {
+                                    bsi.label = name;
+                                    break;
+                                }
+                            }
+                        }
+                        if (si.value_expr)
+                            bsi.value = std::move(si.value_expr);
+                        items.push_back(std::move(bsi));
+                    }
+
+                    auto result =
+                        std::make_unique<SetPhysicalOp>(std::move(items), std::move(cr.output_schema), store,
+                                                        ctx.label_defs, ctx.label_name_to_id, std::move(cr.op));
+                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
+                                              std::move(cr.output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundRemoveOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+
+                    std::vector<RemovePhysicalOp::BoundRemoveItem> items;
+                    for (auto& ri : v.items) {
+                        RemovePhysicalOp::BoundRemoveItem bri;
+                        bri.kind = (ri.kind == binder::BoundRemoveOp::ItemKind::REMOVE_LABEL)
+                                       ? RemovePhysicalOp::BoundRemoveItem::Kind::LABEL
+                                       : RemovePhysicalOp::BoundRemoveItem::Kind::PROPERTY;
+                        bri.var_name = ri.target_variable;
+                        items.push_back(std::move(bri));
+                    }
+
+                    auto result =
+                        std::make_unique<RemovePhysicalOp>(std::move(items), std::move(cr.output_schema), store,
+                                                           ctx.label_defs, ctx.label_name_to_id, std::move(cr.op));
+                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
+                                              std::move(cr.output_types)};
+                } else {
+                    return std::string("Unknown bound logical operator type");
+                }
+            }
+        },
+        op);
 }
 
 } // namespace compute
