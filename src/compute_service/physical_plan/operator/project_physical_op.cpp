@@ -24,7 +24,14 @@ folly::coro::AsyncGenerator<DataChunk> ProjectPhysicalOp::executeChunk() {
 
         VectorizedEvaluator evaluator;
         for (const auto& item : items_) {
-            auto& out_col = output.addColumn(binder::getBoundExprType(item.expr).kind);
+            auto col_kind = binder::getBoundExprType(item.expr).kind;
+            // Multi-candidate property access may produce ListValue at runtime,
+            // so the column must be ANY to hold it.
+            if (auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&item.expr)) {
+                if ((*prop)->candidates.size() > 1)
+                    col_kind = binder::BoundTypeKind::ANY;
+            }
+            auto& out_col = output.addColumn(col_kind);
             out_col.reserve(n);
             evaluator.evaluate(item.expr, *chunk, out_col);
         }

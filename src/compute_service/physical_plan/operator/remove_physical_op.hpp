@@ -2,7 +2,6 @@
 
 #include "common/types/graph_types.hpp"
 #include "compute_service/executor/data_chunk.hpp"
-#include "compute_service/parser/ast.hpp"
 #include "compute_service/physical_plan/physical_operator_base.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 
@@ -18,7 +17,14 @@ namespace compute {
 
 class RemovePhysicalOp : public PhysicalOperator {
 public:
-    RemovePhysicalOp(std::vector<cypher::RemoveItem> items, Schema input_schema, IAsyncGraphDataStore& store,
+    struct BoundRemoveItem {
+        enum class Kind { PROPERTY, LABEL };
+        Kind kind;
+        std::string var_name;
+        std::string name;
+    };
+
+    RemovePhysicalOp(std::vector<BoundRemoveItem> items, Schema input_schema, IAsyncGraphDataStore& store,
                      const std::unordered_map<LabelId, LabelDef>& label_defs,
                      const std::unordered_map<std::string, LabelId>& label_name_to_id,
                      std::unique_ptr<PhysicalOperator> child)
@@ -35,7 +41,7 @@ public:
     }
 
 private:
-    std::vector<cypher::RemoveItem> items_;
+    std::vector<BoundRemoveItem> items_;
     Schema input_schema_;
     IAsyncGraphDataStore& store_;
     const std::unordered_map<LabelId, LabelDef>& label_defs_;

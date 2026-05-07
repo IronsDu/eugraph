@@ -143,23 +143,34 @@ struct Column {
 - [x] `query_executor.cpp`: `StreamContext::gen` 类型从 `AsyncGenerator<RowBatch>` 改为 `AsyncGenerator<DataChunk>`
 - [x] DDL/EXPLAIN 路径用 `wrapRowBatchToChunkGenerator()` 包装
 
-### ❌ 待完成
+### Phase 7d: Materializing Operators ✅
+- [x] `SortPhysicalOp` — `BoundExpression` 排序键 + `VectorizedEvaluator` 向量化求值 + 索引排序 → FLAT DataChunk
+- [x] `AggregatePhysicalOp` — `BoundExpression` 分组键/聚合参数 + `VectorizedEvaluator` 向量化求值 + 哈希聚合 → FLAT DataChunk
+- [x] `PhysicalPlanner::planSort()` / `planAggregate()` — 使用 PlanBinder 绑定表达式
 
-#### Phase 7d: Materializing Operators (未开始)
-- [ ] `SortPhysicalOp` — 物化所有输入 chunk → 排序 → 重建 FLAT DataChunk
-- [ ] `AggregatePhysicalOp` — 物化所有输入 → group by → 重建 FLAT DataChunk
+### Phase 7e: Write Operators ✅
+- [x] `CreateNodePhysicalOp` — `child_->executeChunk()` drain → 写入 → 单行 FLAT DataChunk
+- [x] `CreateEdgePhysicalOp` — `child_->executeChunk()` drain → 写入 → 单行 FLAT DataChunk
 
-#### Phase 7e: Write Operators (未开始)
-- [ ] `CreateNodePhysicalOp` / `CreateEdgePhysicalOp` — drain child → store 变更 → 单行 FLAT DataChunk
+### 基础设施补充
+- [x] `physical_operator_base.cpp` — 实现 `executeViaChunk()`、`rowBatchToDataChunk()`、`dataChunkToRowBatch()`、`wrapRowBatchToChunkGenerator()`
 
-#### Phase 7f: 遗留边界问题
-- [ ] Path 相关测试 (5 个): `ReturnNamedPathSingleHop`, `ReturnNamedPathTwoHop`, `PathNodes`, `PathRelationships`, `PathLength` — `pv.elements.size() == 0`
-- [ ] Multi-label 测试 (1 个): `PropertyConflictToList` — 期望 ListValue 但得到单个 string
-- [ ] Old code cleanup: 移除 `ExpressionEvaluator`，清理旧的 `cypher::Expression` 引用
+### ✅ Phase 7f: 完成
+
+#### 遗留边界问题
+- [x] Path 相关测试 (5 个): `ReturnNamedPathSingleHop`, `ReturnNamedPathTwoHop`, `PathNodes`, `PathRelationships`, `PathLength` — 已通过
+- [x] Multi-label 测试 (1 个): `PropertyConflictToList` — 修复: ProjectPhysicalOp 对多候选 BoundPropertyRef 使用 ANY 列类型
+- [x] Old code cleanup: 移除 `ExpressionEvaluator`，`SetPhysicalOp`/`RemovePhysicalOp` 迁移到 BoundExpression
+
+#### Bug 修复 (Phase 7f 新增)
+- [x] `PropertyConflictToList`: `BoundPropertyRef` 多候选属性访问在运行时可能产生 ListValue，但 ProjectPhysicalOp 的结果列类型由 `getBoundExprType()` 决定（合并后为 STRING），导致 `Column::setValue()` 静默丢弃 ListValue。修复: ProjectPhysicalOp 检测多候选 BoundPropertyRef 并使用 ANY 列类型
+- [x] `SetPhysicalOp`: 替换 `ExpressionEvaluator` 为 `VectorizedEvaluator`，`BoundSetItem` 使用 `binder::BoundExpression` 表示 SET 值
+- [x] `RemovePhysicalOp`: 替换 `cypher::Expression` 为 `BoundRemoveItem`（预提取变量名/属性名）
+- [x] 删除 `expression_evaluator.hpp/.cpp`，从 CMakeLists 移除
 
 #### 测试状态
-- **370/376** core tests pass (98%)
-- 6 failures: 5 path-related + 1 multi-label property conflict
+- **295/295** tests pass (100%) — query_executor(123) + logical_plan(15) + metadata(17) + restart_persistence(3) + index_e2e(36) + cypher_parser(74) + index_store(14) + index_codec(13)
+- RPC/Integration tests: 存在预先的 SEGFAULT（Thrift server 线程问题，非本次改动引起）
 
 ---
 

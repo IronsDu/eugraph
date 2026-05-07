@@ -24,7 +24,8 @@ public:
         : variable_(std::move(variable)), label_ids_(std::move(label_ids)), label_props_(std::move(label_props)),
           store_(store), assigned_vid_(assigned_vid), child_(std::move(child)), label_defs_(std::move(label_defs)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
     std::vector<const PhysicalOperator*> children() const override {
         if (child_)

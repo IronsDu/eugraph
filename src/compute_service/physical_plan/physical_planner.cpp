@@ -363,16 +363,45 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSort(SortOp& 
     auto child_schema = std::move(child_res.output_schema);
     auto child_types = std::move(child_res.output_types);
 
+    // Bind sort expressions against child output schema.
+    binder::PlanBinder binder(*catalog_, *func_registry_);
+    for (size_t i = 0; i < child_schema.size(); ++i) {
+        binder.registerColumn(child_schema[i], child_types[i]);
+    }
+
     std::vector<SortPhysicalOp::SortItem> items;
     for (auto& si : op.sort_items) {
+        // First, try to match the sort expression against child column names.
+        // This handles ORDER BY n.name where the child (Project) outputs "n.name" as a column.
+        std::string expr_str = cypher::expressionToString(si.expr);
+        bool bound_as_column = false;
+        for (size_t i = 0; i < child_schema.size(); ++i) {
+            if (child_schema[i] == expr_str) {
+                SortPhysicalOp::SortItem item;
+                item.expr = binder::BoundColumnRef{static_cast<uint32_t>(i), child_types[i], child_schema[i]};
+                item.ascending = (si.direction != cypher::OrderBy::Direction::DESC);
+                items.push_back(std::move(item));
+                bound_as_column = true;
+                break;
+            }
+        }
+        if (bound_as_column)
+            continue;
+
+        // Fall back to PlanBinder for complex expressions (e.g., ORDER BY n.age + 1).
+        auto bound = binder.bindExpression(si.expr);
+        if (!bound.has_value()) {
+            std::string err = "Failed to bind sort expression";
+            for (const auto& e : binder.errors()) err += "; " + e;
+            return err;
+        }
         SortPhysicalOp::SortItem item;
-        item.expr = std::move(si.expr);
-        item.direction = si.direction;
+        item.expr = std::move(*bound);
+        item.ascending = (si.direction != cypher::OrderBy::Direction::DESC);
         items.push_back(std::move(item));
     }
 
-    auto result =
-        std::make_unique<SortPhysicalOp>(std::move(items), Schema(child_schema), std::move(child_op), ctx.label_defs);
+    auto result = std::make_unique<SortPhysicalOp>(std::move(items), std::move(child_op));
     return PlanOperatorResult{std::move(result), std::move(child_schema), std::move(child_types)};
 }
 
@@ -419,29 +448,45 @@ PhysicalPlanner::planAggregate(AggregateOp& op, IAsyncGraphDataStore& store, Pla
     auto child_op = std::move(child_res.op);
     auto child_schema = std::move(child_res.output_schema);
 
+    // Bind expressions against child output schema.
+    binder::PlanBinder plan_binder(*catalog_, *func_registry_);
+    for (size_t i = 0; i < child_schema.size(); ++i) {
+        plan_binder.registerColumn(child_schema[i], child_res.output_types[i]);
+    }
+
     std::vector<AggregatePhysicalOp::GroupKey> group_keys;
     for (auto& gk : op.group_keys) {
+        auto bound = plan_binder.bindExpression(gk);
+        if (!bound.has_value()) {
+            std::string err = "Failed to bind group key expression";
+            for (const auto& e : plan_binder.errors()) err += "; " + e;
+            return err;
+        }
         AggregatePhysicalOp::GroupKey key;
-        key.expr = std::move(gk);
+        key.expr = std::move(*bound);
         group_keys.push_back(std::move(key));
     }
 
     std::vector<AggregatePhysicalOp::AggregateExpr> aggregates;
     for (auto& af : op.aggregates) {
+        auto bound = plan_binder.bindExpression(af.arg);
+        if (!bound.has_value()) {
+            std::string err = "Failed to bind aggregate expression";
+            for (const auto& e : plan_binder.errors()) err += "; " + e;
+            return err;
+        }
         AggregatePhysicalOp::AggregateExpr ae;
         ae.func_name = std::move(af.func_name);
-        ae.arg = std::move(af.arg);
+        ae.arg = std::move(*bound);
         ae.distinct = af.distinct;
         aggregates.push_back(std::move(ae));
     }
 
     Schema output_schema = Schema(op.output_names);
     std::vector<binder::BoundType> output_types;
-    // Group key types are unknown at plan time (depend on expression evaluation)
     for (size_t i = 0; i < group_keys.size(); ++i) {
         output_types.push_back(binder::BoundType::Any());
     }
-    // Aggregate result types: count→INT64, sum→depends, avg→DOUBLE, min/max→depends
     for (const auto& ae : aggregates) {
         if (ae.func_name == "count")
             output_types.push_back(binder::BoundType::Int64());
@@ -459,7 +504,7 @@ PhysicalPlanner::planAggregate(AggregateOp& op, IAsyncGraphDataStore& store, Pla
     }
 
     auto result = std::make_unique<AggregatePhysicalOp>(std::move(group_keys), std::move(aggregates),
-                                                        std::move(child_op), Schema(child_schema), ctx.label_defs);
+                                                        std::move(child_op));
     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
 }
 
@@ -640,6 +685,32 @@ PhysicalPlanner::planCreateEdge(CreateEdgeOp& op, IAsyncGraphDataStore& store, P
 
 // ==================== SET ====================
 
+namespace {
+
+std::string extractVariableName(const cypher::Expression& target) {
+    if (std::holds_alternative<std::unique_ptr<cypher::Variable>>(target)) {
+        return std::get<std::unique_ptr<cypher::Variable>>(target)->name;
+    }
+    if (std::holds_alternative<std::unique_ptr<cypher::PropertyAccess>>(target)) {
+        auto& pa = std::get<std::unique_ptr<cypher::PropertyAccess>>(target);
+        return extractVariableName(pa->object);
+    }
+    if (std::holds_alternative<std::unique_ptr<cypher::LabelCastExpr>>(target)) {
+        auto& lc = std::get<std::unique_ptr<cypher::LabelCastExpr>>(target);
+        return extractVariableName(lc->object);
+    }
+    return {};
+}
+
+std::string extractPropertyName(const cypher::Expression& target) {
+    if (std::holds_alternative<std::unique_ptr<cypher::PropertyAccess>>(target)) {
+        return std::get<std::unique_ptr<cypher::PropertyAccess>>(target)->property;
+    }
+    return {};
+}
+
+} // anonymous namespace
+
 std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSet(SetOp& op, IAsyncGraphDataStore& store,
                                                                        PlanContext& ctx, Schema input_schema,
                                                                        const std::vector<binder::BoundType>& input_types) {
@@ -657,7 +728,28 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSet(SetOp& op
         child_types = std::move(child_res.output_types);
     }
 
-    auto result = std::make_unique<SetPhysicalOp>(std::move(op.items), child_schema, store, ctx.label_defs,
+    // Bind SET value expressions using PlanBinder.
+    binder::PlanBinder plan_binder(*catalog_, *func_registry_);
+    for (size_t i = 0; i < child_schema.size(); ++i) {
+        plan_binder.registerColumn(child_schema[i], child_types[i]);
+    }
+
+    std::vector<SetPhysicalOp::BoundSetItem> bound_items;
+    bound_items.reserve(op.items.size());
+    for (auto& item : op.items) {
+        SetPhysicalOp::BoundSetItem bi;
+        bi.kind = item.kind;
+        bi.var_name = extractVariableName(item.target);
+        bi.prop_name = extractPropertyName(item.target);
+        bi.label = item.label;
+        if (item.value.has_value()) {
+            auto bound = plan_binder.bindExpression(*item.value);
+            bi.value = std::move(bound);
+        }
+        bound_items.push_back(std::move(bi));
+    }
+
+    auto result = std::make_unique<SetPhysicalOp>(std::move(bound_items), child_schema, store, ctx.label_defs,
                                                   ctx.label_name_to_id, std::move(child_op));
     return PlanOperatorResult{std::move(result), child_schema, std::move(child_types)};
 }
@@ -681,7 +773,19 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planRemove(Remove
         child_types = std::move(child_res.output_types);
     }
 
-    auto result = std::make_unique<RemovePhysicalOp>(std::move(op.items), child_schema, store, ctx.label_defs,
+    std::vector<RemovePhysicalOp::BoundRemoveItem> bound_items;
+    bound_items.reserve(op.items.size());
+    for (auto& item : op.items) {
+        RemovePhysicalOp::BoundRemoveItem bi;
+        bi.kind = item.kind == cypher::RemoveItem::Kind::PROPERTY
+                      ? RemovePhysicalOp::BoundRemoveItem::Kind::PROPERTY
+                      : RemovePhysicalOp::BoundRemoveItem::Kind::LABEL;
+        bi.var_name = extractVariableName(item.target);
+        bi.name = item.name;
+        bound_items.push_back(std::move(bi));
+    }
+
+    auto result = std::make_unique<RemovePhysicalOp>(std::move(bound_items), child_schema, store, ctx.label_defs,
                                                      ctx.label_name_to_id, std::move(child_op));
     return PlanOperatorResult{std::move(result), child_schema, std::move(child_types)};
 }

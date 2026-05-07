@@ -9,15 +9,14 @@
 namespace eugraph {
 namespace compute {
 
-folly::coro::AsyncGenerator<RowBatch> CreateEdgePhysicalOp::execute() {
+folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
     if (child_) {
-        auto child_gen = child_->execute();
-        while (auto batch = co_await child_gen.next()) {
+        auto child_gen = child_->executeChunk();
+        while (auto chunk = co_await child_gen.next()) {
             // Discard child output
         }
     }
 
-    // Look up edge label definition for index maintenance
     const EdgeLabelDef* edge_label_def = nullptr;
     {
         auto def_it = edge_label_defs_.find(label_id_);
@@ -35,7 +34,6 @@ folly::coro::AsyncGenerator<RowBatch> CreateEdgePhysicalOp::execute() {
             if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
                 continue;
 
-            // Collect all indexed property values; skip if any is missing
             std::vector<PropertyValue> values;
             bool allPresent = true;
             for (auto prop_id : idx.prop_ids) {
@@ -69,7 +67,6 @@ folly::coro::AsyncGenerator<RowBatch> CreateEdgePhysicalOp::execute() {
             if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
                 continue;
 
-            // Collect all indexed property values; skip if any is missing
             std::vector<PropertyValue> values;
             bool allPresent = true;
             for (auto prop_id : idx.prop_ids) {
@@ -90,19 +87,17 @@ folly::coro::AsyncGenerator<RowBatch> CreateEdgePhysicalOp::execute() {
         }
     }
 
-    RowBatch output;
     if (ok) {
         EdgeValue ev;
         ev.id = assigned_eid_;
         ev.src_id = src_id_;
         ev.dst_id = dst_id_;
         ev.label_id = label_id_;
-        // ev.properties left as nullopt; edge properties not fetched here
-        Row row;
-        row.push_back(Value(std::move(ev)));
-        output.push_back(std::move(row));
-    }
-    if (!output.empty()) {
+
+        DataChunk output;
+        output.columns.push_back(Column::flat(binder::BoundTypeKind::EDGE, 1));
+        output.columns[0].setValue(0, Value(std::move(ev)));
+        output.count = 1;
         co_yield std::move(output);
     }
 }

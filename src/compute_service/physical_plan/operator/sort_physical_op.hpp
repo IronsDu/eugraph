@@ -1,16 +1,13 @@
 #pragma once
 
-#include "common/types/graph_types.hpp"
-#include "compute_service/executor/expression_evaluator.hpp"
-#include "compute_service/executor/row.hpp"
-#include "compute_service/parser/ast.hpp"
+#include "compute_service/binder/bound_expression/bound_expression.hpp"
+#include "compute_service/executor/data_chunk.hpp"
 #include "compute_service/physical_plan/physical_operator_base.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace eugraph {
@@ -19,16 +16,16 @@ namespace compute {
 class SortPhysicalOp : public PhysicalOperator {
 public:
     struct SortItem {
-        cypher::Expression expr;
-        cypher::OrderBy::Direction direction;
+        binder::BoundExpression expr;
+        bool ascending = true;
     };
 
-    SortPhysicalOp(std::vector<SortItem> sort_items, Schema input_schema, std::unique_ptr<PhysicalOperator> child,
-                   const std::unordered_map<LabelId, LabelDef>& label_defs)
-        : sort_items_(std::move(sort_items)), input_schema_(std::move(input_schema)), child_(std::move(child)),
-          evaluator_(label_defs) {}
+    SortPhysicalOp(std::vector<SortItem> sort_items, std::unique_ptr<PhysicalOperator> child)
+        : sort_items_(std::move(sort_items)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
+
     std::string toString() const override {
         return "Sort(items=" + std::to_string(sort_items_.size()) + ")";
     }
@@ -38,9 +35,7 @@ public:
 
 private:
     std::vector<SortItem> sort_items_;
-    Schema input_schema_;
     std::unique_ptr<PhysicalOperator> child_;
-    ExpressionEvaluator evaluator_;
 };
 
 } // namespace compute

@@ -22,10 +22,10 @@ std::string CreateNodePhysicalOp::toString() const {
     return "CreateNode(variable=" + variable_ + ", labels=[" + s + "])";
 }
 
-folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
+folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
     if (child_) {
-        auto child_gen = child_->execute();
-        while (auto batch = co_await child_gen.next()) {
+        auto child_gen = child_->executeChunk();
+        while (auto chunk = co_await child_gen.next()) {
             // Discard child output — we just need the side effects
         }
     }
@@ -42,7 +42,6 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
                     continue;
                 if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
                     continue;
-                // Collect all indexed property values; skip if any is missing
                 std::vector<PropertyValue> values;
                 bool allPresent = true;
                 for (auto prop_id : idx.prop_ids) {
@@ -55,7 +54,6 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
                 }
                 if (!allPresent)
                     continue;
-                // Use composite table if multiple prop_ids, single table otherwise
                 auto table = idx.prop_ids.size() == 1 ? vidxTable(label_id, idx.prop_ids[0])
                                                       : vidxCompositeTable(label_id, idx.prop_ids);
                 bool constraint_ok = co_await store_.checkUniqueConstraint(table, values);
@@ -81,7 +79,6 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
             for (const auto& idx : def_it->second.indexes) {
                 if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
                     continue;
-                // Collect all indexed property values; skip if any is missing
                 std::vector<PropertyValue> values;
                 bool allPresent = true;
                 for (auto prop_id : idx.prop_ids) {
@@ -101,20 +98,18 @@ folly::coro::AsyncGenerator<RowBatch> CreateNodePhysicalOp::execute() {
         }
     }
 
-    RowBatch output;
     if (ok) {
-        // Build VertexValue with the created labels and properties
         VertexValue vv;
         vv.id = assigned_vid_;
         vv.labels = LabelIdSet(label_ids_.begin(), label_ids_.end());
         for (const auto& [lid, props] : label_props_) {
             vv.properties[lid] = props;
         }
-        Row row;
-        row.push_back(Value(std::move(vv)));
-        output.push_back(std::move(row));
-    }
-    if (!output.empty()) {
+
+        DataChunk output;
+        output.columns.push_back(Column::flat(binder::BoundTypeKind::VERTEX, 1));
+        output.columns[0].setValue(0, Value(std::move(vv)));
+        output.count = 1;
         co_yield std::move(output);
     }
 }

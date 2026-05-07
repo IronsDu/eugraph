@@ -79,7 +79,9 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 evalUnaryOp(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
-                auto& col = acquireTempColumn(val->result_type.kind, count);
+                // Use ANY type when multiple candidates may produce a ListValue at runtime.
+                auto col_type = val->candidates.size() > 1 ? binder::BoundTypeKind::ANY : val->result_type.kind;
+                auto& col = acquireTempColumn(col_type, count);
                 evalPropertyRef(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
