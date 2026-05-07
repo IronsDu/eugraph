@@ -455,6 +455,8 @@ using Schema = vector<string>;   // 列名列表
 - 索引扫描优化（IndexScan、EdgeIndexScan）
 - 流式执行（StreamContext + Thrift ServerStream）
 - 索引 DDL（CREATE/DROP/SHOW INDEX，含边索引）
+- Binder 接入查询管线：`Binder::bind()` → `PhysicalPlanner::planBound()` 替代 `LogicalPlanBuilder` → `PlanBinder` 路径
+- FunctionRegistry 回调接入标量和聚合执行（`scalar_fn`、`agg_init/agg_update/agg_finalize`）
 
 ### 已知限制（待优化）
 
@@ -462,11 +464,11 @@ using Schema = vector<string>;   // 列名列表
 
 **BoundBinaryOp/BoundUnaryOp 无函数指针**：当前通过 `switch(op)` 枚举分发。设计目标是绑定时确定具体的操作函数指针（如 DuckDB 的 `BinaryOpFunc`），求值时直接调用，消除 switch 开销。
 
-**完整 Binder 已接入管线**：查询管线已从 `LogicalPlanBuilder` → `PlanBinder` 路径切换到 `Binder` → `planBound` 路径。`Binder` 类直接从 AST 产出 `BoundLogicalPlan`，`PhysicalPlanner::planBound()` 将其转换为 `PhysicalOperator` 树。旧的 `LogicalPlanBuilder` + `PlanBinder` 路径仍保留但不再作为默认管线。
-
 **索引扫描优化暂未接入新管线**：`planBound` 路径当前不含 `tryIndexScan`/`tryEdgeIndexScan` 优化（Filter+LabelScan 不会自动转换为 IndexScan）。查询功能不受影响，但无法利用索引加速。待后续优化器阶段接入。
 
 **投影下推未实际生效**：`Binder` 收集了属性需求（`BindContext::property_requirements`），但 Scan 算子尚未利用这些信息减少属性加载量，仍然获取全部属性。
+
+**ORDER BY 引用 RETURN 别名未实现**：`Binder::bindReturn` 处理 ORDER BY 时通过 `bindExpression` 解析排序表达式，但 RETURN 子句中定义的别名（如 `RETURN id(n) AS id ORDER BY id ASC`）尚未注册到 `BindContext` 中，导致 `id` 被当作未定义变量。需在 ORDER BY 处理前将 RETURN 别名注册到符号表。
 
 ### 待实现
 - DELETE, MERGE 执行
