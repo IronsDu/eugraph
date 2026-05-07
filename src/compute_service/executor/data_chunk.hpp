@@ -16,20 +16,21 @@ namespace eugraph {
 /// Marks logical rows as valid within a physical DataChunk.
 /// After filtering, selected rows form a contiguous logical view
 /// without physically reorganizing the chunk.
+///
+/// When is_identity is true, all rows are selected in order and
+/// indices is not allocated.
 struct SelectionVector {
-    std::vector<uint32_t> indices; // logical_row → physical_row
+    std::vector<uint32_t> indices; // logical_row → physical_row (unused when is_identity)
     size_t count = 0;
+    bool is_identity = true;
 
     SelectionVector() = default;
 
-    /// Create identity selection (all rows selected).
+    /// Create identity selection (all rows selected, zero allocation).
     static SelectionVector identity(size_t n) {
         SelectionVector sv;
-        sv.indices.resize(n);
-        for (size_t i = 0; i < n; ++i) {
-            sv.indices[i] = static_cast<uint32_t>(i);
-        }
         sv.count = n;
+        sv.is_identity = true;
         return sv;
     }
 
@@ -38,6 +39,7 @@ struct SelectionVector {
     void filter(const std::vector<bool>& predicate, size_t total) {
         count = 0;
         indices.resize(total);
+        is_identity = false;
         for (size_t i = 0; i < total; ++i) {
             if (predicate[i]) {
                 indices[count++] = static_cast<uint32_t>(i);
@@ -45,25 +47,35 @@ struct SelectionVector {
         }
     }
 
+    /// Map logical row index to physical row index.
     uint32_t operator[](size_t i) const {
-        return indices[i];
+        return is_identity ? static_cast<uint32_t>(i) : indices[i];
     }
+
     uint32_t& operator[](size_t i) {
         return indices[i];
     }
+
+    /// Check if this is an identity selection (all rows valid in order).
+    bool isIdentity() const {
+        return is_identity;
+    }
+
+    /// Return the logical row count.
+    size_t size() const {
+        return count;
+    }
 };
 
-// ==================== Column ====================
+// ==================== ColumnBuffer ====================
 
-/// A single column in a DataChunk.
-///
-/// Columns are typed. For concrete types (INT64, DOUBLE, BOOL, STRING, VERTEX,
-/// EDGE, PATH, LIST), data is stored in a homogeneous vector + validity bitmap.
-/// For ANY type, data is stored as vector<Value> (runtime polymorphic).
-struct Column {
-    binder::BoundTypeKind type;
+/// Shared data storage for a Column.
+/// Multiple Columns can share the same ColumnBuffer (DICTIONARY form),
+/// avoiding data copies in Filter, Skip, Limit, Expand, etc.
+struct ColumnBuffer {
+    binder::BoundTypeKind type = binder::BoundTypeKind::NULL_TYPE;
+    size_t capacity = 0;
 
-    // Concrete typed data (one is active depending on type).
     std::vector<int64_t> int64_data;
     std::vector<double> double_data;
     std::vector<std::string> string_data;
@@ -71,25 +83,16 @@ struct Column {
     std::vector<EdgeValue> edge_data;
     std::vector<PathValue> path_data;
     std::vector<ListValue> list_data;
-    // Bool values stored as uint8_t vector (not vector<bool> for performance).
-    std::vector<uint8_t> bool_data;
-
-    // ANY type fallback.
+    std::vector<uint8_t> bool_data; // bool as uint8_t (not vector<bool>)
     std::vector<Value> any_data;
 
     // Validity bitmap: byte array, bit i = row i is non-NULL.
-    // Row i is NULL if (validity[i / 8] & (1 << (i % 8))) == 0.
     std::vector<uint8_t> validity;
 
-    /// Number of allocated rows.
-    size_t capacity = 0;
-
-    Column() : type(binder::BoundTypeKind::NULL_TYPE) {}
-
-    explicit Column(binder::BoundTypeKind t) : type(t) {}
-
-    /// Reserve capacity for data and validity.
+    /// Allocate capacity for the active typed vector and validity.
     void reserve(size_t n) {
+        if (n <= capacity)
+            return;
         capacity = n;
         validity.resize((n + 7) / 8, 0xFF); // all valid by default
         switch (type) {
@@ -124,27 +127,23 @@ struct Column {
         }
     }
 
-    /// Set row i to NULL.
-    void setNull(size_t i) {
-        if (i / 8 >= validity.size())
-            return;
-        validity[i / 8] &= ~(1U << (i % 8));
-    }
-
-    /// Check if row i is NULL.
     bool isNull(size_t i) const {
         if (i / 8 >= validity.size())
             return true;
         return (validity[i / 8] & (1U << (i % 8))) == 0;
     }
 
-    /// Set row i to valid (not NULL).
+    void setNull(size_t i) {
+        if (i / 8 >= validity.size())
+            validity.resize((i + 8) / 8, 0xFF);
+        validity[i / 8] &= ~(1U << (i % 8));
+    }
+
     void setValid(size_t i) {
         if (i / 8 < validity.size())
             validity[i / 8] |= (1U << (i % 8));
     }
 
-    /// Extract the value at row i as a runtime Value.
     Value getValue(size_t i) const {
         if (isNull(i))
             return Value{};
@@ -172,7 +171,6 @@ struct Column {
         return Value{};
     }
 
-    /// Set the value at row i from a runtime Value.
     void setValue(size_t i, const Value& val) {
         if (::eugraph::isNull(val)) {
             setNull(i);
@@ -225,25 +223,186 @@ struct Column {
     }
 };
 
+// ==================== Column ====================
+
+/// Physical storage form of a Column.
+enum class VectorForm : uint8_t {
+    FLAT,       // Owning or sharing a ColumnBuffer; logical row i = buffer[i]
+    CONSTANT,   // Single value broadcast to all rows (no buffer allocated)
+    DICTIONARY, // Sharing another Column's buffer; logical row i = buffer[dict_sel[i]]
+};
+
+/// A single column in a DataChunk.
+///
+/// Three physical forms:
+/// - FLAT: standard array storage, one element per row (owns or shares buffer)
+/// - CONSTANT: single shared value, all rows return the same value
+/// - DICTIONARY: references another Column's buffer via shared_ptr,
+///   with a SelectionVector mapping logical→physical rows.
+///   Enables zero-copy filtering, slicing, and expansion.
+struct Column {
+    binder::BoundTypeKind type = binder::BoundTypeKind::NULL_TYPE;
+    VectorForm form = VectorForm::FLAT;
+
+    // FLAT / DICTIONARY: shared data storage
+    std::shared_ptr<ColumnBuffer> buffer;
+
+    // DICTIONARY: logical row i → physical row dict_sel[i] in buffer
+    SelectionVector dict_sel;
+
+    // CONSTANT: the shared value broadcast to all rows
+    Value constant_value;
+
+    Column() : type(binder::BoundTypeKind::NULL_TYPE), form(VectorForm::FLAT) {}
+
+    explicit Column(binder::BoundTypeKind t) : type(t), form(VectorForm::FLAT) {}
+
+    // ── Factories ──
+
+    /// Create a CONSTANT column broadcasting a single value to all rows.
+    static Column constant(Value val) {
+        Column col;
+        col.form = VectorForm::CONSTANT;
+        col.constant_value = std::move(val);
+        return col;
+    }
+
+    /// Create a FLAT column with an allocated buffer of the given type.
+    static Column flat(binder::BoundTypeKind t, size_t capacity = 0) {
+        Column col;
+        col.type = t;
+        col.form = VectorForm::FLAT;
+        col.buffer = std::make_shared<ColumnBuffer>();
+        col.buffer->type = t;
+        if (capacity > 0)
+            col.buffer->reserve(capacity);
+        return col;
+    }
+
+    /// Create a DICTIONARY column sharing another column's buffer.
+    /// Logical row i reads from buffer at physical row dict_sel[i].
+    static Column dict(std::shared_ptr<ColumnBuffer> buf, SelectionVector sel) {
+        Column col;
+        col.type = buf->type;
+        col.form = VectorForm::DICTIONARY;
+        col.buffer = std::move(buf);
+        col.dict_sel = std::move(sel);
+        return col;
+    }
+
+    // ── Capacity ──
+
+    /// Reserve capacity for data and validity (FLAT form only).
+    void reserve(size_t n) {
+        if (form == VectorForm::CONSTANT)
+            return;
+        if (form == VectorForm::DICTIONARY)
+            return; // DICTIONARY columns are read-only, no allocation needed
+        if (!buffer) {
+            buffer = std::make_shared<ColumnBuffer>();
+            buffer->type = type;
+        }
+        buffer->reserve(n);
+    }
+
+    // ── Validity ──
+
+    /// Set row i to NULL.
+    void setNull(size_t i) {
+        if (form == VectorForm::CONSTANT) {
+            // Mark the shared constant as null
+            constant_value = Value{};
+            return;
+        }
+        if (form == VectorForm::DICTIONARY)
+            return; // DICTIONARY is read-only
+        if (buffer)
+            buffer->setNull(i);
+    }
+
+    /// Check if row i is NULL.
+    bool isNull(size_t i) const {
+        if (form == VectorForm::CONSTANT) {
+            return ::eugraph::isNull(constant_value);
+        }
+        if (!buffer)
+            return true;
+        size_t physical = (form == VectorForm::DICTIONARY) ? dict_sel[i] : i;
+        return buffer->isNull(physical);
+    }
+
+    /// Set row i to valid (not NULL).
+    void setValid(size_t i) {
+        if (form == VectorForm::CONSTANT)
+            return; // CONSTANT validity is tied to the value itself
+        if (form == VectorForm::DICTIONARY)
+            return; // DICTIONARY is read-only
+        if (buffer)
+            buffer->setValid(i);
+    }
+
+    // ── Value access ──
+
+    /// Extract the value at logical row i as a runtime Value.
+    Value getValue(size_t i) const {
+        if (form == VectorForm::CONSTANT) {
+            if (::eugraph::isNull(constant_value))
+                return Value{};
+            return constant_value;
+        }
+        if (!buffer)
+            return Value{};
+        size_t physical = (form == VectorForm::DICTIONARY) ? dict_sel[i] : i;
+        return buffer->getValue(physical);
+    }
+
+    /// Set the value at logical row i from a runtime Value.
+    /// Only valid for FLAT columns. DICTIONARY columns are read-only
+    /// (they share data with another column).
+    void setValue(size_t i, const Value& val) {
+        if (form == VectorForm::CONSTANT) {
+            constant_value = val;
+            return;
+        }
+        if (form == VectorForm::DICTIONARY)
+            return; // DICTIONARY is read-only — shared data must not be mutated
+        if (!buffer) {
+            buffer = std::make_shared<ColumnBuffer>();
+            buffer->type = type;
+        }
+        buffer->setValue(i, val);
+    }
+
+    /// Number of allocated rows in the buffer (FLAT form only).
+    size_t capacity() const {
+        if (!buffer)
+            return 0;
+        return buffer->capacity;
+    }
+};
+
 // ==================== DataChunk ====================
 
 /// Columnar data block: each column is a homogeneously typed array.
 ///
-/// Replaces the row-based RowBatch. Columns of the same type enable
-/// SIMD-friendly operations, better cache locality, and reduced memory
-/// allocation overhead. A SelectionVector marks which logical rows are
-/// valid after filtering without physically reorganizing data.
+/// SelectionVector marks which logical rows are valid after filtering
+/// without physically reorganizing data. Each Column independently
+/// supports FLAT / CONSTANT / DICTIONARY forms.
 struct DataChunk {
     std::vector<Column> columns;
-    size_t count = 0; // logical row count (≤ capacity)
+    size_t count = 0; // logical row count (≤ capacity for FLAT columns)
+
+    // Per-chunk selection vector: marks which rows are part of this chunk's
+    // logical view. Identity = all `count` rows are valid in order.
+    SelectionVector sel;
 
     static constexpr size_t DEFAULT_CAPACITY = 1024;
 
     DataChunk() = default;
 
-    /// Add a column with the given type.
+    /// Add a FLAT column with the given type.
     Column& addColumn(binder::BoundTypeKind type) {
-        columns.emplace_back(type);
+        columns.push_back(Column::flat(type));
         return columns.back();
     }
 
@@ -252,37 +411,38 @@ struct DataChunk {
         columns.clear();
         columns.reserve(types.size());
         for (const auto& t : types) {
-            columns.emplace_back(t.kind);
+            columns.push_back(Column::flat(t.kind));
         }
     }
 
-    /// Allocate capacity for all columns.
+    /// Allocate capacity for all FLAT columns.
     void reserve(size_t n) {
         for (auto& col : columns) {
             col.reserve(n);
         }
     }
 
-    /// Reset count to 0 (but keep allocated capacity).
+    /// Reset count to 0 and selection to identity.
     void reset() {
         count = 0;
+        sel = SelectionVector::identity(0);
     }
 
     /// Set count and ensure capacity.
     void resize(size_t n) {
         reserve(n);
         count = n;
+        sel = SelectionVector::identity(n);
     }
 
-    /// Extract the value at (col_idx, row_idx) using an optional selection vector.
-    Value getValue(size_t col_idx, size_t row_idx, const SelectionVector* sel = nullptr) const {
-        size_t physical_row = sel ? (*sel)[row_idx] : row_idx;
+    /// Extract the value at (col_idx, logical_row_idx).
+    Value getValue(size_t col_idx, size_t row_idx) const {
         if (col_idx >= columns.size())
             return Value{};
-        return columns[col_idx].getValue(physical_row);
+        return columns[col_idx].getValue(row_idx);
     }
 
-    /// Set the value at (col_idx, row_idx).
+    /// Set the value at (col_idx, logical_row_idx).
     void setValue(size_t col_idx, size_t row_idx, const Value& val) {
         if (col_idx < columns.size()) {
             columns[col_idx].setValue(row_idx, val);
@@ -298,15 +458,15 @@ struct DataChunk {
     }
 
     /// Convert to legacy Row vector (for transition / RPC output).
-    std::vector<Row> toRows(const SelectionVector* sel = nullptr) const {
+    std::vector<Row> toRows() const {
         std::vector<Row> rows;
-        size_t n = sel ? sel->count : count;
+        size_t n = sel.is_identity ? count : sel.count;
         rows.reserve(n);
         for (size_t r = 0; r < n; ++r) {
             Row row;
             row.reserve(columns.size());
             for (size_t c = 0; c < columns.size(); ++c) {
-                row.push_back(getValue(c, r, sel));
+                row.push_back(getValue(c, r));
             }
             rows.push_back(std::move(row));
         }
@@ -319,8 +479,8 @@ struct DataChunk {
     }
 
     /// Number of logical rows.
-    size_t numRows(const SelectionVector* sel = nullptr) const {
-        return sel ? sel->count : count;
+    size_t numRows() const {
+        return sel.is_identity ? count : sel.count;
     }
 };
 

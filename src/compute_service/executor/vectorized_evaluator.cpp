@@ -9,38 +9,34 @@ namespace compute {
 
 // ==================== Public API ====================
 
-void VectorizedEvaluator::evaluate(const binder::BoundExpression& expr, const DataChunk& input, Column& result,
-                                   const SelectionVector* sel) {
-    size_t count = sel ? sel->count : input.count;
+void VectorizedEvaluator::evaluate(const binder::BoundExpression& expr, const DataChunk& input, Column& result) {
+    size_t count = input.numRows();
     result.reserve(count);
 
-    auto eval_result = evaluateInternal(expr, input, sel);
+    auto eval_result = evaluateInternal(expr, input);
     if (eval_result.column && eval_result.column != &result) {
-        // Copy from temp/input column to result column
         for (size_t i = 0; i < count; ++i) {
-            size_t src_row = sel ? (*sel)[i] : i;
-            if (eval_result.column->isNull(src_row)) {
+            if (eval_result.column->isNull(i)) {
                 result.setNull(i);
             } else {
-                result.setValue(i, eval_result.column->getValue(src_row));
+                result.setValue(i, eval_result.column->getValue(i));
             }
         }
     }
 }
 
 void VectorizedEvaluator::evaluatePredicate(const binder::BoundExpression& expr, const DataChunk& input,
-                                            std::vector<bool>& result, const SelectionVector* sel) {
-    size_t count = sel ? sel->count : input.count;
+                                            std::vector<bool>& result) {
+    size_t count = input.numRows();
     result.resize(count, false);
 
-    auto eval_result = evaluateInternal(expr, input, sel);
+    auto eval_result = evaluateInternal(expr, input);
     if (!eval_result.column)
         return;
 
     for (size_t i = 0; i < count; ++i) {
-        size_t src_row = sel ? (*sel)[i] : i;
-        if (!eval_result.column->isNull(src_row)) {
-            Value v = eval_result.column->getValue(src_row);
+        if (!eval_result.column->isNull(i)) {
+            Value v = eval_result.column->getValue(i);
             if (std::holds_alternative<bool>(v)) {
                 result[i] = std::get<bool>(v);
             }
@@ -51,26 +47,24 @@ void VectorizedEvaluator::evaluatePredicate(const binder::BoundExpression& expr,
 // ==================== Internal ====================
 
 Column& VectorizedEvaluator::acquireTempColumn(binder::BoundTypeKind type, size_t capacity) {
-    temp_columns_.emplace_back(type);
-    auto& col = temp_columns_.back();
-    col.reserve(capacity);
-    return col;
+    temp_columns_.push_back(Column::flat(type, capacity));
+    return temp_columns_.back();
 }
 
 VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const binder::BoundExpression& expr,
-                                                                      const DataChunk& input,
-                                                                      const SelectionVector* sel) {
+                                                                      const DataChunk& input) {
     return std::visit(
-        [this, &input, sel](const auto& val) -> EvalResult {
+        [this, &input](const auto& val) -> EvalResult {
             using T = std::decay_t<decltype(val)>;
-            size_t count = sel ? sel->count : input.count;
+            size_t count = input.numRows();
 
             if constexpr (std::is_same_v<T, binder::BoundLiteral>) {
                 auto& col = acquireTempColumn(val.type.kind, count);
                 evalLiteral(val, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
-                // Direct reference to input column - avoid copy
+                // Direct reference to input column — zero copy.
+                // Column handles FLAT/CONSTANT/DICTIONARY internally.
                 if (val.column_index < input.columns.size()) {
                     return {&input.columns[val.column_index], false};
                 }
@@ -78,35 +72,32 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
                 auto& col = acquireTempColumn(val->result_type.kind, count);
-                evalBinaryOp(*val, input, col, count, sel);
+                evalBinaryOp(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
                 auto& col = acquireTempColumn(val->result_type.kind, count);
-                evalUnaryOp(*val, input, col, count, sel);
+                evalUnaryOp(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
                 auto& col = acquireTempColumn(val->result_type.kind, count);
-                evalPropertyRef(*val, input, col, count, sel);
+                evalPropertyRef(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
                 auto& col = acquireTempColumn(val->return_type.kind, count);
-                evalFunctionCall(*val, input, col, count, sel);
+                evalFunctionCall(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
-                // LabelCast evaluates the inner object and scopes properties
-                auto inner = evaluateInternal(val->object, input, sel);
+                auto inner = evaluateInternal(val->object, input);
                 if (inner.column) {
                     auto& col = acquireTempColumn(binder::BoundTypeKind::VERTEX, count);
                     for (size_t i = 0; i < count; ++i) {
-                        size_t src_row = sel ? (*sel)[i] : i;
-                        col.setValue(i, inner.column->getValue(src_row));
+                        col.setValue(i, inner.column->getValue(i));
                     }
                     return {&col, true};
                 }
                 auto& col = acquireTempColumn(binder::BoundTypeKind::VERTEX, count);
                 return {&col, true};
             } else {
-                // Other types: return empty ANY column
                 auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
                 return {&col, true};
             }
@@ -122,31 +113,17 @@ void VectorizedEvaluator::evalLiteral(const binder::BoundLiteral& lit, Column& r
     }
 }
 
-void VectorizedEvaluator::evalColumnRef(const binder::BoundColumnRef& ref, const DataChunk& input, Column& result,
-                                        size_t count, const SelectionVector* sel) {
-    if (ref.column_index >= input.columns.size())
-        return;
-    const auto& src_col = input.columns[ref.column_index];
-    for (size_t i = 0; i < count; ++i) {
-        size_t src_row = sel ? (*sel)[i] : i;
-        result.setValue(i, src_col.getValue(src_row));
-    }
-}
-
 void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const DataChunk& input, Column& result,
-                                       size_t count, const SelectionVector* sel) {
-    auto left = evaluateInternal(op.left, input, sel);
-    auto right = evaluateInternal(op.right, input, sel);
+                                       size_t count) {
+    auto left = evaluateInternal(op.left, input);
+    auto right = evaluateInternal(op.right, input);
 
     if (!left.column || !right.column)
         return;
 
     for (size_t i = 0; i < count; ++i) {
-        size_t lr = sel ? (*sel)[i] : i;
-        size_t rr = sel ? (*sel)[i] : i;
-        // Use physical rows for sub-expressions
-        Value lv = left.column->getValue(lr);
-        Value rv = right.column->getValue(rr);
+        Value lv = left.column->getValue(i);
+        Value rv = right.column->getValue(i);
 
         Value r;
         switch (op.op) {
@@ -169,8 +146,6 @@ void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
             break;
         }
         default:
-            // For comparison/arithmetic, use Value-level operations
-            // LT, GT, LTE, GTE
             if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
                 int64_t a = std::get<int64_t>(lv);
                 int64_t b = std::get<int64_t>(rv);
@@ -274,14 +249,13 @@ void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
 }
 
 void VectorizedEvaluator::evalUnaryOp(const binder::BoundUnaryOp& op, const DataChunk& input, Column& result,
-                                      size_t count, const SelectionVector* sel) {
-    auto operand = evaluateInternal(op.operand, input, sel);
+                                      size_t count) {
+    auto operand = evaluateInternal(op.operand, input);
     if (!operand.column)
         return;
 
     for (size_t i = 0; i < count; ++i) {
-        size_t src_row = sel ? (*sel)[i] : i;
-        Value ov = operand.column->getValue(src_row);
+        Value ov = operand.column->getValue(i);
 
         Value r;
         switch (op.op) {
@@ -309,14 +283,13 @@ void VectorizedEvaluator::evalUnaryOp(const binder::BoundUnaryOp& op, const Data
 }
 
 void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, const DataChunk& input, Column& result,
-                                          size_t count, const SelectionVector* sel) {
-    auto obj = evaluateInternal(ref.object, input, sel);
+                                          size_t count) {
+    auto obj = evaluateInternal(ref.object, input);
     if (!obj.column)
         return;
 
     for (size_t i = 0; i < count; ++i) {
-        size_t src_row = sel ? (*sel)[i] : i;
-        Value ov = obj.column->getValue(src_row);
+        Value ov = obj.column->getValue(i);
 
         Value r;
         if (std::holds_alternative<VertexValue>(ov)) {
@@ -374,38 +347,36 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
 }
 
 void VectorizedEvaluator::evalFunctionCall(const binder::BoundFunctionCall& fc, const DataChunk& input, Column& result,
-                                           size_t count, const SelectionVector* sel) {
+                                           size_t count) {
     if (!fc.func_def)
         return;
 
-    // Evaluate arguments
     std::vector<EvalResult> arg_results;
     arg_results.reserve(fc.args.size());
     for (const auto& arg : fc.args) {
-        arg_results.push_back(evaluateInternal(arg, input, sel));
+        arg_results.push_back(evaluateInternal(arg, input));
     }
 
     const std::string& name = fc.func_def->name;
 
     for (size_t i = 0; i < count; ++i) {
-        size_t src_row = sel ? (*sel)[i] : i;
         Value r;
 
         if (name == "id" && fc.args.size() == 1) {
             if (arg_results[0].column) {
-                r = function::scalar::idImpl(arg_results[0].column->getValue(src_row));
+                r = function::scalar::idImpl(arg_results[0].column->getValue(i));
             }
         } else if (name == "nodes" && fc.args.size() == 1) {
             if (arg_results[0].column) {
-                r = function::scalar::nodesImpl(arg_results[0].column->getValue(src_row));
+                r = function::scalar::nodesImpl(arg_results[0].column->getValue(i));
             }
         } else if (name == "relationships" && fc.args.size() == 1) {
             if (arg_results[0].column) {
-                r = function::scalar::relationshipsImpl(arg_results[0].column->getValue(src_row));
+                r = function::scalar::relationshipsImpl(arg_results[0].column->getValue(i));
             }
         } else if (name == "length" && fc.args.size() == 1) {
             if (arg_results[0].column) {
-                r = function::scalar::lengthImpl(arg_results[0].column->getValue(src_row));
+                r = function::scalar::lengthImpl(arg_results[0].column->getValue(i));
             }
         }
         result.setValue(i, r);

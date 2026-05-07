@@ -35,6 +35,14 @@ public:
         return errors_;
     }
 
+    /// Bind a single expression to a BoundExpression.
+    /// Requires the BindContext to be populated with the input schema columns
+    /// (via registerColumn) before calling.
+    std::optional<BoundExpression> bindExpression(const cypher::Expression& expr);
+
+    /// Register an input schema column for expression variable resolution.
+    void registerColumn(const std::string& name, BoundType type);
+
 private:
     const catalog::Catalog& catalog_;
     const function::FunctionRegistry& func_registry_;
@@ -61,8 +69,7 @@ private:
     std::optional<BoundLogicalOperator> bindSet(const cypher::SetClause& set, BoundLogicalOperator child);
     std::optional<BoundLogicalOperator> bindRemove(const cypher::RemoveClause& rem, BoundLogicalOperator child);
 
-    // ── Expression binding ──
-    std::optional<BoundExpression> bindExpression(const cypher::Expression& expr);
+    // ── Expression binding helpers ──
     BoundType inferBinaryOpType(cypher::BinaryOperator op, const BoundType& left_type, const BoundType& right_type,
                                 std::string& error_msg);
     BoundType inferUnaryOpType(cypher::UnaryOperator op, const BoundType& operand_type, std::string& error_msg);

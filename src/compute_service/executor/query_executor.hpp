@@ -2,6 +2,7 @@
 
 #include "compute_service/binder/plan_binder.hpp"
 #include "compute_service/catalog/catalog.hpp"
+#include "compute_service/executor/data_chunk.hpp"
 #include "compute_service/executor/row.hpp"
 #include "compute_service/function/function_registry.hpp"
 #include "compute_service/logical_plan/logical_plan_builder.hpp"
@@ -27,7 +28,7 @@ struct StreamContext {
     Schema columns;
     std::string error;
     std::unique_ptr<PhysicalOperator> phys_op;
-    folly::coro::AsyncGenerator<RowBatch> gen;
+    folly::coro::AsyncGenerator<DataChunk> gen;
     GraphTxnHandle txn = INVALID_GRAPH_TXN;
     IAsyncGraphDataStore& store;
     bool should_commit = true;

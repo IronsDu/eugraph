@@ -83,8 +83,9 @@ static ExecutionResult execSync(QueryExecutor& executor, const std::string& quer
     result.columns = std::move(ctx->columns);
     auto gen = std::move(ctx->gen);
     blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
-        while (auto batch = co_await gen.next()) {
-            for (auto& row : batch->rows) {
+        while (auto chunk = co_await gen.next()) {
+            auto rows = chunk->toRows();
+            for (auto& row : rows) {
                 result.rows.push_back(std::move(row));
             }
         }
@@ -105,8 +106,9 @@ static std::vector<Row> runQuery(QueryExecutor& executor, const std::string& que
     result.columns = std::move(ctx->columns);
     auto gen = std::move(ctx->gen);
     blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
-        while (auto batch = co_await gen.next()) {
-            for (auto& row : batch->rows) {
+        while (auto chunk = co_await gen.next()) {
+            auto rows = chunk->toRows();
+            for (auto& row : rows) {
                 result.rows.push_back(std::move(row));
             }
         }

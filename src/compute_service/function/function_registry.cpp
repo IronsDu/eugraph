@@ -1,5 +1,7 @@
 #include "compute_service/function/function_registry.hpp"
 
+#include <climits>
+
 #include "compute_service/function/aggregate/avg_function.hpp"
 #include "compute_service/function/aggregate/count_function.hpp"
 #include "compute_service/function/aggregate/min_function.hpp"
@@ -72,12 +74,16 @@ const FunctionDef* FunctionRegistry::lookup(const std::string& name,
     if (it == functions_.end())
         return nullptr;
 
+    const FunctionDef* best = nullptr;
+    int best_cost = INT32_MAX;
     for (const auto& overload : it->second) {
-        if (overload.matches(arg_types)) {
-            return &overload;
+        int cost = overload.matchCost(arg_types);
+        if (cost >= 0 && cost < best_cost) {
+            best_cost = cost;
+            best = &overload;
         }
     }
-    return nullptr;
+    return best;
 }
 
 const std::vector<FunctionDef>* FunctionRegistry::lookupAll(const std::string& name) const {

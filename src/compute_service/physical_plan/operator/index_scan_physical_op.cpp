@@ -1,7 +1,7 @@
 #include "compute_service/physical_plan/operator/index_scan_physical_op.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
-#include "compute_service/executor/row.hpp"
+#include "compute_service/executor/data_chunk.hpp"
 
 namespace eugraph {
 namespace compute {
@@ -9,9 +9,11 @@ namespace compute {
 // Single-property constructor
 IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id, uint16_t prop_id, ScanMode mode,
                                          PropertyValue search_value, std::optional<PropertyValue> range_end,
-                                         IAsyncGraphDataStore& store, std::unordered_map<LabelId, LabelDef> label_defs)
+                                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
+                                         std::unordered_map<LabelId, LabelDef> label_defs)
     : variable_(std::move(variable)), label_id_(label_id), prop_ids_({prop_id}), mode_(mode), eq_values_(),
-      range_start_(std::nullopt), range_end_(std::nullopt), store_(store), label_defs_(std::move(label_defs)) {
+      range_start_(std::nullopt), range_end_(std::nullopt), output_types_(std::move(output_types)), store_(store),
+      label_defs_(std::move(label_defs)) {
     if (mode == ScanMode::EQUALITY) {
         eq_values_.push_back(std::move(search_value));
     } else {
@@ -26,12 +28,13 @@ IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id,
                                          ScanMode mode, std::vector<PropertyValue> eq_values,
                                          std::optional<std::vector<PropertyValue>> range_start,
                                          std::optional<std::vector<PropertyValue>> range_end,
-                                         IAsyncGraphDataStore& store, std::unordered_map<LabelId, LabelDef> label_defs)
+                                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
+                                         std::unordered_map<LabelId, LabelDef> label_defs)
     : variable_(std::move(variable)), label_id_(label_id), prop_ids_(std::move(prop_ids)), mode_(mode),
       eq_values_(std::move(eq_values)), range_start_(std::move(range_start)), range_end_(std::move(range_end)),
-      store_(store), label_defs_(std::move(label_defs)) {}
+      output_types_(std::move(output_types)), store_(store), label_defs_(std::move(label_defs)) {}
 
-folly::coro::AsyncGenerator<RowBatch> IndexScanPhysicalOp::execute() {
+folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
     folly::coro::AsyncGenerator<std::vector<VertexId>> gen;
     if (mode_ == ScanMode::EQUALITY) {
         if (prop_ids_.size() == 1) {
@@ -54,7 +57,10 @@ folly::coro::AsyncGenerator<RowBatch> IndexScanPhysicalOp::execute() {
     }
 
     while (auto batch = co_await gen.next()) {
-        RowBatch output;
+        DataChunk chunk;
+        chunk.setSchema(output_types_);
+        chunk.reserve(batch->size());
+
         for (VertexId vid : *batch) {
             auto labels = co_await store_.getVertexLabels(vid);
             VertexValue vv;
@@ -66,12 +72,10 @@ folly::coro::AsyncGenerator<RowBatch> IndexScanPhysicalOp::execute() {
                     vv.properties[lid] = std::move(*props);
                 }
             }
-            Row row;
-            row.push_back(Value(std::move(vv)));
-            output.push_back(std::move(row));
+            chunk.appendRow({Value(std::move(vv))});
         }
-        if (!output.empty()) {
-            co_yield std::move(output);
+        if (chunk.count > 0) {
+            co_yield std::move(chunk);
         }
     }
 }

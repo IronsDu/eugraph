@@ -5,6 +5,18 @@
 namespace eugraph {
 namespace binder {
 
+// ==================== Public Expression Binding API ====================
+
+void Binder::registerColumn(const std::string& name, BoundType type) {
+    uint32_t idx = static_cast<uint32_t>(ctx_.symbols.size());
+    ColumnInfo info;
+    info.name = name;
+    info.type = std::move(type);
+    info.column_index = idx;
+    ctx_.symbols[name] = std::move(info);
+    ctx_.next_column_index = idx + 1;
+}
+
 // ==================== Statement Binding ====================
 
 std::optional<BoundStatement> Binder::bind(const cypher::Statement& stmt) {
@@ -768,14 +780,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     error("Variable '" + ptr->name + "' not defined");
                     return std::nullopt;
                 }
-                // Find column index
-                uint32_t col_idx = 0;
-                for (const auto& [name, info] : ctx_.symbols) {
-                    if (name == ptr->name)
-                        break;
-                    ++col_idx;
-                }
-                return BoundExpression(BoundColumnRef(col_idx, col->type, ptr->name));
+                return BoundExpression(BoundColumnRef(col->column_index, col->type, ptr->name));
             } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
                 auto left = bindExpression(ptr->left);
                 auto right = bindExpression(ptr->right);

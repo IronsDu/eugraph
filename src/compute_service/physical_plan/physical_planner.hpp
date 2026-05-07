@@ -1,6 +1,9 @@
 #pragma once
 
+#include "compute_service/binder/bound_type.hpp"
+#include "compute_service/catalog/catalog.hpp"
 #include "compute_service/executor/row.hpp"
+#include "compute_service/function/function_registry.hpp"
 #include "compute_service/logical_plan/logical_plan.hpp"
 #include "compute_service/physical_plan/physical_operator.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
@@ -27,10 +30,11 @@ struct PlanContext {
     EdgeId next_edge_id = 1;
 };
 
-/// Result of planning an operator: the physical operator + its output schema.
+/// Result of planning an operator: the physical operator + its output schema + types.
 struct PlanOperatorResult {
     std::unique_ptr<PhysicalOperator> op;
     Schema output_schema;
+    std::vector<binder::BoundType> output_types;
 };
 
 /// Converts a LogicalPlan into a tree of PhysicalOperator.
@@ -39,42 +43,60 @@ public:
     /// Plan a logical plan into physical operators.
     /// Returns the physical operator tree root on success, or an error string.
     std::variant<std::unique_ptr<PhysicalOperator>, std::string> plan(LogicalPlan& logical_plan,
-                                                                      IAsyncGraphDataStore& store, PlanContext& ctx);
+                                                                      IAsyncGraphDataStore& store, PlanContext& ctx,
+                                                                      const catalog::Catalog& catalog,
+                                                                      const function::FunctionRegistry& func_registry);
 
 private:
     std::variant<PlanOperatorResult, std::string> planOperator(LogicalOperator& op, IAsyncGraphDataStore& store,
-                                                               PlanContext& ctx, Schema input_schema);
+                                                               PlanContext& ctx, Schema input_schema,
+                                                               const std::vector<binder::BoundType>& input_types);
 
     std::variant<PlanOperatorResult, std::string> planAllNodeScan(AllNodeScanOp& op, IAsyncGraphDataStore& store,
-                                                                  PlanContext& ctx, Schema input_schema);
+                                                                  PlanContext& ctx, Schema input_schema,
+                                                                  const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planLabelScan(LabelScanOp& op, IAsyncGraphDataStore& store,
-                                                                PlanContext& ctx, Schema input_schema);
+                                                                PlanContext& ctx, Schema input_schema,
+                                                                const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planExpand(ExpandOp& op, IAsyncGraphDataStore& store,
-                                                             PlanContext& ctx, Schema input_schema);
+                                                             PlanContext& ctx, Schema input_schema,
+                                                             const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planFilter(FilterOp& op, IAsyncGraphDataStore& store,
-                                                             PlanContext& ctx, Schema input_schema);
+                                                             PlanContext& ctx, Schema input_schema,
+                                                             const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planProject(ProjectOp& op, IAsyncGraphDataStore& store,
-                                                              PlanContext& ctx, Schema input_schema);
+                                                              PlanContext& ctx, Schema input_schema,
+                                                              const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planLimit(LimitOp& op, IAsyncGraphDataStore& store, PlanContext& ctx,
-                                                            Schema input_schema);
+                                                            Schema input_schema,
+                                                            const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planSkip(SkipOp& op, IAsyncGraphDataStore& store, PlanContext& ctx,
-                                                           Schema input_schema);
+                                                           Schema input_schema,
+                                                           const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planSort(SortOp& op, IAsyncGraphDataStore& store, PlanContext& ctx,
-                                                           Schema input_schema);
+                                                           Schema input_schema,
+                                                           const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planDistinct(DistinctOp& op, IAsyncGraphDataStore& store,
-                                                               PlanContext& ctx, Schema input_schema);
+                                                               PlanContext& ctx, Schema input_schema,
+                                                               const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planAggregate(AggregateOp& op, IAsyncGraphDataStore& store,
-                                                                PlanContext& ctx, Schema input_schema);
+                                                                PlanContext& ctx, Schema input_schema,
+                                                                const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planCreateNode(CreateNodeOp& op, IAsyncGraphDataStore& store,
-                                                                 PlanContext& ctx, Schema input_schema);
+                                                                 PlanContext& ctx, Schema input_schema,
+                                                                 const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planCreateEdge(CreateEdgeOp& op, IAsyncGraphDataStore& store,
-                                                                 PlanContext& ctx, Schema input_schema);
+                                                                 PlanContext& ctx, Schema input_schema,
+                                                                 const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planSet(SetOp& op, IAsyncGraphDataStore& store, PlanContext& ctx,
-                                                          Schema input_schema);
+                                                          Schema input_schema,
+                                                          const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planRemove(RemoveOp& op, IAsyncGraphDataStore& store,
-                                                             PlanContext& ctx, Schema input_schema);
+                                                             PlanContext& ctx, Schema input_schema,
+                                                             const std::vector<binder::BoundType>& input_types);
     std::variant<PlanOperatorResult, std::string> planPathBuild(PathBuildOp& op, IAsyncGraphDataStore& store,
-                                                                PlanContext& ctx, Schema input_schema);
+                                                                PlanContext& ctx, Schema input_schema,
+                                                                const std::vector<binder::BoundType>& input_types);
 
     /// Validate that PropertyAccess on LabelCastExpr (n::Label.prop) references
     /// a label and property that actually exist. Returns error string on failure.
@@ -89,6 +111,10 @@ private:
                                                        const std::vector<const cypher::BinaryOp*>& conditions,
                                                        EdgeLabelId label_id, const EdgeLabelDef& edge_label_def,
                                                        IAsyncGraphDataStore& store, PlanContext& ctx);
+
+    // Set by plan() before dispatching — used by planFilter/planProject for expression binding
+    const catalog::Catalog* catalog_ = nullptr;
+    const function::FunctionRegistry* func_registry_ = nullptr;
 };
 
 } // namespace compute

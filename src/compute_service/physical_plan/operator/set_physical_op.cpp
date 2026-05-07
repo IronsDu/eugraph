@@ -46,38 +46,33 @@ int findColumn(const Schema& schema, const std::string& name) {
 
 } // anonymous namespace
 
-folly::coro::AsyncGenerator<RowBatch> SetPhysicalOp::execute() {
-    auto child_gen = child_->execute();
+folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
+    auto child_gen = child_->executeChunk();
 
-    while (auto child_batch = co_await child_gen.next()) {
-        RowBatch output;
-        for (auto& row : child_batch->rows) {
+    while (auto chunk = co_await child_gen.next()) {
+        auto rows = chunk->toRows();
+        for (auto& row : rows) {
             for (const auto& item : items_) {
                 std::string var_name = extractVariableName(item.target);
-                if (var_name.empty())
-                    continue;
+                if (var_name.empty()) continue;
 
                 int col = findColumn(input_schema_, var_name);
-                if (col < 0 || static_cast<size_t>(col) >= row.size())
-                    continue;
-                if (!std::holds_alternative<VertexValue>(row[col]))
-                    continue;
+                if (col < 0 || static_cast<size_t>(col) >= row.size()) continue;
+                if (!std::holds_alternative<VertexValue>(row[col])) continue;
 
                 const auto& vertex = std::get<VertexValue>(row[col]);
                 VertexId vid = vertex.id;
 
                 if (item.kind == cypher::SetItemKind::SET_LABELS) {
                     auto lit = label_name_to_id_.find(item.label);
-                    if (lit == label_name_to_id_.end())
-                        continue;
+                    if (lit == label_name_to_id_.end()) continue;
                     co_await store_.addVertexLabel(vid, lit->second);
                 } else if (item.kind == cypher::SetItemKind::SET_PROPERTY) {
                     std::string prop_name;
                     if (std::holds_alternative<std::unique_ptr<cypher::PropertyAccess>>(item.target)) {
                         prop_name = std::get<std::unique_ptr<cypher::PropertyAccess>>(item.target)->property;
                     }
-                    if (prop_name.empty())
-                        continue;
+                    if (prop_name.empty()) continue;
 
                     LabelId found_label = INVALID_LABEL_ID;
                     uint16_t found_prop_id = 0;
@@ -91,25 +86,18 @@ folly::coro::AsyncGenerator<RowBatch> SetPhysicalOp::execute() {
                             }
                         }
                     }
-                    if (match_count == 0)
-                        continue;
-                    if (match_count > 1)
-                        continue;
+                    if (match_count == 0 || match_count > 1) continue;
+                    if (!item.value.has_value()) continue;
 
-                    if (!item.value.has_value())
-                        continue;
                     ExpressionEvaluator eval(label_defs_);
                     Value val = eval.evaluate(*item.value, row, input_schema_);
                     PropertyValue pv = valueToPropertyValue(val);
-
                     co_await store_.putVertexProperty(vid, found_label, found_prop_id, pv);
                 }
             }
-            output.push_back(std::move(row));
         }
-        if (!output.empty()) {
-            co_yield std::move(output);
-        }
+        // Yield the chunk as-is (DICTIONARY zero-copy for data, mutations already done)
+        co_yield std::move(*chunk);
     }
 }
 

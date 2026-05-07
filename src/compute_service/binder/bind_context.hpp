@@ -16,6 +16,8 @@ namespace binder {
 struct ColumnInfo {
     std::string name;
     BoundType type;
+    /// Column index in the DataChunk (0-based).
+    uint32_t column_index = 0;
     /// For columns sourced from a specific property on a label.
     std::optional<LabelId> source_label;
     std::optional<uint16_t> source_prop_id;
@@ -45,7 +47,7 @@ struct BindContext {
     /// Register a new variable in the symbol table. Returns the assigned column index.
     uint32_t registerVariable(const std::string& name, BoundType type) {
         auto [it, inserted] =
-            symbols.emplace(name, ColumnInfo{name, std::move(type), std::nullopt, std::nullopt, false});
+            symbols.emplace(name, ColumnInfo{name, std::move(type), 0, std::nullopt, std::nullopt, false});
         if (inserted) {
             // Assign column index only on first registration
             // (we use a separate pass to assign indices in order)

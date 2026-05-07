@@ -87,13 +87,14 @@ void PlanBinder::walkAndBind(const LogicalOperator& op, BoundPlanResult& result)
                 std::vector<BoundExpression> bound_items;
                 for (const auto& item : ptr->items) {
                     auto bound = bindExpression(item.expr);
+                    // Save type before moving bound into bound_items
+                    BoundType bound_type = bound ? BoundType::clone(getBoundExprType(*bound)) : BoundType::Any();
                     if (bound) {
                         bound_items.push_back(std::move(*bound));
                     }
                     // Register alias as a column so ORDER BY / downstream can reference it.
                     std::string col_name = item.alias.value_or(cypher::expressionToString(item.expr));
-                    registerVariable(col_name, bound ? getBoundExprType(*bound) : BoundType::Any(),
-                                     ctx_.next_column_index++);
+                    registerVariable(col_name, std::move(bound_type), ctx_.next_column_index++);
                 }
                 if (!bound_items.empty()) {
                     result.bound_projections[ptr.get()] = std::move(bound_items);
@@ -154,13 +155,7 @@ std::optional<BoundExpression> PlanBinder::bindExpression(const cypher::Expressi
                     error("Variable '" + ptr->name + "' not defined");
                     return std::nullopt;
                 }
-                uint32_t idx = 0;
-                for (const auto& [n, info] : ctx_.symbols) {
-                    if (n == ptr->name)
-                        break;
-                    ++idx;
-                }
-                return BoundExpression(BoundColumnRef(idx, col->type, ptr->name));
+                return BoundExpression(BoundColumnRef(col->column_index, col->type, ptr->name));
             }
             if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
                 auto left = bindExpression(ptr->left);
@@ -218,37 +213,56 @@ std::optional<BoundExpression> PlanBinder::bindExpression(const cypher::Expressi
                 auto obj = bindExpression(ptr->object);
                 if (!obj)
                     return std::nullopt;
-                const BoundType& ot = getBoundExprType(*obj);
+                // Copy type before moving *obj to avoid dangling reference
+                BoundType obj_type = BoundType::clone(getBoundExprType(*obj));
 
                 auto prop_ref = std::make_unique<BoundPropertyRef>();
-                prop_ref->object = std::move(*obj);
 
-                if (ot.kind == BoundTypeKind::VERTEX) {
-                    // Try to find property across all labels
-                    LabelIdSet all_ids;
-                    for (const auto& [lid, ldef] : catalog_.allLabels())
-                        all_ids.insert(lid);
-                    auto candidates = catalog_.lookupPropertyAcrossLabels(all_ids, ptr->property);
-                    if (candidates.empty()) {
-                        error("Property '" + ptr->property + "' not found on any label");
-                        return std::nullopt;
-                    }
-                    BoundType merged = BoundType::Null();
-                    for (auto& [lid, pd] : candidates) {
+                if (obj_type.kind == BoundTypeKind::VERTEX) {
+                    // If the object is a LabelCast, only look up on the specific label
+                    if (std::holds_alternative<std::unique_ptr<BoundLabelCast>>(*obj)) {
+                        auto& lc = std::get<std::unique_ptr<BoundLabelCast>>(*obj);
+                        LabelId lid = lc->label_id;
+                        auto* pd = catalog_.lookupProperty(lid, ptr->property);
+                        if (!pd) {
+                            error("Property '" + ptr->property + "' not found on label");
+                            return std::nullopt;
+                        }
                         BoundPropertyRef::ResolvedProperty rp;
                         rp.label_id = lid;
                         rp.prop_id = pd->id;
                         rp.type = propertyTypeToBoundType(pd->type);
-                        merged = BoundType::merge(merged, rp.type);
                         prop_ref->candidates.push_back(rp);
+                        prop_ref->result_type = rp.type;
+                    } else {
+                        // Weak-type: look up property across all labels
+                        LabelIdSet all_ids;
+                        for (const auto& [lid, ldef] : catalog_.allLabels())
+                            all_ids.insert(lid);
+                        auto candidates = catalog_.lookupPropertyAcrossLabels(all_ids, ptr->property);
+                        if (candidates.empty()) {
+                            error("Property '" + ptr->property + "' not found on any label");
+                            return std::nullopt;
+                        }
+                        BoundType merged = BoundType::Null();
+                        for (auto& [lid, pd] : candidates) {
+                            BoundPropertyRef::ResolvedProperty rp;
+                            rp.label_id = lid;
+                            rp.prop_id = pd->id;
+                            rp.type = propertyTypeToBoundType(pd->type);
+                            merged = BoundType::merge(merged, rp.type);
+                            prop_ref->candidates.push_back(rp);
+                        }
+                        prop_ref->result_type = merged;
                     }
-                    prop_ref->result_type = merged;
-                } else if (ot.kind == BoundTypeKind::EDGE) {
+                } else if (obj_type.kind == BoundTypeKind::EDGE) {
                     prop_ref->result_type = BoundType::Any();
                 } else {
                     error("Property access on non-vertex/non-edge type");
                     return std::nullopt;
                 }
+
+                prop_ref->object = std::move(*obj);
                 return BoundExpression(std::move(prop_ref));
             }
             if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
@@ -364,12 +378,22 @@ void PlanBinder::registerVariable(const std::string& name, BoundType type, uint3
     ColumnInfo info;
     info.name = name;
     info.type = std::move(type);
+    info.column_index = col_idx;
     ctx_.symbols[name] = info;
 }
 
 const ColumnInfo* PlanBinder::lookupVariable(const std::string& name) const {
     auto it = ctx_.symbols.find(name);
     return it != ctx_.symbols.end() ? &it->second : nullptr;
+}
+
+void PlanBinder::registerColumn(const std::string& name, BoundType type) {
+    uint32_t idx = static_cast<uint32_t>(ctx_.symbols.size());
+    registerVariable(name, std::move(type), idx);
+    if (auto it = ctx_.symbols.find(name); it != ctx_.symbols.end()) {
+        it->second.column_index = idx;
+    }
+    ctx_.next_column_index = idx + 1;
 }
 
 } // namespace binder

@@ -1,14 +1,17 @@
 #include "compute_service/physical_plan/operator/label_scan_physical_op.hpp"
 #include "common/types/graph_types.hpp"
-#include "compute_service/executor/row.hpp"
+#include "compute_service/executor/data_chunk.hpp"
 
 namespace eugraph {
 namespace compute {
 
-folly::coro::AsyncGenerator<RowBatch> LabelScanPhysicalOp::execute() {
+folly::coro::AsyncGenerator<DataChunk> LabelScanPhysicalOp::executeChunk() {
     auto gen = store_.scanVerticesByLabel(label_id_);
     while (auto batch = co_await gen.next()) {
-        RowBatch output;
+        DataChunk chunk;
+        chunk.setSchema(output_types_);
+        chunk.reserve(batch->size());
+
         for (VertexId vid : *batch) {
             auto labels = co_await store_.getVertexLabels(vid);
             VertexValue vv;
@@ -20,12 +23,10 @@ folly::coro::AsyncGenerator<RowBatch> LabelScanPhysicalOp::execute() {
                     vv.properties[lid] = std::move(*props);
                 }
             }
-            Row row;
-            row.push_back(Value(std::move(vv)));
-            output.push_back(std::move(row));
+            chunk.appendRow({Value(std::move(vv))});
         }
-        if (!output.empty()) {
-            co_yield std::move(output);
+        if (chunk.count > 0) {
+            co_yield std::move(chunk);
         }
     }
 }

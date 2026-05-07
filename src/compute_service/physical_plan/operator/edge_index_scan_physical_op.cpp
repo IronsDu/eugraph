@@ -1,7 +1,7 @@
 #include "compute_service/physical_plan/operator/edge_index_scan_physical_op.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
-#include "compute_service/executor/row.hpp"
+#include "compute_service/executor/data_chunk.hpp"
 
 namespace eugraph {
 namespace compute {
@@ -10,11 +10,12 @@ namespace compute {
 EdgeIndexScanPhysicalOp::EdgeIndexScanPhysicalOp(std::string src_var, std::string dst_var, std::string edge_var,
                                                  EdgeLabelId label_id, uint16_t prop_id, ScanMode mode,
                                                  PropertyValue search_value, std::optional<PropertyValue> range_end,
+                                                 std::vector<binder::BoundType> output_types,
                                                  IAsyncGraphDataStore& store,
                                                  std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs)
     : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)), label_id_(label_id),
       prop_ids_({prop_id}), mode_(mode), eq_values_(), range_start_(std::nullopt), range_end_(std::nullopt),
-      store_(store), edge_label_defs_(std::move(edge_label_defs)) {
+      output_types_(std::move(output_types)), store_(store), edge_label_defs_(std::move(edge_label_defs)) {
     if (mode == ScanMode::EQUALITY) {
         eq_values_.push_back(std::move(search_value));
     } else {
@@ -30,14 +31,15 @@ EdgeIndexScanPhysicalOp::EdgeIndexScanPhysicalOp(std::string src_var, std::strin
                                                  std::vector<PropertyValue> eq_values,
                                                  std::optional<std::vector<PropertyValue>> range_start,
                                                  std::optional<std::vector<PropertyValue>> range_end,
+                                                 std::vector<binder::BoundType> output_types,
                                                  IAsyncGraphDataStore& store,
                                                  std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs)
     : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)), label_id_(label_id),
       prop_ids_(std::move(prop_ids)), mode_(mode), eq_values_(std::move(eq_values)),
-      range_start_(std::move(range_start)), range_end_(std::move(range_end)), store_(store),
-      edge_label_defs_(std::move(edge_label_defs)) {}
+      range_start_(std::move(range_start)), range_end_(std::move(range_end)),
+      output_types_(std::move(output_types)), store_(store), edge_label_defs_(std::move(edge_label_defs)) {}
 
-folly::coro::AsyncGenerator<RowBatch> EdgeIndexScanPhysicalOp::execute() {
+folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
     folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>> gen;
     if (mode_ == ScanMode::EQUALITY) {
         if (prop_ids_.size() == 1) {
@@ -60,38 +62,37 @@ folly::coro::AsyncGenerator<RowBatch> EdgeIndexScanPhysicalOp::execute() {
     }
 
     while (auto batch = co_await gen.next()) {
-        RowBatch output;
+        DataChunk chunk;
+        chunk.setSchema(output_types_);
+        chunk.reserve(batch->size());
+
         for (const auto& entry : *batch) {
-            // Build source vertex value
-            VertexValue src_vv;
-            src_vv.id = entry.src_id;
-            auto src_labels = co_await store_.getVertexLabels(entry.src_id);
-            src_vv.labels = src_labels;
+            std::vector<Value> values;
 
-            // Build destination vertex value
-            VertexValue dst_vv;
-            dst_vv.id = entry.dst_id;
-            auto dst_labels = co_await store_.getVertexLabels(entry.dst_id);
-            dst_vv.labels = dst_labels;
-
-            // Build edge value
-            EdgeValue ev;
-            ev.id = entry.edge_id;
-            ev.src_id = entry.src_id;
-            ev.dst_id = entry.dst_id;
-            ev.label_id = entry.label_id;
-
-            Row row;
-            if (!src_var_.empty())
-                row.push_back(Value(std::move(src_vv)));
-            if (!dst_var_.empty())
-                row.push_back(Value(std::move(dst_vv)));
-            if (!edge_var_.empty())
-                row.push_back(Value(std::move(ev)));
-            output.push_back(std::move(row));
+            if (!src_var_.empty()) {
+                VertexValue src_vv;
+                src_vv.id = entry.src_id;
+                src_vv.labels = co_await store_.getVertexLabels(entry.src_id);
+                values.push_back(Value(std::move(src_vv)));
+            }
+            if (!dst_var_.empty()) {
+                VertexValue dst_vv;
+                dst_vv.id = entry.dst_id;
+                dst_vv.labels = co_await store_.getVertexLabels(entry.dst_id);
+                values.push_back(Value(std::move(dst_vv)));
+            }
+            if (!edge_var_.empty()) {
+                EdgeValue ev;
+                ev.id = entry.edge_id;
+                ev.src_id = entry.src_id;
+                ev.dst_id = entry.dst_id;
+                ev.label_id = entry.label_id;
+                values.push_back(Value(std::move(ev)));
+            }
+            chunk.appendRow(values);
         }
-        if (!output.empty()) {
-            co_yield std::move(output);
+        if (chunk.count > 0) {
+            co_yield std::move(chunk);
         }
     }
 }

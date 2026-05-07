@@ -1,5 +1,9 @@
 #pragma once
 
+#include "compute_service/binder/bound_expression/bound_column_ref.hpp"
+#include "compute_service/binder/bound_expression/bound_literal.hpp"
+#include "compute_service/binder/bound_expression/bound_parameter.hpp"
+
 #include <memory>
 #include <variant>
 #include <vector>
@@ -7,9 +11,6 @@
 namespace eugraph {
 namespace binder {
 
-struct BoundLiteral;
-struct BoundColumnRef;
-struct BoundParameter;
 struct BoundPropertyRef;
 struct BoundLabelCast;
 struct BoundBinaryOp;

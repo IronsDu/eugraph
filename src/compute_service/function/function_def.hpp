@@ -29,19 +29,28 @@ struct FunctionDef {
     }
 
     /// Check if this overload matches the given argument types.
-    /// Returns true if exact match, or if variadic with compatible types.
     bool matches(const std::vector<binder::BoundType>& call_arg_types) const {
+        return matchCost(call_arg_types) >= 0;
+    }
+
+    /// Compute the total implicit cast cost for matching this overload.
+    /// Returns -1 if not matched, 0 for exact match, higher values for worse matches.
+    /// Used by FunctionRegistry to select the best overload.
+    int matchCost(const std::vector<binder::BoundType>& call_arg_types) const {
         if (has_variadic_args)
-            return true;
+            return 0; // variadic matches everything at zero cost
         if (arg_types.empty())
-            return true; // untyped overload accepts anything
+            return 0; // untyped overload accepts anything
         if (arg_types.size() != call_arg_types.size())
-            return false;
+            return -1;
+        int total_cost = 0;
         for (size_t i = 0; i < arg_types.size(); ++i) {
-            if (!call_arg_types[i].canCastTo(arg_types[i]) && !arg_types[i].canCastTo(call_arg_types[i]))
-                return false;
+            int cost = call_arg_types[i].implicitCastCost(arg_types[i]);
+            if (cost < 0)
+                return -1;
+            total_cost += cost;
         }
-        return true;
+        return total_cost;
     }
 };
 

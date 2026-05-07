@@ -5,6 +5,7 @@
 #include "compute_service/catalog/catalog.hpp"
 #include "compute_service/function/function_registry.hpp"
 #include "compute_service/parser/index_ddl_parser.hpp"
+#include "compute_service/physical_plan/physical_operator_base.hpp"
 #include "storage/kv/value_codec.hpp"
 
 #include <folly/coro/BlockingWait.h>
@@ -55,7 +56,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
                 co_return ctx;
             }
             ctx->columns = std::move(ddl_result.columns);
-            ctx->gen = folly::coro::co_invoke(
+            auto ddl_row_gen = folly::coro::co_invoke(
                 [rows = std::move(ddl_result.rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
                     if (!rows.empty()) {
                         RowBatch batch;
@@ -63,6 +64,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
                         co_yield std::move(batch);
                     }
                 });
+            ctx->gen = wrapRowBatchToChunkGenerator(std::move(ddl_row_gen));
             co_return ctx;
         }
     }
@@ -168,7 +170,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     plan_ctx.next_edge_id = co_await async_meta_.nextEdgeId();
 
     PhysicalPlanner physical_planner;
-    auto phys_result = physical_planner.plan(logical_plan, async_data_, plan_ctx);
+    auto phys_result = physical_planner.plan(logical_plan, async_data_, plan_ctx, *ctx->catalog, *ctx->func_registry);
     if (std::holds_alternative<std::string>(phys_result)) {
         ctx->error = std::get<std::string>(phys_result);
         co_await async_data_.rollbackTran(txn);
@@ -210,7 +212,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
                     plan_rows.push_back(std::move(arrow_row));
                 }
             }
-            ctx->gen = folly::coro::co_invoke(
+            auto explain_row_gen = folly::coro::co_invoke(
                 [rows = std::move(plan_rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
                     if (!rows.empty()) {
                         RowBatch batch;
@@ -218,6 +220,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
                         co_yield std::move(batch);
                     }
                 });
+            ctx->gen = wrapRowBatchToChunkGenerator(std::move(explain_row_gen));
         }
 
         co_await async_data_.rollbackTran(txn);
@@ -226,7 +229,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     }
 
     ctx->phys_op = std::move(phys_op);
-    ctx->gen = ctx->phys_op->execute();
+    ctx->gen = ctx->phys_op->executeChunk();
     ctx->txn = txn;
 
     co_return ctx;

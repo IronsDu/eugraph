@@ -1,14 +1,13 @@
 #include "compute_service/physical_plan/operator/all_node_scan_physical_op.hpp"
 #include "common/types/graph_types.hpp"
-#include "compute_service/executor/row.hpp"
+#include "compute_service/executor/data_chunk.hpp"
 
 #include <unordered_set>
 
 namespace eugraph {
 namespace compute {
 
-folly::coro::AsyncGenerator<RowBatch> AllNodeScanPhysicalOp::execute() {
-    // First pass: collect all vertices with all their labels and all per-label properties
+folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
     std::unordered_map<VertexId, VertexValue> vertex_map;
     for (const auto& [name, label_id] : label_map_) {
         auto gen = store_.scanVerticesByLabel(label_id);
@@ -26,19 +25,22 @@ folly::coro::AsyncGenerator<RowBatch> AllNodeScanPhysicalOp::execute() {
             }
         }
     }
-    // Second pass: emit all collected vertices as rows
-    RowBatch output;
+
+    DataChunk chunk;
+    chunk.setSchema(output_types_);
+    chunk.reserve(DataChunk::DEFAULT_CAPACITY);
+
     for (auto& [vid, vv] : vertex_map) {
-        Row row;
-        row.push_back(Value(std::move(vv)));
-        output.push_back(std::move(row));
-        if (output.size() >= RowBatch::CAPACITY) {
-            co_yield std::move(output);
-            output = RowBatch{};
+        chunk.appendRow({Value(std::move(vv))});
+        if (chunk.count >= DataChunk::DEFAULT_CAPACITY) {
+            co_yield std::move(chunk);
+            chunk = DataChunk{};
+            chunk.setSchema(output_types_);
+            chunk.reserve(DataChunk::DEFAULT_CAPACITY);
         }
     }
-    if (!output.empty()) {
-        co_yield std::move(output);
+    if (chunk.count > 0) {
+        co_yield std::move(chunk);
     }
 }
 

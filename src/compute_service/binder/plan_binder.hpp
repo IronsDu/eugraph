@@ -51,6 +51,12 @@ public:
         return errors_;
     }
 
+    /// Register an input column for expression variable resolution.
+    void registerColumn(const std::string& name, BoundType type);
+
+    /// Bind a single AST expression. Requires registerColumn to have been called first.
+    std::optional<BoundExpression> bindExpression(const cypher::Expression& expr);
+
 private:
     const catalog::Catalog& catalog_;
     const function::FunctionRegistry& func_registry_;
@@ -63,9 +69,6 @@ private:
 
     /// Walk the logical operator tree and bind expressions.
     void walkAndBind(const compute::LogicalOperator& op, BoundPlanResult& result);
-
-    /// Bind a single AST expression.
-    std::optional<BoundExpression> bindExpression(const cypher::Expression& expr);
 
     // ── Type inference ──
     BoundType inferBinaryOpType(cypher::BinaryOperator op, const BoundType& left, const BoundType& right,

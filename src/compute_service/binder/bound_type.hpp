@@ -120,18 +120,26 @@ struct BoundType {
 
     /// 隐式转换检查：this 是否可以隐式转换为 target
     bool canCastTo(const BoundType& target) const {
+        return implicitCastCost(target) >= 0;
+    }
+
+    /// 隐式转换代价：返回整数代价，-1 表示不可转换。
+    /// 代价用于函数重载解析，选择总代价最低的重载。
+    ///   0 = 完全匹配
+    ///   1 = INT64→DOUBLE, NULL→具体类型, ANY↔具体类型
+    int implicitCastCost(const BoundType& target) const {
         if (*this == target)
-            return true;
+            return 0;
         // INT64 -> DOUBLE
         if (kind == BoundTypeKind::INT64 && target.kind == BoundTypeKind::DOUBLE)
-            return true;
+            return 1;
         // NULL -> anything
         if (kind == BoundTypeKind::NULL_TYPE)
-            return true;
-        // ANY -> anything (runtime checked)
+            return 1;
+        // ANY -> anything or anything -> ANY (runtime checked)
         if (kind == BoundTypeKind::ANY || target.kind == BoundTypeKind::ANY)
-            return true;
-        return false;
+            return 1;
+        return -1;
     }
 
     /// 合并两个类型：产生它们的公共超类型（用于弱类型属性访问）
