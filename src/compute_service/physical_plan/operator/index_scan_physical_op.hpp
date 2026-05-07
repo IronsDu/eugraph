@@ -37,7 +37,9 @@ public:
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
                         std::unordered_map<LabelId, LabelDef> label_defs);
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
 

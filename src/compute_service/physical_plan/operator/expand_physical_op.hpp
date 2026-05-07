@@ -25,8 +25,7 @@ public:
                      std::unique_ptr<PhysicalOperator> child)
         : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)),
           label_filters_(std::move(label_filters)), direction_(direction), store_(store),
-          input_schema_(std::move(input_schema)), output_types_(std::move(output_types)),
-          child_(std::move(child)) {
+          input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)) {
         for (size_t i = 0; i < input_schema_.size(); ++i) {
             if (input_schema_[i] == src_var_) {
                 src_col_idx_ = static_cast<int>(i);
@@ -35,7 +34,9 @@ public:
         }
     }
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
     std::vector<const PhysicalOperator*> children() const override {

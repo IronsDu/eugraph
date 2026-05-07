@@ -23,7 +23,8 @@ folly::coro::AsyncGenerator<DataChunk> DistinctPhysicalOp::executeChunk() {
         }
         new_sel.count = new_sel.indices.size();
 
-        if (new_sel.count == 0) continue;
+        if (new_sel.count == 0)
+            continue;
 
         DataChunk output;
         for (auto& col : chunk->columns) {

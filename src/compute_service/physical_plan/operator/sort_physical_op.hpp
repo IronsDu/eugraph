@@ -23,7 +23,9 @@ public:
     SortPhysicalOp(std::vector<SortItem> sort_items, std::unique_ptr<PhysicalOperator> child)
         : sort_items_(std::move(sort_items)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
 
     std::string toString() const override {

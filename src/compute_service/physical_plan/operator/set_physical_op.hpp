@@ -35,7 +35,9 @@ public:
         : items_(std::move(items)), input_schema_(std::move(input_schema)), store_(store), label_defs_(label_defs),
           label_name_to_id_(label_name_to_id), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Set(items=" + std::to_string(items_.size()) + ")";

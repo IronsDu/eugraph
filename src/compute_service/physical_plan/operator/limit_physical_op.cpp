@@ -10,7 +10,8 @@ folly::coro::AsyncGenerator<DataChunk> LimitPhysicalOp::executeChunk() {
 
     while (remaining > 0) {
         auto chunk = co_await child_gen.next();
-        if (!chunk.has_value()) break;
+        if (!chunk.has_value())
+            break;
 
         size_t n = chunk->numRows();
         if (static_cast<int64_t>(n) <= remaining) {

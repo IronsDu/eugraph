@@ -18,7 +18,10 @@ namespace compute {
 class RemovePhysicalOp : public PhysicalOperator {
 public:
     struct BoundRemoveItem {
-        enum class Kind { PROPERTY, LABEL };
+        enum class Kind {
+            PROPERTY,
+            LABEL
+        };
         Kind kind;
         std::string var_name;
         std::string name;
@@ -31,7 +34,9 @@ public:
         : items_(std::move(items)), input_schema_(std::move(input_schema)), store_(store), label_defs_(label_defs),
           label_name_to_id_(label_name_to_id), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Remove(items=" + std::to_string(items_.size()) + ")";

@@ -71,23 +71,25 @@ PhysicalPlanner::planOperator(LogicalOperator& op, IAsyncGraphDataStore& store, 
 
 // ==================== Scan ====================
 
-std::variant<PlanOperatorResult, std::string>
-PhysicalPlanner::planAllNodeScan(AllNodeScanOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema,
-                                 const std::vector<binder::BoundType>&) {
+std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planAllNodeScan(AllNodeScanOp& op,
+                                                                               IAsyncGraphDataStore& store,
+                                                                               PlanContext& ctx, Schema,
+                                                                               const std::vector<binder::BoundType>&) {
     Schema output_schema;
     std::vector<binder::BoundType> output_types;
     if (!op.variable.empty()) {
         output_schema.push_back(op.variable);
         output_types.push_back(binder::BoundType::Vertex());
     }
-    auto result = std::make_unique<AllNodeScanPhysicalOp>(op.variable, output_types, store, ctx.label_name_to_id,
-                                                          ctx.label_defs);
+    auto result =
+        std::make_unique<AllNodeScanPhysicalOp>(op.variable, output_types, store, ctx.label_name_to_id, ctx.label_defs);
     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
 }
 
-std::variant<PlanOperatorResult, std::string>
-PhysicalPlanner::planLabelScan(LabelScanOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema,
-                               const std::vector<binder::BoundType>&) {
+std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planLabelScan(LabelScanOp& op,
+                                                                             IAsyncGraphDataStore& store,
+                                                                             PlanContext& ctx, Schema,
+                                                                             const std::vector<binder::BoundType>&) {
     auto it = ctx.label_name_to_id.find(op.label);
     if (it == ctx.label_name_to_id.end()) {
         return "Unknown label: " + op.label;
@@ -104,9 +106,9 @@ PhysicalPlanner::planLabelScan(LabelScanOp& op, IAsyncGraphDataStore& store, Pla
 
 // ==================== Expand ====================
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planExpand(ExpandOp& op, IAsyncGraphDataStore& store,
-                                                                          PlanContext& ctx, Schema input_schema,
-                                                                          const std::vector<binder::BoundType>& input_types) {
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planExpand(ExpandOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema,
+                            const std::vector<binder::BoundType>& input_types) {
     if (op.children.size() != 1) {
         return "Expand requires exactly one child";
     }
@@ -150,9 +152,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planExpand(Expand
 
 // ==================== Filter ====================
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planFilter(FilterOp& op, IAsyncGraphDataStore& store,
-                                                                          PlanContext& ctx, Schema input_schema,
-                                                                          const std::vector<binder::BoundType>& input_types) {
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planFilter(FilterOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema,
+                            const std::vector<binder::BoundType>& input_types) {
     if (op.children.size() != 1) {
         return "Filter requires exactly one child";
     }
@@ -245,7 +247,8 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planFilter(Filter
         auto bound = binder.bindExpression(op.predicate);
         if (!bound.has_value()) {
             std::string err = "Failed to bind filter predicate";
-            for (const auto& e : binder.errors()) err += "; " + e;
+            for (const auto& e : binder.errors())
+                err += "; " + e;
             return err;
         }
         bound_pred = std::move(*bound);
@@ -257,9 +260,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planFilter(Filter
 
 // ==================== Project ====================
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planProject(ProjectOp& op, IAsyncGraphDataStore& store,
-                                                                           PlanContext& ctx, Schema input_schema,
-                                                                           const std::vector<binder::BoundType>& input_types) {
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planProject(ProjectOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema,
+                             const std::vector<binder::BoundType>& input_types) {
     if (op.children.size() != 1) {
         return "Project requires exactly one child";
     }
@@ -291,7 +294,8 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planProject(Proje
         auto bound = binder.bindExpression(item.expr);
         if (!bound.has_value()) {
             std::string err = "Failed to bind project expression";
-            for (const auto& e : binder.errors()) err += "; " + e;
+            for (const auto& e : binder.errors())
+                err += "; " + e;
             return err;
         }
         ProjectPhysicalOp::ProjectItem pi;
@@ -308,9 +312,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planProject(Proje
 
 // ==================== Limit ====================
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planLimit(LimitOp& op, IAsyncGraphDataStore& store,
-                                                                         PlanContext& ctx, Schema input_schema,
-                                                                         const std::vector<binder::BoundType>& input_types) {
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planLimit(LimitOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema,
+                           const std::vector<binder::BoundType>& input_types) {
     if (op.children.size() != 1) {
         return "Limit requires exactly one child";
     }
@@ -325,9 +329,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planLimit(LimitOp
 
 // ==================== Skip ====================
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSkip(SkipOp& op, IAsyncGraphDataStore& store,
-                                                                        PlanContext& ctx, Schema input_schema,
-                                                                        const std::vector<binder::BoundType>& input_types) {
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planSkip(SkipOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema,
+                          const std::vector<binder::BoundType>& input_types) {
     if (op.children.size() != 1) {
         return "Skip requires exactly one child";
     }
@@ -342,9 +346,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSkip(SkipOp& 
 
 // ==================== Sort ====================
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSort(SortOp& op, IAsyncGraphDataStore& store,
-                                                                        PlanContext& ctx, Schema input_schema,
-                                                                        const std::vector<binder::BoundType>& input_types) {
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planSort(SortOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema,
+                          const std::vector<binder::BoundType>& input_types) {
     if (op.children.size() != 1) {
         return "Sort requires exactly one child";
     }
@@ -392,7 +396,8 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSort(SortOp& 
         auto bound = binder.bindExpression(si.expr);
         if (!bound.has_value()) {
             std::string err = "Failed to bind sort expression";
-            for (const auto& e : binder.errors()) err += "; " + e;
+            for (const auto& e : binder.errors())
+                err += "; " + e;
             return err;
         }
         SortPhysicalOp::SortItem item;
@@ -407,9 +412,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSort(SortOp& 
 
 // ==================== Distinct ====================
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planDistinct(DistinctOp& op, IAsyncGraphDataStore& store,
-                                                                            PlanContext& ctx, Schema input_schema,
-                                                                            const std::vector<binder::BoundType>& input_types) {
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planDistinct(DistinctOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema,
+                              const std::vector<binder::BoundType>& input_types) {
     if (op.children.size() != 1) {
         return "Distinct requires exactly one child";
     }
@@ -459,7 +464,8 @@ PhysicalPlanner::planAggregate(AggregateOp& op, IAsyncGraphDataStore& store, Pla
         auto bound = plan_binder.bindExpression(gk);
         if (!bound.has_value()) {
             std::string err = "Failed to bind group key expression";
-            for (const auto& e : plan_binder.errors()) err += "; " + e;
+            for (const auto& e : plan_binder.errors())
+                err += "; " + e;
             return err;
         }
         AggregatePhysicalOp::GroupKey key;
@@ -472,7 +478,8 @@ PhysicalPlanner::planAggregate(AggregateOp& op, IAsyncGraphDataStore& store, Pla
         auto bound = plan_binder.bindExpression(af.arg);
         if (!bound.has_value()) {
             std::string err = "Failed to bind aggregate expression";
-            for (const auto& e : plan_binder.errors()) err += "; " + e;
+            for (const auto& e : plan_binder.errors())
+                err += "; " + e;
             return err;
         }
         AggregatePhysicalOp::AggregateExpr ae;
@@ -503,8 +510,8 @@ PhysicalPlanner::planAggregate(AggregateOp& op, IAsyncGraphDataStore& store, Pla
         aggregates[i].name = op.output_names[group_keys.size() + i];
     }
 
-    auto result = std::make_unique<AggregatePhysicalOp>(std::move(group_keys), std::move(aggregates),
-                                                        std::move(child_op));
+    auto result =
+        std::make_unique<AggregatePhysicalOp>(std::move(group_keys), std::move(aggregates), std::move(child_op));
     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
 }
 
@@ -711,9 +718,9 @@ std::string extractPropertyName(const cypher::Expression& target) {
 
 } // anonymous namespace
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSet(SetOp& op, IAsyncGraphDataStore& store,
-                                                                       PlanContext& ctx, Schema input_schema,
-                                                                       const std::vector<binder::BoundType>& input_types) {
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planSet(SetOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema,
+                         const std::vector<binder::BoundType>& input_types) {
     std::unique_ptr<PhysicalOperator> child_op;
     Schema child_schema = input_schema;
     std::vector<binder::BoundType> child_types = input_types;
@@ -756,9 +763,9 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planSet(SetOp& op
 
 // ==================== REMOVE ====================
 
-std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planRemove(RemoveOp& op, IAsyncGraphDataStore& store,
-                                                                          PlanContext& ctx, Schema input_schema,
-                                                                          const std::vector<binder::BoundType>& input_types) {
+std::variant<PlanOperatorResult, std::string>
+PhysicalPlanner::planRemove(RemoveOp& op, IAsyncGraphDataStore& store, PlanContext& ctx, Schema input_schema,
+                            const std::vector<binder::BoundType>& input_types) {
     std::unique_ptr<PhysicalOperator> child_op;
     Schema child_schema = input_schema;
     std::vector<binder::BoundType> child_types = input_types;
@@ -777,9 +784,8 @@ std::variant<PlanOperatorResult, std::string> PhysicalPlanner::planRemove(Remove
     bound_items.reserve(op.items.size());
     for (auto& item : op.items) {
         RemovePhysicalOp::BoundRemoveItem bi;
-        bi.kind = item.kind == cypher::RemoveItem::Kind::PROPERTY
-                      ? RemovePhysicalOp::BoundRemoveItem::Kind::PROPERTY
-                      : RemovePhysicalOp::BoundRemoveItem::Kind::LABEL;
+        bi.kind = item.kind == cypher::RemoveItem::Kind::PROPERTY ? RemovePhysicalOp::BoundRemoveItem::Kind::PROPERTY
+                                                                  : RemovePhysicalOp::BoundRemoveItem::Kind::LABEL;
         bi.var_name = extractVariableName(item.target);
         bi.name = item.name;
         bound_items.push_back(std::move(bi));
@@ -1031,10 +1037,9 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryIndexScan(LabelScanOp& sca
                 end_vec.push_back(std::move(*range_end));
                 composite_end = std::move(end_vec);
             }
-            result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, ScanMode::RANGE,
-                                                           std::vector<PropertyValue>{}, std::move(composite_start),
-                                                           std::move(composite_end), std::move(output_types), store,
-                                                           ctx.label_defs);
+            result = std::make_unique<IndexScanPhysicalOp>(
+                scan_op.variable, label_id, idx.prop_ids, ScanMode::RANGE, std::vector<PropertyValue>{},
+                std::move(composite_start), std::move(composite_end), std::move(output_types), store, ctx.label_defs);
         }
 
         return PlanOperatorResult{std::move(result), std::move(result_output_schema), std::move(result_output_types)};
@@ -1135,8 +1140,8 @@ PhysicalPlanner::tryEdgeIndexScan(ExpandOp& expand_op, const std::vector<const c
         if (!last_is_range) {
             result = std::make_unique<EdgeIndexScanPhysicalOp>(
                 expand_op.src_variable, expand_op.dst_variable, expand_op.edge_variable, label_id, idx.prop_ids,
-                ScanMode::EQUALITY, std::move(eq_values), std::nullopt, std::nullopt, std::move(output_types),
-                store, ctx.edge_label_defs);
+                ScanMode::EQUALITY, std::move(eq_values), std::nullopt, std::nullopt, std::move(output_types), store,
+                ctx.edge_label_defs);
         } else {
             std::optional<std::vector<PropertyValue>> composite_start;
             std::optional<std::vector<PropertyValue>> composite_end;

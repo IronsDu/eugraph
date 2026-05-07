@@ -24,7 +24,8 @@ folly::coro::AsyncGenerator<DataChunk> FilterPhysicalOp::executeChunk() {
         }
         filtered.count = filtered.indices.size();
 
-        if (filtered.count == 0) continue;
+        if (filtered.count == 0)
+            continue;
 
         DataChunk output;
         output.columns.reserve(chunk->columns.size());

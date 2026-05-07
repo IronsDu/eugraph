@@ -36,8 +36,8 @@ EdgeIndexScanPhysicalOp::EdgeIndexScanPhysicalOp(std::string src_var, std::strin
                                                  std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs)
     : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)), label_id_(label_id),
       prop_ids_(std::move(prop_ids)), mode_(mode), eq_values_(std::move(eq_values)),
-      range_start_(std::move(range_start)), range_end_(std::move(range_end)),
-      output_types_(std::move(output_types)), store_(store), edge_label_defs_(std::move(edge_label_defs)) {}
+      range_start_(std::move(range_start)), range_end_(std::move(range_end)), output_types_(std::move(output_types)),
+      store_(store), edge_label_defs_(std::move(edge_label_defs)) {}
 
 folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
     folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>> gen;

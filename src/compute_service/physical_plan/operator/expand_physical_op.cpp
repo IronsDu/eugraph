@@ -78,7 +78,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     src_id = static_cast<VertexId>(std::get<int64_t>(val));
                 }
             }
-            if (src_id == INVALID_VERTEX_ID) continue;
+            if (src_id == INVALID_VERTEX_ID)
+                continue;
 
             for (const auto& label_filter : scan_filters) {
                 auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
@@ -90,7 +91,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             }
         }
 
-        if (edges.empty()) continue;
+        if (edges.empty())
+            continue;
 
         // Build output DataChunk
         DataChunk output;

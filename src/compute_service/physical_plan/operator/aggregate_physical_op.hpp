@@ -31,7 +31,9 @@ public:
                         std::unique_ptr<PhysicalOperator> child)
         : group_keys_(std::move(group_keys)), aggregates_(std::move(aggregates)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
 
     std::string toString() const override {

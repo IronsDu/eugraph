@@ -18,13 +18,14 @@ namespace compute {
 class AllNodeScanPhysicalOp : public PhysicalOperator {
 public:
     AllNodeScanPhysicalOp(std::string variable, std::vector<binder::BoundType> output_types,
-                          IAsyncGraphDataStore& store,
-                          const std::unordered_map<std::string, LabelId>& label_map,
+                          IAsyncGraphDataStore& store, const std::unordered_map<std::string, LabelId>& label_map,
                           std::unordered_map<LabelId, LabelDef> label_defs)
         : variable_(std::move(variable)), output_types_(std::move(output_types)), store_(store), label_map_(label_map),
           label_defs_(std::move(label_defs)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "AllNodeScan(variable=" + variable_ + ")";

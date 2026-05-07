@@ -14,7 +14,9 @@ class SkipPhysicalOp : public PhysicalOperator {
 public:
     SkipPhysicalOp(int64_t skip, std::unique_ptr<PhysicalOperator> child) : skip_(skip), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Skip(" + std::to_string(skip_) + ")";

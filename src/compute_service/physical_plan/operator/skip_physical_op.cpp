@@ -49,7 +49,8 @@ folly::coro::AsyncGenerator<DataChunk> SkipPhysicalOp::executeChunk() {
             // Pass through remaining chunks unchanged
             while (true) {
                 auto rest = co_await child_gen.next();
-                if (!rest.has_value()) break;
+                if (!rest.has_value())
+                    break;
                 co_yield std::move(*rest);
             }
             co_return;

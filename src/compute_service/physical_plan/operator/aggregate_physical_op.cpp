@@ -80,9 +80,9 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                 const auto& agg = aggregates_[i];
                 auto& as = state.aggs[i];
 
-                bool is_count_star = (agg.func_name == "count" &&
-                                      std::holds_alternative<binder::BoundLiteral>(agg.arg) &&
-                                      isNull(std::get<binder::BoundLiteral>(agg.arg).value));
+                bool is_count_star =
+                    (agg.func_name == "count" && std::holds_alternative<binder::BoundLiteral>(agg.arg) &&
+                     isNull(std::get<binder::BoundLiteral>(agg.arg).value));
 
                 double val = 0;
                 if (!is_count_star) {

@@ -54,23 +54,28 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
         for (size_t row_idx = 0; row_idx < n; ++row_idx) {
             for (size_t idx = 0; idx < items_.size(); ++idx) {
                 const auto& item = items_[idx];
-                if (item.var_name.empty()) continue;
+                if (item.var_name.empty())
+                    continue;
 
                 int col = findColumn(input_schema_, item.var_name);
-                if (col < 0 || static_cast<size_t>(col) >= chunk->numColumns()) continue;
+                if (col < 0 || static_cast<size_t>(col) >= chunk->numColumns())
+                    continue;
 
                 Value val = chunk->getValue(static_cast<size_t>(col), row_idx);
-                if (!std::holds_alternative<VertexValue>(val)) continue;
+                if (!std::holds_alternative<VertexValue>(val))
+                    continue;
 
                 const auto& vertex = std::get<VertexValue>(val);
                 VertexId vid = vertex.id;
 
                 if (item.kind == cypher::SetItemKind::SET_LABELS) {
                     auto lit = label_name_to_id_.find(item.label);
-                    if (lit == label_name_to_id_.end()) continue;
+                    if (lit == label_name_to_id_.end())
+                        continue;
                     co_await store_.addVertexLabel(vid, lit->second);
                 } else if (item.kind == cypher::SetItemKind::SET_PROPERTY) {
-                    if (item.prop_name.empty()) continue;
+                    if (item.prop_name.empty())
+                        continue;
 
                     LabelId found_label = INVALID_LABEL_ID;
                     uint16_t found_prop_id = 0;
@@ -84,8 +89,10 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             }
                         }
                     }
-                    if (match_count == 0 || match_count > 1) continue;
-                    if (!item.value.has_value()) continue;
+                    if (match_count == 0 || match_count > 1)
+                        continue;
+                    if (!item.value.has_value())
+                        continue;
 
                     Value v = value_results[idx][row_idx];
                     PropertyValue pv = valueToPropertyValue(v);

@@ -28,8 +28,7 @@ public:
     EdgeIndexScanPhysicalOp(std::string src_var, std::string dst_var, std::string edge_var, EdgeLabelId label_id,
                             uint16_t prop_id, ScanMode mode, PropertyValue search_value,
                             std::optional<PropertyValue> range_end, std::vector<binder::BoundType> output_types,
-                            IAsyncGraphDataStore& store,
-                            std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs);
+                            IAsyncGraphDataStore& store, std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs);
 
     // Composite constructor
     EdgeIndexScanPhysicalOp(std::string src_var, std::string dst_var, std::string edge_var, EdgeLabelId label_id,
@@ -39,7 +38,9 @@ public:
                             std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
                             std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs);
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
 

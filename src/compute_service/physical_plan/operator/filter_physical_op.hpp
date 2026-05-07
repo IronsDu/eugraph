@@ -16,11 +16,12 @@ namespace compute {
 
 class FilterPhysicalOp : public PhysicalOperator {
 public:
-    FilterPhysicalOp(binder::BoundExpression predicate, Schema schema,
-                     std::unique_ptr<PhysicalOperator> child)
+    FilterPhysicalOp(binder::BoundExpression predicate, Schema schema, std::unique_ptr<PhysicalOperator> child)
         : predicate_(std::move(predicate)), schema_(std::move(schema)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Filter";

@@ -15,7 +15,9 @@ class DistinctPhysicalOp : public PhysicalOperator {
 public:
     DistinctPhysicalOp(std::unique_ptr<PhysicalOperator> child) : child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Distinct";
