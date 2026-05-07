@@ -457,7 +457,7 @@ using Schema = vector<string>;   // 列名列表
 
 **BoundBinaryOp/BoundUnaryOp 无函数指针**：当前通过 `switch(op)` 枚举分发。设计目标是绑定时确定具体的操作函数指针（如 DuckDB 的 `BinaryOpFunc`），求值时直接调用，消除 switch 开销。
 
-**Binder 尚未接入管线**：完整的 `Binder` 类（AST → BoundLogicalPlan）已实现，但查询管线仍走 `LogicalPlanBuilder` → `PlanBinder` 路径。`BoundLogicalPlan` 和所有 `Bound*Op` 类型已定义但未消费。待管线重构时替换 `LogicalPlanBuilder`。
+**完整 Binder 尚未接入管线**：`PlanBinder` 已在管线上工作（表达式绑定、类型推断），但完整的 `Binder` 类（直接从 AST 产出 `BoundLogicalPlan`，替代 `LogicalPlanBuilder`）尚未启用。当前管线仍走 `LogicalPlanBuilder` → `PlanBinder` 路径，`BoundLogicalPlan` 和 `Bound*Op` 类型已定义但未消费。待管线重构时用 `Binder` 替换 `LogicalPlanBuilder`。
 
 **投影下推未实际生效**：`PlanBinder` 收集了属性需求（`BindContext::property_requirements`），但 Scan 算子尚未利用这些信息减少属性加载量，仍然获取全部属性。
 
