@@ -2,6 +2,7 @@
 
 #include "compute_service/binder/bound_expression/bound_expression.hpp"
 #include "compute_service/executor/data_chunk.hpp"
+#include "compute_service/function/function_def.hpp"
 #include "compute_service/physical_plan/physical_operator_base.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
@@ -21,7 +22,7 @@ public:
     };
 
     struct AggregateExpr {
-        std::string func_name; // "count", "sum", "avg", "min", "max"
+        const function::FunctionDef* func_def = nullptr;
         binder::BoundExpression arg;
         bool distinct;
         std::string name;

@@ -19,6 +19,13 @@ inline Value idImpl(const Value& arg) {
     return Value{};
 }
 
+/// Unified scalar callback for FunctionRegistry.
+inline Value idScalarFn(const std::vector<Value>& args) {
+    if (args.empty())
+        return Value{};
+    return idImpl(args[0]);
+}
+
 } // namespace scalar
 } // namespace function
 } // namespace eugraph

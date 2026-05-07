@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compute_service/executor/row.hpp"
+#include "compute_service/function/function_def.hpp"
 
 #include <cstdint>
 
@@ -10,7 +11,7 @@ namespace aggregate {
 
 /// Running state for avg aggregation.
 /// Accumulates sum (double) and count, finalize returns average.
-struct AvgState {
+struct AvgState : AggStateBase {
     double sum = 0.0;
     int64_t count = 0;
     void add(const Value& arg) {

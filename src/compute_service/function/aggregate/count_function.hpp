@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compute_service/executor/row.hpp"
+#include "compute_service/function/function_def.hpp"
 
 #include <cstdint>
 
@@ -9,7 +10,7 @@ namespace function {
 namespace aggregate {
 
 /// Running state for count aggregation.
-struct CountState {
+struct CountState : AggStateBase {
     int64_t value = 0;
     void add(const Value& /*arg*/) {
         ++value;

@@ -1,12 +1,33 @@
 #pragma once
 
 #include "compute_service/binder/bound_type.hpp"
+#include "compute_service/executor/row.hpp"
 
+#include <cstdint>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace eugraph {
 namespace function {
+
+/// Base class for aggregate function state (e.g. CountState, SumState, etc.).
+struct AggStateBase {
+    virtual ~AggStateBase() = default;
+};
+
+/// Scalar function execution callback: takes argument values, returns result.
+using ScalarFn = std::function<Value(const std::vector<Value>&)>;
+
+/// Aggregate state factory.
+using AggInitFn = std::function<std::unique_ptr<AggStateBase>()>;
+
+/// Accumulate one value into aggregate state.
+using AggUpdateFn = std::function<void(AggStateBase&, const Value&)>;
+
+/// Produce final aggregate result from state.
+using AggFinalizeFn = std::function<Value(const AggStateBase&)>;
 
 /// Describes a registered function (scalar or aggregate).
 struct FunctionDef {
@@ -15,6 +36,14 @@ struct FunctionDef {
     binder::BoundType return_type;
     bool is_aggregate = false;
     bool has_variadic_args = false; // e.g. coalesce(...)
+
+    // Scalar execution callback (non-null for scalar functions).
+    ScalarFn scalar_fn;
+
+    // Aggregate callbacks (non-null for aggregate functions).
+    AggInitFn agg_init;
+    AggUpdateFn agg_update;
+    AggFinalizeFn agg_finalize;
 
     /// Unique key for overload resolution: name + arg_types
     std::string signatureKey() const {

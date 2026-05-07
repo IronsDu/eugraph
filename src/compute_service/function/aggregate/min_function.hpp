@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compute_service/executor/row.hpp"
+#include "compute_service/function/function_def.hpp"
 
 #include <cstdint>
 #include <string>
@@ -30,7 +31,7 @@ inline bool valueLess(const Value& a, const Value& b) {
 }
 
 /// Running state for min/max aggregation.
-template <bool IsMin> struct MinMaxState {
+template <bool IsMin> struct MinMaxState : AggStateBase {
     Value best; // monostate = uninitialized
 
     void add(const Value& arg) {

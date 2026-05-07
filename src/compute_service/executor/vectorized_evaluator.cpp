@@ -1,6 +1,4 @@
 #include "compute_service/executor/vectorized_evaluator.hpp"
-#include "compute_service/function/scalar/id_function.hpp"
-#include "compute_service/function/scalar/path_functions.hpp"
 
 #include <cmath>
 
@@ -350,7 +348,7 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
 
 void VectorizedEvaluator::evalFunctionCall(const binder::BoundFunctionCall& fc, const DataChunk& input, Column& result,
                                            size_t count) {
-    if (!fc.func_def)
+    if (!fc.func_def || !fc.func_def->scalar_fn)
         return;
 
     std::vector<EvalResult> arg_results;
@@ -359,29 +357,17 @@ void VectorizedEvaluator::evalFunctionCall(const binder::BoundFunctionCall& fc, 
         arg_results.push_back(evaluateInternal(arg, input));
     }
 
-    const std::string& name = fc.func_def->name;
-
     for (size_t i = 0; i < count; ++i) {
-        Value r;
-
-        if (name == "id" && fc.args.size() == 1) {
-            if (arg_results[0].column) {
-                r = function::scalar::idImpl(arg_results[0].column->getValue(i));
-            }
-        } else if (name == "nodes" && fc.args.size() == 1) {
-            if (arg_results[0].column) {
-                r = function::scalar::nodesImpl(arg_results[0].column->getValue(i));
-            }
-        } else if (name == "relationships" && fc.args.size() == 1) {
-            if (arg_results[0].column) {
-                r = function::scalar::relationshipsImpl(arg_results[0].column->getValue(i));
-            }
-        } else if (name == "length" && fc.args.size() == 1) {
-            if (arg_results[0].column) {
-                r = function::scalar::lengthImpl(arg_results[0].column->getValue(i));
+        std::vector<Value> args;
+        args.reserve(arg_results.size());
+        for (const auto& ar : arg_results) {
+            if (ar.column) {
+                args.push_back(ar.column->getValue(i));
+            } else {
+                args.emplace_back();
             }
         }
-        result.setValue(i, r);
+        result.setValue(i, fc.func_def->scalar_fn(args));
     }
 }
 

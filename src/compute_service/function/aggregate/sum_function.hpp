@@ -1,6 +1,7 @@
 #pragma once
 
 #include "compute_service/executor/row.hpp"
+#include "compute_service/function/function_def.hpp"
 
 #include <cstdint>
 
@@ -9,7 +10,7 @@ namespace function {
 namespace aggregate {
 
 /// Running state for sum aggregation (int64).
-struct Int64SumState {
+struct Int64SumState : AggStateBase {
     int64_t value = 0;
     void add(const Value& arg) {
         if (std::holds_alternative<int64_t>(arg))
@@ -24,7 +25,7 @@ struct Int64SumState {
 };
 
 /// Running state for sum aggregation (double).
-struct DoubleSumState {
+struct DoubleSumState : AggStateBase {
     double value = 0.0;
     void add(const Value& arg) {
         if (std::holds_alternative<double>(arg))

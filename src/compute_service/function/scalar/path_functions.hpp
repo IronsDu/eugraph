@@ -41,6 +41,25 @@ inline Value lengthImpl(const Value& arg) {
     return Value(static_cast<int64_t>((pv.elements.size() - 1) / 2));
 }
 
+/// Unified scalar callbacks for FunctionRegistry.
+inline Value nodesScalarFn(const std::vector<Value>& args) {
+    if (args.empty())
+        return Value{};
+    return nodesImpl(args[0]);
+}
+
+inline Value relationshipsScalarFn(const std::vector<Value>& args) {
+    if (args.empty())
+        return Value{};
+    return relationshipsImpl(args[0]);
+}
+
+inline Value lengthScalarFn(const std::vector<Value>& args) {
+    if (args.empty())
+        return Value{};
+    return lengthImpl(args[0]);
+}
+
 } // namespace scalar
 } // namespace function
 } // namespace eugraph

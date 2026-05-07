@@ -483,7 +483,11 @@ PhysicalPlanner::planAggregate(AggregateOp& op, IAsyncGraphDataStore& store, Pla
             return err;
         }
         AggregatePhysicalOp::AggregateExpr ae;
-        ae.func_name = std::move(af.func_name);
+        // Look up the aggregate function in the registry.
+        const auto* all_overloads = func_registry_->lookupAll(af.func_name);
+        if (all_overloads && !all_overloads->empty()) {
+            ae.func_def = &all_overloads->front();
+        }
         ae.arg = std::move(*bound);
         ae.distinct = af.distinct;
         aggregates.push_back(std::move(ae));
@@ -495,12 +499,11 @@ PhysicalPlanner::planAggregate(AggregateOp& op, IAsyncGraphDataStore& store, Pla
         output_types.push_back(binder::BoundType::Any());
     }
     for (const auto& ae : aggregates) {
-        if (ae.func_name == "count")
-            output_types.push_back(binder::BoundType::Int64());
-        else if (ae.func_name == "avg")
-            output_types.push_back(binder::BoundType::Double());
-        else
+        if (ae.func_def) {
+            output_types.push_back(ae.func_def->return_type);
+        } else {
             output_types.push_back(binder::BoundType::Any());
+        }
     }
 
     for (size_t i = 0; i < group_keys.size() && i < op.output_names.size(); ++i) {

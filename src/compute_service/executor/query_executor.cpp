@@ -128,10 +128,9 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     ctx->catalog = std::move(catalog);
     ctx->func_registry = std::move(func_registry);
 
-    // PlanBinder pass: disabled by default until physical operators are upgraded.
-    // Enable via Config::enable_binder to get expression type checking and
+    // PlanBinder pass: bind the logical plan for type checking and
     // property requirement collection.
-    if (config_.enable_binder) {
+    {
         binder::PlanBinder plan_binder(*ctx->catalog, *ctx->func_registry);
         auto bound_result = plan_binder.bind(logical_plan);
         if (!bound_result.errors.empty()) {

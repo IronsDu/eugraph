@@ -52,7 +52,6 @@ class QueryExecutor {
 public:
     struct Config {
         size_t compute_threads = 4;
-        bool enable_binder = false; // set to true to enable PlanBinder validation pass
         Config() = default;
     };
 
