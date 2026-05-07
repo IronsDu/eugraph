@@ -96,78 +96,71 @@ struct Column {
 
 ---
 
-## 待完成
+## Phase 7 完成状态 (2026-05-07)
 
-### 0. 基础设施改进（P0-1 ~ P0-3，本次新增）
-- [ ] SelectionVector null=identity
-- [ ] Column CONSTANT 形态
-- [ ] FunctionRegistry 代价模型
+### ✅ 已完成
 
-### 1. 物理算子升级到 DataChunk（Phase 7 — 核心改动）
+#### 基础设施 (P0-1 ~ P0-3)
+- [x] SelectionVector null=identity 优化
+- [x] Column CONSTANT 形态
+- [x] FunctionRegistry 基于代价的重载解析
 
-需要改造的算子（按依赖顺序）：
+#### PhysicalOperator 基类升级
+- [x] 新增 `executeChunk()` 虚函数返回 `AsyncGenerator<DataChunk>`
+- [x] `executeViaChunk()` 桥接: `executeChunk()` → RowBatch
+- [x] 转换工具: `rowBatchToDataChunk()` / `dataChunkToRowBatch()`
 
-| 算子 | 改动要点 |
-|------|---------|
-| `PhysicalOperator` 基类 | 新增 `executeChunk()` 虚函数，或修改 `execute()` 返回 `AsyncGenerator<DataChunk>` |
-| `AllNodeScanPhysicalOp` | 按需获取属性（projection），输出 DataChunk |
-| `LabelScanPhysicalOp` | 同 AllNodeScan |
-| `IndexScanPhysicalOp` | 同 Scan |
-| `EdgeIndexScanPhysicalOp` | 同 Scan |
-| `ExpandPhysicalOp` | 批量获取邻居属性，边属性按需加载，输出 DataChunk |
-| `FilterPhysicalOp` | 使用 VectorizedEvaluator + SelectionVector 替代 ExpressionEvaluator |
-| `ProjectPhysicalOp` | 使用 VectorizedEvaluator 求值，列存追加 |
-| `SortPhysicalOp` | 基于 Column 比较，预计算排序键 |
-| `AggregatePhysicalOp` | 基于 Column 分组聚合，函数指针来自 FunctionRegistry |
-| `DistinctPhysicalOp` | 基于 SelectionVector 标记重复行 |
-| `SkipPhysicalOp` / `LimitPhysicalOp` | 基于计数调整 SelectionVector |
-| `CreateNodeOp` / `CreateEdgeOp` | 适配新的属性传递格式 |
-| `SetOp` / `RemoveOp` | 适配 BoundExpression 属性引用 |
-| `PathBuildPhysicalOp` | 适配 DataChunk 列格式 |
+#### Leaf Scan 算子 (Phase 7b)
+- [x] `AllNodeScanPhysicalOp` — FLAT columns, `execute()` → `executeViaChunk()`
+- [x] `LabelScanPhysicalOp` — 同上
+- [x] `IndexScanPhysicalOp` — 同上
+- [x] `EdgeIndexScanPhysicalOp` — DICTIONARY columns for src/dst/edge
 
-### 2. RPC 层适配
+#### Pass-Through 算子 (Phase 7c) — DICTIONARY 零拷贝
+- [x] `FilterPhysicalOp` — DICTIONARY 共享 child buffer + 过滤后 dict_sel
+- [x] `SkipPhysicalOp` — DICTIONARY 调整 dict_sel
+- [x] `LimitPhysicalOp` — DICTIONARY 截断 dict_sel
+- [x] `DistinctPhysicalOp` — DICTIONARY hash set 去重
+- [x] `ExpandPhysicalOp` — 输入列 DICTIONARY + 新列 FLAT
+- [x] `SetPhysicalOp` / `RemovePhysicalOp` — child 原样 yield
+- [x] `PathBuildPhysicalOp` — 复制 child 列 + 新建 PATH FLAT 列
 
-- `EuGraphHandler` 中 `DataChunk → ResultRowBatch` 转换
-- 或在最终输出前统一将 DataChunk 转为 RowBatch
+#### 表达式绑定 (在 PhysicalPlanner 中)
+- [x] `planFilter()` / `planProject()` 使用 PlanBinder 将 `cypher::Expression` → `BoundExpression`
+- [x] Filter/Project 算子构造函数接收 `BoundExpression`（非 `cypher::Expression`）
+- [x] 算子使用 `VectorizedEvaluator` 替代 `ExpressionEvaluator`
+- [x] PlanBinder 支持 Label-scoped property access（`n::Label.prop`）
+- [x] PlanBinder 支持跨标签弱类型 property access（`n.prop` → 多候选）
+- [x] Variable 绑定使用 `ColumnInfo::column_index` 直接索引（修复 unordered_map 迭代顺序问题）
 
-### 3. 移除旧代码
+#### Bug 修复
+- [x] `VectorizedEvaluator::temp_columns_` deque 化避免 reallocation 后指针悬空 (heap-use-after-free)
+- [x] `tryIndexScan` 中 `output_types` 被 move 两次导致 PlanOperatorResult 收到空 vector
+- [x] `bind_context.hpp` 中 `ColumnInfo` 聚合初始化需要显式 `column_index = 0`
 
-- 删除 `ExpressionEvaluator`（被 `VectorizedEvaluator` 替代）
-- 清理 `LogicalPlanBuilder` 中的字符串函数名匹配（迁移到 FunctionRegistry）
+#### RPC 适配
+- [x] `eugraph_handler.cpp`: `makeStreamGenerator` 消费 `DataChunk`，调用 `chunk->toRows()`
+- [x] `query_executor.cpp`: `StreamContext::gen` 类型从 `AsyncGenerator<RowBatch>` 改为 `AsyncGenerator<DataChunk>`
+- [x] DDL/EXPLAIN 路径用 `wrapRowBatchToChunkGenerator()` 包装
 
-### 4. 测试
+### ❌ 待完成
 
-- 所有 392 个现有测试在新执行路径下通过
-- 新增 Binder 单元测试（类型推断、错误检测）
-- 新增 VectorizedEvaluator 单元测试
-- 新增 DataChunk 操作测试
+#### Phase 7d: Materializing Operators (未开始)
+- [ ] `SortPhysicalOp` — 物化所有输入 chunk → 排序 → 重建 FLAT DataChunk
+- [ ] `AggregatePhysicalOp` — 物化所有输入 → group by → 重建 FLAT DataChunk
+
+#### Phase 7e: Write Operators (未开始)
+- [ ] `CreateNodePhysicalOp` / `CreateEdgePhysicalOp` — drain child → store 变更 → 单行 FLAT DataChunk
+
+#### Phase 7f: 遗留边界问题
+- [ ] Path 相关测试 (5 个): `ReturnNamedPathSingleHop`, `ReturnNamedPathTwoHop`, `PathNodes`, `PathRelationships`, `PathLength` — `pv.elements.size() == 0`
+- [ ] Multi-label 测试 (1 个): `PropertyConflictToList` — 期望 ListValue 但得到单个 string
+- [ ] Old code cleanup: 移除 `ExpressionEvaluator`，清理旧的 `cypher::Expression` 引用
+
+#### 测试状态
+- **370/376** core tests pass (98%)
+- 6 failures: 5 path-related + 1 multi-label property conflict
 
 ---
 
-## 实施顺序（更新）
-
-```
-0.1 SelectionVector null=identity
-    ↓
-0.2 Column CONSTANT 形态
-    ↓
-0.3 FunctionRegistry 代价模型
-    ↓
-1. 升级 PhysicalOperator 基类接口
-    ↓
-2. 改造 Scan 算子（含投影下推）
-    ↓
-3. 改造 Filter / Project（核心计算）
-    ↓
-4. 改造 Expand
-    ↓
-5. 改造 Sort / Aggregate / Distinct
-    ↓
-6. 改造写算子
-    ↓
-7. RPC 适配
-    ↓
-8. 清理旧代码
-    ↓
-9. 测试
-```
+## 旧实施计划（供参考）
