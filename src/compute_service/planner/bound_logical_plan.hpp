@@ -1,0 +1,36 @@
+#pragma once
+
+#include "compute_service/planner/bind_context.hpp"
+#include "compute_service/planner/bound_expression/bound_expression.hpp"
+#include "compute_service/planner/bound_logical_plan_fwd.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_aggregate_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_create_edge_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_create_node_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_distinct_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_expand_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_filter_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_limit_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_path_build_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_project_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_remove_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_set_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_skip_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_sort_op.hpp"
+
+#include <vector>
+
+namespace eugraph {
+namespace binder {
+
+struct BoundLogicalPlan {
+    BoundLogicalOperator root;
+    std::vector<ColumnInfo> output_schema;
+};
+
+struct BoundStatement {
+    BoundLogicalPlan plan;
+    BindContext context;
+};
+
+} // namespace binder
+} // namespace eugraph

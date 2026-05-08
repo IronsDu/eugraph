@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
+#include "compute_service/executor/data_chunk.hpp"
 #include "compute_service/executor/row.hpp"
 
 namespace eugraph {
@@ -24,6 +25,16 @@ inline Value idScalarFn(const std::vector<Value>& args) {
     if (args.empty())
         return Value{};
     return idImpl(args[0]);
+}
+
+/// Batch scalar callback: extracts id for all rows at once.
+inline void idBatchFn(const std::vector<const Column*>& args, Column& result, size_t count) {
+    if (args.empty())
+        return;
+    const auto& arg_col = *args[0];
+    for (size_t i = 0; i < count; ++i) {
+        result.setValue(i, idImpl(arg_col.getValue(i)));
+    }
 }
 
 } // namespace scalar

@@ -26,11 +26,27 @@ void FunctionRegistry::registerScalarBuiltins() {
     using binder::BoundType;
 
     // id(Vertex) -> Int64
-    functions_["id"].push_back(
-        {"id", {BoundType::Vertex()}, BoundType::Int64(), false, false, scalar::idScalarFn, {}, {}, {}});
+    functions_["id"].push_back({"id",
+                                {BoundType::Vertex()},
+                                BoundType::Int64(),
+                                false,
+                                false,
+                                scalar::idScalarFn,
+                                scalar::idBatchFn,
+                                {},
+                                {},
+                                {}});
     // id(Edge) -> Int64
-    functions_["id"].push_back(
-        {"id", {BoundType::Edge()}, BoundType::Int64(), false, false, scalar::idScalarFn, {}, {}, {}});
+    functions_["id"].push_back({"id",
+                                {BoundType::Edge()},
+                                BoundType::Int64(),
+                                false,
+                                false,
+                                scalar::idScalarFn,
+                                scalar::idBatchFn,
+                                {},
+                                {},
+                                {}});
 
     // nodes(Path) -> List<Vertex>
     functions_["nodes"].push_back({"nodes",
@@ -39,6 +55,7 @@ void FunctionRegistry::registerScalarBuiltins() {
                                    false,
                                    false,
                                    scalar::nodesScalarFn,
+                                   scalar::nodesBatchFn,
                                    {},
                                    {},
                                    {}});
@@ -50,13 +67,22 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            false,
                                            false,
                                            scalar::relationshipsScalarFn,
+                                           scalar::relationshipsBatchFn,
                                            {},
                                            {},
                                            {}});
 
     // length(Path) -> Int64
-    functions_["length"].push_back(
-        {"length", {BoundType::Path()}, BoundType::Int64(), false, false, scalar::lengthScalarFn, {}, {}, {}});
+    functions_["length"].push_back({"length",
+                                    {BoundType::Path()},
+                                    BoundType::Int64(),
+                                    false,
+                                    false,
+                                    scalar::lengthScalarFn,
+                                    scalar::lengthBatchFn,
+                                    {},
+                                    {},
+                                    {}});
 }
 
 void FunctionRegistry::registerAggregateBuiltins() {
@@ -70,6 +96,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          true,
          true,
          {},
+         {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::CountState>(); },
          [](AggStateBase& s, const Value& v) { static_cast<aggregate::CountState&>(s).add(v); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::CountState&>(s).finalize(); }});
@@ -82,6 +109,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          true,
          false,
          {},
+         {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::Int64SumState>(); },
          [](AggStateBase& s, const Value& v) { static_cast<aggregate::Int64SumState&>(s).add(v); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::Int64SumState&>(s).finalize(); }});
@@ -92,6 +120,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          BoundType::Double(),
          true,
          false,
+         {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::DoubleSumState>(); },
          [](AggStateBase& s, const Value& v) { static_cast<aggregate::DoubleSumState&>(s).add(v); },
@@ -105,6 +134,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          true,
          false,
          {},
+         {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::AvgState>(); },
          [](AggStateBase& s, const Value& v) { static_cast<aggregate::AvgState&>(s).add(v); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::AvgState&>(s).finalize(); }});
@@ -115,6 +145,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          BoundType::Double(),
          true,
          false,
+         {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::AvgState>(); },
          [](AggStateBase& s, const Value& v) { static_cast<aggregate::AvgState&>(s).add(v); },
@@ -128,6 +159,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          true,
          true,
          {},
+         {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::MinState>(); },
          [](AggStateBase& s, const Value& v) { static_cast<aggregate::MinState&>(s).add(v); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::MinState&>(s).finalize(); }});
@@ -139,6 +171,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          BoundType::Any(),
          true,
          true,
+         {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::MaxState>(); },
          [](AggStateBase& s, const Value& v) { static_cast<aggregate::MaxState&>(s).add(v); },

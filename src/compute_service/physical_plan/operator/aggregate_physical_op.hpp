@@ -1,9 +1,9 @@
 #pragma once
 
-#include "compute_service/binder/bound_expression/bound_expression.hpp"
 #include "compute_service/executor/data_chunk.hpp"
 #include "compute_service/function/function_def.hpp"
 #include "compute_service/physical_plan/physical_operator_base.hpp"
+#include "compute_service/planner/bound_expression/bound_expression.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 

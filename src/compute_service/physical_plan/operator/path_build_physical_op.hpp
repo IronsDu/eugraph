@@ -1,8 +1,8 @@
 #pragma once
 
-#include "compute_service/binder/bound_type.hpp"
 #include "compute_service/executor/data_chunk.hpp"
 #include "compute_service/physical_plan/physical_operator_base.hpp"
+#include "compute_service/planner/bound_type.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 

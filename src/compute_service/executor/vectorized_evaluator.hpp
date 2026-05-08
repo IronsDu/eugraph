@@ -1,7 +1,7 @@
 #pragma once
 
-#include "compute_service/binder/bound_expression/bound_expression.hpp"
 #include "compute_service/executor/data_chunk.hpp"
+#include "compute_service/planner/bound_expression/bound_expression.hpp"
 
 #include <cstdint>
 #include <deque>

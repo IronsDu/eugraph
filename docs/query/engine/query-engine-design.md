@@ -23,12 +23,16 @@
 ```
 Cypher 查询文本
     → CypherQueryParser: 字符串 → AST (Statement)
-    → Binder: AST → BoundLogicalPlan (语义绑定，符号解析，类型推断)
+    → Binder: AST → BoundStatement (语义绑定，符号解析，类型推断)
         ├── Catalog: label/property 解析
         ├── FunctionRegistry: 函数签名匹配
         └── BindContext: 变量→列索引映射，属性需求收集
-    → PhysicalPlanner:
-        ├── planBound: BoundLogicalPlan → PhysicalOperator 树
+          （此时表达式中的变量引用为 BoundVariableRef，使用变量名）
+    → ColumnResolver: BoundVariableRef → BoundColumnRef (名称→列索引)
+        └── 遍历 BoundLogicalPlan 和 BoundExpression，将变量名解析为列索引
+    → PhysicalPlanner::planBound: BoundLogicalPlan → PhysicalOperator 树
+        ├── tryBoundIndexScan: Filter(LabelScan) + 可索引谓词 → IndexScanPhysicalOp
+        ├── tryBoundEdgeIndexScan: Filter(Expand) + 可索引谓词 → EdgeIndexScanPhysicalOp
         └── ID 解析，存储引用绑定
     → QueryExecutor: 协程管道执行 (Pull-based 火山模型，AsyncGenerator<DataChunk>)
 ```
@@ -144,6 +148,8 @@ class FunctionRegistry {
 
 聚合状态类（`src/compute_service/function/aggregate/`）继承 `AggStateBase`，提供 `add()` 和 `finalize()` 方法。
 
+> B1/B2 已完成：`ScalarFn` 已升级为 `BatchScalarFn`（一次处理整列数据），`BoundBinaryOp`/`BoundUnaryOp` 已添加类型特化的批量函数指针，消除求值时的 `switch(op)` 枚举分发开销。批量函数在 Binder 阶段通过 `resolveBinaryBatchFn`/`resolveUnaryBatchFn` 解析并绑定。
+
 ---
 
 ## 四、Bound Expression（绑定后表达式）
@@ -156,6 +162,7 @@ BoundExpression 将符号引用解析为具体索引/指针，每个节点带有
 BoundExpression = variant<
     BoundLiteral,           // 字面量 + 类型
     BoundColumnRef,         // 列索引 + 类型（零拷贝引用 DataChunk 列）
+    BoundVariableRef,       // 变量名 + 类型（Binder 产出，ColumnResolver 解析为 BoundColumnRef）
     BoundParameter,         // $param
     BoundPropertyRef,       // 属性访问（prop_id + 类型，支持多候选）
     BoundLabelCast,         // n::Label 转型
@@ -176,7 +183,7 @@ BoundExpression = variant<
 
 ## 五、Binder
 
-`src/compute_service/binder/`
+`src/compute_service/planner/`
 
 ### Binder（查询管线入口）
 
@@ -189,13 +196,27 @@ BoundExpression = variant<
 5. 通过 FunctionRegistry 解析函数调用 → FunctionDef 指针
 6. 推断表达式返回类型
 7. 收集投影下推所需属性信息
-8. 产出 `BoundStatement`（含 `BoundLogicalPlan` + `BindContext`）
+8. 为 `BoundBinaryOp`/`BoundUnaryOp` 解析类型特化的批量函数指针（`BinaryBatchFn`/`UnaryBatchFn`）
+9. 产出 `BoundStatement`（含 `BoundLogicalPlan` + `BindContext`）
 
-`BoundLogicalPlan` 的 root 是 `BoundLogicalOperator`（variant），包含 15 种 Bound\*Op 类型，所有符号引用已解析为具体 ID 和列索引。
+`BoundLogicalPlan` 的 root 是 `BoundLogicalOperator`（variant），包含 15 种 BoundXxxOp 类型，定义在 `planner/logical_plan/operator/` 下各自独立的头文件中。所有符号引用已解析为具体 ID，但变量引用此时仍为 `BoundVariableRef`（名称 + 类型），由 ColumnResolver 在 Binder 之后解析为 `BoundColumnRef`（列索引）。
 
-### PlanBinder（旧管线兼容）
+### ColumnResolver（变量名 → 列索引）
 
-PlanBinder 在旧管线的 `PhysicalPlanner` 内部工作，对 `LogicalPlanBuilder` 产出的 `LogicalPlan` 表达式进行绑定。当前查询管线已切换到 `Binder` 路径（`Binder` → `planBound`），PlanBinder 仅保留用于兼容。
+`src/compute_service/planner/column_resolver.hpp`
+
+Binder 产出的 `BoundLogicalPlan` 中，表达式变量引用为 `BoundVariableRef`（通过变量名字符串标识）。ColumnResolver 遍历整个 BoundLogicalPlan 和所有 BoundExpression，将 `BoundVariableRef` 替换为 `BoundColumnRef`（列索引）。这是两阶段解析的第二阶段：
+
+```
+Binder: AST 变量名 → BoundVariableRef（名称，在 BoundLogicalPlan 中）
+ColumnResolver: BoundVariableRef → BoundColumnRef（列索引，直接引用 DataChunk 列）
+```
+
+之所以分两阶段而非 Binder 阶段直接确定列索引，是因为 Binder 在递归绑定时尚未知道最终输出 schema。
+
+### 旧管线（已移除）
+
+`LogicalPlanBuilder` → `PlanBinder` → `PhysicalPlanner::plan()` 旧管线已在 A3 重构中完全移除。`PhysicalPlanner` 现在只保留 `planBound()` 和 `planBoundOperator()` 路径。
 
 ---
 
@@ -247,31 +268,35 @@ struct SelectionVector {
 
 ---
 
-## 七、逻辑计划
+## 七、Bound Logical Plan（绑定后逻辑计划）
+
+`src/compute_service/planner/logical_plan/operator/`
+
+每个算子类型定义在独立的头文件中（满足物理设计原则：最小化依赖，每个文件单一职责）。
+
+`BoundLogicalOperator` 是一个 variant，包含 15 种算子。"子节点"通过 variant 值嵌入（非 unique_ptr），形成递归的算子树。
 
 ### 算子类型（15 种）
 
-`vector<LogicalOperator> children` 形成火山模型算子树。
+| 算子 | 定义文件 | 说明 | 子节点 |
+|------|---------|------|--------|
+| `BoundScanOp` | `bound_scan_op.hpp` | 全顶点扫描 | — |
+| `BoundLabelScanOp` | `bound_label_scan_op.hpp` | 按标签扫描顶点 | — |
+| `BoundExpandOp` | `bound_expand_op.hpp` | 从顶点展开邻居（支持多类型过滤） | 嵌入 `BoundLogicalOperator child` |
+| `BoundFilterOp` | `bound_filter_op.hpp` | 过滤行 | 嵌入 `BoundLogicalOperator child` |
+| `BoundProjectOp` | `bound_project_op.hpp` | 投影/重映射列 | 嵌入 `BoundLogicalOperator child` |
+| `BoundAggregateOp` | `bound_aggregate_op.hpp` | 聚合 + 分组 | 嵌入 `BoundLogicalOperator child` |
+| `BoundSortOp` | `bound_sort_op.hpp` | 排序 | 嵌入 `BoundLogicalOperator child` |
+| `BoundSkipOp` | `bound_skip_op.hpp` | 跳过前 N 行 | 嵌入 `BoundLogicalOperator child` |
+| `BoundDistinctOp` | `bound_distinct_op.hpp` | 去重 | 嵌入 `BoundLogicalOperator child` |
+| `BoundLimitOp` | `bound_limit_op.hpp` | 限制行数 | 嵌入 `BoundLogicalOperator child` |
+| `BoundCreateNodeOp` | `bound_create_node_op.hpp` | 创建顶点 | — |
+| `BoundCreateEdgeOp` | `bound_create_edge_op.hpp` | 创建边 | — |
+| `BoundSetOp` | `bound_set_op.hpp` | 设置属性/标签 | 嵌入 `BoundLogicalOperator child` |
+| `BoundRemoveOp` | `bound_remove_op.hpp` | 移除属性/标签 | 嵌入 `BoundLogicalOperator child` |
+| `BoundPathBuildOp` | `bound_path_build_op.hpp` | 组装路径变量 | 嵌入 `BoundLogicalOperator child` |
 
-| 算子 | 说明 | 子节点数 |
-|------|------|---------|
-| `AllNodeScanOp` | 全顶点扫描 | 0 |
-| `LabelScanOp` | 按标签扫描顶点 | 0 |
-| `ExpandOp` | 从顶点展开邻居（支持多类型过滤） | 1 |
-| `FilterOp` | 过滤行 | 1 |
-| `ProjectOp` | 投影/重映射列 | 1 |
-| `AggregateOp` | 聚合 + 分组 | 1 |
-| `SortOp` | 排序 | 1 |
-| `SkipOp` | 跳过前 N 行 | 1 |
-| `DistinctOp` | 去重 | 1 |
-| `LimitOp` | 限制行数 | 1 |
-| `CreateNodeOp` | 创建顶点 | 0-1 |
-| `CreateEdgeOp` | 创建边 | 1 |
-| `SetOp` | 设置属性/标签 | 1 |
-| `RemoveOp` | 移除属性/标签 | 1 |
-| `PathBuildOp` | 组装路径变量 | 1 |
-
-**符号表**：`Binder` 通过 `BindContext` 维护变量→列索引映射，MATCH 中每个变量分配列索引，RETURN/WHERE 通过索引访问。
+**符号表**：`Binder` 通过 `BindContext` 维护变量→列索引映射，MATCH 中每个变量分配列索引（在 `BoundScanOp::column_index` / `BoundLabelScanOp::column_index` 等字段中）。表达式中的变量引用在 Binder 阶段为 `BoundVariableRef`（变量名），经 `ColumnResolver` 解析为 `BoundColumnRef`（列索引）。
 
 ### Cypher 子句映射
 
@@ -356,11 +381,15 @@ class PhysicalOperator {
 
 ### PhysicalPlanner
 
-`PlanContext` 携带 label/edge_label 映射和 ID 分配器。每个算子的 `planOperator` 返回 `output_schema` + `output_types`。
+`src/compute_service/physical_plan/physical_planner.hpp`
 
-**索引扫描优化**：
-- `Filter(LabelScan)` + 可索引谓词 → `IndexScanPhysicalOp`
-- `Filter(Expand)` + 可索引谓词 → `EdgeIndexScanPhysicalOp`
+唯一入口为 `planBound(BoundLogicalPlan&, IAsyncGraphDataStore&, PlanContext&)`。`PlanContext` 携带 label/edge_label 映射和 ID 分配器。每个算子的 `planBoundOperator()` 返回 `output_schema` + `output_types`。
+
+**索引扫描优化**（已接入 planBound 管线）：
+- `Filter(LabelScan)` + 可索引谓词 → `tryBoundIndexScan()` → `IndexScanPhysicalOp`
+- `Filter(Expand)` + 可索引谓词 → `tryBoundEdgeIndexScan()` → `EdgeIndexScanPhysicalOp`
+
+可索引谓词提取通过 `collectBoundConditions()` / `tryExtractBoundCondition()`，支持等值和范围条件。
 
 ---
 
@@ -440,37 +469,37 @@ using Schema = vector<string>;   // 列名列表
 ## 十二、当前实现状态
 
 ### 已完成
+
 - Cypher Parser + AST（含 `n::Label` 转型语法 + `LabelCastExpr`）
-- 逻辑计划构建（15 种算子）
+- Binder 语义绑定：AST → BoundStatement（`src/compute_service/planner/`）
+- BoundLogicalPlan（15 种算子，独立文件在 `planner/logical_plan/operator/`）
 - Catalog 目录系统 + FunctionRegistry 函数注册表（含执行回调）
-- BoundExpression 13 种类型 + Binder 语义绑定（已接入管线）
+- BoundExpression 14 种类型（含 `BoundVariableRef`）
 - BoundType 类型系统（隐式转换代价、类型合并）
+- ColumnResolver：两阶段列解析（`BoundVariableRef` → `BoundColumnRef`）
 - DataChunk 列存数据块（FLAT/CONSTANT/DICTIONARY + SelectionVector）
 - VectorizedEvaluator 表达式求值器
 - 所有物理算子升级为 DataChunk + BoundExpression 执行
-- 读算子：Scan / Expand / Filter / Project / Limit / Sort / Skip / Distinct / Aggregate
+- 读算子：Scan / IndexScan / EdgeIndexScan / Expand / Filter / Project / Limit / Sort / Skip / Distinct / Aggregate
 - 聚合：count/sum/avg/min/max + GROUP BY + DISTINCT（通过 FunctionDef 回调）
 - 写算子：CreateNode / CreateEdge / SetOp / RemoveOp（含索引维护）
 - 多标签查询：per-label 属性存储、弱类型属性访问、强类型转型
-- 索引扫描优化（IndexScan、EdgeIndexScan）
+- 索引扫描优化（`tryBoundIndexScan` / `tryBoundEdgeIndexScan`）已接入 `planBound` 管线
 - 流式执行（StreamContext + Thrift ServerStream）
 - 索引 DDL（CREATE/DROP/SHOW INDEX，含边索引）
-- Binder 接入查询管线：`Binder::bind()` → `PhysicalPlanner::planBound()` 替代 `LogicalPlanBuilder` → `PlanBinder` 路径
 - FunctionRegistry 回调接入标量和聚合执行（`scalar_fn`、`agg_init/agg_update/agg_finalize`）
+- **A0-A3 重构完成**：目录重组、两阶段列解析、索引扫描接入新管线、旧管线完全移除
+- **B1 完成**：`BoundBinaryOp`/`BoundUnaryOp` 添加类型特化的批量函数指针（`BinaryBatchFn`/`UnaryBatchFn`），在 Binder 阶段通过 `resolveBinaryBatchFn`/`resolveUnaryBatchFn` 解析，替代求值时 `switch(op)` 枚举分发
+- **B2 完成**：`FunctionDef` 的 `ScalarFn` 升级为 `BatchScalarFn`（一次处理整列），所有内置标量函数（`id`、`nodes`、`relationships`、`length`）已更新为批量实现
 
 ### 已知限制（待优化）
-
-**逐行函数调用开销**：`VectorizedEvaluator::evalFunctionCall` 和 `evalBinaryOp`/`evalUnaryOp` 对每行数据分别调用一次函数。在高并发场景下，逐行函数调用的虚函数/`std::function` 开销可能成为瓶颈。DuckDB 的做法是为每种操作生成或使用类型特化的批量处理函数，一次处理整列数据（如 `int64_add(column_a, column_b, result, count)`）。这是后续性能优化的首要方向。
-
-**BoundBinaryOp/BoundUnaryOp 无函数指针**：当前通过 `switch(op)` 枚举分发。设计目标是绑定时确定具体的操作函数指针（如 DuckDB 的 `BinaryOpFunc`），求值时直接调用，消除 switch 开销。
-
-**索引扫描优化暂未接入新管线**：`planBound` 路径当前不含 `tryIndexScan`/`tryEdgeIndexScan` 优化（Filter+LabelScan 不会自动转换为 IndexScan）。查询功能不受影响，但无法利用索引加速。待后续优化器阶段接入。
 
 **投影下推未实际生效**：`Binder` 收集了属性需求（`BindContext::property_requirements`），但 Scan 算子尚未利用这些信息减少属性加载量，仍然获取全部属性。
 
 **ORDER BY 引用 RETURN 别名未实现**：`Binder::bindReturn` 处理 ORDER BY 时通过 `bindExpression` 解析排序表达式，但 RETURN 子句中定义的别名（如 `RETURN id(n) AS id ORDER BY id ASC`）尚未注册到 `BindContext` 中，导致 `id` 被当作未定义变量。需在 ORDER BY 处理前将 RETURN 别名注册到符号表。
 
 ### 待实现
+
 - DELETE, MERGE 执行
 - 多 MATCH + JOIN
 - 查询优化器（谓词下推、投影裁剪）

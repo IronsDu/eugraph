@@ -1,7 +1,7 @@
 #pragma once
 
-#include "compute_service/binder/bound_type.hpp"
 #include "compute_service/executor/row.hpp"
+#include "compute_service/planner/bound_type.hpp"
 
 #include <cstdint>
 #include <cstring>

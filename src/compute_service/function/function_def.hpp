@@ -1,7 +1,7 @@
 #pragma once
 
-#include "compute_service/binder/bound_type.hpp"
 #include "compute_service/executor/row.hpp"
+#include "compute_service/planner/bound_type.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace eugraph {
+struct Column;
 namespace function {
 
 /// Base class for aggregate function state (e.g. CountState, SumState, etc.).
@@ -19,6 +20,9 @@ struct AggStateBase {
 
 /// Scalar function execution callback: takes argument values, returns result.
 using ScalarFn = std::function<Value(const std::vector<Value>&)>;
+
+/// Batch scalar function: processes all rows at once.
+using BatchScalarFn = std::function<void(const std::vector<const Column*>& args, Column& result, size_t count)>;
 
 /// Aggregate state factory.
 using AggInitFn = std::function<std::unique_ptr<AggStateBase>()>;
@@ -39,6 +43,9 @@ struct FunctionDef {
 
     // Scalar execution callback (non-null for scalar functions).
     ScalarFn scalar_fn;
+
+    // Batch scalar execution callback (processes all rows at once).
+    BatchScalarFn batch_scalar_fn;
 
     // Aggregate callbacks (non-null for aggregate functions).
     AggInitFn agg_init;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
+#include "compute_service/executor/data_chunk.hpp"
 #include "compute_service/executor/row.hpp"
 
 #include <string>
@@ -58,6 +59,35 @@ inline Value lengthScalarFn(const std::vector<Value>& args) {
     if (args.empty())
         return Value{};
     return lengthImpl(args[0]);
+}
+
+/// Batch scalar callbacks.
+
+inline void nodesBatchFn(const std::vector<const Column*>& args, Column& result, size_t count) {
+    if (args.empty())
+        return;
+    const auto& arg_col = *args[0];
+    for (size_t i = 0; i < count; ++i) {
+        result.setValue(i, nodesImpl(arg_col.getValue(i)));
+    }
+}
+
+inline void relationshipsBatchFn(const std::vector<const Column*>& args, Column& result, size_t count) {
+    if (args.empty())
+        return;
+    const auto& arg_col = *args[0];
+    for (size_t i = 0; i < count; ++i) {
+        result.setValue(i, relationshipsImpl(arg_col.getValue(i)));
+    }
+}
+
+inline void lengthBatchFn(const std::vector<const Column*>& args, Column& result, size_t count) {
+    if (args.empty())
+        return;
+    const auto& arg_col = *args[0];
+    for (size_t i = 0; i < count; ++i) {
+        result.setValue(i, lengthImpl(arg_col.getValue(i)));
+    }
 }
 
 } // namespace scalar

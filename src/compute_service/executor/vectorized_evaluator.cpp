@@ -1,5 +1,7 @@
 #include "compute_service/executor/vectorized_evaluator.hpp"
 
+#include "compute_service/planner/bound_expression/bound_expression.hpp"
+
 #include <cmath>
 
 namespace eugraph {
@@ -61,11 +63,15 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 evalLiteral(val, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
-                // Direct reference to input column — zero copy.
-                // Column handles FLAT/CONSTANT/DICTIONARY internally.
                 if (val.column_index < input.columns.size()) {
                     return {&input.columns[val.column_index], false};
                 }
+                auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
+                return {&col, true};
+            } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
+                auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
+                return {&col, true};
+            } else if constexpr (std::is_same_v<T, binder::BoundParameter>) {
                 auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
@@ -77,7 +83,6 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 evalUnaryOp(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
-                // Use ANY type when multiple candidates may produce a ListValue at runtime.
                 auto col_type = val->candidates.size() > 1 ? binder::BoundTypeKind::ANY : val->result_type.kind;
                 auto& col = acquireTempColumn(col_type, count);
                 evalPropertyRef(*val, input, col, count);
@@ -121,130 +126,8 @@ void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
     if (!left.column || !right.column)
         return;
 
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.column->getValue(i);
-        Value rv = right.column->getValue(i);
-
-        Value r;
-        switch (op.op) {
-        case cypher::BinaryOperator::EQ:
-            r = Value(lv == rv);
-            break;
-        case cypher::BinaryOperator::NEQ:
-            r = Value(!(lv == rv));
-            break;
-        case cypher::BinaryOperator::AND: {
-            bool lb = std::holds_alternative<bool>(lv) ? std::get<bool>(lv) : false;
-            bool rb = std::holds_alternative<bool>(rv) ? std::get<bool>(rv) : false;
-            r = Value(lb && rb);
-            break;
-        }
-        case cypher::BinaryOperator::OR: {
-            bool lb = std::holds_alternative<bool>(lv) ? std::get<bool>(lv) : false;
-            bool rb = std::holds_alternative<bool>(rv) ? std::get<bool>(rv) : false;
-            r = Value(lb || rb);
-            break;
-        }
-        default:
-            if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
-                int64_t a = std::get<int64_t>(lv);
-                int64_t b = std::get<int64_t>(rv);
-                switch (op.op) {
-                case cypher::BinaryOperator::LT:
-                    r = Value(a < b);
-                    break;
-                case cypher::BinaryOperator::GT:
-                    r = Value(a > b);
-                    break;
-                case cypher::BinaryOperator::LTE:
-                    r = Value(a <= b);
-                    break;
-                case cypher::BinaryOperator::GTE:
-                    r = Value(a >= b);
-                    break;
-                case cypher::BinaryOperator::ADD:
-                    r = Value(a + b);
-                    break;
-                case cypher::BinaryOperator::SUB:
-                    r = Value(a - b);
-                    break;
-                case cypher::BinaryOperator::MUL:
-                    r = Value(a * b);
-                    break;
-                case cypher::BinaryOperator::DIV:
-                    r = b != 0 ? Value(a / b) : Value{};
-                    break;
-                default:
-                    r = Value{};
-                    break;
-                }
-            } else if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv)) {
-                double a = std::get<double>(lv);
-                double b = std::get<double>(rv);
-                switch (op.op) {
-                case cypher::BinaryOperator::LT:
-                    r = Value(a < b);
-                    break;
-                case cypher::BinaryOperator::GT:
-                    r = Value(a > b);
-                    break;
-                case cypher::BinaryOperator::LTE:
-                    r = Value(a <= b);
-                    break;
-                case cypher::BinaryOperator::GTE:
-                    r = Value(a >= b);
-                    break;
-                case cypher::BinaryOperator::ADD:
-                    r = Value(a + b);
-                    break;
-                case cypher::BinaryOperator::SUB:
-                    r = Value(a - b);
-                    break;
-                case cypher::BinaryOperator::MUL:
-                    r = Value(a * b);
-                    break;
-                case cypher::BinaryOperator::DIV:
-                    r = b != 0.0 ? Value(a / b) : Value{};
-                    break;
-                default:
-                    r = Value{};
-                    break;
-                }
-            } else if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv)) {
-                const auto& a = std::get<std::string>(lv);
-                const auto& b = std::get<std::string>(rv);
-                switch (op.op) {
-                case cypher::BinaryOperator::EQ:
-                    r = Value(a == b);
-                    break;
-                case cypher::BinaryOperator::NEQ:
-                    r = Value(a != b);
-                    break;
-                case cypher::BinaryOperator::LT:
-                    r = Value(a < b);
-                    break;
-                case cypher::BinaryOperator::GT:
-                    r = Value(a > b);
-                    break;
-                case cypher::BinaryOperator::LTE:
-                    r = Value(a <= b);
-                    break;
-                case cypher::BinaryOperator::GTE:
-                    r = Value(a >= b);
-                    break;
-                case cypher::BinaryOperator::ADD:
-                    r = Value(a + b);
-                    break;
-                default:
-                    r = Value{};
-                    break;
-                }
-            } else {
-                r = Value{};
-            }
-            break;
-        }
-        result.setValue(i, r);
+    if (op.batch_fn) {
+        op.batch_fn(*left.column, *right.column, result, count);
     }
 }
 
@@ -254,31 +137,8 @@ void VectorizedEvaluator::evalUnaryOp(const binder::BoundUnaryOp& op, const Data
     if (!operand.column)
         return;
 
-    for (size_t i = 0; i < count; ++i) {
-        Value ov = operand.column->getValue(i);
-
-        Value r;
-        switch (op.op) {
-        case cypher::UnaryOperator::NOT:
-            if (std::holds_alternative<bool>(ov))
-                r = Value(!std::get<bool>(ov));
-            break;
-        case cypher::UnaryOperator::NEGATE:
-            if (std::holds_alternative<int64_t>(ov))
-                r = Value(-std::get<int64_t>(ov));
-            else if (std::holds_alternative<double>(ov))
-                r = Value(-std::get<double>(ov));
-            break;
-        case cypher::UnaryOperator::IS_NULL:
-            r = Value(isNull(ov));
-            break;
-        case cypher::UnaryOperator::IS_NOT_NULL:
-            r = Value(!isNull(ov));
-            break;
-        default:
-            break;
-        }
-        result.setValue(i, r);
+    if (op.batch_fn) {
+        op.batch_fn(*operand.column, result, count);
     }
 }
 
@@ -348,14 +208,30 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
 
 void VectorizedEvaluator::evalFunctionCall(const binder::BoundFunctionCall& fc, const DataChunk& input, Column& result,
                                            size_t count) {
-    if (!fc.func_def || !fc.func_def->scalar_fn)
+    if (!fc.func_def)
         return;
 
+    // Evaluate all arguments first
     std::vector<EvalResult> arg_results;
     arg_results.reserve(fc.args.size());
     for (const auto& arg : fc.args) {
         arg_results.push_back(evaluateInternal(arg, input));
     }
+
+    // Use batch function if available
+    if (fc.func_def->batch_scalar_fn) {
+        std::vector<const Column*> arg_cols;
+        arg_cols.reserve(arg_results.size());
+        for (const auto& ar : arg_results) {
+            arg_cols.push_back(ar.column);
+        }
+        fc.func_def->batch_scalar_fn(arg_cols, result, count);
+        return;
+    }
+
+    // Fallback: per-row scalar function call
+    if (!fc.func_def->scalar_fn)
+        return;
 
     for (size_t i = 0; i < count; ++i) {
         std::vector<Value> args;
