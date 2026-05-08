@@ -130,10 +130,9 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         auto result_output_types = output_types;
 
         if (!last_is_range) {
-            result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, ScanMode::EQUALITY,
-                                                           std::move(eq_values), std::nullopt, std::nullopt,
-                                                           std::move(output_types), store, ctx.label_defs,
-                                                           scan_op.label_prop_ids);
+            result = std::make_unique<IndexScanPhysicalOp>(
+                scan_op.variable, label_id, idx.prop_ids, ScanMode::EQUALITY, std::move(eq_values), std::nullopt,
+                std::nullopt, std::move(output_types), store, ctx.label_defs, scan_op.label_prop_ids);
         } else {
             std::optional<std::vector<PropertyValue>> composite_start;
             std::optional<std::vector<PropertyValue>> composite_end;
@@ -149,10 +148,10 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                 end_vec.push_back(std::move(*range_end));
                 composite_end = std::move(end_vec);
             }
-            result = std::make_unique<IndexScanPhysicalOp>(
-                scan_op.variable, label_id, idx.prop_ids, ScanMode::RANGE, std::vector<PropertyValue>{},
-                std::move(composite_start), std::move(composite_end), std::move(output_types), store, ctx.label_defs,
-                scan_op.label_prop_ids);
+            result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, ScanMode::RANGE,
+                                                           std::vector<PropertyValue>{}, std::move(composite_start),
+                                                           std::move(composite_end), std::move(output_types), store,
+                                                           ctx.label_defs, scan_op.label_prop_ids);
         }
 
         return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types)};
@@ -293,10 +292,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_schema.push_back(val.variable);
                     output_types.push_back(binder::BoundType::Vertex());
                 }
-                auto result =
-                    std::make_unique<AllNodeScanPhysicalOp>(val.variable, std::vector<binder::BoundType>(output_types),
-                                                            store, ctx.label_name_to_id, ctx.label_defs,
-                                                            val.label_prop_ids);
+                auto result = std::make_unique<AllNodeScanPhysicalOp>(
+                    val.variable, std::vector<binder::BoundType>(output_types), store, ctx.label_name_to_id,
+                    ctx.label_defs, val.label_prop_ids);
                 return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
             } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
                 Schema output_schema;
@@ -305,9 +303,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_schema.push_back(val.variable);
                     output_types.push_back(binder::BoundType::Vertex());
                 }
-                auto result = std::make_unique<LabelScanPhysicalOp>(
-                    val.variable, val.label_id, std::vector<binder::BoundType>(output_types), store, ctx.label_defs,
-                    val.label_prop_ids);
+                auto result = std::make_unique<LabelScanPhysicalOp>(val.variable, val.label_id,
+                                                                    std::vector<binder::BoundType>(output_types), store,
+                                                                    ctx.label_defs, val.label_prop_ids);
                 return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
             } else {
                 using Elem = typename T::element_type;

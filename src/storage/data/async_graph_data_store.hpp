@@ -64,8 +64,8 @@ public:
         co_return std::move(result);
     }
 
-    folly::coro::Task<std::optional<Properties>>
-    getVertexProperties(VertexId vid, LabelId label_id, const std::vector<uint16_t>& projection) override {
+    folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id,
+                                                                     const std::vector<uint16_t>& projection) override {
         auto result = co_await io_.dispatch([this, vid, label_id, &projection]() -> std::optional<Properties> {
             Properties props;
             bool found_any = false;
@@ -102,8 +102,8 @@ public:
         co_return std::move(result);
     }
 
-    folly::coro::Task<std::optional<Properties>>
-    getEdgeProperties(EdgeLabelId label_id, EdgeId eid, const std::vector<uint16_t>& projection) override {
+    folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid,
+                                                                   const std::vector<uint16_t>& projection) override {
         auto result = co_await io_.dispatch([this, label_id, eid, &projection]() -> std::optional<Properties> {
             Properties props;
             bool found_any = false;

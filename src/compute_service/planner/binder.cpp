@@ -476,9 +476,8 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         // Column index = aggregate output position (group_keys then aggregates).
         for (size_t i = 0; i < agg->output_names.size(); ++i) {
             if (ctx_.symbols.find(agg->output_names[i]) == ctx_.symbols.end()) {
-                BoundType col_type = (i < agg->group_keys.size())
-                    ? getBoundExprType(agg->group_keys[i])
-                    : BoundType::Any();
+                BoundType col_type =
+                    (i < agg->group_keys.size()) ? getBoundExprType(agg->group_keys[i]) : BoundType::Any();
                 ColumnInfo info;
                 info.name = agg->output_names[i];
                 info.type = std::move(col_type);
@@ -1310,8 +1309,7 @@ void Binder::addAllPropertiesForVariable(const std::string& var_name) {
     }
 }
 
-void Binder::collectLabelPropIds(const std::string& var_name,
-                                 std::unordered_map<LabelId, std::vector<uint16_t>>& out) {
+void Binder::collectLabelPropIds(const std::string& var_name, std::unordered_map<LabelId, std::vector<uint16_t>>& out) {
     for (const auto& req : ctx_.property_requirements) {
         if (req.variable_name != var_name)
             continue;
