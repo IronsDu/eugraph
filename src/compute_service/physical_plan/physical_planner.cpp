@@ -380,8 +380,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         return std::get<std::string>(child_result);
                     auto cr = std::move(std::get<PlanOperatorResult>(child_result));
 
-                    auto result = std::make_unique<FilterPhysicalOp>(std::move(v.predicate),
-                                                                     std::move(cr.output_schema), std::move(cr.op));
+                    auto result =
+                        std::make_unique<FilterPhysicalOp>(std::move(v.predicate), cr.output_schema, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundProjectOp>) {
@@ -625,8 +625,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
 
                     auto result =
-                        std::make_unique<SetPhysicalOp>(std::move(items), std::move(cr.output_schema), store,
-                                                        ctx.label_defs, ctx.label_name_to_id, std::move(cr.op));
+                        std::make_unique<SetPhysicalOp>(std::move(items), cr.output_schema, store, ctx.label_defs,
+                                                        ctx.label_name_to_id, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundRemoveOp>) {
@@ -646,8 +646,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
 
                     auto result =
-                        std::make_unique<RemovePhysicalOp>(std::move(items), std::move(cr.output_schema), store,
-                                                           ctx.label_defs, ctx.label_name_to_id, std::move(cr.op));
+                        std::make_unique<RemovePhysicalOp>(std::move(items), cr.output_schema, store, ctx.label_defs,
+                                                           ctx.label_name_to_id, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
                 } else {
