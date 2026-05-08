@@ -639,7 +639,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
 }
 
 std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& pred, BoundLogicalOperator child,
-                                                      std::optional<BoundLogicalOperator> extra_filter_child) {
+                                                      std::optional<BoundLogicalOperator> /*extra_filter_child*/) {
     auto bound_pred = bindExpression(pred);
     if (!bound_pred)
         return std::nullopt;
@@ -1204,7 +1204,7 @@ BoundType Binder::inferUnaryOpType(cypher::UnaryOperator op, const BoundType& op
 // ==================== Pattern Binding ====================
 
 bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_name, uint32_t& col_idx,
-                             std::optional<LabelId>& label_id, std::vector<uint16_t>& default_prop_ids) {
+                             std::optional<LabelId>& label_id, std::vector<uint16_t>& /*default_prop_ids*/) {
     var_name = node.variable.value_or("");
     if (var_name.empty())
         var_name = "__anon_" + std::to_string(nextAnonId());
@@ -1233,7 +1233,7 @@ bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_n
 
 bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std::string& var_name, uint32_t& col_idx,
                                      std::vector<EdgeLabelId>& edge_label_ids,
-                                     std::vector<uint16_t>& default_prop_ids) {
+                                     std::vector<uint16_t>& /*default_prop_ids*/) {
     var_name = rel.variable.value_or("");
     if (var_name.empty())
         var_name = "__anon_edge_" + std::to_string(nextAnonId());

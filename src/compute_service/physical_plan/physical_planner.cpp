@@ -325,13 +325,13 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         label_filters = v.edge_label_ids;
 
                     Schema output_schema = child_schema;
-                    if (!v.dst_variable.empty()) {
-                        output_schema.push_back(v.dst_variable);
-                        output_types.push_back(binder::BoundType::Vertex());
-                    }
                     if (!v.edge_variable.empty()) {
                         output_schema.push_back(v.edge_variable);
                         output_types.push_back(binder::BoundType::Edge());
+                    }
+                    if (!v.dst_variable.empty()) {
+                        output_schema.push_back(v.dst_variable);
+                        output_types.push_back(binder::BoundType::Vertex());
                     }
 
                     auto result = std::make_unique<ExpandPhysicalOp>(

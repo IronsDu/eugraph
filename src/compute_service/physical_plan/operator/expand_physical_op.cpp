@@ -127,10 +127,10 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             output.columns.push_back(Column::flat(output_types_[c].kind, edges.size()));
         }
 
-        // Fill new columns
+        // Fill new columns: edge first, then dst (matches binder column index order)
         for (size_t i = 0; i < edges.size(); ++i) {
-            size_t dst_col_idx = input_cols;
-            size_t edge_col_idx = input_cols + (edge_var_.empty() ? 0 : 1);
+            size_t edge_col_idx = input_cols;
+            size_t dst_col_idx = input_cols + (edge_var_.empty() ? 0 : 1);
 
             if (!dst_var_.empty()) {
                 VertexValue dst_vv;
