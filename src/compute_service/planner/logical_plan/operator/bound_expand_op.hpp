@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace eugraph {
@@ -21,7 +22,7 @@ struct BoundExpandOp {
     std::vector<EdgeLabelId> edge_label_ids;
     cypher::RelationshipDirection direction;
     std::vector<uint16_t> edge_prop_ids;
-    std::vector<uint16_t> dst_prop_ids;
+    std::unordered_map<LabelId, std::vector<uint16_t>> dst_label_prop_ids;
     BoundLogicalOperator child;
 };
 

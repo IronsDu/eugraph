@@ -10,10 +10,11 @@ namespace compute {
 IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id, uint16_t prop_id, ScanMode mode,
                                          PropertyValue search_value, std::optional<PropertyValue> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::unordered_map<LabelId, LabelDef> label_defs)
+                                         std::unordered_map<LabelId, LabelDef> label_defs,
+                                         std::unordered_map<LabelId, std::vector<uint16_t>> label_prop_ids)
     : variable_(std::move(variable)), label_id_(label_id), prop_ids_({prop_id}), mode_(mode), eq_values_(),
       range_start_(std::nullopt), range_end_(std::nullopt), output_types_(std::move(output_types)), store_(store),
-      label_defs_(std::move(label_defs)) {
+      label_defs_(std::move(label_defs)), label_prop_ids_(std::move(label_prop_ids)) {
     if (mode == ScanMode::EQUALITY) {
         eq_values_.push_back(std::move(search_value));
     } else {
@@ -29,10 +30,12 @@ IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id,
                                          std::optional<std::vector<PropertyValue>> range_start,
                                          std::optional<std::vector<PropertyValue>> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
-                                         std::unordered_map<LabelId, LabelDef> label_defs)
+                                         std::unordered_map<LabelId, LabelDef> label_defs,
+                                         std::unordered_map<LabelId, std::vector<uint16_t>> label_prop_ids)
     : variable_(std::move(variable)), label_id_(label_id), prop_ids_(std::move(prop_ids)), mode_(mode),
       eq_values_(std::move(eq_values)), range_start_(std::move(range_start)), range_end_(std::move(range_end)),
-      output_types_(std::move(output_types)), store_(store), label_defs_(std::move(label_defs)) {}
+      output_types_(std::move(output_types)), store_(store), label_defs_(std::move(label_defs)),
+      label_prop_ids_(std::move(label_prop_ids)) {}
 
 folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
     folly::coro::AsyncGenerator<std::vector<VertexId>> gen;
@@ -67,7 +70,12 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
             vv.id = vid;
             vv.labels = labels;
             for (LabelId lid : labels) {
-                auto props = co_await store_.getVertexProperties(vid, lid);
+                auto it = label_prop_ids_.find(lid);
+                if (it == label_prop_ids_.end())
+                    continue;
+                if (it->second.empty())
+                    continue;
+                auto props = co_await store_.getVertexProperties(vid, lid, it->second);
                 if (props) {
                     vv.properties[lid] = std::move(*props);
                 }

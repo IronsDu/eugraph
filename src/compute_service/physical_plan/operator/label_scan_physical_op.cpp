@@ -18,7 +18,12 @@ folly::coro::AsyncGenerator<DataChunk> LabelScanPhysicalOp::executeChunk() {
             vv.id = vid;
             vv.labels = labels;
             for (LabelId lid : labels) {
-                auto props = co_await store_.getVertexProperties(vid, lid);
+                auto it = label_prop_ids_.find(lid);
+                if (it == label_prop_ids_.end())
+                    continue;
+                if (it->second.empty())
+                    continue;
+                auto props = co_await store_.getVertexProperties(vid, lid, it->second);
                 if (props) {
                     vv.properties[lid] = std::move(*props);
                 }

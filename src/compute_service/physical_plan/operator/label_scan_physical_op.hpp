@@ -18,9 +18,10 @@ namespace compute {
 class LabelScanPhysicalOp : public PhysicalOperator {
 public:
     LabelScanPhysicalOp(std::string variable, LabelId label_id, std::vector<binder::BoundType> output_types,
-                        IAsyncGraphDataStore& store, std::unordered_map<LabelId, LabelDef> label_defs)
+                        IAsyncGraphDataStore& store, std::unordered_map<LabelId, LabelDef> label_defs,
+                        std::unordered_map<LabelId, std::vector<uint16_t>> label_prop_ids = {})
         : variable_(std::move(variable)), label_id_(label_id), output_types_(std::move(output_types)), store_(store),
-          label_defs_(std::move(label_defs)) {}
+          label_defs_(std::move(label_defs)), label_prop_ids_(std::move(label_prop_ids)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
@@ -38,6 +39,7 @@ private:
     std::vector<binder::BoundType> output_types_;
     IAsyncGraphDataStore& store_;
     std::unordered_map<LabelId, LabelDef> label_defs_;
+    std::unordered_map<LabelId, std::vector<uint16_t>> label_prop_ids_;
 };
 
 } // namespace compute

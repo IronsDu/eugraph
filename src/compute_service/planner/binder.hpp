@@ -48,6 +48,7 @@ private:
     const function::FunctionRegistry& func_registry_;
     BindContext ctx_;
     std::vector<std::string> errors_;
+    uint32_t anon_id_ = 0;
 
     void error(const std::string& msg) {
         errors_.push_back(msg);
@@ -84,10 +85,18 @@ private:
     uint32_t nextColumnIndex() {
         return ctx_.next_column_index++;
     }
+    uint32_t nextAnonId() {
+        return anon_id_++;
+    }
     BoundType propertyTypeToBoundType(PropertyType pt);
     ColumnInfo makeColumnInfo(const std::string& name, BoundType type,
                               std::optional<LabelId> source_label = std::nullopt,
                               std::optional<uint16_t> source_prop_id = std::nullopt, bool strong_typed = false);
+
+    // ── Projection pushdown ──
+    void addAllPropertiesForVariable(const std::string& var_name);
+    void applyProjectionPushdown(BoundLogicalOperator& op);
+    void collectLabelPropIds(const std::string& var_name, std::unordered_map<LabelId, std::vector<uint16_t>>& out);
 };
 
 } // namespace binder

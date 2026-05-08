@@ -138,7 +138,12 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 auto dst_labels = co_await store_.getVertexLabels(edges[i].dst_id);
                 dst_vv.labels = dst_labels;
                 for (LabelId lid : dst_labels) {
-                    auto props = co_await store_.getVertexProperties(edges[i].dst_id, lid);
+                    auto it = dst_label_prop_ids_.find(lid);
+                    if (it == dst_label_prop_ids_.end())
+                        continue;
+                    if (it->second.empty())
+                        continue;
+                    auto props = co_await store_.getVertexProperties(edges[i].dst_id, lid, it->second);
                     if (props) {
                         dst_vv.properties[lid] = std::move(*props);
                     }

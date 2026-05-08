@@ -466,43 +466,37 @@ using Schema = vector<string>;   // 列名列表
 
 ---
 
-## 十二、当前实现状态
+## 十二、实现状态
 
-### 已完成
+### 已实现功能
 
-- Cypher Parser + AST（含 `n::Label` 转型语法 + `LabelCastExpr`）
-- Binder 语义绑定：AST → BoundStatement（`src/compute_service/planner/`）
-- BoundLogicalPlan（15 种算子，独立文件在 `planner/logical_plan/operator/`）
-- Catalog 目录系统 + FunctionRegistry 函数注册表（含执行回调）
-- BoundExpression 14 种类型（含 `BoundVariableRef`）
-- BoundType 类型系统（隐式转换代价、类型合并）
+- Cypher Parser + AST（含 `n::Label` 转型语法）
+- Binder 语义绑定：AST → BoundStatement（符号解析、类型推断、属性需求收集）
+- BoundLogicalPlan（15 种算子）
+- Catalog 目录系统 + FunctionRegistry 函数注册表
+- BoundExpression 14 种类型，BoundType 类型系统（隐式转换、类型合并）
 - ColumnResolver：两阶段列解析（`BoundVariableRef` → `BoundColumnRef`）
 - DataChunk 列存数据块（FLAT/CONSTANT/DICTIONARY + SelectionVector）
-- VectorizedEvaluator 表达式求值器
-- 所有物理算子升级为 DataChunk + BoundExpression 执行
+- VectorizedEvaluator 向量化表达式求值（批量函数指针，消除 `switch(op)` 分发）
 - 读算子：Scan / IndexScan / EdgeIndexScan / Expand / Filter / Project / Limit / Sort / Skip / Distinct / Aggregate
-- 聚合：count/sum/avg/min/max + GROUP BY + DISTINCT（通过 FunctionDef 回调）
 - 写算子：CreateNode / CreateEdge / SetOp / RemoveOp（含索引维护）
+- 聚合：count/sum/avg/min/max + GROUP BY + DISTINCT
 - 多标签查询：per-label 属性存储、弱类型属性访问、强类型转型
-- 索引扫描优化（`tryBoundIndexScan` / `tryBoundEdgeIndexScan`）已接入 `planBound` 管线
+- 索引扫描优化（Filter + 可索引谓词 → IndexScanPhysicalOp / EdgeIndexScanPhysicalOp）
+- 投影下推：per-label 属性 ID 精确控制，空 map = 不加载属性
 - 流式执行（StreamContext + Thrift ServerStream）
 - 索引 DDL（CREATE/DROP/SHOW INDEX，含边索引）
-- FunctionRegistry 回调接入标量和聚合执行（`scalar_fn`、`agg_init/agg_update/agg_finalize`）
-- **A0-A3 重构完成**：目录重组、两阶段列解析、索引扫描接入新管线、旧管线完全移除
-- **B1 完成**：`BoundBinaryOp`/`BoundUnaryOp` 添加类型特化的批量函数指针（`BinaryBatchFn`/`UnaryBatchFn`），在 Binder 阶段通过 `resolveBinaryBatchFn`/`resolveUnaryBatchFn` 解析，替代求值时 `switch(op)` 枚举分发
-- **B2 完成**：`FunctionDef` 的 `ScalarFn` 升级为 `BatchScalarFn`（一次处理整列），所有内置标量函数（`id`、`nodes`、`relationships`、`length`）已更新为批量实现
 
-### 已知限制（待优化）
+### 已知限制
 
-**投影下推未实际生效**：`Binder` 收集了属性需求（`BindContext::property_requirements`），但 Scan 算子尚未利用这些信息减少属性加载量，仍然获取全部属性。
-
-**ORDER BY 引用 RETURN 别名未实现**：`Binder::bindReturn` 处理 ORDER BY 时通过 `bindExpression` 解析排序表达式，但 RETURN 子句中定义的别名（如 `RETURN id(n) AS id ORDER BY id ASC`）尚未注册到 `BindContext` 中，导致 `id` 被当作未定义变量。需在 ORDER BY 处理前将 RETURN 别名注册到符号表。
+- **ORDER BY 引用 RETURN 别名未实现**：`Binder::bindReturn` 处理 ORDER BY 时，RETURN 子句中定义的别名（如 `RETURN id(n) AS id ORDER BY id ASC`）尚未注册到 `BindContext` 中
+- **投影下推仅支持点查**：存储层通过逐属性 `getVertexProperty` 点查实现 projection，未利用 prefix scan 批量获取
+- **Expand N+1 模式**：Expand 算子逐顶点调用 `getVertexLabels` + `getVertexProperties`，未批量预取
 
 ### 待实现
 
 - DELETE, MERGE 执行
 - 多 MATCH + JOIN
-- 查询优化器（谓词下推、投影裁剪）
 - WITH 子句
 - UNWIND + 列表操作
 - DDL 异步执行（DdlWorker 后台线程）

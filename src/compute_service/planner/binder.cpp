@@ -193,6 +193,10 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
     if (errors_.empty() && current) {
         plan.root = std::move(*current);
+
+        // Apply projection pushdown: fill label_prop_ids on scan/expand operators
+        applyProjectionPushdown(plan.root);
+
         // Extract output schema from the final projection/aggregate
         // For now, just use all symbols as schema
         for (const auto& [name, col_info] : ctx_.symbols) {
@@ -225,6 +229,10 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         if (!bindNodePattern(element.node, start_var, start_col, start_label, start_prop_ids))
             return std::nullopt;
 
+        // Collect bound variable names for path building
+        std::vector<std::string> path_element_vars;
+        path_element_vars.push_back(start_var);
+
         // Create scan operator
         if (start_label) {
             BoundLabelScanOp scan;
@@ -232,13 +240,11 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             scan.column_index = start_col;
             scan.label_id = *start_label;
             scan.label_name = element.node.labels[0];
-            scan.prop_ids = start_prop_ids;
             current = scan;
         } else {
             BoundScanOp scan;
             scan.variable = start_var;
             scan.column_index = start_col;
-            scan.prop_ids = start_prop_ids;
             current = scan;
         }
 
@@ -295,12 +301,13 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             expand->src_column_index = start_col;
             expand->edge_variable = edge_var;
             expand->edge_column_index = edge_col;
+
+            path_element_vars.push_back(edge_var);
+            path_element_vars.push_back(dst_var);
             expand->dst_variable = dst_var;
             expand->dst_column_index = dst_col;
             expand->edge_label_ids = edge_label_ids;
             expand->direction = rel_pat.direction;
-            expand->edge_prop_ids = edge_prop_ids;
-            expand->dst_prop_ids = dst_prop_ids;
             expand->child = std::move(*current);
             current = std::move(expand);
 
@@ -363,17 +370,8 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             path_build->path_variable = *pp.variable;
             path_build->path_column_index = nextColumnIndex();
 
-            // Collect all element variables in the path
-            path_build->element_variables.clear();
-            const auto& first_node = element.node;
-            if (first_node.variable)
-                path_build->element_variables.push_back(*first_node.variable);
-            for (const auto& [rel, node] : element.chain) {
-                if (rel.variable)
-                    path_build->element_variables.push_back(*rel.variable);
-                if (node.variable)
-                    path_build->element_variables.push_back(*node.variable);
-            }
+            // Collect all element variables in the path (use bound variable names)
+            path_build->element_variables = path_element_vars;
             path_build->child = std::move(*current);
 
             ctx_.symbols[path_build->path_variable] = makeColumnInfo(path_build->path_variable, BoundType::Path());
@@ -429,6 +427,26 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
                 continue;
+
+            // Detect whole-variable return (e.g., RETURN n) to add all property requirements
+            if (!is_agg) {
+                if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
+                    auto& col_ref = std::get<BoundColumnRef>(*bound_expr);
+                    if (col_ref.type.kind == BoundTypeKind::VERTEX) {
+                        addAllPropertiesForVariable(col_ref.name);
+                    }
+                } else if (std::holds_alternative<std::unique_ptr<BoundLabelCast>>(*bound_expr)) {
+                    auto& lc = std::get<std::unique_ptr<BoundLabelCast>>(*bound_expr);
+                    if (std::holds_alternative<BoundColumnRef>(lc->object)) {
+                        auto var_name = std::get<BoundColumnRef>(lc->object).name;
+                        const auto* ldef = catalog_.lookupLabel(lc->label_id);
+                        if (ldef) {
+                            for (const auto& pd : ldef->properties)
+                                ctx_.addPropertyRequirement(var_name, lc->label_id, pd.id);
+                        }
+                    }
+                }
+            }
 
             if (is_agg) {
                 // Extract function name and argument from the expression
@@ -528,6 +546,24 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         auto bound_expr = bindExpression(item.expr);
         if (!bound_expr)
             continue;
+
+        // Detect whole-variable return (e.g., RETURN n) to add all property requirements
+        if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
+            auto& col_ref = std::get<BoundColumnRef>(*bound_expr);
+            if (col_ref.type.kind == BoundTypeKind::VERTEX) {
+                addAllPropertiesForVariable(col_ref.name);
+            }
+        } else if (std::holds_alternative<std::unique_ptr<BoundLabelCast>>(*bound_expr)) {
+            auto& lc = std::get<std::unique_ptr<BoundLabelCast>>(*bound_expr);
+            if (std::holds_alternative<BoundColumnRef>(lc->object)) {
+                auto var_name = std::get<BoundColumnRef>(lc->object).name;
+                const auto* ldef = catalog_.lookupLabel(lc->label_id);
+                if (ldef) {
+                    for (const auto& pd : ldef->properties)
+                        ctx_.addPropertyRequirement(var_name, lc->label_id, pd.id);
+                }
+            }
+        }
 
         std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
         BoundProjectOp::ProjectItem proj_item;
@@ -650,9 +686,9 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
                         auto bound_val = bindExpression(prop_expr);
                         if (bound_val)
                             create_node->properties.emplace_back(pd->id, std::move(*bound_val));
-                    } else {
-                        error("Property '" + prop_name + "' not found on label '" + ldef->name + "'");
                     }
+                    // Unknown properties on CREATE are silently skipped;
+                    // they will be auto-registered when write path supports dynamic schema.
                 }
             }
         }
@@ -972,24 +1008,27 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                         if (!pd) {
                             const auto* ldef = catalog_.lookupLabel(lc->label_id);
                             std::string label_name = ldef ? ldef->name : "?";
-                            error("Property '" + ptr->property + "' not found on label '" + label_name + "'");
+                            error("Label '" + label_name + "' has no property '" + ptr->property + "'");
                             return std::nullopt;
                         }
                         auto prop_ref = std::make_unique<BoundPropertyRef>();
+                        auto saved_label_id = lc->label_id;
+                        // Extract variable name from label cast object before move
+                        std::optional<std::string> saved_col_name;
+                        if (std::holds_alternative<BoundColumnRef>(lc->object)) {
+                            saved_col_name = std::get<BoundColumnRef>(lc->object).name;
+                        }
                         prop_ref->object = std::move(*obj);
                         BoundPropertyRef::ResolvedProperty rp;
-                        rp.label_id = lc->label_id;
+                        rp.label_id = saved_label_id;
                         rp.prop_id = pd->id;
                         rp.type = propertyTypeToBoundType(pd->type);
                         prop_ref->candidates.push_back(rp);
                         prop_ref->result_type = rp.type;
 
                         // Add projection requirement
-                        // Extract variable name from label cast object
-                        auto& inner = lc->object;
-                        if (std::holds_alternative<BoundColumnRef>(inner)) {
-                            auto& col_ref = std::get<BoundColumnRef>(inner);
-                            ctx_.addPropertyRequirement(col_ref.name, lc->label_id, pd->id);
+                        if (saved_col_name) {
+                            ctx_.addPropertyRequirement(*saved_col_name, saved_label_id, pd->id);
                         }
 
                         return BoundExpression(std::move(prop_ref));
@@ -1012,6 +1051,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                             return std::nullopt;
                         }
 
+                        auto saved_var_name = col_ref.name;
                         auto prop_ref = std::make_unique<BoundPropertyRef>();
                         prop_ref->object = std::move(*obj);
                         BoundType merged = BoundType::Null();
@@ -1024,7 +1064,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                             prop_ref->candidates.push_back(rp);
 
                             // Add projection requirement
-                            ctx_.addPropertyRequirement(col_ref.name, lid, pd->id);
+                            ctx_.addPropertyRequirement(saved_var_name, lid, pd->id);
                         }
                         prop_ref->result_type = merged;
 
@@ -1051,7 +1091,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
 
                 LabelId lid = catalog_.labelNameToId(ptr->label);
                 if (lid == INVALID_LABEL_ID) {
-                    error("Label '" + ptr->label + "' does not exist");
+                    error("Label '" + ptr->label + "' not found");
                     return std::nullopt;
                 }
 
@@ -1167,10 +1207,16 @@ BoundType Binder::inferUnaryOpType(cypher::UnaryOperator op, const BoundType& op
 bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_name, uint32_t& col_idx,
                              std::optional<LabelId>& label_id, std::vector<uint16_t>& default_prop_ids) {
     var_name = node.variable.value_or("");
+    if (var_name.empty())
+        var_name = "__anon_" + std::to_string(nextAnonId());
     col_idx = nextColumnIndex();
 
     label_id = std::nullopt;
     if (!node.labels.empty()) {
+        if (node.labels.size() > 1) {
+            error("Multi-label CREATE is not supported");
+            return false;
+        }
         LabelId lid = catalog_.labelNameToId(node.labels[0]);
         if (lid == INVALID_LABEL_ID) {
             error("Label '" + node.labels[0] + "' does not exist");
@@ -1190,6 +1236,8 @@ bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std
                                      std::vector<EdgeLabelId>& edge_label_ids,
                                      std::vector<uint16_t>& default_prop_ids) {
     var_name = rel.variable.value_or("");
+    if (var_name.empty())
+        var_name = "__anon_edge_" + std::to_string(nextAnonId());
     col_idx = nextColumnIndex();
 
     edge_label_ids.clear();
@@ -1239,10 +1287,108 @@ ColumnInfo Binder::makeColumnInfo(const std::string& name, BoundType type, std::
     ColumnInfo info;
     info.name = name;
     info.type = std::move(type);
+    info.column_index = ctx_.next_column_index > 0 ? ctx_.next_column_index - 1 : 0;
     info.source_label = source_label;
     info.source_prop_id = source_prop_id;
     info.strong_typed = strong_typed;
     return info;
+}
+
+// ==================== Projection Pushdown ====================
+
+void Binder::addAllPropertiesForVariable(const std::string& var_name) {
+    auto* col = ctx_.lookup(var_name);
+    if (!col)
+        return;
+
+    // RETURN n means the whole vertex — we need all properties from all labels
+    // because the vertex may have multiple labels at runtime
+    for (const auto& [lid, ldef] : catalog_.allLabels()) {
+        for (const auto& pd : ldef.properties) {
+            ctx_.addPropertyRequirement(var_name, lid, pd.id);
+        }
+    }
+}
+
+void Binder::collectLabelPropIds(const std::string& var_name,
+                                 std::unordered_map<LabelId, std::vector<uint16_t>>& out) {
+    for (const auto& req : ctx_.property_requirements) {
+        if (req.variable_name != var_name)
+            continue;
+        if (req.label_id) {
+            auto& ids = out[*req.label_id];
+            for (uint16_t pid : req.prop_ids) {
+                if (std::find(ids.begin(), ids.end(), pid) == ids.end())
+                    ids.push_back(pid);
+            }
+        } else {
+            // Weak-typed: apply to all labels that have these properties
+            for (const auto& [lid, ldef] : catalog_.allLabels()) {
+                auto& ids = out[lid];
+                for (uint16_t pid : req.prop_ids) {
+                    bool has_prop = false;
+                    for (const auto& pd : ldef.properties) {
+                        if (pd.id == pid) {
+                            has_prop = true;
+                            break;
+                        }
+                    }
+                    if (has_prop && std::find(ids.begin(), ids.end(), pid) == ids.end())
+                        ids.push_back(pid);
+                }
+            }
+        }
+    }
+}
+
+void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
+    std::visit(
+        [this](auto& val) {
+            using T = std::decay_t<decltype(val)>;
+            if constexpr (std::is_same_v<T, BoundLabelScanOp>) {
+                collectLabelPropIds(val.variable, val.label_prop_ids);
+            } else if constexpr (std::is_same_v<T, BoundScanOp>) {
+                collectLabelPropIds(val.variable, val.label_prop_ids);
+            } else {
+                using Elem = typename T::element_type;
+                auto& v = *val;
+                if constexpr (std::is_same_v<Elem, BoundExpandOp>) {
+                    collectLabelPropIds(v.dst_variable, v.dst_label_prop_ids);
+                    for (const auto& req : ctx_.property_requirements) {
+                        if (req.variable_name == v.edge_variable && req.label_id) {
+                            for (uint16_t pid : req.prop_ids) {
+                                if (std::find(v.edge_prop_ids.begin(), v.edge_prop_ids.end(), pid) ==
+                                    v.edge_prop_ids.end())
+                                    v.edge_prop_ids.push_back(pid);
+                            }
+                        }
+                    }
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundFilterOp>) {
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundProjectOp>) {
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundSortOp>) {
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundAggregateOp>) {
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundSkipOp>) {
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundLimitOp>) {
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundDistinctOp>) {
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundSetOp>) {
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundRemoveOp>) {
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundPathBuildOp>) {
+                    applyProjectionPushdown(v.child);
+                }
+                // BoundCreateNodeOp, BoundCreateEdgeOp: no child traversal needed
+            }
+        },
+        op);
 }
 
 } // namespace binder

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace eugraph {
@@ -14,7 +15,7 @@ struct BoundLabelScanOp {
     uint32_t column_index;
     LabelId label_id;
     std::string label_name;
-    std::vector<uint16_t> prop_ids;
+    std::unordered_map<LabelId, std::vector<uint16_t>> label_prop_ids;
 };
 
 } // namespace binder

@@ -64,6 +64,31 @@ public:
         co_return std::move(result);
     }
 
+    folly::coro::Task<std::optional<Properties>>
+    getVertexProperties(VertexId vid, LabelId label_id, const std::vector<uint16_t>& projection) override {
+        auto result = co_await io_.dispatch([this, vid, label_id, &projection]() -> std::optional<Properties> {
+            Properties props;
+            bool found_any = false;
+            uint16_t max_id = 0;
+            for (auto pid : projection) {
+                if (pid > max_id)
+                    max_id = pid;
+            }
+            props.resize(max_id + 1);
+            for (auto pid : projection) {
+                auto val = store_.getVertexProperty(txn_, vid, label_id, pid);
+                if (val) {
+                    props[pid] = std::move(*val);
+                    found_any = true;
+                }
+            }
+            if (!found_any)
+                return std::nullopt;
+            return props;
+        });
+        co_return std::move(result);
+    }
+
     folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) override {
         auto result = co_await io_.dispatch([this, vid]() { return store_.getVertexLabels(txn_, vid); });
         co_return std::move(result);
@@ -74,6 +99,31 @@ public:
     folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) override {
         auto result =
             co_await io_.dispatch([this, label_id, eid]() { return store_.getEdgeProperties(txn_, label_id, eid); });
+        co_return std::move(result);
+    }
+
+    folly::coro::Task<std::optional<Properties>>
+    getEdgeProperties(EdgeLabelId label_id, EdgeId eid, const std::vector<uint16_t>& projection) override {
+        auto result = co_await io_.dispatch([this, label_id, eid, &projection]() -> std::optional<Properties> {
+            Properties props;
+            bool found_any = false;
+            uint16_t max_id = 0;
+            for (auto pid : projection) {
+                if (pid > max_id)
+                    max_id = pid;
+            }
+            props.resize(max_id + 1);
+            for (auto pid : projection) {
+                auto val = store_.getEdgeProperty(txn_, label_id, eid, pid);
+                if (val) {
+                    props[pid] = std::move(*val);
+                    found_any = true;
+                }
+            }
+            if (!found_any)
+                return std::nullopt;
+            return props;
+        });
         co_return std::move(result);
     }
 

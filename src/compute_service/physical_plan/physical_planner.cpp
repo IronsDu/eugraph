@@ -132,7 +132,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         if (!last_is_range) {
             result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, ScanMode::EQUALITY,
                                                            std::move(eq_values), std::nullopt, std::nullopt,
-                                                           std::move(output_types), store, ctx.label_defs);
+                                                           std::move(output_types), store, ctx.label_defs,
+                                                           scan_op.label_prop_ids);
         } else {
             std::optional<std::vector<PropertyValue>> composite_start;
             std::optional<std::vector<PropertyValue>> composite_end;
@@ -150,7 +151,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
             }
             result = std::make_unique<IndexScanPhysicalOp>(
                 scan_op.variable, label_id, idx.prop_ids, ScanMode::RANGE, std::vector<PropertyValue>{},
-                std::move(composite_start), std::move(composite_end), std::move(output_types), store, ctx.label_defs);
+                std::move(composite_start), std::move(composite_end), std::move(output_types), store, ctx.label_defs,
+                scan_op.label_prop_ids);
         }
 
         return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types)};
@@ -293,7 +295,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 }
                 auto result =
                     std::make_unique<AllNodeScanPhysicalOp>(val.variable, std::vector<binder::BoundType>(output_types),
-                                                            store, ctx.label_name_to_id, ctx.label_defs);
+                                                            store, ctx.label_name_to_id, ctx.label_defs,
+                                                            val.label_prop_ids);
                 return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
             } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
                 Schema output_schema;
@@ -303,7 +306,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_types.push_back(binder::BoundType::Vertex());
                 }
                 auto result = std::make_unique<LabelScanPhysicalOp>(
-                    val.variable, val.label_id, std::vector<binder::BoundType>(output_types), store, ctx.label_defs);
+                    val.variable, val.label_id, std::vector<binder::BoundType>(output_types), store, ctx.label_defs,
+                    val.label_prop_ids);
                 return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
             } else {
                 using Elem = typename T::element_type;
@@ -334,7 +338,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     auto result = std::make_unique<ExpandPhysicalOp>(
                         v.src_variable, v.dst_variable, v.edge_variable, std::move(label_filters), v.direction, store,
-                        std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op));
+                        std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op),
+                        v.dst_label_prop_ids, v.edge_prop_ids);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
                     // ── Index scan optimization: Filter(LabelScan) → IndexScan ──
@@ -495,6 +500,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto output_types = std::move(cr.output_types);
 
                     Schema output_schema = child_schema;
+                    output_schema.push_back(v.path_variable);
                     output_types.push_back(binder::BoundType::Path());
 
                     auto result = std::make_unique<PathBuildPhysicalOp>(
@@ -514,8 +520,11 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         for (auto& [pid, expr] : v.properties) {
                             if (std::holds_alternative<binder::BoundLiteral>(expr)) {
                                 auto& lit = std::get<binder::BoundLiteral>(expr);
-                                if (!isNull(lit.value))
+                                if (!isNull(lit.value)) {
+                                    if (props.size() <= pid)
+                                        props.resize(pid + 1);
                                     props[pid] = valueToPropertyValue(lit.value);
+                                }
                             }
                         }
                         label_props.emplace_back(v.label_id, std::move(props));
@@ -532,7 +541,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result =
                         std::make_unique<CreateNodePhysicalOp>(v.variable, std::move(label_ids), std::move(label_props),
                                                                store, vid, std::move(child), ctx.label_defs);
-                    return PlanOperatorResult{std::move(result), Schema{}, {}};
+                    Schema node_schema;
+                    if (!v.variable.empty())
+                        node_schema.push_back(v.variable);
+                    return PlanOperatorResult{std::move(result), std::move(node_schema), {binder::BoundType::Vertex()}};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundCreateEdgeOp>) {
                     EdgeId eid = ctx.next_edge_id++;
                     ctx.variable_edge_ids[v.variable] = eid;
@@ -554,15 +566,21 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     for (auto& [pid, expr] : v.properties) {
                         if (std::holds_alternative<binder::BoundLiteral>(expr)) {
                             auto& lit = std::get<binder::BoundLiteral>(expr);
-                            if (!isNull(lit.value))
+                            if (!isNull(lit.value)) {
+                                if (props.size() <= pid)
+                                    props.resize(pid + 1);
                                 props[pid] = valueToPropertyValue(lit.value);
+                            }
                         }
                     }
 
                     auto result = std::make_unique<CreateEdgePhysicalOp>(v.variable, src_id, dst_id, v.label_id, eid,
                                                                          std::move(props), store, ctx.edge_label_defs,
                                                                          std::move(child_op));
-                    return PlanOperatorResult{std::move(result), Schema{}, {}};
+                    Schema edge_schema;
+                    if (!v.variable.empty())
+                        edge_schema.push_back(v.variable);
+                    return PlanOperatorResult{std::move(result), std::move(edge_schema), {binder::BoundType::Edge()}};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSetOp>) {
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -584,8 +602,17 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             break;
                         }
                         bsi.var_name = si.target_variable;
-                        if (si.prop_id)
-                            bsi.prop_name = "prop_" + std::to_string(*si.prop_id);
+                        if (si.prop_id && si.label_id) {
+                            auto it = ctx.label_defs.find(*si.label_id);
+                            if (it != ctx.label_defs.end()) {
+                                for (const auto& pd : it->second.properties) {
+                                    if (pd.id == *si.prop_id) {
+                                        bsi.prop_name = pd.name;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         if (si.label_id) {
                             for (auto& [name, id] : ctx.label_name_to_id) {
                                 if (id == *si.label_id) {
