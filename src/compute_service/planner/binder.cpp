@@ -433,7 +433,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             if (is_agg) {
                 // Extract function name and argument from the expression
                 BoundAggregateOp::AggregateItem agg_item;
-                agg_item.alias = std::move(alias);
+                agg_item.alias = alias;
                 agg_item.result_type = getBoundExprType(*bound_expr);
 
                 // Walk the bound expression to find the function call
@@ -457,7 +457,6 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         // Register RETURN aliases so ORDER BY can reference them.
         // Column index = aggregate output position (group_keys then aggregates).
         for (size_t i = 0; i < agg->output_names.size(); ++i) {
-            spdlog::info("AGG alias[{}]='{}' registered={}", i, agg->output_names[i], ctx_.symbols.count(agg->output_names[i]));
             if (ctx_.symbols.find(agg->output_names[i]) == ctx_.symbols.end()) {
                 BoundType col_type = (i < agg->group_keys.size())
                     ? getBoundExprType(agg->group_keys[i])
