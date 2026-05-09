@@ -219,14 +219,13 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
 
             // Operator name line
             Row name_row;
-            name_row.push_back("| " + ops[i].to_string +
-                               std::string(box_width - 1 - ops[i].to_string.size(), ' ') + "|");
+            name_row.push_back("| " + ops[i].to_string + std::string(box_width - 1 - ops[i].to_string.size(), ' ') +
+                               "|");
             plan_rows.push_back(std::move(name_row));
 
             // Output schema line
             Row out_row;
-            out_row.push_back("| " + ops[i].output + std::string(box_width - 1 - ops[i].output.size(), ' ') +
-                              "|");
+            out_row.push_back("| " + ops[i].output + std::string(box_width - 1 - ops[i].output.size(), ' ') + "|");
             plan_rows.push_back(std::move(out_row));
 
             // Bottom border
