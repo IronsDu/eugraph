@@ -30,7 +30,52 @@ public:
     std::string toString() const override {
         auto it = label_defs_.find(label_id_);
         std::string label_name = (it != label_defs_.end()) ? it->second.name : std::to_string(label_id_);
-        return "LabelScan(variable=" + variable_ + ", label=" + label_name + ")";
+        return "LabelScan(variable=" + variable_ + ", label=" + label_name + ", " + describeProps() + ")";
+    }
+
+private:
+    std::string describeProps() const {
+        if (label_prop_ids_.empty()) {
+            return "props=[]";
+        }
+        auto it = label_prop_ids_.find(label_id_);
+        if (it == label_prop_ids_.end() || it->second.empty()) {
+            return "props=[]";
+        }
+        auto def_it = label_defs_.find(label_id_);
+        if (def_it != label_defs_.end() && it->second.size() == def_it->second.properties.size()) {
+            bool all_match = true;
+            for (size_t i = 0; i < it->second.size(); ++i) {
+                if (it->second[i] != def_it->second.properties[i].id) {
+                    all_match = false;
+                    break;
+                }
+            }
+            if (all_match) {
+                return "props=ALL";
+            }
+        }
+        std::string result = "props=[";
+        for (size_t i = 0; i < it->second.size(); ++i) {
+            if (i > 0)
+                result += ", ";
+            if (def_it != label_defs_.end()) {
+                bool found = false;
+                for (const auto& pd : def_it->second.properties) {
+                    if (pd.id == it->second[i]) {
+                        result += pd.name;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    result += std::to_string(it->second[i]);
+            } else {
+                result += std::to_string(it->second[i]);
+            }
+        }
+        result += "]";
+        return result;
     }
 
 private:

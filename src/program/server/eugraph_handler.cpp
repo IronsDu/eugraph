@@ -436,6 +436,13 @@ folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> EuGraphHa
         info.id() = l.id;
         info.name() = l.name;
         info.directed() = l.directed;
+        for (const auto& pd : l.properties) {
+            thrift::PropertyDefThrift p;
+            p.name() = pd.name;
+            p.type() = static_cast<thrift::PropertyType>(static_cast<int>(pd.type));
+            p.is_required() = pd.required;
+            info.properties()->push_back(std::move(p));
+        }
         resp->push_back(std::move(info));
     }
 
