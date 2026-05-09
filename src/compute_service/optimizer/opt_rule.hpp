@@ -50,7 +50,7 @@ public:
     bool topMatch(const GroupExpr& expr) const;
 
     // Detailed condition check after binding.
-    virtual bool condition(GroupExpr& expr, Memo& memo) const {
+    virtual bool condition(GroupExpr& /*expr*/, Memo& /*memo*/) const {
         return true;
     }
 
