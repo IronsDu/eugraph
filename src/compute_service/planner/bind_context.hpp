@@ -41,6 +41,8 @@ struct BindContext {
     std::unordered_map<std::string, ColumnInfo> symbols;
     /// Accumulated property requirements for projection pushdown.
     std::vector<PropertyRequirement> property_requirements;
+    /// Ordered output columns from RETURN clause (populated by bindReturn).
+    std::vector<ColumnInfo> return_columns;
     /// Next column index to assign.
     uint32_t next_column_index = 0;
 

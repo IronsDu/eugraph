@@ -59,71 +59,80 @@ public:
     // ==================== Vertex Properties ====================
 
     folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id) override {
-        auto result =
-            co_await io_.dispatch([this, vid, label_id]() { return store_.getVertexProperties(txn_, vid, label_id); });
+        auto txn = txn_;
+        auto result = co_await io_.dispatch(
+            [this, txn, vid, label_id]() { return store_.getVertexProperties(txn, vid, label_id); });
         co_return std::move(result);
     }
 
     folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id,
                                                                      const std::vector<uint16_t>& projection) override {
-        auto result = co_await io_.dispatch([this, vid, label_id, &projection]() -> std::optional<Properties> {
-            Properties props;
-            bool found_any = false;
-            uint16_t max_id = 0;
-            for (auto pid : projection) {
-                if (pid > max_id)
-                    max_id = pid;
-            }
-            props.resize(max_id + 1);
-            for (auto pid : projection) {
-                auto val = store_.getVertexProperty(txn_, vid, label_id, pid);
-                if (val) {
-                    props[pid] = std::move(*val);
-                    found_any = true;
+        auto txn = txn_;
+        auto proj = projection; // copy to avoid dangling reference in IO-dispatched lambda
+        auto result =
+            co_await io_.dispatch([this, txn, vid, label_id, proj = std::move(proj)]() -> std::optional<Properties> {
+                Properties props;
+                bool found_any = false;
+                uint16_t max_id = 0;
+                for (auto pid : proj) {
+                    if (pid > max_id)
+                        max_id = pid;
                 }
-            }
-            if (!found_any)
-                return std::nullopt;
-            return props;
-        });
+                props.resize(max_id + 1);
+                for (auto pid : proj) {
+                    auto val = store_.getVertexProperty(txn, vid, label_id, pid);
+                    if (val) {
+                        props[pid] = std::move(*val);
+                        found_any = true;
+                    }
+                }
+                if (!found_any)
+                    return std::nullopt;
+                return props;
+            });
         co_return std::move(result);
     }
 
     folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) override {
-        auto result = co_await io_.dispatch([this, vid]() { return store_.getVertexLabels(txn_, vid); });
-        co_return std::move(result);
+        auto txn = txn_;
+        auto result = co_await io_.dispatch([this, txn, vid]() { return store_.getVertexLabels(txn, vid); });
+        co_return result;
     }
 
     // ==================== Edge Properties ====================
 
     folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) override {
-        auto result =
-            co_await io_.dispatch([this, label_id, eid]() { return store_.getEdgeProperties(txn_, label_id, eid); });
+        auto txn = txn_;
+        auto result = co_await io_.dispatch(
+            [this, txn, label_id, eid]() { return store_.getEdgeProperties(txn, label_id, eid); });
         co_return std::move(result);
     }
 
     folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid,
                                                                    const std::vector<uint16_t>& projection) override {
-        auto result = co_await io_.dispatch([this, label_id, eid, &projection]() -> std::optional<Properties> {
-            Properties props;
-            bool found_any = false;
-            uint16_t max_id = 0;
-            for (auto pid : projection) {
-                if (pid > max_id)
-                    max_id = pid;
-            }
-            props.resize(max_id + 1);
-            for (auto pid : projection) {
-                auto val = store_.getEdgeProperty(txn_, label_id, eid, pid);
-                if (val) {
-                    props[pid] = std::move(*val);
-                    found_any = true;
+        auto txn = txn_;
+        auto proj = projection;
+        auto result =
+            co_await io_.dispatch([this, txn, label_id, eid, proj = std::move(proj)]() -> std::optional<Properties> {
+                Properties props;
+                bool found_any = false;
+                uint16_t max_id = 0;
+                for (auto pid : proj) {
+                    if (pid > max_id)
+                        max_id = pid;
                 }
-            }
-            if (!found_any)
-                return std::nullopt;
-            return props;
-        });
+                props.resize(max_id + 1);
+                for (auto pid : proj) {
+                    auto val = store_.getEdgeProperty(txn, label_id, eid, pid);
+                    if (val) {
+                        props[pid] = std::move(*val);
+                        found_any = true;
+                    }
+                }
+                if (!found_any)
+                    return std::nullopt;
+                return props;
+            });
         co_return std::move(result);
     }
 
@@ -131,8 +140,11 @@ public:
 
     folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByLabel(LabelId label_id) override {
         constexpr size_t BATCH = 1024;
+        auto txn = txn_;
         auto cursor =
-            co_await io_.dispatch([this, label_id]() { return store_.createVertexScanCursor(txn_, label_id); });
+            co_await io_.dispatch([this, txn, label_id]() { return store_.createVertexScanCursor(txn, label_id); });
+        if (!cursor)
+            co_return;
 
         while (true) {
             std::vector<VertexId> batch;
@@ -154,9 +166,12 @@ public:
     folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
     scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) override {
         constexpr size_t BATCH = 1024;
-        auto cursor = co_await io_.dispatch([this, vid, direction, label_filter]() {
-            return store_.createEdgeScanCursor(txn_, vid, direction, label_filter);
+        auto txn = txn_;
+        auto cursor = co_await io_.dispatch([this, txn, vid, direction, label_filter]() {
+            return store_.createEdgeScanCursor(txn, vid, direction, label_filter);
         });
+        if (!cursor)
+            co_return;
 
         while (true) {
             std::vector<ISyncGraphDataStore::EdgeIndexEntry> batch;
@@ -179,9 +194,12 @@ public:
     scanEdgesByType(EdgeLabelId label_id, std::optional<VertexId> src_filter,
                     std::optional<VertexId> dst_filter) override {
         constexpr size_t BATCH = 1024;
-        auto cursor = co_await io_.dispatch([this, label_id, src_filter, dst_filter]() {
-            return store_.createEdgeTypeScanCursor(txn_, label_id, src_filter, dst_filter);
+        auto txn = txn_;
+        auto cursor = co_await io_.dispatch([this, txn, label_id, src_filter, dst_filter]() {
+            return store_.createEdgeTypeScanCursor(txn, label_id, src_filter, dst_filter);
         });
+        if (!cursor)
+            co_return;
 
         while (true) {
             std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> batch;
@@ -202,34 +220,43 @@ public:
 
     folly::coro::Task<bool> putVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id,
                                               const PropertyValue& value) override {
-        auto ok = co_await io_.dispatch([this, vid, label_id, prop_id, &value]() {
-            return store_.putVertexProperty(txn_, vid, label_id, prop_id, value);
+        auto txn = txn_;
+        auto val = value;
+        auto ok = co_await io_.dispatch([this, txn, vid, label_id, prop_id, val = std::move(val)]() {
+            return store_.putVertexProperty(txn, vid, label_id, prop_id, val);
         });
         co_return ok;
     }
 
     folly::coro::Task<bool> putVertexProperties(VertexId vid, LabelId label_id, const Properties& props) override {
-        auto ok = co_await io_.dispatch(
-            [this, vid, label_id, &props]() { return store_.putVertexProperties(txn_, vid, label_id, props); });
+        auto txn = txn_;
+        auto p = props;
+        auto ok = co_await io_.dispatch([this, txn, vid, label_id, p = std::move(p)]() {
+            return store_.putVertexProperties(txn, vid, label_id, p);
+        });
         co_return ok;
     }
 
     folly::coro::Task<bool> deleteVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id) override {
+        auto txn = txn_;
         auto ok = co_await io_.dispatch(
-            [this, vid, label_id, prop_id]() { return store_.deleteVertexProperty(txn_, vid, label_id, prop_id); });
+            [this, txn, vid, label_id, prop_id]() { return store_.deleteVertexProperty(txn, vid, label_id, prop_id); });
         co_return ok;
     }
 
     // ==================== Vertex Label Write ====================
 
     folly::coro::Task<bool> addVertexLabel(VertexId vid, LabelId label_id) override {
-        auto ok = co_await io_.dispatch([this, vid, label_id]() { return store_.addVertexLabel(txn_, vid, label_id); });
+        auto txn = txn_;
+        auto ok =
+            co_await io_.dispatch([this, txn, vid, label_id]() { return store_.addVertexLabel(txn, vid, label_id); });
         co_return ok;
     }
 
     folly::coro::Task<bool> removeVertexLabel(VertexId vid, LabelId label_id) override {
-        auto ok =
-            co_await io_.dispatch([this, vid, label_id]() { return store_.removeVertexLabel(txn_, vid, label_id); });
+        auto txn = txn_;
+        auto ok = co_await io_.dispatch(
+            [this, txn, vid, label_id]() { return store_.removeVertexLabel(txn, vid, label_id); });
         co_return ok;
     }
 
@@ -237,85 +264,121 @@ public:
 
     folly::coro::Task<bool> insertVertex(VertexId vid,
                                          std::span<const std::pair<LabelId, Properties>> label_props) override {
+        auto txn = txn_;
         auto result = co_await io_.dispatch(
-            [this, vid, label_props]() -> bool { return store_.insertVertex(txn_, vid, label_props); });
+            [this, txn, vid, label_props]() -> bool { return store_.insertVertex(txn, vid, label_props); });
         co_return result;
     }
 
     folly::coro::Task<bool> insertEdge(EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id, uint64_t seq,
                                        const Properties& props) override {
-        auto result = co_await io_.dispatch([this, eid, src_id, dst_id, label_id, seq, &props]() -> bool {
-            return store_.insertEdge(txn_, eid, src_id, dst_id, label_id, seq, props);
-        });
+        auto txn = txn_;
+        auto p = props;
+        auto result =
+            co_await io_.dispatch([this, txn, eid, src_id, dst_id, label_id, seq, p = std::move(p)]() -> bool {
+                return store_.insertEdge(txn, eid, src_id, dst_id, label_id, seq, p);
+            });
         co_return result;
     }
 
     // ==================== Index Operations ====================
 
     folly::coro::Task<bool> createIndex(const std::string& table_name) override {
-        auto ok = co_await io_.dispatch([this, &table_name]() { return store_.createIndex(table_name); });
+        auto name = table_name;
+        auto ok = co_await io_.dispatch([this, name = std::move(name)]() { return store_.createIndex(name); });
         co_return ok;
     }
 
     folly::coro::Task<bool> dropIndex(const std::string& table_name) override {
-        auto ok = co_await io_.dispatch([this, &table_name]() { return store_.dropIndex(table_name); });
+        auto name = table_name;
+        auto ok = co_await io_.dispatch([this, name = std::move(name)]() { return store_.dropIndex(name); });
         co_return ok;
     }
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value,
                                              uint64_t entity_id) override {
-        auto ok = co_await io_.dispatch(
-            [this, &table, &value, entity_id]() { return store_.insertIndexEntry(table, value, entity_id); });
+        auto txn = txn_;
+        auto t = table;
+        auto val = value;
+        auto ok = co_await io_.dispatch([this, txn, t = std::move(t), val = std::move(val), entity_id]() {
+            return store_.insertIndexEntry(t, val, entity_id);
+        });
         co_return ok;
     }
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                              uint64_t entity_id) override {
-        auto ok = co_await io_.dispatch(
-            [this, &table, &values, entity_id]() { return store_.insertIndexEntry(table, values, entity_id); });
+        auto txn = txn_;
+        auto t = table;
+        auto vals = values;
+        auto ok = co_await io_.dispatch([this, txn, t = std::move(t), vals = std::move(vals), entity_id]() {
+            return store_.insertIndexEntry(t, vals, entity_id);
+        });
         co_return ok;
     }
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id,
                                              std::string payload) override {
-        auto ok = co_await io_.dispatch([this, &table, &value, entity_id, payload = std::move(payload)]() {
-            return store_.insertIndexEntry(table, value, entity_id, payload);
-        });
+        auto txn = txn_;
+        auto t = table;
+        auto val = value;
+        auto ok = co_await io_.dispatch(
+            [this, txn, t = std::move(t), val = std::move(val), entity_id, payload = std::move(payload)]() {
+                return store_.insertIndexEntry(t, val, entity_id, payload);
+            });
         co_return ok;
     }
 
     folly::coro::Task<bool> insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                              uint64_t entity_id, std::string payload) override {
-        auto ok = co_await io_.dispatch([this, &table, &values, entity_id, payload = std::move(payload)]() {
-            return store_.insertIndexEntry(table, values, entity_id, payload);
-        });
+        auto txn = txn_;
+        auto t = table;
+        auto vals = values;
+        auto ok = co_await io_.dispatch(
+            [this, txn, t = std::move(t), vals = std::move(vals), entity_id, payload = std::move(payload)]() {
+                return store_.insertIndexEntry(t, vals, entity_id, payload);
+            });
         co_return ok;
     }
 
     folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const PropertyValue& value,
                                              uint64_t entity_id) override {
-        auto ok = co_await io_.dispatch(
-            [this, &table, &value, entity_id]() { return store_.deleteIndexEntry(table, value, entity_id); });
+        auto txn = txn_;
+        auto t = table;
+        auto val = value;
+        auto ok = co_await io_.dispatch([this, txn, t = std::move(t), val = std::move(val), entity_id]() {
+            return store_.deleteIndexEntry(t, val, entity_id);
+        });
         co_return ok;
     }
 
     folly::coro::Task<bool> deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                              uint64_t entity_id) override {
-        auto ok = co_await io_.dispatch(
-            [this, &table, &values, entity_id]() { return store_.deleteIndexEntry(table, values, entity_id); });
+        auto txn = txn_;
+        auto t = table;
+        auto vals = values;
+        auto ok = co_await io_.dispatch([this, txn, t = std::move(t), vals = std::move(vals), entity_id]() {
+            return store_.deleteIndexEntry(t, vals, entity_id);
+        });
         co_return ok;
     }
 
     folly::coro::Task<bool> checkUniqueConstraint(const std::string& table, const PropertyValue& value) override {
-        auto ok =
-            co_await io_.dispatch([this, &table, &value]() { return store_.checkUniqueConstraint(table, value); });
+        auto txn = txn_;
+        auto t = table;
+        auto val = value;
+        auto ok = co_await io_.dispatch(
+            [this, txn, t = std::move(t), val = std::move(val)]() { return store_.checkUniqueConstraint(t, val); });
         co_return ok;
     }
 
     folly::coro::Task<bool> checkUniqueConstraint(const std::string& table,
                                                   const std::vector<PropertyValue>& values) override {
-        auto ok =
-            co_await io_.dispatch([this, &table, &values]() { return store_.checkUniqueConstraint(table, values); });
+        auto txn = txn_;
+        auto t = table;
+        auto vals = values;
+        auto ok = co_await io_.dispatch(
+            [this, txn, t = std::move(t), vals = std::move(vals)]() { return store_.checkUniqueConstraint(t, vals); });
         co_return ok;
     }
 
@@ -324,11 +387,13 @@ public:
     folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByIndex(LabelId label_id, uint16_t prop_id,
                                                                            const PropertyValue& value) override {
         constexpr size_t BATCH = 1024;
+        auto txn = txn_;
         std::string table = vidxTable(label_id, prop_id);
+        auto val = value;
         while (true) {
             std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([&]() {
-                store_.scanIndexEquality(txn_, table, value, [&](uint64_t entity_id) {
+            co_await io_.dispatchVoid([this, txn, &table, &val, &batch]() {
+                store_.scanIndexEquality(txn, table, val, [&](uint64_t entity_id) {
                     batch.push_back(entity_id);
                     return batch.size() < BATCH;
                 });
@@ -345,11 +410,13 @@ public:
     scanVerticesByIndexComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
                                  const std::vector<PropertyValue>& values) override {
         constexpr size_t BATCH = 1024;
+        auto txn = txn_;
         std::string table = vidxCompositeTable(label_id, prop_ids);
+        auto vals = values;
         while (true) {
             std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([&]() {
-                store_.scanIndexEquality(txn_, table, values, [&](uint64_t entity_id) {
+            co_await io_.dispatchVoid([this, txn, &table, &vals, &batch]() {
+                store_.scanIndexEquality(txn, table, vals, [&](uint64_t entity_id) {
                     batch.push_back(entity_id);
                     return batch.size() < BATCH;
                 });
@@ -366,11 +433,14 @@ public:
     scanVerticesByIndexRange(LabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
                              const std::optional<PropertyValue>& end) override {
         constexpr size_t BATCH = 1024;
+        auto txn = txn_;
         std::string table = vidxTable(label_id, prop_id);
+        auto s = start;
+        auto e = end;
         while (true) {
             std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([&]() {
-                store_.scanIndexRange(txn_, table, start, end, [&](uint64_t entity_id) {
+            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
+                store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
                     batch.push_back(entity_id);
                     return batch.size() < BATCH;
                 });
@@ -388,11 +458,14 @@ public:
                                       const std::optional<std::vector<PropertyValue>>& start,
                                       const std::optional<std::vector<PropertyValue>>& end) override {
         constexpr size_t BATCH = 1024;
+        auto txn = txn_;
         std::string table = vidxCompositeTable(label_id, prop_ids);
+        auto s = start;
+        auto e = end;
         while (true) {
             std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([&]() {
-                store_.scanIndexRange(txn_, table, start, end, [&](uint64_t entity_id) {
+            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
+                store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
                     batch.push_back(entity_id);
                     return batch.size() < BATCH;
                 });
@@ -410,14 +483,16 @@ public:
     folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
     scanEdgesByIndex(EdgeLabelId label_id, uint16_t prop_id, const PropertyValue& value) override {
         constexpr size_t BATCH = 1024;
+        auto txn = txn_;
         std::string table = eidxTable(label_id, prop_id);
+        auto val = value;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
-            co_await io_.dispatchVoid([&]() {
-                store_.scanIndexEqualityWithValue(txn_, table, value, [&](uint64_t entity_id, std::string_view val) {
+            co_await io_.dispatchVoid([this, txn, &table, &val, &batch]() {
+                store_.scanIndexEqualityWithValue(txn, table, val, [&](uint64_t entity_id, std::string_view v) {
                     EdgeIndexScanEntry entry;
                     entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(val, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
                     batch.push_back(entry);
                     return batch.size() < BATCH;
                 });
@@ -434,14 +509,16 @@ public:
     scanEdgesByIndexComposite(EdgeLabelId label_id, const std::vector<uint16_t>& prop_ids,
                               const std::vector<PropertyValue>& values) override {
         constexpr size_t BATCH = 1024;
+        auto txn = txn_;
         std::string table = eidxCompositeTable(label_id, prop_ids);
+        auto vals = values;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
-            co_await io_.dispatchVoid([&]() {
-                store_.scanIndexEqualityWithValue(txn_, table, values, [&](uint64_t entity_id, std::string_view val) {
+            co_await io_.dispatchVoid([this, txn, &table, &vals, &batch]() {
+                store_.scanIndexEqualityWithValue(txn, table, vals, [&](uint64_t entity_id, std::string_view v) {
                     EdgeIndexScanEntry entry;
                     entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(val, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
                     batch.push_back(entry);
                     return batch.size() < BATCH;
                 });
@@ -458,14 +535,17 @@ public:
     scanEdgesByIndexRange(EdgeLabelId label_id, uint16_t prop_id, const std::optional<PropertyValue>& start,
                           const std::optional<PropertyValue>& end) override {
         constexpr size_t BATCH = 1024;
+        auto txn = txn_;
         std::string table = eidxTable(label_id, prop_id);
+        auto s = start;
+        auto e = end;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
-            co_await io_.dispatchVoid([&]() {
-                store_.scanIndexRangeWithValue(txn_, table, start, end, [&](uint64_t entity_id, std::string_view val) {
+            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
+                store_.scanIndexRangeWithValue(txn, table, s, e, [&](uint64_t entity_id, std::string_view v) {
                     EdgeIndexScanEntry entry;
                     entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(val, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
                     batch.push_back(entry);
                     return batch.size() < BATCH;
                 });
@@ -483,14 +563,17 @@ public:
                                    const std::optional<std::vector<PropertyValue>>& start,
                                    const std::optional<std::vector<PropertyValue>>& end) override {
         constexpr size_t BATCH = 1024;
+        auto txn = txn_;
         std::string table = eidxCompositeTable(label_id, prop_ids);
+        auto s = start;
+        auto e = end;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
-            co_await io_.dispatchVoid([&]() {
-                store_.scanIndexRangeWithValue(txn_, table, start, end, [&](uint64_t entity_id, std::string_view val) {
+            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
+                store_.scanIndexRangeWithValue(txn, table, s, e, [&](uint64_t entity_id, std::string_view v) {
                     EdgeIndexScanEntry entry;
                     entry.edge_id = entity_id;
-                    ValueCodec::decodeEdgeAdjacency(val, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
+                    ValueCodec::decodeEdgeAdjacency(v, entry.src_id, entry.dst_id, entry.seq, entry.label_id);
                     batch.push_back(entry);
                     return batch.size() < BATCH;
                 });

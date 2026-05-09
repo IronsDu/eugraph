@@ -197,10 +197,13 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
         // Apply projection pushdown: fill label_prop_ids on scan/expand operators
         applyProjectionPushdown(plan.root);
 
-        // Extract output schema from the final projection/aggregate
-        // For now, just use all symbols as schema
-        for (const auto& [name, col_info] : ctx_.symbols) {
-            plan.output_schema.push_back(col_info);
+        // Use return_columns if available (from RETURN clause), otherwise fall back to all symbols
+        if (!ctx_.return_columns.empty()) {
+            plan.output_schema = std::move(ctx_.return_columns);
+        } else {
+            for (const auto& [name, col_info] : ctx_.symbols) {
+                plan.output_schema.push_back(col_info);
+            }
         }
         return true;
     }
@@ -484,6 +487,12 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                 info.column_index = static_cast<uint32_t>(i);
                 ctx_.symbols[agg->output_names[i]] = std::move(info);
             }
+            // Populate return_columns for output_schema
+            ColumnInfo out_info;
+            out_info.name = agg->output_names[i];
+            out_info.type = (i < agg->group_keys.size()) ? getBoundExprType(agg->group_keys[i]) : BoundType::Any();
+            out_info.column_index = static_cast<uint32_t>(i);
+            ctx_.return_columns.push_back(std::move(out_info));
         }
 
         auto result = std::make_unique<BoundProjectOp>(); // Agg is a kind of project
@@ -584,6 +593,12 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             info.column_index = static_cast<uint32_t>(i);
             ctx_.symbols[proj_item.alias] = std::move(info);
         }
+        // Populate return_columns for output_schema
+        ColumnInfo out_info;
+        out_info.name = proj_item.alias;
+        out_info.type = proj_item.result_type;
+        out_info.column_index = static_cast<uint32_t>(i);
+        ctx_.return_columns.push_back(std::move(out_info));
     }
 
     BoundLogicalOperator current = std::move(proj);
