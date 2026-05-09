@@ -168,10 +168,31 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
 
     // 5.5. If EXPLAIN, format plan into generator without executing
     if (is_explain) {
-        std::vector<std::string> op_lines;
+        // Build output schema description for an operator
+        auto formatOutput = [](const PhysicalOperator& op) -> std::string {
+            const auto& schema = op.outputSchema();
+            const auto& types = op.outputTypes();
+            if (schema.empty())
+                return "  output: []";
+            std::string result = "  output: [";
+            for (size_t i = 0; i < schema.size(); ++i) {
+                if (i > 0)
+                    result += ", ";
+                result += schema[i] + ":" + types[i].toString();
+            }
+            result += "]";
+            return result;
+        };
+
+        // Collect operator info: toString + output schema for each operator
+        struct OpInfo {
+            std::string to_string;
+            std::string output;
+        };
+        std::vector<OpInfo> ops;
         std::function<void(const PhysicalOperator&)> collect;
         collect = [&](const PhysicalOperator& op) {
-            op_lines.push_back(op.toString());
+            ops.push_back({op.toString(), formatOutput(op)});
             for (const auto* child : op.children()) {
                 collect(*child);
             }
@@ -179,37 +200,58 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
         collect(*phys_op);
 
         ctx->columns.clear();
-        if (op_lines.empty()) {
-            ctx->columns.push_back("Plan");
-        } else {
-            size_t max_len = 0;
-            for (const auto& line : op_lines) {
-                max_len = std::max(max_len, line.size());
-            }
-            ctx->columns.push_back("Plan");
-            std::vector<Row> plan_rows;
-            for (size_t i = 0; i < op_lines.size(); i++) {
-                size_t left_pad = (max_len - op_lines[i].size()) / 2;
-                Row row;
-                row.push_back(std::string(left_pad, ' ') + op_lines[i]);
-                plan_rows.push_back(std::move(row));
-                if (i + 1 < op_lines.size()) {
-                    size_t arrow_pad = max_len / 2;
-                    Row arrow_row;
-                    arrow_row.push_back(std::string(arrow_pad, ' ') + "\xe2\x86\x93");
-                    plan_rows.push_back(std::move(arrow_row));
-                }
-            }
-            auto explain_row_gen = folly::coro::co_invoke(
-                [rows = std::move(plan_rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
-                    if (!rows.empty()) {
-                        RowBatch batch;
-                        batch.rows = std::move(rows);
-                        co_yield std::move(batch);
-                    }
-                });
-            ctx->gen = wrapRowBatchToChunkGenerator(std::move(explain_row_gen));
+        ctx->columns.push_back("Plan");
+
+        // Calculate box width from all lines
+        size_t box_width = 0;
+        for (const auto& op : ops) {
+            box_width = std::max(box_width, op.to_string.size());
+            box_width = std::max(box_width, op.output.size());
         }
+        box_width += 2; // padding inside box
+
+        std::vector<Row> plan_rows;
+        for (size_t i = 0; i < ops.size(); i++) {
+            // Top border
+            Row top_row;
+            top_row.push_back("+" + std::string(box_width, '-') + "+");
+            plan_rows.push_back(std::move(top_row));
+
+            // Operator name line
+            Row name_row;
+            name_row.push_back("| " + ops[i].to_string +
+                               std::string(box_width - 1 - ops[i].to_string.size(), ' ') + "|");
+            plan_rows.push_back(std::move(name_row));
+
+            // Output schema line
+            Row out_row;
+            out_row.push_back("| " + ops[i].output + std::string(box_width - 1 - ops[i].output.size(), ' ') +
+                              "|");
+            plan_rows.push_back(std::move(out_row));
+
+            // Bottom border
+            Row bot_row;
+            bot_row.push_back("+" + std::string(box_width, '-') + "+");
+            plan_rows.push_back(std::move(bot_row));
+
+            // Arrow between operators
+            if (i + 1 < ops.size()) {
+                size_t arrow_pad = box_width / 2;
+                Row arrow_row;
+                arrow_row.push_back(std::string(arrow_pad, ' ') + "\xe2\x86\x93");
+                plan_rows.push_back(std::move(arrow_row));
+            }
+        }
+
+        auto explain_row_gen =
+            folly::coro::co_invoke([rows = std::move(plan_rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
+                if (!rows.empty()) {
+                    RowBatch batch;
+                    batch.rows = std::move(rows);
+                    co_yield std::move(batch);
+                }
+            });
+        ctx->gen = wrapRowBatchToChunkGenerator(std::move(explain_row_gen));
 
         co_await async_data_.rollbackTran(txn);
         ctx->should_commit = false;
