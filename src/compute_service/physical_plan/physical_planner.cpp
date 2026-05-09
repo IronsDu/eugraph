@@ -268,6 +268,19 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
 
 // ==================== Bound Plan Pipeline ====================
 
+namespace {
+std::unique_ptr<PhysicalOperator> finalizePlanResult(PlanOperatorResult&& result) {
+    result.op->setOutputSchema(std::move(result.output_schema), std::move(result.output_types));
+    return std::move(result.op);
+}
+
+PlanOperatorResult extractChildResult(std::variant<PlanOperatorResult, std::string>&& child_result) {
+    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+    cr.op->setOutputSchema(Schema(cr.output_schema), std::vector<binder::BoundType>(cr.output_types));
+    return cr;
+}
+} // namespace
+
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
 PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphDataStore& store, PlanContext& ctx) {
     Schema empty_schema;
@@ -275,7 +288,7 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     auto result = planBoundOperator(bound_plan.root, store, ctx, empty_schema, empty_types);
     if (std::holds_alternative<std::string>(result))
         return std::get<std::string>(result);
-    return std::move(std::get<PlanOperatorResult>(result).op);
+    return finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
 }
 
 std::variant<PlanOperatorResult, std::string>
@@ -315,7 +328,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
                     auto child_op = std::move(cr.op);
                     auto child_schema = std::move(cr.output_schema);
                     auto output_types = std::move(cr.output_types);
@@ -378,7 +391,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
 
                     auto result =
                         std::make_unique<FilterPhysicalOp>(std::move(v.predicate), cr.output_schema, std::move(cr.op));
@@ -388,7 +401,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
                     auto child_op = std::move(cr.op);
 
                     std::vector<ProjectPhysicalOp::ProjectItem> items;
@@ -410,7 +423,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
                     auto child_op = std::move(cr.op);
 
                     std::vector<AggregatePhysicalOp::GroupKey> group_keys;
@@ -451,7 +464,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
 
                     std::vector<SortPhysicalOp::SortItem> sort_items;
                     for (auto& si : v.items) {
@@ -468,7 +481,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
                     auto result = std::make_unique<SkipPhysicalOp>(v.count, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
@@ -476,7 +489,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
                     auto result = std::make_unique<LimitPhysicalOp>(v.count, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
@@ -484,7 +497,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
                     auto result = std::make_unique<DistinctPhysicalOp>(std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
@@ -492,7 +505,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
                     auto child_op = std::move(cr.op);
                     auto child_schema = std::move(cr.output_schema);
                     auto output_types = std::move(cr.output_types);
@@ -533,7 +546,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         auto child_result = planBoundOperator(*v.child, store, ctx, input_schema, input_types);
                         if (std::holds_alternative<std::string>(child_result))
                             return std::get<std::string>(child_result);
-                        child = std::move(std::get<PlanOperatorResult>(child_result).op);
+                        child = finalizePlanResult(std::move(std::get<PlanOperatorResult>(child_result)));
                     }
 
                     auto result =
@@ -550,7 +563,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto child_op = std::move(std::get<PlanOperatorResult>(child_result).op);
+                    auto child_cr = extractChildResult(std::move(child_result));
+                    auto child_op = std::move(child_cr.op);
 
                     VertexId src_id = 0, dst_id = 0;
                     auto sit = ctx.variable_vertex_ids.find(v.src_variable);
@@ -583,7 +597,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
 
                     std::vector<SetPhysicalOp::BoundSetItem> items;
                     for (auto& si : v.items) {
@@ -633,7 +647,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
-                    auto cr = std::move(std::get<PlanOperatorResult>(child_result));
+                    auto cr = extractChildResult(std::move(child_result));
 
                     std::vector<RemovePhysicalOp::BoundRemoveItem> items;
                     for (auto& ri : v.items) {

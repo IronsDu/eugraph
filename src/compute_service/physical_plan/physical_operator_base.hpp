@@ -2,6 +2,7 @@
 
 #include "compute_service/executor/data_chunk.hpp"
 #include "compute_service/executor/row.hpp"
+#include "compute_service/planner/bound_type.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 
@@ -32,11 +33,27 @@ public:
         return {};
     }
 
+    void setOutputSchema(Schema schema, std::vector<binder::BoundType> types) {
+        output_schema_ = std::move(schema);
+        output_types_ = std::move(types);
+    }
+
+    const Schema& outputSchema() const {
+        return output_schema_;
+    }
+    const std::vector<binder::BoundType>& outputTypes() const {
+        return output_types_;
+    }
+
 protected:
     /// Bridge for upgraded operators: wraps executeChunk() output as RowBatch.
     /// Use for the legacy execute() override:
     ///   folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
     folly::coro::AsyncGenerator<RowBatch> executeViaChunk();
+
+private:
+    Schema output_schema_;
+    std::vector<binder::BoundType> output_types_;
 };
 
 // ── Conversion utilities (used by default bridge and DDL/EXPLAIN paths) ──
