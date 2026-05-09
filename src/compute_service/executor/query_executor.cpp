@@ -1,7 +1,10 @@
 #include "compute_service/executor/query_executor.hpp"
 
 #include "common/types/constants.hpp"
+#include "compute_service/catalog/catalog.hpp"
+#include "compute_service/function/function_registry.hpp"
 #include "compute_service/parser/index_ddl_parser.hpp"
+#include "compute_service/physical_plan/physical_operator_base.hpp"
 #include "storage/kv/value_codec.hpp"
 
 #include <folly/coro/BlockingWait.h>
@@ -52,7 +55,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
                 co_return ctx;
             }
             ctx->columns = std::move(ddl_result.columns);
-            ctx->gen = folly::coro::co_invoke(
+            auto ddl_row_gen = folly::coro::co_invoke(
                 [rows = std::move(ddl_result.rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
                     if (!rows.empty()) {
                         RowBatch batch;
@@ -60,6 +63,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
                         co_yield std::move(batch);
                     }
                 });
+            ctx->gen = wrapRowBatchToChunkGenerator(std::move(ddl_row_gen));
             co_return ctx;
         }
     }
@@ -83,16 +87,6 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
         stmt = std::move(stmt_var);
     }
 
-    LogicalPlanBuilder plan_builder;
-    auto logical_result = plan_builder.build(std::move(stmt));
-    if (std::holds_alternative<std::string>(logical_result)) {
-        ctx->error = std::get<std::string>(logical_result);
-        co_return ctx;
-    }
-    auto& logical_plan = std::get<LogicalPlan>(logical_result);
-
-    extractColumnsFromLogicalPlan(logical_plan.root, ctx->columns);
-
     // Load label/edge_label mappings from metadata service
     auto labels = co_await async_meta_.listLabels();
     auto edge_labels = co_await async_meta_.listEdgeLabels();
@@ -104,6 +98,38 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id;
     for (const auto& el : edge_labels)
         edge_label_name_to_id[el.name] = el.id;
+
+    // Build catalog and function registry
+    std::unordered_map<LabelId, LabelDef> label_defs_map;
+    for (const auto& l : labels)
+        label_defs_map[l.id] = l;
+    std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs_map;
+    for (const auto& el : edge_labels)
+        edge_label_defs_map[el.id] = el;
+
+    auto catalog = std::make_unique<catalog::Catalog>();
+    catalog->load(std::move(label_defs_map), std::move(edge_label_defs_map));
+
+    auto func_registry = std::make_unique<function::FunctionRegistry>();
+
+    // 2. Bind: AST → BoundLogicalPlan
+    binder::Binder binder(*catalog, *func_registry);
+    auto bound_stmt = binder.bind(stmt);
+    if (!bound_stmt) {
+        std::string err = "Binding failed";
+        for (const auto& e : binder.errors())
+            err += "; " + e;
+        ctx->error = std::move(err);
+        co_return ctx;
+    }
+
+    // Extract output column names from the bound plan
+    for (const auto& ci : bound_stmt->plan.output_schema) {
+        ctx->columns.push_back(ci.name);
+    }
+
+    ctx->catalog = std::move(catalog);
+    ctx->func_registry = std::move(func_registry);
 
     // Begin transaction
     GraphTxnHandle txn = co_await async_data_.beginTran();
@@ -118,7 +144,6 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     ctx->label_name_to_id = std::move(label_name_to_id);
     ctx->edge_label_name_to_id = std::move(edge_label_name_to_id);
 
-    // PlanContext references StreamContext's maps — physical operators get references to those maps
     PlanContext plan_ctx{
         .label_name_to_id = ctx->label_name_to_id,
         .edge_label_name_to_id = ctx->edge_label_name_to_id,
@@ -131,8 +156,9 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     plan_ctx.next_vertex_id = co_await async_meta_.nextVertexId();
     plan_ctx.next_edge_id = co_await async_meta_.nextEdgeId();
 
+    // 3. Physical planning from BoundLogicalPlan
     PhysicalPlanner physical_planner;
-    auto phys_result = physical_planner.plan(logical_plan, async_data_, plan_ctx);
+    auto phys_result = physical_planner.planBound(bound_stmt->plan, async_data_, plan_ctx);
     if (std::holds_alternative<std::string>(phys_result)) {
         ctx->error = std::get<std::string>(phys_result);
         co_await async_data_.rollbackTran(txn);
@@ -174,7 +200,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
                     plan_rows.push_back(std::move(arrow_row));
                 }
             }
-            ctx->gen = folly::coro::co_invoke(
+            auto explain_row_gen = folly::coro::co_invoke(
                 [rows = std::move(plan_rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
                     if (!rows.empty()) {
                         RowBatch batch;
@@ -182,6 +208,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
                         co_yield std::move(batch);
                     }
                 });
+            ctx->gen = wrapRowBatchToChunkGenerator(std::move(explain_row_gen));
         }
 
         co_await async_data_.rollbackTran(txn);
@@ -190,39 +217,10 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     }
 
     ctx->phys_op = std::move(phys_op);
-    ctx->gen = ctx->phys_op->execute();
+    ctx->gen = ctx->phys_op->executeChunk();
     ctx->txn = txn;
 
     co_return ctx;
-}
-
-void QueryExecutor::extractColumnsFromLogicalPlan(const LogicalOperator& op, Schema& columns) {
-    std::visit(
-        [&columns, this](const auto& ptr) {
-            using T = std::decay_t<decltype(ptr)>;
-            using OpType = typename T::element_type;
-
-            if constexpr (std::is_same_v<OpType, ProjectOp>) {
-                for (const auto& item : ptr->items) {
-                    if (item.alias.has_value()) {
-                        columns.push_back(*item.alias);
-                    } else {
-                        columns.push_back(cypher::expressionToString(item.expr));
-                    }
-                }
-            } else if constexpr (std::is_same_v<OpType, AggregateOp>) {
-                for (const auto& name : ptr->output_names) {
-                    columns.push_back(name);
-                }
-            } else if constexpr (std::is_same_v<OpType, LimitOp> || std::is_same_v<OpType, FilterOp> ||
-                                 std::is_same_v<OpType, SortOp> || std::is_same_v<OpType, SkipOp> ||
-                                 std::is_same_v<OpType, DistinctOp>) {
-                if (!ptr->children.empty()) {
-                    extractColumnsFromLogicalPlan(ptr->children[0], columns);
-                }
-            }
-        },
-        op);
 }
 
 folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result) {

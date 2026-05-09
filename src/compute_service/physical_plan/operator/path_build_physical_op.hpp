@@ -1,7 +1,8 @@
 #pragma once
 
-#include "compute_service/executor/row.hpp"
+#include "compute_service/executor/data_chunk.hpp"
 #include "compute_service/physical_plan/physical_operator_base.hpp"
+#include "compute_service/planner/bound_type.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 
@@ -16,10 +17,9 @@ namespace compute {
 class PathBuildPhysicalOp : public PhysicalOperator {
 public:
     PathBuildPhysicalOp(std::string path_var, std::vector<std::string> element_vars, Schema input_schema,
-                        std::unique_ptr<PhysicalOperator> child)
+                        std::vector<binder::BoundType> output_types, std::unique_ptr<PhysicalOperator> child)
         : path_var_(std::move(path_var)), element_vars_(std::move(element_vars)),
-          input_schema_(std::move(input_schema)), child_(std::move(child)) {
-        // Resolve column indices for each element variable
+          input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)) {
         for (const auto& ev : element_vars_) {
             int idx = -1;
             for (size_t i = 0; i < input_schema_.size(); ++i) {
@@ -32,7 +32,10 @@ public:
         }
     }
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
+    folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
@@ -41,8 +44,9 @@ public:
 private:
     std::string path_var_;
     std::vector<std::string> element_vars_;
-    std::vector<int> element_cols_; // resolved column indices for each element
+    std::vector<int> element_cols_;
     Schema input_schema_;
+    std::vector<binder::BoundType> output_types_;
     std::unique_ptr<PhysicalOperator> child_;
 };
 

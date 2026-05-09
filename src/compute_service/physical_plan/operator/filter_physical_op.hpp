@@ -1,27 +1,28 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "compute_service/executor/expression_evaluator.hpp"
-#include "compute_service/executor/row.hpp"
-#include "compute_service/parser/ast.hpp"
+#include "compute_service/executor/data_chunk.hpp"
+#include "compute_service/executor/vectorized_evaluator.hpp"
 #include "compute_service/physical_plan/physical_operator_base.hpp"
+#include "compute_service/planner/bound_expression/bound_expression.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 
 #include <memory>
-#include <unordered_map>
+#include <string>
 
 namespace eugraph {
 namespace compute {
 
 class FilterPhysicalOp : public PhysicalOperator {
 public:
-    FilterPhysicalOp(cypher::Expression predicate, Schema schema, std::unique_ptr<PhysicalOperator> child,
-                     const std::unordered_map<LabelId, LabelDef>& label_defs)
-        : predicate_(std::move(predicate)), schema_(std::move(schema)), child_(std::move(child)),
-          evaluator_(label_defs) {}
+    FilterPhysicalOp(binder::BoundExpression predicate, Schema schema, std::unique_ptr<PhysicalOperator> child)
+        : predicate_(std::move(predicate)), schema_(std::move(schema)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
+    folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Filter";
     }
@@ -30,10 +31,9 @@ public:
     }
 
 private:
-    cypher::Expression predicate_;
+    binder::BoundExpression predicate_;
     Schema schema_;
     std::unique_ptr<PhysicalOperator> child_;
-    ExpressionEvaluator evaluator_;
 };
 
 } // namespace compute

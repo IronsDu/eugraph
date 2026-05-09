@@ -36,10 +36,33 @@ public:
 
     // Vertex Properties
     virtual folly::coro::Task<std::optional<Properties>> getVertexProperties(VertexId vid, LabelId label_id) = 0;
+    /// Projection-aware variant: fetch only specified property IDs. Default delegates to full fetch.
+    virtual folly::coro::Task<std::optional<Properties>>
+    getVertexProperties(VertexId vid, LabelId label_id, const std::vector<uint16_t>& /*projection*/) {
+        return getVertexProperties(vid, label_id);
+    }
     virtual folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) = 0;
 
     // Edge Properties
     virtual folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) = 0;
+    /// Projection-aware variant: fetch only specified property IDs. Default delegates to full fetch.
+    virtual folly::coro::Task<std::optional<Properties>>
+    getEdgeProperties(EdgeLabelId label_id, EdgeId eid, const std::vector<uint16_t>& /*projection*/) {
+        return getEdgeProperties(label_id, eid);
+    }
+
+    /// Batch vertex property fetch for multiple vertices (same label, same projection).
+    /// Reduces N+1 call overhead in Expand operator.
+    virtual folly::coro::Task<std::vector<std::optional<Properties>>>
+    batchGetVertexProperties(const std::vector<VertexId>& vids, LabelId label_id,
+                             const std::vector<uint16_t>& /*projection*/) {
+        std::vector<std::optional<Properties>> results;
+        results.reserve(vids.size());
+        for (auto vid : vids) {
+            results.push_back(co_await getVertexProperties(vid, label_id));
+        }
+        co_return results;
+    }
 
     // Vertex Property Write
     virtual folly::coro::Task<bool> putVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id,

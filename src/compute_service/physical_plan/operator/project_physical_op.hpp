@@ -1,16 +1,15 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "compute_service/executor/expression_evaluator.hpp"
-#include "compute_service/executor/row.hpp"
-#include "compute_service/parser/ast.hpp"
+#include "compute_service/executor/data_chunk.hpp"
+#include "compute_service/executor/vectorized_evaluator.hpp"
 #include "compute_service/physical_plan/physical_operator_base.hpp"
+#include "compute_service/planner/bound_expression/bound_expression.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace eugraph {
@@ -19,16 +18,17 @@ namespace compute {
 class ProjectPhysicalOp : public PhysicalOperator {
 public:
     struct ProjectItem {
-        cypher::Expression expr;
+        binder::BoundExpression expr;
         std::string name; // output column name
     };
 
-    ProjectPhysicalOp(std::vector<ProjectItem> items, Schema input_schema, std::unique_ptr<PhysicalOperator> child,
-                      const std::unordered_map<LabelId, LabelDef>& label_defs)
-        : items_(std::move(items)), input_schema_(std::move(input_schema)), child_(std::move(child)),
-          evaluator_(label_defs) {}
+    ProjectPhysicalOp(std::vector<ProjectItem> items, Schema input_schema, std::unique_ptr<PhysicalOperator> child)
+        : items_(std::move(items)), input_schema_(std::move(input_schema)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
+    folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
@@ -41,7 +41,6 @@ private:
     std::vector<ProjectItem> items_;
     Schema input_schema_;
     std::unique_ptr<PhysicalOperator> child_;
-    ExpressionEvaluator evaluator_;
 };
 
 } // namespace compute

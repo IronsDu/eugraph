@@ -21,16 +21,17 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
                     std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
                     eugraph::server::EuGraphHandler& handler, int64_t t0) {
     size_t total_rows = 0;
-    while (auto batch = co_await ctx->gen.next()) {
+    while (auto chunk = co_await ctx->gen.next()) {
         eugraph::thrift::ResultRowBatch thrift_batch;
-        for (auto& row : batch->rows) {
+        auto rows = chunk->toRows();
+        for (auto& row : rows) {
             eugraph::thrift::ResultRow row_resp;
             for (auto& val : row) {
                 row_resp.values()->push_back(handler.valueToThrift(val, label_defs, edge_label_defs));
             }
             thrift_batch.rows()->push_back(std::move(row_resp));
         }
-        total_rows += batch->rows.size();
+        total_rows += rows.size();
         co_yield std::move(thrift_batch);
     }
     if (ctx->should_commit) {

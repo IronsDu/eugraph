@@ -125,9 +125,13 @@ target_link_libraries(eugraph_metadata PUBLIC
 # ==================== Query Engine (Logical Plan + Physical Plan + Executor) ====================
 
 add_library(eugraph_query_engine STATIC
-    src/compute_service/logical_plan/logical_plan_builder.cpp
+    src/compute_service/catalog/catalog.cpp
+    src/compute_service/function/batch_ops.cpp
+    src/compute_service/function/function_registry.cpp
+    src/compute_service/planner/binder.cpp
+    src/compute_service/planner/column_resolver.cpp
+    src/compute_service/executor/vectorized_evaluator.cpp
     src/compute_service/physical_plan/operator/edge_index_scan_physical_op.cpp
-    src/compute_service/executor/expression_evaluator.cpp
     src/compute_service/physical_plan/operator/aggregate_physical_op.cpp
     src/compute_service/physical_plan/operator/all_node_scan_physical_op.cpp
     src/compute_service/physical_plan/operator/create_edge_physical_op.cpp
@@ -144,6 +148,7 @@ add_library(eugraph_query_engine STATIC
     src/compute_service/physical_plan/operator/set_physical_op.cpp
     src/compute_service/physical_plan/operator/skip_physical_op.cpp
     src/compute_service/physical_plan/operator/sort_physical_op.cpp
+    src/compute_service/physical_plan/physical_operator_base.cpp
     src/compute_service/physical_plan/physical_planner.cpp
     src/compute_service/executor/query_executor.cpp
 )
@@ -348,24 +353,6 @@ if(EUGRAPH_BUILD_TESTS)
     )
 
     gtest_add_tests(TARGET cypher_parser_tests)
-
-    # Logical plan tests
-    add_executable(logical_plan_tests
-        tests/test_logical_plan.cpp
-    )
-
-    target_include_directories(logical_plan_tests PRIVATE
-        "${PROJECT_SOURCE_DIR}/src"
-        "${ANTLR_GENERATED_DIR}"
-    )
-
-    target_link_libraries(logical_plan_tests PRIVATE
-        eugraph_query_engine
-        GTest::gtest
-        GTest::gtest_main
-    )
-
-    gtest_add_tests(TARGET logical_plan_tests)
 
     # Query executor end-to-end tests
     add_executable(query_executor_tests

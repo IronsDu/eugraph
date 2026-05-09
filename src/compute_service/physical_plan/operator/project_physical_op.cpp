@@ -1,6 +1,4 @@
 #include "compute_service/physical_plan/operator/project_physical_op.hpp"
-#include "compute_service/executor/row.hpp"
-#include "compute_service/parser/ast.hpp"
 
 namespace eugraph {
 namespace compute {
@@ -15,23 +13,30 @@ std::string ProjectPhysicalOp::toString() const {
     return "Project(items=[" + s + "])";
 }
 
-folly::coro::AsyncGenerator<RowBatch> ProjectPhysicalOp::execute() {
-    auto child_gen = child_->execute();
+folly::coro::AsyncGenerator<DataChunk> ProjectPhysicalOp::executeChunk() {
+    auto child_gen = child_->executeChunk();
 
-    while (auto batch = co_await child_gen.next()) {
-        RowBatch output;
-        for (const auto& row : batch->rows) {
-            Row new_row;
-            new_row.reserve(items_.size());
-            for (const auto& item : items_) {
-                Value val = evaluator_.evaluate(item.expr, row, input_schema_);
-                new_row.push_back(std::move(val));
+    while (auto chunk = co_await child_gen.next()) {
+        size_t n = chunk->numRows();
+
+        DataChunk output;
+        output.columns.reserve(items_.size());
+
+        VectorizedEvaluator evaluator;
+        for (const auto& item : items_) {
+            auto col_kind = binder::getBoundExprType(item.expr).kind;
+            // Multi-candidate property access may produce ListValue at runtime,
+            // so the column must be ANY to hold it.
+            if (auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&item.expr)) {
+                if ((*prop)->candidates.size() > 1)
+                    col_kind = binder::BoundTypeKind::ANY;
             }
-            output.push_back(std::move(new_row));
+            auto& out_col = output.addColumn(col_kind);
+            out_col.reserve(n);
+            evaluator.evaluate(item.expr, *chunk, out_col);
         }
-        if (!output.empty()) {
-            co_yield std::move(output);
-        }
+        output.count = n;
+        co_yield std::move(output);
     }
 }
 

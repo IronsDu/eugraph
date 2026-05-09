@@ -7,9 +7,9 @@
 ## 一、整体流水线
 
 ```
-Cypher 文本 → Parser → AST（含 EXPLAIN） → LogicalPlanBuilder → LogicalPlan
-→ PhysicalPlanner → PhysicalOperator 树
-→ execute() → AsyncGenerator<RowBatch>
+Cypher 文本 → Parser → AST（含 EXPLAIN） → Binder → BoundLogicalPlan
+→ PhysicalPlanner (planBound) → PhysicalOperator 树
+→ executeChunk() → AsyncGenerator<DataChunk>
 → (streaming) Thrift ServerStream → Client
 ```
 

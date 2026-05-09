@@ -146,8 +146,9 @@ ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
     result.columns = std::move(ctx->columns);
     auto gen = std::move(ctx->gen);
     blockingWait(co_invoke([&]() -> Task<void> {
-        while (auto batch = co_await gen.next()) {
-            for (auto& row : batch->rows) {
+        while (auto chunk = co_await gen.next()) {
+            auto rows = chunk->toRows();
+            for (auto& row : rows) {
                 result.rows.push_back(std::move(row));
             }
         }
@@ -1756,8 +1757,8 @@ TEST_F(QueryExecutorMultiLabelTest, StreamingSetLabelSurvivesPlanContextLifetime
 
     auto consumeStream = [&]() -> folly::coro::Task<size_t> {
         size_t count = 0;
-        while (auto batch = co_await ctx->gen.next()) {
-            count += batch->rows.size();
+        while (auto chunk = co_await ctx->gen.next()) {
+            count += chunk->numRows();
         }
         co_await ctx->store.commitTran(ctx->txn);
         co_return count;
@@ -2008,4 +2009,52 @@ TEST_F(QueryExecutorTest, CreateEdgeViolatesUniqueEdgeIndex) {
     // Second edge with same 'since' value should be rejected by unique constraint
     auto r2 = execSync(executor, "CREATE (a:Person)-[:REVIEWED {since: 2020}]->(b:Person)");
     EXPECT_TRUE(r2.rows.empty()) << "Expected 0 rows (unique constraint violation)";
+}
+
+// ==================== Output Schema Tests ====================
+
+TEST_F(QueryExecutorTest, OutputSchemaReturnPropertyOnly) {
+    PropertyDef name_prop{0, "name", PropertyType::STRING, false, std::nullopt};
+    auto label = blockingWait(async_meta_->createLabel("Item", {name_prop}));
+    ASSERT_NE(label, INVALID_LABEL_ID);
+    ASSERT_TRUE(blockingWait(async_data_->createLabel(label)));
+
+    QueryExecutor executor(*async_data_, *async_meta_, {});
+    execSync(executor, "CREATE (n:Item {name: 'test'})");
+
+    auto result = execSync(executor, "MATCH (n:Item) RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.columns.size(), 1u) << "Expected 1 column, got: " << result.columns.size();
+    EXPECT_EQ(result.columns[0], "n.name");
+}
+
+TEST_F(QueryExecutorTest, OutputSchemaReturnWholeNode) {
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.columns.size(), 1u) << "Expected 1 column, got: " << result.columns.size();
+    EXPECT_EQ(result.columns[0], "n");
+}
+
+TEST_F(QueryExecutorTest, OutputSchemaReturnMultipleProperties) {
+    PropertyDef name_prop{0, "name", PropertyType::STRING, false, std::nullopt};
+    PropertyDef val_prop{1, "val", PropertyType::INT64, false, std::nullopt};
+    auto label = blockingWait(async_meta_->createLabel("Product", {name_prop, val_prop}));
+    ASSERT_NE(label, INVALID_LABEL_ID);
+    ASSERT_TRUE(blockingWait(async_data_->createLabel(label)));
+
+    QueryExecutor executor(*async_data_, *async_meta_, {});
+    execSync(executor, "CREATE (n:Product {name: 'x', val: 1})");
+
+    auto result = execSync(executor, "MATCH (n:Product) RETURN n.name, n.val");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.columns.size(), 2u) << "Expected 2 columns, got: " << result.columns.size();
+    EXPECT_EQ(result.columns[0], "n.name");
+    EXPECT_EQ(result.columns[1], "n.val");
+}
+
+TEST_F(QueryExecutorTest, OutputSchemaReturnAggregate) {
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN count(*)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.columns.size(), 1u) << "Expected 1 column, got: " << result.columns.size();
+    EXPECT_EQ(result.columns[0], "count()");
 }

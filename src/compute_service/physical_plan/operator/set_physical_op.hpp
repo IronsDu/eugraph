@@ -1,15 +1,16 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "compute_service/executor/expression_evaluator.hpp"
-#include "compute_service/executor/row.hpp"
+#include "compute_service/executor/data_chunk.hpp"
 #include "compute_service/parser/ast.hpp"
 #include "compute_service/physical_plan/physical_operator_base.hpp"
+#include "compute_service/planner/bound_expression/bound_expression.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -19,14 +20,25 @@ namespace compute {
 
 class SetPhysicalOp : public PhysicalOperator {
 public:
-    SetPhysicalOp(std::vector<cypher::SetItem> items, Schema input_schema, IAsyncGraphDataStore& store,
+    struct BoundSetItem {
+        cypher::SetItemKind kind;
+        std::string var_name;
+        std::string prop_name;
+        std::string label;
+        std::optional<binder::BoundExpression> value;
+    };
+
+    SetPhysicalOp(std::vector<BoundSetItem> items, Schema input_schema, IAsyncGraphDataStore& store,
                   const std::unordered_map<LabelId, LabelDef>& label_defs,
                   const std::unordered_map<std::string, LabelId>& label_name_to_id,
                   std::unique_ptr<PhysicalOperator> child)
         : items_(std::move(items)), input_schema_(std::move(input_schema)), store_(store), label_defs_(label_defs),
           label_name_to_id_(label_name_to_id), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override;
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
+    folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Set(items=" + std::to_string(items_.size()) + ")";
     }
@@ -35,7 +47,7 @@ public:
     }
 
 private:
-    std::vector<cypher::SetItem> items_;
+    std::vector<BoundSetItem> items_;
     Schema input_schema_;
     IAsyncGraphDataStore& store_;
     const std::unordered_map<LabelId, LabelDef>& label_defs_;

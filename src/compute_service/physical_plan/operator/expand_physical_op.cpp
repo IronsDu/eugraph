@@ -35,8 +35,8 @@ std::string ExpandPhysicalOp::toString() const {
     return s;
 }
 
-folly::coro::AsyncGenerator<RowBatch> ExpandPhysicalOp::execute() {
-    auto child_gen = child_->execute();
+folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
+    auto child_gen = child_->executeChunk();
 
     auto dir = Direction::OUT;
     if (direction_ == cypher::RelationshipDirection::RIGHT_TO_LEFT) {
@@ -54,63 +54,123 @@ folly::coro::AsyncGenerator<RowBatch> ExpandPhysicalOp::execute() {
         }
     }
 
-    while (auto child_batch = co_await child_gen.next()) {
-        RowBatch output;
+    while (auto chunk = co_await child_gen.next()) {
+        auto rows = chunk->toRows();
+        size_t input_cols = chunk->numColumns();
 
-        for (const auto& row : child_batch->rows) {
+        // Collect output rows: DICTIONARY input + FLAT new columns
+        // First pass: collect edges per source row
+        struct EdgeEntry {
+            size_t src_row;
+            VertexId dst_id;
+            EdgeId edge_id;
+            EdgeLabelId edge_label_id;
+        };
+        std::vector<EdgeEntry> edges;
+
+        for (size_t src_row = 0; src_row < rows.size(); ++src_row) {
             VertexId src_id = INVALID_VERTEX_ID;
-            if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < row.size()) {
-                const auto& val = row[src_col_idx_];
+            if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[src_row].size()) {
+                const auto& val = rows[src_row][src_col_idx_];
                 if (std::holds_alternative<VertexValue>(val)) {
                     src_id = std::get<VertexValue>(val).id;
                 } else if (std::holds_alternative<int64_t>(val)) {
                     src_id = static_cast<VertexId>(std::get<int64_t>(val));
                 }
             }
-            if (src_id == INVALID_VERTEX_ID) {
+            if (src_id == INVALID_VERTEX_ID)
                 continue;
-            }
 
             for (const auto& label_filter : scan_filters) {
                 auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
                 while (auto edge_batch = co_await edge_gen.next()) {
                     for (const auto& entry : *edge_batch) {
-                        Row new_row = row;
-
-                        auto dst_labels = co_await store_.getVertexLabels(entry.neighbor_id);
-                        VertexValue dst_vv;
-                        dst_vv.id = entry.neighbor_id;
-                        dst_vv.labels = dst_labels;
-                        for (LabelId lid : dst_labels) {
-                            auto props = co_await store_.getVertexProperties(entry.neighbor_id, lid);
-                            if (props) {
-                                dst_vv.properties[lid] = std::move(*props);
-                            }
-                        }
-                        new_row.push_back(Value(std::move(dst_vv)));
-
-                        if (!edge_var_.empty()) {
-                            EdgeValue ev;
-                            ev.id = entry.edge_id;
-                            ev.src_id = src_id;
-                            ev.dst_id = entry.neighbor_id;
-                            ev.label_id = entry.edge_label_id;
-                            new_row.push_back(Value(std::move(ev)));
-                        }
-                        output.push_back(std::move(new_row));
-
-                        if (output.size() >= RowBatch::CAPACITY) {
-                            co_yield std::move(output);
-                            output.clear();
-                        }
+                        edges.push_back({src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id});
                     }
                 }
             }
         }
 
-        if (!output.empty()) {
-            co_yield std::move(output);
+        if (edges.empty())
+            continue;
+
+        // Build output DataChunk
+        DataChunk output;
+        output.columns.reserve(output_types_.size());
+
+        // Input columns: DICTIONARY sharing child buffer
+        for (size_t c = 0; c < input_cols; ++c) {
+            auto& src_col = chunk->columns[c];
+            if ((src_col.form == VectorForm::FLAT || src_col.form == VectorForm::DICTIONARY) && src_col.buffer) {
+                SelectionVector mapped;
+                mapped.is_identity = false;
+                mapped.indices.reserve(edges.size());
+                for (const auto& e : edges) {
+                    uint32_t physical = static_cast<uint32_t>(e.src_row);
+                    if (src_col.form == VectorForm::DICTIONARY) {
+                        mapped.indices.push_back(src_col.dict_sel[physical]);
+                    } else {
+                        mapped.indices.push_back(physical);
+                    }
+                }
+                mapped.count = edges.size();
+                output.columns.push_back(Column::dict(src_col.buffer, mapped));
+            } else if (src_col.form == VectorForm::CONSTANT) {
+                output.columns.push_back(Column::constant(src_col.constant_value));
+            } else {
+                output.columns.push_back(Column(src_col.type));
+            }
         }
+
+        // New columns: FLAT (dst vertex, edge)
+        for (size_t c = input_cols; c < output_types_.size(); ++c) {
+            output.columns.push_back(Column::flat(output_types_[c].kind, edges.size()));
+        }
+
+        // Fill new columns: edge first, then dst (matches binder column index order)
+        for (size_t i = 0; i < edges.size(); ++i) {
+            size_t edge_col_idx = input_cols;
+            size_t dst_col_idx = input_cols + (edge_var_.empty() ? 0 : 1);
+
+            if (!dst_var_.empty()) {
+                VertexValue dst_vv;
+                dst_vv.id = edges[i].dst_id;
+                auto dst_labels = co_await store_.getVertexLabels(edges[i].dst_id);
+                dst_vv.labels = dst_labels;
+                for (LabelId lid : dst_labels) {
+                    auto it = dst_label_prop_ids_.find(lid);
+                    if (it == dst_label_prop_ids_.end())
+                        continue;
+                    if (it->second.empty())
+                        continue;
+                    auto props = co_await store_.getVertexProperties(edges[i].dst_id, lid, it->second);
+                    if (props) {
+                        dst_vv.properties[lid] = std::move(*props);
+                    }
+                }
+                output.setValue(dst_col_idx, i, Value(std::move(dst_vv)));
+            }
+            if (!edge_var_.empty()) {
+                EdgeValue ev;
+                ev.id = edges[i].edge_id;
+                ev.src_id = INVALID_VERTEX_ID; // will be filled below
+                ev.dst_id = edges[i].dst_id;
+                ev.label_id = edges[i].edge_label_id;
+
+                // Determine src_id
+                VertexId sid = INVALID_VERTEX_ID;
+                if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[edges[i].src_row].size()) {
+                    const auto& val = rows[edges[i].src_row][src_col_idx_];
+                    if (std::holds_alternative<VertexValue>(val)) {
+                        sid = std::get<VertexValue>(val).id;
+                    }
+                }
+                ev.src_id = sid;
+                output.setValue(edge_col_idx, i, Value(std::move(ev)));
+            }
+        }
+        output.count = edges.size();
+        co_yield std::move(output);
     }
 }
 
