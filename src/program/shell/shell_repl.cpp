@@ -98,6 +98,38 @@ std::string formatEdgeLabelCreated(const std::string& name, int id) {
     return "EdgeLabel created: " + name + " (id=" + std::to_string(id) + ")\n";
 }
 
+std::string propertyTypeToString(thrift::PropertyType t) {
+    switch (t) {
+    case thrift::PropertyType::BOOL:
+        return "BOOL";
+    case thrift::PropertyType::INT64:
+        return "INT64";
+    case thrift::PropertyType::DOUBLE:
+        return "DOUBLE";
+    case thrift::PropertyType::STRING:
+        return "STRING";
+    case thrift::PropertyType::INT64_ARRAY:
+        return "INT64_ARRAY";
+    case thrift::PropertyType::DOUBLE_ARRAY:
+        return "DOUBLE_ARRAY";
+    case thrift::PropertyType::STRING_ARRAY:
+        return "STRING_ARRAY";
+    }
+    return "UNKNOWN";
+}
+
+std::string formatPropertyList(const std::vector<PropertyDefThrift>& props) {
+    if (props.empty())
+        return "(none)";
+    std::string result;
+    for (size_t i = 0; i < props.size(); ++i) {
+        if (i > 0)
+            result += ", ";
+        result += props[i].name().value() + ":" + propertyTypeToString(props[i].type().value());
+    }
+    return result;
+}
+
 std::string formatLabelList(const std::vector<std::tuple<int, std::string, std::string>>& labels) {
     std::vector<std::string> cols = {"ID", "Name", "Properties"};
     std::vector<std::vector<std::string>> rows;
@@ -331,15 +363,7 @@ static void runRpcRepl(const ShellConfig& config) {
                 } else {
                     std::vector<std::tuple<int, std::string, std::string>> rows;
                     for (const auto& l : labels) {
-                        std::string props_str;
-                        for (size_t i = 0; i < l.properties()->size(); i++) {
-                            if (i > 0)
-                                props_str += ", ";
-                            props_str += l.properties()->at(i).name().value();
-                        }
-                        if (props_str.empty())
-                            props_str = "(none)";
-                        rows.push_back({l.id().value(), l.name().value(), props_str});
+                        rows.push_back({l.id().value(), l.name().value(), formatPropertyList(*l.properties())});
                     }
                     std::cout << formatLabelList(rows);
                 }
@@ -350,7 +374,8 @@ static void runRpcRepl(const ShellConfig& config) {
                 } else {
                     std::vector<std::tuple<int, std::string, std::string, bool>> rows;
                     for (const auto& l : labels) {
-                        rows.push_back({l.id().value(), l.name().value(), "(none)", l.directed().value()});
+                        rows.push_back({l.id().value(), l.name().value(), formatPropertyList(*l.properties()),
+                                        l.directed().value()});
                     }
                     std::cout << formatEdgeLabelList(rows);
                 }
