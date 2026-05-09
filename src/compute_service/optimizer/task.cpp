@@ -12,6 +12,20 @@ namespace optimizer {
 // ============================================================
 void OGroupTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
     Group& group = memo.getGroup(group_id_);
+
+    // Recursively optimize child groups first (bottom-up)
+    for (ExprId eid : group.logical_exprs) {
+        GroupExpr& expr = memo.getExpr(eid);
+        for (GroupId child_gid : expr.child_groups) {
+            Group& child_group = memo.getGroup(child_gid);
+            if (!child_group.optimized) {
+                child_group.optimized = true;
+                queue.push(std::make_unique<OGroupTask>(child_gid));
+            }
+        }
+    }
+
+    // Then optimize this group's expressions
     for (ExprId eid : group.logical_exprs) {
         queue.push(std::make_unique<OExprTask>(eid));
     }
