@@ -3,6 +3,7 @@
 #include "common/types/constants.hpp"
 #include "compute_service/catalog/catalog.hpp"
 #include "compute_service/function/function_registry.hpp"
+#include "compute_service/optimizer/logical_optimizer.hpp"
 #include "compute_service/parser/index_ddl_parser.hpp"
 #include "compute_service/physical_plan/physical_operator_base.hpp"
 #include "storage/kv/value_codec.hpp"
@@ -155,6 +156,10 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
 
     plan_ctx.next_vertex_id = co_await async_meta_.nextVertexId();
     plan_ctx.next_edge_id = co_await async_meta_.nextEdgeId();
+
+    // 2.5. Logical optimization
+    optimizer::LogicalOptimizer logical_optimizer;
+    logical_optimizer.optimize(bound_stmt->plan);
 
     // 3. Physical planning from BoundLogicalPlan
     PhysicalPlanner physical_planner;
