@@ -202,3 +202,52 @@ TEST(FilterPushdownTest, FilterDirectlyAboveScanNotPushed) {
     auto& filt = std::get<std::unique_ptr<BoundFilterOp>>(plan.root);
     ASSERT_TRUE(std::holds_alternative<BoundLabelScanOp>(filt->child));
 }
+
+TEST(FilterPushdownTest, FilterNotAtRoot) {
+    // Build: Project → Filter → PathBuild → Expand → LabelScan
+    // This mirrors real queries like:
+    //   MATCH p=(n:person)-[]->(m) WHERE n.firstName='Mahinda' RETURN p
+    // Expected: Project → PathBuild → Expand → Filter → LabelScan
+
+    auto expand = std::make_unique<BoundExpandOp>();
+    expand->src_variable = "n";
+    expand->src_column_index = 0;
+    expand->edge_variable = "r";
+    expand->edge_column_index = 1;
+    expand->dst_variable = "m";
+    expand->dst_column_index = 2;
+    expand->child = makeLabelScan("n", 0);
+
+    auto pathbuild = std::make_unique<BoundPathBuildOp>();
+    pathbuild->path_variable = "p";
+    pathbuild->path_column_index = 3;
+    pathbuild->child = BoundLogicalOperator(std::move(expand));
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(pathbuild));
+    filter->predicate = BoundLiteral(true);
+
+    auto project = std::make_unique<BoundProjectOp>();
+    project->child = BoundLogicalOperator(std::move(filter));
+
+    BoundLogicalPlan plan;
+    plan.root = BoundLogicalOperator(std::move(project));
+
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan);
+
+    // Result: Project → PathBuild → Expand → Filter → LabelScan
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundProjectOp>>(plan.root));
+    auto& proj = std::get<std::unique_ptr<BoundProjectOp>>(plan.root);
+
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundPathBuildOp>>(proj->child));
+    auto& pb = std::get<std::unique_ptr<BoundPathBuildOp>>(proj->child);
+
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundExpandOp>>(pb->child));
+    auto& exp = std::get<std::unique_ptr<BoundExpandOp>>(pb->child);
+
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(exp->child));
+    auto& filt = std::get<std::unique_ptr<BoundFilterOp>>(exp->child);
+
+    ASSERT_TRUE(std::holds_alternative<BoundLabelScanOp>(filt->child));
+}
