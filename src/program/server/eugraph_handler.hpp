@@ -1,10 +1,8 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "compute_service/executor/query_executor.hpp"
 #include "gen-cpp2/EuGraphService.h"
-#include "storage/data/i_async_graph_data_store.hpp"
-#include "storage/meta/i_async_graph_meta_store.hpp"
+#include "storage/graph_manager.hpp"
 
 #include <folly/coro/Task.h>
 
@@ -13,38 +11,45 @@
 namespace eugraph {
 namespace server {
 
-/// Service handler that implements the Thrift-generated EuGraphService interface.
-/// Uses fbthrift coroutine (co_*) methods for async request handling.
-/// DDL operations coordinate between meta store and data store.
 class EuGraphHandler : public apache::thrift::ServiceHandler<thrift::EuGraphService> {
 public:
-    EuGraphHandler(IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, compute::QueryExecutor& executor)
-        : async_data_(async_data), async_meta_(async_meta), executor_(executor) {}
+    explicit EuGraphHandler(GraphManager& graph_manager) : graph_manager_(graph_manager) {}
+
+    // Graph management
+    folly::coro::Task<std::unique_ptr<thrift::GraphInfo>> co_createGraph(std::unique_ptr<std::string> name) override;
+
+    folly::coro::Task<bool> co_dropGraph(std::unique_ptr<std::string> name) override;
+
+    folly::coro::Task<std::unique_ptr<std::vector<thrift::GraphInfo>>> co_listGraphs() override;
 
     // Thrift service methods (coroutine interface)
     folly::coro::Task<std::unique_ptr<thrift::LabelInfo>>
     co_createLabel(std::unique_ptr<std::string> name,
-                   std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) override;
+                   std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties,
+                   std::unique_ptr<std::string> graph_name) override;
 
-    folly::coro::Task<std::unique_ptr<std::vector<thrift::LabelInfo>>> co_listLabels() override;
+    folly::coro::Task<std::unique_ptr<std::vector<thrift::LabelInfo>>>
+    co_listLabels(std::unique_ptr<std::string> graph_name) override;
 
     folly::coro::Task<std::unique_ptr<thrift::EdgeLabelInfo>>
     co_createEdgeLabel(std::unique_ptr<std::string> name,
-                       std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) override;
+                       std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties,
+                       std::unique_ptr<std::string> graph_name) override;
 
-    folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> co_listEdgeLabels() override;
+    folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>>
+    co_listEdgeLabels(std::unique_ptr<std::string> graph_name) override;
 
     folly::coro::Task<apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
-    co_executeCypher(std::unique_ptr<std::string> query) override;
+    co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name) override;
 
-    // Batch import
     folly::coro::Task<std::unique_ptr<thrift::BatchInsertVerticesResult>>
     co_batchInsertVertices(std::unique_ptr<std::string> label_name,
-                           std::unique_ptr<std::vector<thrift::VertexRecord>> records) override;
+                           std::unique_ptr<std::vector<thrift::VertexRecord>> records,
+                           std::unique_ptr<std::string> graph_name) override;
 
-    folly::coro::Task<std::int32_t>
-    co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
-                        std::unique_ptr<std::vector<thrift::EdgeRecord>> records) override;
+    folly::coro::Task<std::int32_t> co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
+                                                        std::unique_ptr<std::vector<thrift::EdgeRecord>> records,
+                                                        std::unique_ptr<std::string> graph_name) override;
 
 public:
     thrift::ResultValue valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
@@ -56,9 +61,9 @@ private:
     static PropertyDef toPropertyDef(const thrift::PropertyDefThrift& req, uint16_t id);
     static PropertyValue thriftToPropertyValue(const thrift::PropertyValueThrift& v);
 
-    IAsyncGraphDataStore& async_data_;
-    IAsyncGraphMetaStore& async_meta_;
-    compute::QueryExecutor& executor_;
+    GraphInstance* resolveGraph(const std::string& graph_name);
+
+    GraphManager& graph_manager_;
 };
 
 } // namespace server

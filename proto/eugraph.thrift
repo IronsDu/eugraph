@@ -84,21 +84,34 @@ struct ResultRowBatch {
   1: list<ResultRow> rows
 }
 
+// ==================== Graph Management ====================
+
+struct GraphInfo {
+  1: i32 graph_id
+  2: string name
+  3: i64 created_at
+}
+
 // ==================== Service ====================
 
 service EuGraphService {
+  // Graph management
+  GraphInfo createGraph(1: string name)
+  bool dropGraph(1: string name)
+  list<GraphInfo> listGraphs()
+
   // DDL: Label management
-  LabelInfo createLabel(1: string name, 2: list<PropertyDefThrift> properties)
-  list<LabelInfo> listLabels()
+  LabelInfo createLabel(1: string name, 2: list<PropertyDefThrift> properties, 3: string graph_name)
+  list<LabelInfo> listLabels(1: string graph_name)
 
   // DDL: EdgeLabel management
-  EdgeLabelInfo createEdgeLabel(1: string name, 2: list<PropertyDefThrift> properties)
-  list<EdgeLabelInfo> listEdgeLabels()
+  EdgeLabelInfo createEdgeLabel(1: string name, 2: list<PropertyDefThrift> properties, 3: string graph_name)
+  list<EdgeLabelInfo> listEdgeLabels(1: string graph_name)
 
   // DML: Cypher query execution (streaming)
-  QueryStreamMeta,stream<ResultRowBatch> executeCypher(1: string query)
+  QueryStreamMeta,stream<ResultRowBatch> executeCypher(1: string query, 2: string graph_name)
 
   // Batch import
-  BatchInsertVerticesResult batchInsertVertices(1: string label_name, 2: list<VertexRecord> records)
-  i32 batchInsertEdges(1: string edge_label_name, 2: list<EdgeRecord> records)
+  BatchInsertVerticesResult batchInsertVertices(1: string label_name, 2: list<VertexRecord> records, 3: string graph_name)
+  i32 batchInsertEdges(1: string edge_label_name, 2: list<EdgeRecord> records, 3: string graph_name)
 }

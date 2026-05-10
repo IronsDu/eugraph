@@ -95,6 +95,45 @@ PropertyDef EuGraphHandler::toPropertyDef(const thrift::PropertyDefThrift& req, 
     return def;
 }
 
+GraphInstance* EuGraphHandler::resolveGraph(const std::string& graph_name) {
+    auto* inst = graph_manager_.getGraph(graph_name);
+    if (!inst)
+        throw std::runtime_error("Graph not found: " + graph_name);
+    return inst;
+}
+
+// ==================== Graph Management ====================
+
+folly::coro::Task<std::unique_ptr<thrift::GraphInfo>>
+EuGraphHandler::co_createGraph(std::unique_ptr<std::string> name) {
+    spdlog::info("[handler] createGraph '{}'", *name);
+    auto entry = graph_manager_.createGraph(*name);
+    auto resp = std::make_unique<thrift::GraphInfo>();
+    resp->graph_id() = static_cast<int32_t>(entry.graph_id);
+    resp->name() = std::move(*name);
+    resp->created_at() = static_cast<int64_t>(entry.created_at);
+    co_return resp;
+}
+
+folly::coro::Task<bool> EuGraphHandler::co_dropGraph(std::unique_ptr<std::string> name) {
+    spdlog::info("[handler] dropGraph '{}'", *name);
+    co_return graph_manager_.dropGraph(*name);
+}
+
+folly::coro::Task<std::unique_ptr<std::vector<thrift::GraphInfo>>> EuGraphHandler::co_listGraphs() {
+    spdlog::info("[handler] listGraphs");
+    auto entries = graph_manager_.listGraphs();
+    auto resp = std::make_unique<std::vector<thrift::GraphInfo>>();
+    for (const auto& e : entries) {
+        thrift::GraphInfo info;
+        info.graph_id() = static_cast<int32_t>(e.graph_id);
+        info.name() = e.name;
+        info.created_at() = static_cast<int64_t>(e.created_at);
+        resp->push_back(std::move(info));
+    }
+    co_return resp;
+}
+
 // ==================== Value conversion ====================
 
 namespace {
@@ -188,7 +227,6 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         std::ostringstream oss;
         oss << "{\"_vid\":" << v.id;
 
-        // Collect property name→value pairs from all labels of this vertex
         if (v.labels.has_value()) {
             for (LabelId lid : *v.labels) {
                 auto it = label_defs.find(lid);
@@ -216,13 +254,11 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         std::ostringstream oss;
         oss << "{\"id\":" << e.id << ",\"src\":" << e.src_id << ",\"dst\":" << e.dst_id;
 
-        // Resolve edge label name
         auto elit = edge_label_defs.find(e.label_id);
         if (elit != edge_label_defs.end()) {
             oss << ",\"label\":\"" << elit->second.name << '"';
         }
 
-        // Collect properties
         if (e.properties.has_value() && elit != edge_label_defs.end()) {
             for (const auto& pd : elit->second.properties) {
                 if (pd.id < e.properties->size()) {
@@ -239,7 +275,6 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
     } else if (std::holds_alternative<PathValue>(val)) {
         auto& p = std::get<PathValue>(val);
         std::ostringstream oss;
-        // Neo4j-style path format: (:Label{prop:v,...})-[edgeType]->(:Label{prop:v,...})->...
         for (size_t i = 0; i < p.elements.size(); ++i) {
             const auto& elem = p.elements[i].value;
             if (std::holds_alternative<VertexValue>(elem)) {
@@ -250,11 +285,10 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                         auto it = label_defs.find(lid);
                         if (it != label_defs.end()) {
                             oss << ":" << it->second.name;
-                            break; // show first label only
+                            break;
                         }
                     }
                 }
-                // Show properties
                 bool first_prop = true;
                 if (v.labels.has_value()) {
                     for (LabelId lid : *v.labels) {
@@ -286,10 +320,8 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                 oss << ")";
             } else if (std::holds_alternative<EdgeValue>(elem)) {
                 auto& e = std::get<EdgeValue>(elem);
-                // Determine arrow direction from the edge's src/dst relative to path order
                 bool outgoing = true;
                 if (i > 0 && i + 1 < p.elements.size()) {
-                    // Previous element is src vertex, next is dst vertex
                     const auto& prev_v = p.elements[i - 1].value;
                     const auto& next_v = p.elements[i + 1].value;
                     if (std::holds_alternative<VertexValue>(prev_v) && std::holds_alternative<VertexValue>(next_v)) {
@@ -356,15 +388,18 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
 
 folly::coro::Task<std::unique_ptr<thrift::LabelInfo>>
 EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
-                               std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
+                               std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties,
+                               std::unique_ptr<std::string> graph_name) {
     auto t0 = nowMs();
-    spdlog::info("[handler] createLabel start");
+    spdlog::info("[handler] createLabel start, graph='{}'", *graph_name);
+    auto* inst = resolveGraph(*graph_name);
+
     std::vector<PropertyDef> defs;
     for (size_t i = 0; i < properties->size(); i++) {
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
     }
 
-    auto label_id = co_await async_meta_.createLabel(*name, defs);
+    auto label_id = co_await inst->async_meta->createLabel(*name, defs);
     auto resp = std::make_unique<thrift::LabelInfo>();
 
     if (label_id == INVALID_LABEL_ID) {
@@ -373,7 +408,7 @@ EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
         co_return resp;
     }
 
-    co_await async_data_.createLabel(label_id);
+    co_await inst->async_data->createLabel(label_id);
 
     resp->id() = label_id;
     resp->name() = *name;
@@ -385,15 +420,18 @@ EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
         resp->properties()->push_back(std::move(pd));
     }
 
-    spdlog::info("[handler] createLabel '{}' done, id={}, {} properties, took={}ms", *name, label_id, defs.size(),
-                 nowMs() - t0);
+    spdlog::info("[handler] createLabel '{}' done on graph '{}', id={}, {} properties, took={}ms", *name, *graph_name,
+                 label_id, defs.size(), nowMs() - t0);
     co_return resp;
 }
 
-folly::coro::Task<std::unique_ptr<std::vector<thrift::LabelInfo>>> EuGraphHandler::co_listLabels() {
+folly::coro::Task<std::unique_ptr<std::vector<thrift::LabelInfo>>>
+EuGraphHandler::co_listLabels(std::unique_ptr<std::string> graph_name) {
     auto t0 = nowMs();
-    spdlog::info("[handler] listLabels start");
-    auto labels = co_await async_meta_.listLabels();
+    spdlog::info("[handler] listLabels start, graph='{}'", *graph_name);
+    auto* inst = resolveGraph(*graph_name);
+
+    auto labels = co_await inst->async_meta->listLabels();
     auto resp = std::make_unique<std::vector<thrift::LabelInfo>>();
 
     for (const auto& l : labels) {
@@ -416,15 +454,18 @@ folly::coro::Task<std::unique_ptr<std::vector<thrift::LabelInfo>>> EuGraphHandle
 
 folly::coro::Task<std::unique_ptr<thrift::EdgeLabelInfo>>
 EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
-                                   std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties) {
+                                   std::unique_ptr<std::vector<thrift::PropertyDefThrift>> properties,
+                                   std::unique_ptr<std::string> graph_name) {
     auto t0 = nowMs();
-    spdlog::info("[handler] createEdgeLabel start");
+    spdlog::info("[handler] createEdgeLabel start, graph='{}'", *graph_name);
+    auto* inst = resolveGraph(*graph_name);
+
     std::vector<PropertyDef> defs;
     for (size_t i = 0; i < properties->size(); i++) {
         defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
     }
 
-    auto label_id = co_await async_meta_.createEdgeLabel(*name, defs);
+    auto label_id = co_await inst->async_meta->createEdgeLabel(*name, defs);
     auto resp = std::make_unique<thrift::EdgeLabelInfo>();
 
     if (label_id == INVALID_EDGE_LABEL_ID) {
@@ -433,22 +474,24 @@ EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
         co_return resp;
     }
 
-    spdlog::info("{} 111111111", __FUNCTION__);
-    co_await async_data_.createEdgeLabel(label_id);
+    co_await inst->async_data->createEdgeLabel(label_id);
 
-    spdlog::info("{} 222222222222", __FUNCTION__);
     resp->id() = label_id;
     resp->name() = *name;
     resp->directed() = true;
 
-    spdlog::info("[handler] createEdgeLabel '{}' done, id={}, took={}ms", *name, label_id, nowMs() - t0);
+    spdlog::info("[handler] createEdgeLabel '{}' done on graph '{}', id={}, took={}ms", *name, *graph_name, label_id,
+                 nowMs() - t0);
     co_return resp;
 }
 
-folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> EuGraphHandler::co_listEdgeLabels() {
+folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>>
+EuGraphHandler::co_listEdgeLabels(std::unique_ptr<std::string> graph_name) {
     auto t0 = nowMs();
-    spdlog::info("[handler] listEdgeLabels start");
-    auto labels = co_await async_meta_.listEdgeLabels();
+    spdlog::info("[handler] listEdgeLabels start, graph='{}'", *graph_name);
+    auto* inst = resolveGraph(*graph_name);
+
+    auto labels = co_await inst->async_meta->listEdgeLabels();
     auto resp = std::make_unique<std::vector<thrift::EdgeLabelInfo>>();
 
     for (const auto& l : labels) {
@@ -473,20 +516,20 @@ folly::coro::Task<std::unique_ptr<std::vector<thrift::EdgeLabelInfo>>> EuGraphHa
 // ==================== DML: Cypher (streaming) ====================
 
 folly::coro::Task<apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
-EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query) {
+EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name) {
     auto t0 = nowMs();
-    spdlog::info("[handler] executeCypher start, query='{}'", *query);
+    spdlog::info("[handler] executeCypher start, graph='{}', query='{}'", *graph_name, *query);
+    auto* inst = resolveGraph(*graph_name);
 
-    auto ctx = co_await executor_.prepareStream(*query);
+    auto ctx = co_await inst->executor->prepareStream(*query);
 
     if (!ctx->error.empty()) {
         spdlog::info("[handler] executeCypher error: {}, took={}ms", ctx->error, nowMs() - t0);
         throw std::runtime_error(ctx->error);
     }
 
-    // Fetch label definitions for vertex/edge JSON serialization
-    auto labels = co_await async_meta_.listLabels();
-    auto edge_labels = co_await async_meta_.listEdgeLabels();
+    auto labels = co_await inst->async_meta->listLabels();
+    auto edge_labels = co_await inst->async_meta->listEdgeLabels();
     std::unordered_map<LabelId, LabelDef> label_defs;
     for (const auto& l : labels)
         label_defs[l.id] = l;
@@ -534,18 +577,21 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift::PropertyValueT
 
 folly::coro::Task<std::unique_ptr<thrift::BatchInsertVerticesResult>>
 EuGraphHandler::co_batchInsertVertices(std::unique_ptr<std::string> label_name,
-                                       std::unique_ptr<std::vector<thrift::VertexRecord>> records) {
+                                       std::unique_ptr<std::vector<thrift::VertexRecord>> records,
+                                       std::unique_ptr<std::string> graph_name) {
     auto t0 = nowMs();
     auto count = records->size();
-    spdlog::info("[handler] batchInsertVertices start, label='{}', count={}", *label_name, count);
+    spdlog::info("[handler] batchInsertVertices start, graph='{}', label='{}', count={}", *graph_name, *label_name,
+                 count);
+    auto* inst = resolveGraph(*graph_name);
 
-    auto label_id_opt = co_await async_meta_.getLabelId(*label_name);
+    auto label_id_opt = co_await inst->async_meta->getLabelId(*label_name);
     if (!label_id_opt.has_value()) {
         throw std::runtime_error("Label not found: " + *label_name);
     }
     LabelId label_id = *label_id_opt;
 
-    VertexId start_vid = co_await async_meta_.nextVertexIdRange(count);
+    VertexId start_vid = co_await inst->async_meta->nextVertexIdRange(count);
 
     std::vector<IAsyncGraphDataStore::BatchVertexEntry> entries;
     entries.reserve(count);
@@ -559,7 +605,7 @@ EuGraphHandler::co_batchInsertVertices(std::unique_ptr<std::string> label_name,
         entries.push_back(std::move(entry));
     }
 
-    co_await async_data_.batchInsertVertices(label_id, std::move(entries));
+    co_await inst->async_data->batchInsertVertices(label_id, std::move(entries));
 
     auto resp = std::make_unique<thrift::BatchInsertVerticesResult>();
     resp->vertex_ids()->reserve(count);
@@ -573,18 +619,21 @@ EuGraphHandler::co_batchInsertVertices(std::unique_ptr<std::string> label_name,
 
 folly::coro::Task<std::int32_t>
 EuGraphHandler::co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
-                                    std::unique_ptr<std::vector<thrift::EdgeRecord>> records) {
+                                    std::unique_ptr<std::vector<thrift::EdgeRecord>> records,
+                                    std::unique_ptr<std::string> graph_name) {
     auto t0 = nowMs();
     auto count = records->size();
-    spdlog::info("[handler] batchInsertEdges start, edgeLabel='{}', count={}", *edge_label_name, count);
+    spdlog::info("[handler] batchInsertEdges start, graph='{}', edgeLabel='{}', count={}", *graph_name,
+                 *edge_label_name, count);
+    auto* inst = resolveGraph(*graph_name);
 
-    auto elabel_id_opt = co_await async_meta_.getEdgeLabelId(*edge_label_name);
+    auto elabel_id_opt = co_await inst->async_meta->getEdgeLabelId(*edge_label_name);
     if (!elabel_id_opt.has_value()) {
         throw std::runtime_error("EdgeLabel not found: " + *edge_label_name);
     }
     EdgeLabelId elabel_id = *elabel_id_opt;
 
-    EdgeId start_eid = co_await async_meta_.nextEdgeIdRange(count);
+    EdgeId start_eid = co_await inst->async_meta->nextEdgeIdRange(count);
 
     std::vector<IAsyncGraphDataStore::BatchEdgeEntry> entries;
     entries.reserve(count);
@@ -601,7 +650,7 @@ EuGraphHandler::co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name
         entries.push_back(std::move(entry));
     }
 
-    co_await async_data_.batchInsertEdges(elabel_id, std::move(entries));
+    co_await inst->async_data->batchInsertEdges(elabel_id, std::move(entries));
 
     spdlog::info("[handler] batchInsertEdges done, count={}, took={}ms", count, nowMs() - t0);
     co_return static_cast<std::int32_t>(count);

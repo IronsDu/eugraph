@@ -8,6 +8,7 @@
 #include "program/shell/rpc_client.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/graph_manager.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
@@ -55,12 +56,7 @@ PropertyDefThrift makePropDef(const std::string& name, eugraph::thrift::Property
 class RpcIntegrationTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<SyncGraphDataStore> sync_data_;
-    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
-    std::unique_ptr<AsyncGraphMetaStore> async_meta_;
-    std::unique_ptr<IoScheduler> io_scheduler_;
-    std::unique_ptr<AsyncGraphDataStore> async_data_;
-    std::unique_ptr<compute::QueryExecutor> executor_;
+    std::shared_ptr<GraphManager> graph_manager_;
     std::shared_ptr<server::EuGraphHandler> handler_;
 
     // Real RPC server and client
@@ -70,25 +66,11 @@ protected:
     void SetUp() override {
         db_path_ = getTestDbPath();
         std::filesystem::remove_all(db_path_);
-        std::filesystem::create_directories(db_path_ + "/data");
-        std::filesystem::create_directories(db_path_ + "/meta");
 
-        sync_data_ = std::make_unique<SyncGraphDataStore>();
-        ASSERT_TRUE(sync_data_->open(db_path_ + "/data"));
+        graph_manager_ = std::make_shared<GraphManager>();
+        ASSERT_TRUE(graph_manager_->init(db_path_, 2, 2));
 
-        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
-        ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
-
-        async_meta_ = std::make_unique<AsyncGraphMetaStore>();
-        io_scheduler_ = std::make_unique<IoScheduler>(2);
-        auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
-        ASSERT_TRUE(opened);
-
-        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
-
-        executor_ =
-            std::make_unique<compute::QueryExecutor>(*async_data_, *async_meta_, compute::QueryExecutor::Config{});
-        handler_ = std::make_shared<server::EuGraphHandler>(*async_data_, *async_meta_, *executor_);
+        handler_ = std::make_shared<server::EuGraphHandler>(*graph_manager_);
 
         // Start real fbthrift server via ScopedServerInterfaceThread
         // Use a config callback to set the IO thread pool as handler executor
@@ -124,12 +106,8 @@ protected:
         // Release the pointer without blocking; OS will reclaim resources.
         (void)server_.release();
         handler_.reset();
-        executor_.reset();
-        async_data_.reset();
-        io_scheduler_.reset();
-        blockingWait(async_meta_->close());
-        sync_data_->close();
-        sync_meta_->close();
+        graph_manager_->shutdown();
+        graph_manager_.reset();
         std::filesystem::remove_all(db_path_);
     }
 
@@ -140,9 +118,13 @@ protected:
     };
 
     CypherResult execCypher(const std::string& query) {
+        return execCypherOnGraph(query, "default");
+    }
+
+    CypherResult execCypherOnGraph(const std::string& query, const std::string& graph_name) {
         CypherResult result;
         try {
-            auto [meta, stream] = client_->executeCypher(query);
+            auto [meta, stream] = client_->executeCypher(query, graph_name);
             result.columns = *meta.columns();
             std::move(stream).subscribeInline([&](folly::Try<ResultRowBatch> batch) {
                 if (batch.hasValue()) {
@@ -160,11 +142,11 @@ protected:
     }
 
     LabelInfo createLabel(const std::string& name, std::vector<PropertyDefThrift> props = {}) {
-        return client_->createLabel(name, props);
+        return client_->createLabel(name, props, "default");
     }
 
     EdgeLabelInfo createEdgeLabel(const std::string& name, std::vector<PropertyDefThrift> props = {}) {
-        return client_->createEdgeLabel(name, props);
+        return client_->createEdgeLabel(name, props, "default");
     }
 };
 
@@ -176,7 +158,7 @@ TEST_F(RpcIntegrationTest, CreateAndListLabels) {
     EXPECT_EQ(info.id().value(), 1);
     EXPECT_EQ(info.name().value(), "Person");
 
-    auto labels = client_->listLabels();
+    auto labels = client_->listLabels("default");
     EXPECT_EQ(labels.size(), 1);
 }
 
@@ -185,7 +167,7 @@ TEST_F(RpcIntegrationTest, CreateAndListEdgeLabels) {
     EXPECT_EQ(info.id().value(), 1);
     EXPECT_EQ(info.name().value(), "KNOWS");
 
-    auto labels = client_->listEdgeLabels();
+    auto labels = client_->listEdgeLabels("default");
     EXPECT_EQ(labels.size(), 1);
 }
 
@@ -486,6 +468,82 @@ TEST_F(RpcIntegrationTest, MetadataOverheadAnalysis) {
     std::cout << "Per-vertex overhead: " << (avg(scan_large) - avg(scan_small)) / 50 << " us/vertex\n";
     std::cout << "Fixed overhead (approx): " << avg(scan_small) - 52 * ((avg(scan_large) - avg(scan_small)) / 50)
               << " us\n";
+}
+
+// ==================== Graph Management Integration Tests ====================
+
+TEST_F(RpcIntegrationTest, CreateAndListGraphs) {
+    auto info = client_->createGraph("social");
+    EXPECT_EQ(info.name().value(), "social");
+    EXPECT_GT(info.graph_id().value(), 0);
+
+    auto graphs = client_->listGraphs();
+    ASSERT_EQ(graphs.size(), 2u);
+
+    EXPECT_EQ(graphs[0].name().value(), "default");
+    EXPECT_EQ(graphs[1].name().value(), "social");
+}
+
+TEST_F(RpcIntegrationTest, CreateDuplicateGraph) {
+    auto first = client_->createGraph("test");
+    auto second = client_->createGraph("test");
+    EXPECT_EQ(first.graph_id().value(), second.graph_id().value());
+}
+
+TEST_F(RpcIntegrationTest, DropGraph) {
+    client_->createGraph("temp");
+    EXPECT_TRUE(client_->dropGraph("temp"));
+
+    auto graphs = client_->listGraphs();
+    for (const auto& g : graphs) {
+        EXPECT_NE(g.name().value(), "temp");
+    }
+}
+
+TEST_F(RpcIntegrationTest, DropDefaultGraphFails) {
+    EXPECT_THROW(client_->dropGraph("default"), std::exception);
+}
+
+TEST_F(RpcIntegrationTest, DropNonExistentGraphFails) {
+    EXPECT_THROW(client_->dropGraph("nonexistent"), std::exception);
+}
+
+TEST_F(RpcIntegrationTest, GraphIdNotReused) {
+    auto first = client_->createGraph("first");
+    client_->dropGraph("first");
+    auto second = client_->createGraph("second");
+    EXPECT_GT(second.graph_id().value(), first.graph_id().value());
+}
+
+TEST_F(RpcIntegrationTest, MultiGraphLabelIsolation) {
+    client_->createGraph("graph_a");
+    client_->createGraph("graph_b");
+
+    auto label_a =
+        client_->createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING)}, "graph_a");
+    EXPECT_GT(label_a.id().value(), 0);
+
+    auto labels_a = client_->listLabels("graph_a");
+    ASSERT_EQ(labels_a.size(), 1u);
+    EXPECT_EQ(labels_a[0].name().value(), "Person");
+
+    auto labels_b = client_->listLabels("graph_b");
+    EXPECT_EQ(labels_b.size(), 0u);
+}
+
+TEST_F(RpcIntegrationTest, MultiGraphCypherIsolation) {
+    client_->createGraph("alpha");
+    client_->createGraph("beta");
+
+    client_->createLabel("Node", {makePropDef("val", eugraph::thrift::PropertyType::INT64)}, "alpha");
+
+    execCypherOnGraph("CREATE (n:Node {val: 42})", "alpha");
+
+    auto result_a = execCypherOnGraph("MATCH (n:Node) RETURN n.val", "alpha");
+    ASSERT_EQ(result_a.rows.size(), 1u);
+
+    auto result_b = execCypherOnGraph("MATCH (n:Node) RETURN n.val", "beta");
+    EXPECT_EQ(result_b.rows.size(), 0u);
 }
 
 } // anonymous namespace
