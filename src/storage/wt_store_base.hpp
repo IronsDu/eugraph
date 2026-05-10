@@ -62,14 +62,15 @@ protected:
     /// Ensure a global table exists (create if not).
     bool ensureGlobalTable(WT_SESSION* session, const char* table_name);
 
-    /// Force a WT checkpoint (flush all committed data to disk).
-    bool checkpoint();
-
     WtConnection conn_;
     WtSession defaultSession_;
 
     std::mutex txnMutex_;
     std::unordered_map<GraphTxnHandle, std::unique_ptr<TxnState>> txns_;
+
+public:
+    /// Force a WT checkpoint (flush all committed data to disk).
+    bool checkpoint();
 };
 
 } // namespace eugraph
