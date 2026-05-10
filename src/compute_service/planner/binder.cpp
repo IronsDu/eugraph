@@ -163,8 +163,11 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                     }
                     return bindReturn(*ptr, std::move(*current));
                 } else if constexpr (std::is_same_v<Elem, cypher::WithClause>) {
-                    error("WITH clause not yet supported in binder");
-                    return std::nullopt;
+                    if (!current) {
+                        error("WITH without preceding clause");
+                        return std::nullopt;
+                    }
+                    return bindWith(*ptr, std::move(*current));
                 } else if constexpr (std::is_same_v<Elem, cypher::CreateClause>) {
                     return bindCreate(*ptr, std::move(current));
                 } else if constexpr (std::is_same_v<Elem, cypher::SetClause>) {
@@ -665,10 +668,183 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
     return filter;
 }
 
-std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& /*with_clause*/,
-                                                     BoundLogicalOperator /*child*/) {
-    error("WITH clause not yet supported in binder");
-    return std::nullopt;
+std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& wc, BoundLogicalOperator child) {
+    // Check for aggregate functions in WITH items
+    bool has_aggregate = false;
+    for (const auto& item : wc.items) {
+        std::visit(
+            [&has_aggregate](const auto& ptr) {
+                using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+                if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                    if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" || ptr->name == "min" ||
+                        ptr->name == "max") {
+                        has_aggregate = true;
+                    }
+                }
+            },
+            item.expr);
+    }
+
+    // Collect output names and types for scope reset
+    std::vector<std::pair<std::string, BoundType>> with_outputs;
+
+    BoundLogicalOperator current;
+
+    if (has_aggregate) {
+        auto agg = std::make_unique<BoundAggregateOp>();
+
+        for (const auto& item : wc.items) {
+            bool is_agg = false;
+            std::visit(
+                [&is_agg](const auto& ptr) {
+                    using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+                    if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                        if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" || ptr->name == "min" ||
+                            ptr->name == "max") {
+                            is_agg = true;
+                        }
+                    }
+                },
+                item.expr);
+
+            std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            auto bound_expr = bindExpression(item.expr);
+            if (!bound_expr)
+                continue;
+
+            if (is_agg) {
+                BoundAggregateOp::AggregateItem agg_item;
+                agg_item.alias = alias;
+                agg_item.result_type = getBoundExprType(*bound_expr);
+
+                if (std::holds_alternative<std::unique_ptr<BoundFunctionCall>>(*bound_expr)) {
+                    auto& fc = std::get<std::unique_ptr<BoundFunctionCall>>(*bound_expr);
+                    agg_item.function_name = fc->func_def->name;
+                    agg_item.func_def = fc->func_def;
+                    agg_item.distinct = fc->distinct;
+                    if (!fc->args.empty())
+                        agg_item.argument = std::move(fc->args[0]);
+                }
+                agg->aggregates.push_back(std::move(agg_item));
+                with_outputs.emplace_back(alias, BoundType::Any());
+            } else {
+                with_outputs.emplace_back(alias, getBoundExprType(*bound_expr));
+                agg->group_keys.push_back(std::move(*bound_expr));
+            }
+            agg->output_names.push_back(std::move(alias));
+        }
+
+        agg->child = std::move(child);
+        current = std::move(agg);
+    } else {
+        // Simple projection
+        auto proj = std::make_unique<BoundProjectOp>();
+        for (const auto& item : wc.items) {
+            auto bound_expr = bindExpression(item.expr);
+            if (!bound_expr)
+                continue;
+
+            // Detect whole-variable pass-through to add property requirements
+            if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
+                auto& col_ref = std::get<BoundColumnRef>(*bound_expr);
+                if (col_ref.type.kind == BoundTypeKind::VERTEX) {
+                    addAllPropertiesForVariable(col_ref.name);
+                }
+            }
+
+            std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            BoundProjectOp::ProjectItem proj_item;
+            proj_item.expr = std::move(*bound_expr);
+            proj_item.alias = alias;
+            proj_item.result_type = getBoundExprType(proj_item.expr);
+            proj->items.push_back(std::move(proj_item));
+            with_outputs.emplace_back(alias, proj_item.result_type);
+        }
+        proj->child = std::move(child);
+        current = std::move(proj);
+    }
+
+    // Register WITH aliases temporarily so ORDER BY / SKIP / LIMIT can resolve them.
+    for (size_t i = 0; i < with_outputs.size(); ++i) {
+        ColumnInfo info;
+        info.name = with_outputs[i].first;
+        info.type = BoundType::clone(with_outputs[i].second);
+        info.column_index = static_cast<uint32_t>(i);
+        ctx_.symbols[with_outputs[i].first] = std::move(info);
+    }
+
+    // ORDER BY
+    if (wc.order_by) {
+        auto sort = std::make_unique<BoundSortOp>();
+        for (const auto& si : wc.order_by->items) {
+            auto bound_key = bindExpression(si.expr);
+            if (!bound_key)
+                continue;
+            BoundSortOp::SortItem sort_item;
+            sort_item.expr = std::move(*bound_key);
+            sort_item.direction = si.direction;
+            sort->items.push_back(std::move(sort_item));
+        }
+        sort->child = std::move(current);
+        current = std::move(sort);
+    }
+
+    // SKIP
+    if (wc.skip) {
+        auto bound_skip = bindExpression(*wc.skip);
+        if (bound_skip && std::holds_alternative<BoundLiteral>(*bound_skip)) {
+            auto& lit = std::get<BoundLiteral>(*bound_skip);
+            if (std::holds_alternative<int64_t>(lit.value)) {
+                auto skip = std::make_unique<BoundSkipOp>();
+                skip->count = std::get<int64_t>(lit.value);
+                skip->child = std::move(current);
+                current = std::move(skip);
+            }
+        }
+    }
+
+    // LIMIT
+    if (wc.limit) {
+        auto bound_limit = bindExpression(*wc.limit);
+        if (bound_limit && std::holds_alternative<BoundLiteral>(*bound_limit)) {
+            auto& lit = std::get<BoundLiteral>(*bound_limit);
+            if (std::holds_alternative<int64_t>(lit.value)) {
+                auto limit = std::make_unique<BoundLimitOp>();
+                limit->count = std::get<int64_t>(lit.value);
+                limit->child = std::move(current);
+                current = std::move(limit);
+            }
+        }
+    }
+
+    // DISTINCT
+    if (wc.distinct) {
+        auto distinct = std::make_unique<BoundDistinctOp>();
+        distinct->child = std::move(current);
+        current = std::move(distinct);
+    }
+
+    // Scope reset: only WITH output columns are visible after this point
+    ctx_.symbols.clear();
+    ctx_.next_column_index = 0;
+    for (size_t i = 0; i < with_outputs.size(); ++i) {
+        ColumnInfo info;
+        info.name = with_outputs[i].first;
+        info.type = std::move(with_outputs[i].second);
+        info.column_index = static_cast<uint32_t>(i);
+        ctx_.symbols[with_outputs[i].first] = std::move(info);
+    }
+    ctx_.next_column_index = static_cast<uint32_t>(with_outputs.size());
+
+    // WHERE
+    if (wc.where_pred) {
+        auto where_op = bindWhere(*wc.where_pred, std::move(current));
+        if (!where_op)
+            return std::nullopt;
+        current = std::move(*where_op);
+    }
+
+    return current;
 }
 
 std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClause& create,
