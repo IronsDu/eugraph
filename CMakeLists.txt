@@ -151,6 +151,11 @@ add_library(eugraph_query_engine STATIC
     src/compute_service/physical_plan/physical_operator_base.cpp
     src/compute_service/physical_plan/physical_planner.cpp
     src/compute_service/executor/query_executor.cpp
+    src/compute_service/optimizer/memo.cpp
+    src/compute_service/optimizer/opt_rule.cpp
+    src/compute_service/optimizer/task.cpp
+    src/compute_service/optimizer/logical_optimizer.cpp
+    src/compute_service/optimizer/rules/filter_pushdown.cpp
 )
 
 target_include_directories(eugraph_query_engine PUBLIC
@@ -376,6 +381,29 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(query_executor_tests wiredtiger_ext)
     gtest_add_tests(TARGET query_executor_tests)
+
+    # Optimizer tests
+    add_executable(optimizer_tests
+        tests/test_optimizer.cpp
+    )
+
+    target_include_directories(optimizer_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(optimizer_tests PRIVATE
+        eugraph_query_engine
+        eugraph_metadata
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(optimizer_tests wiredtiger_ext)
+    gtest_add_tests(TARGET optimizer_tests)
 
     # Metadata service tests
     add_executable(metadata_tests
