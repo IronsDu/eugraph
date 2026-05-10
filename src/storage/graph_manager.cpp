@@ -3,14 +3,26 @@
 #include <folly/coro/BlockingWait.h>
 #include <spdlog/spdlog.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
+#include <thread>
 
 namespace eugraph {
 
-bool GraphManager::init(const std::string& data_dir, int io_threads, int compute_threads) {
+GraphManager::~GraphManager() {
+    if (running_.load()) {
+        shutdown();
+    }
+}
+
+bool GraphManager::init(const std::string& data_dir, int io_threads, int compute_threads, int checkpoint_interval_sec) {
     data_dir_ = data_dir;
     io_threads_ = io_threads;
     compute_threads_ = compute_threads;
+    checkpoint_interval_sec_ = checkpoint_interval_sec;
+
+    auto t0 = std::chrono::steady_clock::now();
 
     std::error_code ec;
     std::filesystem::create_directories(data_dir_, ec);
@@ -19,6 +31,7 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
         return false;
     }
 
+    spdlog::info("Opening catalog...");
     if (!catalog_.open(data_dir_ + "/catalog")) {
         spdlog::error("Failed to open catalog store");
         return false;
@@ -27,18 +40,25 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
     io_scheduler_ = std::make_shared<IoScheduler>(io_threads_);
 
     auto entries = catalog_.listGraphs();
+    spdlog::info("Found {} graph(s) in catalog, opening...", entries.size());
+
     for (auto& entry : entries) {
+        auto t_graph = std::chrono::steady_clock::now();
         auto instance = openGraphInstance(entry.graph_id, entry.name);
+        auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_graph).count();
         if (instance) {
             graphs_[entry.name] = std::move(instance);
-            spdlog::info("Loaded graph '{}' (id={})", entry.name, entry.graph_id);
+            spdlog::info("Loaded graph '{}' (id={}) in {}ms", entry.name, entry.graph_id, ms);
         } else {
-            spdlog::warn("Failed to open graph '{}' (id={}), cleaning up catalog entry", entry.name, entry.graph_id);
+            spdlog::warn("Failed to open graph '{}' (id={}) in {}ms, cleaning up catalog entry", entry.name,
+                         entry.graph_id, ms);
             catalog_.dropGraph(entry.name);
         }
     }
 
     if (!catalog_.getGraph(kDefaultGraphName).has_value()) {
+        spdlog::info("Creating default graph...");
         auto entry = catalog_.createGraph(kDefaultGraphName);
         if (!entry.has_value()) {
             spdlog::error("Failed to create default graph");
@@ -53,10 +73,28 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
         spdlog::info("Created default graph (id={})", entry->graph_id);
     }
 
+    running_.store(true);
+    checkpoint_thread_ = std::thread(&GraphManager::checkpointLoop, this);
+
+    auto total_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    spdlog::info("GraphManager initialized in {}ms ({} graphs loaded, checkpoint interval {}s)", total_ms,
+                 graphs_.size(), checkpoint_interval_sec_);
+
     return true;
 }
 
 void GraphManager::shutdown() {
+    if (!running_.exchange(false))
+        return;
+
+    {
+        std::lock_guard<std::mutex> lk(checkpoint_mu_);
+        checkpoint_cv_.notify_one();
+    }
+    if (checkpoint_thread_.joinable())
+        checkpoint_thread_.join();
+
     std::unique_lock lock(mu_);
 
     for (auto& [name, inst] : graphs_) {
@@ -164,6 +202,35 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstance(uint32_t graph_id
         std::make_unique<compute::QueryExecutor>(*instance->async_data, *instance->async_meta, executor_config);
 
     return instance;
+}
+
+void GraphManager::checkpointAll() {
+    std::shared_lock lock(mu_);
+    for (auto& [name, inst] : graphs_) {
+        auto t0 = std::chrono::steady_clock::now();
+        inst->sync_data->checkpoint();
+        inst->sync_meta->checkpoint();
+        catalog_.checkpoint();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        spdlog::info("Periodic checkpoint for graph '{}' completed ({}ms)", name, ms);
+    }
+}
+
+void GraphManager::checkpointLoop() {
+    spdlog::info("Checkpoint thread started (interval {}s)", checkpoint_interval_sec_);
+    while (running_.load()) {
+        std::unique_lock<std::mutex> lk(checkpoint_mu_);
+        checkpoint_cv_.wait_for(lk, std::chrono::seconds(checkpoint_interval_sec_),
+                                [this] { return !running_.load(); });
+        if (!running_.load())
+            break;
+        try {
+            checkpointAll();
+        } catch (const std::exception& e) {
+            spdlog::error("Periodic checkpoint failed: {}", e.what());
+        }
+    }
+    spdlog::info("Checkpoint thread stopped");
 }
 
 } // namespace eugraph

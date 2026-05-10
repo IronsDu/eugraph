@@ -1,6 +1,7 @@
 #include "storage/wt_store_base.hpp"
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <spdlog/spdlog.h>
@@ -60,7 +61,16 @@ void WtStoreBase::closeConnection() {
         }
         txns_.clear();
     }
-    // defaultSession_ and conn_ are automatically cleaned up by their destructors
+    if (defaultSession_) {
+        auto t0 = std::chrono::steady_clock::now();
+        int ret = defaultSession_.get()->checkpoint(defaultSession_.get(), nullptr);
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        if (ret != 0) {
+            spdlog::warn("Checkpoint before close failed: error {} ({}ms)", ret, ms);
+        } else {
+            spdlog::info("Checkpoint completed ({}ms)", ms);
+        }
+    }
     defaultSession_ = WtSession{};
     conn_.close();
 }
@@ -76,12 +86,18 @@ bool WtStoreBase::openConnection(const std::string& db_path) {
         return false;
     }
 
+    auto t0 = std::chrono::steady_clock::now();
+
     // Enable WAL with fsync on commit for crash durability.
     // transaction_sync=(enabled=true) is required: without it, log records are
     // only buffered in memory and flushed on checkpoint or clean shutdown.
     if (!conn_.open(db_path, "create,log=(enabled=true),transaction_sync=(enabled=true,method=fsync)")) {
         return false;
     }
+
+    auto t1 = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    spdlog::info("Opened WT connection at {} ({}ms)", db_path, ms);
 
     defaultSession_ = conn_.openSession();
     if (!defaultSession_) {
