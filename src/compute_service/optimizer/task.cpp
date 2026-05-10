@@ -10,7 +10,7 @@ namespace optimizer {
 // ============================================================
 // OGroupTask
 // ============================================================
-void OGroupTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
+void OGroupTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     Group& group = memo.getGroup(group_id_);
 
     // Recursively optimize child groups first (bottom-up)
