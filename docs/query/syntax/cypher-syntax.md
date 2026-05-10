@@ -63,6 +63,40 @@ MATCH (n:Person) RETURN n::Employee.salary
 MATCH (n) RETURN n::Employee
 ```
 
+### WITH — 中间投影
+
+WITH 子句用于在查询中间进行投影、聚合、排序和过滤，类似于 RETURN 但会重置作用域（只有 WITH 列出的变量在后续子句中可见）。
+
+```cypher
+-- 简单投影 + 重命名
+MATCH (n:Person) WITH n.name AS name RETURN name
+
+-- 聚合 + 分组（非聚合列自动成为分组键）
+MATCH (n:Person)-[:KNOWS]->(m) WITH n, count(m) AS cnt RETURN n.name, cnt
+
+-- WHERE 过滤（类似 SQL HAVING，在聚合之后执行）
+MATCH (n:Person)-[:KNOWS]->(m) WITH n, count(m) AS cnt WHERE cnt > 1 RETURN n.name
+
+-- ORDER BY + LIMIT
+MATCH (n:Person) WITH n.name AS name ORDER BY name DESC LIMIT 5 RETURN name
+
+-- DISTINCT
+MATCH (n:Person) WITH DISTINCT n.city AS city RETURN city
+```
+
+**支持的功能**：
+- 投影 + 重命名（`expr AS alias`）
+- 聚合（count/sum/avg/min/max）+ 隐式分组
+- `WHERE` 过滤
+- `ORDER BY` / `SKIP` / `LIMIT`
+- `DISTINCT`
+- 作用域重置（仅 WITH 输出列在后续可见）
+
+**已知限制**：
+- WITH 后接 MATCH 时，第二个 MATCH 创建独立扫描算子，不使用 WITH 输出作为输入（如 `WITH n.city AS city MATCH (c:City {name: city})` 中 `city` 无法传入第二个 MATCH）
+- 聚合结果类型为 `ANY`，WHERE 中与具体类型（如 int64）比较可能失败（如 `WHERE count > 1`）
+- WITH 后 SET 属性更新可能不生效（作用域重置后列索引变化）
+
 ### RETURN — 返回
 
 ```cypher
@@ -137,7 +171,6 @@ REMOVE n.name                     -- 移除属性（便捷模式）
 | `DELETE` / `DETACH DELETE` | 删除顶点/边 |
 | `MERGE` | 条件创建（含 ON CREATE/MATCH SET） |
 | `UNWIND` | 列表展开为行 |
-| `WITH` | 多部查询断点 |
 | `CALL` | 过程调用/子查询 |
 | `UNION` / `UNION ALL` | 查询合并 |
 | `OPTIONAL MATCH` | 可选匹配 |
