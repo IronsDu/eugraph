@@ -45,7 +45,8 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
     for (auto& entry : entries) {
         auto t_graph = std::chrono::steady_clock::now();
         auto instance = openGraphInstance(entry.graph_id, entry.name);
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_graph).count();
+        auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_graph).count();
         if (instance) {
             graphs_[entry.name] = std::move(instance);
             spdlog::info("Loaded graph '{}' (id={}) in {}ms", entry.name, entry.graph_id, ms);
@@ -75,7 +76,8 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
     running_.store(true);
     checkpoint_thread_ = std::thread(&GraphManager::checkpointLoop, this);
 
-    auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    auto total_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
     spdlog::info("GraphManager initialized in {}ms ({} graphs loaded, checkpoint interval {}s)", total_ms,
                  graphs_.size(), checkpoint_interval_sec_);
 
@@ -218,7 +220,8 @@ void GraphManager::checkpointLoop() {
     spdlog::info("Checkpoint thread started (interval {}s)", checkpoint_interval_sec_);
     while (running_.load()) {
         std::unique_lock<std::mutex> lk(checkpoint_mu_);
-        checkpoint_cv_.wait_for(lk, std::chrono::seconds(checkpoint_interval_sec_), [this] { return !running_.load(); });
+        checkpoint_cv_.wait_for(lk, std::chrono::seconds(checkpoint_interval_sec_),
+                                [this] { return !running_.load(); });
         if (!running_.load())
             break;
         try {
