@@ -562,4 +562,29 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(loader_integration_tests wiredtiger_ext)
     gtest_add_tests(TARGET loader_integration_tests)
+
+    # Catalog + GraphManager tests
+    add_executable(catalog_tests
+        tests/test_catalog_and_graph_manager.cpp
+    )
+
+    target_include_directories(catalog_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(catalog_tests PRIVATE
+        eugraph_shell_lib
+        eugraph_query_engine
+        eugraph_metadata
+        eugraph_thrift
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(catalog_tests wiredtiger_ext)
+    gtest_add_tests(TARGET catalog_tests)
 endif()
