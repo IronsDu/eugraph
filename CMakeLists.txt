@@ -61,6 +61,7 @@ add_library(eugraph_lib STATIC
     src/storage/data/sync_graph_data_store.cpp
     src/storage/meta/sync_graph_meta_store.cpp
     src/storage/meta/meta_codec.cpp
+    src/storage/catalog/catalog_store.cpp
 )
 
 target_include_directories(eugraph_lib PUBLIC
@@ -207,6 +208,7 @@ add_library(eugraph_shell_lib STATIC
     src/program/shell/shell_repl.cpp
     src/program/shell/rpc_client.cpp
     src/program/server/eugraph_handler.cpp
+    src/storage/graph_manager.cpp
     third_party/linenoise/linenoise.c
 )
 

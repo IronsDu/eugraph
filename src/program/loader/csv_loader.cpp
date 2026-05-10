@@ -210,7 +210,7 @@ void createLabels(shell::EuGraphRpcClient& client, const std::vector<LabelSchema
             props.push_back(std::move(pd));
         }
         spdlog::info("[loader] Creating label '{}' with {} properties", schema.name, props.size());
-        client.createLabel(schema.name, props);
+        client.createLabel(schema.name, props, "default");
     }
 }
 
@@ -225,7 +225,7 @@ void createEdgeLabels(shell::EuGraphRpcClient& client, const std::vector<EdgeTyp
             props.push_back(std::move(pd));
         }
         spdlog::info("[loader] Creating edge label '{}' with {} properties", schema.name, props.size());
-        client.createEdgeLabel(schema.name, props);
+        client.createEdgeLabel(schema.name, props, "default");
     }
 }
 
@@ -260,7 +260,7 @@ CsvIdMap loadVertices(shell::EuGraphRpcClient& client, const std::vector<CsvFile
         auto flush_batch = [&]() {
             if (batch.empty())
                 return;
-            auto result = client.batchInsertVertices(fi.label, std::move(batch));
+            auto result = client.batchInsertVertices(fi.label, std::move(batch), "default");
             for (size_t i = 0; i < result.vertex_ids()->size() && i < csv_ids.size(); i++) {
                 label_map[csv_ids[i]] = static_cast<uint64_t>((*result.vertex_ids())[i]);
             }
@@ -317,7 +317,7 @@ void createUniqueIdIndexes(shell::EuGraphRpcClient& client, const std::vector<La
         try {
             spdlog::info("[loader] Creating unique index '{}' on label '{}' property '{}'", index_name, schema.name,
                          id_prop_name);
-            client.executeCypher(query);
+            client.executeCypher(query, "default");
             spdlog::info("[loader] Unique index '{}' created successfully", index_name);
         } catch (const std::exception& e) {
             spdlog::warn("[loader] Failed to create unique index '{}': {}", index_name, e.what());
@@ -392,14 +392,14 @@ void loadEdges(shell::EuGraphRpcClient& client, const std::vector<CsvFileInfo>& 
             total++;
 
             if ((int)batch.size() >= batch_size) {
-                client.batchInsertEdges(fi.edge_type, std::move(batch));
+                client.batchInsertEdges(fi.edge_type, std::move(batch), "default");
                 batch.clear();
                 batch.reserve(batch_size);
             }
         }
 
         if (!batch.empty()) {
-            client.batchInsertEdges(fi.edge_type, std::move(batch));
+            client.batchInsertEdges(fi.edge_type, std::move(batch), "default");
         }
 
         spdlog::info("[loader] Loaded {} edges for '{}' ({} skipped)", total, fi.edge_type, skipped);

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -148,6 +149,22 @@ std::string formatEdgeLabelList(const std::vector<std::tuple<int, std::string, s
     return formatTable(cols, rows);
 }
 
+std::string formatTimestamp(int64_t ts) {
+    auto time_t_val = static_cast<time_t>(ts);
+    std::ostringstream oss;
+    oss << std::put_time(std::localtime(&time_t_val), "%Y-%m-%d %H:%M:%S");
+    return oss.str();
+}
+
+std::string formatGraphList(const std::vector<thrift::GraphInfo>& graphs) {
+    std::vector<std::string> cols = {"graph_id", "graph_name", "created_at"};
+    std::vector<std::vector<std::string>> rows;
+    for (const auto& g : graphs) {
+        rows.push_back({std::to_string(g.graph_id().value()), g.name().value(), formatTimestamp(g.created_at().value())});
+    }
+    return formatTable(cols, rows);
+}
+
 // ==================== REPL helpers ====================
 
 std::pair<std::string, std::string> parseCommand(const std::string& line) {
@@ -217,18 +234,14 @@ std::vector<PropertyDefThrift> parsePropertyDefs(const std::string& args) {
 
 // ==================== REPL common logic ====================
 
-// Common REPL loop for both embedded and RPC modes.
-// The handler_func callback processes each command.
 using CommandHandler =
-    std::function<void(const std::string& cmd, const std::string& args, const std::string& accumulated)>;
-
-static const char* kPrompt = "\033[32meugraph>\033[0m ";
-static const char* kMultilinePrompt = "\033[36m......>\033[0m ";
+    std::function<void(const std::string& cmd, const std::string& args, const std::string& accumulated,
+                       const std::string& graph_name)>;
 
 static void completionCallback(const char* buf, linenoiseCompletions* lc) {
     if (buf[0] == ':') {
-        const char* cmds[] = {
-            ":help", ":exit", ":quit", ":create-label", ":create-edge-label", ":list-labels", ":list-edge-labels"};
+        const char* cmds[] = {":help",   ":exit",         ":quit",      ":create-label", ":create-edge-label",
+                              ":list-labels", ":list-edge-labels", ":create-graph", ":drop-graph", ":list-graphs", ":use"};
         for (const auto* c : cmds) {
             if (strncmp(c, buf, strlen(buf)) == 0) {
                 linenoiseAddCompletion(lc, c);
@@ -237,7 +250,7 @@ static void completionCallback(const char* buf, linenoiseCompletions* lc) {
     }
 }
 
-static void runReplLoop(const std::string& mode_label, CommandHandler handler) {
+static void runReplLoop(const std::string& mode_label, const std::string& current_graph, CommandHandler handler) {
     linenoiseSetCompletionCallback(completionCallback);
     linenoiseHistorySetMaxLen(256);
 
@@ -248,12 +261,15 @@ static void runReplLoop(const std::string& mode_label, CommandHandler handler) {
     std::cout << "Type :help for available commands, :exit to quit." << std::endl;
     std::cout << std::endl;
 
+    std::string graph = current_graph;
+
     while (true) {
         std::string accumulated;
 
         while (true) {
-            const char* prompt = accumulated.empty() ? kPrompt : kMultilinePrompt;
-            char* line_raw = linenoise(prompt);
+            std::string prompt = "\033[32meugraph(" + graph + ")>\033[0m ";
+            const char* prompt_str = accumulated.empty() ? prompt.c_str() : "\033[36m......>\033[0m ";
+            char* line_raw = linenoise(prompt_str);
             if (!line_raw) {
                 std::cout << std::endl;
                 linenoiseHistorySave(history_path.c_str());
@@ -286,10 +302,18 @@ static void runReplLoop(const std::string& mode_label, CommandHandler handler) {
             linenoiseHistorySave(history_path.c_str());
             std::cout << "Bye!" << std::endl;
             return;
+        } else if (cmd == ":use") {
+            linenoiseHistoryAdd(accumulated.c_str());
+            if (args.empty()) {
+                std::cerr << "Usage: :use <graph_name>" << std::endl;
+            } else {
+                graph = args;
+                std::cout << "Switched to graph '" << graph << "'" << std::endl;
+            }
         } else {
             linenoiseHistoryAdd(accumulated.c_str());
             auto t0 = std::chrono::steady_clock::now();
-            handler(cmd, args, accumulated);
+            handler(cmd, args, accumulated, graph);
             auto t1 = std::chrono::steady_clock::now();
             auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
             if (us > 1000) {
@@ -318,18 +342,46 @@ static void runRpcRepl(const ShellConfig& config) {
         std::cout << "Connected. (connect took " << ms << "ms)" << std::endl;
     }
 
-    auto cmd_handler = [&client](const std::string& cmd, const std::string& args, const std::string& accumulated) {
+    std::string current_graph = "default";
+
+    auto cmd_handler = [&client](const std::string& cmd, const std::string& args, const std::string& accumulated,
+                                  const std::string& graph_name) {
         try {
             if (cmd == ":help") {
                 std::cout << "Available commands:" << std::endl;
-                std::cout << "  :create-label <name> [prop1:type1 ...]" << std::endl;
-                std::cout << "  :create-edge-label <name> [prop1:type1 ...]" << std::endl;
-                std::cout << "  :list-labels" << std::endl;
-                std::cout << "  :list-edge-labels" << std::endl;
+                std::cout << "  :create-graph <name>            Create a new graph" << std::endl;
+                std::cout << "  :drop-graph <name>              Drop a graph" << std::endl;
+                std::cout << "  :list-graphs                    List all graphs" << std::endl;
+                std::cout << "  :use <name>                     Switch current graph" << std::endl;
+                std::cout << "  :create-label <name> [prop:type ...]" << std::endl;
+                std::cout << "  :create-edge-label <name> [prop:type ...]" << std::endl;
+                std::cout << "  :list-labels                    List labels in current graph" << std::endl;
+                std::cout << "  :list-edge-labels               List edge labels in current graph" << std::endl;
                 std::cout << "  :help                           Show this help" << std::endl;
                 std::cout << "  :exit / :quit                   Exit shell" << std::endl;
                 std::cout << std::endl;
                 std::cout << "Any other input is treated as a Cypher query (end with ;)." << std::endl;
+            } else if (cmd == ":create-graph") {
+                if (args.empty()) {
+                    std::cerr << "Usage: :create-graph <name>" << std::endl;
+                    return;
+                }
+                auto resp = client.createGraph(args);
+                std::cout << "Graph created: " << args << " (id=" << resp.graph_id().value() << ")" << std::endl;
+            } else if (cmd == ":drop-graph") {
+                if (args.empty()) {
+                    std::cerr << "Usage: :drop-graph <name>" << std::endl;
+                    return;
+                }
+                client.dropGraph(args);
+                std::cout << "Graph dropped: " << args << std::endl;
+            } else if (cmd == ":list-graphs") {
+                auto graphs = client.listGraphs();
+                if (graphs.empty()) {
+                    std::cout << "(no graphs)" << std::endl;
+                } else {
+                    std::cout << formatGraphList(graphs);
+                }
             } else if (cmd == ":create-label") {
                 if (args.empty()) {
                     std::cerr << "Usage: :create-label <name> [prop1:type1 ...]" << std::endl;
@@ -341,7 +393,7 @@ static void runRpcRepl(const ShellConfig& config) {
                 std::string rest;
                 std::getline(iss, rest);
                 auto props = parsePropertyDefs(rest);
-                auto resp = client.createLabel(name, props);
+                auto resp = client.createLabel(name, props, graph_name);
                 std::cout << formatLabelCreated(resp.name().value(), resp.id().value());
             } else if (cmd == ":create-edge-label") {
                 if (args.empty()) {
@@ -354,10 +406,10 @@ static void runRpcRepl(const ShellConfig& config) {
                 std::string rest;
                 std::getline(iss, rest);
                 auto props = parsePropertyDefs(rest);
-                auto resp = client.createEdgeLabel(name, props);
+                auto resp = client.createEdgeLabel(name, props, graph_name);
                 std::cout << formatEdgeLabelCreated(resp.name().value(), resp.id().value());
             } else if (cmd == ":list-labels") {
-                auto labels = client.listLabels();
+                auto labels = client.listLabels(graph_name);
                 if (labels.empty()) {
                     std::cout << "(no labels)" << std::endl;
                 } else {
@@ -368,7 +420,7 @@ static void runRpcRepl(const ShellConfig& config) {
                     std::cout << formatLabelList(rows);
                 }
             } else if (cmd == ":list-edge-labels") {
-                auto labels = client.listEdgeLabels();
+                auto labels = client.listEdgeLabels(graph_name);
                 if (labels.empty()) {
                     std::cout << "(no edge labels)" << std::endl;
                 } else {
@@ -385,7 +437,7 @@ static void runRpcRepl(const ShellConfig& config) {
                     query.pop_back();
                 }
                 try {
-                    auto [meta, stream] = client.executeCypher(query);
+                    auto [meta, stream] = client.executeCypher(query, graph_name);
                     if (meta.columns()->empty()) {
                         std::cout << "OK" << std::endl;
                     } else {
@@ -417,7 +469,7 @@ static void runRpcRepl(const ShellConfig& config) {
         }
     };
 
-    runReplLoop("rpc", cmd_handler);
+    runReplLoop("rpc", current_graph, cmd_handler);
 }
 
 // ==================== Public REPL entry ====================

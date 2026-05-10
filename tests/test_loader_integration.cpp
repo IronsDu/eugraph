@@ -9,6 +9,7 @@
 #include "program/shell/rpc_client.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
+#include "storage/graph_manager.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
@@ -58,12 +59,7 @@ std::string getDataDir() {
 class LoaderIntegrationTest : public ::testing::Test {
 protected:
     std::string db_path_;
-    std::unique_ptr<SyncGraphDataStore> sync_data_;
-    std::unique_ptr<SyncGraphMetaStore> sync_meta_;
-    std::unique_ptr<AsyncGraphMetaStore> async_meta_;
-    std::unique_ptr<IoScheduler> io_scheduler_;
-    std::unique_ptr<AsyncGraphDataStore> async_data_;
-    std::unique_ptr<compute::QueryExecutor> executor_;
+    std::shared_ptr<GraphManager> graph_manager_;
     std::shared_ptr<server::EuGraphHandler> handler_;
     std::unique_ptr<apache::thrift::ScopedServerInterfaceThread> server_;
     std::unique_ptr<shell::EuGraphRpcClient> client_;
@@ -71,25 +67,11 @@ protected:
     void SetUp() override {
         db_path_ = getTestDbPath();
         std::filesystem::remove_all(db_path_);
-        std::filesystem::create_directories(db_path_ + "/data");
-        std::filesystem::create_directories(db_path_ + "/meta");
 
-        sync_data_ = std::make_unique<SyncGraphDataStore>();
-        ASSERT_TRUE(sync_data_->open(db_path_ + "/data"));
+        graph_manager_ = std::make_shared<GraphManager>();
+        ASSERT_TRUE(graph_manager_->init(db_path_, 2, 2));
 
-        sync_meta_ = std::make_unique<SyncGraphMetaStore>();
-        ASSERT_TRUE(sync_meta_->open(db_path_ + "/meta"));
-
-        async_meta_ = std::make_unique<AsyncGraphMetaStore>();
-        io_scheduler_ = std::make_unique<IoScheduler>(2);
-        auto opened = blockingWait(async_meta_->open(*sync_meta_, *io_scheduler_));
-        ASSERT_TRUE(opened);
-
-        async_data_ = std::make_unique<AsyncGraphDataStore>(*sync_data_, *io_scheduler_);
-
-        executor_ =
-            std::make_unique<compute::QueryExecutor>(*async_data_, *async_meta_, compute::QueryExecutor::Config{});
-        handler_ = std::make_shared<server::EuGraphHandler>(*async_data_, *async_meta_, *executor_);
+        handler_ = std::make_shared<server::EuGraphHandler>(*graph_manager_);
 
         auto ts = std::make_shared<apache::thrift::ThriftServer>();
         ts->setAddress(folly::SocketAddress("::1", 0));
@@ -115,17 +97,10 @@ protected:
 
     void TearDown() override {
         client_.reset();
-        // Server teardown can deadlock when IO pool is shared with ThreadManager.
-        // Release the pointer without blocking; OS will reclaim resources.
-        // LSAN is suppressed around server construction in SetUp to avoid leak reports.
         (void)server_.release();
         handler_.reset();
-        executor_.reset();
-        async_data_.reset();
-        io_scheduler_.reset();
-        blockingWait(async_meta_->close());
-        sync_data_->close();
-        sync_meta_->close();
+        graph_manager_->shutdown();
+        graph_manager_.reset();
         std::filesystem::remove_all(db_path_);
     }
 
@@ -137,7 +112,7 @@ protected:
     CypherResult execCypher(const std::string& query) {
         CypherResult result;
         try {
-            auto [meta, stream] = client_->executeCypher(query);
+            auto [meta, stream] = client_->executeCypher(query, "default");
             auto gen = std::move(stream).toAsyncGenerator();
             folly::coro::blockingWait([&]() -> folly::coro::Task<void> {
                 while (auto batch = co_await gen.next()) {
@@ -226,10 +201,10 @@ TEST_F(LoaderIntegrationTest, FullLoadAndVerify) {
     loader::createEdgeLabels(*client_, edge_schemas);
 
     // Verify labels created
-    auto labels = client_->listLabels();
+    auto labels = client_->listLabels("default");
     EXPECT_EQ(labels.size(), 8);
 
-    auto edge_labels = client_->listEdgeLabels();
+    auto edge_labels = client_->listEdgeLabels("default");
     EXPECT_GE(edge_labels.size(), 9); // at least 9 distinct edge types
 
     // Load vertices

@@ -55,46 +55,73 @@ bool EuGraphRpcClient::connect() {
     }
 }
 
-thrift::LabelInfo EuGraphRpcClient::createLabel(const std::string& name,
-                                                const std::vector<thrift::PropertyDefThrift>& properties) {
-    return client_->semifuture_createLabel(name, properties).via(evb_.get()).get();
+// ==================== Graph Management ====================
+
+thrift::GraphInfo EuGraphRpcClient::createGraph(const std::string& name) {
+    return client_->semifuture_createGraph(name).via(evb_.get()).get();
 }
 
-std::vector<thrift::LabelInfo> EuGraphRpcClient::listLabels() {
-    return client_->semifuture_listLabels().via(evb_.get()).get();
+bool EuGraphRpcClient::dropGraph(const std::string& name) {
+    return client_->semifuture_dropGraph(name).via(evb_.get()).get();
+}
+
+std::vector<thrift::GraphInfo> EuGraphRpcClient::listGraphs() {
+    return client_->semifuture_listGraphs().via(evb_.get()).get();
+}
+
+// ==================== DDL ====================
+
+thrift::LabelInfo EuGraphRpcClient::createLabel(const std::string& name,
+                                                const std::vector<thrift::PropertyDefThrift>& properties,
+                                                const std::string& graph_name) {
+    return client_->semifuture_createLabel(name, properties, graph_name).via(evb_.get()).get();
+}
+
+std::vector<thrift::LabelInfo> EuGraphRpcClient::listLabels(const std::string& graph_name) {
+    return client_->semifuture_listLabels(graph_name).via(evb_.get()).get();
 }
 
 thrift::EdgeLabelInfo EuGraphRpcClient::createEdgeLabel(const std::string& name,
-                                                        const std::vector<thrift::PropertyDefThrift>& properties) {
-    return client_->semifuture_createEdgeLabel(name, properties).via(evb_.get()).get();
+                                                        const std::vector<thrift::PropertyDefThrift>& properties,
+                                                        const std::string& graph_name) {
+    return client_->semifuture_createEdgeLabel(name, properties, graph_name).via(evb_.get()).get();
 }
 
-std::vector<thrift::EdgeLabelInfo> EuGraphRpcClient::listEdgeLabels() {
-    return client_->semifuture_listEdgeLabels().via(evb_.get()).get();
+std::vector<thrift::EdgeLabelInfo> EuGraphRpcClient::listEdgeLabels(const std::string& graph_name) {
+    return client_->semifuture_listEdgeLabels(graph_name).via(evb_.get()).get();
 }
+
+// ==================== DML ====================
 
 apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>
-EuGraphRpcClient::executeCypher(const std::string& query) {
-    return client_->semifuture_executeCypher(query).via(evb_.get()).get();
+EuGraphRpcClient::executeCypher(const std::string& query, const std::string& graph_name) {
+    return client_->semifuture_executeCypher(query, graph_name).via(evb_.get()).get();
 }
 
 folly::coro::Task<apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
-EuGraphRpcClient::co_executeCypher(const std::string& query) {
-    co_return client_->semifuture_executeCypher(query).via(evb_.get()).get();
+EuGraphRpcClient::co_executeCypher(const std::string& query, const std::string& graph_name) {
+    co_return client_->semifuture_executeCypher(query, graph_name).via(evb_.get()).get();
 }
 
+// ==================== Batch Import ====================
+
 thrift::BatchInsertVerticesResult EuGraphRpcClient::batchInsertVertices(const std::string& label_name,
-                                                                        std::vector<thrift::VertexRecord> records) {
+                                                                        std::vector<thrift::VertexRecord> records,
+                                                                        const std::string& graph_name) {
     auto t0 = nowMs();
-    auto resp = client_->semifuture_batchInsertVertices(label_name, std::move(records)).via(evb_.get()).get();
+    auto resp =
+        client_->semifuture_batchInsertVertices(label_name, std::move(records), graph_name).via(evb_.get()).get();
     spdlog::info("[rpc_client] batchInsertVertices: {} records, {}ms", *resp.count(), nowMs() - t0);
     return resp;
 }
 
 std::int32_t EuGraphRpcClient::batchInsertEdges(const std::string& edge_label_name,
-                                                std::vector<thrift::EdgeRecord> records) {
+                                                std::vector<thrift::EdgeRecord> records,
+                                                const std::string& graph_name) {
     auto t0 = nowMs();
-    auto resp = client_->semifuture_batchInsertEdges(edge_label_name, std::move(records)).via(evb_.get()).get();
+    auto resp = client_->semifuture_batchInsertEdges(edge_label_name, std::move(records), graph_name)
+                    .via(evb_.get())
+                    .get();
     spdlog::info("[rpc_client] batchInsertEdges: {} records, {}ms", resp, nowMs() - t0);
     return resp;
 }
