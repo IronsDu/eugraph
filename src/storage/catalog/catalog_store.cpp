@@ -66,13 +66,12 @@ std::optional<GraphEntry> CatalogStore::getGraph(const std::string& name) {
 
 std::vector<GraphEntry> CatalogStore::listGraphs() {
     std::vector<GraphEntry> entries;
-    tableScan(defaultSession_.get(), TABLE_METADATA, kGraphPrefix,
-              [&](std::string_view key, std::string_view value) {
-                  auto entry = decodeGraphEntry(value);
-                  entry.name = std::string(key.substr(kGraphPrefix.size()));
-                  entries.push_back(std::move(entry));
-                  return true;
-              });
+    tableScan(defaultSession_.get(), TABLE_METADATA, kGraphPrefix, [&](std::string_view key, std::string_view value) {
+        auto entry = decodeGraphEntry(value);
+        entry.name = std::string(key.substr(kGraphPrefix.size()));
+        entries.push_back(std::move(entry));
+        return true;
+    });
     return entries;
 }
 

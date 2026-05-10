@@ -13,12 +13,10 @@ namespace server {
 
 class EuGraphHandler : public apache::thrift::ServiceHandler<thrift::EuGraphService> {
 public:
-    explicit EuGraphHandler(GraphManager& graph_manager)
-        : graph_manager_(graph_manager) {}
+    explicit EuGraphHandler(GraphManager& graph_manager) : graph_manager_(graph_manager) {}
 
     // Graph management
-    folly::coro::Task<std::unique_ptr<thrift::GraphInfo>>
-    co_createGraph(std::unique_ptr<std::string> name) override;
+    folly::coro::Task<std::unique_ptr<thrift::GraphInfo>> co_createGraph(std::unique_ptr<std::string> name) override;
 
     folly::coro::Task<bool> co_dropGraph(std::unique_ptr<std::string> name) override;
 
@@ -49,10 +47,9 @@ public:
                            std::unique_ptr<std::vector<thrift::VertexRecord>> records,
                            std::unique_ptr<std::string> graph_name) override;
 
-    folly::coro::Task<std::int32_t>
-    co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
-                        std::unique_ptr<std::vector<thrift::EdgeRecord>> records,
-                        std::unique_ptr<std::string> graph_name) override;
+    folly::coro::Task<std::int32_t> co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
+                                                        std::unique_ptr<std::vector<thrift::EdgeRecord>> records,
+                                                        std::unique_ptr<std::string> graph_name) override;
 
 public:
     thrift::ResultValue valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,

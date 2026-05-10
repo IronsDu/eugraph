@@ -160,7 +160,8 @@ std::string formatGraphList(const std::vector<thrift::GraphInfo>& graphs) {
     std::vector<std::string> cols = {"graph_id", "graph_name", "created_at"};
     std::vector<std::vector<std::string>> rows;
     for (const auto& g : graphs) {
-        rows.push_back({std::to_string(g.graph_id().value()), g.name().value(), formatTimestamp(g.created_at().value())});
+        rows.push_back(
+            {std::to_string(g.graph_id().value()), g.name().value(), formatTimestamp(g.created_at().value())});
     }
     return formatTable(cols, rows);
 }
@@ -234,14 +235,22 @@ std::vector<PropertyDefThrift> parsePropertyDefs(const std::string& args) {
 
 // ==================== REPL common logic ====================
 
-using CommandHandler =
-    std::function<void(const std::string& cmd, const std::string& args, const std::string& accumulated,
-                       const std::string& graph_name)>;
+using CommandHandler = std::function<void(const std::string& cmd, const std::string& args,
+                                          const std::string& accumulated, const std::string& graph_name)>;
 
 static void completionCallback(const char* buf, linenoiseCompletions* lc) {
     if (buf[0] == ':') {
-        const char* cmds[] = {":help",   ":exit",         ":quit",      ":create-label", ":create-edge-label",
-                              ":list-labels", ":list-edge-labels", ":create-graph", ":drop-graph", ":list-graphs", ":use"};
+        const char* cmds[] = {":help",
+                              ":exit",
+                              ":quit",
+                              ":create-label",
+                              ":create-edge-label",
+                              ":list-labels",
+                              ":list-edge-labels",
+                              ":create-graph",
+                              ":drop-graph",
+                              ":list-graphs",
+                              ":use"};
         for (const auto* c : cmds) {
             if (strncmp(c, buf, strlen(buf)) == 0) {
                 linenoiseAddCompletion(lc, c);
@@ -345,7 +354,7 @@ static void runRpcRepl(const ShellConfig& config) {
     std::string current_graph = "default";
 
     auto cmd_handler = [&client](const std::string& cmd, const std::string& args, const std::string& accumulated,
-                                  const std::string& graph_name) {
+                                 const std::string& graph_name) {
         try {
             if (cmd == ":help") {
                 std::cout << "Available commands:" << std::endl;

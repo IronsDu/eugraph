@@ -20,7 +20,9 @@ public:
 
     bool connect();
 
-    folly::EventBase* evb() { return evb_.get(); }
+    folly::EventBase* evb() {
+        return evb_.get();
+    }
 
     // Graph management
     thrift::GraphInfo createGraph(const std::string& name);

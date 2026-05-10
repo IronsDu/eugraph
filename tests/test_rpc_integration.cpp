@@ -118,9 +118,13 @@ protected:
     };
 
     CypherResult execCypher(const std::string& query) {
+        return execCypherOnGraph(query, "default");
+    }
+
+    CypherResult execCypherOnGraph(const std::string& query, const std::string& graph_name) {
         CypherResult result;
         try {
-            auto [meta, stream] = client_->executeCypher(query, "default");
+            auto [meta, stream] = client_->executeCypher(query, graph_name);
             result.columns = *meta.columns();
             std::move(stream).subscribeInline([&](folly::Try<ResultRowBatch> batch) {
                 if (batch.hasValue()) {
@@ -464,6 +468,82 @@ TEST_F(RpcIntegrationTest, MetadataOverheadAnalysis) {
     std::cout << "Per-vertex overhead: " << (avg(scan_large) - avg(scan_small)) / 50 << " us/vertex\n";
     std::cout << "Fixed overhead (approx): " << avg(scan_small) - 52 * ((avg(scan_large) - avg(scan_small)) / 50)
               << " us\n";
+}
+
+// ==================== Graph Management Integration Tests ====================
+
+TEST_F(RpcIntegrationTest, CreateAndListGraphs) {
+    auto info = client_->createGraph("social");
+    EXPECT_EQ(info.name().value(), "social");
+    EXPECT_GT(info.graph_id().value(), 0);
+
+    auto graphs = client_->listGraphs();
+    ASSERT_EQ(graphs.size(), 2u);
+
+    EXPECT_EQ(graphs[0].name().value(), "default");
+    EXPECT_EQ(graphs[1].name().value(), "social");
+}
+
+TEST_F(RpcIntegrationTest, CreateDuplicateGraph) {
+    auto first = client_->createGraph("test");
+    auto second = client_->createGraph("test");
+    EXPECT_EQ(first.graph_id().value(), second.graph_id().value());
+}
+
+TEST_F(RpcIntegrationTest, DropGraph) {
+    client_->createGraph("temp");
+    EXPECT_TRUE(client_->dropGraph("temp"));
+
+    auto graphs = client_->listGraphs();
+    for (const auto& g : graphs) {
+        EXPECT_NE(g.name().value(), "temp");
+    }
+}
+
+TEST_F(RpcIntegrationTest, DropDefaultGraphFails) {
+    EXPECT_THROW(client_->dropGraph("default"), std::exception);
+}
+
+TEST_F(RpcIntegrationTest, DropNonExistentGraphFails) {
+    EXPECT_THROW(client_->dropGraph("nonexistent"), std::exception);
+}
+
+TEST_F(RpcIntegrationTest, GraphIdNotReused) {
+    auto first = client_->createGraph("first");
+    client_->dropGraph("first");
+    auto second = client_->createGraph("second");
+    EXPECT_GT(second.graph_id().value(), first.graph_id().value());
+}
+
+TEST_F(RpcIntegrationTest, MultiGraphLabelIsolation) {
+    client_->createGraph("graph_a");
+    client_->createGraph("graph_b");
+
+    auto label_a =
+        client_->createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING)}, "graph_a");
+    EXPECT_GT(label_a.id().value(), 0);
+
+    auto labels_a = client_->listLabels("graph_a");
+    ASSERT_EQ(labels_a.size(), 1u);
+    EXPECT_EQ(labels_a[0].name().value(), "Person");
+
+    auto labels_b = client_->listLabels("graph_b");
+    EXPECT_EQ(labels_b.size(), 0u);
+}
+
+TEST_F(RpcIntegrationTest, MultiGraphCypherIsolation) {
+    client_->createGraph("alpha");
+    client_->createGraph("beta");
+
+    client_->createLabel("Node", {makePropDef("val", eugraph::thrift::PropertyType::INT64)}, "alpha");
+
+    execCypherOnGraph("CREATE (n:Node {val: 42})", "alpha");
+
+    auto result_a = execCypherOnGraph("MATCH (n:Node) RETURN n.val", "alpha");
+    ASSERT_EQ(result_a.rows.size(), 1u);
+
+    auto result_b = execCypherOnGraph("MATCH (n:Node) RETURN n.val", "beta");
+    EXPECT_EQ(result_b.rows.size(), 0u);
 }
 
 } // anonymous namespace

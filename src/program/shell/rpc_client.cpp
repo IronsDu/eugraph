@@ -119,9 +119,8 @@ std::int32_t EuGraphRpcClient::batchInsertEdges(const std::string& edge_label_na
                                                 std::vector<thrift::EdgeRecord> records,
                                                 const std::string& graph_name) {
     auto t0 = nowMs();
-    auto resp = client_->semifuture_batchInsertEdges(edge_label_name, std::move(records), graph_name)
-                    .via(evb_.get())
-                    .get();
+    auto resp =
+        client_->semifuture_batchInsertEdges(edge_label_name, std::move(records), graph_name).via(evb_.get()).get();
     spdlog::info("[rpc_client] batchInsertEdges: {} records, {}ms", resp, nowMs() - t0);
     return resp;
 }

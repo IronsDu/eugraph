@@ -542,8 +542,8 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
 
     auto gen = makeStreamGenerator(std::move(ctx), std::move(label_defs), std::move(edge_label_defs), *this, t0);
 
-    co_return apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>{
-        std::move(meta), std::move(gen)};
+    co_return apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>{std::move(meta),
+                                                                                                       std::move(gen)};
 }
 
 // ==================== Batch Import ====================
