@@ -43,6 +43,8 @@ struct EdgeVisitKeyHash {
 
 class VarLenExpandPhysicalOp : public PhysicalOperator {
 public:
+    ~VarLenExpandPhysicalOp() override;
+
     VarLenExpandPhysicalOp(
         std::string src_var, std::string dst_var, std::optional<std::vector<EdgeLabelId>> label_filters,
         cypher::RelationshipDirection direction, int64_t min_hops, int64_t max_hops, IAsyncGraphDataStore& store,

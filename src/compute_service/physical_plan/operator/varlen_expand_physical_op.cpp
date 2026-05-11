@@ -6,6 +6,8 @@
 namespace eugraph {
 namespace compute {
 
+VarLenExpandPhysicalOp::~VarLenExpandPhysicalOp() = default;
+
 std::string VarLenExpandPhysicalOp::toString() const {
     std::string dir;
     switch (direction_) {
