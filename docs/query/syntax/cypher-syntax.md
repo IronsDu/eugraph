@@ -20,11 +20,30 @@ MATCH (a)<-[:KNOWS]-(b)    -- 反向展开
 MATCH (a)-[:KNOWS]-(b)     -- 无向展开
 ```
 
+**变长路径**：
+
+```cypher
+MATCH (a)-[*2..3]->(b)      -- 2 到 3 跳
+MATCH (a)-[:KNOWS*1..5]->(b) -- 指定边类型的 1 到 5 跳
+MATCH (a)-[*3]->(b)          -- 精确 3 跳
+MATCH (a)-[*0..3]->(b)       -- 包含 identity path（0 跳，a=b）
+MATCH (a)-[*..]->(b)          -- 无上界展开
+MATCH (a)-[:KNOWS|LIVES_IN*1..2]->(b)  -- 多边类型
+MATCH p = (a)-[:KNOWS*1..3]->(b)       -- 命名路径变量
+MATCH (a)-[e:KNOWS*2]->(b)             -- 命名边变量 → LIST<EDGE>
+MATCH (a)-[:KNOWS*1..5 {score: 10}]->(b)  -- 逐跳边属性过滤
+MATCH (a)-[:KNOWS*1..5]-(b)                -- 无向变长
+```
+
+**变长路径限制**：
+- min/max 必须是字面量整数，min >= 0
+- 混合固定+变长链且带命名路径（`p = (a)-[:X]->(b)-[:Y*2..3]->(c)`）不支持
+- 边属性过滤值仅支持字面常量（不支持表达式或变量引用）
+
 **限制**：
 - 仅支持单个 MATCH 子句（多 MATCH 不支持）
 - 仅支持单个 pattern part（逗号分隔的多个模式不支持）
 - OPTIONAL MATCH 仅解析，执行按普通 MATCH 处理
-- 变长路径（`*min..max`）仅解析，Expand 算子不使用
 
 ### WHERE — 过滤
 
@@ -49,6 +68,21 @@ WHERE x IS NULL / x IS NOT NULL
 | 逻辑 | `XOR` | 仅解析 |
 
 **索引优化**：当 Filter 在 LabelScan 之上且谓词为 `n.prop = literal` 模式，且该属性存在 PUBLIC 索引时，自动使用 IndexScan（还支持 `>`, `>=`, `<`, `<=` 的范围扫描）。
+
+**路径谓词**（可与变长路径配合使用）：
+
+```cypher
+MATCH p = (a)-[:KNOWS*1..5]->(b)
+WHERE ALL(x IN nodes(p) WHERE x.age > 18)
+RETURN p
+
+-- 四种量词：ANY / NONE / SINGLE
+WHERE ANY(x IN nodes(p) WHERE x.city = 'Beijing')
+WHERE NONE(x IN relationships(p) WHERE x.score < 0)
+WHERE SINGLE(x IN nodes(p) WHERE id(x) = 100)
+```
+
+量词语义（遵循 Cypher 标准）：ALL 空列表→true，ANY 空列表→false，NONE 空列表→true，SINGLE→恰好一个满足。
 
 ### 多标签属性访问
 
@@ -174,11 +208,10 @@ REMOVE n.name                     -- 移除属性（便捷模式）
 | `CALL` | 过程调用/子查询 |
 | `UNION` / `UNION ALL` | 查询合并 |
 | `OPTIONAL MATCH` | 可选匹配 |
-| 变长路径 `*min..max` | 多跳展开 |
 | `CASE WHEN THEN ELSE END` | 条件表达式 |
 | `$param` | 参数化查询 |
 | `[x IN list WHERE pred \| proj]` | 列表推导 |
-| `ALL/ANY/NONE/SINGLE(...)` | 量词谓词 |
+| `ALL/ANY/NONE/SINGLE(...)` | 量词谓词（已实现，见 WHERE 子句） |
 | `EXISTS { pattern }` | 存在性子查询 |
 | `list[index]` / `list[from..to]` | 下标/切片 |
 | `{k: v}` / `[1, 2, 3]` | Map/List 字面量求值 |

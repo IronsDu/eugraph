@@ -1,6 +1,7 @@
 #include "compute_service/optimizer/memo.hpp"
 
 #include "compute_service/planner/bound_logical_plan.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 namespace eugraph {
 namespace optimizer {

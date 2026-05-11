@@ -106,6 +106,7 @@ AsyncGenerator<RowBatch>
 | LabelScan | 按标签 ID 扫描，逐批加载 VertexValue | scanVerticesByLabel + getVertexProperties |
 | IndexScan | 等值或范围扫描，通过 IndexKeyCodec | scanVerticesByIndex / scanVerticesByIndexRange |
 | Expand | 嵌套循环：对每行输入扫描邻居边 | scanEdges（支持按类型过滤） |
+| VarLenExpand | DFS + 显式栈 + 边唯一性回溯，逐源顶点多跳展开 | scanEdges × hop_depth（支持按类型过滤） |
 | Filter | 纯计算，无 IO | 无 |
 | Project | 纯计算，无 IO | 无 |
 | Sort | **阻断**：全量物化后 `std::sort` | 无 |

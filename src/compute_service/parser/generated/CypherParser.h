@@ -1,5 +1,5 @@
 
-// Generated from /home/dodo/code/fuck/eugraph/grammar/CypherParser.g4 by ANTLR 4.13.2
+// Generated from grammar/CypherParser.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -1462,6 +1462,8 @@ public:
     antlr4::tree::TerminalNode *MULT();
     std::vector<NumLitContext *> numLit();
     NumLitContext* numLit(size_t i);
+    std::vector<antlr4::tree::TerminalNode *> ID();
+    antlr4::tree::TerminalNode* ID(size_t i);
     antlr4::tree::TerminalNode *RANGE();
 
 

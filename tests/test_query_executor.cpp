@@ -2305,3 +2305,684 @@ TEST_F(QueryExecutorWithTest, WithFollowedBySet) {
     auto result = execSync(*executor_, "MATCH (n:Person {name: 'Alice'}) WITH n SET n.age = 99");
     EXPECT_TRUE(result.error.empty()) << result.error;
 }
+
+// ==================== Variable-Length Expand Tests ====================
+
+TEST_F(QueryExecutorTest, VarLenExpandExact2Hops) {
+    // KNOWS chain: 1->2->3->4, LIVES_IN: 1->5, 2->6
+    insertMultiHopEdges();
+
+    // Exact 2 hops via KNOWS: 1->2->3, 2->3->4 → 2 rows
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*2]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 2u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandRange1To2) {
+    insertMultiHopEdges();
+
+    // 1-2 hops via KNOWS: 1->2(1hop), 1->2->3(2hop), 2->3(1hop), 2->3->4(2hop), 3->4(1hop) → 5 rows
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1..2]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 5u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandRange1To3) {
+    insertMultiHopEdges();
+
+    // 1-3 hops via KNOWS: 1hop(1->2,2->3,3->4) + 2hop(1->3,2->4) + 3hop(1->4) → 6 rows
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1..3]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 6u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandExact1Hop) {
+    insertMultiHopEdges();
+
+    // [*1] should be equivalent to a normal 1-hop expand
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 3u); // 1->2, 2->3, 3->4
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandNoMatch) {
+    insertMultiHopEdges();
+
+    // No 2-hop LIVES_IN chain exists
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:LIVES_IN*2..3]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandNoTypeFilter) {
+    insertMultiHopEdges();
+
+    // No type filter: follows KNOWS and LIVES_IN
+    // 1-hop: 1->2(K), 1->5(L), 2->3(K), 2->6(L), 3->4(K) = 5
+    // 2-hop: 1->2->3(KK), 1->2->6(KL), 2->3->4(KK) = 3
+    auto result = execSync(*executor_, "MATCH (a:Person)-[*1..2]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 8u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandIsolatedNode) {
+    // No edges at all
+    insertTestVertices();
+
+    auto result = execSync(*executor_, "MATCH (a:Person)-[*1..3]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandSelfLoop) {
+    insertTestVertices();
+    auto txn = sync_data_->beginTransaction();
+    // Self-loop on vertex 1
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 1, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    // [*1]: 1->1 (self-loop) = 1 row
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandCycle) {
+    // Triangle: 1->2->3->1
+    insertTestVertices();
+    auto txn = sync_data_->beginTransaction();
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 1, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    // 1-3 hops from vertex 1: must not infinite loop
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1..3]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // From 1: 1->2(1), 1->2->3(2), 1->2->3->1(3) = 3 paths
+    // From 2: 2->3(1), 2->3->1(2), 2->3->1->2(3) = 3 paths
+    // From 3: 3->1(1), 3->1->2(2), 3->1->2->3(3) = 3 paths
+    EXPECT_EQ(result.rows.size(), 9u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandMultiEdge) {
+    // Two edges between same vertex pair
+    insertTestVertices();
+    auto txn = sync_data_->beginTransaction();
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 2, KNOWS_LABEL, 1, {})); // different seq
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    // [*1]: 2 different edges → 2 rows (same dst vertex)
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 2u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandExplain) {
+    auto result = execSync(*executor_, "EXPLAIN MATCH (a:Person)-[*2..3]->(b) RETURN b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    std::string plan_text;
+    for (const auto& row : result.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0])) {
+            plan_text += std::get<std::string>(row[0]) + "\n";
+        }
+    }
+    EXPECT_NE(plan_text.find("VarLenExpand"), std::string::npos);
+    EXPECT_NE(plan_text.find("hops=[2..3]"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandNamedEdgeVariable) {
+    insertMultiHopEdges();
+
+    // r should be LIST<EDGE> with 2 elements for *2 pattern
+    auto result = execSync(*executor_, "MATCH (a:Person)-[r:KNOWS*2]->(b) RETURN r");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 2u);
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1u);
+        EXPECT_TRUE(std::holds_alternative<ListValue>(row[0]));
+        auto& lv = std::get<ListValue>(row[0]);
+        EXPECT_EQ(lv.elements.size(), 2u); // 2 edges
+        for (auto& es : lv.elements) {
+            EXPECT_TRUE(std::holds_alternative<EdgeValue>(es.value));
+        }
+    }
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandUndirected) {
+    insertTestVertices();
+    auto txn = sync_data_->beginTransaction();
+    // 1→2 (KNOWS)
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    // Undirected: 1-[KNOWS*1]-2 matches from both directions
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1]-(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 2u); // (1,2) and (2,1)
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandMinZero) {
+    // [*0..3] includes identity paths (src==dst) plus 1-3 hop expansions
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH (a:Person)-[*0..3]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // 1-hop K: 3, 2-hop K+K: 2, 3-hop K+K+K: 1, 1-hop LI: 2, identity: 6 (one per vertex)
+    // = 15 total
+    EXPECT_EQ(result.rows.size(), 15u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandZeroHopOnly) {
+    // [*0] returns only identity paths (src==dst)
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH (a:Person)-[*0]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // 6 vertices, each has identity path to itself
+    EXPECT_EQ(result.rows.size(), 6u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandZeroHopWithPath) {
+    // [*0..2] with named path: identity path has 1 node, 0 edges
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*0..2]->(b) "
+                                       "WHERE id(a) = 1 "
+                                       "RETURN a, b, length(p)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // From vertex 1: identity(length=0), 1->2(length=1), 1->2->3(length=2)
+    EXPECT_EQ(result.rows.size(), 3u);
+    // Verify identity path length
+    bool found_zero = false;
+    for (const auto& row : result.rows) {
+        if (row.size() >= 3 && std::holds_alternative<int64_t>(row[2]) && std::get<int64_t>(row[2]) == 0) {
+            found_zero = true;
+        }
+    }
+    EXPECT_TRUE(found_zero) << "Identity path with length=0 should be present";
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandZeroHopNegMinRejected) {
+    // Negative min hops should still be rejected
+    auto result = execSync(*executor_, "MATCH (a:Person)-[* -1..3]->(b) RETURN a, b");
+    EXPECT_FALSE(result.error.empty());
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandWithLimit) {
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1..3]->(b) RETURN a, b LIMIT 3");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 3u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandWithWhere) {
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1..2]->(b) WHERE true RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 5u);
+}
+
+// ── P1: Path variable and path functions ──
+
+TEST_F(QueryExecutorTest, VarLenExpandNamedPath) {
+    insertMultiHopEdges();
+
+    // Path for 1->2->3 (KNOWS*2): elements = [v1, e12, v2, e23, v3] = 5 elements
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*2]->(b) RETURN p");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 2u); // 1->3 and 2->4
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1u);
+        EXPECT_TRUE(std::holds_alternative<PathValue>(row[0]));
+        auto& pv = std::get<PathValue>(row[0]);
+        EXPECT_EQ(pv.elements.size(), 5u); // v1, e, v2, e, v3
+    }
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandPathNodes) {
+    insertMultiHopEdges();
+
+    // No type filter: follows KNOWS and LIVES_IN
+    // 1-hop paths: 5, each producing nodes(p) with 2 vertices
+    // 2-hop paths: 3, each producing nodes(p) with 3 vertices
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[*1..2]->(b) RETURN nodes(p)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 8u); // 5 one-hop + 3 two-hop
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1u);
+        EXPECT_TRUE(std::holds_alternative<ListValue>(row[0]));
+        auto& lv = std::get<ListValue>(row[0]);
+        EXPECT_GE(lv.elements.size(), 2u); // at least src + dst
+        // All elements should be vertices
+        for (auto& es : lv.elements) {
+            EXPECT_TRUE(std::holds_alternative<VertexValue>(es.value));
+        }
+    }
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandPathRelationships) {
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[*1..2]->(b) RETURN relationships(p)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 8u);
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1u);
+        EXPECT_TRUE(std::holds_alternative<ListValue>(row[0]));
+        auto& lv = std::get<ListValue>(row[0]);
+        EXPECT_GE(lv.elements.size(), 1u);
+        for (auto& es : lv.elements) {
+            EXPECT_TRUE(std::holds_alternative<EdgeValue>(es.value));
+        }
+    }
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandPathLength) {
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*2]->(b) RETURN length(p)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 2u); // 1->3 and 2->4
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1u);
+        EXPECT_TRUE(std::holds_alternative<int64_t>(row[0]));
+        EXPECT_EQ(std::get<int64_t>(row[0]), 2);
+    }
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandPathWithRange) {
+    insertMultiHopEdges();
+
+    // Paths with varying lengths
+    // No type filter: follow all edge types
+    // 1-hop: 1->2, 1->5, 2->3, 2->6, 3->4 = 5
+    // 2-hop: 1->3, 1->6, 2->4 = 3
+    // 3-hop: 1->4 = 1
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[*1..3]->(b) RETURN length(p)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 9u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandPathSelfLoop) {
+    insertTestVertices();
+    auto txn = sync_data_->beginTransaction();
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 1, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1]->(b) RETURN p, length(p)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
+    for (const auto& row : result.rows) {
+        EXPECT_EQ(std::get<int64_t>(row[1]), 1);
+    }
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandNamedPathMixedChainRejected) {
+    insertMultiHopEdges();
+
+    // Mixed fixed + varlen chain with named path
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS]->(b)-[:KNOWS*2..3]->(c) RETURN p");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("not supported"), std::string::npos);
+}
+
+// ── P2: Unbounded upper + undirected + named edge variables ──
+
+TEST_F(QueryExecutorTest, VarLenExpandUnboundedUpper) {
+    insertMultiHopEdges();
+
+    // Unbounded: [*2..] should find paths of length >= 2
+    // KNOWS: 1→2→3→4 = 2-hop(1→3), 3-hop(1→4) + 2→3→4 = 2-hop(2→4) = 3
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*2..]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 3u); // (1,3), (1,4), (2,4)
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandUnboundedUpperBare) {
+    insertMultiHopEdges();
+
+    // Bare unbounded: [*..] = [*1..]
+    // All paths of any length
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*..]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // 1-hop: 1→2, 2→3, 3→4 = 3
+    // 2-hop: 1→3, 2→4 = 2
+    // 3-hop: 1→4 = 1
+    EXPECT_EQ(result.rows.size(), 6u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandUnboundedCycle) {
+    insertTestVertices();
+    auto txn = sync_data_->beginTransaction();
+    // Cycle: 1→2, 2→1 (mutual KNOWS)
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 1, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    // Unbounded with cycle — must terminate (vertex cycle detection)
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*..]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // 1-hop: 1→2, 2→1 = 2
+    // 2-hop: 1→2→1, 2→1→2 = 2 (revisiting start vertex is allowed in Cypher)
+    // 3-hop prevented by vertex cycle detection
+    EXPECT_EQ(result.rows.size(), 4u);
+}
+
+// ── P3: Edge property filtering ──
+
+TEST_F(QueryExecutorTest, VarLenExpandEdgePropertyFilter) {
+    // Create edge label with a property
+    auto rated_label_id = blockingWait(
+        async_meta_->createEdgeLabel("RATED", {PropertyDef{0, "score", PropertyType::INT64, false, std::nullopt}}));
+    ASSERT_NE(rated_label_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(rated_label_id));
+
+    // Build chain: 1→2 (RATED, score=5), 2→3 (RATED, score=10), 3→4 (RATED, score=5)
+    insertMultiHopEdges();
+    auto txn = sync_data_->beginTransaction();
+    // Replace 1→2 with RATED edge (score=5)
+    ASSERT_TRUE(sync_data_->deleteEdge(txn, 1, KNOWS_LABEL, 1, 2, 0));
+    ASSERT_TRUE(
+        sync_data_->insertEdge(txn, 1, 1, 2, rated_label_id, 0, Properties{PropertyValue(static_cast<int64_t>(5))}));
+    // Replace 2→3 with RATED edge (score=10)
+    ASSERT_TRUE(sync_data_->deleteEdge(txn, 2, KNOWS_LABEL, 2, 3, 0));
+    ASSERT_TRUE(
+        sync_data_->insertEdge(txn, 2, 2, 3, rated_label_id, 0, Properties{PropertyValue(static_cast<int64_t>(10))}));
+    // Replace 3→4 with RATED edge (score=5)
+    ASSERT_TRUE(sync_data_->deleteEdge(txn, 3, KNOWS_LABEL, 3, 4, 0));
+    ASSERT_TRUE(
+        sync_data_->insertEdge(txn, 3, 3, 4, rated_label_id, 0, Properties{PropertyValue(static_cast<int64_t>(5))}));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    // Filter: only edges with score=5
+    // 1→2(score=5)→3(score=10): fails because 2nd edge score=10
+    // 2→3(score=10)→4(score=5): fails because 1st edge score=10
+    // 1-hop: 1→2(score=5), 2→3(score=10), 3→4(score=5) → only 1→2 and 3→4 match
+    // 2-hop: only if both edges have score=5, which none do in this setup
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:RATED*1..2 {score: 5}]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // 1-hop matches: 1→2 and 3→4
+    // 2-hop: 1→2→3 fails (2→3 has score=10), 2→3→4 fails (2→3 has score=10)
+    EXPECT_EQ(result.rows.size(), 2u); // (1,2), (3,4)
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandEdgePropertyFilterNoMatch) {
+    auto rated_label_id = blockingWait(
+        async_meta_->createEdgeLabel("RATED2", {PropertyDef{0, "score", PropertyType::INT64, false, std::nullopt}}));
+    ASSERT_NE(rated_label_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(rated_label_id));
+
+    insertTestVertices();
+    auto txn = sync_data_->beginTransaction();
+    ASSERT_TRUE(
+        sync_data_->insertEdge(txn, 1, 1, 2, rated_label_id, 0, Properties{PropertyValue(static_cast<int64_t>(5))}));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    // No edge has score=999
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:RATED2*1 {score: 999}]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandEdgePropertyFilterNonexistent) {
+    // KNOWS label has no 'status' property
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*2..3 {status: 'active'}]->(b) RETURN a, b");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("does not exist"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandEdgePropertyFilterNonLiteral) {
+    // Non-literal value in property filter should be rejected
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*2 {score: a.age}]->(b) RETURN a, b");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("literal"), std::string::npos);
+}
+
+// ==================== Path Predicate Tests (P3b) ====================
+
+TEST_F(QueryExecutorTest, PathPredicateAllNodes) {
+    // ALL(x IN nodes(p) WHERE id(x) > 0) — all vertices have positive IDs
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE ALL(x IN nodes(p) WHERE id(x) > 0) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // All paths should pass: 1→2, 2→3, 3→4, 1→2→3, 2→3→4
+    EXPECT_GT(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateAllNodesFalse) {
+    // ALL(x IN nodes(p) WHERE id(x) > 100) — no vertex has id > 100
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE ALL(x IN nodes(p) WHERE id(x) > 100) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateAnyNodes) {
+    // ANY(x IN nodes(p) WHERE id(x) = 2) — paths through vertex 2
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE ANY(x IN nodes(p) WHERE id(x) = 2) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // Paths that include vertex 2: 1→2, 2→3, 1→2→3, 2→3→4
+    EXPECT_GT(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateNoneNodes) {
+    // NONE(x IN nodes(p) WHERE id(x) < 0) — no vertex has negative ID
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE NONE(x IN nodes(p) WHERE id(x) < 0) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // All paths should pass since all vertex IDs are positive
+    EXPECT_GT(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateSingleNodes) {
+    // SINGLE(x IN nodes(p) WHERE id(x) = 1) — exactly one vertex with id=1
+    // Path 1→2 has vertices [1,2] → exactly one vertex with id=1 → true
+    // Path 1→2→3 has vertices [1,2,3] → exactly one vertex with id=1 → true
+    // Path 2→3 has vertices [2,3] → no vertex with id=1 → false
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE SINGLE(x IN nodes(p) WHERE id(x) = 1) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_GT(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateAllNoWhere) {
+    // ALL(x IN nodes(p)) without WHERE clause — always true
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE ALL(x IN nodes(p)) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_GT(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateAnyEmptyList) {
+    // ANY(x IN nodes(p) WHERE ...) — test with no WHERE pred on ANY produces correct results
+    // Without WHERE, every element is "true", so ANY returns true for non-empty list
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE ANY(x IN nodes(p)) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // All non-empty paths match
+    EXPECT_GT(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateUndirected) {
+    // Path predicate with undirected VarLenExpand
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]-(b) "
+                                       "WHERE ALL(x IN nodes(p) WHERE id(x) > 0) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_GT(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateAllLiteralFalse) {
+    // ALL(x IN nodes(p) WHERE false) — should filter everything
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE ALL(x IN nodes(p) WHERE false) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateAllLiteralTrue) {
+    // ALL(x IN nodes(p) WHERE true) — should pass everything
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE ALL(x IN nodes(p) WHERE true) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_GT(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateWithListLiteral) {
+    // ALL(x IN [1,2,3] WHERE x > 0) — should be true
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE ALL(x IN [1,2,3] WHERE x > 0) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_GT(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateWithListLiteralFalse) {
+    // ALL(x IN [1,2,3] WHERE x > 10) — should be false for [1,2,3]
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE ALL(x IN [1,2,3] WHERE x > 10) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateNodesDirect) {
+    // Test that nodes(p) works correctly
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE length(p) = 2 "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // 2-hop paths: 1->2->3 (length=2), 2->3->4 (length=2)
+    EXPECT_EQ(result.rows.size(), 2u);
+}
+
+TEST_F(QueryExecutorTest, PathPredicateReturnAll) {
+    // RETURN ALL(x IN nodes(p) WHERE id(x) > 0) — should return true for all paths
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1]->(b) "
+                                       "RETURN ALL(x IN nodes(p) WHERE id(x) > 0) AS ok");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_GE(result.rows.size(), 1u);
+    // First row, first column should be true
+    const auto& row = result.rows[0];
+    ASSERT_GE(row.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<bool>(row[0]));
+    if (std::holds_alternative<bool>(row[0])) {
+        EXPECT_TRUE(std::get<bool>(row[0])) << "ALL(id(x) > 0) should be true for all paths";
+    }
+}
+
+TEST_F(QueryExecutorTest, PathPredicateReturnAllFalse) {
+    // RETURN ALL(x IN nodes(p) WHERE id(x) > 100) — should return false
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1]->(b) "
+                                       "RETURN ALL(x IN nodes(p) WHERE id(x) > 100) AS ok");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_GE(result.rows.size(), 1u);
+    const auto& row = result.rows[0];
+    ASSERT_GE(row.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<bool>(row[0]));
+    if (std::holds_alternative<bool>(row[0])) {
+        EXPECT_FALSE(std::get<bool>(row[0])) << "ALL(id(x) > 100) should be false, vertex IDs are 1-6";
+    }
+}
+
+TEST_F(QueryExecutorTest, PathPredicateExplain) {
+    // Verify the logical plan includes the quantifier filter
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "EXPLAIN MATCH p = (a:Person)-[:KNOWS*1..2]->(b) "
+                                       "WHERE ALL(x IN nodes(p) WHERE id(x) > 100) "
+                                       "RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // The EXPLAIN should produce output describing the plan
+    EXPECT_GT(result.rows.size(), 0u);
+    // Check that plan text mentions Filter and the predicate
+    bool found_filter = false;
+    for (const auto& row : result.rows) {
+        for (const auto& val : row) {
+            if (std::holds_alternative<std::string>(val)) {
+                const auto& s = std::get<std::string>(val);
+                if (s.find("Filter") != std::string::npos || s.find("ALL") != std::string::npos) {
+                    found_filter = true;
+                }
+            }
+        }
+    }
+    EXPECT_TRUE(found_filter) << "Plan should include Filter operator with ALL predicate";
+}
+
+// ==================== VarLenExpand Corner Case Tests ====================
+
+TEST_F(QueryExecutorTest, VarLenExpandDiamondAllPaths) {
+    // Diamond: 1->2->4 and 1->3->4 (two distinct paths to the same endpoint).
+    // Verifies All Paths semantics (not Reachability).
+    insertTestVertices(); // 1-5 Person
+    auto txn = sync_data_->beginTransaction();
+    std::vector<std::pair<LabelId, Properties>> lp6 = {{PERSON_LABEL, Properties{}}};
+    ASSERT_TRUE(sync_data_->insertVertex(txn, 6, lp6));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 4, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 4, 3, 4, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1..2]->(b) WHERE id(a) = 1 AND id(b) = 4 RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // 1->2->4 and 1->3->4: two distinct paths
+    EXPECT_EQ(result.rows.size(), 2u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandEdgeUniqueness) {
+    // Triangle 1->2->3->1. A 4-hop path would need 4 edges but only 3 distinct
+    // edges exist; the edge uniqueness constraint prevents reuse within a path.
+    insertTestVertices();
+    auto txn = sync_data_->beginTransaction();
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 1, KNOWS_LABEL, 0, {}));
+    ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*4]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // No 4-hop path exists without reusing edges
+    EXPECT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandUnionTypes) {
+    // Multi-type variable-length: [:KNOWS|LIVES_IN*1..2]
+    insertMultiHopEdges();
+
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS|LIVES_IN*1..2]->(b) RETURN a, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // 1-hop: 1->2(K), 1->5(LI), 2->3(K), 2->6(LI), 3->4(K) = 5
+    // 2-hop: 1->2->3(K+K), 1->2->6(K+LI), 2->3->4(K+K) = 3
+    EXPECT_EQ(result.rows.size(), 8u);
+}

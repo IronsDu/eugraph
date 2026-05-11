@@ -1,4 +1,5 @@
 #include "compute_service/physical_plan/physical_planner.hpp"
+#include "compute_service/physical_plan/operator/varlen_expand_physical_op.hpp"
 #include "compute_service/planner/bound_logical_plan.hpp"
 
 #include <stdexcept>
@@ -351,6 +352,40 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         v.src_variable, v.dst_variable, v.edge_variable, std::move(label_filters), v.direction, store,
                         std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op),
                         v.dst_label_prop_ids, v.edge_prop_ids);
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundVarLenExpandOp>) {
+                    auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = extractChildResult(std::move(child_result));
+                    auto child_op = std::move(cr.op);
+                    auto child_schema = std::move(cr.output_schema);
+                    auto output_types = std::move(cr.output_types);
+
+                    std::optional<std::vector<EdgeLabelId>> label_filters;
+                    if (!v.edge_label_ids.empty())
+                        label_filters = v.edge_label_ids;
+
+                    Schema output_schema = child_schema;
+                    output_schema.push_back(v.dst_variable);
+                    output_types.push_back(binder::BoundType::Vertex());
+
+                    // P1: add PATH column if path variable is set
+                    if (!v.path_variable.empty()) {
+                        output_schema.push_back(v.path_variable);
+                        output_types.push_back(binder::BoundType::Path());
+                    }
+                    // P2: add LIST<EDGE> column if edge variable is set
+                    if (!v.edge_variable.empty()) {
+                        output_schema.push_back(v.edge_variable);
+                        output_types.push_back(binder::BoundType::List(binder::BoundType::Edge()));
+                    }
+
+                    auto result = std::make_unique<VarLenExpandPhysicalOp>(
+                        v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops, v.max_hops,
+                        store, std::move(child_schema), std::vector<binder::BoundType>(output_types),
+                        std::move(child_op), v.dst_label_prop_ids, v.path_variable, v.edge_variable,
+                        v.edge_prop_filters);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
                     // ── Index scan optimization: Filter(LabelScan) → IndexScan ──

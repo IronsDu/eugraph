@@ -16,6 +16,7 @@
 #include "compute_service/planner/logical_plan/operator/bound_set_op.hpp"
 #include "compute_service/planner/logical_plan/operator/bound_skip_op.hpp"
 #include "compute_service/planner/logical_plan/operator/bound_sort_op.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 #include <vector>
 

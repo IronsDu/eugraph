@@ -10,6 +10,13 @@
 namespace eugraph {
 namespace compute {
 
+enum class QuantifierKind {
+    ALL,
+    ANY,
+    NONE,
+    SINGLE
+};
+
 /// Evaluates BoundExpression trees against DataChunk input,
 /// producing columnar output without string-based dispatch.
 ///
@@ -47,6 +54,11 @@ private:
     void evalUnaryOp(const binder::BoundUnaryOp& op, const DataChunk& input, Column& result, size_t count);
     void evalPropertyRef(const binder::BoundPropertyRef& ref, const DataChunk& input, Column& result, size_t count);
     void evalFunctionCall(const binder::BoundFunctionCall& fc, const DataChunk& input, Column& result, size_t count);
+
+    /// Evaluate a quantifier expression (ALL/ANY/NONE/SINGLE).
+    void evalQuantifierExpr(QuantifierKind kind, uint32_t loop_column_index, const binder::BoundExpression& list_expr,
+                            const std::optional<binder::BoundExpression>& where_pred, const DataChunk& input,
+                            Column& result, size_t count);
 };
 
 } // namespace compute

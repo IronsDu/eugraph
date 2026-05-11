@@ -11,6 +11,7 @@
 #include "compute_service/planner/bound_expression/bound_map.hpp"
 #include "compute_service/planner/bound_expression/bound_parameter.hpp"
 #include "compute_service/planner/bound_expression/bound_property_ref.hpp"
+#include "compute_service/planner/bound_expression/bound_quantifier_expr.hpp"
 #include "compute_service/planner/bound_expression/bound_slice.hpp"
 #include "compute_service/planner/bound_expression/bound_subscript.hpp"
 #include "compute_service/planner/bound_expression/bound_unary_op.hpp"
@@ -51,6 +52,14 @@ inline const BoundType& getBoundExprType(const BoundExpression& expr) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundSubscript>>) {
                 return val->result_type;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundSlice>>) {
+                return val->result_type;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundAllExpr>>) {
+                return val->result_type;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundAnyExpr>>) {
+                return val->result_type;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundNoneExpr>>) {
+                return val->result_type;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundSingleExpr>>) {
                 return val->result_type;
             } else {
                 // BoundMap has no meaningful result type

@@ -1,6 +1,7 @@
 #include "compute_service/planner/binder.hpp"
 
 #include "compute_service/function/batch_ops.hpp"
+#include "compute_service/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -74,6 +75,19 @@ cypher::Expression cloneExpression(const cypher::Expression& expr) {
             }
         },
         expr);
+}
+
+// P3: convert AST Literal value variant to PropertyValue
+PropertyValue literalToPropertyValue(const std::variant<cypher::NullValue, bool, int64_t, double, std::string>& val) {
+    return std::visit(
+        [](const auto& v) -> PropertyValue {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, cypher::NullValue>)
+                return std::monostate{};
+            else
+                return v;
+        },
+        val);
 }
 
 } // anonymous namespace
@@ -285,6 +299,170 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             if (!current)
                 break;
 
+            if (rel_pat.range.has_value()) {
+                // ── Variable-length expand ──
+
+                // P2: named edge variable → LIST<EDGE>
+                std::optional<std::string> edge_var;
+                if (rel_pat.variable.has_value()) {
+                    edge_var = *rel_pat.variable;
+                }
+                // P3: edge property filters (resolved after edge type binding below)
+                std::unordered_map<EdgeLabelId, std::vector<std::pair<uint16_t, PropertyValue>>> edge_prop_filters;
+                // P2: undirected allowed (physical op already handles BOTH)
+
+                // Extract min/max from range (both must be integer literals)
+                auto extractIntLiteral = [&](const cypher::Expression& expr, int64_t& out) -> bool {
+                    if (!std::holds_alternative<std::unique_ptr<cypher::Literal>>(expr)) {
+                        error("Variable-length range bounds must be integer literals");
+                        return false;
+                    }
+                    auto& lit = std::get<std::unique_ptr<cypher::Literal>>(expr);
+                    if (!std::holds_alternative<int64_t>(lit->value)) {
+                        error("Variable-length range bounds must be integer literals");
+                        return false;
+                    }
+                    out = std::get<int64_t>(lit->value);
+                    return true;
+                };
+
+                int64_t min_hops = 1, max_hops = 1;
+                const auto& [min_expr, max_expr] = *rel_pat.range;
+                if (!extractIntLiteral(min_expr, min_hops))
+                    return std::nullopt;
+                if (!extractIntLiteral(max_expr, max_hops))
+                    return std::nullopt;
+
+                if (min_hops < 0) {
+                    error("Variable-length minimum hop count must be >= 0 (got " + std::to_string(min_hops) + ")");
+                    return std::nullopt;
+                }
+                // P2: unbounded upper range (max=-1 sentinel)
+                if (max_hops >= 0 && max_hops < min_hops) {
+                    error("Variable-length maximum hops (" + std::to_string(max_hops) + ") must be >= minimum (" +
+                          std::to_string(min_hops) + ")");
+                    return std::nullopt;
+                }
+
+                // Bind edge types
+                std::vector<EdgeLabelId> edge_label_ids;
+                if (!rel_pat.rel_types.empty()) {
+                    edge_label_ids = catalog_.resolveEdgeLabelIds(rel_pat.rel_types);
+                    if (edge_label_ids.empty()) {
+                        error("Edge type '" + rel_pat.rel_types[0] + "' does not exist");
+                        return std::nullopt;
+                    }
+                } else {
+                    for (const auto& [id, def] : catalog_.allEdgeLabels()) {
+                        edge_label_ids.push_back(id);
+                    }
+                }
+
+                // P3: resolve inline edge property filters
+                if (rel_pat.properties.has_value()) {
+                    for (const auto& [prop_name, prop_expr] : rel_pat.properties->entries) {
+                        if (!std::holds_alternative<std::unique_ptr<cypher::Literal>>(prop_expr)) {
+                            error("Variable-length edge property filter value must be a literal");
+                            return std::nullopt;
+                        }
+                        auto& lit = std::get<std::unique_ptr<cypher::Literal>>(prop_expr);
+                        PropertyValue prop_val = literalToPropertyValue(lit->value);
+
+                        bool found = false;
+                        for (auto lid : edge_label_ids) {
+                            auto* def = catalog_.lookupEdgeLabelProperty(lid, prop_name);
+                            if (def) {
+                                edge_prop_filters[lid].emplace_back(def->id, prop_val);
+                                found = true;
+                            }
+                        }
+                        if (!found) {
+                            error("Edge property '" + prop_name + "' does not exist on the specified edge type(s)");
+                            return std::nullopt;
+                        }
+                    }
+                }
+
+                // Bind target node
+                std::string dst_var;
+                uint32_t dst_col;
+                std::optional<LabelId> dst_label;
+                std::vector<uint16_t> dst_prop_ids;
+                if (!bindNodePattern(node_pat, dst_var, dst_col, dst_label, dst_prop_ids))
+                    return std::nullopt;
+
+                // Create varlen expand operator
+                auto varlen = std::make_unique<BoundVarLenExpandOp>();
+                varlen->src_variable = start_var;
+                varlen->src_column_index = start_col;
+                varlen->dst_variable = dst_var;
+                varlen->dst_column_index = dst_col;
+                varlen->edge_label_ids = std::move(edge_label_ids);
+                varlen->direction = rel_pat.direction;
+                varlen->min_hops = min_hops;
+                varlen->max_hops = max_hops;
+
+                // P1: handle named path variable — varlen produces PathValue directly
+                if (pp.variable) {
+                    if (element.chain.size() > 1) {
+                        error("Named path with mixed fixed/varlen chain is not supported yet");
+                        return std::nullopt;
+                    }
+                    varlen->path_variable = *pp.variable;
+                    varlen->path_column_index = nextColumnIndex();
+                    varlen->path_handled_by_varlen = true;
+                    ctx_.symbols[varlen->path_variable] = makeColumnInfo(varlen->path_variable, BoundType::Path());
+                }
+
+                // P2: handle named edge variable → LIST<EDGE>
+                if (edge_var) {
+                    varlen->edge_variable = *edge_var;
+                    varlen->edge_column_index = nextColumnIndex();
+                    ctx_.symbols[varlen->edge_variable] =
+                        makeColumnInfo(varlen->edge_variable, BoundType::List(BoundType::Edge()));
+                }
+
+                // P3: edge property filters
+                varlen->edge_prop_filters = std::move(edge_prop_filters);
+
+                varlen->child = std::move(*current);
+                current = std::move(varlen);
+
+                // Inline properties on the target node
+                if (node_pat.properties && current) {
+                    for (const auto& [prop_name, prop_expr] : node_pat.properties->entries) {
+                        auto var_expr = std::make_unique<cypher::Variable>();
+                        var_expr->name = dst_var;
+                        auto prop_access = std::make_unique<cypher::PropertyAccess>();
+                        prop_access->object = std::move(var_expr);
+                        prop_access->property = prop_name;
+
+                        auto eq = std::make_unique<cypher::BinaryOp>();
+                        eq->op = cypher::BinaryOperator::EQ;
+                        eq->left = std::move(prop_access);
+                        eq->right = cloneExpression(prop_expr);
+
+                        auto filter_pred = bindExpression(cypher::Expression(std::move(eq)));
+                        if (filter_pred && current) {
+                            BoundFilterOp filter;
+                            filter.predicate = std::move(*filter_pred);
+                            filter.child = std::move(*current);
+                            current = std::make_unique<BoundFilterOp>(std::move(filter));
+                        }
+                    }
+                }
+
+                // Varlen has no edge variable, so no edge-property filter needed.
+                // For path_element_vars: varlen has no named edge, use dst only.
+                path_element_vars.push_back(dst_var);
+
+                start_var = dst_var;
+                start_col = dst_col;
+                continue; // skip the normal Expand logic below
+            }
+
+            // ── Fixed-length (original) expand ──
+
             // Bind relationship
             std::string edge_var;
             uint32_t edge_col;
@@ -372,16 +550,30 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
 
         // Handle named path variable
         if (pp.variable && current) {
-            auto path_build = std::make_unique<BoundPathBuildOp>();
-            path_build->path_variable = *pp.variable;
-            path_build->path_column_index = nextColumnIndex();
+            // Check if varlen expand already handles the path
+            bool path_already_handled = false;
+            std::visit(
+                [&](auto& op) {
+                    using T = std::decay_t<decltype(op)>;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<BoundVarLenExpandOp>>) {
+                        if (op && op->path_handled_by_varlen)
+                            path_already_handled = true;
+                    }
+                },
+                *current);
 
-            // Collect all element variables in the path (use bound variable names)
-            path_build->element_variables = path_element_vars;
-            path_build->child = std::move(*current);
+            if (!path_already_handled) {
+                auto path_build = std::make_unique<BoundPathBuildOp>();
+                path_build->path_variable = *pp.variable;
+                path_build->path_column_index = nextColumnIndex();
 
-            ctx_.symbols[path_build->path_variable] = makeColumnInfo(path_build->path_variable, BoundType::Path());
-            current = std::move(path_build);
+                // Collect all element variables in the path (use bound variable names)
+                path_build->element_variables = path_element_vars;
+                path_build->child = std::move(*current);
+
+                ctx_.symbols[path_build->path_variable] = makeColumnInfo(path_build->path_variable, BoundType::Path());
+                current = std::move(path_build);
+            }
         }
     }
 
@@ -1305,6 +1497,67 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 return BoundExpression(std::move(bl));
             } else if constexpr (std::is_same_v<Elem, cypher::Parameter>) {
                 return BoundExpression(BoundParameter(ptr->name, BoundType::Any()));
+            } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
+                                 std::is_same_v<Elem, cypher::NoneExpr> || std::is_same_v<Elem, cypher::SingleExpr>) {
+                auto list_expr = bindExpression(ptr->list_expr);
+                if (!list_expr)
+                    return std::nullopt;
+
+                const BoundType& list_type = getBoundExprType(*list_expr);
+                BoundType elem_type = (list_type.kind == BoundTypeKind::LIST && list_type.element_type)
+                                          ? BoundType::clone(*list_type.element_type)
+                                          : BoundType::Any();
+
+                // Temporarily register loop variable in BindContext
+                uint32_t loop_col = nextColumnIndex();
+                ctx_.symbols[ptr->variable] = makeColumnInfo(ptr->variable, BoundType::clone(elem_type));
+
+                std::optional<BoundExpression> where_pred;
+                if (ptr->where_pred) {
+                    where_pred = bindExpression(*ptr->where_pred);
+                    if (!where_pred)
+                        return std::nullopt;
+                }
+
+                // Remove loop variable from BindContext (scope ends)
+                ctx_.symbols.erase(ptr->variable);
+
+                BoundExpression result;
+                BoundType bool_type = BoundType::Bool();
+                if constexpr (std::is_same_v<Elem, cypher::AllExpr>) {
+                    auto e = std::make_unique<BoundAllExpr>();
+                    e->variable = ptr->variable;
+                    e->loop_column_index = loop_col;
+                    e->list_expr = std::move(*list_expr);
+                    e->where_pred = std::move(where_pred);
+                    e->result_type = std::move(bool_type);
+                    result = BoundExpression(std::move(e));
+                } else if constexpr (std::is_same_v<Elem, cypher::AnyExpr>) {
+                    auto e = std::make_unique<BoundAnyExpr>();
+                    e->variable = ptr->variable;
+                    e->loop_column_index = loop_col;
+                    e->list_expr = std::move(*list_expr);
+                    e->where_pred = std::move(where_pred);
+                    e->result_type = std::move(bool_type);
+                    result = BoundExpression(std::move(e));
+                } else if constexpr (std::is_same_v<Elem, cypher::NoneExpr>) {
+                    auto e = std::make_unique<BoundNoneExpr>();
+                    e->variable = ptr->variable;
+                    e->loop_column_index = loop_col;
+                    e->list_expr = std::move(*list_expr);
+                    e->where_pred = std::move(where_pred);
+                    e->result_type = std::move(bool_type);
+                    result = BoundExpression(std::move(e));
+                } else {
+                    auto e = std::make_unique<BoundSingleExpr>();
+                    e->variable = ptr->variable;
+                    e->loop_column_index = loop_col;
+                    e->list_expr = std::move(*list_expr);
+                    e->where_pred = std::move(where_pred);
+                    e->result_type = std::move(bool_type);
+                    result = BoundExpression(std::move(e));
+                }
+                return result;
             } else {
                 // Other types not yet supported
                 return std::nullopt;
@@ -1552,6 +1805,9 @@ void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
                             }
                         }
                     }
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundVarLenExpandOp>) {
+                    collectLabelPropIds(v.dst_variable, v.dst_label_prop_ids);
                     applyProjectionPushdown(v.child);
                 } else if constexpr (std::is_same_v<Elem, BoundFilterOp>) {
                     applyProjectionPushdown(v.child);

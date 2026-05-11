@@ -102,6 +102,43 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 }
                 auto& col = acquireTempColumn(binder::BoundTypeKind::VERTEX, count);
                 return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
+                auto& col = acquireTempColumn(binder::BoundTypeKind::LIST, count);
+                for (size_t i = 0; i < count; ++i) {
+                    ListValue lv;
+                    for (const auto& elem : val->elements) {
+                        // For BoundList, elements are evaluated separately for each row
+                        // We evaluate each element expression and write its row-i value
+                        auto elem_eval = evaluateInternal(elem, input);
+                        if (elem_eval.column && !elem_eval.column->isNull(i)) {
+                            lv.elements.push_back(ValueStorage{elem_eval.column->getValue(i)});
+                        } else {
+                            lv.elements.push_back(ValueStorage{Value{}});
+                        }
+                    }
+                    col.setValue(i, Value(std::move(lv)));
+                }
+                return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>>) {
+                auto& col = acquireTempColumn(binder::BoundTypeKind::BOOL, count);
+                evalQuantifierExpr(QuantifierKind::ALL, val->loop_column_index, val->list_expr, val->where_pred, input,
+                                   col, count);
+                return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAnyExpr>>) {
+                auto& col = acquireTempColumn(binder::BoundTypeKind::BOOL, count);
+                evalQuantifierExpr(QuantifierKind::ANY, val->loop_column_index, val->list_expr, val->where_pred, input,
+                                   col, count);
+                return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundNoneExpr>>) {
+                auto& col = acquireTempColumn(binder::BoundTypeKind::BOOL, count);
+                evalQuantifierExpr(QuantifierKind::NONE, val->loop_column_index, val->list_expr, val->where_pred, input,
+                                   col, count);
+                return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSingleExpr>>) {
+                auto& col = acquireTempColumn(binder::BoundTypeKind::BOOL, count);
+                evalQuantifierExpr(QuantifierKind::SINGLE, val->loop_column_index, val->list_expr, val->where_pred,
+                                   input, col, count);
+                return {&col, true};
             } else {
                 auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
                 return {&col, true};
@@ -244,6 +281,116 @@ void VectorizedEvaluator::evalFunctionCall(const binder::BoundFunctionCall& fc, 
             }
         }
         result.setValue(i, fc.func_def->scalar_fn(args));
+    }
+}
+
+void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_column_index,
+                                             const binder::BoundExpression& list_expr,
+                                             const std::optional<binder::BoundExpression>& where_pred,
+                                             const DataChunk& input, Column& result, size_t count) {
+    auto list_eval = evaluateInternal(list_expr, input);
+
+    size_t total_cols = std::max(static_cast<size_t>(loop_column_index) + 1, input.columns.size() + 1);
+
+    for (size_t i = 0; i < count; ++i) {
+        bool final_result;
+        int single_match_count = 0;
+
+        switch (kind) {
+        case QuantifierKind::ALL:
+            final_result = true;
+            break;
+        case QuantifierKind::ANY:
+            final_result = false;
+            break;
+        case QuantifierKind::NONE:
+            final_result = true;
+            break;
+        case QuantifierKind::SINGLE:
+            final_result = false;
+            break;
+        }
+
+        if (!list_eval.column || list_eval.column->isNull(i)) {
+            final_result = (kind == QuantifierKind::ALL || kind == QuantifierKind::NONE);
+            result.setValue(i, Value(final_result));
+            continue;
+        }
+
+        Value list_val = list_eval.column->getValue(i);
+        if (!std::holds_alternative<ListValue>(list_val)) {
+            final_result = (kind == QuantifierKind::ALL || kind == QuantifierKind::NONE);
+            result.setValue(i, Value(final_result));
+            continue;
+        }
+
+        const auto& lv = std::get<ListValue>(list_val);
+
+        if (lv.elements.empty()) {
+            final_result = (kind == QuantifierKind::ALL || kind == QuantifierKind::NONE);
+            result.setValue(i, Value(final_result));
+            continue;
+        }
+
+        for (const auto& elem_storage : lv.elements) {
+            Value elem_val = elem_storage.value;
+
+            DataChunk temp_chunk;
+            temp_chunk.columns.resize(total_cols);
+            temp_chunk.count = 1;
+            temp_chunk.sel = SelectionVector::identity(1);
+
+            for (size_t c = 0; c < input.columns.size(); ++c) {
+                temp_chunk.columns[c] = Column::constant(input.columns[c].getValue(i));
+            }
+            for (size_t c = input.columns.size(); c < total_cols; ++c) {
+                temp_chunk.columns[c] = Column::constant(Value{});
+            }
+            temp_chunk.columns[loop_column_index] = Column::constant(std::move(elem_val));
+
+            bool elem_passes = true;
+            if (where_pred) {
+                std::vector<bool> pred_result;
+                evaluatePredicate(*where_pred, temp_chunk, pred_result);
+                elem_passes = !pred_result.empty() && pred_result[0];
+            }
+
+            switch (kind) {
+            case QuantifierKind::ALL:
+                if (!elem_passes) {
+                    final_result = false;
+                    goto done;
+                }
+                break;
+            case QuantifierKind::ANY:
+                if (elem_passes) {
+                    final_result = true;
+                    goto done;
+                }
+                break;
+            case QuantifierKind::NONE:
+                if (elem_passes) {
+                    final_result = false;
+                    goto done;
+                }
+                break;
+            case QuantifierKind::SINGLE:
+                if (elem_passes) {
+                    ++single_match_count;
+                    if (single_match_count > 1) {
+                        final_result = false;
+                        goto done;
+                    }
+                }
+                break;
+            }
+        }
+
+    done:
+        if (kind == QuantifierKind::SINGLE) {
+            final_result = (single_match_count == 1);
+        }
+        result.setValue(i, Value(final_result));
     }
 }
 

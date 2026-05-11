@@ -546,6 +546,12 @@ void SyncGraphDataStore::scanEdges(GraphTxnHandle txn, VertexId vid, Direction d
     if (!session)
         return;
 
+    if (direction == Direction::BOTH) {
+        scanEdges(txn, vid, Direction::OUT, label_filter, callback);
+        scanEdges(txn, vid, Direction::IN, label_filter, callback);
+        return;
+    }
+
     std::string prefix;
     if (label_filter) {
         prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter);
@@ -612,23 +618,6 @@ std::unique_ptr<ISyncGraphDataStore::IVertexScanCursor> SyncGraphDataStore::crea
         return nullptr;
 
     return std::make_unique<VertexScanCursorImpl>(session, labelFwdTable(label_id));
-}
-
-std::unique_ptr<ISyncGraphDataStore::IEdgeScanCursor>
-SyncGraphDataStore::createEdgeScanCursor(GraphTxnHandle txn, VertexId vid, Direction direction,
-                                         std::optional<EdgeLabelId> label_filter) {
-    auto session = getSession(txn);
-    if (!session)
-        return nullptr;
-
-    std::string prefix;
-    if (label_filter) {
-        prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter);
-    } else {
-        prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction);
-    }
-
-    return std::make_unique<EdgeScanCursorImpl>(session, prefix);
 }
 
 std::unique_ptr<ISyncGraphDataStore::IEdgeTypeScanCursor>
@@ -737,6 +726,68 @@ void EdgeScanCursorImpl::next() {
         return;
     }
     readCurrent();
+}
+
+// BOTH-direction cursor: merges OUT and IN scans into a single iterator.
+class MergedEdgeScanCursor : public ISyncGraphDataStore::IEdgeScanCursor {
+public:
+    MergedEdgeScanCursor(WT_SESSION* session, VertexId vid, std::optional<EdgeLabelId> label_filter)
+        : cursor1_(session, makePrefix(vid, Direction::OUT, label_filter)),
+          cursor2_(session, makePrefix(vid, Direction::IN, label_filter)), onFirst_(true) {}
+
+    const EdgeScanCursorImpl& active() const {
+        if (onFirst_ && cursor1_.valid())
+            return cursor1_;
+        return cursor2_;
+    }
+    EdgeScanCursorImpl& active() {
+        if (onFirst_ && cursor1_.valid())
+            return cursor1_;
+        return cursor2_;
+    }
+
+    bool valid() const override {
+        return active().valid();
+    }
+    const ISyncGraphDataStore::EdgeIndexEntry& entry() const override {
+        return active().entry();
+    }
+    void next() override {
+        auto& a = active();
+        a.next();
+        if (!a.valid() && onFirst_)
+            onFirst_ = false;
+    }
+
+private:
+    static std::string makePrefix(VertexId vid, Direction dir, std::optional<EdgeLabelId> label) {
+        if (label)
+            return KeyCodec::encodeEdgeIndexPrefix(vid, dir, *label);
+        return KeyCodec::encodeEdgeIndexPrefix(vid, dir);
+    }
+
+    EdgeScanCursorImpl cursor1_, cursor2_;
+    bool onFirst_;
+};
+
+std::unique_ptr<ISyncGraphDataStore::IEdgeScanCursor>
+SyncGraphDataStore::createEdgeScanCursor(GraphTxnHandle txn, VertexId vid, Direction direction,
+                                         std::optional<EdgeLabelId> label_filter) {
+    auto session = getSession(txn);
+    if (!session)
+        return nullptr;
+
+    if (direction == Direction::BOTH)
+        return std::make_unique<MergedEdgeScanCursor>(session, vid, label_filter);
+
+    std::string prefix;
+    if (label_filter) {
+        prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction, *label_filter);
+    } else {
+        prefix = KeyCodec::encodeEdgeIndexPrefix(vid, direction);
+    }
+
+    return std::make_unique<EdgeScanCursorImpl>(session, prefix);
 }
 
 // ==================== EdgeTypeScanCursorImpl ====================
