@@ -694,6 +694,51 @@ private:
             if (d->relationshipTypes())
                 for (auto* n : d->relationshipTypes()->name())
                     rp.rel_types.push_back(n->getText());
+            if (d->rangeLit()) {
+                auto* rl = d->rangeLit();
+                // Collect bound values from both numLit children and ID terminals,
+                // ordered by token index. The ANTLR lexer may tokenize digits as ID.
+                std::vector<std::pair<size_t, std::string>> bound_tokens;
+                for (size_t i = 0; i < rl->numLit().size(); ++i)
+                    bound_tokens.emplace_back(rl->numLit(i)->getStart()->getTokenIndex(), rl->numLit(i)->getText());
+                for (size_t i = 0; i < rl->ID().size(); ++i)
+                    bound_tokens.emplace_back(rl->ID(i)->getSymbol()->getTokenIndex(), rl->ID(i)->getText());
+                std::sort(bound_tokens.begin(), bound_tokens.end());
+
+                auto parseBound = [](const std::string& s) { return static_cast<int64_t>(std::stoll(s)); };
+                bool has_range = rl->RANGE() != nullptr;
+                if (has_range) {
+                    // Patterns: *min..max, *..max, *min.., *..
+                    // bound_tokens=[(i3,3),(i7,7)] => min=3,max=7
+                    // bound_tokens=[(i3,3)] => *3.. or *..3 (check token vs RANGE)
+                    // bound_tokens=[]      => *..
+                    Expression min_expr, max_expr;
+                    if (bound_tokens.size() == 2) {
+                        min_expr = makeLiteral(parseBound(bound_tokens[0].second));
+                        max_expr = makeLiteral(parseBound(bound_tokens[1].second));
+                    } else if (bound_tokens.size() == 1) {
+                        auto range_start = rl->RANGE()->getSymbol()->getTokenIndex();
+                        if (bound_tokens[0].first < range_start) {
+                            // bound before RANGE: *min..
+                            min_expr = makeLiteral(parseBound(bound_tokens[0].second));
+                            max_expr = makeLiteral(static_cast<int64_t>(-1));
+                        } else {
+                            // bound after RANGE: *..max
+                            min_expr = makeLiteral(static_cast<int64_t>(1));
+                            max_expr = makeLiteral(parseBound(bound_tokens[0].second));
+                        }
+                    } else {
+                        // *.. (no bounds)
+                        min_expr = makeLiteral(static_cast<int64_t>(1));
+                        max_expr = makeLiteral(static_cast<int64_t>(-1));
+                    }
+                    rp.range = std::make_pair(std::move(min_expr), std::move(max_expr));
+                } else if (!bound_tokens.empty()) {
+                    // *n (exact hop count) => min=n, max=n
+                    auto v = parseBound(bound_tokens[0].second);
+                    rp.range = std::make_pair(makeLiteral(v), makeLiteral(v));
+                }
+            }
             if (d->properties())
                 rp.properties = buildProperties(d->properties());
         }

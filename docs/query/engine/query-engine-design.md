@@ -276,13 +276,14 @@ struct SelectionVector {
 
 `BoundLogicalOperator` 是一个 variant，包含 15 种算子。"子节点"通过 variant 值嵌入（非 unique_ptr），形成递归的算子树。
 
-### 算子类型（15 种）
+### 算子类型（16 种）
 
 | 算子 | 定义文件 | 说明 | 子节点 |
 |------|---------|------|--------|
 | `BoundScanOp` | `bound_scan_op.hpp` | 全顶点扫描 | — |
 | `BoundLabelScanOp` | `bound_label_scan_op.hpp` | 按标签扫描顶点 | — |
 | `BoundExpandOp` | `bound_expand_op.hpp` | 从顶点展开邻居（支持多类型过滤） | 嵌入 `BoundLogicalOperator child` |
+| `BoundVarLenExpandOp` | `bound_varlen_expand_op.hpp` | 变长邻接展开（`[*min..max]`） | 嵌入 `BoundLogicalOperator child` |
 | `BoundFilterOp` | `bound_filter_op.hpp` | 过滤行 | 嵌入 `BoundLogicalOperator child` |
 | `BoundProjectOp` | `bound_project_op.hpp` | 投影/重映射列 | 嵌入 `BoundLogicalOperator child` |
 | `BoundAggregateOp` | `bound_aggregate_op.hpp` | 聚合 + 分组 | 嵌入 `BoundLogicalOperator child` |
@@ -306,6 +307,7 @@ struct SelectionVector {
 | `MATCH (n:Label)` | `LabelScanOp` |
 | `MATCH (n:Label{prop: val})` | `LabelScanOp` + `FilterOp` |
 | `MATCH (a)-[r:TYPE]->(b)` | `ExpandOp`（子节点为 a 的 scan） |
+| `MATCH (a)-[*2..3]->(b)` | `VarLenExpandOp`（子节点为 a 的 scan） |
 | `MATCH p = ...` | `PathBuildOp` |
 | `WHERE pred` | `FilterOp` |
 | `RETURN items` | `ProjectOp`（无聚合）/ `AggregateOp`（有聚合） |
@@ -342,6 +344,7 @@ class PhysicalOperator {
 | `IndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId`, `prop_id`, `ScanMode` | FLAT columns |
 | `EdgeIndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `EdgeLabelId`, `prop_ids` | DICTIONARY columns for src/dst/edge |
 | `ExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, Schema | 输入 DICTIONARY + 新列 FLAT |
+| `VarLenExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, `min_hops`, `max_hops`, Schema | DFS + 边唯一性，输入 DICTIONARY + 目标顶点 FLAT |
 | `FilterPhysicalOp` | `BoundExpression` 谓词, Schema | DICTIONARY 共享 child buffer |
 | `ProjectPhysicalOp` | `BoundExpression` 投影项列表 | FLAT columns |
 | `AggregatePhysicalOp` | `FunctionDef*` 聚合, `BoundExpression` 分组键 | FLAT output |
@@ -503,3 +506,79 @@ using Schema = vector<string>;   // 列名列表
 - UNWIND + 列表操作
 - DDL 异步执行（DdlWorker 后台线程）
 - 崩溃恢复（索引 DDL 状态恢复）
+
+### 待优化：边属性邻接存储
+
+**设想**：扩展 `CREATE EDGE LABEL` 语法，允许指定哪些属性列随邻接关系存储在 KV 的 value 中。
+
+**动机**：当前边属性存储在独立的边属性表中。变长查询的逐跳属性过滤（如 `[:REL*1..5 {status: 'active'}]`）每跳都需要额外 IO 回查属性。如果高频过滤属性直接存储在邻接 KV 的 value 中，可以消除随机 IO。
+
+**现状**：变长查询暂时使用额外 IO 回查方式完成属性过滤。此优化需存储层配合，优先级低于变长查询核心功能。
+
+---
+
+## 变长邻接查询（VarLen Expand）
+
+`BoundVarLenExpandOp`（逻辑算子）+ `VarLenExpandPhysicalOp`（物理算子）实现 `(a)-[r:TYPE*min..max]->(b)` 变长邻接模式。
+
+### 逻辑算子：BoundVarLenExpandOp
+
+定义于 `src/compute_service/planner/logical_plan/operator/bound_varlen_expand_op.hpp`。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `src_variable` / `src_column_index` | string / uint32 | 起点变量名及列索引 |
+| `dst_variable` / `dst_column_index` | string / uint32 | 终点变量名及列索引 |
+| `edge_label_ids` | `vector<EdgeLabelId>` | 边类型过滤；空 = 全部类型 |
+| `direction` | `RelationshipDirection` | OUT / IN / BOTH |
+| `min_hops` / `max_hops` | int64 | `max=-1` 表示无上界 |
+| `dst_label_prop_ids` | `unordered_map<LabelId, vector<uint16>>` | 目标顶点投影下推 |
+| `path_variable` / `path_column_index` | string / uint32 | 命名路径变量（可选） |
+| `path_handled_by_varlen` | bool | 为 true 时跳过 PathBuildOp 创建 |
+| `edge_variable` / `edge_column_index` | string / uint32 | 命名边变量 → `LIST<EDGE>`（可选） |
+| `edge_prop_filters` | `unordered_map<EdgeLabelId, vector<pair<uint16, PropertyValue>>>` | 逐跳边属性过滤 |
+| `child` | `BoundLogicalOperator` | 子算子（通常为 Scan） |
+
+### 物理算子：VarLenExpandPhysicalOp
+
+定义于 `src/compute_service/physical_plan/operator/varlen_expand_physical_op.hpp`。
+
+**遍历算法**：DFS + 显式栈。`StackFrame` 记录当前顶点、深度、预取邻边列表、边索引、入边信息。每步：
+
+1. 检查边是否重复（`visited_edges` per-source-row，含 src_id/edge_label_id/dst_id/seq）——保证**路径内边唯一性**
+2. 检查边属性过滤条件——不满足则 `continue`
+3. 若 `next_depth >= min_hops`，emit 一条结果（含路径/边列表）
+4. 若未达深度上限（或 unbounded），扫描邻边、顶点循环检测（线性扫描 stack）、入栈
+
+**输出列顺序**：`[child cols...] [dst_vertex] [path?] [edge_list?]`
+
+**Identity path**（`min_hops=0`）：DFS 前额外 emit 一行：
+- `dst` = `src`（相同顶点），`path` = PathValue 仅含起点，`edge_list` = 空 ListValue
+- `max_hops=0` 时跳过边扫描和 DFS
+
+**Undirected**：通过 `MergedEdgeScanCursor` 合并 OUT + IN 两个方向的扫描结果。
+
+**边属性过滤**：DFS 中逐跳 `co_await getEdgeProperties()` 检查 `{prop: value}` 条件，不满足则剪枝。
+
+**Filter 下推控制**：`FilterPushdownRule` 禁止 Filter 通过 VarLenExpand 下推——filter 可能引用算子产出的 path / dst / edge 列。
+
+**顶点循环检测**：对 unbounded（`max_hops < 0`）或未达 max 深度的遍历，线性扫描 stack 检查候选邻点是否已在当前路径中。
+
+### 路径谓词
+
+`BoundAllExpr` / `BoundAnyExpr` / `BoundNoneExpr` / `BoundSingleExpr` 四种 BoundExpression（`bound_quantifier_expr.hpp`），支持 `ALL/ANY/NONE/SINGLE(x IN list WHERE pred)` 语法。
+
+关键实现决策：
+
+- **循环变量作用域在 Binder 处理**：绑定 `where_pred` 前将循环变量临时注册到 `BindContext`（分配真实 column_index），绑定后移除。`where_pred` 中的循环变量自然解析为 `BoundColumnRef`，无需修改 ColumnResolver 的核心逻辑。
+- **运行时求值**：`VectorizedEvaluator::evalQuantifierExpr()` 为 list 中每个元素构建临时单行 DataChunk（input columns + loop var column），走正常 `evaluateInternal` 路径求值 `where_pred`。不修改 `BoundVariableRef`/`BoundColumnRef` 的现有求值分支。
+- **量词语义**：遵循 Cypher 标准——ALL 空列表→true，ANY 空列表→false，NONE 空列表→true，SINGLE→恰好一个元素满足。
+- `BoundList` 求值同步修复（此前落入 evaluator 的 catch-all else，返回空列）。
+
+### 已知限制（VarLenExpand 特有）
+
+- **LIMIT 不参与 DFS 剪枝**：DFS 先穷举当前 source vertex 的所有路径才输出，LIMIT 在后续 pipeline 截断。超级节点（100 条边）上 `[*2]` 会产生 ~10k 中间结果，此时 LIMIT 无法提前终止遍历。
+- **混合固定+varlen 链 + 命名路径**：`p = (a)-[:X]->(b)-[:Y*2..3]->(c)` 不支持（Binder 阶段拒绝）。
+- **边属性过滤仅支持字面常量**：`{prop: value}` 中 value 必须为字面量（int/string/bool/double），不支持表达式或变量引用。
+- **中间顶点缺少属性**：DFS 构建 PathValue 时，除首尾顶点外只设置 `id`，无 labels 和 properties。因此 `ALL(x IN nodes(p) WHERE x.name = 'Alice')` 对中间顶点不生效。
+- **多 MATCH + VarLenExpand 未实现**：当前不支持多条 MATCH 子句中包含变长邻接的组合（属于多 MATCH + JOIN 的通用待实现项）。

@@ -1,5 +1,7 @@
 #include "compute_service/planner/column_resolver.hpp"
 
+#include "compute_service/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
+
 namespace eugraph {
 namespace binder {
 
@@ -63,6 +65,8 @@ bool ColumnResolver::resolveOperator(BoundLogicalOperator& op, const BindContext
                 }
                 return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundExpandOp>>) {
+                return resolveOperator(val->child, ctx, errors);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundVarLenExpandOp>>) {
                 return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundSkipOp>>) {
                 return resolveOperator(val->child, ctx, errors);
@@ -156,6 +160,38 @@ bool ColumnResolver::resolveExpression(BoundExpression& expr, const BindContext&
                 }
                 if (val->to) {
                     if (!resolveExpression(*val->to, ctx, errors))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundAllExpr>>) {
+                if (!resolveExpression(val->list_expr, ctx, errors))
+                    return false;
+                if (val->where_pred) {
+                    if (!resolveExpression(*val->where_pred, ctx, errors))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundAnyExpr>>) {
+                if (!resolveExpression(val->list_expr, ctx, errors))
+                    return false;
+                if (val->where_pred) {
+                    if (!resolveExpression(*val->where_pred, ctx, errors))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundNoneExpr>>) {
+                if (!resolveExpression(val->list_expr, ctx, errors))
+                    return false;
+                if (val->where_pred) {
+                    if (!resolveExpression(*val->where_pred, ctx, errors))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundSingleExpr>>) {
+                if (!resolveExpression(val->list_expr, ctx, errors))
+                    return false;
+                if (val->where_pred) {
+                    if (!resolveExpression(*val->where_pred, ctx, errors))
                         return false;
                 }
                 return true;

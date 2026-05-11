@@ -8,6 +8,7 @@ namespace optimizer {
 bool isPenetrable(OptNodeType type) {
     switch (type) {
     case OptNodeType::Expand:
+    case OptNodeType::VarLenExpand:
     case OptNodeType::PathBuild:
     case OptNodeType::Filter:
     case OptNodeType::Sort:
@@ -32,7 +33,15 @@ bool FilterPushdownRule::condition(GroupExpr& expr, Memo& memo) const {
     GroupExpr& child_expr = memo.getExpr(child_eid);
     OptNodeType child_type = nodeTypeFromVariantIndex(child_expr.op.index());
 
-    return isPenetrable(child_type);
+    if (!isPenetrable(child_type))
+        return false;
+
+    // Don't push Filter through VarLenExpand: the filter may reference variables
+    // produced by the VarLenExpand (dst, path, edge), making pushdown incorrect.
+    if (child_type == OptNodeType::VarLenExpand)
+        return false;
+
+    return true;
 }
 
 std::vector<std::unique_ptr<GroupExpr>> FilterPushdownRule::substitute(GroupExpr& expr, Memo& memo) const {
