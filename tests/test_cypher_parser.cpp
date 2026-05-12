@@ -1,5 +1,5 @@
-#include "compute_service/parser/ast.hpp"
-#include "compute_service/parser/cypher_parser.hpp"
+#include "query/parser/ast.hpp"
+#include "query/parser/cypher_parser.hpp"
 #include <gtest/gtest.h>
 
 using namespace eugraph::cypher;

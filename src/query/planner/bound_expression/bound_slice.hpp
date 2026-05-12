@@ -1,0 +1,20 @@
+#pragma once
+
+#include "query/planner/bound_expression/bound_expression_fwd.hpp"
+#include "query/planner/bound_type.hpp"
+
+#include <optional>
+
+namespace eugraph {
+namespace binder {
+
+/// Bound slice expression: list[from..to]
+struct BoundSlice {
+    BoundExpression list;
+    std::optional<BoundExpression> from;
+    std::optional<BoundExpression> to;
+    BoundType result_type = BoundType::Any(); // List<element_type>
+};
+
+} // namespace binder
+} // namespace eugraph

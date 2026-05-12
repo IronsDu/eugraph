@@ -2,7 +2,7 @@
 
 #include <folly/init/Init.h>
 
-#include "compute_service/executor/query_executor.hpp"
+#include "query/executor/query_executor.hpp"
 #include "gen-cpp2/eugraph_types.h"
 #include "program/loader/csv_loader.hpp"
 #include "program/server/eugraph_handler.hpp"

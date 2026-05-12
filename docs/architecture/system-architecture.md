@@ -90,12 +90,12 @@
 
 | 类 | 文件 | 职责 |
 |----|------|------|
-| `QueryExecutor` | `compute_service/executor/` | 查询编排（parse → plan → execute），事务管理 |
-| `PhysicalPlanner` | `compute_service/physical_plan/physical_planner.hpp` | 逻辑计划 → 物理算子，每种算子有独立 planning 方法 |
-| `PhysicalOperator` | `compute_service/physical_plan/physical_operator_base.hpp` | 物理算子抽象基类（火山模型 pull-based 迭代器） |
-| 13 种物理算子 | `compute_service/physical_plan/operator/*.hpp` | AllNodeScan/LabelScan/IndexScan/Expand/Filter/Project/Aggregate/Sort/Skip/Limit/Distinct/CreateNode/CreateEdge |
-| `LogicalOperator` | `compute_service/logical_plan/logical_operator_fwd.hpp` | variant typedef（前向声明 + unique_ptr 打破循环依赖） |
-| 12 种逻辑算子 | `compute_service/logical_plan/operator/*.hpp` | AllNodeScan/LabelScan/Expand/Filter/Project/Aggregate/Sort/Skip/Limit/Distinct/CreateNode/CreateEdge |
+| `QueryExecutor` | `query/executor/` | 查询编排（parse → plan → execute），事务管理 |
+| `PhysicalPlanner` | `query/physical_plan/physical_planner.hpp` | 逻辑计划 → 物理算子，每种算子有独立 planning 方法 |
+| `PhysicalOperator` | `query/physical_plan/physical_operator_base.hpp` | 物理算子抽象基类（火山模型 pull-based 迭代器） |
+| 13 种物理算子 | `query/physical_plan/operator/*.hpp` | AllNodeScan/LabelScan/IndexScan/Expand/Filter/Project/Aggregate/Sort/Skip/Limit/Distinct/CreateNode/CreateEdge |
+| `LogicalOperator` | `query/logical_plan/logical_operator_fwd.hpp` | variant typedef（前向声明 + unique_ptr 打破循环依赖） |
+| 12 种逻辑算子 | `query/logical_plan/operator/*.hpp` | AllNodeScan/LabelScan/Expand/Filter/Project/Aggregate/Sort/Skip/Limit/Distinct/CreateNode/CreateEdge |
 
 关键设计：
 - **只依赖 async 接口**：`IAsyncGraphDataStore` + `IAsyncGraphMetaStore`

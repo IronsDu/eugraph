@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
 #include "common/types/constants.hpp"
-#include "compute_service/executor/query_executor.hpp"
-#include "compute_service/parser/index_ddl_parser.hpp"
+#include "query/executor/query_executor.hpp"
+#include "query/parser/index_ddl_parser.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/io_scheduler.hpp"

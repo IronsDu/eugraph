@@ -62,7 +62,7 @@ Statement → variant<RegularQuery, StandaloneCall>
 
 `AstBuilder` **直接遍历 ANTLR Parse Tree**（不继承 `BaseVisitor`）。原因：ANTLR `BaseVisitor` 返回 `std::any`，与 move-only 的 `unique_ptr` AST 类型不兼容，直接遍历避免了 `std::any_cast` 和类型安全问题。
 
-实现文件：`src/compute_service/parser/cypher_parser.cpp`
+实现文件：`src/query/parser/cypher_parser.cpp`
 
 ### 错误处理
 
@@ -88,7 +88,7 @@ class CypherQueryParser {
 grammar/
   CypherLexer.g4
   CypherParser.g4
-src/compute_service/parser/
+src/query/parser/
   ast.hpp              — AST 节点定义
   cypher_parser.hpp    — 对外接口
   cypher_parser.cpp    — AstBuilder + CypherQueryParser 实现

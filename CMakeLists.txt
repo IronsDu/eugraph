@@ -83,7 +83,7 @@ add_dependencies(eugraph_lib wiredtiger_ext)
 # ==================== Compute Service (Cypher Parser + Query Engine) ====================
 
 # Pre-generated ANTLR4 C++ sources (committed to repo, no Java build dependency)
-set(ANTLR_GENERATED_DIR "${PROJECT_SOURCE_DIR}/src/compute_service/parser/generated")
+set(ANTLR_GENERATED_DIR "${PROJECT_SOURCE_DIR}/src/query/parser/generated")
 set(ANTLR_GENERATED_SOURCES
     "${ANTLR_GENERATED_DIR}/CypherLexer.cpp"
     "${ANTLR_GENERATED_DIR}/CypherParser.cpp"
@@ -93,8 +93,8 @@ set(ANTLR_GENERATED_SOURCES
 
 add_library(eugraph_compute STATIC
     ${ANTLR_GENERATED_SOURCES}
-    src/compute_service/parser/cypher_parser.cpp
-    src/compute_service/parser/index_ddl_parser.cpp
+    src/query/parser/cypher_parser.cpp
+    src/query/parser/index_ddl_parser.cpp
 )
 
 target_include_directories(eugraph_compute PUBLIC
@@ -126,38 +126,38 @@ target_link_libraries(eugraph_metadata PUBLIC
 # ==================== Query Engine (Logical Plan + Physical Plan + Executor) ====================
 
 add_library(eugraph_query_engine STATIC
-    src/compute_service/catalog/catalog.cpp
-    src/compute_service/function/batch_ops.cpp
-    src/compute_service/function/function_registry.cpp
-    src/compute_service/planner/binder.cpp
-    src/compute_service/planner/column_resolver.cpp
-    src/compute_service/executor/vectorized_evaluator.cpp
-    src/compute_service/physical_plan/operator/edge_index_scan_physical_op.cpp
-    src/compute_service/physical_plan/operator/aggregate_physical_op.cpp
-    src/compute_service/physical_plan/operator/all_node_scan_physical_op.cpp
-    src/compute_service/physical_plan/operator/create_edge_physical_op.cpp
-    src/compute_service/physical_plan/operator/create_node_physical_op.cpp
-    src/compute_service/physical_plan/operator/distinct_physical_op.cpp
-    src/compute_service/physical_plan/operator/expand_physical_op.cpp
-    src/compute_service/physical_plan/operator/filter_physical_op.cpp
-    src/compute_service/physical_plan/operator/index_scan_physical_op.cpp
-    src/compute_service/physical_plan/operator/label_scan_physical_op.cpp
-    src/compute_service/physical_plan/operator/limit_physical_op.cpp
-    src/compute_service/physical_plan/operator/varlen_expand_physical_op.cpp
-    src/compute_service/physical_plan/operator/path_build_physical_op.cpp
-    src/compute_service/physical_plan/operator/project_physical_op.cpp
-    src/compute_service/physical_plan/operator/remove_physical_op.cpp
-    src/compute_service/physical_plan/operator/set_physical_op.cpp
-    src/compute_service/physical_plan/operator/skip_physical_op.cpp
-    src/compute_service/physical_plan/operator/sort_physical_op.cpp
-    src/compute_service/physical_plan/physical_operator_base.cpp
-    src/compute_service/physical_plan/physical_planner.cpp
-    src/compute_service/executor/query_executor.cpp
-    src/compute_service/optimizer/memo.cpp
-    src/compute_service/optimizer/opt_rule.cpp
-    src/compute_service/optimizer/task.cpp
-    src/compute_service/optimizer/logical_optimizer.cpp
-    src/compute_service/optimizer/rules/filter_pushdown.cpp
+    src/query/catalog/catalog.cpp
+    src/query/function/batch_ops.cpp
+    src/query/function/function_registry.cpp
+    src/query/planner/binder.cpp
+    src/query/planner/column_resolver.cpp
+    src/query/executor/vectorized_evaluator.cpp
+    src/query/physical_plan/operator/edge_index_scan_physical_op.cpp
+    src/query/physical_plan/operator/aggregate_physical_op.cpp
+    src/query/physical_plan/operator/all_node_scan_physical_op.cpp
+    src/query/physical_plan/operator/create_edge_physical_op.cpp
+    src/query/physical_plan/operator/create_node_physical_op.cpp
+    src/query/physical_plan/operator/distinct_physical_op.cpp
+    src/query/physical_plan/operator/expand_physical_op.cpp
+    src/query/physical_plan/operator/filter_physical_op.cpp
+    src/query/physical_plan/operator/index_scan_physical_op.cpp
+    src/query/physical_plan/operator/label_scan_physical_op.cpp
+    src/query/physical_plan/operator/limit_physical_op.cpp
+    src/query/physical_plan/operator/varlen_expand_physical_op.cpp
+    src/query/physical_plan/operator/path_build_physical_op.cpp
+    src/query/physical_plan/operator/project_physical_op.cpp
+    src/query/physical_plan/operator/remove_physical_op.cpp
+    src/query/physical_plan/operator/set_physical_op.cpp
+    src/query/physical_plan/operator/skip_physical_op.cpp
+    src/query/physical_plan/operator/sort_physical_op.cpp
+    src/query/physical_plan/physical_operator_base.cpp
+    src/query/physical_plan/physical_planner.cpp
+    src/query/executor/query_executor.cpp
+    src/query/optimizer/memo.cpp
+    src/query/optimizer/opt_rule.cpp
+    src/query/optimizer/task.cpp
+    src/query/optimizer/logical_optimizer.cpp
+    src/query/optimizer/rules/filter_pushdown.cpp
 )
 
 target_include_directories(eugraph_query_engine PUBLIC

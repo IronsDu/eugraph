@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
-#include "compute_service/optimizer/logical_optimizer.hpp"
-#include "compute_service/optimizer/memo.hpp"
-#include "compute_service/optimizer/opt_rule.hpp"
-#include "compute_service/planner/bound_logical_plan.hpp"
+#include "query/optimizer/logical_optimizer.hpp"
+#include "query/optimizer/memo.hpp"
+#include "query/optimizer/opt_rule.hpp"
+#include "query/planner/bound_logical_plan.hpp"
 
 using namespace eugraph;
 using namespace eugraph::optimizer;

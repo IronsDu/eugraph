@@ -1,7 +1,7 @@
 # Cascades 逻辑优化器
 
 > 相关模块：Optimizer、Binder、PhysicalPlanner、QueryExecutor
-> 源码：`src/compute_service/optimizer/`
+> 源码：`src/query/optimizer/`
 
 ---
 
@@ -299,7 +299,7 @@ Filter(LEAF)  — 匹配有一个子节点的 Filter
 ## 七、文件结构
 
 ```
-src/compute_service/optimizer/
+src/query/optimizer/
 ├── memo.hpp                 # Memo, Group, GroupExpr, GroupId, ExprId
 ├── memo.cpp                 # copyIn, copyOut, findDuplicate, mergeGroups
 ├── opt_rule.hpp             # OptNodeType, PatternNode, OptRule, RuleSet
