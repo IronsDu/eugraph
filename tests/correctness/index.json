@@ -1545,6 +1545,5 @@
         }
       ]
     }
-  },
-  "license": "Derived from openCypher TCK (Apache 2.0)"
+  }
 }

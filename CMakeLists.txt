@@ -588,4 +588,31 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(catalog_tests wiredtiger_ext)
     gtest_add_tests(TARGET catalog_tests)
+
+    # TCK-based Cypher correctness tests
+    add_executable(correctness_tests
+        tests/test_correctness.cpp
+    )
+
+    target_include_directories(correctness_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_compile_definitions(correctness_tests PRIVATE
+        CORRECTNESS_JSON_DIR="${PROJECT_SOURCE_DIR}/tests/correctness"
+    )
+
+    target_link_libraries(correctness_tests PRIVATE
+        eugraph_query_engine
+        eugraph_metadata
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(correctness_tests wiredtiger_ext)
+    gtest_add_tests(TARGET correctness_tests)
 endif()
