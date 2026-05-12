@@ -59,7 +59,8 @@ private:
     bool bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan& plan);
 
     // ── Clause binding ──
-    std::optional<BoundLogicalOperator> bindMatch(const cypher::MatchClause& match);
+    std::optional<BoundLogicalOperator> bindMatch(const cypher::MatchClause& match,
+                                                  std::optional<BoundLogicalOperator> parent = std::nullopt);
     std::optional<BoundLogicalOperator> bindReturn(const cypher::ReturnClause& ret, BoundLogicalOperator child);
     std::optional<BoundLogicalOperator>
     bindWhere(const cypher::Expression& pred, BoundLogicalOperator child,
@@ -77,7 +78,8 @@ private:
 
     // ── Pattern binding ──
     bool bindNodePattern(const cypher::NodePattern& node, std::string& var_name, uint32_t& col_idx,
-                         std::optional<LabelId>& label_id, std::vector<uint16_t>& default_prop_ids);
+                         std::optional<LabelId>& label_id, std::vector<uint16_t>& default_prop_ids,
+                         bool skip_register = false);
     bool bindRelationshipPattern(const cypher::RelationshipPattern& rel, std::string& var_name, uint32_t& col_idx,
                                  std::vector<EdgeLabelId>& edge_label_ids, std::vector<uint16_t>& default_prop_ids);
 

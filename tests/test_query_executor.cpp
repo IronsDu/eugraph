@@ -2324,7 +2324,54 @@ TEST_F(QueryExecutorWithTest, WithFollowedBySet) {
     EXPECT_EQ(std::get<int64_t>(verify.rows[0][0]), 99);
 }
 
-// ==================== Variable-Length Expand Tests ====================
+TEST_F(QueryExecutorWithTest, WithThenMatchExpand) {
+    insertPersonWithEdges();
+
+    // MATCH (a:Person)-[:KNOWS]->(b) WITH b MATCH (b)-[:KNOWS]->(c) RETURN c.name
+    // Data: Alice->Bob, Alice->Carol, Bob->Carol
+    // After first MATCH: b = Bob, Carol, Carol
+    // After second MATCH: b=Bob -> c=Carol; b=Carol -> nobody
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) WITH b "
+                                       "MATCH (b)-[:KNOWS]->(c) RETURN c.name ORDER BY c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Carol");
+}
+
+TEST_F(QueryExecutorWithTest, WithThenMatchExpandSingleHop) {
+    insertPersonWithEdges();
+
+    // Pass a single variable through WITH and expand from it
+    auto result = execSync(*executor_, "MATCH (a:Person {name: 'Alice'})-[:KNOWS]->(b) WITH b "
+                                       "MATCH (b)-[:KNOWS]->(c) RETURN b.name, c.name ORDER BY c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // Alice->Bob, Alice->Carol: b=Bob,Carol. Then Bob->Carol, Carol->nobody => 1 row
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Bob");
+    EXPECT_EQ(std::get<std::string>(result.rows[0][1]), "Carol");
+}
+
+TEST_F(QueryExecutorWithTest, WithThenMatchMultiHop) {
+    insertPersonWithEdges();
+
+    // MATCH (a:Person {name: 'Alice'}) WITH a MATCH (a)-[:KNOWS]->(b)-[:KNOWS]->(c) RETURN c.name
+    // Alice->Bob->Carol => c=Carol
+    // Alice->Carol->nobody => no result
+    auto result = execSync(*executor_, "MATCH (a:Person {name: 'Alice'}) WITH a "
+                                       "MATCH (a)-[:KNOWS]->(b)-[:KNOWS]->(c) RETURN c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Carol");
+}
+
+TEST_F(QueryExecutorWithTest, WithThenIndependentMatchError) {
+    insertPersonData();
+
+    // MATCH after WITH with a variable not in WITH output should produce an error
+    auto result = execSync(*executor_, "MATCH (a:Person) WITH a MATCH (b:Person) RETURN a.name, b.name");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("not yet supported"), std::string::npos) << "Actual error: " << result.error;
+}
 
 TEST_F(QueryExecutorTest, VarLenExpandExact2Hops) {
     // KNOWS chain: 1->2->3->4, LIVES_IN: 1->5, 2->6
