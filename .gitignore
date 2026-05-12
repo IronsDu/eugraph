@@ -1,5 +1,8 @@
 build/
+build-asan/
 .vscode/
+.vs/
+eugraph-data/
 vcpkg_installed/
 *.o
 *.a

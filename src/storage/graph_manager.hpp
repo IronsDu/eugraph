@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "compute_service/executor/query_executor.hpp"
+#include "query/executor/query_executor.hpp"
 #include "storage/catalog/catalog_store.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
