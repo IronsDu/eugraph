@@ -143,7 +143,7 @@ def _expand_params(text: str, params: dict[str, str]) -> str:
     def _replace(m: re.Match) -> str:
         key = m.group(1)
         return params.get(key, m.group(0))
-    return re.sub(r"<([^>]+)>", _replace, text)
+    return re.sub(r"<([^><]+)>", _replace, text)
 
 
 # ── Scenario extraction ────────────────────────────────────────────

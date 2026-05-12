@@ -237,7 +237,7 @@
       "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs=1, result=false]",
       "description": "[5] Comparing NaN [lhs=0.0 / 0.0, rhs=1, result=false]",
       "setup": [],
-      "query": "RETURN 0.0 / 0.0 > 1 AS gt, 0.0 / 0.0 >= 1 AS gtE, 0.0 / 0.0 < <rhs> AS lt, 0.0 / 0.0 <= <rhs> AS ltE",
+      "query": "RETURN 0.0 / 0.0 > 1 AS gt, 0.0 / 0.0 >= 1 AS gtE, 0.0 / 0.0 < 1 AS lt, 0.0 / 0.0 <= 1 AS ltE",
       "expect_columns": [
         "gt",
         "gtE",
@@ -261,7 +261,7 @@
       "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs=1.0, result=false]",
       "description": "[5] Comparing NaN [lhs=0.0 / 0.0, rhs=1.0, result=false]",
       "setup": [],
-      "query": "RETURN 0.0 / 0.0 > 1.0 AS gt, 0.0 / 0.0 >= 1.0 AS gtE, 0.0 / 0.0 < <rhs> AS lt, 0.0 / 0.0 <= <rhs> AS ltE",
+      "query": "RETURN 0.0 / 0.0 > 1.0 AS gt, 0.0 / 0.0 >= 1.0 AS gtE, 0.0 / 0.0 < 1.0 AS lt, 0.0 / 0.0 <= 1.0 AS ltE",
       "expect_columns": [
         "gt",
         "gtE",
@@ -285,7 +285,7 @@
       "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs=0.0 / 0.0, result=false]",
       "description": "[5] Comparing NaN [lhs=0.0 / 0.0, rhs=0.0 / 0.0, result=false]",
       "setup": [],
-      "query": "RETURN 0.0 / 0.0 > 0.0 / 0.0 AS gt, 0.0 / 0.0 >= 0.0 / 0.0 AS gtE, 0.0 / 0.0 < <rhs> AS lt, 0.0 / 0.0 <= <rhs> AS ltE",
+      "query": "RETURN 0.0 / 0.0 > 0.0 / 0.0 AS gt, 0.0 / 0.0 >= 0.0 / 0.0 AS gtE, 0.0 / 0.0 < 0.0 / 0.0 AS lt, 0.0 / 0.0 <= 0.0 / 0.0 AS ltE",
       "expect_columns": [
         "gt",
         "gtE",
@@ -309,7 +309,7 @@
       "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs='a', result=null]",
       "description": "[5] Comparing NaN [lhs=0.0 / 0.0, rhs='a', result=null]",
       "setup": [],
-      "query": "RETURN 0.0 / 0.0 > 'a' AS gt, 0.0 / 0.0 >= 'a' AS gtE, 0.0 / 0.0 < <rhs> AS lt, 0.0 / 0.0 <= <rhs> AS ltE",
+      "query": "RETURN 0.0 / 0.0 > 'a' AS gt, 0.0 / 0.0 >= 'a' AS gtE, 0.0 / 0.0 < 'a' AS lt, 0.0 / 0.0 <= 'a' AS ltE",
       "expect_columns": [
         "gt",
         "gtE",
@@ -333,7 +333,7 @@
       "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs=1.0, rhs=1.0, result=false]",
       "description": "[6] Comparability between numbers and strings [lhs=1.0, rhs=1.0, result=false]",
       "setup": [],
-      "query": "RETURN 1.0 < <rhs> AS result",
+      "query": "RETURN 1.0 < 1.0 AS result",
       "expect_columns": [
         "result"
       ],
@@ -351,7 +351,7 @@
       "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs=1, rhs=1.0, result=false]",
       "description": "[6] Comparability between numbers and strings [lhs=1, rhs=1.0, result=false]",
       "setup": [],
-      "query": "RETURN 1 < <rhs> AS result",
+      "query": "RETURN 1 < 1.0 AS result",
       "expect_columns": [
         "result"
       ],
@@ -369,7 +369,7 @@
       "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs='1.0', rhs=1.0, result=null]",
       "description": "[6] Comparability between numbers and strings [lhs='1.0', rhs=1.0, result=null]",
       "setup": [],
-      "query": "RETURN '1.0' < <rhs> AS result",
+      "query": "RETURN '1.0' < 1.0 AS result",
       "expect_columns": [
         "result"
       ],
@@ -387,7 +387,7 @@
       "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs='1', rhs=1, result=null]",
       "description": "[6] Comparability between numbers and strings [lhs='1', rhs=1, result=null]",
       "setup": [],
-      "query": "RETURN '1' < <rhs> AS result",
+      "query": "RETURN '1' < 1 AS result",
       "expect_columns": [
         "result"
       ],
