@@ -1,0 +1,95 @@
+{
+  "source": "clauses/match-where/MatchWhere5.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "MatchWhere5 - Filter on predicate resulting in null",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "MatchWhere5 - Filter on predicate resulting in null-[1] Filter out on null",
+      "description": "[1] Filter out on null",
+      "setup": [
+        "CREATE (root:Root {name: 'x'}), (child1:TextNode {var: 'text'}), (child2:IntNode {var: 0})",
+        "CREATE (root)-[:T]->(child1), (root)-[:T]->(child2)"
+      ],
+      "query": "MATCH (:Root {name: 'x'})-->(i:TextNode)\nWHERE i.var > 'te'\nRETURN i",
+      "expect_columns": [
+        "i"
+      ],
+      "expect_rows": [
+        [
+          "(:TextNode {var: 'text'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere5 - Filter on predicate resulting in null-[2] Filter out on null if the AND'd predicate evaluates to false",
+      "description": "[2] Filter out on null if the AND'd predicate evaluates to false",
+      "setup": [
+        "CREATE (root:Root {name: 'x'}), (child1:TextNode {var: 'text'}), (child2:IntNode {var: 0})",
+        "CREATE (root)-[:T]->(child1), (root)-[:T]->(child2)"
+      ],
+      "query": "MATCH (:Root {name: 'x'})-->(i:TextNode)\nWHERE i.var > 'te' AND i:TextNode\nRETURN i",
+      "expect_columns": [
+        "i"
+      ],
+      "expect_rows": [
+        [
+          "(:TextNode {var: 'text'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere5 - Filter on predicate resulting in null-[3] Filter out on null if the AND'd predicate evaluates to true",
+      "description": "[3] Filter out on null if the AND'd predicate evaluates to true",
+      "setup": [
+        "CREATE (root:Root {name: 'x'}), (child1:TextNode {var: 'text'}), (child2:IntNode {var: 0})",
+        "CREATE (root)-[:T]->(child1), (root)-[:T]->(child2)"
+      ],
+      "query": "MATCH (:Root {name: 'x'})-->(i:TextNode)\nWHERE i.var > 'te' AND i.var IS NOT NULL\nRETURN i",
+      "expect_columns": [
+        "i"
+      ],
+      "expect_rows": [
+        [
+          "(:TextNode {var: 'text'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere5 - Filter on predicate resulting in null-[4] Do not filter out on null if the OR'd predicate evaluates to true",
+      "description": "[4] Do not filter out on null if the OR'd predicate evaluates to true",
+      "setup": [
+        "CREATE (root:Root {name: 'x'}), (child1:TextNode {var: 'text'}), (child2:IntNode {var: 0})",
+        "CREATE (root)-[:T]->(child1), (root)-[:T]->(child2)"
+      ],
+      "query": "MATCH (:Root {name: 'x'})-->(i)\nWHERE i.var > 'te' OR i.var IS NOT NULL\nRETURN i",
+      "expect_columns": [
+        "i"
+      ],
+      "expect_rows": [
+        [
+          "(:TextNode {var: 'text'})"
+        ],
+        [
+          "(:IntNode {var: 0})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

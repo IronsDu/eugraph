@@ -1,0 +1,236 @@
+{
+  "source": "clauses/match/Match4.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Match4 - Match variable length patterns scenarios",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Match4 - Match variable length patterns scenarios-[1] Handling fixed-length variable length pattern",
+      "description": "[1] Handling fixed-length variable length pattern",
+      "setup": [
+        "CREATE ()-[:T]->()"
+      ],
+      "query": "MATCH (a)-[r*1..1]->(b)\nRETURN r",
+      "expect_columns": [
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "[[:T]]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match4 - Match variable length patterns scenarios-[2] Simple variable length pattern",
+      "description": "[2] Simple variable length pattern",
+      "setup": [
+        "CREATE (a {name: 'A'}), (b {name: 'B'}), (c {name: 'C'}), (d {name: 'D'})",
+        "CREATE (a)-[:CONTAINS]->(b), (b)-[:CONTAINS]->(c), (c)-[:CONTAINS]->(d)"
+      ],
+      "query": "MATCH (a {name: 'A'})-[*]->(x)\nRETURN x",
+      "expect_columns": [
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'B'})"
+        ],
+        [
+          "({name: 'C'})"
+        ],
+        [
+          "({name: 'D'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match4 - Match variable length patterns scenarios-[3] Zero-length variable length pattern in the middle of the pattern",
+      "description": "[3] Zero-length variable length pattern in the middle of the pattern",
+      "setup": [
+        "CREATE (a {name: 'A'}), (b {name: 'B'}), (c {name: 'C'}), ({name: 'D'}), ({name: 'E'})",
+        "CREATE (a)-[:CONTAINS]->(b), (b)-[:FRIEND]->(c)"
+      ],
+      "query": "MATCH (a {name: 'A'})-[:CONTAINS*0..1]->(b)-[:FRIEND*0..1]->(c)\nRETURN a, b, c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'A'})",
+          "({name: 'A'})",
+          "({name: 'A'})"
+        ],
+        [
+          "({name: 'A'})",
+          "({name: 'B'})",
+          "({name: 'B'})"
+        ],
+        [
+          "({name: 'A'})",
+          "({name: 'B'})",
+          "({name: 'C'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "CONTAINS"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match4 - Match variable length patterns scenarios-[4] Matching longer variable length paths",
+      "description": "[4] Matching longer variable length paths",
+      "setup": [
+        "CREATE (a {var: 'start'}), (b {var: 'end'})",
+        "WITH *",
+        "UNWIND range(1, 20) AS i",
+        "CREATE (n {var: i})",
+        "WITH a, b, [a] + collect(n) + [b] AS nodeList",
+        "UNWIND range(0, size(nodeList) - 2, 1) AS i",
+        "WITH nodeList[i] AS n1, nodeList[i+1] AS n2",
+        "CREATE (n1)-[:T]->(n2)"
+      ],
+      "query": "MATCH (n {var: 'start'})-[:T*]->(m {var: 'end'})\nRETURN m",
+      "expect_columns": [
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "({var: 'end'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match4 - Match variable length patterns scenarios-[5] Matching variable length pattern with property predicate",
+      "description": "[5] Matching variable length pattern with property predicate",
+      "setup": [
+        "CREATE (a:Artist:A), (b:Artist:B), (c:Artist:C)",
+        "CREATE (a)-[:WORKED_WITH {year: 1987}]->(b), (b)-[:WORKED_WITH {year: 1988}]->(c)"
+      ],
+      "query": "MATCH (a:Artist)-[:WORKED_WITH* {year: 1988}]->(b:Artist)\nRETURN *",
+      "expect_columns": [
+        "a",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:Artist:B)",
+          "(:Artist:C)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match4 - Match variable length patterns scenarios-[6] Matching variable length patterns from a bound node",
+      "description": "[6] Matching variable length patterns from a bound node",
+      "setup": [
+        "CREATE (a:A), (b), (c)",
+        "CREATE (a)-[:X]->(b), (b)-[:Y]->(c)"
+      ],
+      "query": "MATCH (a:A)\nMATCH (a)-[r*2]->()\nRETURN r",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match4 - Match variable length patterns scenarios-[7] Matching variable length patterns including a bound relationship",
+      "description": "[7] Matching variable length patterns including a bound relationship",
+      "setup": [
+        "CREATE (n0:Node), (n1:Node), (n2:Node), (n3:Node), (n0)-[:EDGE]->(n1), (n1)-[:EDGE]->(n2), (n2)-[:EDGE]->(n3)"
+      ],
+      "query": "MATCH ()-[r:EDGE]-()\nMATCH p = (n)-[*0..1]-()-[r]-()-[*0..1]-(m)\nRETURN count(p) AS c",
+      "expect_columns": [
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "32"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match4 - Match variable length patterns scenarios-[8] Matching relationships into a list and matching variable length using the list",
+      "description": "[8] Matching relationships into a list and matching variable length using the list",
+      "setup": [
+        "CREATE (a:A), (b:B), (c:C)",
+        "CREATE (a)-[:Y]->(b), (b)-[:Y]->(c)"
+      ],
+      "query": "MATCH ()-[r1]->()-[r2]->()\nWITH [r1, r2] AS rs\n  LIMIT 1\nMATCH (first)-[rs*]->(second)\nRETURN first, second",
+      "expect_columns": [
+        "first",
+        "second"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:C)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match4 - Match variable length patterns scenarios-[9] Fail when asterisk operator is missing",
+      "description": "[9] Fail when asterisk operator is missing",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidRelationshipPattern",
+      "setup": [
+        "CREATE (n0:A {name: 'n0'}), (n00:B {name: 'n00'}), (n01:B {name: 'n01'}), (n000:C {name: 'n000'}), (n001:C {name: 'n001'}), (n010:C {name: 'n010'}), (n011:C {name: 'n011'}), (n0000:D {name: 'n0000'}), (n0001:D {name: 'n0001'}), (n0010:D {name: 'n0010'}), (n0011:D {name: 'n0011'}), (n0100:D {name: 'n0100'}), (n0101:D {name: 'n0101'}), (n0110:D {name: 'n0110'}), (n0111:D {name: 'n0111'})",
+        "CREATE (n0)-[:LIKES]->(n00), (n0)-[:LIKES]->(n01), (n00)-[:LIKES]->(n000), (n00)-[:LIKES]->(n001), (n01)-[:LIKES]->(n010), (n01)-[:LIKES]->(n011), (n000)-[:LIKES]->(n0000), (n000)-[:LIKES]->(n0001), (n001)-[:LIKES]->(n0010), (n001)-[:LIKES]->(n0011), (n010)-[:LIKES]->(n0100), (n010)-[:LIKES]->(n0101), (n011)-[:LIKES]->(n0110), (n011)-[:LIKES]->(n0111)"
+      ],
+      "query": "MATCH (a:A)\nMATCH (a)-[:LIKES..]->(c)\nRETURN c.name",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match4 - Match variable length patterns scenarios-[10] Fail on negative bound",
+      "description": "[10] Fail on negative bound",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidRelationshipPattern",
+      "setup": [
+        "CREATE (n0:A {name: 'n0'}), (n00:B {name: 'n00'}), (n01:B {name: 'n01'}), (n000:C {name: 'n000'}), (n001:C {name: 'n001'}), (n010:C {name: 'n010'}), (n011:C {name: 'n011'}), (n0000:D {name: 'n0000'}), (n0001:D {name: 'n0001'}), (n0010:D {name: 'n0010'}), (n0011:D {name: 'n0011'}), (n0100:D {name: 'n0100'}), (n0101:D {name: 'n0101'}), (n0110:D {name: 'n0110'}), (n0111:D {name: 'n0111'})",
+        "CREATE (n0)-[:LIKES]->(n00), (n0)-[:LIKES]->(n01), (n00)-[:LIKES]->(n000), (n00)-[:LIKES]->(n001), (n01)-[:LIKES]->(n010), (n01)-[:LIKES]->(n011), (n000)-[:LIKES]->(n0000), (n000)-[:LIKES]->(n0001), (n001)-[:LIKES]->(n0010), (n001)-[:LIKES]->(n0011), (n010)-[:LIKES]->(n0100), (n010)-[:LIKES]->(n0101), (n011)-[:LIKES]->(n0110), (n011)-[:LIKES]->(n0111)"
+      ],
+      "query": "MATCH (a:A)\nMATCH (a)-[:LIKES*-2]->(c)\nRETURN c.name",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

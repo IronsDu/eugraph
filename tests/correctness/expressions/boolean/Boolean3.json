@@ -1,0 +1,769 @@
+{
+  "source": "expressions/boolean/Boolean3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Boolean3 - XOR logical operations",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Boolean3 - XOR logical operations-[1] Exclusive disjunction of two truth values",
+      "description": "[1] Exclusive disjunction of two truth values",
+      "setup": [],
+      "query": "RETURN true XOR true AS tt,\n       true XOR false AS tf,\n       true XOR null AS tn,\n       false XOR true AS ft,\n       false XOR false AS ff,\n       false XOR null AS fn,\n       null XOR true AS nt,\n       null XOR false AS nf,\n       null XOR null AS nn",
+      "expect_columns": [
+        "tt",
+        "tf",
+        "tn",
+        "ft",
+        "ff",
+        "fn",
+        "nt",
+        "nf",
+        "nn"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "true",
+          "null",
+          "true",
+          "false",
+          "null",
+          "null",
+          "null",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[2] Exclusive disjunction of three truth values",
+      "description": "[2] Exclusive disjunction of three truth values",
+      "setup": [],
+      "query": "RETURN true XOR true XOR true AS ttt,\n       true XOR true XOR false AS ttf,\n       true XOR true XOR null AS ttn,\n       true XOR false XOR true AS tft,\n       true XOR false XOR false AS tff,\n       true XOR false XOR null AS tfn,\n       true XOR null XOR true AS tnt,\n       true XOR null XOR false AS tnf,\n       true XOR null XOR null AS tnn,\n       false XOR true XOR true AS ftt,\n       false XOR true XOR false AS ftf,\n       false XOR true XOR null AS ftn,\n       false XOR false XOR true AS fft,\n       false XOR false XOR false AS fff,\n       false XOR false XOR null AS ffn,\n       false XOR null XOR true AS fnt,\n       false XOR null XOR false AS fnf,\n       false XOR null XOR null AS fnn,\n       null XOR true XOR true AS ntt,\n       null XOR true XOR false AS ntf,\n       null XOR true XOR null AS ntn,\n       null XOR false XOR true AS nft,\n       null XOR false XOR false AS nff,\n       null XOR false XOR null AS nfn,\n       null XOR null XOR true AS nnt,\n       null XOR null XOR false AS nnf,\n       null XOR null XOR null AS nnn",
+      "expect_columns": [
+        "ttt",
+        "ttf",
+        "ttn",
+        "tft",
+        "tff",
+        "tfn",
+        "tnt",
+        "tnf",
+        "tnn",
+        "ftt",
+        "ftf",
+        "ftn",
+        "fft",
+        "fff",
+        "ffn",
+        "fnt",
+        "fnf",
+        "fnn",
+        "ntt",
+        "ntf",
+        "ntn",
+        "nft",
+        "nff",
+        "nfn",
+        "nnt",
+        "nnf",
+        "nnn"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "false",
+          "null",
+          "false",
+          "true",
+          "null",
+          "null",
+          "null",
+          "null",
+          "false",
+          "true",
+          "null",
+          "true",
+          "false",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[3] Exclusive disjunction of many truth values",
+      "description": "[3] Exclusive disjunction of many truth values",
+      "setup": [],
+      "query": "RETURN true XOR true XOR true XOR true XOR true XOR true XOR true XOR true XOR true XOR true XOR true AS t,\n       true XOR true XOR true XOR false XOR true XOR true XOR true XOR true XOR true XOR true XOR true AS tsf,\n       true XOR true XOR true XOR null XOR true XOR true XOR true XOR true XOR true XOR true XOR true AS tsn,\n       false XOR false XOR false XOR false XOR false XOR false XOR false XOR false XOR false XOR false XOR false AS f,\n       false XOR false XOR false XOR false XOR true XOR false XOR false XOR false XOR false XOR false XOR false AS fst,\n       false XOR false XOR false XOR false XOR false XOR false XOR null XOR false XOR false XOR false XOR false AS fsn,\n       null XOR null XOR null XOR null XOR null XOR null XOR null XOR null XOR null XOR null XOR null AS n,\n       null XOR null XOR null XOR null XOR true XOR null XOR null XOR null XOR null XOR null XOR null AS nst,\n       null XOR null XOR null XOR null XOR false XOR null XOR null XOR null XOR null XOR null XOR null AS nsf,\n       true XOR false XOR false XOR false XOR true XOR false XOR false XOR true XOR true XOR true XOR false AS m1,\n       true XOR true XOR false XOR false XOR true XOR false XOR false XOR true XOR true XOR true XOR false AS m2,\n       true XOR true XOR false XOR false XOR true XOR null XOR false XOR true XOR true XOR null XOR false AS m3",
+      "expect_columns": [
+        "t",
+        "tsf",
+        "tsn",
+        "f",
+        "fst",
+        "fsn",
+        "n",
+        "nst",
+        "nsf",
+        "m1",
+        "m2",
+        "m3"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "false",
+          "null",
+          "false",
+          "true",
+          "null",
+          "null",
+          "null",
+          "null",
+          "true",
+          "false",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[4] Exclusive disjunction is commutative on non-null",
+      "description": "[4] Exclusive disjunction is commutative on non-null",
+      "setup": [],
+      "query": "UNWIND [true, false] AS a\nUNWIND [true, false] AS b\nRETURN a, b, (a XOR b) = (b XOR a) AS result",
+      "expect_columns": [
+        "a",
+        "b",
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "true"
+        ],
+        [
+          "true",
+          "false",
+          "true"
+        ],
+        [
+          "false",
+          "true",
+          "true"
+        ],
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND",
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[5] Exclusive disjunction is commutative on null",
+      "description": "[5] Exclusive disjunction is commutative on null",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH a, b WHERE a IS NULL OR b IS NULL\nRETURN a, b, (a XOR b) IS NULL = (b XOR a) IS NULL AS result",
+      "expect_columns": [
+        "a",
+        "b",
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "null",
+          "true"
+        ],
+        [
+          "false",
+          "null",
+          "true"
+        ],
+        [
+          "null",
+          "true",
+          "true"
+        ],
+        [
+          "null",
+          "false",
+          "true"
+        ],
+        [
+          "null",
+          "null",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND",
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[6] Exclusive disjunction is associative on non-null",
+      "description": "[6] Exclusive disjunction is associative on non-null",
+      "setup": [],
+      "query": "UNWIND [true, false] AS a\nUNWIND [true, false] AS b\nUNWIND [true, false] AS c\nRETURN a, b, c, (a XOR (b XOR c)) = ((a XOR b) XOR c) AS result",
+      "expect_columns": [
+        "a",
+        "b",
+        "c",
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "true",
+          "true"
+        ],
+        [
+          "true",
+          "true",
+          "false",
+          "true"
+        ],
+        [
+          "true",
+          "false",
+          "true",
+          "true"
+        ],
+        [
+          "true",
+          "false",
+          "false",
+          "true"
+        ],
+        [
+          "false",
+          "true",
+          "true",
+          "true"
+        ],
+        [
+          "false",
+          "true",
+          "false",
+          "true"
+        ],
+        [
+          "false",
+          "false",
+          "true",
+          "true"
+        ],
+        [
+          "false",
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND",
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[7] Exclusive disjunction is associative on null",
+      "description": "[7] Exclusive disjunction is associative on null",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH a, b, c WHERE a IS NULL OR b IS NULL OR c IS NULL\nRETURN a, b, c, (a XOR (b XOR c)) IS NULL = ((a XOR b) XOR c) IS NULL AS result",
+      "expect_columns": [
+        "a",
+        "b",
+        "c",
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "null",
+          "true"
+        ],
+        [
+          "true",
+          "false",
+          "null",
+          "true"
+        ],
+        [
+          "true",
+          "null",
+          "true",
+          "true"
+        ],
+        [
+          "true",
+          "null",
+          "false",
+          "true"
+        ],
+        [
+          "true",
+          "null",
+          "null",
+          "true"
+        ],
+        [
+          "false",
+          "true",
+          "null",
+          "true"
+        ],
+        [
+          "false",
+          "false",
+          "null",
+          "true"
+        ],
+        [
+          "false",
+          "null",
+          "true",
+          "true"
+        ],
+        [
+          "false",
+          "null",
+          "false",
+          "true"
+        ],
+        [
+          "false",
+          "null",
+          "null",
+          "true"
+        ],
+        [
+          "null",
+          "true",
+          "true",
+          "true"
+        ],
+        [
+          "null",
+          "true",
+          "false",
+          "true"
+        ],
+        [
+          "null",
+          "true",
+          "null",
+          "true"
+        ],
+        [
+          "null",
+          "false",
+          "true",
+          "true"
+        ],
+        [
+          "null",
+          "false",
+          "false",
+          "true"
+        ],
+        [
+          "null",
+          "false",
+          "null",
+          "true"
+        ],
+        [
+          "null",
+          "null",
+          "true",
+          "true"
+        ],
+        [
+          "null",
+          "null",
+          "false",
+          "true"
+        ],
+        [
+          "null",
+          "null",
+          "null",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND",
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=123, b=true]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=123, b=true]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN 123 XOR true",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=123.4, b=false]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=123.4, b=false]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN 123.4 XOR false",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=123.4, b=null]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=123.4, b=null]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN 123.4 XOR null",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a='foo', b=true]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a='foo', b=true]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN 'foo' XOR true",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=[], b=false]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=[], b=false]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN [] XOR false",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=[true], b=false]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=[true], b=false]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN [true] XOR false",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=[null], b=null]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=[null], b=null]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN [null] XOR null",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a={}, b=true]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a={}, b=true]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN {} XOR true",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a={x: []}, b=true]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a={x: []}, b=true]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN {x: []} XOR true",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b=123]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b=123]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN false XOR 123",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=true, b=123.4]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=true, b=123.4]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN true XOR 123.4",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b='foo']",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b='foo']",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN false XOR 'foo'",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=null, b='foo']",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=null, b='foo']",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN null XOR 'foo'",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=true, b=[]]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=true, b=[]]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN true XOR []",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=true, b=[false]]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=true, b=[false]]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN true XOR [false]",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=null, b=[null]]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=null, b=[null]]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN null XOR [null]",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b={}]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b={}]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN false XOR {}",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b={x: []}]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b={x: []}]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN false XOR {x: []}",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=123, b='foo']",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=123, b='foo']",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN 123 XOR 'foo'",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=123.4, b=123.4]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=123.4, b=123.4]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN 123.4 XOR 123.4",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a='foo', b={x: []}]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a='foo', b={x: []}]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN 'foo' XOR {x: []}",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=[true], b=[true]]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a=[true], b=[true]]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN [true] XOR [true]",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a={x: []}, b=[123]]",
+      "description": "[8] Fail on exclusive disjunction of at least one non-booleans [a={x: []}, b=[123]]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "RETURN {x: []} XOR [123]",
+      "requires": [
+        "XOR"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

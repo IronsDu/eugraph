@@ -1,0 +1,408 @@
+{
+  "source": "clauses/return-orderby/ReturnOrderBy1.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[1] ORDER BY should order booleans in the expected order",
+      "description": "[1] ORDER BY should order booleans in the expected order",
+      "setup": [],
+      "query": "UNWIND [true, false] AS bools\nRETURN bools\nORDER BY bools",
+      "expect_columns": [
+        "bools"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ],
+        [
+          "true"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[2] ORDER BY DESC should order booleans in the expected order",
+      "description": "[2] ORDER BY DESC should order booleans in the expected order",
+      "setup": [],
+      "query": "UNWIND [true, false] AS bools\nRETURN bools\nORDER BY bools DESC",
+      "expect_columns": [
+        "bools"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ],
+        [
+          "false"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[3] ORDER BY should order strings in the expected order",
+      "description": "[3] ORDER BY should order strings in the expected order",
+      "setup": [],
+      "query": "UNWIND ['.*', '', ' ', 'one'] AS strings\nRETURN strings\nORDER BY strings",
+      "expect_columns": [
+        "strings"
+      ],
+      "expect_rows": [
+        [
+          "''"
+        ],
+        [
+          "' '"
+        ],
+        [
+          "'.*'"
+        ],
+        [
+          "'one'"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[4] ORDER BY DESC should order strings in the expected order",
+      "description": "[4] ORDER BY DESC should order strings in the expected order",
+      "setup": [],
+      "query": "UNWIND ['.*', '', ' ', 'one'] AS strings\nRETURN strings\nORDER BY strings DESC",
+      "expect_columns": [
+        "strings"
+      ],
+      "expect_rows": [
+        [
+          "'one'"
+        ],
+        [
+          "'.*'"
+        ],
+        [
+          "' '"
+        ],
+        [
+          "''"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[5] ORDER BY should order ints in the expected order",
+      "description": "[5] ORDER BY should order ints in the expected order",
+      "setup": [],
+      "query": "UNWIND [1, 3, 2] AS ints\nRETURN ints\nORDER BY ints",
+      "expect_columns": [
+        "ints"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ],
+        [
+          "2"
+        ],
+        [
+          "3"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[6] ORDER BY DESC should order ints in the expected order",
+      "description": "[6] ORDER BY DESC should order ints in the expected order",
+      "setup": [],
+      "query": "UNWIND [1, 3, 2] AS ints\nRETURN ints\nORDER BY ints DESC",
+      "expect_columns": [
+        "ints"
+      ],
+      "expect_rows": [
+        [
+          "3"
+        ],
+        [
+          "2"
+        ],
+        [
+          "1"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[7] ORDER BY should order floats in the expected order",
+      "description": "[7] ORDER BY should order floats in the expected order",
+      "setup": [],
+      "query": "UNWIND [1.5, 1.3, 999.99] AS floats\nRETURN floats\nORDER BY floats",
+      "expect_columns": [
+        "floats"
+      ],
+      "expect_rows": [
+        [
+          "1.3"
+        ],
+        [
+          "1.5"
+        ],
+        [
+          "999.99"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[8] ORDER BY DESC should order floats in the expected order",
+      "description": "[8] ORDER BY DESC should order floats in the expected order",
+      "setup": [],
+      "query": "UNWIND [1.5, 1.3, 999.99] AS floats\nRETURN floats\nORDER BY floats DESC",
+      "expect_columns": [
+        "floats"
+      ],
+      "expect_rows": [
+        [
+          "999.99"
+        ],
+        [
+          "1.5"
+        ],
+        [
+          "1.3"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[9] ORDER BY should order lists in the expected order",
+      "description": "[9] ORDER BY should order lists in the expected order",
+      "setup": [],
+      "query": "UNWIND [[], ['a'], ['a', 1], [1], [1, 'a'], [1, null], [null, 1], [null, 2]] AS lists\nRETURN lists\nORDER BY lists",
+      "expect_columns": [
+        "lists"
+      ],
+      "expect_rows": [
+        [
+          "[]"
+        ],
+        [
+          "['a']"
+        ],
+        [
+          "['a', 1]"
+        ],
+        [
+          "[1]"
+        ],
+        [
+          "[1, 'a']"
+        ],
+        [
+          "[1, null]"
+        ],
+        [
+          "[null, 1]"
+        ],
+        [
+          "[null, 2]"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[10] ORDER BY DESC should order lists in the expected order",
+      "description": "[10] ORDER BY DESC should order lists in the expected order",
+      "setup": [],
+      "query": "UNWIND [[], ['a'], ['a', 1], [1], [1, 'a'], [1, null], [null, 1], [null, 2]] AS lists\nRETURN lists\nORDER BY lists DESC",
+      "expect_columns": [
+        "lists"
+      ],
+      "expect_rows": [
+        [
+          "[null, 2]"
+        ],
+        [
+          "[null, 1]"
+        ],
+        [
+          "[1, null]"
+        ],
+        [
+          "[1, 'a']"
+        ],
+        [
+          "[1]"
+        ],
+        [
+          "['a', 1]"
+        ],
+        [
+          "['a']"
+        ],
+        [
+          "[]"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[11] ORDER BY should order distinct types in the expected order",
+      "description": "[11] ORDER BY should order distinct types in the expected order",
+      "setup": [
+        "CREATE (:N)-[:REL]->()"
+      ],
+      "query": "MATCH p = (n:N)-[r:REL]->()\nUNWIND [n, r, p, 1.5, ['list'], 'text', null, false, 0.0 / 0.0, {a: 'map'}] AS types\nRETURN types\nORDER BY types",
+      "expect_columns": [
+        "types"
+      ],
+      "expect_rows": [
+        [
+          "{a: 'map'}"
+        ],
+        [
+          "(:N)"
+        ],
+        [
+          "[:REL]"
+        ],
+        [
+          "['list']"
+        ],
+        [
+          "<(:N)-[:REL]->()>"
+        ],
+        [
+          "'text'"
+        ],
+        [
+          "false"
+        ],
+        [
+          "1.5"
+        ],
+        [
+          "NaN"
+        ],
+        [
+          "null"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[12] ORDER BY DESC should order distinct types in the expected order",
+      "description": "[12] ORDER BY DESC should order distinct types in the expected order",
+      "setup": [
+        "CREATE (:N)-[:REL]->()"
+      ],
+      "query": "MATCH p = (n:N)-[r:REL]->()\nUNWIND [n, r, p, 1.5, ['list'], 'text', null, false, 0.0 / 0.0, {a: 'map'}] AS types\nRETURN types\nORDER BY types DESC",
+      "expect_columns": [
+        "types"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ],
+        [
+          "NaN"
+        ],
+        [
+          "1.5"
+        ],
+        [
+          "false"
+        ],
+        [
+          "'text'"
+        ],
+        [
+          "<(:N)-[:REL]->()>"
+        ],
+        [
+          "['list']"
+        ],
+        [
+          "[:REL]"
+        ],
+        [
+          "(:N)"
+        ],
+        [
+          "{a: 'map'}"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

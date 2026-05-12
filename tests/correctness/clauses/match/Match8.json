@@ -1,0 +1,87 @@
+{
+  "source": "clauses/match/Match8.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Match8 - Match clause interoperation with other clauses",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Match8 - Match clause interoperation with other clauses-[1] Pattern independent of bound variables results in cross product",
+      "description": "[1] Pattern independent of bound variables results in cross product",
+      "setup": [
+        "CREATE (:A), (:B)"
+      ],
+      "query": "MATCH (a)\nWITH a\nMATCH (b)\nRETURN a, b",
+      "expect_columns": [
+        "a",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:A)"
+        ],
+        [
+          "(:A)",
+          "(:B)"
+        ],
+        [
+          "(:B)",
+          "(:A)"
+        ],
+        [
+          "(:B)",
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match8 - Match clause interoperation with other clauses-[2] Counting rows after MATCH, MERGE, OPTIONAL MATCH",
+      "description": "[2] Counting rows after MATCH, MERGE, OPTIONAL MATCH",
+      "setup": [
+        "CREATE (a:A), (b:B)",
+        "CREATE (a)-[:T1]->(b), (b)-[:T2]->(a)"
+      ],
+      "query": "MATCH (a)\nMERGE (b)\nWITH *\nOPTIONAL MATCH (a)--(b)\nRETURN count(*)",
+      "expect_columns": [
+        "count(*)"
+      ],
+      "expect_rows": [
+        [
+          "6"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "MERGE",
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match8 - Match clause interoperation with other clauses-[3] Matching and disregarding output, then matching again",
+      "description": "[3] Matching and disregarding output, then matching again",
+      "setup": [
+        "CREATE (andres {name: 'Andres'}), (michael {name: 'Michael'}), (peter {name: 'Peter'}), (bread {type: 'Bread'}), (veggies {type: 'Veggies'}), (meat {type: 'Meat'})",
+        "CREATE (andres)-[:ATE {times: 10}]->(bread), (andres)-[:ATE {times: 8}]->(veggies), (michael)-[:ATE {times: 4}]->(veggies), (michael)-[:ATE {times: 6}]->(bread), (michael)-[:ATE {times: 9}]->(meat), (peter)-[:ATE {times: 7}]->(veggies), (peter)-[:ATE {times: 7}]->(bread), (peter)-[:ATE {times: 4}]->(meat)"
+      ],
+      "query": "MATCH ()-->()\nWITH 1 AS x\nMATCH ()-[r1]->()<--()\nRETURN sum(r1.times)",
+      "expect_columns": [
+        "sum(r1.times)"
+      ],
+      "expect_rows": [
+        [
+          "776"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

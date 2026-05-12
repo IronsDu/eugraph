@@ -1,0 +1,7 @@
+{
+  "source": "expressions/mathematical/Mathematical10.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical10 - Random numbers",
+  "capability": "partial",
+  "scenarios": []
+}

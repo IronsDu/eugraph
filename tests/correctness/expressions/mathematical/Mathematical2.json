@@ -1,0 +1,28 @@
+{
+  "source": "expressions/mathematical/Mathematical2.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical2 - Addition",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Mathematical2 - Addition-[1] Allow addition",
+      "description": "[1] Allow addition",
+      "setup": [
+        "CREATE ({id: 1337, version: 99})"
+      ],
+      "query": "MATCH (a)\nWHERE a.id = 1337\nRETURN a.version + 5",
+      "expect_columns": [
+        "a.version + 5"
+      ],
+      "expect_rows": [
+        [
+          "104"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

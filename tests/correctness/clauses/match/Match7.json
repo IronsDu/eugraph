@@ -1,0 +1,780 @@
+{
+  "source": "clauses/match/Match7.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Match7 - Optional match",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Match7 - Optional match-[1] Simple OPTIONAL MATCH on empty graph",
+      "description": "[1] Simple OPTIONAL MATCH on empty graph",
+      "setup": [],
+      "query": "OPTIONAL MATCH (n)\nRETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[2] OPTIONAL MATCH with previously bound nodes",
+      "description": "[2] OPTIONAL MATCH with previously bound nodes",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH (n)\nOPTIONAL MATCH (n)-[:NOT_EXIST]->(x)\nRETURN n, x",
+      "expect_columns": [
+        "n",
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "()",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[3] OPTIONAL MATCH and bound nodes",
+      "description": "[3] OPTIONAL MATCH and bound nodes",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:A), (b:C)\nOPTIONAL MATCH (x)-->(b)\nRETURN x",
+      "expect_columns": [
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "(:A {num: 42})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[4] Optionally matching relationship with bound nodes in reverse direction",
+      "description": "[4] Optionally matching relationship with bound nodes in reverse direction",
+      "setup": [
+        "CREATE (:A)-[:T]->(:B)"
+      ],
+      "query": "MATCH (a1)-[r]->()\nWITH r, a1\n  LIMIT 1\nOPTIONAL MATCH (a1)<-[r]-(b2)\nRETURN a1, r, b2",
+      "expect_columns": [
+        "a1",
+        "r",
+        "b2"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:T]",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "LIMIT",
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[5] Optionally matching relationship with a relationship that is already bound",
+      "description": "[5] Optionally matching relationship with a relationship that is already bound",
+      "setup": [
+        "CREATE (:A)-[:T]->(:B)"
+      ],
+      "query": "MATCH ()-[r]->()\nWITH r\n  LIMIT 1\nOPTIONAL MATCH (a2)-[r]->(b2)\nRETURN a2, r, b2",
+      "expect_columns": [
+        "a2",
+        "r",
+        "b2"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:T]",
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "LIMIT",
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[6] Optionally matching relationship with a relationship and node that are both already bound",
+      "description": "[6] Optionally matching relationship with a relationship and node that are both already bound",
+      "setup": [
+        "CREATE (:A)-[:T]->(:B)"
+      ],
+      "query": "MATCH (a1)-[r]->()\nWITH r, a1\n  LIMIT 1\nOPTIONAL MATCH (a1)-[r]->(b2)\nRETURN a1, r, b2",
+      "expect_columns": [
+        "a1",
+        "r",
+        "b2"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:T]",
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "LIMIT",
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[7] MATCH with OPTIONAL MATCH in longer pattern",
+      "description": "[7] MATCH with OPTIONAL MATCH in longer pattern",
+      "setup": [
+        "CREATE (a {name: 'A'}), (b {name: 'B'}), (c {name: 'C'})",
+        "CREATE (a)-[:KNOWS]->(b), (b)-[:KNOWS]->(c)"
+      ],
+      "query": "MATCH (a {name: 'A'})\nOPTIONAL MATCH (a)-[:KNOWS]->()-[:KNOWS]->(foo)\nRETURN foo",
+      "expect_columns": [
+        "foo"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'C'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[8] Longer pattern with bound nodes without matches",
+      "description": "[8] Longer pattern with bound nodes without matches",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:A), (c:C)\nOPTIONAL MATCH (a)-->(b)-->(c)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[9] Longer pattern with bound nodes",
+      "description": "[9] Longer pattern with bound nodes",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:Single), (c:C)\nOPTIONAL MATCH (a)-->(b)-->(c)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:A {num: 42})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[10] Optionally matching from null nodes should return null",
+      "description": "[10] Optionally matching from null nodes should return null",
+      "setup": [],
+      "query": "OPTIONAL MATCH (a)\nWITH a\nOPTIONAL MATCH (a)-->(b)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[11] Return two subgraphs with bound undirected relationship and optional relationship",
+      "description": "[11] Return two subgraphs with bound undirected relationship and optional relationship",
+      "setup": [
+        "CREATE (a:A {num: 1})-[:REL {name: 'r1'}]->(b:B {num: 2})-[:REL {name: 'r2'}]->(c:C {num: 3})"
+      ],
+      "query": "MATCH (a)-[r {name: 'r1'}]-(b)\nOPTIONAL MATCH (b)-[r2]-(c)\nWHERE r <> r2\nRETURN a, b, c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "(:A {num: 1})",
+          "(:B {num: 2})",
+          "(:C {num: 3})"
+        ],
+        [
+          "(:B {num: 2})",
+          "(:A {num: 1})",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[12] Variable length optional relationships",
+      "description": "[12] Variable length optional relationships",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:Single)\nOPTIONAL MATCH (a)-[*]->(b)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:A {num: 42})"
+        ],
+        [
+          "(:B {num: 46})"
+        ],
+        [
+          "(:B {num: 46})"
+        ],
+        [
+          "(:C)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[13] Variable length optional relationships with bound nodes",
+      "description": "[13] Variable length optional relationships with bound nodes",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:Single), (x:C)\nOPTIONAL MATCH (a)-[*]->(x)\nRETURN x",
+      "expect_columns": [
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "(:C)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[14] Variable length optional relationships with length predicates",
+      "description": "[14] Variable length optional relationships with length predicates",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:Single)\nOPTIONAL MATCH (a)-[*3..]-(b)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[15] Variable length patterns and nulls",
+      "description": "[15] Variable length patterns and nulls",
+      "setup": [
+        "CREATE (a:A), (b:B)"
+      ],
+      "query": "MATCH (a:A)\nOPTIONAL MATCH (a)-[:FOO]->(b:B)\nOPTIONAL MATCH (b)<-[:BAR*]-(c:B)\nRETURN a, b, c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "null",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[16] Optionally matching named paths - null result",
+      "description": "[16] Optionally matching named paths - null result",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:A)\nOPTIONAL MATCH p = (a)-[:X]->(b)\nRETURN p",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[17] Optionally matching named paths - existing result",
+      "description": "[17] Optionally matching named paths - existing result",
+      "setup": [
+        "CREATE (a {name: 'A'}), (b {name: 'B'}), (c {name: 'C'})",
+        "CREATE (a)-[:X]->(b)"
+      ],
+      "query": "MATCH (a {name: 'A'}), (x)\nWHERE x.name IN ['B', 'C']\nOPTIONAL MATCH p = (a)-->(x)\nRETURN x, p",
+      "expect_columns": [
+        "x",
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'B'})",
+          "<({name: 'A'})-[:X]->({name: 'B'})>"
+        ],
+        [
+          "({name: 'C'})",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[18] Named paths inside optional matches with node predicates",
+      "description": "[18] Named paths inside optional matches with node predicates",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:A), (b:B)\nOPTIONAL MATCH p = (a)-[:X]->(b)\nRETURN p",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[19] Optionally matching named paths with single and variable length patterns",
+      "description": "[19] Optionally matching named paths with single and variable length patterns",
+      "setup": [
+        "CREATE (a {name: 'A'}), (b {name: 'B'})",
+        "CREATE (a)-[:X]->(b)"
+      ],
+      "query": "MATCH (a {name: 'A'})\nOPTIONAL MATCH p = (a)-->(b)-[*]->(c)\nRETURN p",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[20] Variable length optional relationships with bound nodes, no matches",
+      "description": "[20] Variable length optional relationships with bound nodes, no matches",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:A), (b:B)\nOPTIONAL MATCH p = (a)-[*]->(b)\nRETURN p",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[21] Handling optional matches between nulls",
+      "description": "[21] Handling optional matches between nulls",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "OPTIONAL MATCH (a:NotThere)\nOPTIONAL MATCH (b:NotThere)\nWITH a, b\nOPTIONAL MATCH (b)-[r:NOR_THIS]->(a)\nRETURN a, b, r",
+      "expect_columns": [
+        "a",
+        "b",
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "null",
+          "null",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[22] MATCH after OPTIONAL MATCH",
+      "description": "[22] MATCH after OPTIONAL MATCH",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:Single)\nOPTIONAL MATCH (a)-->(b:NonExistent)\nOPTIONAL MATCH (a)-->(c:NonExistent)\nWITH coalesce(b, c) AS x\nMATCH (x)-->(d)\nRETURN d",
+      "expect_columns": [
+        "d"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH",
+        "coalesce"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[23] OPTIONAL MATCH with labels on the optional end node",
+      "description": "[23] OPTIONAL MATCH with labels on the optional end node",
+      "setup": [
+        "CREATE (:X), (x:X), (y1:Y), (y2:Y:Z)",
+        "CREATE (x)-[:REL]->(y1), (x)-[:REL]->(y2)"
+      ],
+      "query": "MATCH (a:X)\nOPTIONAL MATCH (a)-->(b:Y)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ],
+        [
+          "(:Y)"
+        ],
+        [
+          "(:Y:Z)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[24] Optionally matching self-loops",
+      "description": "[24] Optionally matching self-loops",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:B)\nOPTIONAL MATCH (a)-[r]-(a)\nRETURN r",
+      "expect_columns": [
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "[:LOOP]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[25] Optionally matching self-loops without matches",
+      "description": "[25] Optionally matching self-loops without matches",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a)\nWHERE NOT (a:B)\nOPTIONAL MATCH (a)-[r]->(a)\nRETURN r",
+      "expect_columns": [
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ],
+        [
+          "null"
+        ],
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[26] Handling correlated optional matches; first does not match implies second does not match",
+      "description": "[26] Handling correlated optional matches; first does not match implies second does not match",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (a:A), (b:B)\nOPTIONAL MATCH (a)-->(x)\nOPTIONAL MATCH (x)-[r]->(b)\nRETURN x, r",
+      "expect_columns": [
+        "x",
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "(:C)",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[27] Handling optional matches between optionally matched entities",
+      "description": "[27] Handling optional matches between optionally matched entities",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "OPTIONAL MATCH (a:NotThere)\nWITH a\nMATCH (b:B)\nWITH a, b\nOPTIONAL MATCH (b)-[r:NOR_THIS]->(a)\nRETURN a, b, r",
+      "expect_columns": [
+        "a",
+        "b",
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "null",
+          "(:B {num: 46})",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[28] Handling optional matches with inline label predicate",
+      "description": "[28] Handling optional matches with inline label predicate",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (n:Single)\nOPTIONAL MATCH (n)-[r]-(m:NonExistent)\nRETURN r",
+      "expect_columns": [
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[29] Satisfies the open world assumption, relationships between same nodes",
+      "description": "[29] Satisfies the open world assumption, relationships between same nodes",
+      "setup": [
+        "CREATE (a:Player), (b:Team)",
+        "CREATE (a)-[:PLAYS_FOR]->(b), (a)-[:SUPPORTS]->(b)"
+      ],
+      "query": "MATCH (p:Player)-[:PLAYS_FOR]->(team:Team)\nOPTIONAL MATCH (p)-[s:SUPPORTS]->(team)\nRETURN count(*) AS matches, s IS NULL AS optMatch",
+      "expect_columns": [
+        "matches",
+        "optMatch"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[30] Satisfies the open world assumption, single relationship",
+      "description": "[30] Satisfies the open world assumption, single relationship",
+      "setup": [
+        "CREATE (a:Player), (b:Team)",
+        "CREATE (a)-[:PLAYS_FOR]->(b)"
+      ],
+      "query": "MATCH (p:Player)-[:PLAYS_FOR]->(team:Team)\nOPTIONAL MATCH (p)-[s:SUPPORTS]->(team)\nRETURN count(*) AS matches, s IS NULL AS optMatch",
+      "expect_columns": [
+        "matches",
+        "optMatch"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match7 - Optional match-[31] Satisfies the open world assumption, relationships between different nodes",
+      "description": "[31] Satisfies the open world assumption, relationships between different nodes",
+      "setup": [
+        "CREATE (a:Player), (b:Team), (c:Team)",
+        "CREATE (a)-[:PLAYS_FOR]->(b), (a)-[:SUPPORTS]->(c)"
+      ],
+      "query": "MATCH (p:Player)-[:PLAYS_FOR]->(team:Team)\nOPTIONAL MATCH (p)-[s:SUPPORTS]->(team)\nRETURN count(*) AS matches, s IS NULL AS optMatch",
+      "expect_columns": [
+        "matches",
+        "optMatch"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "source": "expressions/mathematical/Mathematical6.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical6 - Modulo division",
+  "capability": "partial",
+  "scenarios": []
+}

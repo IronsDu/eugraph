@@ -1,0 +1,129 @@
+{
+  "source": "clauses/return/Return5.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Return5 - Implicit grouping with distinct",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Return5 - Implicit grouping with distinct-[1] DISTINCT inside aggregation should work with lists in maps",
+      "description": "[1] DISTINCT inside aggregation should work with lists in maps",
+      "setup": [
+        "CREATE ({list: ['A', 'B']}), ({list: ['A', 'B']})"
+      ],
+      "query": "MATCH (n)\nRETURN count(DISTINCT {name: n.list}) AS count",
+      "expect_columns": [
+        "count"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return5 - Implicit grouping with distinct-[2] DISTINCT on nullable values",
+      "description": "[2] DISTINCT on nullable values",
+      "setup": [
+        "CREATE ({name: 'Florescu'}), (), ()"
+      ],
+      "query": "MATCH (n)\nRETURN DISTINCT n.name",
+      "expect_columns": [
+        "n.name"
+      ],
+      "expect_rows": [
+        [
+          "'Florescu'"
+        ],
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return5 - Implicit grouping with distinct-[3] DISTINCT inside aggregation should work with nested lists in maps",
+      "description": "[3] DISTINCT inside aggregation should work with nested lists in maps",
+      "setup": [
+        "CREATE ({list: ['A', 'B']}), ({list: ['A', 'B']})"
+      ],
+      "query": "MATCH (n)\nRETURN count(DISTINCT {name: [[n.list, n.list], [n.list, n.list]]}) AS count",
+      "expect_columns": [
+        "count"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return5 - Implicit grouping with distinct-[4] DISTINCT inside aggregation should work with nested lists of maps in maps",
+      "description": "[4] DISTINCT inside aggregation should work with nested lists of maps in maps",
+      "setup": [
+        "CREATE ({list: ['A', 'B']}), ({list: ['A', 'B']})"
+      ],
+      "query": "MATCH (n)\nRETURN count(DISTINCT {name: [{name2: n.list}, {baz: {apa: n.list}}]}) AS count",
+      "expect_columns": [
+        "count"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return5 - Implicit grouping with distinct-[5] Aggregate on list values",
+      "description": "[5] Aggregate on list values",
+      "setup": [
+        "CREATE ({color: ['red']})",
+        "CREATE ({color: ['blue']})",
+        "CREATE ({color: ['red']})"
+      ],
+      "query": "MATCH (a)\nRETURN DISTINCT a.color, count(*)",
+      "expect_columns": [
+        "a.color",
+        "count(*)"
+      ],
+      "expect_rows": [
+        [
+          "['red']",
+          "2"
+        ],
+        [
+          "['blue']",
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

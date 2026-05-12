@@ -1,0 +1,780 @@
+{
+  "source": "expressions/pattern/Pattern1.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Pattern1 - Pattern predicate",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Pattern1 - Pattern predicate-[1] Matching on any single outgoing directed connection",
+      "description": "[1] Matching on any single outgoing directed connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)-[]->() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ],
+        [
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[2] Matching on a single undirected connection",
+      "description": "[2] Matching on a single undirected connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)-[]-() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ],
+        [
+          "(:B)"
+        ],
+        [
+          "(:C)"
+        ],
+        [
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[3] Matching on any single incoming directed connection",
+      "description": "[3] Matching on any single incoming directed connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)<-[]-() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ],
+        [
+          "(:B)"
+        ],
+        [
+          "(:C)"
+        ],
+        [
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[4] Matching on a specific type of single outgoing directed connection",
+      "description": "[4] Matching on a specific type of single outgoing directed connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)-[:REL1]->() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[5] Matching on a specific type of single undirected connection",
+      "description": "[5] Matching on a specific type of single undirected connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)-[:REL1]-() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ],
+        [
+          "(:B)"
+        ],
+        [
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[6] Matching on a specific type of single incoming directed connection",
+      "description": "[6] Matching on a specific type of single incoming directed connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)<-[:REL1]-() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:B)"
+        ],
+        [
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[7] Matching on a specific type of a variable length outgoing directed connection",
+      "description": "[7] Matching on a specific type of a variable length outgoing directed connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)-[:REL1*]->() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[8] Matching on a specific type of variable length undirected connection",
+      "description": "[8] Matching on a specific type of variable length undirected connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)-[:REL1*]-() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ],
+        [
+          "(:B)"
+        ],
+        [
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[9] Matching on a specific type of variable length incoming directed connection",
+      "description": "[9] Matching on a specific type of variable length incoming directed connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)<-[:REL1*]-() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:B)"
+        ],
+        [
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Matching on a specific type of undirected connection with length 2",
+      "description": "[10] Matching on a specific type of undirected connection with length 2",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)-[:REL1*2]-() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:B)"
+        ],
+        [
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(a)]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(a)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (a) RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r]->(a)]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r]->(a)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (n)-[r]->(a) RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(a)-[r]->(n)]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(a)-[r]->(n)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (a)-[r]->(n) RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)<-[r {}]-(a)]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(n)<-[r {}]-(a)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (n)<-[r {}]-(a) RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r {}]-(a)]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r {}]-(a)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (n)-[r {}]-(a) RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r]->()]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r]->()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (n)-[r]->() RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=()-[r]->(n)]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=()-[r]->(n)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE ()-[r]->(n) RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)<-[r]-()]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(n)<-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (n)<-[r]-() RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r]-()]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (n)-[r]-() RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=()-[r]->()]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=()-[r]->()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE ()-[r]->() RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=()<-[r]-()]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=()<-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE ()<-[r]-() RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=()-[r]-()]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=()-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE ()-[r]-() RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r:REL]->(a {num: 5})]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r:REL]->(a {num: 5})]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (n)-[r:REL]->(a {num: 5}) RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r:REL*0..2]->(a {num: 5})]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r:REL*0..2]->(a {num: 5})]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (n)-[r:REL*0..2]->(a {num: 5}) RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r:REL]->(:C)<-[s:REL]-(a {num: 5})]",
+      "description": "[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r:REL]->(:C)<-[s:REL]-(a {num: 5})]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (n) WHERE (n)-[r:REL]->(:C)<-[s:REL]-(a {num: 5}) RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[11] Fail on checking self pattern",
+      "description": "[11] Fail on checking self pattern",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "MATCH (n) WHERE (n) RETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[12] Matching two nodes on a single directed connection between them",
+      "description": "[12] Matching two nodes on a single directed connection between them",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n), (m) WHERE (n)-[]->(m) RETURN n, m",
+      "expect_columns": [
+        "n",
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:B)"
+        ],
+        [
+          "(:B)",
+          "(:A)"
+        ],
+        [
+          "(:A)",
+          "(:C)"
+        ],
+        [
+          "(:A)",
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[13] Fail on matching two nodes on a single undirected connection between them",
+      "description": "[13] Fail on matching two nodes on a single undirected connection between them",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n), (m) WHERE (n)-[:REL1|REL2|REL3|REL4]-(m) RETURN n, m",
+      "expect_columns": [
+        "n",
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:B)"
+        ],
+        [
+          "(:B)",
+          "(:A)"
+        ],
+        [
+          "(:A)",
+          "(:C)"
+        ],
+        [
+          "(:A)",
+          "(:D)"
+        ],
+        [
+          "(:C)",
+          "(:A)"
+        ],
+        [
+          "(:D)",
+          "(:A)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[14] Matching two nodes on a specific type of single outgoing directed connection",
+      "description": "[14] Matching two nodes on a specific type of single outgoing directed connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n), (m) WHERE (n)-[:REL1]->(m) RETURN n, m",
+      "expect_columns": [
+        "n",
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:B)"
+        ],
+        [
+          "(:A)",
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[15] Matching two nodes on a specific type of single undirected connection",
+      "description": "[15] Matching two nodes on a specific type of single undirected connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n), (m) WHERE (n)-[:REL1]-(m) RETURN n, m",
+      "expect_columns": [
+        "n",
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:B)"
+        ],
+        [
+          "(:B)",
+          "(:A)"
+        ],
+        [
+          "(:A)",
+          "(:D)"
+        ],
+        [
+          "(:D)",
+          "(:A)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[16] Matching two nodes on a specific type of a variable length outgoing directed connection",
+      "description": "[16] Matching two nodes on a specific type of a variable length outgoing directed connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n), (m) WHERE (n)-[:REL1*]->(m) RETURN n, m",
+      "expect_columns": [
+        "n",
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:B)"
+        ],
+        [
+          "(:A)",
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[17] Matching two nodes on a specific type of variable length undirected connection",
+      "description": "[17] Matching two nodes on a specific type of variable length undirected connection",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n), (m) WHERE (n)-[:REL1*]-(m) RETURN n, m",
+      "expect_columns": [
+        "n",
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:B)"
+        ],
+        [
+          "(:A)",
+          "(:D)"
+        ],
+        [
+          "(:B)",
+          "(:A)"
+        ],
+        [
+          "(:B)",
+          "(:D)"
+        ],
+        [
+          "(:D)",
+          "(:A)"
+        ],
+        [
+          "(:D)",
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[18] Matching two nodes on a specific type of undirected connection with length 2",
+      "description": "[18] Matching two nodes on a specific type of undirected connection with length 2",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n), (m) WHERE (n)-[:REL1*2]-(m) RETURN n, m",
+      "expect_columns": [
+        "n",
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "(:D)",
+          "(:B)"
+        ],
+        [
+          "(:B)",
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[19] Using a negated existential pattern predicate",
+      "description": "[19] Using a negated existential pattern predicate",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE NOT (n)-[:REL2]-() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:C)"
+        ],
+        [
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[20] Using two existential pattern predicates in a conjunction",
+      "description": "[20] Using two existential pattern predicates in a conjunction",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)-[:REL1]-() AND (n)-[:REL3]-() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[21] Using two existential pattern predicates in a disjunction",
+      "description": "[21] Using two existential pattern predicates in a disjunction",
+      "setup": [
+        "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)"
+      ],
+      "query": "MATCH (n) WHERE (n)-[:REL1]-() OR (n)-[:REL2]-() RETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ],
+        [
+          "(:B)"
+        ],
+        [
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[22] Fail on using pattern in RETURN projection",
+      "description": "[22] Fail on using pattern in RETURN projection",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "MATCH (n) RETURN (n)-[]->()",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[23] Fail on using pattern in WITH projection",
+      "description": "[23] Fail on using pattern in WITH projection",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "MATCH (n) WITH (n)-[]->() AS x RETURN x",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern1 - Pattern predicate-[24] Fail on using pattern in right-hand side of SET",
+      "description": "[24] Fail on using pattern in right-hand side of SET",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "MATCH (n) SET n.prop = head(nodes(head((n)-[:REL]->()))).foo",
+      "requires": [
+        "SET",
+        "nodes"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

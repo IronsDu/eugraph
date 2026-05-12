@@ -1,0 +1,82 @@
+{
+  "source": "clauses/match-where/MatchWhere3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "MatchWhere3 - Equi-Joins on variables",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "MatchWhere3 - Equi-Joins on variables-[1] Join between node identities",
+      "description": "[1] Join between node identities",
+      "setup": [
+        "CREATE (:A), (:B)"
+      ],
+      "query": "MATCH (a), (b)\nWHERE a = b\nRETURN a, b",
+      "expect_columns": [
+        "a",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:A)"
+        ],
+        [
+          "(:B)",
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere3 - Equi-Joins on variables-[2] Join between node properties of disconnected nodes",
+      "description": "[2] Join between node properties of disconnected nodes",
+      "setup": [
+        "CREATE (:A {id: 1}), (:A {id: 2}), (:B {id: 2}), (:B {id: 3})"
+      ],
+      "query": "MATCH (a:A), (b:B)\nWHERE a.id = b.id\nRETURN a, b",
+      "expect_columns": [
+        "a",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:A {id: 2})",
+          "(:B {id: 2})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere3 - Equi-Joins on variables-[3] Join between node properties of adjacent nodes",
+      "description": "[3] Join between node properties of adjacent nodes",
+      "setup": [
+        "CREATE (a:A {animal: 'monkey'}), (b:B {animal: 'cow'}), (c:C {animal: 'monkey'}), (d:D {animal: 'cow'}), (a)-[:KNOWS]->(b), (a)-[:KNOWS]->(c), (d)-[:KNOWS]->(b), (d)-[:KNOWS]->(c)"
+      ],
+      "query": "MATCH (n)-[rel]->(x)\nWHERE n.animal = x.animal\nRETURN n, x",
+      "expect_columns": [
+        "n",
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "(:A {animal: 'monkey'})",
+          "(:C {animal: 'monkey'})"
+        ],
+        [
+          "(:D {animal: 'cow'})",
+          "(:B {animal: 'cow'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

@@ -1,0 +1,231 @@
+{
+  "source": "clauses/return/Return4.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Return4 - Column renaming",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Return4 - Column renaming-[1] Honour the column name for RETURN items",
+      "description": "[1] Honour the column name for RETURN items",
+      "setup": [
+        "CREATE ({name: 'Someone'})"
+      ],
+      "query": "MATCH (a)\nWITH a.name AS a\nRETURN a",
+      "expect_columns": [
+        "a"
+      ],
+      "expect_rows": [
+        [
+          "'Someone'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return4 - Column renaming-[2] Support column renaming",
+      "description": "[2] Support column renaming",
+      "setup": [
+        "CREATE (:Singleton)"
+      ],
+      "query": "MATCH (a)\nRETURN a AS ColumnName",
+      "expect_columns": [
+        "ColumnName"
+      ],
+      "expect_rows": [
+        [
+          "(:Singleton)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return4 - Column renaming-[3] Aliasing expressions",
+      "description": "[3] Aliasing expressions",
+      "setup": [
+        "CREATE ({id: 42})"
+      ],
+      "query": "MATCH (a)\nRETURN a.id AS a, a.id",
+      "expect_columns": [
+        "a",
+        "a.id"
+      ],
+      "expect_rows": [
+        [
+          "42",
+          "42"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return4 - Column renaming-[4] Keeping used expression 1",
+      "description": "[4] Keeping used expression 1",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH (n)\nRETURN cOuNt( * )",
+      "expect_columns": [
+        "cOuNt( * )"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return4 - Column renaming-[5] Keeping used expression 2",
+      "description": "[5] Keeping used expression 2",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH p = (n)-->(b)\nRETURN nOdEs( p )",
+      "expect_columns": [
+        "nOdEs( p )"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return4 - Column renaming-[6] Keeping used expression 3",
+      "description": "[6] Keeping used expression 3",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH p = (n)-->(b)\nRETURN coUnt( dIstInct p )",
+      "expect_columns": [
+        "coUnt( dIstInct p )"
+      ],
+      "expect_rows": [
+        [
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [
+        "@skipStyleCheck"
+      ],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return4 - Column renaming-[7] Keeping used expression 4",
+      "description": "[7] Keeping used expression 4",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH p = (n)-->(b)\nRETURN aVg(    n.aGe     )",
+      "expect_columns": [
+        "aVg(    n.aGe     )"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return4 - Column renaming-[8] Support column renaming for aggregations",
+      "description": "[8] Support column renaming for aggregations",
+      "setup": [
+        "UNWIND range(0, 10) AS i",
+        "CREATE ()"
+      ],
+      "query": "MATCH ()\nRETURN count(*) AS columnName",
+      "expect_columns": [
+        "columnName"
+      ],
+      "expect_rows": [
+        [
+          "11"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return4 - Column renaming-[9] Handle subexpression in aggregation also occurring as standalone expression with nested aggregation in a literal map",
+      "description": "[9] Handle subexpression in aggregation also occurring as standalone expression with nested aggregation in a literal map",
+      "setup": [
+        "CREATE (:A), (:B {num: 42})"
+      ],
+      "query": "MATCH (a:A), (b:B)\nRETURN coalesce(a.num, b.num) AS foo,\n  b.num AS bar,\n  {name: count(b)} AS baz",
+      "expect_columns": [
+        "foo",
+        "bar",
+        "baz"
+      ],
+      "expect_rows": [
+        [
+          "42",
+          "42",
+          "{name: 1}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "coalesce"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return4 - Column renaming-[10] Fail when returning multiple columns with same name",
+      "description": "[10] Fail when returning multiple columns with same name",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "ColumnNameConflict",
+      "setup": [],
+      "query": "RETURN 1 AS a, 2 AS a",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return4 - Column renaming-[11] Reusing variable names in RETURN",
+      "description": "[11] Reusing variable names in RETURN",
+      "setup": [
+        "CREATE (a:Person), (b:Person), (m:Message {id: 10})",
+        "CREATE (a)-[:LIKE {creationDate: 20160614}]->(m)-[:POSTED_BY]->(b)"
+      ],
+      "query": "MATCH (person:Person)<--(message)<-[like]-(:Person)\nWITH like.creationDate AS likeTime, person AS person\n  ORDER BY likeTime, message.id\nWITH head(collect({likeTime: likeTime})) AS latestLike, person AS person\nRETURN latestLike.likeTime AS likeTime\n  ORDER BY likeTime",
+      "expect_columns": [
+        "likeTime"
+      ],
+      "expect_rows": [
+        [
+          "20160614"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "collect"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

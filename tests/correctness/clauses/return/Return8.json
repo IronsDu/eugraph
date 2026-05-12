@@ -1,0 +1,28 @@
+{
+  "source": "clauses/return/Return8.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Return8 - Return clause interoperation with other clauses",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Return8 - Return clause interoperation with other clauses-[1] Return aggregation after With filtering",
+      "description": "[1] Return aggregation after With filtering",
+      "setup": [
+        "CREATE ({num: 43}), ({num: 42})"
+      ],
+      "query": "MATCH (n)\nWITH n\nWHERE n.num = 42\nRETURN count(*)",
+      "expect_columns": [
+        "count(*)"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

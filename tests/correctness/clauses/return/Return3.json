@@ -1,0 +1,77 @@
+{
+  "source": "clauses/return/Return3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Return3 - Return multiple expressions (if column order correct)",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Return3 - Return multiple expressions (if column order correct)-[1] Returning multiple expressions",
+      "description": "[1] Returning multiple expressions",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH (a)\nRETURN a.id IS NOT NULL AS a, a IS NOT NULL AS b",
+      "expect_columns": [
+        "a",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return3 - Return multiple expressions (if column order correct)-[2] Returning multiple node property values",
+      "description": "[2] Returning multiple node property values",
+      "setup": [
+        "CREATE ({name: 'Philip J. Fry', age: 2046, seasons: [1, 2, 3, 4, 5, 6, 7]})"
+      ],
+      "query": "MATCH (a)\nRETURN a.name, a.age, a.seasons",
+      "expect_columns": [
+        "a.name",
+        "a.age",
+        "a.seasons"
+      ],
+      "expect_rows": [
+        [
+          "'Philip J. Fry'",
+          "2046",
+          "[1, 2, 3, 4, 5, 6, 7]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return3 - Return multiple expressions (if column order correct)-[3] Projecting nodes and relationships",
+      "description": "[3] Projecting nodes and relationships",
+      "setup": [
+        "CREATE (a:A), (b:B)",
+        "CREATE (a)-[:T]->(b)"
+      ],
+      "query": "MATCH (a)-[r]->()\nRETURN a AS foo, r AS bar",
+      "expect_columns": [
+        "foo",
+        "bar"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:T]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

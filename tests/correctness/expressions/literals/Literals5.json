@@ -1,0 +1,461 @@
+{
+  "source": "expressions/literals/Literals5.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Literals5 - Float",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Literals5 - Float-[1] Return a short positive float",
+      "description": "[1] Return a short positive float",
+      "setup": [],
+      "query": "RETURN 1.0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "1.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[2] Return a short positive float without integer digits",
+      "description": "[2] Return a short positive float without integer digits",
+      "setup": [],
+      "query": "RETURN .1 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0.1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[3] Return a long positive float",
+      "description": "[3] Return a long positive float",
+      "setup": [],
+      "query": "RETURN 3985764.3405892687 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "3985764.3405892686"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[4] Return a long positive float without integer digits",
+      "description": "[4] Return a long positive float without integer digits",
+      "setup": [],
+      "query": "RETURN .3405892687 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0.3405892687"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[5] Return a very long positive float",
+      "description": "[5] Return a very long positive float",
+      "setup": [],
+      "query": "RETURN 126354186523812635418263552340512384016094862983471987543918591348961093487896783409268730945879405123840160948812635418265234051238401609486298347198754391859134896109348789678340926873094587962983471812635265234051238401609486298348126354182652340512384016094862983471987543918591348961093487896783409218.0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "1.2635418652381264e305"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[6] Return a very long positive float without integer digits",
+      "description": "[6] Return a very long positive float without integer digits",
+      "setup": [],
+      "query": "RETURN .00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "1e-305"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[7] Return a positive zero float",
+      "description": "[7] Return a positive zero float",
+      "setup": [],
+      "query": "RETURN 0.0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[8] Return a positive zero float without integer digits",
+      "description": "[8] Return a positive zero float without integer digits",
+      "setup": [],
+      "query": "RETURN .0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[9] Return a negative zero float",
+      "description": "[9] Return a negative zero float",
+      "setup": [],
+      "query": "RETURN -0.0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[10] Return a negative zero float without integer digits",
+      "description": "[10] Return a negative zero float without integer digits",
+      "setup": [],
+      "query": "RETURN -.0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[11] Return a very long negative float",
+      "description": "[11] Return a very long negative float",
+      "setup": [],
+      "query": "RETURN -126354186523812635418263552340512384016094862983471987543918591348961093487896783409268730945879405123840160948812635418265234051238401609486298347198754391859134896109348789678340926873094587962983471812635265234051238401609486298348126354182652340512384016094862983471987543918591348961093487896783409218.0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-1.2635418652381264e305"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[12] Return a very long negative float without integer digits",
+      "description": "[12] Return a very long negative float without integer digits",
+      "setup": [],
+      "query": "RETURN -.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-1e-305"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[13] Return a positive float with positive lower case exponent",
+      "description": "[13] Return a positive float with positive lower case exponent",
+      "setup": [],
+      "query": "RETURN 1e9 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "1000000000.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[14] Return a positive float with positive upper case exponent",
+      "description": "[14] Return a positive float with positive upper case exponent",
+      "setup": [],
+      "query": "RETURN 1E9 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "1000000000.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[15] Return a positive float with positive lower case exponent without integer digits",
+      "description": "[15] Return a positive float with positive lower case exponent without integer digits",
+      "setup": [],
+      "query": "RETURN .1e9 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "100000000.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[16] Return a positive float with negative lower case exponent",
+      "description": "[16] Return a positive float with negative lower case exponent",
+      "setup": [],
+      "query": "RETURN 1e-5 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0.00001"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[17] Return a positive float with negative lower case exponent without integer digits",
+      "description": "[17] Return a positive float with negative lower case exponent without integer digits",
+      "setup": [],
+      "query": "RETURN .1e-5 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0.000001"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[18] Return a positive float with negative upper case exponent without integer digits",
+      "description": "[18] Return a positive float with negative upper case exponent without integer digits",
+      "setup": [],
+      "query": "RETURN .1E-5 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0.000001"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[19] Return a negative float in with positive lower case exponent",
+      "description": "[19] Return a negative float in with positive lower case exponent",
+      "setup": [],
+      "query": "RETURN -1e9 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-1000000000.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[20] Return a negative float in with positive upper case exponent",
+      "description": "[20] Return a negative float in with positive upper case exponent",
+      "setup": [],
+      "query": "RETURN -1E9 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-1000000000.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[21] Return a negative float with positive lower case exponent without integer digits",
+      "description": "[21] Return a negative float with positive lower case exponent without integer digits",
+      "setup": [],
+      "query": "RETURN -.1e9 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-100000000.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[22] Return a negative float with negative lower case exponent",
+      "description": "[22] Return a negative float with negative lower case exponent",
+      "setup": [],
+      "query": "RETURN -1e-5 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-0.00001"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[23] Return a negative float with negative lower case exponent without integer digits",
+      "description": "[23] Return a negative float with negative lower case exponent without integer digits",
+      "setup": [],
+      "query": "RETURN -.1e-5 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-0.000001"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[24] Return a negative float with negative upper case exponent without integer digits",
+      "description": "[24] Return a negative float with negative upper case exponent without integer digits",
+      "setup": [],
+      "query": "RETURN -.1E-5 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-0.000001"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[25] Return a positive float with one integer digit and maximum positive exponent",
+      "description": "[25] Return a positive float with one integer digit and maximum positive exponent",
+      "setup": [],
+      "query": "RETURN 1e308 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "1e308"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[26] Return a positive float with nine integer digit and maximum positive exponent",
+      "description": "[26] Return a positive float with nine integer digit and maximum positive exponent",
+      "setup": [],
+      "query": "RETURN 123456789e300 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "1.23456789e308"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals5 - Float-[27] Fail when float value is too large",
+      "description": "[27] Fail when float value is too large",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "FloatingPointOverflow",
+      "setup": [],
+      "query": "RETURN 1.34E999",
+      "requires": [],
+      "tags": []
+    }
+  ]
+}

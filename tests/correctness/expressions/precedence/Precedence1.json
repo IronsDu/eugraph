@@ -1,0 +1,1541 @@
+{
+  "source": "expressions/precedence/Precedence1.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Precedence1 - On boolean values",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Precedence1 - On boolean values-[1] Exclusive disjunction takes precedence over inclusive disjunction",
+      "description": "[1] Exclusive disjunction takes precedence over inclusive disjunction",
+      "setup": [],
+      "query": "RETURN true OR true XOR true AS a,\n       true OR (true XOR true) AS b,\n       (true OR true) XOR true AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "XOR"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[2] Conjunction disjunction takes precedence over exclusive disjunction",
+      "description": "[2] Conjunction disjunction takes precedence over exclusive disjunction",
+      "setup": [],
+      "query": "RETURN true XOR false AND false AS a,\n       true XOR (false AND false) AS b,\n       (true XOR false) AND false AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "XOR"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[3] Conjunction disjunction takes precedence over inclusive disjunction",
+      "description": "[3] Conjunction disjunction takes precedence over inclusive disjunction",
+      "setup": [],
+      "query": "RETURN true OR false AND false AS a,\n       true OR (false AND false) AS b,\n       (true OR false) AND false AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[4] Negation takes precedence over conjunction",
+      "description": "[4] Negation takes precedence over conjunction",
+      "setup": [],
+      "query": "RETURN NOT true AND false AS a,\n       (NOT true) AND false AS b,\n       NOT (true AND false) AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[5] Negation takes precedence over inclusive disjunction",
+      "description": "[5] Negation takes precedence over inclusive disjunction",
+      "setup": [],
+      "query": "RETURN NOT false OR true AS a,\n       (NOT false) OR true AS b,\n       NOT (false OR true) AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[6] Comparison operator takes precedence over boolean negation",
+      "description": "[6] Comparison operator takes precedence over boolean negation",
+      "setup": [],
+      "query": "RETURN NOT false >= false AS a,\n       NOT (false >= false) AS b,\n       (NOT false) >= false AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[7] Comparison operator takes precedence over binary boolean operator",
+      "description": "[7] Comparison operator takes precedence over binary boolean operator",
+      "setup": [],
+      "query": "RETURN true OR false = false AS a,\n       true OR (false = false) AS b,\n       (true OR false) = false AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[8] Null predicate takes precedence over comparison operator",
+      "description": "[8] Null predicate takes precedence over comparison operator",
+      "setup": [],
+      "query": "RETURN false = true IS NULL AS a,\n       false = (true IS NULL) AS b,\n       (false = true) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[9] Null predicate takes precedence over negation",
+      "description": "[9] Null predicate takes precedence over negation",
+      "setup": [],
+      "query": "RETURN NOT false IS NULL AS a,\n       NOT (false IS NULL) AS b,\n       (NOT false) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[10] Null predicate takes precedence over boolean operator",
+      "description": "[10] Null predicate takes precedence over boolean operator",
+      "setup": [],
+      "query": "RETURN true OR false IS NULL AS a,\n       true OR (false IS NULL) AS b,\n       (true OR false) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[11] List predicate takes precedence over comparison operator",
+      "description": "[11] List predicate takes precedence over comparison operator",
+      "setup": [],
+      "query": "RETURN false = true IN [true, false] AS a,\n       false = (true IN [true, false]) AS b,\n       (false = true) IN [true, false] AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[12] List predicate takes precedence over negation",
+      "description": "[12] List predicate takes precedence over negation",
+      "setup": [],
+      "query": "RETURN NOT true IN [true, false] AS a,\n       NOT (true IN [true, false]) AS b,\n       (NOT true) IN [true, false] AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[13] List predicate takes precedence over boolean operator",
+      "description": "[13] List predicate takes precedence over boolean operator",
+      "setup": [],
+      "query": "RETURN false AND true IN [true, false] AS a,\n       false AND (true IN [true, false]) AS b,\n       (false AND true) IN [true, false] AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[14] Exclusive disjunction takes precedence over inclusive disjunction in every combination of truth values",
+      "description": "[14] Exclusive disjunction takes precedence over inclusive disjunction in every combination of truth values",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a OR b XOR c) = (a OR (b XOR c))) AS eq,\n     collect((a OR b XOR c) <> ((a OR b) XOR c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[15] Conjunction takes precedence over exclusive disjunction in every combination of truth values",
+      "description": "[15] Conjunction takes precedence over exclusive disjunction in every combination of truth values",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a XOR b AND c) = (a XOR (b AND c))) AS eq,\n     collect((a XOR b AND c) <> ((a XOR b) AND c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[16] Conjunction takes precedence over inclusive disjunction in every combination of truth values",
+      "description": "[16] Conjunction takes precedence over inclusive disjunction in every combination of truth values",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a OR b AND c) = (a OR (b AND c))) AS eq,\n     collect((a OR b AND c) <> ((a OR b) AND c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[17] Negation takes precedence over conjunction in every combination of truth values",
+      "description": "[17] Negation takes precedence over conjunction in every combination of truth values",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((NOT a AND b) = ((NOT a) AND b)) AS eq,\n     collect((NOT a AND b) <> (NOT (a AND b))) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[18] Negation takes precedence over inclusive disjunction in every combination of truth values",
+      "description": "[18] Negation takes precedence over inclusive disjunction in every combination of truth values",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((NOT a OR b) = ((NOT a) OR b)) AS eq,\n     collect((NOT a OR b) <> (NOT (a OR b))) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[19] Comparison operators takes precedence over boolean negation in every combination of truth values [comp=<=]",
+      "description": "[19] Comparison operators takes precedence over boolean negation in every combination of truth values [comp=<=]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((NOT a <= b) = (NOT (a <= b))) AS eq,\n     collect((NOT a <= b) <> ((NOT a) <= b)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[19] Comparison operators takes precedence over boolean negation in every combination of truth values [comp=>=]",
+      "description": "[19] Comparison operators takes precedence over boolean negation in every combination of truth values [comp=>=]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((NOT a >= b) = (NOT (a >= b))) AS eq,\n     collect((NOT a >= b) <> ((NOT a) >= b)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[19] Comparison operators takes precedence over boolean negation in every combination of truth values [comp=<]",
+      "description": "[19] Comparison operators takes precedence over boolean negation in every combination of truth values [comp=<]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((NOT a < b) = (NOT (a < b))) AS eq,\n     collect((NOT a < b) <> ((NOT a) < b)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[19] Comparison operators takes precedence over boolean negation in every combination of truth values [comp=>]",
+      "description": "[19] Comparison operators takes precedence over boolean negation in every combination of truth values [comp=>]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((NOT a > b) = (NOT (a > b))) AS eq,\n     collect((NOT a > b) <> ((NOT a) > b)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[20] Pairs of comparison operators and boolean negation that are associative in every combination of truth values [comp==]",
+      "description": "[20] Pairs of comparison operators and boolean negation that are associative in every combination of truth values [comp==]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((NOT (a = b)) = ((NOT a) = b)) AS eq\nRETURN all(x IN eq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[20] Pairs of comparison operators and boolean negation that are associative in every combination of truth values [comp=<>]",
+      "description": "[20] Pairs of comparison operators and boolean negation that are associative in every combination of truth values [comp=<>]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((NOT (a <> b)) = ((NOT a) <> b)) AS eq\nRETURN all(x IN eq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred==, boolop=OR]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred==, boolop=OR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a OR b = c) = (a OR (b = c))) AS eq,\n     collect((a OR b = c) <> ((a OR b) = c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred==, boolop=AND]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred==, boolop=AND]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a AND b = c) = (a AND (b = c))) AS eq,\n     collect((a AND b = c) <> ((a AND b) = c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<=, boolop=OR]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<=, boolop=OR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a OR b <= c) = (a OR (b <= c))) AS eq,\n     collect((a OR b <= c) <> ((a OR b) <= c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<=, boolop=XOR]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<=, boolop=XOR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a XOR b <= c) = (a XOR (b <= c))) AS eq,\n     collect((a XOR b <= c) <> ((a XOR b) <= c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<=, boolop=AND]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<=, boolop=AND]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a AND b <= c) = (a AND (b <= c))) AS eq,\n     collect((a AND b <= c) <> ((a AND b) <= c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=>=, boolop=XOR]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=>=, boolop=XOR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a XOR b >= c) = (a XOR (b >= c))) AS eq,\n     collect((a XOR b >= c) <> ((a XOR b) >= c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=>=, boolop=AND]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=>=, boolop=AND]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a AND b >= c) = (a AND (b >= c))) AS eq,\n     collect((a AND b >= c) <> ((a AND b) >= c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<, boolop=OR]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<, boolop=OR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a OR b < c) = (a OR (b < c))) AS eq,\n     collect((a OR b < c) <> ((a OR b) < c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<, boolop=XOR]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<, boolop=XOR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a XOR b < c) = (a XOR (b < c))) AS eq,\n     collect((a XOR b < c) <> ((a XOR b) < c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<, boolop=AND]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<, boolop=AND]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a AND b < c) = (a AND (b < c))) AS eq,\n     collect((a AND b < c) <> ((a AND b) < c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=>, boolop=OR]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=>, boolop=OR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a OR b > c) = (a OR (b > c))) AS eq,\n     collect((a OR b > c) <> ((a OR b) > c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=>, boolop=XOR]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=>, boolop=XOR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a XOR b > c) = (a XOR (b > c))) AS eq,\n     collect((a XOR b > c) <> ((a XOR b) > c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<>, boolop=OR]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<>, boolop=OR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a OR b <> c) = (a OR (b <> c))) AS eq,\n     collect((a OR b <> c) <> ((a OR b) <> c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<>, boolop=AND]",
+      "description": "[21] Comparison operators take precedence over binary boolean operators in every combination of truth values [pred=<>, boolop=AND]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a AND b <> c) = (a AND (b <> c))) AS eq,\n     collect((a AND b <> c) <> ((a AND b) <> c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[22] Pairs of comparison operators and binary boolean operators that are associative in every combination of truth values [pred==, boolop=XOR]",
+      "description": "[22] Pairs of comparison operators and binary boolean operators that are associative in every combination of truth values [pred==, boolop=XOR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a XOR (b = c)) = ((a XOR b) = c)) AS eq\nRETURN all(x IN eq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[22] Pairs of comparison operators and binary boolean operators that are associative in every combination of truth values [pred=>=, boolop=OR]",
+      "description": "[22] Pairs of comparison operators and binary boolean operators that are associative in every combination of truth values [pred=>=, boolop=OR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a OR (b >= c)) = ((a OR b) >= c)) AS eq\nRETURN all(x IN eq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[22] Pairs of comparison operators and binary boolean operators that are associative in every combination of truth values [pred=>, boolop=AND]",
+      "description": "[22] Pairs of comparison operators and binary boolean operators that are associative in every combination of truth values [pred=>, boolop=AND]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a AND (b > c)) = ((a AND b) > c)) AS eq\nRETURN all(x IN eq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[22] Pairs of comparison operators and binary boolean operators that are associative in every combination of truth values [pred=<>, boolop=XOR]",
+      "description": "[22] Pairs of comparison operators and binary boolean operators that are associative in every combination of truth values [pred=<>, boolop=XOR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [true, false, null] AS c\nWITH collect((a XOR (b <> c)) = ((a XOR b) <> c)) AS eq\nRETURN all(x IN eq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp==, nullpred=IS NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp==, nullpred=IS NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a = b IS NULL) = (a = (b IS NULL))) AS eq,\n     collect((a = b IS NULL) <> ((a = b) IS NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp==, nullpred=IS NOT NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp==, nullpred=IS NOT NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a = b IS NOT NULL) = (a = (b IS NOT NULL))) AS eq,\n     collect((a = b IS NOT NULL) <> ((a = b) IS NOT NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<=, nullpred=IS NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<=, nullpred=IS NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a <= b IS NULL) = (a <= (b IS NULL))) AS eq,\n     collect((a <= b IS NULL) <> ((a <= b) IS NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<=, nullpred=IS NOT NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<=, nullpred=IS NOT NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a <= b IS NOT NULL) = (a <= (b IS NOT NULL))) AS eq,\n     collect((a <= b IS NOT NULL) <> ((a <= b) IS NOT NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=>=, nullpred=IS NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=>=, nullpred=IS NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a >= b IS NULL) = (a >= (b IS NULL))) AS eq,\n     collect((a >= b IS NULL) <> ((a >= b) IS NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=>=, nullpred=IS NOT NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=>=, nullpred=IS NOT NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a >= b IS NOT NULL) = (a >= (b IS NOT NULL))) AS eq,\n     collect((a >= b IS NOT NULL) <> ((a >= b) IS NOT NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<, nullpred=IS NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<, nullpred=IS NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a < b IS NULL) = (a < (b IS NULL))) AS eq,\n     collect((a < b IS NULL) <> ((a < b) IS NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<, nullpred=IS NOT NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<, nullpred=IS NOT NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a < b IS NOT NULL) = (a < (b IS NOT NULL))) AS eq,\n     collect((a < b IS NOT NULL) <> ((a < b) IS NOT NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=>, nullpred=IS NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=>, nullpred=IS NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a > b IS NULL) = (a > (b IS NULL))) AS eq,\n     collect((a > b IS NULL) <> ((a > b) IS NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=>, nullpred=IS NOT NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=>, nullpred=IS NOT NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a > b IS NOT NULL) = (a > (b IS NOT NULL))) AS eq,\n     collect((a > b IS NOT NULL) <> ((a > b) IS NOT NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<>, nullpred=IS NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<>, nullpred=IS NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a <> b IS NULL) = (a <> (b IS NULL))) AS eq,\n     collect((a <> b IS NULL) <> ((a <> b) IS NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<>, nullpred=IS NOT NULL]",
+      "description": "[23] Null predicates take precedence over comparison operators in every combination of truth values [comp=<>, nullpred=IS NOT NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a <> b IS NOT NULL) = (a <> (b IS NOT NULL))) AS eq,\n     collect((a <> b IS NOT NULL) <> ((a <> b) IS NOT NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[24] Null predicates take precedence over boolean negation on every truth values [nullpred=IS NULL]",
+      "description": "[24] Null predicates take precedence over boolean negation on every truth values [nullpred=IS NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((NOT a IS NULL) = (NOT (a IS NULL))) AS eq,\n     collect((NOT a IS NULL) <> ((NOT a) IS NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[24] Null predicates take precedence over boolean negation on every truth values [nullpred=IS NOT NULL]",
+      "description": "[24] Null predicates take precedence over boolean negation on every truth values [nullpred=IS NOT NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((NOT a IS NOT NULL) = (NOT (a IS NOT NULL))) AS eq,\n     collect((NOT a IS NOT NULL) <> ((NOT a) IS NOT NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=OR, nullpred=IS NULL]",
+      "description": "[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=OR, nullpred=IS NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a OR b IS NULL) = (a OR (b IS NULL))) AS eq,\n     collect((a OR b IS NULL) <> ((a OR b) IS NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=OR, nullpred=IS NOT NULL]",
+      "description": "[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=OR, nullpred=IS NOT NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a OR b IS NOT NULL) = (a OR (b IS NOT NULL))) AS eq,\n     collect((a OR b IS NOT NULL) <> ((a OR b) IS NOT NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=XOR, nullpred=IS NULL]",
+      "description": "[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=XOR, nullpred=IS NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a XOR b IS NULL) = (a XOR (b IS NULL))) AS eq,\n     collect((a XOR b IS NULL) <> ((a XOR b) IS NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=XOR, nullpred=IS NOT NULL]",
+      "description": "[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=XOR, nullpred=IS NOT NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a XOR b IS NOT NULL) = (a XOR (b IS NOT NULL))) AS eq,\n     collect((a XOR b IS NOT NULL) <> ((a XOR b) IS NOT NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=AND, nullpred=IS NULL]",
+      "description": "[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=AND, nullpred=IS NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a AND b IS NULL) = (a AND (b IS NULL))) AS eq,\n     collect((a AND b IS NULL) <> ((a AND b) IS NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=AND, nullpred=IS NOT NULL]",
+      "description": "[25] Null predicates take precedence over binary boolean operators in every combination of truth values [boolop=AND, nullpred=IS NOT NULL]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nWITH collect((a AND b IS NOT NULL) = (a AND (b IS NOT NULL))) AS eq,\n     collect((a AND b IS NOT NULL) <> ((a AND b) IS NOT NULL)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[26] List predicate takes precedence over comparison operators in every combination of truth values [comp==]",
+      "description": "[26] List predicate takes precedence over comparison operators in every combination of truth values [comp==]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS c\nWITH collect((a = b IN c) = (a = (b IN c))) AS eq,\n     collect((a = b IN c) <> ((a = b) IN c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[26] List predicate takes precedence over comparison operators in every combination of truth values [comp=<=]",
+      "description": "[26] List predicate takes precedence over comparison operators in every combination of truth values [comp=<=]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS c\nWITH collect((a <= b IN c) = (a <= (b IN c))) AS eq,\n     collect((a <= b IN c) <> ((a <= b) IN c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[26] List predicate takes precedence over comparison operators in every combination of truth values [comp=>=]",
+      "description": "[26] List predicate takes precedence over comparison operators in every combination of truth values [comp=>=]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS c\nWITH collect((a >= b IN c) = (a >= (b IN c))) AS eq,\n     collect((a >= b IN c) <> ((a >= b) IN c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[26] List predicate takes precedence over comparison operators in every combination of truth values [comp=<]",
+      "description": "[26] List predicate takes precedence over comparison operators in every combination of truth values [comp=<]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS c\nWITH collect((a < b IN c) = (a < (b IN c))) AS eq,\n     collect((a < b IN c) <> ((a < b) IN c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[26] List predicate takes precedence over comparison operators in every combination of truth values [comp=>]",
+      "description": "[26] List predicate takes precedence over comparison operators in every combination of truth values [comp=>]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS c\nWITH collect((a > b IN c) = (a > (b IN c))) AS eq,\n     collect((a > b IN c) <> ((a > b) IN c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[26] List predicate takes precedence over comparison operators in every combination of truth values [comp=<>]",
+      "description": "[26] List predicate takes precedence over comparison operators in every combination of truth values [comp=<>]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS c\nWITH collect((a <> b IN c) = (a <> (b IN c))) AS eq,\n     collect((a <> b IN c) <> ((a <> b) IN c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[27] List predicate takes precedence over negation in every combination of truth values",
+      "description": "[27] List predicate takes precedence over negation in every combination of truth values",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS b\nWITH collect((NOT a IN b) = (NOT (a IN b))) AS eq,\n     collect((NOT a IN b) <> ((NOT a) IN b)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[28] List predicate takes precedence over binary boolean operators in every combination of truth values [boolop=OR]",
+      "description": "[28] List predicate takes precedence over binary boolean operators in every combination of truth values [boolop=OR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS c\nWITH collect((a OR b IN c) = (a OR (b IN c))) AS eq,\n     collect((a OR b IN c) <> ((a OR b) IN c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[28] List predicate takes precedence over binary boolean operators in every combination of truth values [boolop=XOR]",
+      "description": "[28] List predicate takes precedence over binary boolean operators in every combination of truth values [boolop=XOR]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS c\nWITH collect((a XOR b IN c) = (a XOR (b IN c))) AS eq,\n     collect((a XOR b IN c) <> ((a XOR b) IN c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "XOR",
+        "collect"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence1 - On boolean values-[28] List predicate takes precedence over binary boolean operators in every combination of truth values [boolop=AND]",
+      "description": "[28] List predicate takes precedence over binary boolean operators in every combination of truth values [boolop=AND]",
+      "setup": [],
+      "query": "UNWIND [true, false, null] AS a\nUNWIND [true, false, null] AS b\nUNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS c\nWITH collect((a AND b IN c) = (a AND (b IN c))) AS eq,\n     collect((a AND b IN c) <> ((a AND b) IN c)) AS neq\nRETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": []
+    }
+  ]
+}

@@ -1,0 +1,225 @@
+{
+  "source": "clauses/match/Match9.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Match9 - Match deprecated scenarios",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Match9 - Match deprecated scenarios-[1] Variable length relationship variables are lists of relationships",
+      "description": "[1] Variable length relationship variables are lists of relationships",
+      "setup": [
+        "CREATE (a), (b), (c)",
+        "CREATE (a)-[:T]->(b)"
+      ],
+      "query": "MATCH ()-[r*0..1]-()\nRETURN last(r) AS l",
+      "expect_columns": [
+        "l"
+      ],
+      "expect_rows": [
+        [
+          "[:T]"
+        ],
+        [
+          "[:T]"
+        ],
+        [
+          "null"
+        ],
+        [
+          "null"
+        ],
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match9 - Match deprecated scenarios-[2] Return relationships by collecting them as a list - directed, one way",
+      "description": "[2] Return relationships by collecting them as a list - directed, one way",
+      "setup": [
+        "CREATE (a:A)-[:REL {num: 1}]->(b:B)-[:REL {num: 2}]->(e:End)"
+      ],
+      "query": "MATCH (a)-[r:REL*2..2]->(b:End)\nRETURN r",
+      "expect_columns": [
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "[[:REL {num: 1}], [:REL {num: 2}]]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match9 - Match deprecated scenarios-[3] Return relationships by collecting them as a list - undirected, starting from two extremes",
+      "description": "[3] Return relationships by collecting them as a list - undirected, starting from two extremes",
+      "setup": [
+        "CREATE (a:End)-[:REL {num: 1}]->(b:B)-[:REL {num: 2}]->(c:End)"
+      ],
+      "query": "MATCH (a)-[r:REL*2..2]-(b:End)\nRETURN r",
+      "expect_columns": [
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "[[:REL {num:1}], [:REL {num:2}]]"
+        ],
+        [
+          "[[:REL {num:2}], [:REL {num:1}]]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match9 - Match deprecated scenarios-[4] Return relationships by collecting them as a list - undirected, starting from one extreme",
+      "description": "[4] Return relationships by collecting them as a list - undirected, starting from one extreme",
+      "setup": [
+        "CREATE (s:Start)-[:REL {num: 1}]->(b:B)-[:REL {num: 2}]->(c:C)"
+      ],
+      "query": "MATCH (a:Start)-[r:REL*2..2]-(b)\nRETURN r",
+      "expect_columns": [
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "[[:REL {num: 1}], [:REL {num: 2}]]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match9 - Match deprecated scenarios-[5] Variable length pattern with label predicate on both sides",
+      "description": "[5] Variable length pattern with label predicate on both sides",
+      "setup": [
+        "CREATE (a:Blue), (b:Red), (c:Green), (d:Yellow)",
+        "CREATE (a)-[:T]->(b), (b)-[:T]->(c), (b)-[:T]->(d)"
+      ],
+      "query": "MATCH (a:Blue)-[r*]->(b:Green)\nRETURN count(r)",
+      "expect_columns": [
+        "count(r)"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match9 - Match deprecated scenarios-[6] Matching relationships into a list and matching variable length using the list, with bound nodes",
+      "description": "[6] Matching relationships into a list and matching variable length using the list, with bound nodes",
+      "setup": [
+        "CREATE (a:A), (b:B), (c:C)",
+        "CREATE (a)-[:Y]->(b), (b)-[:Y]->(c)"
+      ],
+      "query": "MATCH (a)-[r1]->()-[r2]->(b)\nWITH [r1, r2] AS rs, a AS first, b AS second\n  LIMIT 1\nMATCH (first)-[rs*]->(second)\nRETURN first, second",
+      "expect_columns": [
+        "first",
+        "second"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:C)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match9 - Match deprecated scenarios-[7] Matching relationships into a list and matching variable length using the list, with bound nodes, wrong direction",
+      "description": "[7] Matching relationships into a list and matching variable length using the list, with bound nodes, wrong direction",
+      "setup": [
+        "CREATE (a:A), (b:B), (c:C)",
+        "CREATE (a)-[:Y]->(b), (b)-[:Y]->(c)"
+      ],
+      "query": "MATCH (a)-[r1]->()-[r2]->(b)\nWITH [r1, r2] AS rs, a AS second, b AS first\n  LIMIT 1\nMATCH (first)-[rs*]->(second)\nRETURN first, second",
+      "expect_columns": [
+        "first",
+        "second"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match9 - Match deprecated scenarios-[8] Variable length relationship in OPTIONAL MATCH",
+      "description": "[8] Variable length relationship in OPTIONAL MATCH",
+      "setup": [
+        "CREATE (:A), (:B)"
+      ],
+      "query": "MATCH (a:A), (b:B)\nOPTIONAL MATCH (a)-[r*]-(b)\nWHERE r IS NULL\n  AND a <> b\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match9 - Match deprecated scenarios-[9] Optionally matching named paths with variable length patterns",
+      "description": "[9] Optionally matching named paths with variable length patterns",
+      "setup": [
+        "CREATE (a {name: 'A'}), (b {name: 'B'}), (c {name: 'C'})",
+        "CREATE (a)-[:X]->(b)"
+      ],
+      "query": "MATCH (a {name: 'A'}), (x)\nWHERE x.name IN ['B', 'C']\nOPTIONAL MATCH p = (a)-[r*]->(x)\nRETURN r, x, p",
+      "expect_columns": [
+        "r",
+        "x",
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "[[:X]]",
+          "({name: 'B'})",
+          "<({name: 'A'})-[:X]->({name: 'B'})>"
+        ],
+        [
+          "null",
+          "({name: 'C'})",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

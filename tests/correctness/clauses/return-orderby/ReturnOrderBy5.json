@@ -1,0 +1,36 @@
+{
+  "source": "clauses/return-orderby/ReturnOrderBy5.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "ReturnOrderBy5 - Order by in combination with column renaming",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "ReturnOrderBy5 - Order by in combination with column renaming-[1] Renaming columns before ORDER BY should return results in ascending order",
+      "description": "[1] Renaming columns before ORDER BY should return results in ascending order",
+      "setup": [
+        "CREATE (n1 {num: 1}), (n2 {num: 3}), (n3 {num: -5})"
+      ],
+      "query": "MATCH (n)\nRETURN n.num AS n\nORDER BY n + 2",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "-5"
+        ],
+        [
+          "1"
+        ],
+        [
+          "3"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

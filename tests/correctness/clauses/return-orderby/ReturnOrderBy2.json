@@ -1,0 +1,372 @@
+{
+  "source": "clauses/return-orderby/ReturnOrderBy2.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "ReturnOrderBy2 - Order by a single expression (order of projection)",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[1] ORDER BY should return results in ascending order",
+      "description": "[1] ORDER BY should return results in ascending order",
+      "setup": [
+        "CREATE (n1 {num: 1}), (n2 {num: 3}), (n3 {num: -5})"
+      ],
+      "query": "MATCH (n)\nRETURN n.num AS prop\nORDER BY n.num",
+      "expect_columns": [
+        "prop"
+      ],
+      "expect_rows": [
+        [
+          "-5"
+        ],
+        [
+          "1"
+        ],
+        [
+          "3"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[2] ORDER BY DESC should return results in descending order",
+      "description": "[2] ORDER BY DESC should return results in descending order",
+      "setup": [
+        "CREATE (n1 {num: 1}), (n2 {num: 3}), (n3 {num: -5})"
+      ],
+      "query": "MATCH (n)\nRETURN n.num AS prop\nORDER BY n.num DESC",
+      "expect_columns": [
+        "prop"
+      ],
+      "expect_rows": [
+        [
+          "3"
+        ],
+        [
+          "1"
+        ],
+        [
+          "-5"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[3] Sort on aggregated function",
+      "description": "[3] Sort on aggregated function",
+      "setup": [
+        "CREATE ({division: 'A', age: 22}), ({division: 'B', age: 33}), ({division: 'B', age: 44}), ({division: 'C', age: 55})"
+      ],
+      "query": "MATCH (n)\nRETURN n.division, max(n.age)\n  ORDER BY max(n.age)",
+      "expect_columns": [
+        "n.division",
+        "max(n.age)"
+      ],
+      "expect_rows": [
+        [
+          "'A'",
+          "22"
+        ],
+        [
+          "'B'",
+          "44"
+        ],
+        [
+          "'C'",
+          "55"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[4] Support sort and distinct",
+      "description": "[4] Support sort and distinct",
+      "setup": [
+        "CREATE ({name: 'A'}), ({name: 'B'}), ({name: 'C'})"
+      ],
+      "query": "MATCH (a)\nRETURN DISTINCT a\n  ORDER BY a.name",
+      "expect_columns": [
+        "a"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'A'})"
+        ],
+        [
+          "({name: 'B'})"
+        ],
+        [
+          "({name: 'C'})"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "DISTINCT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[5] Support ordering by a property after being distinct-ified",
+      "description": "[5] Support ordering by a property after being distinct-ified",
+      "setup": [
+        "CREATE (:A)-[:T]->(:B)"
+      ],
+      "query": "MATCH (a)-->(b)\nRETURN DISTINCT b\n  ORDER BY b.name",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:B)"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "DISTINCT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[6] Count star should count everything in scope",
+      "description": "[6] Count star should count everything in scope",
+      "setup": [
+        "CREATE (:L1), (:L2), (:L3)"
+      ],
+      "query": "MATCH (a)\nRETURN a, count(*)\nORDER BY count(*)",
+      "expect_columns": [
+        "a",
+        "count(*)"
+      ],
+      "expect_rows": [
+        [
+          "(:L1)",
+          "1"
+        ],
+        [
+          "(:L2)",
+          "1"
+        ],
+        [
+          "(:L3)",
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[7] Ordering with aggregation",
+      "description": "[7] Ordering with aggregation",
+      "setup": [
+        "CREATE ({name: 'nisse'})"
+      ],
+      "query": "MATCH (n)\nRETURN n.name, count(*) AS foo\n  ORDER BY n.name",
+      "expect_columns": [
+        "n.name",
+        "foo"
+      ],
+      "expect_rows": [
+        [
+          "'nisse'",
+          "1"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[8] Returning all variables with ordering",
+      "description": "[8] Returning all variables with ordering",
+      "setup": [
+        "CREATE ({id: 1}), ({id: 10})"
+      ],
+      "query": "MATCH (n)\nRETURN *\n  ORDER BY n.id",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "({id: 1})"
+        ],
+        [
+          "({id: 10})"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[9] Using aliased DISTINCT expression in ORDER BY",
+      "description": "[9] Using aliased DISTINCT expression in ORDER BY",
+      "setup": [
+        "CREATE ({id: 1}), ({id: 10})"
+      ],
+      "query": "MATCH (n)\nRETURN DISTINCT n.id AS id\n  ORDER BY id DESC",
+      "expect_columns": [
+        "id"
+      ],
+      "expect_rows": [
+        [
+          "10"
+        ],
+        [
+          "1"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "DISTINCT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[10] Returned columns do not change from using ORDER BY",
+      "description": "[10] Returned columns do not change from using ORDER BY",
+      "setup": [
+        "CREATE ({id: 1}), ({id: 10})"
+      ],
+      "query": "MATCH (n)\nRETURN DISTINCT n\n  ORDER BY n.id",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "({id: 1})"
+        ],
+        [
+          "({id: 10})"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "DISTINCT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[11] Aggregates ordered by arithmetics",
+      "description": "[11] Aggregates ordered by arithmetics",
+      "setup": [
+        "CREATE (:A), (:X), (:X)"
+      ],
+      "query": "MATCH (a:A), (b:X)\nRETURN count(a) * 10 + count(b) * 5 AS x\nORDER BY x",
+      "expect_columns": [
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "30"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[12] Aggregation of named paths",
+      "description": "[12] Aggregation of named paths",
+      "setup": [
+        "CREATE (a:A), (b:B), (c:C), (d:D), (e:E), (f:F)",
+        "CREATE (a)-[:R]->(b)",
+        "CREATE (c)-[:R]->(d)",
+        "CREATE (d)-[:R]->(e)",
+        "CREATE (e)-[:R]->(f)"
+      ],
+      "query": "MATCH p = (a)-[*]->(b)\nRETURN collect(nodes(p)) AS paths, length(p) AS l\nORDER BY l",
+      "expect_columns": [
+        "paths",
+        "l"
+      ],
+      "expect_rows": [
+        [
+          "[[(:A), (:B)], [(:C), (:D)], [(:D), (:E)], [(:E), (:F)]]",
+          "1"
+        ],
+        [
+          "[[(:C), (:D), (:E)], [(:D), (:E), (:F)]]",
+          "2"
+        ],
+        [
+          "[[(:C), (:D), (:E), (:F)]]",
+          "3"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "collect",
+        "nodes"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[13] Fail when sorting on variable removed by DISTINCT",
+      "description": "[13] Fail when sorting on variable removed by DISTINCT",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [
+        "CREATE ({name: 'A', age: 13}), ({name: 'B', age: 12}), ({name: 'C', age: 11})"
+      ],
+      "query": "MATCH (a)\nRETURN DISTINCT a.name\n  ORDER BY a.age",
+      "requires": [
+        "DISTINCT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy2 - Order by a single expression (order of projection)-[14] Fail on aggregation in ORDER BY after RETURN",
+      "description": "[14] Fail on aggregation in ORDER BY after RETURN",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidAggregation",
+      "setup": [],
+      "query": "MATCH (n)\nRETURN n.num1\n  ORDER BY max(n.num2)",
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

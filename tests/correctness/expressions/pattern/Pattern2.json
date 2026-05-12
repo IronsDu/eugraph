@@ -1,0 +1,286 @@
+{
+  "source": "expressions/pattern/Pattern2.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Pattern2 - Pattern Comprehension",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Pattern2 - Pattern Comprehension-[1] Return a pattern comprehension",
+      "description": "[1] Return a pattern comprehension",
+      "setup": [
+        "CREATE (a:A), (b:B)",
+        "CREATE (a)-[:T]->(b), (b)-[:T]->(:C)"
+      ],
+      "query": "MATCH (n)\nRETURN [p = (n)-->() | p] AS list",
+      "expect_columns": [
+        "list"
+      ],
+      "expect_rows": [
+        [
+          "[<(:A)-[:T]->(:B)>]"
+        ],
+        [
+          "[<(:B)-[:T]->(:C)>]"
+        ],
+        [
+          "[]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern2 - Pattern Comprehension-[2] Return a pattern comprehension with label predicate",
+      "description": "[2] Return a pattern comprehension with label predicate",
+      "setup": [
+        "CREATE (a:A), (b:B), (c:C), (d:D)",
+        "CREATE (a)-[:T]->(b), (a)-[:T]->(c), (a)-[:T]->(d)"
+      ],
+      "query": "MATCH (n:A)\nRETURN [p = (n)-->(:B) | p] AS list",
+      "expect_columns": [
+        "list"
+      ],
+      "expect_rows": [
+        [
+          "[<(:A)-[:T]->(:B)>]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern2 - Pattern Comprehension-[3] Return a pattern comprehension with bound nodes",
+      "description": "[3] Return a pattern comprehension with bound nodes",
+      "setup": [
+        "CREATE (a:A), (b:B)",
+        "CREATE (a)-[:T]->(b)"
+      ],
+      "query": "MATCH (a:A), (b:B)\nRETURN [p = (a)-->(b) | p] AS list",
+      "expect_columns": [
+        "list"
+      ],
+      "expect_rows": [
+        [
+          "[<(:A)-[:T]->(:B)>]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern2 - Pattern Comprehension-[4] Introduce a new node variable in pattern comprehension",
+      "description": "[4] Introduce a new node variable in pattern comprehension",
+      "setup": [
+        "CREATE (a), (b {name: 'val'}), (c)",
+        "CREATE (a)-[:T]->(b), (b)-[:T]->(c)"
+      ],
+      "query": "MATCH (n)\nRETURN [(n)-[:T]->(b) | b.name] AS list",
+      "expect_columns": [
+        "list"
+      ],
+      "expect_rows": [
+        [
+          "['val']"
+        ],
+        [
+          "[null]"
+        ],
+        [
+          "[]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern2 - Pattern Comprehension-[5] Introduce a new relationship variable in pattern comprehension",
+      "description": "[5] Introduce a new relationship variable in pattern comprehension",
+      "setup": [
+        "CREATE (a), (b), (c)",
+        "CREATE (a)-[:T {name: 'val'}]->(b), (b)-[:T]->(c)"
+      ],
+      "query": "MATCH (n)\nRETURN [(n)-[r:T]->() | r.name] AS list",
+      "expect_columns": [
+        "list"
+      ],
+      "expect_rows": [
+        [
+          "['val']"
+        ],
+        [
+          "[null]"
+        ],
+        [
+          "[]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern2 - Pattern Comprehension-[6] Aggregate on a pattern comprehension",
+      "description": "[6] Aggregate on a pattern comprehension",
+      "setup": [
+        "CREATE (a:A), (:A), (:A)",
+        "CREATE (a)-[:HAS]->()"
+      ],
+      "query": "MATCH (n:A)\nRETURN count([p = (n)-[:HAS]->() | p]) AS c",
+      "expect_columns": [
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "3"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern2 - Pattern Comprehension-[7] Use a pattern comprehension inside a list comprehension",
+      "description": "[7] Use a pattern comprehension inside a list comprehension",
+      "setup": [
+        "CREATE (n1:X {n: 1}), (m1:Y), (i1:Y), (i2:Y)",
+        "CREATE (n1)-[:T]->(m1), (m1)-[:T]->(i1), (m1)-[:T]->(i2)",
+        "CREATE (n2:X {n: 2}), (m2), (i3:L), (i4:Y)",
+        "CREATE (n2)-[:T]->(m2), (m2)-[:T]->(i3), (m2)-[:T]->(i4)"
+      ],
+      "query": "MATCH p = (n:X)-->()\nRETURN n, [x IN nodes(p) | size([(x)-->(:Y) | 1])] AS list",
+      "expect_columns": [
+        "n",
+        "list"
+      ],
+      "expect_rows": [
+        [
+          "(:X {n: 1})",
+          "[1, 2]"
+        ],
+        [
+          "(:X {n: 2})",
+          "[0, 1]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN",
+        "nodes"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern2 - Pattern Comprehension-[8] Use a pattern comprehension in WITH",
+      "description": "[8] Use a pattern comprehension in WITH",
+      "setup": [
+        "CREATE (a:A), (b:B)",
+        "CREATE (a)-[:T]->(b), (b)-[:T]->(:C)"
+      ],
+      "query": "MATCH (n)-->(b)\nWITH [p = (n)-->() | p] AS ps, count(b) AS c\nRETURN ps, c",
+      "expect_columns": [
+        "ps",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "[<(:A)-[:T]->(:B)>]",
+          "1"
+        ],
+        [
+          "[<(:B)-[:T]->(:C)>]",
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern2 - Pattern Comprehension-[9] Use a variable-length pattern comprehension in WITH",
+      "description": "[9] Use a variable-length pattern comprehension in WITH",
+      "setup": [
+        "CREATE (:A)-[:T]->(:B)"
+      ],
+      "query": "MATCH (a:A), (b:B)\nWITH [p = (a)-[*]->(b) | p] AS paths, count(a) AS c\nRETURN paths, c",
+      "expect_columns": [
+        "paths",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "[<(:A)-[:T]->(:B)>]",
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern2 - Pattern Comprehension-[10] Use a pattern comprehension in RETURN",
+      "description": "[10] Use a pattern comprehension in RETURN",
+      "setup": [
+        "CREATE (a:A), (:A), (:A)",
+        "CREATE (a)-[:HAS]->()"
+      ],
+      "query": "MATCH (n:A)\nRETURN [p = (n)-[:HAS]->() | p] AS ps",
+      "expect_columns": [
+        "ps"
+      ],
+      "expect_rows": [
+        [
+          "[<(:A)-[:HAS]->()>]"
+        ],
+        [
+          "[]"
+        ],
+        [
+          "[]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Pattern2 - Pattern Comprehension-[11] Use a pattern comprehension and ORDER BY",
+      "description": "[11] Use a pattern comprehension and ORDER BY",
+      "setup": [
+        "CREATE (a {time: 10}), (b {time: 20})",
+        "CREATE (a)-[:T]->(b)"
+      ],
+      "query": "MATCH (liker)\nRETURN [p = (liker)--() | p] AS isNew\n  ORDER BY liker.time",
+      "expect_columns": [
+        "isNew"
+      ],
+      "expect_rows": [
+        [
+          "[<({time: 10})-[:T]->({time: 20})>]"
+        ],
+        [
+          "[<({time: 20})<-[:T]-({time: 10})>]"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

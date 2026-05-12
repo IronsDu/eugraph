@@ -1,0 +1,405 @@
+{
+  "source": "expressions/comparison/Comparison2.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Comparison2 - Half-bounded Range",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Comparison2 - Half-bounded Range-[1] Comparing strings and integers using > in an AND'd predicate",
+      "description": "[1] Comparing strings and integers using > in an AND'd predicate",
+      "setup": [
+        "CREATE (root:Root)-[:T]->(:Child {var: 0}), (root)-[:T]->(:Child {var: 'xx'}), (root)-[:T]->(:Child)"
+      ],
+      "query": "MATCH (:Root)-->(i:Child)\nWHERE i.var IS NOT NULL AND i.var > 'x'\nRETURN i.var",
+      "expect_columns": [
+        "i.var"
+      ],
+      "expect_rows": [
+        [
+          "'xx'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[2] Comparing strings and integers using > in a OR'd predicate",
+      "description": "[2] Comparing strings and integers using > in a OR'd predicate",
+      "setup": [
+        "CREATE (root:Root)-[:T]->(:Child {var: 0}), (root)-[:T]->(:Child {var: 'xx'}), (root)-[:T]->(:Child)"
+      ],
+      "query": "MATCH (:Root)-->(i:Child)\nWHERE i.var IS NULL OR i.var > 'x'\nRETURN i.var",
+      "expect_columns": [
+        "i.var"
+      ],
+      "expect_rows": [
+        [
+          "'xx'"
+        ],
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[3] Comparing across types yields null, except numbers [operator=<, lhs=1, rhs=3.14]",
+      "description": "[3] Comparing across types yields null, except numbers [operator=<, lhs=1, rhs=3.14]",
+      "setup": [
+        "CREATE ()-[:T]->()"
+      ],
+      "query": "MATCH p = (n)-[r]->()\nWITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types\nUNWIND range(0, size(types) - 1) AS i\nUNWIND range(0, size(types) - 1) AS j\nWITH types[i] AS lhs, types[j] AS rhs\nWHERE i <> j\nWITH lhs, rhs, lhs < rhs AS result\nWHERE result\nRETURN lhs, rhs",
+      "expect_columns": [
+        "lhs",
+        "rhs"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "3.14"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[3] Comparing across types yields null, except numbers [operator=<=, lhs=1, rhs=3.14]",
+      "description": "[3] Comparing across types yields null, except numbers [operator=<=, lhs=1, rhs=3.14]",
+      "setup": [
+        "CREATE ()-[:T]->()"
+      ],
+      "query": "MATCH p = (n)-[r]->()\nWITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types\nUNWIND range(0, size(types) - 1) AS i\nUNWIND range(0, size(types) - 1) AS j\nWITH types[i] AS lhs, types[j] AS rhs\nWHERE i <> j\nWITH lhs, rhs, lhs <= rhs AS result\nWHERE result\nRETURN lhs, rhs",
+      "expect_columns": [
+        "lhs",
+        "rhs"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "3.14"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[3] Comparing across types yields null, except numbers [operator=>=, lhs=3.14, rhs=1]",
+      "description": "[3] Comparing across types yields null, except numbers [operator=>=, lhs=3.14, rhs=1]",
+      "setup": [
+        "CREATE ()-[:T]->()"
+      ],
+      "query": "MATCH p = (n)-[r]->()\nWITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types\nUNWIND range(0, size(types) - 1) AS i\nUNWIND range(0, size(types) - 1) AS j\nWITH types[i] AS lhs, types[j] AS rhs\nWHERE i <> j\nWITH lhs, rhs, lhs >= rhs AS result\nWHERE result\nRETURN lhs, rhs",
+      "expect_columns": [
+        "lhs",
+        "rhs"
+      ],
+      "expect_rows": [
+        [
+          "3.14",
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[3] Comparing across types yields null, except numbers [operator=>, lhs=3.14, rhs=1]",
+      "description": "[3] Comparing across types yields null, except numbers [operator=>, lhs=3.14, rhs=1]",
+      "setup": [
+        "CREATE ()-[:T]->()"
+      ],
+      "query": "MATCH p = (n)-[r]->()\nWITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types\nUNWIND range(0, size(types) - 1) AS i\nUNWIND range(0, size(types) - 1) AS j\nWITH types[i] AS lhs, types[j] AS rhs\nWHERE i <> j\nWITH lhs, rhs, lhs > rhs AS result\nWHERE result\nRETURN lhs, rhs",
+      "expect_columns": [
+        "lhs",
+        "rhs"
+      ],
+      "expect_rows": [
+        [
+          "3.14",
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[4] Comparing lists [lhs=[1, 0], rhs=[1], result=true]",
+      "description": "[4] Comparing lists [lhs=[1, 0], rhs=[1], result=true]",
+      "setup": [],
+      "query": "RETURN [1, 0] >= [1] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[4] Comparing lists [lhs=[1, null], rhs=[1], result=true]",
+      "description": "[4] Comparing lists [lhs=[1, null], rhs=[1], result=true]",
+      "setup": [],
+      "query": "RETURN [1, null] >= [1] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[4] Comparing lists [lhs=[1, 2], rhs=[1, null], result=null]",
+      "description": "[4] Comparing lists [lhs=[1, 2], rhs=[1, null], result=null]",
+      "setup": [],
+      "query": "RETURN [1, 2] >= [1, null] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[4] Comparing lists [lhs=[1, 'a'], rhs=[1, null], result=null]",
+      "description": "[4] Comparing lists [lhs=[1, 'a'], rhs=[1, null], result=null]",
+      "setup": [],
+      "query": "RETURN [1, 'a'] >= [1, null] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[4] Comparing lists [lhs=[1, 2], rhs=[3, null], result=false]",
+      "description": "[4] Comparing lists [lhs=[1, 2], rhs=[3, null], result=false]",
+      "setup": [],
+      "query": "RETURN [1, 2] >= [3, null] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs=1, result=false]",
+      "description": "[5] Comparing NaN [lhs=0.0 / 0.0, rhs=1, result=false]",
+      "setup": [],
+      "query": "RETURN 0.0 / 0.0 > 1 AS gt, 0.0 / 0.0 >= 1 AS gtE, 0.0 / 0.0 < <rhs> AS lt, 0.0 / 0.0 <= <rhs> AS ltE",
+      "expect_columns": [
+        "gt",
+        "gtE",
+        "lt",
+        "ltE"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "false",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs=1.0, result=false]",
+      "description": "[5] Comparing NaN [lhs=0.0 / 0.0, rhs=1.0, result=false]",
+      "setup": [],
+      "query": "RETURN 0.0 / 0.0 > 1.0 AS gt, 0.0 / 0.0 >= 1.0 AS gtE, 0.0 / 0.0 < <rhs> AS lt, 0.0 / 0.0 <= <rhs> AS ltE",
+      "expect_columns": [
+        "gt",
+        "gtE",
+        "lt",
+        "ltE"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "false",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs=0.0 / 0.0, result=false]",
+      "description": "[5] Comparing NaN [lhs=0.0 / 0.0, rhs=0.0 / 0.0, result=false]",
+      "setup": [],
+      "query": "RETURN 0.0 / 0.0 > 0.0 / 0.0 AS gt, 0.0 / 0.0 >= 0.0 / 0.0 AS gtE, 0.0 / 0.0 < <rhs> AS lt, 0.0 / 0.0 <= <rhs> AS ltE",
+      "expect_columns": [
+        "gt",
+        "gtE",
+        "lt",
+        "ltE"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "false",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs='a', result=null]",
+      "description": "[5] Comparing NaN [lhs=0.0 / 0.0, rhs='a', result=null]",
+      "setup": [],
+      "query": "RETURN 0.0 / 0.0 > 'a' AS gt, 0.0 / 0.0 >= 'a' AS gtE, 0.0 / 0.0 < <rhs> AS lt, 0.0 / 0.0 <= <rhs> AS ltE",
+      "expect_columns": [
+        "gt",
+        "gtE",
+        "lt",
+        "ltE"
+      ],
+      "expect_rows": [
+        [
+          "null",
+          "null",
+          "null",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs=1.0, rhs=1.0, result=false]",
+      "description": "[6] Comparability between numbers and strings [lhs=1.0, rhs=1.0, result=false]",
+      "setup": [],
+      "query": "RETURN 1.0 < <rhs> AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs=1, rhs=1.0, result=false]",
+      "description": "[6] Comparability between numbers and strings [lhs=1, rhs=1.0, result=false]",
+      "setup": [],
+      "query": "RETURN 1 < <rhs> AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs='1.0', rhs=1.0, result=null]",
+      "description": "[6] Comparability between numbers and strings [lhs='1.0', rhs=1.0, result=null]",
+      "setup": [],
+      "query": "RETURN '1.0' < <rhs> AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs='1', rhs=1, result=null]",
+      "description": "[6] Comparability between numbers and strings [lhs='1', rhs=1, result=null]",
+      "setup": [],
+      "query": "RETURN '1' < <rhs> AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

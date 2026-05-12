@@ -1,0 +1,216 @@
+{
+  "source": "expressions/comparison/Comparison3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Comparison3 - Full-Bound Range",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Comparison3 - Full-Bound Range-[1] Handling numerical ranges 1",
+      "description": "[1] Handling numerical ranges 1",
+      "setup": [
+        "UNWIND [1, 2, 3] AS i",
+        "CREATE ({num: i})"
+      ],
+      "query": "MATCH (n)\nWHERE 1 < n.num < 3\nRETURN n.num",
+      "expect_columns": [
+        "n.num"
+      ],
+      "expect_rows": [
+        [
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison3 - Full-Bound Range-[2] Handling numerical ranges 2",
+      "description": "[2] Handling numerical ranges 2",
+      "setup": [
+        "UNWIND [1, 2, 3] AS i",
+        "CREATE ({num: i})"
+      ],
+      "query": "MATCH (n)\nWHERE 1 < n.num <= 3\nRETURN n.num",
+      "expect_columns": [
+        "n.num"
+      ],
+      "expect_rows": [
+        [
+          "2"
+        ],
+        [
+          "3"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison3 - Full-Bound Range-[3] Handling numerical ranges 3",
+      "description": "[3] Handling numerical ranges 3",
+      "setup": [
+        "UNWIND [1, 2, 3] AS i",
+        "CREATE ({num: i})"
+      ],
+      "query": "MATCH (n)\nWHERE 1 <= n.num < 3\nRETURN n.num",
+      "expect_columns": [
+        "n.num"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ],
+        [
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison3 - Full-Bound Range-[4] Handling numerical ranges 4",
+      "description": "[4] Handling numerical ranges 4",
+      "setup": [
+        "UNWIND [1, 2, 3] AS i",
+        "CREATE ({num: i})"
+      ],
+      "query": "MATCH (n)\nWHERE 1 <= n.num <= 3\nRETURN n.num",
+      "expect_columns": [
+        "n.num"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ],
+        [
+          "2"
+        ],
+        [
+          "3"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison3 - Full-Bound Range-[5] Handling string ranges 1",
+      "description": "[5] Handling string ranges 1",
+      "setup": [
+        "UNWIND ['a', 'b', 'c'] AS c",
+        "CREATE ({name: c})"
+      ],
+      "query": "MATCH (n)\nWHERE 'a' < n.name < 'c'\nRETURN n.name",
+      "expect_columns": [
+        "n.name"
+      ],
+      "expect_rows": [
+        [
+          "'b'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison3 - Full-Bound Range-[6] Handling string ranges 2",
+      "description": "[6] Handling string ranges 2",
+      "setup": [
+        "UNWIND ['a', 'b', 'c'] AS c",
+        "CREATE ({name: c})"
+      ],
+      "query": "MATCH (n)\nWHERE 'a' < n.name <= 'c'\nRETURN n.name",
+      "expect_columns": [
+        "n.name"
+      ],
+      "expect_rows": [
+        [
+          "'b'"
+        ],
+        [
+          "'c'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison3 - Full-Bound Range-[7] Handling string ranges 3",
+      "description": "[7] Handling string ranges 3",
+      "setup": [
+        "UNWIND ['a', 'b', 'c'] AS c",
+        "CREATE ({name: c})"
+      ],
+      "query": "MATCH (n)\nWHERE 'a' <= n.name < 'c'\nRETURN n.name",
+      "expect_columns": [
+        "n.name"
+      ],
+      "expect_rows": [
+        [
+          "'a'"
+        ],
+        [
+          "'b'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison3 - Full-Bound Range-[8] Handling string ranges 4",
+      "description": "[8] Handling string ranges 4",
+      "setup": [
+        "UNWIND ['a', 'b', 'c'] AS c",
+        "CREATE ({name: c})"
+      ],
+      "query": "MATCH (n)\nWHERE 'a' <= n.name <= 'c'\nRETURN n.name",
+      "expect_columns": [
+        "n.name"
+      ],
+      "expect_rows": [
+        [
+          "'a'"
+        ],
+        [
+          "'b'"
+        ],
+        [
+          "'c'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison3 - Full-Bound Range-[9] Handling empty range",
+      "description": "[9] Handling empty range",
+      "setup": [
+        "CREATE ({num: 3})"
+      ],
+      "query": "MATCH (n)\nWHERE 10 < n.num <= 3\nRETURN n.num",
+      "expect_columns": [
+        "n.num"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

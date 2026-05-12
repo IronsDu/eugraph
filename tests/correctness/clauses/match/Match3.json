@@ -1,0 +1,732 @@
+{
+  "source": "clauses/match/Match3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Match3 - Match fixed length patterns",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Match3 - Match fixed length patterns-[1] Get neighbours",
+      "description": "[1] Get neighbours",
+      "setup": [
+        "CREATE (a:A {num: 1})-[:KNOWS]->(b:B {num: 2})"
+      ],
+      "query": "MATCH (n1)-[rel:KNOWS]->(n2)\nRETURN n1, n2",
+      "expect_columns": [
+        "n1",
+        "n2"
+      ],
+      "expect_rows": [
+        [
+          "(:A {num: 1})",
+          "(:B {num: 2})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[2] Directed match of a simple relationship",
+      "description": "[2] Directed match of a simple relationship",
+      "setup": [
+        "CREATE (:A)-[:LOOP]->(:B)"
+      ],
+      "query": "MATCH (a)-[r]->(b)\nRETURN a, r, b",
+      "expect_columns": [
+        "a",
+        "r",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:LOOP]",
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[3] Undirected match on simple relationship graph",
+      "description": "[3] Undirected match on simple relationship graph",
+      "setup": [
+        "CREATE (:A)-[:LOOP]->(:B)"
+      ],
+      "query": "MATCH (a)-[r]-(b)\nRETURN a, r, b",
+      "expect_columns": [
+        "a",
+        "r",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:LOOP]",
+          "(:B)"
+        ],
+        [
+          "(:B)",
+          "[:LOOP]",
+          "(:A)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[4] Get two related nodes",
+      "description": "[4] Get two related nodes",
+      "setup": [
+        "CREATE (a:A {num: 1}), (a)-[:KNOWS]->(b:B {num: 2}), (a)-[:KNOWS]->(c:C {num: 3})"
+      ],
+      "query": "MATCH ()-[rel:KNOWS]->(x)\nRETURN x",
+      "expect_columns": [
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "(:B {num: 2})"
+        ],
+        [
+          "(:C {num: 3})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[5] Return two subgraphs with bound undirected relationship",
+      "description": "[5] Return two subgraphs with bound undirected relationship",
+      "setup": [
+        "CREATE (a:A {num: 1})-[:REL {name: 'r'}]->(b:B {num: 2})"
+      ],
+      "query": "MATCH (a)-[r {name: 'r'}]-(b)\nRETURN a, b",
+      "expect_columns": [
+        "a",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:B {num: 2})",
+          "(:A {num: 1})"
+        ],
+        [
+          "(:A {num: 1})",
+          "(:B {num: 2})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[6] Matching a relationship pattern using a label predicate",
+      "description": "[6] Matching a relationship pattern using a label predicate",
+      "setup": [
+        "CREATE (a), (b1:Foo), (b2)",
+        "CREATE (a)-[:T]->(b1), (a)-[:T]->(b2)"
+      ],
+      "query": "MATCH (a)-->(b:Foo)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:Foo)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[7] Matching nodes with many labels",
+      "description": "[7] Matching nodes with many labels",
+      "setup": [
+        "CREATE (a:A:B:C:D:E:F:G:H:I:J:K:L:M), (b:U:V:W:X:Y:Z)",
+        "CREATE (a)-[:T]->(b)"
+      ],
+      "query": "MATCH (n:A:B:C:D:E:F:G:H:I:J:K:L:M)-[:T]->(m:Z:Y:X:W:V:U)\nRETURN n, m",
+      "expect_columns": [
+        "n",
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "(:A:B:C:D:E:F:G:H:I:J:K:L:M)",
+          "(:Z:Y:X:W:V:U)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[8] Matching using relationship predicate with multiples of the same type",
+      "description": "[8] Matching using relationship predicate with multiples of the same type",
+      "setup": [
+        "CREATE (a:A), (b:B)",
+        "CREATE (a)-[:T]->(b)"
+      ],
+      "query": "MATCH (a)-[:T|:T]->(b)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[9] Get related to related to",
+      "description": "[9] Get related to related to",
+      "setup": [
+        "CREATE (a:A {num: 1})-[:KNOWS]->(b:B {num: 2})-[:FRIEND]->(c:C {num: 3})"
+      ],
+      "query": "MATCH (n)-->(a)-->(b)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:C {num: 3})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[10] Matching using self-referencing pattern returns no result",
+      "description": "[10] Matching using self-referencing pattern returns no result",
+      "setup": [
+        "CREATE (a), (b), (c)",
+        "CREATE (a)-[:T]->(b), (b)-[:T]->(c)"
+      ],
+      "query": "MATCH (a)-->(b), (b)-->(b)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[11] Undirected match in self-relationship graph",
+      "description": "[11] Undirected match in self-relationship graph",
+      "setup": [
+        "CREATE (a:A)-[:LOOP]->(a)"
+      ],
+      "query": "MATCH (a)-[r]-(b)\nRETURN a, r, b",
+      "expect_columns": [
+        "a",
+        "r",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:LOOP]",
+          "(:A)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[12] Undirected match of self-relationship in self-relationship graph",
+      "description": "[12] Undirected match of self-relationship in self-relationship graph",
+      "setup": [
+        "CREATE (a:A)-[:LOOP]->(a)"
+      ],
+      "query": "MATCH (n)-[r]-(n)\nRETURN n, r",
+      "expect_columns": [
+        "n",
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:LOOP]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[13] Directed match on self-relationship graph",
+      "description": "[13] Directed match on self-relationship graph",
+      "setup": [
+        "CREATE (a:A)-[:LOOP]->(a)"
+      ],
+      "query": "MATCH (a)-[r]->(b)\nRETURN a, r, b",
+      "expect_columns": [
+        "a",
+        "r",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:LOOP]",
+          "(:A)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[14] Directed match of self-relationship on self-relationship graph",
+      "description": "[14] Directed match of self-relationship on self-relationship graph",
+      "setup": [
+        "CREATE (a:A)-[:LOOP]->(a)"
+      ],
+      "query": "MATCH (n)-[r]->(n)\nRETURN n, r",
+      "expect_columns": [
+        "n",
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:LOOP]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[15] Mixing directed and undirected pattern parts with self-relationship, simple",
+      "description": "[15] Mixing directed and undirected pattern parts with self-relationship, simple",
+      "setup": [
+        "CREATE (:A)-[:T1]->(l:Looper), (l)-[:LOOP]->(l), (l)-[:T2]->(:B)"
+      ],
+      "query": "MATCH (x:A)-[r1]->(y)-[r2]-(z)\nRETURN x, r1, y, r2, z",
+      "expect_columns": [
+        "x",
+        "r1",
+        "y",
+        "r2",
+        "z"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:T1]",
+          "(:Looper)",
+          "[:LOOP]",
+          "(:Looper)"
+        ],
+        [
+          "(:A)",
+          "[:T1]",
+          "(:Looper)",
+          "[:T2]",
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[16] Mixing directed and undirected pattern parts with self-relationship, undirected",
+      "description": "[16] Mixing directed and undirected pattern parts with self-relationship, undirected",
+      "setup": [
+        "CREATE (:A)-[:T1]->(l:Looper), (l)-[:LOOP]->(l), (l)-[:T2]->(:B)"
+      ],
+      "query": "MATCH (x)-[r1]-(y)-[r2]-(z)\nRETURN x, r1, y, r2, z",
+      "expect_columns": [
+        "x",
+        "r1",
+        "y",
+        "r2",
+        "z"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:T1]",
+          "(:Looper)",
+          "[:LOOP]",
+          "(:Looper)"
+        ],
+        [
+          "(:A)",
+          "[:T1]",
+          "(:Looper)",
+          "[:T2]",
+          "(:B)"
+        ],
+        [
+          "(:Looper)",
+          "[:LOOP]",
+          "(:Looper)",
+          "[:T1]",
+          "(:A)"
+        ],
+        [
+          "(:Looper)",
+          "[:LOOP]",
+          "(:Looper)",
+          "[:T2]",
+          "(:B)"
+        ],
+        [
+          "(:B)",
+          "[:T2]",
+          "(:Looper)",
+          "[:LOOP]",
+          "(:Looper)"
+        ],
+        [
+          "(:B)",
+          "[:T2]",
+          "(:Looper)",
+          "[:T1]",
+          "(:A)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[17] Handling cyclic patterns",
+      "description": "[17] Handling cyclic patterns",
+      "setup": [
+        "CREATE (a {name: 'a'}), (b {name: 'b'}), (c {name: 'c'})",
+        "CREATE (a)-[:A]->(b), (b)-[:B]->(a), (b)-[:B]->(c)"
+      ],
+      "query": "MATCH (a)-[:A]->()-[:B]->(a)\nRETURN a.name",
+      "expect_columns": [
+        "a.name"
+      ],
+      "expect_rows": [
+        [
+          "'a'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[18] Handling cyclic patterns when separated into two parts",
+      "description": "[18] Handling cyclic patterns when separated into two parts",
+      "setup": [
+        "CREATE (a {name: 'a'}), (b {name: 'b'}), (c {name: 'c'})",
+        "CREATE (a)-[:A]->(b), (b)-[:B]->(a), (b)-[:B]->(c)"
+      ],
+      "query": "MATCH (a)-[:A]->(b), (b)-[:B]->(a)\nRETURN a.name",
+      "expect_columns": [
+        "a.name"
+      ],
+      "expect_rows": [
+        [
+          "'a'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[19] Two bound nodes pointing to the same node",
+      "description": "[19] Two bound nodes pointing to the same node",
+      "setup": [
+        "CREATE (a {name: 'A'}), (b {name: 'B'}), (x1 {name: 'x1'}), (x2 {name: 'x2'})",
+        "CREATE (a)-[:KNOWS]->(x1), (a)-[:KNOWS]->(x2), (b)-[:KNOWS]->(x1), (b)-[:KNOWS]->(x2)"
+      ],
+      "query": "MATCH (a {name: 'A'}), (b {name: 'B'})\nMATCH (a)-->(x)<-->(b)\nRETURN x",
+      "expect_columns": [
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'x1'})"
+        ],
+        [
+          "({name: 'x2'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[20] Three bound nodes pointing to the same node",
+      "description": "[20] Three bound nodes pointing to the same node",
+      "setup": [
+        "CREATE (a {name: 'A'}), (b {name: 'B'}), (c {name: 'C'}), (x1 {name: 'x1'}), (x2 {name: 'x2'})",
+        "CREATE (a)-[:KNOWS]->(x1), (a)-[:KNOWS]->(x2), (b)-[:KNOWS]->(x1), (b)-[:KNOWS]->(x2), (c)-[:KNOWS]->(x1), (c)-[:KNOWS]->(x2)"
+      ],
+      "query": "MATCH (a {name: 'A'}), (b {name: 'B'}), (c {name: 'C'})\nMATCH (a)-->(x), (b)-->(x), (c)-->(x)\nRETURN x",
+      "expect_columns": [
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'x1'})"
+        ],
+        [
+          "({name: 'x2'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[21] Three bound nodes pointing to the same node with extra connections",
+      "description": "[21] Three bound nodes pointing to the same node with extra connections",
+      "setup": [
+        "CREATE (a {name: 'a'}), (b {name: 'b'}), (c {name: 'c'}), (d {name: 'd'}), (e {name: 'e'}), (f {name: 'f'}), (g {name: 'g'}), (h {name: 'h'}), (i {name: 'i'}), (j {name: 'j'}), (k {name: 'k'})",
+        "CREATE (a)-[:KNOWS]->(d), (a)-[:KNOWS]->(e), (a)-[:KNOWS]->(f), (a)-[:KNOWS]->(g), (a)-[:KNOWS]->(i), (b)-[:KNOWS]->(d), (b)-[:KNOWS]->(e), (b)-[:KNOWS]->(f), (b)-[:KNOWS]->(h), (b)-[:KNOWS]->(k), (c)-[:KNOWS]->(d), (c)-[:KNOWS]->(e), (c)-[:KNOWS]->(h), (c)-[:KNOWS]->(g), (c)-[:KNOWS]->(j)"
+      ],
+      "query": "MATCH (a {name: 'a'}), (b {name: 'b'}), (c {name: 'c'})\nMATCH (a)-->(x), (b)-->(x), (c)-->(x)\nRETURN x",
+      "expect_columns": [
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'd'})"
+        ],
+        [
+          "({name: 'e'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[22] Returning bound nodes that are not part of the pattern",
+      "description": "[22] Returning bound nodes that are not part of the pattern",
+      "setup": [
+        "CREATE (a {name: 'A'}), (b {name: 'B'}), (c {name: 'C'})",
+        "CREATE (a)-[:KNOWS]->(b)"
+      ],
+      "query": "MATCH (a {name: 'A'}), (c {name: 'C'})\nMATCH (a)-->(b)\nRETURN a, b, c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'A'})",
+          "({name: 'B'})",
+          "({name: 'C'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[23] Matching disconnected patterns",
+      "description": "[23] Matching disconnected patterns",
+      "setup": [
+        "CREATE (a:A), (b:B), (c:C)",
+        "CREATE (a)-[:T]->(b), (a)-[:T]->(c)"
+      ],
+      "query": "MATCH (a)-->(b)\nMATCH (c)-->(d)\nRETURN a, b, c, d",
+      "expect_columns": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:B)",
+          "(:A)",
+          "(:B)"
+        ],
+        [
+          "(:A)",
+          "(:B)",
+          "(:A)",
+          "(:C)"
+        ],
+        [
+          "(:A)",
+          "(:C)",
+          "(:A)",
+          "(:B)"
+        ],
+        [
+          "(:A)",
+          "(:C)",
+          "(:A)",
+          "(:C)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[24] Matching twice with duplicate relationship types on same relationship",
+      "description": "[24] Matching twice with duplicate relationship types on same relationship",
+      "setup": [
+        "CREATE (:A)-[:T]->(:B)"
+      ],
+      "query": "MATCH (a1)-[r:T]->()\nWITH r, a1\nMATCH (a1)-[r:T]->(b2)\nRETURN a1, r, b2",
+      "expect_columns": [
+        "a1",
+        "r",
+        "b2"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:T]",
+          "(:B)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[25] Matching twice with an additional node label",
+      "description": "[25] Matching twice with an additional node label",
+      "setup": [
+        "CREATE ()-[:T]->()"
+      ],
+      "query": "MATCH (a1)-[r]->()\nWITH r, a1\nMATCH (a1:X)-[r]->(b2)\nRETURN a1, r, b2",
+      "expect_columns": [
+        "a1",
+        "r",
+        "b2"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[26] Matching twice with a duplicate predicate",
+      "description": "[26] Matching twice with a duplicate predicate",
+      "setup": [
+        "CREATE (:X:Y)-[:T]->()"
+      ],
+      "query": "MATCH (a1:X:Y)-[r]->()\nWITH r, a1\nMATCH (a1:Y)-[r]->(b2)\nRETURN a1, r, b2",
+      "expect_columns": [
+        "a1",
+        "r",
+        "b2"
+      ],
+      "expect_rows": [
+        [
+          "(:X:Y)",
+          "[:T]",
+          "()"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[27] Matching from null nodes should return no results owing to finding no matches",
+      "description": "[27] Matching from null nodes should return no results owing to finding no matches",
+      "setup": [],
+      "query": "OPTIONAL MATCH (a)\nWITH a\nMATCH (a)-->(b)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[28] Matching from null nodes should return no results owing to matches being filtered out",
+      "description": "[28] Matching from null nodes should return no results owing to matches being filtered out",
+      "setup": [
+        "CREATE ()-[:T]->()"
+      ],
+      "query": "OPTIONAL MATCH (a:TheLabel)\nWITH a\nMATCH (a)-->(b)\nRETURN b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[29] Fail when re-using a relationship in the same pattern",
+      "description": "[29] Fail when re-using a relationship in the same pattern",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "RelationshipUniquenessViolation",
+      "setup": [],
+      "query": "MATCH (a)-[r]->()-[r]->(a)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match3 - Match fixed length patterns-[30] Fail when using a list or nodes as a node",
+      "description": "[30] Fail when using a list or nodes as a node",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (n)\nWITH [n] AS users\nMATCH (users)-->(messages)\nRETURN messages",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

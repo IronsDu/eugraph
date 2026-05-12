@@ -1,0 +1,22 @@
+{
+  "source": "expressions/mathematical/Mathematical3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical3 - Subtraction",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Mathematical3 - Subtraction-[1] Fail for invalid Unicode hyphen in subtraction",
+      "description": "[1] Fail for invalid Unicode hyphen in subtraction",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidUnicodeCharacter",
+      "setup": [],
+      "query": "RETURN 42 — 41",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

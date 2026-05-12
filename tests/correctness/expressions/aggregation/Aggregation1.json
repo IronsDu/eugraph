@@ -1,0 +1,56 @@
+{
+  "source": "expressions/aggregation/Aggregation1.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Aggregation1 - Count",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Aggregation1 - Count-[1] Count only non-null values",
+      "description": "[1] Count only non-null values",
+      "setup": [
+        "CREATE ({name: 'a', num: 33})",
+        "CREATE ({name: 'a'})",
+        "CREATE ({name: 'b', num: 42})"
+      ],
+      "query": "MATCH (n)\nRETURN n.name, count(n.num)",
+      "expect_columns": [
+        "n.name",
+        "count(n.num)"
+      ],
+      "expect_rows": [
+        [
+          "'a'",
+          "1"
+        ],
+        [
+          "'b'",
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation1 - Count-[2] Counting loop relationships",
+      "description": "[2] Counting loop relationships",
+      "setup": [
+        "CREATE (a), (a)-[:R]->(a)"
+      ],
+      "query": "MATCH ()-[r]-()\nRETURN count(r)",
+      "expect_columns": [
+        "count(r)"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

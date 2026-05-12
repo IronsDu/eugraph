@@ -1,0 +1,256 @@
+{
+  "source": "expressions/literals/Literals3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Literals3 - Hexadecimal integer",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Literals3 - Hexadecimal integer-[1] Return a short positive hexadecimal integer",
+      "description": "[1] Return a short positive hexadecimal integer",
+      "setup": [],
+      "query": "RETURN 0x1 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[2] Return a long positive hexadecimal integer",
+      "description": "[2] Return a long positive hexadecimal integer",
+      "setup": [],
+      "query": "RETURN 0x162CD4F6 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "372036854"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[3] Return the largest hexadecimal integer",
+      "description": "[3] Return the largest hexadecimal integer",
+      "setup": [],
+      "query": "RETURN 0x7FFFFFFFFFFFFFFF AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "9223372036854775807"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[4] Return a positive hexadecimal zero",
+      "description": "[4] Return a positive hexadecimal zero",
+      "setup": [],
+      "query": "RETURN 0x0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[5] Return a negative hexadecimal zero",
+      "description": "[5] Return a negative hexadecimal zero",
+      "setup": [],
+      "query": "RETURN -0x0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[6] Return a short negative hexadecimal integer",
+      "description": "[6] Return a short negative hexadecimal integer",
+      "setup": [],
+      "query": "RETURN -0x1 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[7] Return a long negative hexadecimal integer",
+      "description": "[7] Return a long negative hexadecimal integer",
+      "setup": [],
+      "query": "RETURN -0x162CD4F6 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-372036854"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[8] Return the smallest hexadecimal integer",
+      "description": "[8] Return the smallest hexadecimal integer",
+      "setup": [],
+      "query": "RETURN -0x8000000000000000 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-9223372036854775808"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[9] Return a lower case hexadecimal integer",
+      "description": "[9] Return a lower case hexadecimal integer",
+      "setup": [],
+      "query": "RETURN 0x1a2b3c4d5e6f7 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "460367961908983"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[10] Return a upper case hexadecimal integer",
+      "description": "[10] Return a upper case hexadecimal integer",
+      "setup": [],
+      "query": "RETURN 0x1A2B3C4D5E6F7 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "460367961908983"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[11] Return a mixed case hexadecimal integer",
+      "description": "[11] Return a mixed case hexadecimal integer",
+      "setup": [],
+      "query": "RETURN 0x1A2b3c4D5E6f7 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "460367961908983"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[12] Fail on an incomplete hexadecimal integer",
+      "description": "[12] Fail on an incomplete hexadecimal integer",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidNumberLiteral",
+      "setup": [],
+      "query": "RETURN 0x AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[13] Fail on an hexadecimal literal containing a lower case invalid alphanumeric character",
+      "description": "[13] Fail on an hexadecimal literal containing a lower case invalid alphanumeric character",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidNumberLiteral",
+      "setup": [],
+      "query": "RETURN 0x1A2b3j4D5E6f7 AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[14] Fail on an hexadecimal literal containing a upper case invalid alphanumeric character",
+      "description": "[14] Fail on an hexadecimal literal containing a upper case invalid alphanumeric character",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidNumberLiteral",
+      "setup": [],
+      "query": "RETURN 0x1A2b3c4Z5E6f7 AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[16] Fail on a too large hexadecimal integer",
+      "description": "[16] Fail on a too large hexadecimal integer",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "IntegerOverflow",
+      "setup": [],
+      "query": "RETURN 0x8000000000000000 AS literal",
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals3 - Hexadecimal integer-[17] Fail on a too small hexadecimal integer",
+      "description": "[17] Fail on a too small hexadecimal integer",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "IntegerOverflow",
+      "setup": [],
+      "query": "RETURN -0x8000000000000001 AS literal",
+      "requires": [],
+      "tags": []
+    }
+  ]
+}

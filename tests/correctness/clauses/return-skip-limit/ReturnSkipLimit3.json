@@ -1,0 +1,102 @@
+{
+  "source": "clauses/return-skip-limit/ReturnSkipLimit3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "ReturnSkipLimit3 - Skip and limit",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "ReturnSkipLimit3 - Skip and limit-[1] Get rows in the middle",
+      "description": "[1] Get rows in the middle",
+      "setup": [
+        "CREATE ({name: 'A'}), ({name: 'B'}), ({name: 'C'}), ({name: 'D'}), ({name: 'E'})"
+      ],
+      "query": "MATCH (n)\nRETURN n\nORDER BY n.name ASC\nSKIP 2\nLIMIT 2",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'C'})"
+        ],
+        [
+          "({name: 'D'})"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "LIMIT",
+        "ORDER BY",
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit3 - Skip and limit-[2] Get rows in the middle by param",
+      "description": "[2] Get rows in the middle by param",
+      "setup": [
+        "CREATE ({name: 'A'}), ({name: 'B'}), ({name: 'C'}), ({name: 'D'}), ({name: 'E'})"
+      ],
+      "query": "MATCH (n)\nRETURN n\nORDER BY n.name ASC\nSKIP $s\nLIMIT $l",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'C'})"
+        ],
+        [
+          "({name: 'D'})"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "LIMIT",
+        "ORDER BY",
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit3 - Skip and limit-[3] Limiting amount of rows when there are fewer left than the LIMIT argument",
+      "description": "[3] Limiting amount of rows when there are fewer left than the LIMIT argument",
+      "setup": [
+        "UNWIND range(0, 15) AS i",
+        "CREATE ({count: i})"
+      ],
+      "query": "MATCH (a)\nRETURN a.count\n  ORDER BY a.count\n  SKIP 10\n  LIMIT 10",
+      "expect_columns": [
+        "a.count"
+      ],
+      "expect_rows": [
+        [
+          "10"
+        ],
+        [
+          "11"
+        ],
+        [
+          "12"
+        ],
+        [
+          "13"
+        ],
+        [
+          "14"
+        ],
+        [
+          "15"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "LIMIT",
+        "ORDER BY",
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

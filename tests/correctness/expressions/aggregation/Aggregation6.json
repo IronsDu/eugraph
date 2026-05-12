@@ -1,0 +1,257 @@
+{
+  "source": "expressions/aggregation/Aggregation6.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Aggregation6 - Percentiles",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Aggregation6 - Percentiles-[1] `percentileDisc()` [p=0.0, result=10.0]",
+      "description": "[1] `percentileDisc()` [p=0.0, result=10.0]",
+      "setup": [
+        "CREATE ({price: 10.0}), ({price: 20.0}), ({price: 30.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileDisc(n.price, $percentile) AS p",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "10.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[1] `percentileDisc()` [p=0.5, result=20.0]",
+      "description": "[1] `percentileDisc()` [p=0.5, result=20.0]",
+      "setup": [
+        "CREATE ({price: 10.0}), ({price: 20.0}), ({price: 30.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileDisc(n.price, $percentile) AS p",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "20.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[1] `percentileDisc()` [p=1.0, result=30.0]",
+      "description": "[1] `percentileDisc()` [p=1.0, result=30.0]",
+      "setup": [
+        "CREATE ({price: 10.0}), ({price: 20.0}), ({price: 30.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileDisc(n.price, $percentile) AS p",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "30.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[2] `percentileCont()` [p=0.0, result=10.0]",
+      "description": "[2] `percentileCont()` [p=0.0, result=10.0]",
+      "setup": [
+        "CREATE ({price: 10.0}), ({price: 20.0}), ({price: 30.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileCont(n.price, $percentile) AS p",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "10.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[2] `percentileCont()` [p=0.5, result=20.0]",
+      "description": "[2] `percentileCont()` [p=0.5, result=20.0]",
+      "setup": [
+        "CREATE ({price: 10.0}), ({price: 20.0}), ({price: 30.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileCont(n.price, $percentile) AS p",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "20.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[2] `percentileCont()` [p=1.0, result=30.0]",
+      "description": "[2] `percentileCont()` [p=1.0, result=30.0]",
+      "setup": [
+        "CREATE ({price: 10.0}), ({price: 20.0}), ({price: 30.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileCont(n.price, $percentile) AS p",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "30.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[3] `percentileCont()` failing on bad arguments [percentile=1000]",
+      "description": "[3] `percentileCont()` failing on bad arguments [percentile=1000]",
+      "setup": [
+        "CREATE ({price: 10.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileCont(n.price, $param)",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[3] `percentileCont()` failing on bad arguments [percentile=-1]",
+      "description": "[3] `percentileCont()` failing on bad arguments [percentile=-1]",
+      "setup": [
+        "CREATE ({price: 10.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileCont(n.price, $param)",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[3] `percentileCont()` failing on bad arguments [percentile=1.1]",
+      "description": "[3] `percentileCont()` failing on bad arguments [percentile=1.1]",
+      "setup": [
+        "CREATE ({price: 10.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileCont(n.price, $param)",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[4] `percentileDisc()` failing on bad arguments [percentile=1000]",
+      "description": "[4] `percentileDisc()` failing on bad arguments [percentile=1000]",
+      "setup": [
+        "CREATE ({price: 10.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileDisc(n.price, $param)",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[4] `percentileDisc()` failing on bad arguments [percentile=-1]",
+      "description": "[4] `percentileDisc()` failing on bad arguments [percentile=-1]",
+      "setup": [
+        "CREATE ({price: 10.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileDisc(n.price, $param)",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[4] `percentileDisc()` failing on bad arguments [percentile=1.1]",
+      "description": "[4] `percentileDisc()` failing on bad arguments [percentile=1.1]",
+      "setup": [
+        "CREATE ({price: 10.0})"
+      ],
+      "query": "MATCH (n)\nRETURN percentileDisc(n.price, $param)",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation6 - Percentiles-[5] `percentileDisc()` failing in more involved query",
+      "description": "[5] `percentileDisc()` failing in more involved query",
+      "setup": [
+        "UNWIND range(0, 10) AS i",
+        "CREATE (s:S)",
+        "WITH s, i",
+        "UNWIND range(0, i) AS j",
+        "CREATE (s)-[:REL]->()"
+      ],
+      "query": "MATCH (n:S)\nWITH n, size([(n)-->() | 1]) AS deg\nWHERE deg > 2\nWITH deg\nLIMIT 100\nRETURN percentileDisc(0.90, deg), deg",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "LIMIT",
+        "percentile"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

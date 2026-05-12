@@ -1,0 +1,1117 @@
+{
+  "source": "clauses/match/Match1.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Match1 - Match nodes",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Match1 - Match nodes-[1] Match non-existent nodes returns empty",
+      "description": "[1] Match non-existent nodes returns empty",
+      "setup": [],
+      "query": "MATCH (n)\nRETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[2] Matching all nodes",
+      "description": "[2] Matching all nodes",
+      "setup": [
+        "CREATE (:A), (:B {name: 'b'}), ({name: 'c'})"
+      ],
+      "query": "MATCH (n)\nRETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ],
+        [
+          "(:B {name: 'b'})"
+        ],
+        [
+          "({name: 'c'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[3] Matching nodes using multiple labels",
+      "description": "[3] Matching nodes using multiple labels",
+      "setup": [
+        "CREATE (:A:B:C), (:A:B), (:A:C), (:B:C), (:A), (:B), (:C), ({name: ':A:B:C'}), ({abc: 'abc'}), ()"
+      ],
+      "query": "MATCH (a:A:B)\nRETURN a",
+      "expect_columns": [
+        "a"
+      ],
+      "expect_rows": [
+        [
+          "(:A:B)"
+        ],
+        [
+          "(:A:B:C)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[4] Simple node inline property predicate",
+      "description": "[4] Simple node inline property predicate",
+      "setup": [
+        "CREATE ({name: 'bar'}), ({name: 'monkey'}), ({firstname: 'bar'})"
+      ],
+      "query": "MATCH (n {name: 'bar'})\nRETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'bar'})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[5] Use multiple MATCH clauses to do a Cartesian product",
+      "description": "[5] Use multiple MATCH clauses to do a Cartesian product",
+      "setup": [
+        "CREATE ({num: 1}), ({num: 2}), ({num: 3})"
+      ],
+      "query": "MATCH (n), (m)\nRETURN n.num AS n, m.num AS m",
+      "expect_columns": [
+        "n",
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "1"
+        ],
+        [
+          "1",
+          "2"
+        ],
+        [
+          "1",
+          "3"
+        ],
+        [
+          "2",
+          "1"
+        ],
+        [
+          "2",
+          "2"
+        ],
+        [
+          "2",
+          "3"
+        ],
+        [
+          "3",
+          "3"
+        ],
+        [
+          "3",
+          "1"
+        ],
+        [
+          "3",
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[6] Fail when using parameter as node predicate in MATCH",
+      "description": "[6] Fail when using parameter as node predicate in MATCH",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidParameterUse",
+      "setup": [],
+      "query": "MATCH (n $param)\nRETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[r]-()]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[r]->()]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[r]->()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]->()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()<-[r]-()]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()<-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()<-[r]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=(), ()-[r]-()]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=(), ()-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), ()-[r]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[r]-(), ()]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[r]-(), ()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]-(), ()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-(), ()-[r]-()]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-(), ()-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-(), ()-[r]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-()-[r]-()]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-()-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()-[r]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-()-[]-(), ()-[r]-()]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-()-[]-(), ()-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()-[]-(), ()-[r]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-()-[]-(), ()-[r]-(), ()]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-()-[]-(), ()-[r]-(), ()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()-[]-(), ()-[r]-(), ()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-()-[]-(), (), ()-[r]-()]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-()-[]-(), (), ()-[r]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()-[]-(), (), ()-[r]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=(x), (a)-[q]-(b), (s), (s)-[r]->(t)<-[]-(b)]",
+      "description": "[7] Fail when a relationship has the same variable in a preceding MATCH [pattern=(x), (a)-[q]-(b), (s), (s)-[r]->(t)<-[]-(b)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), (a)-[q]-(b), (s), (s)-[r]->(t)<-[]-(b)\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[]-()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()-[]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[]->()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[]->()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()-[]->()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()<-[]-()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()<-[]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()<-[]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[*]-()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[*]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()-[*]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[*]->()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[*]->()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()-[*]->()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()-[]-()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()-[]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), r = ()-[]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()-[]->()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()-[]->()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), r = ()-[]->()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()<-[]-()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()<-[]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), r = ()<-[]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()-[*]-()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()-[*]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), r = ()-[*]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()-[*]->()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()-[*]->()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), r = ()-[*]->()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=()-[]-(), r = ()-[]-(), ()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=()-[]-(), r = ()-[]-(), ()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-(), r = ()-[]-(), ()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[]-(), ()-[]-(), ()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[]-(), ()-[]-(), ()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()-[]-(), ()-[]-(), ()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=()-[]-()<-[]-(), r = ()-[]-()]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=()-[]-()<-[]-(), r = ()-[]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()<-[]-(), r = ()-[]-()\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=(x), r = (a)-[q]-(b), (s)-[p]-(t)-[]-(b)]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=(x), r = (a)-[q]-(b), (s)-[p]-(t)-[]-(b)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), r = (a)-[q]-(b), (s)-[p]-(t)-[]-(b)\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=(x), (a)-[q]-(b), r = (s)-[p]-(t)-[]-(b)]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=(x), (a)-[q]-(b), r = (s)-[p]-(t)-[]-(b)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), (a)-[q]-(b), r = (s)-[p]-(t)-[]-(b)\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[8] Fail when a path has the same variable in a preceding MATCH [pattern=(x), (a)-[q]-(b), r = (s)-[p]->(t)<-[]-(b)]",
+      "description": "[8] Fail when a path has the same variable in a preceding MATCH [pattern=(x), (a)-[q]-(b), r = (s)-[p]->(t)<-[]-(b)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), (a)-[q]-(b), r = (s)-[p]->(t)<-[]-(b)\nMATCH (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]-(r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]->(r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]->(r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]->(r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()<-[r]-(r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()<-[r]-(r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()<-[r]-(r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-()-[]-(r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-()-[]-(r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]-()-[]-(r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r*]-()-[]-(r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r*]-()-[]-(r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r*]-()-[]-(r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(), (r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]->(), (r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]->(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]->(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()<-[r]-(), (r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()<-[r]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()<-[r]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(), (r)-[]-()]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(), (r)-[]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]-(), (r)-[]-()\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(), ()-[]-(r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(), ()-[]-(r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]-(), ()-[]-(r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=(s)-[r]-(t), (r)-[]-(t)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=(s)-[r]-(t), (r)-[]-(t)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (s)-[r]-(t), (r)-[]-(t)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=(s)-[r]-(t), (s)-[]-(r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=(s)-[r]-(t), (s)-[]-(r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (s)-[r]-(t), (s)-[]-(r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=(), ()-[r]-(), (r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=(), ()-[r]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), ()-[r]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(), (), (r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(), (), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]-(), (), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(), (r), ()]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[r]-(), (r), ()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[r]-(), (r), ()\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-(), ()-[r]-(), (r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-(), ()-[r]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-(), ()-[r]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[r]-(), ()-[]-(r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[r]-(), ()-[]-(r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()-[r]-(), ()-[]-(r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[]-(), ()-[r]-(), (r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[]-(), ()-[r]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()-[]-(), ()-[r]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[r]-(), (r), ()-[]-()]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[r]-(), (r), ()-[]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()-[r]-(), (r), ()-[]-()\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[r]-(), (), (r)-[]-()]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[r]-(), (), (r)-[]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()-[r]-(), (), (r)-[]-()\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[r*]-(), (r), ()-[]-()]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[r*]-(), (r), ()-[]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()-[r*]-(), (r), ()-[]-()\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[*]-()-[r]-(), (), (r)-[]-()]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[*]-()-[r]-(), (), (r)-[]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[*]-()-[r]-(), (), (r)-[]-()\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[*]-()-[r]-(), (), (r)-[*]-()]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[*]-()-[r]-(), (), (r)-[*]-()]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[*]-()-[r]-(), (), (r)-[*]-()\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[*]-()-[r]-(), (), ()-[*]-(r)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=()-[*]-()-[r]-(), (), ()-[*]-(r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[*]-()-[r]-(), (), ()-[*]-(r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[9] Fail when a relationship has the same variable in the same pattern [pattern=(x), (a)-[r]-(b), (s), (s)-[]->(r)<-[]-(b)]",
+      "description": "[9] Fail when a relationship has the same variable in the same pattern [pattern=(x), (a)-[r]-(b), (s), (s)-[]->(r)<-[]-(b)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), (a)-[r]-(b), (s), (s)-[]->(r)<-[]-(b)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=r = ()-[]-(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=r = ()-[]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()-[]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=r = ()-[]->(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=r = ()-[]->(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()-[]->(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=r = ()<-[]-(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=r = ()<-[]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()<-[]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=r = ()-[*]-(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=r = ()-[*]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()-[*]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=r = ()-[*]->(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=r = ()-[*]->(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()-[*]->(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(), r = ()-[]-(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(), r = ()-[]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), r = ()-[]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(), r = ()-[]->(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(), r = ()-[]->(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), r = ()-[]->(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(), r = ()<-[]-(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(), r = ()<-[]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), r = ()<-[]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(), r = ()-[*]-(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(), r = ()-[*]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), r = ()-[*]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(), r = ()-[*]->(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(), r = ()-[*]->(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (), r = ()-[*]->(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=()-[]-(), r = ()-[]-(), (), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=()-[]-(), r = ()-[]-(), (), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-(), r = ()-[]-(), (), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=r = ()-[]-(), ()-[]-(), (), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=r = ()-[]-(), ()-[]-(), (), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH r = ()-[]-(), ()-[]-(), (), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=()-[]-()<-[]-(), r = ()-[]-(), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=()-[]-()<-[]-(), r = ()-[]-(), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH ()-[]-()<-[]-(), r = ()-[]-(), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(x), r = (a)-[q]-(b), (s)-[p]-(t)-[]-(b), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(x), r = (a)-[q]-(b), (s)-[p]-(t)-[]-(b), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), r = (a)-[q]-(b), (s)-[p]-(t)-[]-(b), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(x), (a)-[q]-(b), r = (s)-[p]-(t)-[]-(b), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(x), (a)-[q]-(b), r = (s)-[p]-(t)-[]-(b), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), (a)-[q]-(b), r = (s)-[p]-(t)-[]-(b), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(x), (a)-[q]-(b), r = (s)-[p]->(t)<-[]-(b), (r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(x), (a)-[q]-(b), r = (s)-[p]->(t)<-[]-(b), (r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), (a)-[q]-(b), r = (s)-[p]->(t)<-[]-(b), (r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(x), r = (s)-[p]-(t)-[]-(b), (r), (a)-[q]-(b)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(x), r = (s)-[p]-(t)-[]-(b), (r), (a)-[q]-(b)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), r = (s)-[p]-(t)-[]-(b), (r), (a)-[q]-(b)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(x), r = (s)-[p]->(t)<-[]-(b), (r), (a)-[q]-(b)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(x), r = (s)-[p]->(t)<-[]-(b), (r), (a)-[q]-(b)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), r = (s)-[p]->(t)<-[]-(b), (r), (a)-[q]-(b)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(x), r = (s)-[p]-(t)-[]-(b), (a)-[q]-(r)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(x), r = (s)-[p]-(t)-[]-(b), (a)-[q]-(r)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), r = (s)-[p]-(t)-[]-(b), (a)-[q]-(r)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[10] Fail when a path has the same variable in the same pattern [pattern=(x), r = (s)-[p]->(t)<-[]-(b), (r)-[q]-(b)]",
+      "description": "[10] Fail when a path has the same variable in the same pattern [pattern=(x), r = (s)-[p]->(t)<-[]-(b), (r)-[q]-(b)]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "MATCH (x), r = (s)-[p]->(t)<-[]-(b), (r)-[q]-(b)\nRETURN r",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[11] Fail when matching a node variable bound to a value [invalid=true]",
+      "description": "[11] Fail when matching a node variable bound to a value [invalid=true]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "WITH true AS n\nMATCH (n)\nRETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[11] Fail when matching a node variable bound to a value [invalid=123]",
+      "description": "[11] Fail when matching a node variable bound to a value [invalid=123]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "WITH 123 AS n\nMATCH (n)\nRETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[11] Fail when matching a node variable bound to a value [invalid=123.4]",
+      "description": "[11] Fail when matching a node variable bound to a value [invalid=123.4]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "WITH 123.4 AS n\nMATCH (n)\nRETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[11] Fail when matching a node variable bound to a value [invalid='foo']",
+      "description": "[11] Fail when matching a node variable bound to a value [invalid='foo']",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "WITH 'foo' AS n\nMATCH (n)\nRETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[11] Fail when matching a node variable bound to a value [invalid=[]]",
+      "description": "[11] Fail when matching a node variable bound to a value [invalid=[]]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "WITH [] AS n\nMATCH (n)\nRETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[11] Fail when matching a node variable bound to a value [invalid=[10]]",
+      "description": "[11] Fail when matching a node variable bound to a value [invalid=[10]]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "WITH [10] AS n\nMATCH (n)\nRETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[11] Fail when matching a node variable bound to a value [invalid={x: 1}]",
+      "description": "[11] Fail when matching a node variable bound to a value [invalid={x: 1}]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "WITH {x: 1} AS n\nMATCH (n)\nRETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Match1 - Match nodes-[11] Fail when matching a node variable bound to a value [invalid={x: []}]",
+      "description": "[11] Fail when matching a node variable bound to a value [invalid={x: []}]",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "VariableTypeConflict",
+      "setup": [],
+      "query": "WITH {x: []} AS n\nMATCH (n)\nRETURN n",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

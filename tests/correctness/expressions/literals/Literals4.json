@@ -1,0 +1,166 @@
+{
+  "source": "expressions/literals/Literals4.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Literals4 - Octal integer",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Literals4 - Octal integer-[1] Return a short positive octal integer",
+      "description": "[1] Return a short positive octal integer",
+      "setup": [],
+      "query": "RETURN 0o1 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals4 - Octal integer-[2] Return a long positive octal integer",
+      "description": "[2] Return a long positive octal integer",
+      "setup": [],
+      "query": "RETURN 0o2613152366 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "372036854"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals4 - Octal integer-[3] Return the largest octal integer",
+      "description": "[3] Return the largest octal integer",
+      "setup": [],
+      "query": "RETURN 0o777777777777777777777 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "9223372036854775807"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals4 - Octal integer-[4] Return a positive octal zero",
+      "description": "[4] Return a positive octal zero",
+      "setup": [],
+      "query": "RETURN 0o0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals4 - Octal integer-[5] Return a negative octal zero",
+      "description": "[5] Return a negative octal zero",
+      "setup": [],
+      "query": "RETURN -0o0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals4 - Octal integer-[6] Return a short negative octal integer",
+      "description": "[6] Return a short negative octal integer",
+      "setup": [],
+      "query": "RETURN -0o1 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals4 - Octal integer-[7] Return a long negative octal integer",
+      "description": "[7] Return a long negative octal integer",
+      "setup": [],
+      "query": "RETURN -0o2613152366 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-372036854"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals4 - Octal integer-[8] Return the smallest octal integer",
+      "description": "[8] Return the smallest octal integer",
+      "setup": [],
+      "query": "RETURN -0o1000000000000000000000 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-9223372036854775808"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals4 - Octal integer-[9] Fail on a too large octal integer",
+      "description": "[9] Fail on a too large octal integer",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "IntegerOverflow",
+      "setup": [],
+      "query": "RETURN 0o1000000000000000000000 AS literal",
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals4 - Octal integer-[10] Fail on a too small octal integer",
+      "description": "[10] Fail on a too small octal integer",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "IntegerOverflow",
+      "setup": [],
+      "query": "RETURN -0o1000000000000000000001 AS literal",
+      "requires": [],
+      "tags": []
+    }
+  ]
+}

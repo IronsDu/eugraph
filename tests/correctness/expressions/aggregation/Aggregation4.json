@@ -1,0 +1,7 @@
+{
+  "source": "expressions/aggregation/Aggregation4.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Aggregation4 - Avg",
+  "capability": "partial",
+  "scenarios": []
+}

@@ -1,0 +1,26 @@
+{
+  "source": "expressions/mathematical/Mathematical13.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical13 - Square root",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Mathematical13 - Square root-[1] `sqrt()` returning float values",
+      "description": "[1] `sqrt()` returning float values",
+      "setup": [],
+      "query": "RETURN sqrt(12.96)",
+      "expect_columns": [
+        "sqrt(12.96)"
+      ],
+      "expect_rows": [
+        [
+          "3.6"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "source": "clauses/return/Return7.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Return7 - Return all variables",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Return7 - Return all variables-[1] Return all variables",
+      "description": "[1] Return all variables",
+      "setup": [
+        "CREATE (:Start)-[:T]->()"
+      ],
+      "query": "MATCH p = (a:Start)-->(b)\nRETURN *",
+      "expect_columns": [
+        "a",
+        "b",
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "(:Start)",
+          "()",
+          "<(:Start)-[:T]->()>"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return7 - Return all variables-[2] Fail when using RETURN * without variables in scope",
+      "description": "[2] Fail when using RETURN * without variables in scope",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "NoVariablesInScope",
+      "setup": [],
+      "query": "MATCH ()\nRETURN *",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "source": "expressions/mathematical/Mathematical12.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical12 - Rounding numbers",
+  "capability": "partial",
+  "scenarios": []
+}

@@ -1,0 +1,339 @@
+{
+  "source": "clauses/return-skip-limit/ReturnSkipLimit2.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "ReturnSkipLimit2 - Limit",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "ReturnSkipLimit2 - Limit-[1] Limit to two hits",
+      "description": "[1] Limit to two hits",
+      "setup": [],
+      "query": "UNWIND [1, 1, 1, 1, 1] AS i\nRETURN i\nLIMIT 2",
+      "expect_columns": [
+        "i"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ],
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "LIMIT",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[2] Limit to two hits with explicit order",
+      "description": "[2] Limit to two hits with explicit order",
+      "setup": [
+        "CREATE ({name: 'A'}), ({name: 'B'}), ({name: 'C'}), ({name: 'D'}), ({name: 'E'})"
+      ],
+      "query": "MATCH (n)\nRETURN n\nORDER BY n.name ASC\nLIMIT 2",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'A'})"
+        ],
+        [
+          "({name: 'B'})"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "LIMIT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[3] LIMIT 0 should return an empty result",
+      "description": "[3] LIMIT 0 should return an empty result",
+      "setup": [
+        "CREATE (), (), ()"
+      ],
+      "query": "MATCH (n)\nRETURN n\n  LIMIT 0",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[4] Handle ORDER BY with LIMIT 1",
+      "description": "[4] Handle ORDER BY with LIMIT 1",
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nORDER BY p.name\nLIMIT 1",
+      "expect_columns": [
+        "name"
+      ],
+      "expect_rows": [
+        [
+          "'Craig'"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "LIMIT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[5] ORDER BY with LIMIT 0 should not generate errors",
+      "description": "[5] ORDER BY with LIMIT 0 should not generate errors",
+      "setup": [],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nORDER BY p.name\nLIMIT 0",
+      "expect_columns": [
+        "name"
+      ],
+      "expect_rows": [],
+      "ordered": true,
+      "requires": [
+        "LIMIT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[6] LIMIT with an expression that does not depend on variables",
+      "description": "[6] LIMIT with an expression that does not depend on variables",
+      "setup": [
+        "UNWIND range(1, 3) AS i",
+        "CREATE ({nr: i})"
+      ],
+      "query": "MATCH (n)\nWITH n LIMIT toInteger(ceil(1.7))\nRETURN count(*) AS count",
+      "expect_columns": [
+        "count"
+      ],
+      "expect_rows": [
+        [
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "LIMIT",
+        "toInteger"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[7] Limit to more rows than actual results 1",
+      "description": "[7] Limit to more rows than actual results 1",
+      "setup": [
+        "CREATE ({num: 1}), ({num: 3}), ({num: 2})"
+      ],
+      "query": "MATCH (foo)\nRETURN foo.num AS x\n  ORDER BY x DESC\n  LIMIT 4",
+      "expect_columns": [
+        "x"
+      ],
+      "expect_rows": [
+        [
+          "3"
+        ],
+        [
+          "2"
+        ],
+        [
+          "1"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "LIMIT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[8] Limit to more rows than actual results 2",
+      "description": "[8] Limit to more rows than actual results 2",
+      "setup": [
+        "CREATE (a:A), (n1 {num: 1}), (n2 {num: 2}), (m1), (m2)",
+        "CREATE (a)-[:T]->(n1), (n1)-[:T]->(m1), (a)-[:T]->(n2), (n2)-[:T]->(m2)"
+      ],
+      "query": "MATCH (a:A)-->(n)-->(m)\nRETURN n.num, count(*)\n  ORDER BY n.num\n  LIMIT 1000",
+      "expect_columns": [
+        "n.num",
+        "count(*)"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "1"
+        ],
+        [
+          "2",
+          "1"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "LIMIT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[9] Fail when using non-constants in LIMIT",
+      "description": "[9] Fail when using non-constants in LIMIT",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "NonConstantExpression",
+      "setup": [],
+      "query": "MATCH (n) RETURN n LIMIT n.count",
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[10] Negative parameter for LIMIT should fail",
+      "description": "[10] Negative parameter for LIMIT should fail",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": null,
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nLIMIT $_limit",
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[11] Negative parameter for LIMIT with ORDER BY should fail",
+      "description": "[11] Negative parameter for LIMIT with ORDER BY should fail",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": null,
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nORDER BY name LIMIT $_limit",
+      "requires": [
+        "LIMIT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[12] Fail when using negative value in LIMIT 1",
+      "description": "[12] Fail when using negative value in LIMIT 1",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "NegativeIntegerArgument",
+      "setup": [],
+      "query": "MATCH (n)\nRETURN n\n  LIMIT -1",
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[13] Fail when using negative value in LIMIT 2",
+      "description": "[13] Fail when using negative value in LIMIT 2",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "NegativeIntegerArgument",
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nLIMIT -1",
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[14] Floating point parameter for LIMIT should fail",
+      "description": "[14] Floating point parameter for LIMIT should fail",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": null,
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nLIMIT $_limit",
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[15] Floating point parameter for LIMIT with ORDER BY should fail",
+      "description": "[15] Floating point parameter for LIMIT with ORDER BY should fail",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": null,
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nORDER BY name LIMIT $_limit",
+      "requires": [
+        "LIMIT",
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[16] Fail when using floating point in LIMIT 1",
+      "description": "[16] Fail when using floating point in LIMIT 1",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [],
+      "query": "MATCH (n)\nRETURN n\n  LIMIT 1.7",
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit2 - Limit-[17] Fail when using floating point in LIMIT 2",
+      "description": "[17] Fail when using floating point in LIMIT 2",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nLIMIT 1.5",
+      "requires": [
+        "LIMIT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

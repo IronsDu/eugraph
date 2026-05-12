@@ -1,0 +1,33 @@
+{
+  "source": "expressions/comparison/Comparison4.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Comparison4 - Combination of Comparisons",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Comparison4 - Combination of Comparisons-[1] Handling long chains of operators",
+      "description": "[1] Handling long chains of operators",
+      "setup": [
+        "CREATE (a:A {prop1: 3, prop2: 4})",
+        "CREATE (b:B {prop1: 4, prop2: 5})",
+        "CREATE (c:C {prop1: 4, prop2: 4})",
+        "CREATE (a)-[:R]->(b)",
+        "CREATE (b)-[:R]->(c)",
+        "CREATE (c)-[:R]->(a)"
+      ],
+      "query": "MATCH (n)-->(m)\nWHERE n.prop1 < m.prop1 = n.prop2 <> m.prop2\nRETURN labels(m)",
+      "expect_columns": [
+        "labels(m)"
+      ],
+      "expect_rows": [
+        [
+          "['B']"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

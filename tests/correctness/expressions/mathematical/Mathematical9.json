@@ -1,0 +1,7 @@
+{
+  "source": "expressions/mathematical/Mathematical9.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical9 - Mathematical constants",
+  "capability": "partial",
+  "scenarios": []
+}

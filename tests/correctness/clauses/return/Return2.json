@@ -1,0 +1,351 @@
+{
+  "source": "clauses/return/Return2.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Return2 - Return single expression (correctly projecting an expression)",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[1] Arithmetic expressions should propagate null values",
+      "description": "[1] Arithmetic expressions should propagate null values",
+      "setup": [],
+      "query": "RETURN 1 + (2 - (3 * (4 / (5 ^ (6 % null))))) AS a",
+      "expect_columns": [
+        "a"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[2] Returning a node property value",
+      "description": "[2] Returning a node property value",
+      "setup": [
+        "CREATE ({num: 1})"
+      ],
+      "query": "MATCH (a)\nRETURN a.num",
+      "expect_columns": [
+        "a.num"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[3] Missing node property should become null",
+      "description": "[3] Missing node property should become null",
+      "setup": [
+        "CREATE ({num: 1})"
+      ],
+      "query": "MATCH (a)\nRETURN a.name",
+      "expect_columns": [
+        "a.name"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[4] Returning a relationship property value",
+      "description": "[4] Returning a relationship property value",
+      "setup": [
+        "CREATE ()-[:T {num: 1}]->()"
+      ],
+      "query": "MATCH ()-[r]->()\nRETURN r.num",
+      "expect_columns": [
+        "r.num"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[5] Missing relationship property should become null",
+      "description": "[5] Missing relationship property should become null",
+      "setup": [
+        "CREATE ()-[:T {name: 1}]->()"
+      ],
+      "query": "MATCH ()-[r]->()\nRETURN r.name2",
+      "expect_columns": [
+        "r.name2"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[6] Adding a property and a literal in projection",
+      "description": "[6] Adding a property and a literal in projection",
+      "setup": [
+        "CREATE ({num: 1})"
+      ],
+      "query": "MATCH (a)\nRETURN a.num + 1 AS foo",
+      "expect_columns": [
+        "foo"
+      ],
+      "expect_rows": [
+        [
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[7] Adding list properties in projection",
+      "description": "[7] Adding list properties in projection",
+      "setup": [
+        "CREATE ({list1: [1, 2, 3], list2: [4, 5]})"
+      ],
+      "query": "MATCH (a)\nRETURN a.list2 + a.list1 AS foo",
+      "expect_columns": [
+        "foo"
+      ],
+      "expect_rows": [
+        [
+          "[4, 5, 1, 2, 3]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[8] Returning label predicate expression",
+      "description": "[8] Returning label predicate expression",
+      "setup": [
+        "CREATE (), (:Foo)"
+      ],
+      "query": "MATCH (n)\nRETURN (n:Foo)",
+      "expect_columns": [
+        "(n:Foo)"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ],
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[9] Returning a projected map",
+      "description": "[9] Returning a projected map",
+      "setup": [
+        "CREATE ({numbers: [1, 2, 3]})"
+      ],
+      "query": "RETURN {a: 1, b: 'foo'}",
+      "expect_columns": [
+        "{a: 1, b: 'foo'}"
+      ],
+      "expect_rows": [
+        [
+          "{a: 1, b: 'foo'}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[10] Return count aggregation over an empty graph",
+      "description": "[10] Return count aggregation over an empty graph",
+      "setup": [],
+      "query": "MATCH (a)\nRETURN count(a) > 0",
+      "expect_columns": [
+        "count(a) > 0"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[11] RETURN does not lose precision on large integers",
+      "description": "[11] RETURN does not lose precision on large integers",
+      "setup": [
+        "CREATE (:TheLabel {id: 4611686018427387905})"
+      ],
+      "query": "MATCH (p:TheLabel)\nRETURN p.id",
+      "expect_columns": [
+        "p.id"
+      ],
+      "expect_rows": [
+        [
+          "4611686018427387905"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[12] Projecting a list of nodes and relationships",
+      "description": "[12] Projecting a list of nodes and relationships",
+      "setup": [
+        "CREATE (a:A), (b:B)",
+        "CREATE (a)-[:T]->(b)"
+      ],
+      "query": "MATCH (n)-[r]->(m)\nRETURN [n, r, m] AS r",
+      "expect_columns": [
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "[(:A), [:T], (:B)]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[13] Projecting a map of nodes and relationships",
+      "description": "[13] Projecting a map of nodes and relationships",
+      "setup": [
+        "CREATE (a:A), (b:B)",
+        "CREATE (a)-[:T]->(b)"
+      ],
+      "query": "MATCH (n)-[r]->(m)\nRETURN {node1: n, rel: r, node2: m} AS m",
+      "expect_columns": [
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "{node1: (:A), rel: [:T], node2: (:B)}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[14] Do not fail when returning type of deleted relationships",
+      "description": "[14] Do not fail when returning type of deleted relationships",
+      "setup": [
+        "CREATE ()-[:T]->()"
+      ],
+      "query": "MATCH ()-[r]->()\nDELETE r\nRETURN type(r)",
+      "expect_columns": [
+        "type(r)"
+      ],
+      "expect_rows": [
+        [
+          "'T'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DELETE"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[15] Fail when returning properties of deleted nodes",
+      "description": "[15] Fail when returning properties of deleted nodes",
+      "setup": [
+        "CREATE ({num: 0})"
+      ],
+      "query": "MATCH (n)\nDELETE n\nRETURN n.num",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "DELETE"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[16] Fail when returning labels of deleted nodes",
+      "description": "[16] Fail when returning labels of deleted nodes",
+      "setup": [
+        "CREATE (:A)"
+      ],
+      "query": "MATCH (n)\nDELETE n\nRETURN labels(n)",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "DELETE"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[17] Fail when returning properties of deleted relationships",
+      "description": "[17] Fail when returning properties of deleted relationships",
+      "setup": [
+        "CREATE ()-[:T {num: 0}]->()"
+      ],
+      "query": "MATCH ()-[r]->()\nDELETE r\nRETURN r.num",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "DELETE"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return2 - Return single expression (correctly projecting an expression)-[18] Fail on projecting a non-existent function",
+      "description": "[18] Fail on projecting a non-existent function",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnknownFunction",
+      "setup": [],
+      "query": "MATCH (a)\nRETURN foo(a)",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

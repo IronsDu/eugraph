@@ -1,0 +1,248 @@
+{
+  "source": "expressions/aggregation/Aggregation2.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Aggregation2 - Min and Max",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Aggregation2 - Min and Max-[1] `max()` over integers",
+      "description": "[1] `max()` over integers",
+      "setup": [],
+      "query": "UNWIND [1, 2, 0, null, -1] AS x\nRETURN max(x)",
+      "expect_columns": [
+        "max(x)"
+      ],
+      "expect_rows": [
+        [
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[2] `min()` over integers",
+      "description": "[2] `min()` over integers",
+      "setup": [],
+      "query": "UNWIND [1, 2, 0, null, -1] AS x\nRETURN min(x)",
+      "expect_columns": [
+        "min(x)"
+      ],
+      "expect_rows": [
+        [
+          "-1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[3] `max()` over floats",
+      "description": "[3] `max()` over floats",
+      "setup": [],
+      "query": "UNWIND [1.0, 2.0, 0.5, null] AS x\nRETURN max(x)",
+      "expect_columns": [
+        "max(x)"
+      ],
+      "expect_rows": [
+        [
+          "2.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[4] `min()` over floats",
+      "description": "[4] `min()` over floats",
+      "setup": [],
+      "query": "UNWIND [1.0, 2.0, 0.5, null] AS x\nRETURN min(x)",
+      "expect_columns": [
+        "min(x)"
+      ],
+      "expect_rows": [
+        [
+          "0.5"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[5] `max()` over mixed numeric values",
+      "description": "[5] `max()` over mixed numeric values",
+      "setup": [],
+      "query": "UNWIND [1, 2.0, 5, null, 3.2, 0.1] AS x\nRETURN max(x)",
+      "expect_columns": [
+        "max(x)"
+      ],
+      "expect_rows": [
+        [
+          "5"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[6] `min()` over mixed numeric values",
+      "description": "[6] `min()` over mixed numeric values",
+      "setup": [],
+      "query": "UNWIND [1, 2.0, 5, null, 3.2, 0.1] AS x\nRETURN min(x)",
+      "expect_columns": [
+        "min(x)"
+      ],
+      "expect_rows": [
+        [
+          "0.1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[7] `max()` over strings",
+      "description": "[7] `max()` over strings",
+      "setup": [],
+      "query": "UNWIND ['a', 'b', 'B', null, 'abc', 'abc1'] AS i\nRETURN max(i)",
+      "expect_columns": [
+        "max(i)"
+      ],
+      "expect_rows": [
+        [
+          "'b'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[8] `min()` over strings",
+      "description": "[8] `min()` over strings",
+      "setup": [],
+      "query": "UNWIND ['a', 'b', 'B', null, 'abc', 'abc1'] AS i\nRETURN min(i)",
+      "expect_columns": [
+        "min(i)"
+      ],
+      "expect_rows": [
+        [
+          "'B'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[9] `max()` over list values",
+      "description": "[9] `max()` over list values",
+      "setup": [],
+      "query": "UNWIND [[1], [2], [2, 1]] AS x\nRETURN max(x)",
+      "expect_columns": [
+        "max(x)"
+      ],
+      "expect_rows": [
+        [
+          "[2, 1]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[10] `min()` over list values",
+      "description": "[10] `min()` over list values",
+      "setup": [],
+      "query": "UNWIND [[1], [2], [2, 1]] AS x\nRETURN min(x)",
+      "expect_columns": [
+        "min(x)"
+      ],
+      "expect_rows": [
+        [
+          "[1]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[11] `max()` over mixed values",
+      "description": "[11] `max()` over mixed values",
+      "setup": [],
+      "query": "UNWIND [1, 'a', null, [1, 2], 0.2, 'b'] AS x\nRETURN max(x)",
+      "expect_columns": [
+        "max(x)"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation2 - Min and Max-[12] `min()` over mixed values",
+      "description": "[12] `min()` over mixed values",
+      "setup": [],
+      "query": "UNWIND [1, 'a', null, [1, 2], 0.2, 'b'] AS x\nRETURN min(x)",
+      "expect_columns": [
+        "min(x)"
+      ],
+      "expect_rows": [
+        [
+          "[1, 2]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

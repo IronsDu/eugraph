@@ -1,0 +1,66 @@
+{
+  "source": "clauses/return-orderby/ReturnOrderBy4.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "ReturnOrderBy4 - Order by in combination with projection",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "ReturnOrderBy4 - Order by in combination with projection-[1] ORDER BY of a column introduced in RETURN should return salient results in ascending order",
+      "description": "[1] ORDER BY of a column introduced in RETURN should return salient results in ascending order",
+      "setup": [],
+      "query": "WITH [0, 1] AS prows, [[2], [3, 4]] AS qrows\nUNWIND prows AS p\nUNWIND qrows[p] AS q\nWITH p, count(q) AS rng\nRETURN p\nORDER BY rng",
+      "expect_columns": [
+        "p"
+      ],
+      "expect_rows": [
+        [
+          "0"
+        ],
+        [
+          "1"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy4 - Order by in combination with projection-[2] Handle projections with ORDER BY",
+      "description": "[2] Handle projections with ORDER BY",
+      "setup": [
+        "CREATE (c1:Crew {name: 'Neo', rank: 1}), (c2:Crew {name: 'Neo', rank: 2}), (c3:Crew {name: 'Neo', rank: 3}), (c4:Crew {name: 'Neo', rank: 4}), (c5:Crew {name: 'Neo', rank: 5})"
+      ],
+      "query": "MATCH (c:Crew {name: 'Neo'})\nWITH c, 0 AS relevance\nRETURN c.rank AS rank\nORDER BY relevance, c.rank",
+      "expect_columns": [
+        "rank"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ],
+        [
+          "2"
+        ],
+        [
+          "3"
+        ],
+        [
+          "4"
+        ],
+        [
+          "5"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

@@ -1,0 +1,116 @@
+{
+  "source": "expressions/literals/Literals1.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Literals1 - Boolean and Null",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Literals1 - Boolean and Null-[1] Return a boolean true lower case",
+      "description": "[1] Return a boolean true lower case",
+      "setup": [],
+      "query": "RETURN true AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals1 - Boolean and Null-[2] Return a boolean true upper case",
+      "description": "[2] Return a boolean true upper case",
+      "setup": [],
+      "query": "RETURN TRUE AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [
+        "@skipStyleCheck"
+      ]
+    },
+    {
+      "id": "Literals1 - Boolean and Null-[3] Return a boolean false lower case",
+      "description": "[3] Return a boolean false lower case",
+      "setup": [],
+      "query": "RETURN false AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals1 - Boolean and Null-[4] Return a boolean false upper case",
+      "description": "[4] Return a boolean false upper case",
+      "setup": [],
+      "query": "RETURN FALSE AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [
+        "@skipStyleCheck"
+      ]
+    },
+    {
+      "id": "Literals1 - Boolean and Null-[5] Return null lower case",
+      "description": "[5] Return null lower case",
+      "setup": [],
+      "query": "RETURN null AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals1 - Boolean and Null-[6] Return null upper case",
+      "description": "[6] Return null upper case",
+      "setup": [],
+      "query": "RETURN NULL AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [
+        "@skipStyleCheck"
+      ]
+    }
+  ]
+}

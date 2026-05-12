@@ -1,0 +1,192 @@
+{
+  "source": "expressions/null/Null3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Null3 - Null evaluation",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Null3 - Null evaluation-[1] The inverse of a null is a null",
+      "description": "[1] The inverse of a null is a null",
+      "setup": [],
+      "query": "RETURN NOT null AS value",
+      "expect_columns": [
+        "value"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null3 - Null evaluation-[2] It is unknown - i.e. null - if a null is equal to a null",
+      "description": "[2] It is unknown - i.e. null - if a null is equal to a null",
+      "setup": [],
+      "query": "RETURN null = null AS value",
+      "expect_columns": [
+        "value"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null3 - Null evaluation-[3] It is unknown - i.e. null - if a null is not equal to a null",
+      "description": "[3] It is unknown - i.e. null - if a null is not equal to a null",
+      "setup": [],
+      "query": "RETURN null <> null AS value",
+      "expect_columns": [
+        "value"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null3 - Null evaluation-[4] Using null in IN [elt=null, coll=null, result=null]",
+      "description": "[4] Using null in IN [elt=null, coll=null, result=null]",
+      "setup": [],
+      "query": "RETURN $elt IN $coll AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Null3 - Null evaluation-[4] Using null in IN [elt=null, coll=[1, 2, 3], result=null]",
+      "description": "[4] Using null in IN [elt=null, coll=[1, 2, 3], result=null]",
+      "setup": [],
+      "query": "RETURN $elt IN $coll AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Null3 - Null evaluation-[4] Using null in IN [elt=null, coll=[1, 2, 3, null], result=null]",
+      "description": "[4] Using null in IN [elt=null, coll=[1, 2, 3, null], result=null]",
+      "setup": [],
+      "query": "RETURN $elt IN $coll AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Null3 - Null evaluation-[4] Using null in IN [elt=null, coll=[], result=false]",
+      "description": "[4] Using null in IN [elt=null, coll=[], result=false]",
+      "setup": [],
+      "query": "RETURN $elt IN $coll AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Null3 - Null evaluation-[4] Using null in IN [elt=1, coll=[1, 2, 3, null], result=true]",
+      "description": "[4] Using null in IN [elt=1, coll=[1, 2, 3, null], result=true]",
+      "setup": [],
+      "query": "RETURN $elt IN $coll AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Null3 - Null evaluation-[4] Using null in IN [elt=1, coll=[null, 1], result=true]",
+      "description": "[4] Using null in IN [elt=1, coll=[null, 1], result=true]",
+      "setup": [],
+      "query": "RETURN $elt IN $coll AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Null3 - Null evaluation-[4] Using null in IN [elt=5, coll=[1, 2, 3, null], result=null]",
+      "description": "[4] Using null in IN [elt=5, coll=[1, 2, 3, null], result=null]",
+      "setup": [],
+      "query": "RETURN $elt IN $coll AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "IN"
+      ],
+      "tags": []
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "source": "clauses/match-where/MatchWhere4.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "MatchWhere4 - Non-Equi-Joins on variables",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "MatchWhere4 - Non-Equi-Joins on variables-[1] Join nodes on inequality",
+      "description": "[1] Join nodes on inequality",
+      "setup": [
+        "CREATE (:A), (:B)"
+      ],
+      "query": "MATCH (a), (b)\nWHERE a <> b\nRETURN a, b",
+      "expect_columns": [
+        "a",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "(:B)"
+        ],
+        [
+          "(:B)",
+          "(:A)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere4 - Non-Equi-Joins on variables-[2] Join with disjunctive multi-part predicates including patterns",
+      "description": "[2] Join with disjunctive multi-part predicates including patterns",
+      "setup": [
+        "CREATE (a:TheLabel {id: 0}), (b:TheLabel {id: 1}), (c:TheLabel {id: 2})",
+        "CREATE (a)-[:T]->(b), (b)-[:T]->(c)"
+      ],
+      "query": "MATCH (a), (b)\nWHERE a.id = 0\n  AND (a)-[:T]->(b:TheLabel)\n  OR (a)-[:T*]->(b:MissingLabel)\nRETURN DISTINCT b",
+      "expect_columns": [
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:TheLabel {id: 1})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "source": "clauses/return-orderby/ReturnOrderBy3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "ReturnOrderBy3 - Order by multiple expressions (order obey priority of expressions)",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "ReturnOrderBy3 - Order by multiple expressions (order obey priority of expressions)-[1] Sort on aggregate function and normal property",
+      "description": "[1] Sort on aggregate function and normal property",
+      "setup": [
+        "CREATE ({division: 'Sweden'})",
+        "CREATE ({division: 'Germany'})",
+        "CREATE ({division: 'England'})",
+        "CREATE ({division: 'Sweden'})"
+      ],
+      "query": "MATCH (n)\nRETURN n.division, count(*)\nORDER BY count(*) DESC, n.division ASC",
+      "expect_columns": [
+        "n.division",
+        "count(*)"
+      ],
+      "expect_rows": [
+        [
+          "'Sweden'",
+          "2"
+        ],
+        [
+          "'England'",
+          "1"
+        ],
+        [
+          "'Germany'",
+          "1"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

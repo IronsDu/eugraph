@@ -1,0 +1,40 @@
+{
+  "source": "clauses/return/Return1.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Return1 - Return single variable (correct return of values according to their type)",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Return1 - Return single variable (correct return of values according to their type)-[1] Returning a list property",
+      "description": "[1] Returning a list property",
+      "setup": [
+        "CREATE ({numbers: [1, 2, 3]})"
+      ],
+      "query": "MATCH (n)\nRETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "({numbers: [1, 2, 3]})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return1 - Return single variable (correct return of values according to their type)-[2] Fail when returning an undefined variable",
+      "description": "[2] Fail when returning an undefined variable",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH ()\nRETURN foo",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

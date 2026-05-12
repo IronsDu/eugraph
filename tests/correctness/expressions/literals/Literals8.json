@@ -1,0 +1,431 @@
+{
+  "source": "expressions/literals/Literals8.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Literals8 - Maps",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Literals8 - Maps-[1] Return an empty map",
+      "description": "[1] Return an empty map",
+      "setup": [],
+      "query": "RETURN {} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[2] Return a map containing one value with alphabetic lower case key",
+      "description": "[2] Return a map containing one value with alphabetic lower case key",
+      "setup": [],
+      "query": "RETURN {abc: 1} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{abc: 1}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[3] Return a map containing one value with alphabetic upper case key",
+      "description": "[3] Return a map containing one value with alphabetic upper case key",
+      "setup": [],
+      "query": "RETURN {ABC: 1} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{ABC: 1}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[4] Return a map containing one value with alphabetic mixed case key",
+      "description": "[4] Return a map containing one value with alphabetic mixed case key",
+      "setup": [],
+      "query": "RETURN {aBCdeF: 1} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{aBCdeF: 1}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[5] Return a map containing one value with alphanumeric mixed case key",
+      "description": "[5] Return a map containing one value with alphanumeric mixed case key",
+      "setup": [],
+      "query": "RETURN {a1B2c3e67: 1} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{a1B2c3e67: 1}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[6] Return a map containing a boolean",
+      "description": "[6] Return a map containing a boolean",
+      "setup": [],
+      "query": "RETURN {k: false} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{k: false}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[7] Return a map containing a null",
+      "description": "[7] Return a map containing a null",
+      "setup": [],
+      "query": "RETURN {k: null} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{k: null}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[8] Return a map containing a integer",
+      "description": "[8] Return a map containing a integer",
+      "setup": [],
+      "query": "RETURN {k: 1} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{k: 1}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[9] Return a map containing a hexadecimal integer",
+      "description": "[9] Return a map containing a hexadecimal integer",
+      "setup": [],
+      "query": "RETURN {F: -0x162CD4F6} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{F: -372036854}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[10] Return a map containing a octal integer",
+      "description": "[10] Return a map containing a octal integer",
+      "setup": [],
+      "query": "RETURN {k: 0o2613152366} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{k: 372036854}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[11] Return a map containing a float",
+      "description": "[11] Return a map containing a float",
+      "setup": [],
+      "query": "RETURN {k: -.1e-5} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{k: -0.000001}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[12] Return a map containing a string",
+      "description": "[12] Return a map containing a string",
+      "setup": [],
+      "query": "RETURN {k: 'ab: c, as#?lßdj '} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{k: 'ab: c, as#?lßdj '}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[13] Return a map containing an empty map",
+      "description": "[13] Return a map containing an empty map",
+      "setup": [],
+      "query": "RETURN {a: {}} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{a: {}}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[14] Return seven-deep nested maps",
+      "description": "[14] Return seven-deep nested maps",
+      "setup": [],
+      "query": "RETURN {a1: {a2: {a3: {a4: {a5: {a6: {}}}}}}} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{a1: {a2: {a3: {a4: {a5: {a6: {}}}}}}}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[15] Return 20-deep nested maps",
+      "description": "[15] Return 20-deep nested maps",
+      "setup": [],
+      "query": "RETURN {a1: {a2: {a3: {a4: {a5: {a6: {a7: {a8: {a9: {a10: {a11: {a12: {a13: {a14: {a15: {a16: {a17: {a18: {a19: {}}}}}}}}}}}}}}}}}}}} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{a1: {a2: {a3: {a4: {a5: {a6: {a7: {a8: {a9: {a10: {a11: {a12: {a13: {a14: {a15: {a16: {a17: {a18: {a19: {}}}}}}}}}}}}}}}}}}}}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[16] Return 40-deep nested maps",
+      "description": "[16] Return 40-deep nested maps",
+      "setup": [],
+      "query": "RETURN {a1: {a2: {a3: {a4: {a5: {a6: {a7: {a8: {a9: {a10: {a11: {a12: {a13: {a14: {a15: {a16: {a17: {a18: {a19: {a20: {a21: {a22: {a23: {a24: {a25: {a26: {a27: {a28: {a29: {a30: {a31: {a32: {a33: {a34: {a35: {a36: {a37: {a38: {a39: {}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}} AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{a1: {a2: {a3: {a4: {a5: {a6: {a7: {a8: {a9: {a10: {a11: {a12: {a13: {a14: {a15: {a16: {a17: {a18: {a19: {a20: {a21: {a22: {a23: {a24: {a25: {a26: {a27: {a28: {a29: {a30: {a31: {a32: {a33: {a34: {a35: {a36: {a37: {a38: {a39: {}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[17] Return a map containing real and fake nested maps",
+      "description": "[17] Return a map containing real and fake nested maps",
+      "setup": [],
+      "query": "RETURN { a : ' { b : ' , c : { d : ' ' } , d : ' } ' } AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{a: ' { b : ', c: {d: ' '}, d: ' } '}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[18] Return a complex map containing multiple mixed and nested values",
+      "description": "[18] Return a complex map containing multiple mixed and nested values",
+      "setup": [],
+      "query": "RETURN  { data: [ {\n            id: '0001',\n            type: 'donut',\n            name: 'Cake',\n            ppu: 0.55,\n            batters:\n                {\n                    batter:\n                        [\n                            { id: '1001', type: 'Regular' },\n                            { id: '1002', type: 'Chocolate' },\n                            { id: '1003', type: 'Blueberry' },\n                            { id: '1004', type: 'Devils Food' }\n                        ]\n                },\n            topping:\n                [\n                    { id: '5001', type: 'None' },\n                    { id: '5002', type: 'Glazed' },\n                    { id: '5005', type: 'Sugar' },\n                    { id: '5007', type: 'Powdered Sugar' },\n                    { id: '5006', type: 'Chocolate Sprinkles' },\n                    { id: '5003', type: 'Chocolate' },\n                    { id: '5004', type: 'Maple' }\n                ]\n        },\n        {\n            id: '0002',\n            type: 'donut',\n            name: 'Raised',\n            ppu: 0.55,\n            batters:\n                {\n                    batter:\n                        [\n                            { id: '1001', type: 'Regular' }\n                        ]\n                },\n            topping:\n                [\n                    { id: '5001', type: 'None' },\n                    { id: '5002', type: 'Glazed' },\n                    { id: '5005', type: 'Sugar' },\n                    { id: '5003', type: 'Chocolate' },\n                    { id: '5004', type: 'Maple' }\n                ]\n        },\n        {\n            id: '0003',\n            type: 'donut',\n            name: 'Old Fashioned',\n            ppu: 0.55,\n            batters:\n                {\n                    batter:\n                        [\n                            { id: '1001', type: 'Regular' },\n                            { id: '1002', type: 'Chocolate' }\n                        ]\n                },\n            topping:\n                [\n                    { id: '5001', type: 'None' },\n                    { id: '5002', type: 'Glazed' },\n                    { id: '5003', type: 'Chocolate' },\n                    { id: '5004', type: 'Maple' }\n                ]\n        } ] } AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "{data: [{id: '0001', type: 'donut', name: 'Cake', ppu: 0.55, batters: {batter: [{id: '1001', type: 'Regular'}, {id: '1002', type: 'Chocolate'}, {id: '1003', type: 'Blueberry'}, {id: '1004', type: 'Devils Food'}]}, topping: [{id: '5001', type: 'None'}, {id: '5002', type: 'Glazed'}, {id: '5005', type: 'Sugar'}, {id: '5007', type: 'Powdered Sugar'}, {id: '5006', type: 'Chocolate Sprinkles'}, {id: '5003', type: 'Chocolate'}, {id: '5004', type: 'Maple'}]}, {id: '0002', type: 'donut', name: 'Raised', ppu: 0.55, batters: {batter: [{id: '1001', type: 'Regular'}]}, topping: [{id: '5001', type: 'None'}, {id: '5002', type: 'Glazed'}, {id: '5005', type: 'Sugar'}, {id: '5003', type: 'Chocolate'}, {id: '5004', type: 'Maple'}]}, {id: '0003', type: 'donut', name: 'Old Fashioned', ppu: 0.55, batters: {batter: [{id: '1001', type: 'Regular'}, {id: '1002', type: 'Chocolate'}]}, topping: [{id: '5001', type: 'None'}, {id: '5002', type: 'Glazed'}, {id: '5003', type: 'Chocolate'}, {id: '5004', type: 'Maple'}]}]}"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [
+        "@skipStyleCheck"
+      ]
+    },
+    {
+      "id": "Literals8 - Maps-[19] Fail on a map containing key starting with a number",
+      "description": "[19] Fail on a map containing key starting with a number",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "RETURN {1B2c3e67:1} AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals8 - Maps-[20] Fail on a map containing key with symbol",
+      "description": "[20] Fail on a map containing key with symbol",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "RETURN {k1#k: 1} AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals8 - Maps-[21] Fail on a map containing key with dot",
+      "description": "[21] Fail on a map containing key with dot",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "RETURN {k1.k: 1} AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals8 - Maps-[22] Fail on a map containing unquoted string",
+      "description": "[22] Fail on a map containing unquoted string",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "RETURN {k1: k2} AS literal",
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals8 - Maps-[23] Fail on a map containing only a comma",
+      "description": "[23] Fail on a map containing only a comma",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "RETURN {, } AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals8 - Maps-[24] Fail on a map containing a value without key",
+      "description": "[24] Fail on a map containing a value without key",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "RETURN {1} AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals8 - Maps-[25] Fail on a map containing a list without key",
+      "description": "[25] Fail on a map containing a list without key",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "RETURN {[]} AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals8 - Maps-[26] Fail on a map containing a map without key",
+      "description": "[26] Fail on a map containing a map without key",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "RETURN {{}} AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals8 - Maps-[27] Fail on a nested map with non-matching braces",
+      "description": "[27] Fail on a nested map with non-matching braces",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "RETURN {k: {k: {}} AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    }
+  ]
+}

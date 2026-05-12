@@ -1,0 +1,26 @@
+{
+  "source": "expressions/mathematical/Mathematical11.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical11 - Signed numbers functions",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Mathematical11 - Signed numbers functions-[1] Absolute function",
+      "description": "[1] Absolute function",
+      "setup": [],
+      "query": "RETURN abs(-1)",
+      "expect_columns": [
+        "abs(-1)"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

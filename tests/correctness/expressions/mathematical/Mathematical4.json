@@ -1,0 +1,7 @@
+{
+  "source": "expressions/mathematical/Mathematical4.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical4 - Multiplication",
+  "capability": "partial",
+  "scenarios": []
+}

@@ -1,0 +1,268 @@
+{
+  "source": "expressions/precedence/Precedence4.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Precedence4 - On null value",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Precedence4 - On null value-[1] Null predicate takes precedence over comparison operator [null1=NOT NULL, comp==, null2=NULL, right=false, wrong=true]",
+      "description": "[1] Null predicate takes precedence over comparison operator [null1=NOT NULL, comp==, null2=NULL, right=false, wrong=true]",
+      "setup": [],
+      "query": "RETURN null IS NOT NULL = null IS NULL AS a,\n       (null IS NOT NULL) = (null IS NULL) AS b,\n       (null IS NOT NULL = null) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[1] Null predicate takes precedence over comparison operator [null1=NULL, comp=<>, null2=NULL, right=false, wrong=true]",
+      "description": "[1] Null predicate takes precedence over comparison operator [null1=NULL, comp=<>, null2=NULL, right=false, wrong=true]",
+      "setup": [],
+      "query": "RETURN null IS NULL <> null IS NULL AS a,\n       (null IS NULL) <> (null IS NULL) AS b,\n       (null IS NULL <> null) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[1] Null predicate takes precedence over comparison operator [null1=NULL, comp=<>, null2=NOT NULL, right=true, wrong=false]",
+      "description": "[1] Null predicate takes precedence over comparison operator [null1=NULL, comp=<>, null2=NOT NULL, right=true, wrong=false]",
+      "setup": [],
+      "query": "RETURN null IS NULL <> null IS NOT NULL AS a,\n       (null IS NULL) <> (null IS NOT NULL) AS b,\n       (null IS NULL <> null) IS NOT NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[2] Null predicate takes precedence over boolean negation",
+      "description": "[2] Null predicate takes precedence over boolean negation",
+      "setup": [],
+      "query": "RETURN NOT null IS NULL AS a,\n       NOT (null IS NULL) AS b,\n       (NOT null) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=null, op=AND, truth2=null, null=NULL, right=null, wrong=true]",
+      "description": "[3] Null predicate takes precedence over binary boolean operator [truth1=null, op=AND, truth2=null, null=NULL, right=null, wrong=true]",
+      "setup": [],
+      "query": "RETURN null AND null IS NULL AS a,\n       null AND (null IS NULL) AS b,\n       (null AND null) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "null",
+          "null",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=null, op=AND, truth2=true, null=NULL, right=false, wrong=true]",
+      "description": "[3] Null predicate takes precedence over binary boolean operator [truth1=null, op=AND, truth2=true, null=NULL, right=false, wrong=true]",
+      "setup": [],
+      "query": "RETURN null AND true IS NULL AS a,\n       null AND (true IS NULL) AS b,\n       (null AND true) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=false, op=AND, truth2=false, null=NOT NULL, right=false, wrong=true]",
+      "description": "[3] Null predicate takes precedence over binary boolean operator [truth1=false, op=AND, truth2=false, null=NOT NULL, right=false, wrong=true]",
+      "setup": [],
+      "query": "RETURN false AND false IS NOT NULL AS a,\n       false AND (false IS NOT NULL) AS b,\n       (false AND false) IS NOT NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=null, op=OR, truth2=false, null=NULL, right=null, wrong=true]",
+      "description": "[3] Null predicate takes precedence over binary boolean operator [truth1=null, op=OR, truth2=false, null=NULL, right=null, wrong=true]",
+      "setup": [],
+      "query": "RETURN null OR false IS NULL AS a,\n       null OR (false IS NULL) AS b,\n       (null OR false) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "null",
+          "null",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=true, op=OR, truth2=null, null=NULL, right=true, wrong=false]",
+      "description": "[3] Null predicate takes precedence over binary boolean operator [truth1=true, op=OR, truth2=null, null=NULL, right=true, wrong=false]",
+      "setup": [],
+      "query": "RETURN true OR null IS NULL AS a,\n       true OR (null IS NULL) AS b,\n       (true OR null) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=true, op=XOR, truth2=null, null=NOT NULL, right=true, wrong=false]",
+      "description": "[3] Null predicate takes precedence over binary boolean operator [truth1=true, op=XOR, truth2=null, null=NOT NULL, right=true, wrong=false]",
+      "setup": [],
+      "query": "RETURN true XOR null IS NOT NULL AS a,\n       true XOR (null IS NOT NULL) AS b,\n       (true XOR null) IS NOT NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "XOR"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=true, op=XOR, truth2=false, null=NULL, right=true, wrong=false]",
+      "description": "[3] Null predicate takes precedence over binary boolean operator [truth1=true, op=XOR, truth2=false, null=NULL, right=true, wrong=false]",
+      "setup": [],
+      "query": "RETURN true XOR false IS NULL AS a,\n       true XOR (false IS NULL) AS b,\n       (true XOR false) IS NULL AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "XOR"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Precedence4 - On null value-[4] String predicate takes precedence over binary boolean operator",
+      "description": "[4] String predicate takes precedence over binary boolean operator",
+      "setup": [],
+      "query": "RETURN ('abc' STARTS WITH null OR true) = (('abc' STARTS WITH null) OR true) AS a,\n       ('abc' STARTS WITH null OR true) <> ('abc' STARTS WITH (null OR true)) AS b,\n       (true OR null STARTS WITH 'abc') = (true OR (null STARTS WITH 'abc')) AS c,\n       (true OR null STARTS WITH 'abc') <> ((true OR null) STARTS WITH 'abc') AS d",
+      "expect_columns": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "null",
+          "true",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "STARTS WITH"
+      ],
+      "tags": []
+    }
+  ]
+}

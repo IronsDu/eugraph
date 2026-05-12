@@ -1,0 +1,192 @@
+{
+  "source": "expressions/literals/Literals2.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Literals2 - Decimal integer",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Literals2 - Decimal integer-[1] Return a short positive integer",
+      "description": "[1] Return a short positive integer",
+      "setup": [],
+      "query": "RETURN 1 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals2 - Decimal integer-[2] Return a long positive integer",
+      "description": "[2] Return a long positive integer",
+      "setup": [],
+      "query": "RETURN 372036854 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "372036854"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals2 - Decimal integer-[3] Return the largest integer",
+      "description": "[3] Return the largest integer",
+      "setup": [],
+      "query": "RETURN 9223372036854775807 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "9223372036854775807"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals2 - Decimal integer-[4] Return a positive zero",
+      "description": "[4] Return a positive zero",
+      "setup": [],
+      "query": "RETURN 0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals2 - Decimal integer-[5] Return a negative zero",
+      "description": "[5] Return a negative zero",
+      "setup": [],
+      "query": "RETURN -0 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals2 - Decimal integer-[6] Return a short negative integer",
+      "description": "[6] Return a short negative integer",
+      "setup": [],
+      "query": "RETURN -1 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals2 - Decimal integer-[7] Return a long negative integer",
+      "description": "[7] Return a long negative integer",
+      "setup": [],
+      "query": "RETURN -372036854 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-372036854"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals2 - Decimal integer-[8] Return the smallest integer",
+      "description": "[8] Return the smallest integer",
+      "setup": [],
+      "query": "RETURN -9223372036854775808 AS literal",
+      "expect_columns": [
+        "literal"
+      ],
+      "expect_rows": [
+        [
+          "-9223372036854775808"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals2 - Decimal integer-[9] Fail on a too large integer",
+      "description": "[9] Fail on a too large integer",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "IntegerOverflow",
+      "setup": [],
+      "query": "RETURN 9223372036854775808 AS literal",
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals2 - Decimal integer-[10] Fail on a too small integer",
+      "description": "[10] Fail on a too small integer",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "IntegerOverflow",
+      "setup": [],
+      "query": "RETURN -9223372036854775809 AS literal",
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Literals2 - Decimal integer-[11] Fail on an integer containing a alphabetic character",
+      "description": "[11] Fail on an integer containing a alphabetic character",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidNumberLiteral",
+      "setup": [],
+      "query": "RETURN 9223372h54775808 AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    },
+    {
+      "id": "Literals2 - Decimal integer-[12] Fail on an integer containing a invalid symbol character",
+      "description": "[12] Fail on an integer containing a invalid symbol character",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UnexpectedSyntax",
+      "setup": [],
+      "query": "RETURN 9223372#54775808 AS literal",
+      "requires": [],
+      "tags": [
+        "@skipGrammarCheck"
+      ]
+    }
+  ]
+}

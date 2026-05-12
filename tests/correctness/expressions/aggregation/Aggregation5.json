@@ -1,0 +1,53 @@
+{
+  "source": "expressions/aggregation/Aggregation5.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Aggregation5 - Collect",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Aggregation5 - Collect-[1] `collect()` filtering nulls",
+      "description": "[1] `collect()` filtering nulls",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH (n)\nOPTIONAL MATCH (n)-[:NOT_EXIST]->(x)\nRETURN n, collect(x)",
+      "expect_columns": [
+        "n",
+        "collect(x)"
+      ],
+      "expect_rows": [
+        [
+          "()",
+          "[]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH",
+        "collect"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation5 - Collect-[2] OPTIONAL MATCH and `collect()` on node property",
+      "description": "[2] OPTIONAL MATCH and `collect()` on node property",
+      "setup": [
+        "CREATE (:DoesExist {num: 42})",
+        "CREATE (:DoesExist {num: 43})",
+        "CREATE (:DoesExist {num: 44})"
+      ],
+      "query": "OPTIONAL MATCH (f:DoesExist)\nOPTIONAL MATCH (n:DoesNotExist)\nRETURN collect(DISTINCT n.num) AS a, collect(DISTINCT f.num) AS b",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "DISTINCT",
+        "OPTIONAL MATCH",
+        "collect"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

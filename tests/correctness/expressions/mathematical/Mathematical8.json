@@ -1,0 +1,44 @@
+{
+  "source": "expressions/mathematical/Mathematical8.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical8 - Arithmetic precedence",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Mathematical8 - Arithmetic precedence-[1] Arithmetic precedence test",
+      "description": "[1] Arithmetic precedence test",
+      "setup": [],
+      "query": "RETURN 12 / 4 * 3 - 2 * 4",
+      "expect_columns": [
+        "12 / 4 * 3 - 2 * 4"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Mathematical8 - Arithmetic precedence-[2] Arithmetic precedence with parenthesis test",
+      "description": "[2] Arithmetic precedence with parenthesis test",
+      "setup": [],
+      "query": "RETURN 12 / 4 * (3 - 2 * 4)",
+      "expect_columns": [
+        "12 / 4 * (3 - 2 * 4)"
+      ],
+      "expect_rows": [
+        [
+          "-15"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

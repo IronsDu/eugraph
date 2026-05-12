@@ -1,0 +1,53 @@
+{
+  "source": "expressions/aggregation/Aggregation3.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Aggregation3 - Sum",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Aggregation3 - Sum-[1] Sum only non-null values",
+      "description": "[1] Sum only non-null values",
+      "setup": [
+        "CREATE ({name: 'a', num: 33})",
+        "CREATE ({name: 'a'})",
+        "CREATE ({name: 'a', num: 42})"
+      ],
+      "query": "MATCH (n)\nRETURN n.name, sum(n.num)",
+      "expect_columns": [
+        "n.name",
+        "sum(n.num)"
+      ],
+      "expect_rows": [
+        [
+          "'a'",
+          "75"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation3 - Sum-[2] No overflow during summation",
+      "description": "[2] No overflow during summation",
+      "setup": [],
+      "query": "UNWIND range(1000000, 2000000) AS i\nWITH i\nLIMIT 3000\nRETURN sum(i)",
+      "expect_columns": [
+        "sum(i)"
+      ],
+      "expect_rows": [
+        [
+          "3004498500"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "LIMIT",
+        "UNWIND"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

@@ -1,0 +1,554 @@
+{
+  "source": "expressions/precedence/Precedence2.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Precedence2 - On numeric values",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=+, mult2=*, right=14, wrong=40]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=+, mult2=*, right=14, wrong=40]",
+      "setup": [],
+      "query": "RETURN 4 * 2 + 3 * 2 AS a,\n       4 * 2 + (3 * 2) AS b,\n       4 * (2 + 3) * 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "14",
+          "14",
+          "40"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=+, mult2=/, right=9, wrong=10]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=+, mult2=/, right=9, wrong=10]",
+      "setup": [],
+      "query": "RETURN 4 * 2 + 3 / 2 AS a,\n       4 * 2 + (3 / 2) AS b,\n       4 * (2 + 3) / 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "9",
+          "9",
+          "10"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=+, mult2=%, right=9, wrong=0]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=+, mult2=%, right=9, wrong=0]",
+      "setup": [],
+      "query": "RETURN 4 * 2 + 3 % 2 AS a,\n       4 * 2 + (3 % 2) AS b,\n       4 * (2 + 3) % 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "9",
+          "9",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=-, mult2=*, right=2, wrong=-8]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=-, mult2=*, right=2, wrong=-8]",
+      "setup": [],
+      "query": "RETURN 4 * 2 - 3 * 2 AS a,\n       4 * 2 - (3 * 2) AS b,\n       4 * (2 - 3) * 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "2",
+          "2",
+          "-8"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=-, mult2=/, right=7, wrong=-2]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=-, mult2=/, right=7, wrong=-2]",
+      "setup": [],
+      "query": "RETURN 4 * 2 - 3 / 2 AS a,\n       4 * 2 - (3 / 2) AS b,\n       4 * (2 - 3) / 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "7",
+          "7",
+          "-2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=-, mult2=%, right=7, wrong=0]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=-, mult2=%, right=7, wrong=0]",
+      "setup": [],
+      "query": "RETURN 4 * 2 - 3 % 2 AS a,\n       4 * 2 - (3 % 2) AS b,\n       4 * (2 - 3) % 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "7",
+          "7",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=+, mult2=*, right=8, wrong=0]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=+, mult2=*, right=8, wrong=0]",
+      "setup": [],
+      "query": "RETURN 4 / 2 + 3 * 2 AS a,\n       4 / 2 + (3 * 2) AS b,\n       4 / (2 + 3) * 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "8",
+          "8",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=+, mult2=/, right=3, wrong=0]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=+, mult2=/, right=3, wrong=0]",
+      "setup": [],
+      "query": "RETURN 4 / 2 + 3 / 2 AS a,\n       4 / 2 + (3 / 2) AS b,\n       4 / (2 + 3) / 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "3",
+          "3",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=+, mult2=%, right=3, wrong=0]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=+, mult2=%, right=3, wrong=0]",
+      "setup": [],
+      "query": "RETURN 4 / 2 + 3 % 2 AS a,\n       4 / 2 + (3 % 2) AS b,\n       4 / (2 + 3) % 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "3",
+          "3",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=-, mult2=*, right=-4, wrong=-8]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=-, mult2=*, right=-4, wrong=-8]",
+      "setup": [],
+      "query": "RETURN 4 / 2 - 3 * 2 AS a,\n       4 / 2 - (3 * 2) AS b,\n       4 / (2 - 3) * 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "-4",
+          "-4",
+          "-8"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=-, mult2=/, right=1, wrong=-2]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=-, mult2=/, right=1, wrong=-2]",
+      "setup": [],
+      "query": "RETURN 4 / 2 - 3 / 2 AS a,\n       4 / 2 - (3 / 2) AS b,\n       4 / (2 - 3) / 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "1",
+          "-2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=-, mult2=%, right=1, wrong=0]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=-, mult2=%, right=1, wrong=0]",
+      "setup": [],
+      "query": "RETURN 4 / 2 - 3 % 2 AS a,\n       4 / 2 - (3 % 2) AS b,\n       4 / (2 - 3) % 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "1",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=+, mult2=*, right=6, wrong=8]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=+, mult2=*, right=6, wrong=8]",
+      "setup": [],
+      "query": "RETURN 4 % 2 + 3 * 2 AS a,\n       4 % 2 + (3 * 2) AS b,\n       4 % (2 + 3) * 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "6",
+          "6",
+          "8"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=+, mult2=/, right=1, wrong=2]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=+, mult2=/, right=1, wrong=2]",
+      "setup": [],
+      "query": "RETURN 4 % 2 + 3 / 2 AS a,\n       4 % 2 + (3 / 2) AS b,\n       4 % (2 + 3) / 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "1",
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=+, mult2=%, right=1, wrong=0]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=+, mult2=%, right=1, wrong=0]",
+      "setup": [],
+      "query": "RETURN 4 % 2 + 3 % 2 AS a,\n       4 % 2 + (3 % 2) AS b,\n       4 % (2 + 3) % 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "1",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=-, mult2=*, right=-6, wrong=0]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=-, mult2=*, right=-6, wrong=0]",
+      "setup": [],
+      "query": "RETURN 4 % 2 - 3 * 2 AS a,\n       4 % 2 - (3 * 2) AS b,\n       4 % (2 - 3) * 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "-6",
+          "-6",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=-, mult2=/, right=-1, wrong=0]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=-, mult2=/, right=-1, wrong=0]",
+      "setup": [],
+      "query": "RETURN 4 % 2 - 3 / 2 AS a,\n       4 % 2 - (3 / 2) AS b,\n       4 % (2 - 3) / 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "-1",
+          "-1",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=-, mult2=%, right=-1, wrong=0]",
+      "description": "[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=-, mult2=%, right=-1, wrong=0]",
+      "setup": [],
+      "query": "RETURN 4 % 2 - 3 % 2 AS a,\n       4 % 2 - (3 % 2) AS b,\n       4 % (2 - 3) % 2 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "-1",
+          "-1",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[2] Exponentiation takes precedence over numeric multiplicative operations [mult=*, right=512.0, wrong=68719476736.0]",
+      "description": "[2] Exponentiation takes precedence over numeric multiplicative operations [mult=*, right=512.0, wrong=68719476736.0]",
+      "setup": [],
+      "query": "RETURN 4 ^ 3 * 2 ^ 3 AS a,\n       (4 ^ 3) * (2 ^ 3) AS b,\n       4 ^ (3 * 2) ^ 3 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "512.0",
+          "512.0",
+          "68719476736.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[2] Exponentiation takes precedence over numeric multiplicative operations [mult=/, right=8.0, wrong=64.0]",
+      "description": "[2] Exponentiation takes precedence over numeric multiplicative operations [mult=/, right=8.0, wrong=64.0]",
+      "setup": [],
+      "query": "RETURN 4 ^ 3 / 2 ^ 3 AS a,\n       (4 ^ 3) / (2 ^ 3) AS b,\n       4 ^ (3 / 2) ^ 3 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "8.0",
+          "8.0",
+          "64.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[2] Exponentiation takes precedence over numeric multiplicative operations [mult=%, right=0.0, wrong=64.0]",
+      "description": "[2] Exponentiation takes precedence over numeric multiplicative operations [mult=%, right=0.0, wrong=64.0]",
+      "setup": [],
+      "query": "RETURN 4 ^ 3 % 2 ^ 3 AS a,\n       (4 ^ 3) % (2 ^ 3) AS b,\n       4 ^ (3 % 2) ^ 3 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "0.0",
+          "0.0",
+          "64.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[3] Exponentiation takes precedence over numeric additive operations [add=+, right=72.0, wrong=1073741824.0]",
+      "description": "[3] Exponentiation takes precedence over numeric additive operations [add=+, right=72.0, wrong=1073741824.0]",
+      "setup": [],
+      "query": "RETURN 4 ^ 3 + 2 ^ 3 AS a,\n       (4 ^ 3) + (2 ^ 3) AS b,\n       4 ^ (3 + 2) ^ 3 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "72.0",
+          "72.0",
+          "1073741824.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[3] Exponentiation takes precedence over numeric additive operations [add=-, right=56.0, wrong=64.0]",
+      "description": "[3] Exponentiation takes precedence over numeric additive operations [add=-, right=56.0, wrong=64.0]",
+      "setup": [],
+      "query": "RETURN 4 ^ 3 - 2 ^ 3 AS a,\n       (4 ^ 3) - (2 ^ 3) AS b,\n       4 ^ (3 - 2) ^ 3 AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "56.0",
+          "56.0",
+          "64.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[4] Numeric unary negative takes precedence over exponentiation",
+      "description": "[4] Numeric unary negative takes precedence over exponentiation",
+      "setup": [],
+      "query": "RETURN -3 ^ 2 AS a,\n       (-3) ^ 2 AS b,\n       -(3 ^ 2) AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "9.0",
+          "9.0",
+          "-9.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[5] Numeric unary negative takes precedence over numeric additive operations [add=+, right=-1, wrong=-5]",
+      "description": "[5] Numeric unary negative takes precedence over numeric additive operations [add=+, right=-1, wrong=-5]",
+      "setup": [],
+      "query": "RETURN -3 + 2 AS a,\n       (-3) + 2 AS b,\n       -(3 + 2) AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "-1",
+          "-1",
+          "-5"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Precedence2 - On numeric values-[5] Numeric unary negative takes precedence over numeric additive operations [add=-, right=-5, wrong=-1]",
+      "description": "[5] Numeric unary negative takes precedence over numeric additive operations [add=-, right=-5, wrong=-1]",
+      "setup": [],
+      "query": "RETURN -3 - 2 AS a,\n       (-3) - 2 AS b,\n       -(3 - 2) AS c",
+      "expect_columns": [
+        "a",
+        "b",
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "-5",
+          "-5",
+          "-1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    }
+  ]
+}

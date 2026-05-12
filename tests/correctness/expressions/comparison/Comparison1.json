@@ -1,0 +1,800 @@
+{
+  "source": "expressions/comparison/Comparison1.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Comparison1 - Equality",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Comparison1 - Equality-[1] Number-typed integer comparison",
+      "description": "[1] Number-typed integer comparison",
+      "setup": [
+        "CREATE ({id: 0})"
+      ],
+      "query": "WITH collect([0, 0.0]) AS numbers\nUNWIND numbers AS arr\nWITH arr[0] AS expected\nMATCH (n) WHERE toInteger(n.id) = expected\nRETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "({id: 0})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "UNWIND",
+        "collect",
+        "toInteger"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[2] Number-typed float comparison",
+      "description": "[2] Number-typed float comparison",
+      "setup": [
+        "CREATE ({id: 0})"
+      ],
+      "query": "WITH collect([0.5, 0]) AS numbers\nUNWIND numbers AS arr\nWITH arr[0] AS expected\nMATCH (n) WHERE toInteger(n.id) = expected\nRETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "UNWIND",
+        "collect",
+        "toInteger"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[3] Any-typed string comparison",
+      "description": "[3] Any-typed string comparison",
+      "setup": [
+        "CREATE ({id: 0})"
+      ],
+      "query": "WITH collect(['0', 0]) AS things\nUNWIND things AS arr\nWITH arr[0] AS expected\nMATCH (n) WHERE toInteger(n.id) = expected\nRETURN n",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "UNWIND",
+        "collect",
+        "toInteger"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[4] Comparing nodes to nodes",
+      "description": "[4] Comparing nodes to nodes",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH (a)\nWITH a\nMATCH (b)\nWHERE a = b\nRETURN count(b)",
+      "expect_columns": [
+        "count(b)"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[5] Comparing relationships to relationships",
+      "description": "[5] Comparing relationships to relationships",
+      "setup": [
+        "CREATE ()-[:T]->()"
+      ],
+      "query": "MATCH ()-[a]->()\nWITH a\nMATCH ()-[b]->()\nWHERE a = b\nRETURN count(b)",
+      "expect_columns": [
+        "count(b)"
+      ],
+      "expect_rows": [
+        [
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=[1, 2], rhs=[1], result=false]",
+      "description": "[6] Comparing lists to lists [lhs=[1, 2], rhs=[1], result=false]",
+      "setup": [],
+      "query": "RETURN [1, 2] = [1] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=[null], rhs=[1], result=null]",
+      "description": "[6] Comparing lists to lists [lhs=[null], rhs=[1], result=null]",
+      "setup": [],
+      "query": "RETURN [null] = [1] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=['a'], rhs=[1], result=false]",
+      "description": "[6] Comparing lists to lists [lhs=['a'], rhs=[1], result=false]",
+      "setup": [],
+      "query": "RETURN ['a'] = [1] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=[[1]], rhs=[[1], [null]], result=false]",
+      "description": "[6] Comparing lists to lists [lhs=[[1]], rhs=[[1], [null]], result=false]",
+      "setup": [],
+      "query": "RETURN [[1]] = [[1], [null]] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=[[1], [2]], rhs=[[1], [null]], result=null]",
+      "description": "[6] Comparing lists to lists [lhs=[[1], [2]], rhs=[[1], [null]], result=null]",
+      "setup": [],
+      "query": "RETURN [[1], [2]] = [[1], [null]] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=[[1], [2, 3]], rhs=[[1], [null]], result=false]",
+      "description": "[6] Comparing lists to lists [lhs=[[1], [2, 3]], rhs=[[1], [null]], result=false]",
+      "setup": [],
+      "query": "RETURN [[1], [2, 3]] = [[1], [null]] AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={}, rhs={}, result=true]",
+      "description": "[7] Comparing maps to maps [lhs={}, rhs={}, result=true]",
+      "setup": [],
+      "query": "RETURN {} = {} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: true}, rhs={k: true}, result=true]",
+      "description": "[7] Comparing maps to maps [lhs={k: true}, rhs={k: true}, result=true]",
+      "setup": [],
+      "query": "RETURN {k: true} = {k: true} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1}, rhs={k: 1}, result=true]",
+      "description": "[7] Comparing maps to maps [lhs={k: 1}, rhs={k: 1}, result=true]",
+      "setup": [],
+      "query": "RETURN {k: 1} = {k: 1} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1.0}, rhs={k: 1.0}, result=true]",
+      "description": "[7] Comparing maps to maps [lhs={k: 1.0}, rhs={k: 1.0}, result=true]",
+      "setup": [],
+      "query": "RETURN {k: 1.0} = {k: 1.0} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 'abc'}, rhs={k: 'abc'}, result=true]",
+      "description": "[7] Comparing maps to maps [lhs={k: 'abc'}, rhs={k: 'abc'}, result=true]",
+      "setup": [],
+      "query": "RETURN {k: 'abc'} = {k: 'abc'} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 'a', l: 2}, rhs={k: 'a', l: 2}, result=true]",
+      "description": "[7] Comparing maps to maps [lhs={k: 'a', l: 2}, rhs={k: 'a', l: 2}, result=true]",
+      "setup": [],
+      "query": "RETURN {k: 'a', l: 2} = {k: 'a', l: 2} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={}, rhs={k: null}, result=false]",
+      "description": "[7] Comparing maps to maps [lhs={}, rhs={k: null}, result=false]",
+      "setup": [],
+      "query": "RETURN {} = {k: null} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: null}, rhs={}, result=false]",
+      "description": "[7] Comparing maps to maps [lhs={k: null}, rhs={}, result=false]",
+      "setup": [],
+      "query": "RETURN {k: null} = {} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1}, rhs={k: 1, l: null}, result=false]",
+      "description": "[7] Comparing maps to maps [lhs={k: 1}, rhs={k: 1, l: null}, result=false]",
+      "setup": [],
+      "query": "RETURN {k: 1} = {k: 1, l: null} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: null, l: 1}, rhs={l: 1}, result=false]",
+      "description": "[7] Comparing maps to maps [lhs={k: null, l: 1}, rhs={l: 1}, result=false]",
+      "setup": [],
+      "query": "RETURN {k: null, l: 1} = {l: 1} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: null}, rhs={k: null, l: null}, result=false]",
+      "description": "[7] Comparing maps to maps [lhs={k: null}, rhs={k: null, l: null}, result=false]",
+      "setup": [],
+      "query": "RETURN {k: null} = {k: null, l: null} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: null}, rhs={k: null}, result=null]",
+      "description": "[7] Comparing maps to maps [lhs={k: null}, rhs={k: null}, result=null]",
+      "setup": [],
+      "query": "RETURN {k: null} = {k: null} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1}, rhs={k: null}, result=null]",
+      "description": "[7] Comparing maps to maps [lhs={k: 1}, rhs={k: null}, result=null]",
+      "setup": [],
+      "query": "RETURN {k: 1} = {k: null} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1, l: null}, rhs={k: null, l: null}, result=null]",
+      "description": "[7] Comparing maps to maps [lhs={k: 1, l: null}, rhs={k: null, l: null}, result=null]",
+      "setup": [],
+      "query": "RETURN {k: 1, l: null} = {k: null, l: null} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1, l: null}, rhs={k: null, l: 1}, result=null]",
+      "description": "[7] Comparing maps to maps [lhs={k: 1, l: null}, rhs={k: null, l: 1}, result=null]",
+      "setup": [],
+      "query": "RETURN {k: 1, l: null} = {k: null, l: 1} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1, l: null}, rhs={k: 1, l: 1}, result=null]",
+      "description": "[7] Comparing maps to maps [lhs={k: 1, l: null}, rhs={k: 1, l: 1}, result=null]",
+      "setup": [],
+      "query": "RETURN {k: 1, l: null} = {k: 1, l: 1} AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs=1]",
+      "description": "[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs=1]",
+      "setup": [],
+      "query": "RETURN 0.0 / 0.0 = 1 AS isEqual, 0.0 / 0.0 <> 1 AS isNotEqual",
+      "expect_columns": [
+        "isEqual",
+        "isNotEqual"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs=1.0]",
+      "description": "[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs=1.0]",
+      "setup": [],
+      "query": "RETURN 0.0 / 0.0 = 1.0 AS isEqual, 0.0 / 0.0 <> 1.0 AS isNotEqual",
+      "expect_columns": [
+        "isEqual",
+        "isNotEqual"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs=0.0 / 0.0]",
+      "description": "[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs=0.0 / 0.0]",
+      "setup": [],
+      "query": "RETURN 0.0 / 0.0 = 0.0 / 0.0 AS isEqual, 0.0 / 0.0 <> 0.0 / 0.0 AS isNotEqual",
+      "expect_columns": [
+        "isEqual",
+        "isNotEqual"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs='a']",
+      "description": "[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs='a']",
+      "setup": [],
+      "query": "RETURN 0.0 / 0.0 = 'a' AS isEqual, 0.0 / 0.0 <> 'a' AS isNotEqual",
+      "expect_columns": [
+        "isEqual",
+        "isNotEqual"
+      ],
+      "expect_rows": [
+        [
+          "false",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[9] Equality between strings and numbers [lhs=1.0, rhs=1.0, result=true]",
+      "description": "[9] Equality between strings and numbers [lhs=1.0, rhs=1.0, result=true]",
+      "setup": [],
+      "query": "RETURN 1.0 = 1.0 AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[9] Equality between strings and numbers [lhs=1, rhs=1.0, result=true]",
+      "description": "[9] Equality between strings and numbers [lhs=1, rhs=1.0, result=true]",
+      "setup": [],
+      "query": "RETURN 1 = 1.0 AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[9] Equality between strings and numbers [lhs='1.0', rhs=1.0, result=false]",
+      "description": "[9] Equality between strings and numbers [lhs='1.0', rhs=1.0, result=false]",
+      "setup": [],
+      "query": "RETURN '1.0' = 1.0 AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[9] Equality between strings and numbers [lhs='1', rhs=1, result=false]",
+      "description": "[9] Equality between strings and numbers [lhs='1', rhs=1, result=false]",
+      "setup": [],
+      "query": "RETURN '1' = 1 AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[10] Handling inlined equality of large integer",
+      "description": "[10] Handling inlined equality of large integer",
+      "setup": [
+        "CREATE (:TheLabel {id: 4611686018427387905})"
+      ],
+      "query": "MATCH (p:TheLabel {id: 4611686018427387905})\nRETURN p.id",
+      "expect_columns": [
+        "p.id"
+      ],
+      "expect_rows": [
+        [
+          "4611686018427387905"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[11] Handling explicit equality of large integer",
+      "description": "[11] Handling explicit equality of large integer",
+      "setup": [
+        "CREATE (:TheLabel {id: 4611686018427387905})"
+      ],
+      "query": "MATCH (p:TheLabel)\nWHERE p.id = 4611686018427387905\nRETURN p.id",
+      "expect_columns": [
+        "p.id"
+      ],
+      "expect_rows": [
+        [
+          "4611686018427387905"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[12] Handling inlined equality of large integer, non-equal values",
+      "description": "[12] Handling inlined equality of large integer, non-equal values",
+      "setup": [
+        "CREATE (:TheLabel {id: 4611686018427387905})"
+      ],
+      "query": "MATCH (p:TheLabel {id : 4611686018427387900})\nRETURN p.id",
+      "expect_columns": [
+        "p.id"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[13] Handling explicit equality of large integer, non-equal values",
+      "description": "[13] Handling explicit equality of large integer, non-equal values",
+      "setup": [
+        "CREATE (:TheLabel {id: 4611686018427387905})"
+      ],
+      "query": "MATCH (p:TheLabel)\nWHERE p.id = 4611686018427387900\nRETURN p.id",
+      "expect_columns": [
+        "p.id"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[14] Direction of traversed relationship is not significant for path equality, simple",
+      "description": "[14] Direction of traversed relationship is not significant for path equality, simple",
+      "setup": [
+        "CREATE (n:A)-[:LOOP]->(n)"
+      ],
+      "query": "MATCH p1 = (:A)-->()\nMATCH p2 = (:A)<--()\nRETURN p1 = p2",
+      "expect_columns": [
+        "p1 = p2"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[15] It is unknown - i.e. null - if a null is equal to a null",
+      "description": "[15] It is unknown - i.e. null - if a null is equal to a null",
+      "setup": [],
+      "query": "RETURN null = null AS value",
+      "expect_columns": [
+        "value"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[16] It is unknown - i.e. null - if a null is not equal to a null",
+      "description": "[16] It is unknown - i.e. null - if a null is not equal to a null",
+      "setup": [],
+      "query": "RETURN null <> null AS value",
+      "expect_columns": [
+        "value"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Comparison1 - Equality-[17] Failing when comparing to an undefined variable",
+      "description": "[17] Failing when comparing to an undefined variable",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (s)\nWHERE s.name = undefinedVariable\n  AND s.age = 10\nRETURN s",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

@@ -1,0 +1,1550 @@
+{
+  "total_feature_files": 220,
+  "total_extracted": 1153,
+  "total_skipped": 0,
+  "categories": {
+    "clauses/call": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Call1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Call2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Call3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Call4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Call5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Call6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/create": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Create1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Create2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Create3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Create4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Create5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Create6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/delete": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Delete1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Delete2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Delete3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Delete4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Delete5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Delete6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/match": {
+      "extracted": 381,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Match1",
+          "extracted": 86,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Match2",
+          "extracted": 86,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Match3",
+          "extracted": 30,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Match4",
+          "extracted": 10,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Match5",
+          "extracted": 29,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Match6",
+          "extracted": 97,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Match7",
+          "extracted": 31,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Match8",
+          "extracted": 3,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Match9",
+          "extracted": 9,
+          "skipped": 0,
+          "capability": "partial"
+        }
+      ]
+    },
+    "clauses/match-where": {
+      "extracted": 34,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "MatchWhere1",
+          "extracted": 15,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "MatchWhere2",
+          "extracted": 2,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "MatchWhere3",
+          "extracted": 3,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "MatchWhere4",
+          "extracted": 2,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "MatchWhere5",
+          "extracted": 4,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "MatchWhere6",
+          "extracted": 8,
+          "skipped": 0,
+          "capability": "partial"
+        }
+      ]
+    },
+    "clauses/merge": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Merge1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Merge2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Merge3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Merge4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Merge5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Merge6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Merge7",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Merge8",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Merge9",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/remove": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Remove1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Remove2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Remove3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/return": {
+      "extracted": 63,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Return1",
+          "extracted": 2,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Return2",
+          "extracted": 18,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Return3",
+          "extracted": 3,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Return4",
+          "extracted": 11,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Return5",
+          "extracted": 5,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Return6",
+          "extracted": 21,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Return7",
+          "extracted": 2,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Return8",
+          "extracted": 1,
+          "skipped": 0,
+          "capability": "partial"
+        }
+      ]
+    },
+    "clauses/return-orderby": {
+      "extracted": 35,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "ReturnOrderBy1",
+          "extracted": 12,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "ReturnOrderBy2",
+          "extracted": 14,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "ReturnOrderBy3",
+          "extracted": 1,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "ReturnOrderBy4",
+          "extracted": 2,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "ReturnOrderBy5",
+          "extracted": 1,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "ReturnOrderBy6",
+          "extracted": 5,
+          "skipped": 0,
+          "capability": "partial"
+        }
+      ]
+    },
+    "clauses/return-skip-limit": {
+      "extracted": 31,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "ReturnSkipLimit1",
+          "extracted": 11,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "ReturnSkipLimit2",
+          "extracted": 17,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "ReturnSkipLimit3",
+          "extracted": 3,
+          "skipped": 0,
+          "capability": "partial"
+        }
+      ]
+    },
+    "clauses/set": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Set1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Set2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Set3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Set4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Set5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Set6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/union": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Union1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Union2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Union3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/unwind": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Unwind1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/with": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "With1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "With2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "With3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "With4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "With5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "With6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "With7",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/with-orderBy": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "WithOrderBy1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithOrderBy2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithOrderBy3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithOrderBy4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/with-skip-limit": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "WithSkipLimit1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithSkipLimit2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithSkipLimit3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "clauses/with-where": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "WithWhere1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithWhere2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithWhere3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithWhere4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithWhere5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithWhere6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "WithWhere7",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "expressions/aggregation": {
+      "extracted": 35,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Aggregation1",
+          "extracted": 2,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Aggregation2",
+          "extracted": 12,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Aggregation3",
+          "extracted": 2,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Aggregation4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Aggregation5",
+          "extracted": 2,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Aggregation6",
+          "extracted": 13,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Aggregation7",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Aggregation8",
+          "extracted": 4,
+          "skipped": 0,
+          "capability": "partial"
+        }
+      ]
+    },
+    "expressions/boolean": {
+      "extracted": 150,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Boolean1",
+          "extracted": 30,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Boolean2",
+          "extracted": 30,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Boolean3",
+          "extracted": 30,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Boolean4",
+          "extracted": 52,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Boolean5",
+          "extracted": 8,
+          "skipped": 0,
+          "capability": "partial"
+        }
+      ]
+    },
+    "expressions/comparison": {
+      "extracted": 72,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Comparison1",
+          "extracted": 43,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Comparison2",
+          "extracted": 19,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Comparison3",
+          "extracted": 9,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Comparison4",
+          "extracted": 1,
+          "skipped": 0,
+          "capability": "partial"
+        }
+      ]
+    },
+    "expressions/conditional": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Conditional1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Conditional2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "expressions/existentialSubqueries": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "ExistentialSubquery1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "ExistentialSubquery2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "ExistentialSubquery3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "expressions/graph": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Graph1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Graph2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Graph3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Graph4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Graph5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Graph6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Graph7",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Graph8",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Graph9",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "expressions/list": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "List1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List10",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List11",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List12",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List7",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List8",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "List9",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "expressions/literals": {
+      "extracted": 131,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Literals1",
+          "extracted": 6,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Literals2",
+          "extracted": 12,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Literals3",
+          "extracted": 16,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Literals4",
+          "extracted": 10,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Literals5",
+          "extracted": 27,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Literals6",
+          "extracted": 13,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Literals7",
+          "extracted": 20,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Literals8",
+          "extracted": 27,
+          "skipped": 0,
+          "capability": "full"
+        }
+      ]
+    },
+    "expressions/map": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Map1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Map2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Map3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "expressions/mathematical": {
+      "extracted": 6,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Mathematical1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical10",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical11",
+          "extracted": 1,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical12",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical13",
+          "extracted": 1,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical14",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical15",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical16",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical17",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical2",
+          "extracted": 1,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical3",
+          "extracted": 1,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical7",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical8",
+          "extracted": 2,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Mathematical9",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "partial"
+        }
+      ]
+    },
+    "expressions/null": {
+      "extracted": 44,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Null1",
+          "extracted": 17,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Null2",
+          "extracted": 17,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Null3",
+          "extracted": 10,
+          "skipped": 0,
+          "capability": "full"
+        }
+      ]
+    },
+    "expressions/path": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Path1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Path2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Path3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "expressions/pattern": {
+      "extracted": 50,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Pattern1",
+          "extracted": 39,
+          "skipped": 0,
+          "capability": "partial"
+        },
+        {
+          "name": "Pattern2",
+          "extracted": 11,
+          "skipped": 0,
+          "capability": "partial"
+        }
+      ]
+    },
+    "expressions/precedence": {
+      "extracted": 121,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Precedence1",
+          "extracted": 72,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Precedence2",
+          "extracted": 26,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Precedence3",
+          "extracted": 11,
+          "skipped": 0,
+          "capability": "full"
+        },
+        {
+          "name": "Precedence4",
+          "extracted": 12,
+          "skipped": 0,
+          "capability": "full"
+        }
+      ]
+    },
+    "expressions/quantifier": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Quantifier1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier10",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier11",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier12",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier7",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier8",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Quantifier9",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "expressions/string": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "String1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String10",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String11",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String12",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String13",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String14",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String7",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String8",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "String9",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "expressions/temporal": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "Temporal1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Temporal10",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Temporal2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Temporal3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Temporal4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Temporal5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Temporal6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Temporal7",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Temporal8",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "Temporal9",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "expressions/typeConversion": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "TypeConversion1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "TypeConversion2",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "TypeConversion3",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "TypeConversion4",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "TypeConversion5",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        },
+        {
+          "name": "TypeConversion6",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "useCases/countingSubgraphMatches": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "CountingSubgraphMatches1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    },
+    "useCases/triadicSelection": {
+      "extracted": 0,
+      "skipped": 0,
+      "features": [
+        {
+          "name": "TriadicSelection1",
+          "extracted": 0,
+          "skipped": 0,
+          "capability": "skip"
+        }
+      ]
+    }
+  },
+  "license": "Derived from openCypher TCK (Apache 2.0)"
+}

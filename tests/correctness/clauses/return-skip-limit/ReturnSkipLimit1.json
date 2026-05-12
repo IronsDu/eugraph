@@ -1,0 +1,212 @@
+{
+  "source": "clauses/return-skip-limit/ReturnSkipLimit1.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "ReturnSkipLimit1 - Skip",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "ReturnSkipLimit1 - Skip-[1] Start the result from the second row",
+      "description": "[1] Start the result from the second row",
+      "setup": [
+        "CREATE ({name: 'A'}), ({name: 'B'}), ({name: 'C'}), ({name: 'D'}), ({name: 'E'})"
+      ],
+      "query": "MATCH (n)\nRETURN n\nORDER BY n.name ASC\nSKIP 2",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'C'})"
+        ],
+        [
+          "({name: 'D'})"
+        ],
+        [
+          "({name: 'E'})"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit1 - Skip-[2] Start the result from the second row by param",
+      "description": "[2] Start the result from the second row by param",
+      "setup": [
+        "CREATE ({name: 'A'}), ({name: 'B'}), ({name: 'C'}), ({name: 'D'}), ({name: 'E'})"
+      ],
+      "query": "MATCH (n)\nRETURN n\nORDER BY n.name ASC\nSKIP $skipAmount",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'C'})"
+        ],
+        [
+          "({name: 'D'})"
+        ],
+        [
+          "({name: 'E'})"
+        ]
+      ],
+      "ordered": true,
+      "requires": [
+        "ORDER BY",
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit1 - Skip-[3] SKIP with an expression that does not depend on variables",
+      "description": "[3] SKIP with an expression that does not depend on variables",
+      "setup": [
+        "UNWIND range(1, 10) AS i",
+        "CREATE ({nr: i})"
+      ],
+      "query": "MATCH (n)\nWITH n SKIP toInteger(rand()*9)\nWITH count(*) AS count\nRETURN count > 0 AS nonEmpty",
+      "expect_columns": [
+        "nonEmpty"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "SKIP",
+        "toInteger"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit1 - Skip-[4] Accept skip zero",
+      "description": "[4] Accept skip zero",
+      "setup": [],
+      "query": "MATCH (n)\nWHERE 1 = 0\nRETURN n SKIP 0",
+      "expect_columns": [
+        "n"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit1 - Skip-[5] SKIP with an expression that depends on variables should fail",
+      "description": "[5] SKIP with an expression that depends on variables should fail",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "NonConstantExpression",
+      "setup": [],
+      "query": "MATCH (n) RETURN n SKIP n.count",
+      "requires": [
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit1 - Skip-[6] Negative parameter for SKIP should fail",
+      "description": "[6] Negative parameter for SKIP should fail",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": null,
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nSKIP $_skip",
+      "requires": [
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit1 - Skip-[7] Negative SKIP should fail",
+      "description": "[7] Negative SKIP should fail",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "NegativeIntegerArgument",
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nSKIP -1",
+      "requires": [
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit1 - Skip-[8] Floating point parameter for SKIP should fail",
+      "description": "[8] Floating point parameter for SKIP should fail",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": null,
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nSKIP $_limit",
+      "requires": [
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit1 - Skip-[9] Floating point SKIP should fail",
+      "description": "[9] Floating point SKIP should fail",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "InvalidArgumentType",
+      "setup": [
+        "CREATE (s:Person {name: 'Steven'}), (c:Person {name: 'Craig'})"
+      ],
+      "query": "MATCH (p:Person)\nRETURN p.name AS name\nSKIP 1.5",
+      "requires": [
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit1 - Skip-[10] Fail when using non-constants in SKIP",
+      "description": "[10] Fail when using non-constants in SKIP",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "NonConstantExpression",
+      "setup": [],
+      "query": "MATCH (n)\nRETURN n\n  SKIP n.count",
+      "requires": [
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnSkipLimit1 - Skip-[11] Fail when using negative value in SKIP",
+      "description": "[11] Fail when using negative value in SKIP",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "NegativeIntegerArgument",
+      "setup": [],
+      "query": "MATCH (n)\nRETURN n\n  SKIP -1",
+      "requires": [
+        "SKIP"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

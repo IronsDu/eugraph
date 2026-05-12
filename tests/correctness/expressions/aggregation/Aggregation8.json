@@ -1,0 +1,95 @@
+{
+  "source": "expressions/aggregation/Aggregation8.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Aggregation8 - DISTINCT",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Aggregation8 - DISTINCT-[1] Distinct on unbound node",
+      "description": "[1] Distinct on unbound node",
+      "setup": [],
+      "query": "OPTIONAL MATCH (a)\nRETURN count(DISTINCT a)",
+      "expect_columns": [
+        "count(DISTINCT a)"
+      ],
+      "expect_rows": [
+        [
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT",
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation8 - DISTINCT-[2] Distinct on null",
+      "description": "[2] Distinct on null",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH (a)\nRETURN count(DISTINCT a.name)",
+      "expect_columns": [
+        "count(DISTINCT a.name)"
+      ],
+      "expect_rows": [
+        [
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation8 - DISTINCT-[3] Collect distinct nulls",
+      "description": "[3] Collect distinct nulls",
+      "setup": [],
+      "query": "UNWIND [null, null] AS x\nRETURN collect(DISTINCT x) AS c",
+      "expect_columns": [
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "[]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Aggregation8 - DISTINCT-[4] Collect distinct values mixed with nulls",
+      "description": "[4] Collect distinct values mixed with nulls",
+      "setup": [],
+      "query": "UNWIND [null, 1, null] AS x\nRETURN collect(DISTINCT x) AS c",
+      "expect_columns": [
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "[1]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT",
+        "UNWIND",
+        "collect"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

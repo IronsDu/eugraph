@@ -1,0 +1,423 @@
+{
+  "source": "clauses/return/Return6.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Return6 - Implicit grouping with aggregates",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[1] Return count aggregation over nodes",
+      "description": "[1] Return count aggregation over nodes",
+      "setup": [
+        "CREATE ({num: 42})"
+      ],
+      "query": "MATCH (n)\nRETURN n.num AS n, count(n) AS count",
+      "expect_columns": [
+        "n",
+        "count"
+      ],
+      "expect_rows": [
+        [
+          "42",
+          "1"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[2] Projecting an arithmetic expression with aggregation",
+      "description": "[2] Projecting an arithmetic expression with aggregation",
+      "setup": [
+        "CREATE ({id: 42})"
+      ],
+      "query": "MATCH (a)\nRETURN a, count(a) + 3",
+      "expect_columns": [
+        "a",
+        "count(a) + 3"
+      ],
+      "expect_rows": [
+        [
+          "({id: 42})",
+          "4"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[3] Aggregating by a list property has a correct definition of equality",
+      "description": "[3] Aggregating by a list property has a correct definition of equality",
+      "setup": [
+        "CREATE ({a: [1, 2, 3]}), ({a: [1, 2, 3]})"
+      ],
+      "query": "MATCH (a)\nWITH a.num AS a, count(*) AS count\nRETURN count",
+      "expect_columns": [
+        "count"
+      ],
+      "expect_rows": [
+        [
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[4] Support multiple divisions in aggregate function",
+      "description": "[4] Support multiple divisions in aggregate function",
+      "setup": [
+        "UNWIND range(0, 7250) AS i",
+        "CREATE ()"
+      ],
+      "query": "MATCH (n)\nRETURN count(n) / 60 / 60 AS count",
+      "expect_columns": [
+        "count"
+      ],
+      "expect_rows": [
+        [
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[5] Aggregates inside normal functions",
+      "description": "[5] Aggregates inside normal functions",
+      "setup": [
+        "UNWIND range(0, 10) AS i",
+        "CREATE ()"
+      ],
+      "query": "MATCH (a)\nRETURN size(collect(a))",
+      "expect_columns": [
+        "size(collect(a))"
+      ],
+      "expect_rows": [
+        [
+          "11"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "collect"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[6] Handle aggregates inside non-aggregate expressions",
+      "description": "[6] Handle aggregates inside non-aggregate expressions",
+      "setup": [],
+      "query": "MATCH (a {name: 'Andres'})<-[:FATHER]-(child)\nRETURN a.name, {foo: a.name='Andres', kids: collect(child.name)}",
+      "expect_columns": [
+        "a.name",
+        "{foo: a.name='Andres', kids: collect(child.name)}"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "collect"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[7] Aggregate on property",
+      "description": "[7] Aggregate on property",
+      "setup": [
+        "CREATE ({num: 33})",
+        "CREATE ({num: 33})",
+        "CREATE ({num: 42})"
+      ],
+      "query": "MATCH (n)\nRETURN n.num, count(*)",
+      "expect_columns": [
+        "n.num",
+        "count(*)"
+      ],
+      "expect_rows": [
+        [
+          "42",
+          "1"
+        ],
+        [
+          "33",
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[8] Handle aggregation on functions",
+      "description": "[8] Handle aggregation on functions",
+      "setup": [
+        "CREATE (a:L), (b1), (b2)",
+        "CREATE (a)-[:A]->(b1), (a)-[:A]->(b2)"
+      ],
+      "query": "MATCH p=(a:L)-[*]->(b)\nRETURN b, avg(length(p))",
+      "expect_columns": [
+        "b",
+        "avg(length(p))"
+      ],
+      "expect_rows": [
+        [
+          "()",
+          "1.0"
+        ],
+        [
+          "()",
+          "1.0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[9] Aggregates with arithmetics",
+      "description": "[9] Aggregates with arithmetics",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH ()\nRETURN count(*) * 10 AS c",
+      "expect_columns": [
+        "c"
+      ],
+      "expect_rows": [
+        [
+          "10"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[10] Multiple aggregates on same variable",
+      "description": "[10] Multiple aggregates on same variable",
+      "setup": [
+        "CREATE ()"
+      ],
+      "query": "MATCH (n)\nRETURN count(n), collect(n)",
+      "expect_columns": [
+        "count(n)",
+        "collect(n)"
+      ],
+      "expect_rows": [
+        [
+          "1",
+          "[()]"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "collect"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[11] Counting matches",
+      "description": "[11] Counting matches",
+      "setup": [
+        "UNWIND range(1, 100) AS i",
+        "CREATE ()"
+      ],
+      "query": "MATCH ()\nRETURN count(*)",
+      "expect_columns": [
+        "count(*)"
+      ],
+      "expect_rows": [
+        [
+          "100"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[12] Counting matches per group",
+      "description": "[12] Counting matches per group",
+      "setup": [
+        "CREATE (a:L), (b1), (b2)",
+        "CREATE (a)-[:A]->(b1), (a)-[:A]->(b2)"
+      ],
+      "query": "MATCH (a:L)-[rel]->(b)\nRETURN a, count(*)",
+      "expect_columns": [
+        "a",
+        "count(*)"
+      ],
+      "expect_rows": [
+        [
+          "(:L)",
+          "2"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[13] Returning the minimum length of paths",
+      "description": "[13] Returning the minimum length of paths",
+      "setup": [
+        "CREATE (a:T {name: 'a'}), (b:T {name: 'b'}), (c:T {name: 'c'})",
+        "CREATE (a)-[:R]->(b)",
+        "CREATE (a)-[:R]->(c)",
+        "CREATE (c)-[:R]->(b)"
+      ],
+      "query": "MATCH p = (a:T {name: 'a'})-[:R*]->(other:T)\nWHERE other <> a\nWITH a, other, min(length(p)) AS len\nRETURN a.name AS name, collect(other.name) AS others, len",
+      "expect_columns": [],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "collect"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[14] Aggregates in aggregates",
+      "description": "[14] Aggregates in aggregates",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "NestedAggregation",
+      "setup": [],
+      "query": "RETURN count(count(*))",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[15] Using `rand()` in aggregations",
+      "description": "[15] Using `rand()` in aggregations",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "NonConstantExpression",
+      "setup": [],
+      "query": "RETURN count(rand())",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[16] Aggregation on complex expressions",
+      "description": "[16] Aggregation on complex expressions",
+      "setup": [
+        "CREATE (andres {name: 'Andres'}), (michael {name: 'Michael'}), (peter {name: 'Peter'}), (bread {type: 'Bread'}), (veggies {type: 'Veggies'}), (meat {type: 'Meat'})",
+        "CREATE (andres)-[:ATE {times: 10}]->(bread), (andres)-[:ATE {times: 8}]->(veggies), (michael)-[:ATE {times: 4}]->(veggies), (michael)-[:ATE {times: 6}]->(bread), (michael)-[:ATE {times: 9}]->(meat), (peter)-[:ATE {times: 7}]->(veggies), (peter)-[:ATE {times: 7}]->(bread), (peter)-[:ATE {times: 4}]->(meat)"
+      ],
+      "query": "MATCH (me)-[r1:ATE]->()<-[r2:ATE]-(you)\nWHERE me.name = 'Michael'\nWITH me, count(DISTINCT r1) AS H1, count(DISTINCT r2) AS H2, you\nMATCH (me)-[r1:ATE]->()<-[r2:ATE]-(you)\nRETURN me, you, sum((1 - abs(r1.times / H1 - r2.times / H2)) * (r1.times + r2.times) / (H1 + H2)) AS sum",
+      "expect_columns": [
+        "me",
+        "you",
+        "sum"
+      ],
+      "expect_rows": [
+        [
+          "({name: 'Michael'})",
+          "({name: 'Andres'})",
+          "-7"
+        ],
+        [
+          "({name: 'Michael'})",
+          "({name: 'Peter'})",
+          "0"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "DISTINCT"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[17] Handle constants and parameters inside an expression which contains an aggregation expression",
+      "description": "[17] Handle constants and parameters inside an expression which contains an aggregation expression",
+      "setup": [],
+      "query": "MATCH (person)\nRETURN $age + avg(person.age) - 1000",
+      "expect_columns": [
+        "$age + avg(person.age) - 1000"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[18] Handle returned variables inside an expression which contains an aggregation expression",
+      "description": "[18] Handle returned variables inside an expression which contains an aggregation expression",
+      "setup": [],
+      "query": "MATCH (me: Person)--(you: Person)\nWITH me.age AS age, you\nRETURN age, age + count(you.age)",
+      "expect_columns": [
+        "age",
+        "age + count(you.age)"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[19] Handle returned property accesses inside an expression which contains an aggregation expression",
+      "description": "[19] Handle returned property accesses inside an expression which contains an aggregation expression",
+      "setup": [],
+      "query": "MATCH (me: Person)--(you: Person)\nRETURN me.age, me.age + count(you.age)",
+      "expect_columns": [
+        "me.age",
+        "me.age + count(you.age)"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[20] Fail if not returned variables are used inside an expression which contains an aggregation expression",
+      "description": "[20] Fail if not returned variables are used inside an expression which contains an aggregation expression",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "AmbiguousAggregationExpression",
+      "setup": [],
+      "query": "MATCH (me: Person)--(you: Person)\nRETURN me.age + count(you.age)",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "Return6 - Implicit grouping with aggregates-[21] Fail if more complex expressions, even if returned, are used inside expression which contains an aggregation expression",
+      "description": "[21] Fail if more complex expressions, even if returned, are used inside expression which contains an aggregation expression",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "AmbiguousAggregationExpression",
+      "setup": [],
+      "query": "MATCH (me: Person)--(you: Person)\nRETURN me.age + you.age, me.age + you.age + count(*)",
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

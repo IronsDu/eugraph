@@ -1,0 +1,7 @@
+{
+  "source": "expressions/mathematical/Mathematical15.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Mathematical15 - Degrees and radians",
+  "capability": "partial",
+  "scenarios": []
+}

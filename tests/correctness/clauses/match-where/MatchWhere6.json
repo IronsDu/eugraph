@@ -1,0 +1,233 @@
+{
+  "source": "clauses/match-where/MatchWhere6.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "MatchWhere6 - Filter optional matches",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "MatchWhere6 - Filter optional matches-[1] Filter node with node label predicate on multi variables with multiple bindings after MATCH and OPTIONAL MATCH",
+      "description": "[1] Filter node with node label predicate on multi variables with multiple bindings after MATCH and OPTIONAL MATCH",
+      "setup": [
+        "CREATE (a {name: 'A'}), (b:B {name: 'B'}), (c:C {name: 'C'}), (d:D {name: 'C'})",
+        "CREATE (a)-[:T]->(b), (a)-[:T]->(c), (a)-[:T]->(d)"
+      ],
+      "query": "MATCH (a)-->(b)\nWHERE b:B\nOPTIONAL MATCH (a)-->(c)\nWHERE c:C\nRETURN a.name",
+      "expect_columns": [
+        "a.name"
+      ],
+      "expect_rows": [
+        [
+          "'A'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere6 - Filter optional matches-[2] Filter node with false node label predicate after OPTIONAL MATCH",
+      "description": "[2] Filter node with false node label predicate after OPTIONAL MATCH",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (n:Single)\nOPTIONAL MATCH (n)-[r]-(m)\nWHERE m:NonExistent\nRETURN r",
+      "expect_columns": [
+        "r"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere6 - Filter optional matches-[3] Filter node with property predicate on multi variables with multiple bindings after OPTIONAL MATCH",
+      "description": "[3] Filter node with property predicate on multi variables with multiple bindings after OPTIONAL MATCH",
+      "setup": [
+        "CREATE (s:Single), (a:A {num: 42}), (b:B {num: 46}), (c:C)",
+        "CREATE (s)-[:REL]->(a), (s)-[:REL]->(b), (a)-[:REL]->(c), (b)-[:LOOP]->(b)"
+      ],
+      "query": "MATCH (n:Single)\nOPTIONAL MATCH (n)-[r]-(m)\nWHERE m.num = 42\nRETURN m",
+      "expect_columns": [
+        "m"
+      ],
+      "expect_rows": [
+        [
+          "(:A {num: 42})"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere6 - Filter optional matches-[4] Do not fail when predicates on optionally matched and missed nodes are invalid",
+      "description": "[4] Do not fail when predicates on optionally matched and missed nodes are invalid",
+      "setup": [
+        "CREATE (a), (b {name: 'Mark'})",
+        "CREATE (a)-[:T]->(b)"
+      ],
+      "query": "MATCH (n)-->(x0)\nOPTIONAL MATCH (x0)-->(x1)\nWHERE x1.name = 'bar'\nRETURN x0.name",
+      "expect_columns": [
+        "x0.name"
+      ],
+      "expect_rows": [
+        [
+          "'Mark'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere6 - Filter optional matches-[5] Matching and optionally matching with unbound nodes and equality predicate in reverse direction",
+      "description": "[5] Matching and optionally matching with unbound nodes and equality predicate in reverse direction",
+      "setup": [
+        "CREATE (:A)-[:T]->(:B)"
+      ],
+      "query": "MATCH (a1)-[r]->()\nWITH r, a1\n  LIMIT 1\nOPTIONAL MATCH (a2)<-[r]-(b2)\nWHERE a1 = a2\nRETURN a1, r, b2, a2",
+      "expect_columns": [
+        "a1",
+        "r",
+        "b2",
+        "a2"
+      ],
+      "expect_rows": [
+        [
+          "(:A)",
+          "[:T]",
+          "null",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "LIMIT",
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere6 - Filter optional matches-[6] Join nodes on non-equality of properties – OPTIONAL MATCH and WHERE",
+      "description": "[6] Join nodes on non-equality of properties – OPTIONAL MATCH and WHERE",
+      "setup": [
+        "CREATE (:X {val: 1})-[:E1]->(:Y {val: 2})-[:E2]->(:Z {val: 3}), (:X {val: 4})-[:E1]->(:Y {val: 5}), (:X {val: 6})"
+      ],
+      "query": "MATCH (x:X)\nOPTIONAL MATCH (x)-[:E1]->(y:Y)\nWHERE x.val < y.val\nRETURN x, y",
+      "expect_columns": [
+        "x",
+        "y"
+      ],
+      "expect_rows": [
+        [
+          "(:X {val: 1})",
+          "(:Y {val: 2})"
+        ],
+        [
+          "(:X {val: 4})",
+          "(:Y {val: 5})"
+        ],
+        [
+          "(:X {val: 6})",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere6 - Filter optional matches-[7] Join nodes on non-equality of properties – OPTIONAL MATCH on two relationships and WHERE",
+      "description": "[7] Join nodes on non-equality of properties – OPTIONAL MATCH on two relationships and WHERE",
+      "setup": [
+        "CREATE (:X {val: 1})-[:E1]->(:Y {val: 2})-[:E2]->(:Z {val: 3}), (:X {val: 4})-[:E1]->(:Y {val: 5}), (:X {val: 6})"
+      ],
+      "query": "MATCH (x:X)\nOPTIONAL MATCH (x)-[:E1]->(y:Y)-[:E2]->(z:Z)\nWHERE x.val < z.val\nRETURN x, y, z",
+      "expect_columns": [
+        "x",
+        "y",
+        "z"
+      ],
+      "expect_rows": [
+        [
+          "(:X {val: 1})",
+          "(:Y {val: 2})",
+          "(:Z {val: 3})"
+        ],
+        [
+          "(:X {val: 4})",
+          "null",
+          "null"
+        ],
+        [
+          "(:X {val: 6})",
+          "null",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere6 - Filter optional matches-[8] Join nodes on non-equality of properties – Two OPTIONAL MATCH clauses and WHERE",
+      "description": "[8] Join nodes on non-equality of properties – Two OPTIONAL MATCH clauses and WHERE",
+      "setup": [
+        "CREATE (:X {val: 1})-[:E1]->(:Y {val: 2})-[:E2]->(:Z {val: 3}), (:X {val: 4})-[:E1]->(:Y {val: 5}), (:X {val: 6})"
+      ],
+      "query": "MATCH (x:X)\nOPTIONAL MATCH (x)-[:E1]->(y:Y)\nOPTIONAL MATCH (y)-[:E2]->(z:Z)\nWHERE x.val < z.val\nRETURN x, y, z",
+      "expect_columns": [
+        "x",
+        "y",
+        "z"
+      ],
+      "expect_rows": [
+        [
+          "(:X {val: 1})",
+          "(:Y {val: 2})",
+          "(:Z {val: 3})"
+        ],
+        [
+          "(:X {val: 4})",
+          "(:Y {val: 5})",
+          "null"
+        ],
+        [
+          "(:X {val: 6})",
+          "null",
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

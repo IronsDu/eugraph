@@ -1,0 +1,319 @@
+{
+  "source": "expressions/null/Null1.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "Null1 - IS NULL validation",
+  "capability": "full",
+  "scenarios": [
+    {
+      "id": "Null1 - IS NULL validation-[1] Property null check on non-null node",
+      "description": "[1] Property null check on non-null node",
+      "setup": [
+        "CREATE ({exists: 42})"
+      ],
+      "query": "MATCH (n)\nRETURN n.missing IS NULL,\n       n.exists IS NULL",
+      "expect_columns": [
+        "n.missing IS NULL",
+        "n.exists IS NULL"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[2] Property null check on optional non-null node",
+      "description": "[2] Property null check on optional non-null node",
+      "setup": [
+        "CREATE ({exists: 42})"
+      ],
+      "query": "OPTIONAL MATCH (n)\nRETURN n.missing IS NULL,\n       n.exists IS NULL",
+      "expect_columns": [
+        "n.missing IS NULL",
+        "n.exists IS NULL"
+      ],
+      "expect_rows": [
+        [
+          "true",
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[3] Property null check on null node",
+      "description": "[3] Property null check on null node",
+      "setup": [],
+      "query": "OPTIONAL MATCH (n)\nRETURN n.missing IS NULL",
+      "expect_columns": [
+        "n.missing IS NULL"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "OPTIONAL MATCH"
+      ],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[4] A literal null IS null",
+      "description": "[4] A literal null IS null",
+      "setup": [],
+      "query": "RETURN null IS NULL AS value",
+      "expect_columns": [
+        "value"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: 'Mats', name2: 'Pontus'}, key=name, result=false]",
+      "description": "[5] IS NULL on a map [map={name: 'Mats', name2: 'Pontus'}, key=name, result=false]",
+      "setup": [],
+      "query": "WITH {name: 'Mats', name2: 'Pontus'} AS map\nRETURN map.name IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: 'Mats', name2: 'Pontus'}, key=name2, result=false]",
+      "description": "[5] IS NULL on a map [map={name: 'Mats', name2: 'Pontus'}, key=name2, result=false]",
+      "setup": [],
+      "query": "WITH {name: 'Mats', name2: 'Pontus'} AS map\nRETURN map.name2 IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: 'Mats', name2: null}, key=name, result=false]",
+      "description": "[5] IS NULL on a map [map={name: 'Mats', name2: null}, key=name, result=false]",
+      "setup": [],
+      "query": "WITH {name: 'Mats', name2: null} AS map\nRETURN map.name IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "false"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: 'Mats', name2: null}, key=name2, result=true]",
+      "description": "[5] IS NULL on a map [map={name: 'Mats', name2: null}, key=name2, result=true]",
+      "setup": [],
+      "query": "WITH {name: 'Mats', name2: null} AS map\nRETURN map.name2 IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: null}, key=name, result=true]",
+      "description": "[5] IS NULL on a map [map={name: null}, key=name, result=true]",
+      "setup": [],
+      "query": "WITH {name: null} AS map\nRETURN map.name IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: null, name2: null}, key=name, result=true]",
+      "description": "[5] IS NULL on a map [map={name: null, name2: null}, key=name, result=true]",
+      "setup": [],
+      "query": "WITH {name: null, name2: null} AS map\nRETURN map.name IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: null, name2: null}, key=name2, result=true]",
+      "description": "[5] IS NULL on a map [map={name: null, name2: null}, key=name2, result=true]",
+      "setup": [],
+      "query": "WITH {name: null, name2: null} AS map\nRETURN map.name2 IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={notName: null, notName2: null}, key=name, result=true]",
+      "description": "[5] IS NULL on a map [map={notName: null, notName2: null}, key=name, result=true]",
+      "setup": [],
+      "query": "WITH {notName: null, notName2: null} AS map\nRETURN map.name IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={notName: 0, notName2: null}, key=name, result=true]",
+      "description": "[5] IS NULL on a map [map={notName: 0, notName2: null}, key=name, result=true]",
+      "setup": [],
+      "query": "WITH {notName: 0, notName2: null} AS map\nRETURN map.name IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={notName: 0}, key=name, result=true]",
+      "description": "[5] IS NULL on a map [map={notName: 0}, key=name, result=true]",
+      "setup": [],
+      "query": "WITH {notName: 0} AS map\nRETURN map.name IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={}, key=name, result=true]",
+      "description": "[5] IS NULL on a map [map={}, key=name, result=true]",
+      "setup": [],
+      "query": "WITH {} AS map\nRETURN map.name IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map=null, key=name, result=true]",
+      "description": "[5] IS NULL on a map [map=null, key=name, result=true]",
+      "setup": [],
+      "query": "WITH null AS map\nRETURN map.name IS NULL AS result",
+      "expect_columns": [
+        "result"
+      ],
+      "expect_rows": [
+        [
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": []
+    },
+    {
+      "id": "Null1 - IS NULL validation-[6] IS NULL is case insensitive",
+      "description": "[6] IS NULL is case insensitive",
+      "setup": [
+        "CREATE (a:X {prop: 42}), (:X)"
+      ],
+      "query": "MATCH (n:X)\nRETURN n, n.prop iS NuLl AS b",
+      "expect_columns": [
+        "n",
+        "b"
+      ],
+      "expect_rows": [
+        [
+          "(:X {prop: 42})",
+          "false"
+        ],
+        [
+          "(:X)",
+          "true"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [
+        "@skipStyleCheck"
+      ]
+    }
+  ]
+}

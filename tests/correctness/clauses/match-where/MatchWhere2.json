@@ -1,0 +1,53 @@
+{
+  "source": "clauses/match-where/MatchWhere2.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "MatchWhere2 - Filter multiple variables",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "MatchWhere2 - Filter multiple variables-[1] Filter nodes with conjunctive two-part property predicate on multi variables with multiple bindings",
+      "description": "[1] Filter nodes with conjunctive two-part property predicate on multi variables with multiple bindings",
+      "setup": [
+        "CREATE (a:A), (b:B {id: 1}), (c:C {id: 2}), (d:D)",
+        "CREATE (a)-[:T]->(b), (a)-[:T]->(c), (a)-[:T]->(d), (b)-[:T]->(c), (b)-[:T]->(d), (c)-[:T]->(d)"
+      ],
+      "query": "MATCH (a)--(b)--(c)--(d)--(a), (b)--(d)\nWHERE a.id = 1\n  AND c.id = 2\nRETURN d",
+      "expect_columns": [
+        "d"
+      ],
+      "expect_rows": [
+        [
+          "(:A)"
+        ],
+        [
+          "(:D)"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "MatchWhere2 - Filter multiple variables-[2] Filter node with conjunctive multi-part property predicates on multi variables with multiple bindings",
+      "description": "[2] Filter node with conjunctive multi-part property predicates on multi variables with multiple bindings",
+      "setup": [
+        "CREATE (advertiser {name: 'advertiser1', id: 0}), (thing {name: 'Color', id: 1}), (red {name: 'red'}), (p1 {name: 'product1'}), (p2 {name: 'product4'})",
+        "CREATE (advertiser)-[:ADV_HAS_PRODUCT]->(p1), (advertiser)-[:ADV_HAS_PRODUCT]->(p2), (thing)-[:AA_HAS_VALUE]->(red), (p1)-[:AP_HAS_VALUE]->(red), (p2)-[:AP_HAS_VALUE]->(red)"
+      ],
+      "query": "MATCH (advertiser)-[:ADV_HAS_PRODUCT]->(out)-[:AP_HAS_VALUE]->(red)<-[:AA_HAS_VALUE]-(a)\nWHERE advertiser.id = $1\n  AND a.id = $2\n  AND red.name = 'red'\n  AND out.name = 'product1'\nRETURN out.name",
+      "expect_columns": [
+        "out.name"
+      ],
+      "expect_rows": [
+        [
+          "'product1'"
+        ]
+      ],
+      "ordered": false,
+      "requires": [],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}

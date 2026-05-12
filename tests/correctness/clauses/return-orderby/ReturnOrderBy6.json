@@ -1,0 +1,90 @@
+{
+  "source": "clauses/return-orderby/ReturnOrderBy6.feature",
+  "source_version": "openCypher TCK (Apache 2.0)",
+  "feature": "ReturnOrderBy6 - Aggregation expressions in order by",
+  "capability": "partial",
+  "scenarios": [
+    {
+      "id": "ReturnOrderBy6 - Aggregation expressions in order by-[1] Handle constants and parameters inside an order by item which contains an aggregation expression",
+      "description": "[1] Handle constants and parameters inside an order by item which contains an aggregation expression",
+      "setup": [],
+      "query": "MATCH (person)\nRETURN avg(person.age) AS avgAge\nORDER BY $age + avg(person.age) - 1000",
+      "expect_columns": [
+        "avgAge"
+      ],
+      "expect_rows": [
+        [
+          "null"
+        ]
+      ],
+      "ordered": false,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy6 - Aggregation expressions in order by-[2] Handle returned aliases inside an order by item which contains an aggregation expression",
+      "description": "[2] Handle returned aliases inside an order by item which contains an aggregation expression",
+      "setup": [],
+      "query": "MATCH (me: Person)--(you: Person)\nRETURN me.age AS age, count(you.age) AS cnt\nORDER BY age, age + count(you.age)",
+      "expect_columns": [
+        "age",
+        "cnt"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy6 - Aggregation expressions in order by-[3] Handle returned property accesses inside an order by item which contains an aggregation expression",
+      "description": "[3] Handle returned property accesses inside an order by item which contains an aggregation expression",
+      "setup": [],
+      "query": "MATCH (me: Person)--(you: Person)\nRETURN me.age AS age, count(you.age) AS cnt\nORDER BY me.age + count(you.age)",
+      "expect_columns": [
+        "age",
+        "cnt"
+      ],
+      "expect_rows": [],
+      "ordered": false,
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy6 - Aggregation expressions in order by-[4] Fail if not returned variables are used inside an order by item which contains an aggregation expression",
+      "description": "[4] Fail if not returned variables are used inside an order by item which contains an aggregation expression",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "UndefinedVariable",
+      "setup": [],
+      "query": "MATCH (me: Person)--(you: Person)\nRETURN count(you.age) AS agg\nORDER BY me.age + count(you.age)",
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    },
+    {
+      "id": "ReturnOrderBy6 - Aggregation expressions in order by-[5] Fail if more complex expressions, even if returned, are used inside an order by item which contains an aggregation expression",
+      "description": "[5] Fail if more complex expressions, even if returned, are used inside an order by item which contains an aggregation expression",
+      "is_error": true,
+      "error_type": "SyntaxError",
+      "error_contains": "AmbiguousAggregationExpression",
+      "setup": [],
+      "query": "MATCH (me: Person)--(you: Person)\nRETURN me.age + you.age, count(*) AS cnt\nORDER BY me.age + you.age + count(*)",
+      "requires": [
+        "ORDER BY"
+      ],
+      "tags": [],
+      "note": "partial: may need manual adjustment"
+    }
+  ]
+}
