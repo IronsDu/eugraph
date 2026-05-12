@@ -2,11 +2,11 @@
 
 #include <folly/init/Init.h>
 
-#include "query/executor/query_executor.hpp"
 #include "gen-cpp2/eugraph_types.h"
 #include "program/loader/csv_loader.hpp"
 #include "program/server/eugraph_handler.hpp"
 #include "program/shell/rpc_client.hpp"
+#include "query/executor/query_executor.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/graph_manager.hpp"
