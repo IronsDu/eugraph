@@ -393,7 +393,7 @@ literal
     ;
 
 rangeLit
-    : MULT numLit? (RANGE numLit?)?
+    : MULT (numLit | ID)? (RANGE (numLit | ID)?)?
     ;
 
 boolLit
