@@ -483,17 +483,25 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     Schema output_schema(v.output_names.begin(), v.output_names.end());
                     std::vector<binder::BoundType> output_types;
-                    for (size_t i = 0; i < group_keys.size(); ++i)
-                        output_types.push_back(binder::BoundType::Any());
+                    std::vector<binder::BoundTypeKind> output_type_kinds;
+                    for (size_t i = 0; i < group_keys.size(); ++i) {
+                        auto gk_type = getBoundExprType(group_keys[i].expr);
+                        output_types.push_back(gk_type);
+                        output_type_kinds.push_back(gk_type.kind);
+                    }
                     for (const auto& ae : aggregates) {
-                        if (ae.func_def)
+                        if (ae.func_def) {
                             output_types.push_back(ae.func_def->return_type);
-                        else
+                            output_type_kinds.push_back(ae.func_def->return_type.kind);
+                        } else {
                             output_types.push_back(binder::BoundType::Any());
+                            output_type_kinds.push_back(binder::BoundTypeKind::ANY);
+                        }
                     }
 
-                    auto result = std::make_unique<AggregatePhysicalOp>(std::move(group_keys), std::move(aggregates),
-                                                                        std::move(child_op));
+                    auto result =
+                        std::make_unique<AggregatePhysicalOp>(std::move(group_keys), std::move(aggregates),
+                                                              std::move(child_op), std::move(output_type_kinds));
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSortOp>) {
                     auto child_result = planBoundOperator(v.child, store, ctx, input_schema, input_types);
