@@ -29,8 +29,10 @@ public:
     };
 
     AggregatePhysicalOp(std::vector<GroupKey> group_keys, std::vector<AggregateExpr> aggregates,
-                        std::unique_ptr<PhysicalOperator> child)
-        : group_keys_(std::move(group_keys)), aggregates_(std::move(aggregates)), child_(std::move(child)) {}
+                        std::unique_ptr<PhysicalOperator> child,
+                        std::vector<binder::BoundTypeKind> output_type_kinds = {})
+        : group_keys_(std::move(group_keys)), aggregates_(std::move(aggregates)), child_(std::move(child)),
+          output_type_kinds_(std::move(output_type_kinds)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
@@ -49,6 +51,7 @@ private:
     std::vector<GroupKey> group_keys_;
     std::vector<AggregateExpr> aggregates_;
     std::unique_ptr<PhysicalOperator> child_;
+    std::vector<binder::BoundTypeKind> output_type_kinds_;
 };
 
 } // namespace compute

@@ -2256,6 +2256,19 @@ TEST_F(QueryExecutorWithTest, WithAggregationGroupByHaving) {
     EXPECT_EQ(std::get<int64_t>(result.rows[1][1]), 1);
 }
 
+// Test 2b: HAVING — WHERE filtering on aggregate result.
+// Alice has 2 friends, Bob has 1 → WHERE friendCnt > 1 should only return Alice.
+TEST_F(QueryExecutorWithTest, WithAggregationHavingFilter) {
+    insertPersonWithEdges();
+
+    auto result = execSync(*executor_, "MATCH (n:Person)-[:KNOWS]->(m) WITH n, count(m) AS friendCnt "
+                                       "WHERE friendCnt > 1 RETURN n.name, friendCnt ORDER BY n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 2);
+}
+
 // Test 3: WITH DISTINCT deduplication — if 100 people in same city, only 1 city value
 TEST_F(QueryExecutorWithTest, WithDistinctDeduplication) {
     // Insert 3 persons, 2 in same age group (30-ish), 1 different
@@ -2295,15 +2308,20 @@ TEST_F(QueryExecutorWithTest, WithOrderByLimitIntermediate) {
     ASSERT_EQ(result.rows.size(), 2u);
 }
 
-// Test 5: WITH followed by SET — update statement after WITH projection
-// Verifies that the binder correctly chains SET after WITH without errors.
-// Note: SET on WITH-projected variables may have property resolution limitations
-// due to scope reset changing column indices.
+// Test 5: WITH followed by SET — update statement after WITH projection.
+// Verifies that property metadata (source_label) is preserved through scope reset.
 TEST_F(QueryExecutorWithTest, WithFollowedBySet) {
     insertPersonData();
 
+    // SET after WITH (same variable name)
     auto result = execSync(*executor_, "MATCH (n:Person {name: 'Alice'}) WITH n SET n.age = 99");
-    EXPECT_TRUE(result.error.empty()) << result.error;
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    // Verify the property was actually written
+    auto verify = execSync(*executor_, "MATCH (n:Person {name: 'Alice'}) RETURN n.age");
+    ASSERT_TRUE(verify.error.empty()) << verify.error;
+    ASSERT_EQ(verify.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(verify.rows[0][0]), 99);
 }
 
 // ==================== Variable-Length Expand Tests ====================

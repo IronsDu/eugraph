@@ -674,8 +674,9 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         // Column index = aggregate output position (group_keys then aggregates).
         for (size_t i = 0; i < agg->output_names.size(); ++i) {
             if (ctx_.symbols.find(agg->output_names[i]) == ctx_.symbols.end()) {
-                BoundType col_type =
-                    (i < agg->group_keys.size()) ? getBoundExprType(agg->group_keys[i]) : BoundType::Any();
+                BoundType col_type = (i < agg->group_keys.size())
+                                         ? getBoundExprType(agg->group_keys[i])
+                                         : BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
                 ColumnInfo info;
                 info.name = agg->output_names[i];
                 info.type = std::move(col_type);
@@ -685,7 +686,9 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             // Populate return_columns for output_schema
             ColumnInfo out_info;
             out_info.name = agg->output_names[i];
-            out_info.type = (i < agg->group_keys.size()) ? getBoundExprType(agg->group_keys[i]) : BoundType::Any();
+            out_info.type = (i < agg->group_keys.size())
+                                ? getBoundExprType(agg->group_keys[i])
+                                : BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
             out_info.column_index = static_cast<uint32_t>(i);
             ctx_.return_columns.push_back(std::move(out_info));
         }
@@ -918,7 +921,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                         agg_item.argument = std::move(fc->args[0]);
                 }
                 agg->aggregates.push_back(std::move(agg_item));
-                with_outputs.emplace_back(alias, BoundType::Any());
+                with_outputs.emplace_back(alias, BoundType::clone(agg->aggregates.back().result_type));
             } else {
                 with_outputs.emplace_back(alias, getBoundExprType(*bound_expr));
                 agg->group_keys.push_back(std::move(*bound_expr));
@@ -957,11 +960,19 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     }
 
     // Register WITH aliases temporarily so ORDER BY / SKIP / LIMIT can resolve them.
+    // Preserve metadata (source_label, etc.) from any prior registration so that
+    // downstream SET/REMOVE can resolve property IDs.
     for (size_t i = 0; i < with_outputs.size(); ++i) {
         ColumnInfo info;
         info.name = with_outputs[i].first;
         info.type = BoundType::clone(with_outputs[i].second);
         info.column_index = static_cast<uint32_t>(i);
+        auto existing = ctx_.symbols.find(with_outputs[i].first);
+        if (existing != ctx_.symbols.end()) {
+            info.source_label = existing->second.source_label;
+            info.source_prop_id = existing->second.source_prop_id;
+            info.strong_typed = existing->second.strong_typed;
+        }
         ctx_.symbols[with_outputs[i].first] = std::move(info);
     }
 
@@ -1016,14 +1027,23 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         current = std::move(distinct);
     }
 
-    // Scope reset: only WITH output columns are visible after this point
-    ctx_.symbols.clear();
+    // Scope reset: only WITH output columns are visible after this point.
+    // Preserve metadata (source_label, source_prop_id, strong_typed) from old
+    // symbols so that downstream SET/REMOVE can resolve property IDs.
+    auto old_symbols = std::move(ctx_.symbols);
     ctx_.next_column_index = 0;
     for (size_t i = 0; i < with_outputs.size(); ++i) {
         ColumnInfo info;
         info.name = with_outputs[i].first;
         info.type = std::move(with_outputs[i].second);
         info.column_index = static_cast<uint32_t>(i);
+        // Carry forward metadata if this variable was known before WITH.
+        auto it = old_symbols.find(with_outputs[i].first);
+        if (it != old_symbols.end()) {
+            info.source_label = it->second.source_label;
+            info.source_prop_id = it->second.source_prop_id;
+            info.strong_typed = it->second.strong_typed;
+        }
         ctx_.symbols[with_outputs[i].first] = std::move(info);
     }
     ctx_.next_column_index = static_cast<uint32_t>(with_outputs.size());

@@ -492,12 +492,9 @@ using Schema = vector<string>;   // 列名列表
 
 ### 已知限制
 
-- **ORDER BY 引用 RETURN 别名未实现**：`Binder::bindReturn` 处理 ORDER BY 时，RETURN 子句中定义的别名（如 `RETURN id(n) AS id ORDER BY id ASC`）尚未注册到 `BindContext` 中
 - **投影下推仅支持点查**：存储层通过逐属性 `getVertexProperty` 点查实现 projection，未利用 prefix scan 批量获取
 - **Expand N+1 模式**：Expand 算子逐顶点调用 `getVertexLabels` + `getVertexProperties`，未批量预取
 - **WITH 后 MATCH 不关联**：WITH 后接 MATCH 时，MATCH 创建独立扫描算子，不使用 WITH 输出作为输入。需让 MATCH 支持以 WITH 输出为 child 的关联查找模式
-- **聚合列 WHERE 类型比较**：聚合结果类型为 `BoundType::Any()`，WHERE 中与具体类型（如 int64）比较时 VectorizedEvaluator 可能不匹配。需让聚合函数正确设置结果类型（count → INT64, avg → DOUBLE 等）
-- **WITH 后 SET 属性更新**：WITH 经过 scope reset 后变量列索引改变，SET 操作基于旧列索引查找属性导致更新不生效
 
 ### 待实现
 

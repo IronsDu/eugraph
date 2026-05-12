@@ -105,7 +105,8 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
     auto buildOutputChunk = [&]() -> DataChunk {
         DataChunk dc;
         for (size_t c = 0; c < out_cols; ++c) {
-            dc.columns.push_back(Column::flat(binder::BoundTypeKind::ANY, DataChunk::DEFAULT_CAPACITY));
+            auto kind = (c < output_type_kinds_.size()) ? output_type_kinds_[c] : binder::BoundTypeKind::ANY;
+            dc.columns.push_back(Column::flat(kind, DataChunk::DEFAULT_CAPACITY));
         }
         return dc;
     };
