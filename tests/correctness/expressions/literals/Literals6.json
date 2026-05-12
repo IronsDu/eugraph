@@ -19,7 +19,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[2] Return a single-quoted string with one character",
@@ -36,7 +37,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[3] Return a single-quoted string with uft-8 characters",
@@ -53,7 +55,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[4] Return a single-quoted string with escaped single-quoted",
@@ -70,7 +73,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[5] Return a single-quoted string with escaped characters",
@@ -89,7 +93,8 @@
       "requires": [],
       "tags": [
         "@skipStyleCheck"
-      ]
+      ],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[6] Return a single-quoted string with 100 characters",
@@ -106,7 +111,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[7] Return a single-quoted string with 1000 characters",
@@ -123,7 +129,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[8] Return a single-quoted string with 10000 characters",
@@ -140,7 +147,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[9] Return a double-quoted empty string",
@@ -157,7 +165,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[10] Accept valid Unicode literal",
@@ -174,7 +183,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[11] Return a double-quoted string with one character",
@@ -193,7 +203,8 @@
       "requires": [],
       "tags": [
         "@skipStyleCheck"
-      ]
+      ],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[12] Return a double-quoted string with uft-8 characters",
@@ -212,7 +223,8 @@
       "requires": [],
       "tags": [
         "@skipStyleCheck"
-      ]
+      ],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals6 - String-[13] Failing on incorrect unicode literal",
@@ -225,7 +237,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

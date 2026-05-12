@@ -26,7 +26,8 @@
         "toInteger"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Comparison1 - Equality-[2] Number-typed float comparison",
@@ -46,7 +47,8 @@
         "toInteger"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Comparison1 - Equality-[3] Any-typed string comparison",
@@ -66,7 +68,8 @@
         "toInteger"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Comparison1 - Equality-[4] Comparing nodes to nodes",
@@ -86,7 +89,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Comparison1 - Equality-[5] Comparing relationships to relationships",
@@ -106,7 +110,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=[1, 2], rhs=[1], result=false]",
@@ -124,7 +129,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=[null], rhs=[1], result=null]",
@@ -142,7 +148,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=['a'], rhs=[1], result=false]",
@@ -160,7 +167,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=[[1]], rhs=[[1], [null]], result=false]",
@@ -178,7 +186,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=[[1], [2]], rhs=[[1], [null]], result=null]",
@@ -196,7 +205,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[6] Comparing lists to lists [lhs=[[1], [2, 3]], rhs=[[1], [null]], result=false]",
@@ -214,7 +224,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={}, rhs={}, result=true]",
@@ -232,7 +243,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: true}, rhs={k: true}, result=true]",
@@ -250,7 +262,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1}, rhs={k: 1}, result=true]",
@@ -268,7 +281,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1.0}, rhs={k: 1.0}, result=true]",
@@ -286,7 +300,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 'abc'}, rhs={k: 'abc'}, result=true]",
@@ -304,7 +319,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 'a', l: 2}, rhs={k: 'a', l: 2}, result=true]",
@@ -322,7 +338,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={}, rhs={k: null}, result=false]",
@@ -340,7 +357,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: null}, rhs={}, result=false]",
@@ -358,7 +376,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1}, rhs={k: 1, l: null}, result=false]",
@@ -376,7 +395,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: null, l: 1}, rhs={l: 1}, result=false]",
@@ -394,7 +414,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: null}, rhs={k: null, l: null}, result=false]",
@@ -412,7 +433,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: null}, rhs={k: null}, result=null]",
@@ -430,7 +452,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1}, rhs={k: null}, result=null]",
@@ -448,7 +471,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1, l: null}, rhs={k: null, l: null}, result=null]",
@@ -466,7 +490,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1, l: null}, rhs={k: null, l: 1}, result=null]",
@@ -484,7 +509,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[7] Comparing maps to maps [lhs={k: 1, l: null}, rhs={k: 1, l: 1}, result=null]",
@@ -502,7 +528,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs=1]",
@@ -522,7 +549,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs=1.0]",
@@ -542,7 +570,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs=0.0 / 0.0]",
@@ -562,7 +591,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[8] Equality and inequality of NaN [lhs=0.0 / 0.0, rhs='a']",
@@ -582,7 +612,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[9] Equality between strings and numbers [lhs=1.0, rhs=1.0, result=true]",
@@ -600,7 +631,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[9] Equality between strings and numbers [lhs=1, rhs=1.0, result=true]",
@@ -618,7 +650,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[9] Equality between strings and numbers [lhs='1.0', rhs=1.0, result=false]",
@@ -636,7 +669,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[9] Equality between strings and numbers [lhs='1', rhs=1, result=false]",
@@ -654,7 +688,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[10] Handling inlined equality of large integer",
@@ -674,7 +709,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Comparison1 - Equality-[11] Handling explicit equality of large integer",
@@ -694,7 +730,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Comparison1 - Equality-[12] Handling inlined equality of large integer, non-equal values",
@@ -710,7 +747,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Comparison1 - Equality-[13] Handling explicit equality of large integer, non-equal values",
@@ -726,7 +764,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Comparison1 - Equality-[14] Direction of traversed relationship is not significant for path equality, simple",
@@ -746,7 +785,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Comparison1 - Equality-[15] It is unknown - i.e. null - if a null is equal to a null",
@@ -764,7 +804,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[16] It is unknown - i.e. null - if a null is not equal to a null",
@@ -782,7 +823,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison1 - Equality-[17] Failing when comparing to an undefined variable",
@@ -794,7 +836,8 @@
       "query": "MATCH (s)\nWHERE s.name = undefinedVariable\n  AND s.age = 10\nRETURN s",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

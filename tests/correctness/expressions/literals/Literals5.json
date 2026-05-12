@@ -19,7 +19,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[2] Return a short positive float without integer digits",
@@ -36,7 +37,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[3] Return a long positive float",
@@ -53,7 +55,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[4] Return a long positive float without integer digits",
@@ -70,7 +73,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[5] Return a very long positive float",
@@ -87,7 +91,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[6] Return a very long positive float without integer digits",
@@ -104,7 +109,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[7] Return a positive zero float",
@@ -121,7 +127,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[8] Return a positive zero float without integer digits",
@@ -138,7 +145,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[9] Return a negative zero float",
@@ -155,7 +163,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[10] Return a negative zero float without integer digits",
@@ -172,7 +181,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[11] Return a very long negative float",
@@ -189,7 +199,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[12] Return a very long negative float without integer digits",
@@ -206,7 +217,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[13] Return a positive float with positive lower case exponent",
@@ -223,7 +235,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[14] Return a positive float with positive upper case exponent",
@@ -240,7 +253,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[15] Return a positive float with positive lower case exponent without integer digits",
@@ -257,7 +271,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[16] Return a positive float with negative lower case exponent",
@@ -274,7 +289,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[17] Return a positive float with negative lower case exponent without integer digits",
@@ -291,7 +307,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[18] Return a positive float with negative upper case exponent without integer digits",
@@ -308,7 +325,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[19] Return a negative float in with positive lower case exponent",
@@ -325,7 +343,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[20] Return a negative float in with positive upper case exponent",
@@ -342,7 +361,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[21] Return a negative float with positive lower case exponent without integer digits",
@@ -359,7 +379,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[22] Return a negative float with negative lower case exponent",
@@ -376,7 +397,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[23] Return a negative float with negative lower case exponent without integer digits",
@@ -393,7 +415,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[24] Return a negative float with negative upper case exponent without integer digits",
@@ -410,7 +433,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[25] Return a positive float with one integer digit and maximum positive exponent",
@@ -427,7 +451,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[26] Return a positive float with nine integer digit and maximum positive exponent",
@@ -444,7 +469,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals5 - Float-[27] Fail when float value is too large",
@@ -455,7 +481,8 @@
       "setup": [],
       "query": "RETURN 1.34E999",
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

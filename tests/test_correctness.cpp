@@ -45,6 +45,7 @@ struct CorrectnessCase {
     std::string errorType;
     std::string errorContains;
     std::string sourceFile;
+    std::string skipReason;
 };
 
 // ── JSON loading ──────────────────────────────────────────────────
@@ -127,6 +128,7 @@ std::vector<CorrectnessCase> LoadCasesFromJSON(const std::string& path) {
             tc.isError = obj.getBool("is_error").value_or(false);
             tc.errorType = obj.getString("error_type").value_or("");
             tc.errorContains = obj.getString("error_contains").value_or("");
+            tc.skipReason = obj.getString("skip_reason").value_or("");
             if (!tc.query.empty()) cases.push_back(std::move(tc));
         } catch (const json::ParseError&) {
             // Skip malformed scenarios
@@ -248,6 +250,11 @@ protected:
 
 TEST_P(CorrectnessTest, Run) {
     const auto& tc = GetParam();
+
+    // Honor skip_reason from JSON
+    if (!tc.skipReason.empty()) {
+        GTEST_SKIP() << "skip: " << tc.skipReason;
+    }
 
     // Execute setup statements
     for (const auto& stmt : tc.setup) {

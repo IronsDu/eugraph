@@ -200,7 +200,62 @@ cmake --build . --target correctness_tests
 ctest --preset=debug -R correctness_tests
 ```
 
-## 七、扩展指南
+## 七、Skip 机制
+
+### 7.1 skip_reason 字段
+
+每个 JSON 用例可包含 `skip_reason` 字段。当该字段非空时，测试跑步器在 SetUp 之前调用 `GTEST_SKIP()` 跳过该用例：
+
+```jsonc
+{
+  "id": "...",
+  "query": "RETURN null IS NULL AS value",
+  "skip_reason": "engine: standalone RETURN not supported"
+}
+```
+
+C++ 跑步器检查逻辑：
+
+```cpp
+if (!tc.skipReason.empty()) {
+    GTEST_SKIP() << "skip: " << tc.skipReason;
+}
+```
+
+### 7.2 标注脚本
+
+`scripts/annotate_skip.py` 根据已知引擎限制对用例进行静态分类，自动添加 `skip_reason`：
+
+```bash
+python3 scripts/annotate_skip.py tests/correctness
+```
+
+### 7.3 分类体系
+
+| 类别 | 含义 | 启用条件 |
+|------|------|---------|
+| `catalog` | 需要标签/属性预注册 | 测试框架自动解析并预注册标签 |
+| `engine` | 需要 WITH 管道 / 独立 RETURN | Binder 支持无 MATCH 上下文 |
+| `parser` | 关键字未在 ANTLR 中（UNWIND、IN、XOR） | 添加 grammar 规则 |
+| `binder` | 解析通过但 Binder 未实现 | 实现对应子句绑定 |
+| `runtime` | 内置函数未实现（toInteger 等） | 实现对应函数 |
+| `checker` | 语义错误检测未完善 | Binder/Checker 完善错误检测 |
+
+### 7.4 启用流程
+
+当实现了某个缺失功能后：
+1. 运行 `scripts/annotate_skip.py tests/correctness` 重新分类
+2. 相关用例的 `skip_reason` 自动清除（变为 runnable）
+3. 运行 `./correctness_tests` 验证新用例通过
+
+## 八、测试报告
+
+每次运行 `annotate_skip.py` 会生成 `tests/correctness/TEST_REPORT.md`，包含：
+- 总览：总数 / 可运行 / 已跳过
+- 跳过分组表：原因 → 数量 → 优先级 → 依赖
+- 按文件汇总表
+
+## 九、扩展指南
 
 ### 导入新的 TCK 功能类别
 

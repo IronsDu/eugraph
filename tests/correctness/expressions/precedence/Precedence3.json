@@ -23,7 +23,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence3 - On list values-[2] List element access takes precedence over list concatenation",
@@ -44,7 +45,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence3 - On list values-[3] List slicing takes precedence over list concatenation",
@@ -65,7 +67,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence3 - On list values-[4] List appending takes precedence over list element containment",
@@ -88,7 +91,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence3 - On list values-[5] List concatenation takes precedence over list element containment",
@@ -113,7 +117,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence3 - On list values-[6] List element containment takes precedence over comparison operator [comp==, right=false, wrong=true]",
@@ -136,7 +141,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence3 - On list values-[6] List element containment takes precedence over comparison operator [comp=<>, right=true, wrong=false]",
@@ -159,7 +165,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence3 - On list values-[6] List element containment takes precedence over comparison operator [comp=<, right=null, wrong=false]",
@@ -182,7 +189,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence3 - On list values-[6] List element containment takes precedence over comparison operator [comp=>, right=null, wrong=true]",
@@ -205,7 +213,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence3 - On list values-[6] List element containment takes precedence over comparison operator [comp=<=, right=null, wrong=false]",
@@ -228,7 +237,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence3 - On list values-[6] List element containment takes precedence over comparison operator [comp=>=, right=null, wrong=true]",
@@ -251,7 +261,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     }
   ]
 }

@@ -263,7 +263,39 @@ INSTANTIATE_TEST_SUITE_P(
 | 结果比较器复杂度（嵌套结构、路径、map） | Phase 1 先支持标量列；后续迭代加入复合类型匹配 |
 | 每个用例重建 WiredTiger 开销大 | Phase 1 先简单重建（类似现有集成测试）；后续可优化为快照回滚 |
 
-## 六、成功标准
+## 六、当前状态与启用路线图
+
+### 6.1 测试覆盖
+
+| 指标 | 数值 |
+|------|------|
+| 总场景数 | 1153 |
+| 可运行（skip_reason 为空） | ~19 |
+| 已跳过（带 skip_reason） | ~1134 |
+
+### 6.2 跳过分组与启用优先级
+
+按影响范围从大到小排列，每一批启用后 `annotate_skip.py` 自动重新分类：
+
+| 优先级 | 类别 | 跳过数 | 需做的工作 | 预计解锁用例 |
+|--------|------|--------|-----------|:----------:|
+| **P0** | catalog | 204 | 测试框架 SetUp 中解析 setup/query 的标签和属性，调用 `createLabel`/`createEdgeLabel` 预注册 | ~400+ |
+| **P1** | engine | 453 | Binder 支持无 MATCH 上下文的独立 RETURN、WITH 管道、多 MATCH | ~400+ |
+| **P1** | checker | 261 | Binder 完善语义检查（变量类型冲突、重复绑定、未定义变量） | ~261 (错误场景) |
+| **P2** | parser | 138 | ANTLR grammar 添加 UNWIND、IN、XOR 等关键字 | ~138 |
+| **P2** | binder | 56 | Binder 实现 DELETE/MERGE/SET/REMOVE 等 DML 子句 | ~56 |
+| **P2** | runtime | 22 | 实现 toInteger、toFloat、coalesce 等内置函数 | ~22 |
+
+### 6.3 关键约束
+
+项目是**强类型系统**：
+- 标签必须先 `createLabel` 注册，才能 `CREATE` 或 `MATCH`
+- 属性列需预先定义，否则 `CREATE` 时属性被静默丢弃
+- TCK 的 schema-less 模型（`CREATE (:A {name: 'bar'})` 无需预先定义 A 或 name）与项目类型系统冲突
+
+P0（catalog）解决后，大部分 MATCH-based 查询和带标签的 CREATE 用例即可运行。
+
+## 七、成功标准
 
 1. **Phase 2 完成**：表达式类正确性用例 ≥150 条，全部通过
 2. **Phase 3 完成**：查询子句类正确性用例 ≥200 条，全部通过

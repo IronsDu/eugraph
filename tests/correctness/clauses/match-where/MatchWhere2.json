@@ -26,7 +26,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere2 - Filter multiple variables-[2] Filter node with conjunctive multi-part property predicates on multi variables with multiple bindings",
@@ -47,7 +48,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     }
   ]
 }

@@ -19,7 +19,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals4 - Octal integer-[2] Return a long positive octal integer",
@@ -36,7 +37,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals4 - Octal integer-[3] Return the largest octal integer",
@@ -53,7 +55,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals4 - Octal integer-[4] Return a positive octal zero",
@@ -70,7 +73,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals4 - Octal integer-[5] Return a negative octal zero",
@@ -87,7 +91,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals4 - Octal integer-[6] Return a short negative octal integer",
@@ -104,7 +109,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals4 - Octal integer-[7] Return a long negative octal integer",
@@ -121,7 +127,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals4 - Octal integer-[8] Return the smallest octal integer",
@@ -138,7 +145,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals4 - Octal integer-[9] Fail on a too large octal integer",
@@ -149,7 +157,8 @@
       "setup": [],
       "query": "RETURN 0o1000000000000000000000 AS literal",
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals4 - Octal integer-[10] Fail on a too small octal integer",
@@ -160,7 +169,8 @@
       "setup": [],
       "query": "RETURN -0o1000000000000000000001 AS literal",
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

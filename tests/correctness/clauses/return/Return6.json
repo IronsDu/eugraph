@@ -24,7 +24,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[2] Projecting an arithmetic expression with aggregation",
@@ -46,7 +47,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[3] Aggregating by a list property has a correct definition of equality",
@@ -66,7 +68,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[4] Support multiple divisions in aggregate function",
@@ -155,7 +158,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[8] Handle aggregation on functions",
@@ -182,7 +186,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[9] Aggregates with arithmetics",
@@ -270,7 +275,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[13] Returning the minimum length of paths",
@@ -289,7 +295,8 @@
         "collect"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[14] Aggregates in aggregates",
@@ -301,7 +308,8 @@
       "query": "RETURN count(count(*))",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[15] Using `rand()` in aggregations",
@@ -313,7 +321,8 @@
       "query": "RETURN count(rand())",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[16] Aggregation on complex expressions",
@@ -345,7 +354,8 @@
         "DISTINCT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[17] Handle constants and parameters inside an expression which contains an aggregation expression",
@@ -378,7 +388,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[19] Handle returned property accesses inside an expression which contains an aggregation expression",
@@ -405,7 +416,8 @@
       "query": "MATCH (me: Person)--(you: Person)\nRETURN me.age + count(you.age)",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Return6 - Implicit grouping with aggregates-[21] Fail if more complex expressions, even if returned, are used inside expression which contains an aggregation expression",
@@ -417,7 +429,8 @@
       "query": "MATCH (me: Person)--(you: Person)\nRETURN me.age + you.age, me.age + you.age + count(*)",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

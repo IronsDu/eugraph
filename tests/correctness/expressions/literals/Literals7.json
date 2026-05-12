@@ -19,7 +19,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[2] Return a list containing a boolean",
@@ -36,7 +37,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[3] Return a list containing a null",
@@ -53,7 +55,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[4] Return a list containing a integer",
@@ -70,7 +73,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[5] Return a list containing a hexadecimal integer",
@@ -87,7 +91,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[6] Return a list containing a octal integer",
@@ -104,7 +109,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[7] Return a list containing a float",
@@ -121,7 +127,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[8] Return a list containing a string",
@@ -138,7 +145,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[9] Return a list containing an empty lists",
@@ -155,7 +163,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[10] Return seven-deep nested empty lists",
@@ -172,7 +181,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[11] Return 20-deep nested empty lists",
@@ -189,7 +199,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[12] Return 40-deep nested empty lists",
@@ -206,7 +217,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[13] Return a list containing an empty map",
@@ -223,7 +235,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[14] Return a list containing multiple integer",
@@ -240,7 +253,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[16] Return a list containing multiple mixed values",
@@ -257,7 +271,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[17] Return a list containing real and fake nested lists",
@@ -274,7 +289,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[18] Return a complex list containing multiple mixed and nested values",
@@ -293,7 +309,8 @@
       "requires": [],
       "tags": [
         "@skipStyleCheck"
-      ]
+      ],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals7 - List-[19] Fail on a list containing only a comma",
@@ -306,7 +323,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals7 - List-[20] Fail on a nested list with non-matching brackets",
@@ -319,7 +337,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals7 - List-[21] Fail on a nested list with missing commas",
@@ -332,7 +351,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

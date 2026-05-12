@@ -38,7 +38,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Boolean3 - XOR logical operations-[2] Exclusive disjunction of three truth values",
@@ -110,7 +111,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Boolean3 - XOR logical operations-[3] Exclusive disjunction of many truth values",
@@ -152,7 +154,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Boolean3 - XOR logical operations-[4] Exclusive disjunction is commutative on non-null",
@@ -192,7 +195,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[5] Exclusive disjunction is commutative on null",
@@ -237,7 +241,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[6] Exclusive disjunction is associative on non-null",
@@ -306,7 +311,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[7] Exclusive disjunction is associative on null",
@@ -441,7 +447,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=123, b=true]",
@@ -455,7 +462,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=123.4, b=false]",
@@ -469,7 +477,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=123.4, b=null]",
@@ -483,7 +492,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a='foo', b=true]",
@@ -497,7 +507,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=[], b=false]",
@@ -511,7 +522,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=[true], b=false]",
@@ -525,7 +537,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=[null], b=null]",
@@ -539,7 +552,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a={}, b=true]",
@@ -553,7 +567,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a={x: []}, b=true]",
@@ -567,7 +582,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b=123]",
@@ -581,7 +597,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=true, b=123.4]",
@@ -595,7 +612,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b='foo']",
@@ -609,7 +627,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=null, b='foo']",
@@ -623,7 +642,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=true, b=[]]",
@@ -637,7 +657,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=true, b=[false]]",
@@ -651,7 +672,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=null, b=[null]]",
@@ -665,7 +687,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b={}]",
@@ -679,7 +702,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=false, b={x: []}]",
@@ -693,7 +717,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=123, b='foo']",
@@ -707,7 +732,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=123.4, b=123.4]",
@@ -721,7 +747,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a='foo', b={x: []}]",
@@ -735,7 +762,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a=[true], b=[true]]",
@@ -749,7 +777,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     },
     {
       "id": "Boolean3 - XOR logical operations-[8] Fail on exclusive disjunction of at least one non-booleans [a={x: []}, b=[123]]",
@@ -763,7 +792,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: XOR keyword not in grammar"
     }
   ]
 }

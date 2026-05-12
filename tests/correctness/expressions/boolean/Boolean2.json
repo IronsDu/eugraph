@@ -36,7 +36,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Boolean2 - OR logical operations-[2] Disjunction of three truth values",
@@ -106,7 +107,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Boolean2 - OR logical operations-[3] Disjunction of many truth values",
@@ -146,7 +148,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Boolean2 - OR logical operations-[4] Disjunction is commutative on non-null",
@@ -185,7 +188,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean2 - OR logical operations-[5] Disjunction is commutative on null",
@@ -229,7 +233,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean2 - OR logical operations-[6] Disjunction is associative on non-null",
@@ -297,7 +302,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean2 - OR logical operations-[7] Disjunction is associative on null",
@@ -431,7 +437,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=123, b=true]",
@@ -443,7 +450,8 @@
       "query": "RETURN 123 OR true",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=123.4, b=false]",
@@ -455,7 +463,8 @@
       "query": "RETURN 123.4 OR false",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=123.4, b=null]",
@@ -467,7 +476,8 @@
       "query": "RETURN 123.4 OR null",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a='foo', b=true]",
@@ -479,7 +489,8 @@
       "query": "RETURN 'foo' OR true",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=[], b=false]",
@@ -491,7 +502,8 @@
       "query": "RETURN [] OR false",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=[true], b=false]",
@@ -503,7 +515,8 @@
       "query": "RETURN [true] OR false",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=[null], b=null]",
@@ -515,7 +528,8 @@
       "query": "RETURN [null] OR null",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a={}, b=true]",
@@ -527,7 +541,8 @@
       "query": "RETURN {} OR true",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a={x: []}, b=true]",
@@ -539,7 +554,8 @@
       "query": "RETURN {x: []} OR true",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=false, b=123]",
@@ -551,7 +567,8 @@
       "query": "RETURN false OR 123",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=true, b=123.4]",
@@ -563,7 +580,8 @@
       "query": "RETURN true OR 123.4",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=false, b='foo']",
@@ -575,7 +593,8 @@
       "query": "RETURN false OR 'foo'",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=null, b='foo']",
@@ -587,7 +606,8 @@
       "query": "RETURN null OR 'foo'",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=true, b=[]]",
@@ -599,7 +619,8 @@
       "query": "RETURN true OR []",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=true, b=[false]]",
@@ -611,7 +632,8 @@
       "query": "RETURN true OR [false]",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=null, b=[null]]",
@@ -623,7 +645,8 @@
       "query": "RETURN null OR [null]",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=false, b={}]",
@@ -635,7 +658,8 @@
       "query": "RETURN false OR {}",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=false, b={x: []}]",
@@ -647,7 +671,8 @@
       "query": "RETURN false OR {x: []}",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=123, b='foo']",
@@ -659,7 +684,8 @@
       "query": "RETURN 123 OR 'foo'",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=123.4, b=123.4]",
@@ -671,7 +697,8 @@
       "query": "RETURN 123.4 OR 123.4",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a='foo', b={x: []}]",
@@ -683,7 +710,8 @@
       "query": "RETURN 'foo' OR {x: []}",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a=[true], b=[true]]",
@@ -695,7 +723,8 @@
       "query": "RETURN [true] OR [true]",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Boolean2 - OR logical operations-[8] Fail on disjunction of at least one non-booleans [a={x: []}, b=[123]]",
@@ -707,7 +736,8 @@
       "query": "RETURN {x: []} OR [123]",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

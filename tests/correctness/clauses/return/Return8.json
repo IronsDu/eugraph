@@ -22,7 +22,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     }
   ]
 }

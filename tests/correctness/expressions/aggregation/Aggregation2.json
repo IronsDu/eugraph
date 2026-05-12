@@ -22,7 +22,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[2] `min()` over integers",
@@ -42,7 +43,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[3] `max()` over floats",
@@ -62,7 +64,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[4] `min()` over floats",
@@ -82,7 +85,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[5] `max()` over mixed numeric values",
@@ -102,7 +106,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[6] `min()` over mixed numeric values",
@@ -122,7 +127,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[7] `max()` over strings",
@@ -142,7 +148,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[8] `min()` over strings",
@@ -162,7 +169,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[9] `max()` over list values",
@@ -182,7 +190,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[10] `min()` over list values",
@@ -202,7 +211,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[11] `max()` over mixed values",
@@ -222,7 +232,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation2 - Min and Max-[12] `min()` over mixed values",
@@ -242,7 +253,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     }
   ]
 }

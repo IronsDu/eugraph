@@ -42,7 +42,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[3] Return a three node path",
@@ -62,7 +63,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[4] Respecting direction when matching non-existent path",
@@ -79,7 +81,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[5] Path query should return results in written order",
@@ -99,7 +102,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[6] Handling direction of named paths",
@@ -119,7 +123,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[7] Respecting direction when matching existing path",
@@ -140,7 +145,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[8] Respecting direction when matching non-existent path with multiple directions",
@@ -157,7 +163,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[9] Longer path query should return results in written order",
@@ -177,7 +184,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[10] Named path with alternating directed/undirected relationships",
@@ -198,7 +206,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[11] Named path with multiple alternating directed/undirected relationships",
@@ -219,7 +228,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[12] Matching path with multiple bidirectional relationships",
@@ -249,7 +259,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[13] Matching path with both directions should respect other directions",
@@ -273,7 +284,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[14] Named path with undirected fixed variable length pattern",
@@ -303,7 +315,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[15] Variable-length named path",
@@ -346,7 +359,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[17] Return a named var length path of length zero",
@@ -372,7 +386,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[18] Undirected named path",
@@ -395,7 +410,8 @@
         "LIMIT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[19] Variable length relationship without lower bound",
@@ -419,7 +435,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[20] Variable length relationship without bounds",
@@ -443,7 +460,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=(p)-[]-()]",
@@ -455,7 +473,8 @@
       "query": "MATCH (p)-[]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=(p)-[]->()]",
@@ -467,7 +486,8 @@
       "query": "MATCH (p)-[]->()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=(p)<-[]-()]",
@@ -479,7 +499,8 @@
       "query": "MATCH (p)<-[]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]-(p)]",
@@ -491,7 +512,8 @@
       "query": "MATCH ()-[]-(p)\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]->(p)]",
@@ -503,7 +525,8 @@
       "query": "MATCH ()-[]->(p)\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=()<-[]-(p)]",
@@ -515,7 +538,8 @@
       "query": "MATCH ()<-[]-(p)\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=(p)-[]-(), ()]",
@@ -527,7 +551,8 @@
       "query": "MATCH (p)-[]-(), ()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]-(p), ()]",
@@ -539,7 +564,8 @@
       "query": "MATCH ()-[]-(p), ()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=(p)-[]-()-[]-()]",
@@ -551,7 +577,8 @@
       "query": "MATCH (p)-[]-()-[]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]-(p)-[]-()]",
@@ -563,7 +590,8 @@
       "query": "MATCH ()-[]-(p)-[]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]-()-[]-(p)]",
@@ -575,7 +603,8 @@
       "query": "MATCH ()-[]-()-[]-(p)\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=(a)-[r]-(p)-[]->(b), (t), (t)-[*]-(b)]",
@@ -587,7 +616,8 @@
       "query": "MATCH (a)-[r]-(p)-[]->(b), (t), (t)-[*]-(b)\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=(a)-[r*]-(s)-[]-(b), (p), (t)-[]-(b)]",
@@ -599,7 +629,8 @@
       "query": "MATCH (a)-[r*]-(s)-[]-(b), (p), (t)-[]-(b)\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[21] Fail when a node has the same variable in a preceding MATCH [pattern=(a)-[r]-(p)<-[*]-(b), (t), (t)-[]-(b)]",
@@ -611,7 +642,8 @@
       "query": "MATCH (a)-[r]-(p)<-[*]-(b), (t), (t)-[]-(b)\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[p]-()]",
@@ -623,7 +655,8 @@
       "query": "MATCH ()-[p]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[p]->()]",
@@ -635,7 +668,8 @@
       "query": "MATCH ()-[p]->()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()<-[p]-()]",
@@ -647,7 +681,8 @@
       "query": "MATCH ()<-[p]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[p*]-()]",
@@ -659,7 +694,8 @@
       "query": "MATCH ()-[p*]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[p*]->()]",
@@ -671,7 +707,8 @@
       "query": "MATCH ()-[p*]->()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()<-[p*]-()]",
@@ -683,7 +720,8 @@
       "query": "MATCH ()<-[p*]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[p]-(), ()]",
@@ -695,7 +733,8 @@
       "query": "MATCH ()-[p]-(), ()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[p*]-(), ()]",
@@ -707,7 +746,8 @@
       "query": "MATCH ()-[p*]-(), ()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[p]-()-[]-()]",
@@ -719,7 +759,8 @@
       "query": "MATCH ()-[p]-()-[]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[p*]-()-[]-()]",
@@ -731,7 +772,8 @@
       "query": "MATCH ()-[p*]-()-[]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-()-[p]-()]",
@@ -743,7 +785,8 @@
       "query": "MATCH ()-[]-()-[p]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=()-[]-()-[p*]-()]",
@@ -755,7 +798,8 @@
       "query": "MATCH ()-[]-()-[p*]-()\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=(a)-[r]-()-[]->(b), (t), (t)-[p*]-(b)]",
@@ -767,7 +811,8 @@
       "query": "MATCH (a)-[r]-()-[]->(b), (t), (t)-[p*]-(b)\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=(a)-[r*]-(s)-[p]-(b), (t), (t)-[]-(b)]",
@@ -779,7 +824,8 @@
       "query": "MATCH (a)-[r*]-(s)-[p]-(b), (t), (t)-[]-(b)\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[22] Fail when a relationship has the same variable in a preceding MATCH [pattern=(a)-[r]-(s)<-[p]-(b), (t), (t)-[]-(b)]",
@@ -791,7 +837,8 @@
       "query": "MATCH (a)-[r]-(s)<-[p]-(b), (t), (t)-[]-(b)\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=p = (p)-[]-()]",
@@ -803,7 +850,8 @@
       "query": "MATCH p = (p)-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=p = (p)-[]->()]",
@@ -815,7 +863,8 @@
       "query": "MATCH p = (p)-[]->()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=p = (p)<-[]-()]",
@@ -827,7 +876,8 @@
       "query": "MATCH p = (p)<-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=p = ()-[]-(p)]",
@@ -839,7 +889,8 @@
       "query": "MATCH p = ()-[]-(p)\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=p = ()-[]->(p)]",
@@ -851,7 +902,8 @@
       "query": "MATCH p = ()-[]->(p)\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=p = ()<-[]-(p)]",
@@ -863,7 +915,8 @@
       "query": "MATCH p = ()<-[]-(p)\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=(p)-[]-(), p = ()-[]-()]",
@@ -875,7 +928,8 @@
       "query": "MATCH (p)-[]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=(p)-[]->(), p = ()-[]-()]",
@@ -887,7 +941,8 @@
       "query": "MATCH (p)-[]->(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=(p)<-[]-(), p = ()-[]-()]",
@@ -899,7 +954,8 @@
       "query": "MATCH (p)<-[]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=()-[]-(p), p = ()-[]-()]",
@@ -911,7 +967,8 @@
       "query": "MATCH ()-[]-(p), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=()-[]->(p), p = ()-[]-()]",
@@ -923,7 +980,8 @@
       "query": "MATCH ()-[]->(p), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=()<-[]-(p), p = ()-[]-()]",
@@ -935,7 +993,8 @@
       "query": "MATCH ()<-[]-(p), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=(p)-[]-(), (), p = ()-[]-()]",
@@ -947,7 +1006,8 @@
       "query": "MATCH (p)-[]-(), (), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=()-[p]-(), (), p = ()-[]-()]",
@@ -959,7 +1019,8 @@
       "query": "MATCH ()-[p]-(), (), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=()-[]-(p), (), p = ()-[]-()]",
@@ -971,7 +1032,8 @@
       "query": "MATCH ()-[]-(p), (), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=(p)-[]-()-[]-(), p = ()-[]-()]",
@@ -983,7 +1045,8 @@
       "query": "MATCH (p)-[]-()-[]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=()-[]-(p)-[]-(), p = ()-[]-()]",
@@ -995,7 +1058,8 @@
       "query": "MATCH ()-[]-(p)-[]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=()-[]-()-[]-(p), p = ()-[]-()]",
@@ -1007,7 +1071,8 @@
       "query": "MATCH ()-[]-()-[]-(p), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=(a)-[r]-(p)-[]-(b), p = (s)-[]-(t), (t), (t)-[]-(b)]",
@@ -1019,7 +1084,8 @@
       "query": "MATCH (a)-[r]-(p)-[]-(b), p = (s)-[]-(t), (t), (t)-[]-(b)\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[23] Fail when a node has the same variable in the same pattern [pattern=(a)-[r]-(p)<-[*]-(b), p = (s)-[]-(t), (t), (t)-[]-(b)]",
@@ -1031,7 +1097,8 @@
       "query": "MATCH (a)-[r]-(p)<-[*]-(b), p = (s)-[]-(t), (t), (t)-[]-(b)\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=p = ()-[p]-()]",
@@ -1043,7 +1110,8 @@
       "query": "MATCH p = ()-[p]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=p = ()-[p]->()]",
@@ -1055,7 +1123,8 @@
       "query": "MATCH p = ()-[p]->()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=p = ()<-[p]-()]",
@@ -1067,7 +1136,8 @@
       "query": "MATCH p = ()<-[p]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=p = ()-[p*]-()]",
@@ -1079,7 +1149,8 @@
       "query": "MATCH p = ()-[p*]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=p = ()-[p*]->()]",
@@ -1091,7 +1162,8 @@
       "query": "MATCH p = ()-[p*]->()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=p = ()<-[p*]-()]",
@@ -1103,7 +1175,8 @@
       "query": "MATCH p = ()<-[p*]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()-[p]-(), p = ()-[]-()]",
@@ -1115,7 +1188,8 @@
       "query": "MATCH ()-[p]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()-[p]->(), p = ()-[]-()]",
@@ -1127,7 +1201,8 @@
       "query": "MATCH ()-[p]->(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()<-[p]-(), p = ()-[]-()]",
@@ -1139,7 +1214,8 @@
       "query": "MATCH ()<-[p]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()-[p*]-(), p = ()-[]-()]",
@@ -1151,7 +1227,8 @@
       "query": "MATCH ()-[p*]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()-[p*]->(), p = ()-[]-()]",
@@ -1163,7 +1240,8 @@
       "query": "MATCH ()-[p*]->(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()<-[p*]-(), p = ()-[]-()]",
@@ -1175,7 +1253,8 @@
       "query": "MATCH ()<-[p*]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()-[p]-(), (), p = ()-[]-()]",
@@ -1187,7 +1266,8 @@
       "query": "MATCH ()-[p]-(), (), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()-[p*]-(), (), p = ()-[]-()]",
@@ -1199,7 +1279,8 @@
       "query": "MATCH ()-[p*]-(), (), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()-[p]-()-[]-(), p = ()-[]-()]",
@@ -1211,7 +1292,8 @@
       "query": "MATCH ()-[p]-()-[]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()-[p*]-()-[]-(), p = ()-[]-()]",
@@ -1223,7 +1305,8 @@
       "query": "MATCH ()-[p*]-()-[]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[p]-(), p = ()-[]-()]",
@@ -1235,7 +1318,8 @@
       "query": "MATCH ()-[]-()-[p]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=()-[]-()-[p*]-(), p = ()-[]-()]",
@@ -1247,7 +1331,8 @@
       "query": "MATCH ()-[]-()-[p*]-(), p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=(a)-[r]-(s)-[p]-(b), p = (s)-[]-(t), (t), (t)-[]-(b)]",
@@ -1259,7 +1344,8 @@
       "query": "MATCH (a)-[r]-(s)-[p]-(b), p = (s)-[]-(t), (t), (t)-[]-(b)\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[24] Fail when a relationship has the same variable in the same pattern [pattern=(a)-[r]-(s)<-[p*]-(b), p = (s)-[]-(t), (t), (t)-[]-(b)]",
@@ -1271,7 +1357,8 @@
       "query": "MATCH (a)-[r]-(s)<-[p*]-(b), p = (s)-[]-(t), (t), (t)-[]-(b)\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match6 - Match named paths scenarios-[25] Fail when matching a path variable bound to a value [invalid=true]",
@@ -1283,7 +1370,8 @@
       "query": "WITH true AS p\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[25] Fail when matching a path variable bound to a value [invalid=123]",
@@ -1295,7 +1383,8 @@
       "query": "WITH 123 AS p\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[25] Fail when matching a path variable bound to a value [invalid=123.4]",
@@ -1307,7 +1396,8 @@
       "query": "WITH 123.4 AS p\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[25] Fail when matching a path variable bound to a value [invalid='foo']",
@@ -1319,7 +1409,8 @@
       "query": "WITH 'foo' AS p\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[25] Fail when matching a path variable bound to a value [invalid=[]]",
@@ -1331,7 +1422,8 @@
       "query": "WITH [] AS p\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[25] Fail when matching a path variable bound to a value [invalid=[10]]",
@@ -1343,7 +1435,8 @@
       "query": "WITH [10] AS p\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[25] Fail when matching a path variable bound to a value [invalid={x: 1}]",
@@ -1355,7 +1448,8 @@
       "query": "WITH {x: 1} AS p\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match6 - Match named paths scenarios-[25] Fail when matching a path variable bound to a value [invalid={x: []}]",
@@ -1367,7 +1461,8 @@
       "query": "WITH {x: []} AS p\nMATCH p = ()-[]-()\nRETURN p",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     }
   ]
 }

@@ -24,7 +24,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[2] Directed match of a simple relationship",
@@ -48,7 +49,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[3] Undirected match on simple relationship graph",
@@ -77,7 +79,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[4] Get two related nodes",
@@ -100,7 +103,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[5] Return two subgraphs with bound undirected relationship",
@@ -126,7 +130,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[6] Matching a relationship pattern using a label predicate",
@@ -147,7 +152,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[7] Matching nodes with many labels",
@@ -170,7 +176,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[8] Matching using relationship predicate with multiples of the same type",
@@ -191,7 +198,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[9] Get related to related to",
@@ -211,7 +219,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[10] Matching using self-referencing pattern returns no result",
@@ -228,7 +237,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[11] Undirected match in self-relationship graph",
@@ -252,7 +262,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[12] Undirected match of self-relationship in self-relationship graph",
@@ -274,7 +285,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[13] Directed match on self-relationship graph",
@@ -298,7 +310,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[14] Directed match of self-relationship on self-relationship graph",
@@ -320,7 +333,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[15] Mixing directed and undirected pattern parts with self-relationship, simple",
@@ -355,7 +369,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[16] Mixing directed and undirected pattern parts with self-relationship, undirected",
@@ -418,7 +433,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[17] Handling cyclic patterns",
@@ -439,7 +455,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[18] Handling cyclic patterns when separated into two parts",
@@ -460,7 +477,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match3 - Match fixed length patterns-[19] Two bound nodes pointing to the same node",
@@ -484,7 +502,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match3 - Match fixed length patterns-[20] Three bound nodes pointing to the same node",
@@ -508,7 +527,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match3 - Match fixed length patterns-[21] Three bound nodes pointing to the same node with extra connections",
@@ -532,7 +552,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match3 - Match fixed length patterns-[22] Returning bound nodes that are not part of the pattern",
@@ -557,7 +578,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match3 - Match fixed length patterns-[23] Matching disconnected patterns",
@@ -602,7 +624,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match3 - Match fixed length patterns-[24] Matching twice with duplicate relationship types on same relationship",
@@ -626,7 +649,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Match3 - Match fixed length patterns-[25] Matching twice with an additional node label",
@@ -644,7 +668,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Match3 - Match fixed length patterns-[26] Matching twice with a duplicate predicate",
@@ -668,7 +693,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Match3 - Match fixed length patterns-[27] Matching from null nodes should return no results owing to finding no matches",
@@ -684,7 +710,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match3 - Match fixed length patterns-[28] Matching from null nodes should return no results owing to matches being filtered out",
@@ -702,7 +729,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match3 - Match fixed length patterns-[29] Fail when re-using a relationship in the same pattern",
@@ -714,7 +742,8 @@
       "query": "MATCH (a)-[r]->()-[r]->(a)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match3 - Match fixed length patterns-[30] Fail when using a list or nodes as a node",
@@ -726,7 +755,8 @@
       "query": "MATCH (n)\nWITH [n] AS users\nMATCH (users)-->(messages)\nRETURN messages",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     }
   ]
 }

@@ -70,7 +70,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean5 - Interop of logical operations-[2] Disjunction is distributive over conjunction on null",
@@ -204,7 +205,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean5 - Interop of logical operations-[3] Conjunction is distributive over disjunction on non-null",
@@ -272,7 +274,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean5 - Interop of logical operations-[4] Conjunction is distributive over disjunction on null",
@@ -406,7 +409,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean5 - Interop of logical operations-[5] Conjunction is distributive over exclusive disjunction on non-null",
@@ -475,7 +479,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean5 - Interop of logical operations-[6] Conjunction is not distributive over exclusive disjunction on null",
@@ -610,7 +615,8 @@
         "XOR"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean5 - Interop of logical operations-[7] De Morgan's law on non-null: the negation of a disjunction is the conjunction of the negations",
@@ -649,7 +655,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Boolean5 - Interop of logical operations-[8] De Morgan's law on non-null: the negation of a conjunction is the disjunction of the negations",
@@ -688,7 +695,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     }
   ]
 }

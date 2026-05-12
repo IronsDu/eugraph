@@ -25,7 +25,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[2] Matching on a single undirected connection",
@@ -54,7 +55,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[3] Matching on any single incoming directed connection",
@@ -83,7 +85,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[4] Matching on a specific type of single outgoing directed connection",
@@ -103,7 +106,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[5] Matching on a specific type of single undirected connection",
@@ -129,7 +133,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[6] Matching on a specific type of single incoming directed connection",
@@ -152,7 +157,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[7] Matching on a specific type of a variable length outgoing directed connection",
@@ -172,7 +178,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[8] Matching on a specific type of variable length undirected connection",
@@ -198,7 +205,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[9] Matching on a specific type of variable length incoming directed connection",
@@ -221,7 +229,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Matching on a specific type of undirected connection with length 2",
@@ -244,7 +253,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(a)]",
@@ -256,7 +266,8 @@
       "query": "MATCH (n) WHERE (a) RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r]->(a)]",
@@ -268,7 +279,8 @@
       "query": "MATCH (n) WHERE (n)-[r]->(a) RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(a)-[r]->(n)]",
@@ -280,7 +292,8 @@
       "query": "MATCH (n) WHERE (a)-[r]->(n) RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)<-[r {}]-(a)]",
@@ -292,7 +305,8 @@
       "query": "MATCH (n) WHERE (n)<-[r {}]-(a) RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r {}]-(a)]",
@@ -304,7 +318,8 @@
       "query": "MATCH (n) WHERE (n)-[r {}]-(a) RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r]->()]",
@@ -316,7 +331,8 @@
       "query": "MATCH (n) WHERE (n)-[r]->() RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=()-[r]->(n)]",
@@ -328,7 +344,8 @@
       "query": "MATCH (n) WHERE ()-[r]->(n) RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)<-[r]-()]",
@@ -340,7 +357,8 @@
       "query": "MATCH (n) WHERE (n)<-[r]-() RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r]-()]",
@@ -352,7 +370,8 @@
       "query": "MATCH (n) WHERE (n)-[r]-() RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=()-[r]->()]",
@@ -364,7 +383,8 @@
       "query": "MATCH (n) WHERE ()-[r]->() RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=()<-[r]-()]",
@@ -376,7 +396,8 @@
       "query": "MATCH (n) WHERE ()<-[r]-() RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=()-[r]-()]",
@@ -388,7 +409,8 @@
       "query": "MATCH (n) WHERE ()-[r]-() RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r:REL]->(a {num: 5})]",
@@ -400,7 +422,8 @@
       "query": "MATCH (n) WHERE (n)-[r:REL]->(a {num: 5}) RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r:REL*0..2]->(a {num: 5})]",
@@ -412,7 +435,8 @@
       "query": "MATCH (n) WHERE (n)-[r:REL*0..2]->(a {num: 5}) RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[10] Fail on introducing unbounded variables in pattern [pattern=(n)-[r:REL]->(:C)<-[s:REL]-(a {num: 5})]",
@@ -424,7 +448,8 @@
       "query": "MATCH (n) WHERE (n)-[r:REL]->(:C)<-[s:REL]-(a {num: 5}) RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[11] Fail on checking self pattern",
@@ -436,7 +461,8 @@
       "query": "MATCH (n) WHERE (n) RETURN n",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[12] Matching two nodes on a single directed connection between them",
@@ -470,7 +496,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[13] Fail on matching two nodes on a single undirected connection between them",
@@ -512,7 +539,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[14] Matching two nodes on a specific type of single outgoing directed connection",
@@ -538,7 +566,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[15] Matching two nodes on a specific type of single undirected connection",
@@ -572,7 +601,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[16] Matching two nodes on a specific type of a variable length outgoing directed connection",
@@ -598,7 +628,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[17] Matching two nodes on a specific type of variable length undirected connection",
@@ -640,7 +671,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[18] Matching two nodes on a specific type of undirected connection with length 2",
@@ -666,7 +698,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[19] Using a negated existential pattern predicate",
@@ -689,7 +722,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[20] Using two existential pattern predicates in a conjunction",
@@ -709,7 +743,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[21] Using two existential pattern predicates in a disjunction",
@@ -735,7 +770,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern1 - Pattern predicate-[22] Fail on using pattern in RETURN projection",
@@ -747,7 +783,8 @@
       "query": "MATCH (n) RETURN (n)-[]->()",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[23] Fail on using pattern in WITH projection",
@@ -759,7 +796,8 @@
       "query": "MATCH (n) WITH (n)-[]->() AS x RETURN x",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Pattern1 - Pattern predicate-[24] Fail on using pattern in right-hand side of SET",
@@ -774,7 +812,8 @@
         "nodes"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: SET clause not yet bound"
     }
   ]
 }

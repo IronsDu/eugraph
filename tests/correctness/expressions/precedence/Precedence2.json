@@ -23,7 +23,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=+, mult2=/, right=9, wrong=10]",
@@ -44,7 +45,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=+, mult2=%, right=9, wrong=0]",
@@ -65,7 +67,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=-, mult2=*, right=2, wrong=-8]",
@@ -86,7 +89,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=-, mult2=/, right=7, wrong=-2]",
@@ -107,7 +111,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=*, add=-, mult2=%, right=7, wrong=0]",
@@ -128,7 +133,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=+, mult2=*, right=8, wrong=0]",
@@ -149,7 +155,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=+, mult2=/, right=3, wrong=0]",
@@ -170,7 +177,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=+, mult2=%, right=3, wrong=0]",
@@ -191,7 +199,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=-, mult2=*, right=-4, wrong=-8]",
@@ -212,7 +221,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=-, mult2=/, right=1, wrong=-2]",
@@ -233,7 +243,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=/, add=-, mult2=%, right=1, wrong=0]",
@@ -254,7 +265,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=+, mult2=*, right=6, wrong=8]",
@@ -275,7 +287,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=+, mult2=/, right=1, wrong=2]",
@@ -296,7 +309,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=+, mult2=%, right=1, wrong=0]",
@@ -317,7 +331,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=-, mult2=*, right=-6, wrong=0]",
@@ -338,7 +353,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=-, mult2=/, right=-1, wrong=0]",
@@ -359,7 +375,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[1] Numeric multiplicative operations takes precedence over numeric additive operations [mult1=%, add=-, mult2=%, right=-1, wrong=0]",
@@ -380,7 +397,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[2] Exponentiation takes precedence over numeric multiplicative operations [mult=*, right=512.0, wrong=68719476736.0]",
@@ -401,7 +419,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[2] Exponentiation takes precedence over numeric multiplicative operations [mult=/, right=8.0, wrong=64.0]",
@@ -422,7 +441,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[2] Exponentiation takes precedence over numeric multiplicative operations [mult=%, right=0.0, wrong=64.0]",
@@ -443,7 +463,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[3] Exponentiation takes precedence over numeric additive operations [add=+, right=72.0, wrong=1073741824.0]",
@@ -464,7 +485,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[3] Exponentiation takes precedence over numeric additive operations [add=-, right=56.0, wrong=64.0]",
@@ -485,7 +507,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[4] Numeric unary negative takes precedence over exponentiation",
@@ -506,7 +529,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[5] Numeric unary negative takes precedence over numeric additive operations [add=+, right=-1, wrong=-5]",
@@ -527,7 +551,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence2 - On numeric values-[5] Numeric unary negative takes precedence over numeric additive operations [add=-, right=-5, wrong=-1]",
@@ -548,7 +573,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     }
   ]
 }

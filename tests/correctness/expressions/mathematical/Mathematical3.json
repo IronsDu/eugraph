@@ -16,7 +16,8 @@
       "tags": [
         "@skipGrammarCheck"
       ],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

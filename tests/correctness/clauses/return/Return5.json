@@ -24,7 +24,8 @@
         "DISTINCT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return5 - Implicit grouping with distinct-[2] DISTINCT on nullable values",
@@ -49,7 +50,8 @@
         "DISTINCT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return5 - Implicit grouping with distinct-[3] DISTINCT inside aggregation should work with nested lists in maps",
@@ -71,7 +73,8 @@
         "DISTINCT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return5 - Implicit grouping with distinct-[4] DISTINCT inside aggregation should work with nested lists of maps in maps",
@@ -93,7 +96,8 @@
         "DISTINCT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return5 - Implicit grouping with distinct-[5] Aggregate on list values",
@@ -123,7 +127,8 @@
         "DISTINCT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     }
   ]
 }

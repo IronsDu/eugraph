@@ -24,7 +24,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[1] `percentileDisc()` [p=0.5, result=20.0]",
@@ -46,7 +47,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[1] `percentileDisc()` [p=1.0, result=30.0]",
@@ -68,7 +70,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[2] `percentileCont()` [p=0.0, result=10.0]",
@@ -90,7 +93,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[2] `percentileCont()` [p=0.5, result=20.0]",
@@ -112,7 +116,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[2] `percentileCont()` [p=1.0, result=30.0]",
@@ -134,7 +139,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[3] `percentileCont()` failing on bad arguments [percentile=1000]",
@@ -150,7 +156,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[3] `percentileCont()` failing on bad arguments [percentile=-1]",
@@ -166,7 +173,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[3] `percentileCont()` failing on bad arguments [percentile=1.1]",
@@ -182,7 +190,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[4] `percentileDisc()` failing on bad arguments [percentile=1000]",
@@ -198,7 +207,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[4] `percentileDisc()` failing on bad arguments [percentile=-1]",
@@ -214,7 +224,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[4] `percentileDisc()` failing on bad arguments [percentile=1.1]",
@@ -230,7 +241,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Aggregation6 - Percentiles-[5] `percentileDisc()` failing in more involved query",
@@ -251,7 +263,8 @@
         "percentile"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     }
   ]
 }

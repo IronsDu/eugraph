@@ -25,7 +25,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "MatchWhere6 - Filter optional matches-[2] Filter node with false node label predicate after OPTIONAL MATCH",
@@ -48,7 +49,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "MatchWhere6 - Filter optional matches-[3] Filter node with property predicate on multi variables with multiple bindings after OPTIONAL MATCH",
@@ -71,7 +73,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "MatchWhere6 - Filter optional matches-[4] Do not fail when predicates on optionally matched and missed nodes are invalid",
@@ -94,7 +97,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "MatchWhere6 - Filter optional matches-[5] Matching and optionally matching with unbound nodes and equality predicate in reverse direction",
@@ -123,7 +127,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "MatchWhere6 - Filter optional matches-[6] Join nodes on non-equality of properties – OPTIONAL MATCH and WHERE",
@@ -155,7 +160,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "MatchWhere6 - Filter optional matches-[7] Join nodes on non-equality of properties – OPTIONAL MATCH on two relationships and WHERE",
@@ -191,7 +197,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "MatchWhere6 - Filter optional matches-[8] Join nodes on non-equality of properties – Two OPTIONAL MATCH clauses and WHERE",
@@ -227,7 +234,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     }
   ]
 }

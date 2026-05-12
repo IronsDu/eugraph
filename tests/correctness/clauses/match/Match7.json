@@ -22,7 +22,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[2] OPTIONAL MATCH with previously bound nodes",
@@ -46,7 +47,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[3] OPTIONAL MATCH and bound nodes",
@@ -69,7 +71,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[4] Optionally matching relationship with bound nodes in reverse direction",
@@ -96,7 +99,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[5] Optionally matching relationship with a relationship that is already bound",
@@ -123,7 +127,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[6] Optionally matching relationship with a relationship and node that are both already bound",
@@ -150,7 +155,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[7] MATCH with OPTIONAL MATCH in longer pattern",
@@ -173,7 +179,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[8] Longer pattern with bound nodes without matches",
@@ -196,7 +203,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[9] Longer pattern with bound nodes",
@@ -219,7 +227,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[10] Optionally matching from null nodes should return null",
@@ -239,7 +248,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[11] Return two subgraphs with bound undirected relationship and optional relationship",
@@ -270,7 +280,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[12] Variable length optional relationships",
@@ -302,7 +313,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[13] Variable length optional relationships with bound nodes",
@@ -325,7 +337,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[14] Variable length optional relationships with length predicates",
@@ -348,7 +361,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[15] Variable length patterns and nulls",
@@ -374,7 +388,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[16] Optionally matching named paths - null result",
@@ -397,7 +412,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[17] Optionally matching named paths - existing result",
@@ -427,7 +443,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[18] Named paths inside optional matches with node predicates",
@@ -450,7 +467,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[19] Optionally matching named paths with single and variable length patterns",
@@ -473,7 +491,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[20] Variable length optional relationships with bound nodes, no matches",
@@ -496,7 +515,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[21] Handling optional matches between nulls",
@@ -523,7 +543,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[22] MATCH after OPTIONAL MATCH",
@@ -543,7 +564,8 @@
         "coalesce"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[23] OPTIONAL MATCH with labels on the optional end node",
@@ -572,7 +594,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[24] Optionally matching self-loops",
@@ -595,7 +618,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[25] Optionally matching self-loops without matches",
@@ -624,7 +648,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[26] Handling correlated optional matches; first does not match implies second does not match",
@@ -649,7 +674,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[27] Handling optional matches between optionally matched entities",
@@ -676,7 +702,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[28] Handling optional matches with inline label predicate",
@@ -699,7 +726,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[29] Satisfies the open world assumption, relationships between same nodes",
@@ -724,7 +752,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[30] Satisfies the open world assumption, single relationship",
@@ -749,7 +778,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Match7 - Optional match-[31] Satisfies the open world assumption, relationships between different nodes",
@@ -774,7 +804,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     }
   ]
 }

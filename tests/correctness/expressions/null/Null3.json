@@ -19,7 +19,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Null3 - Null evaluation-[2] It is unknown - i.e. null - if a null is equal to a null",
@@ -36,7 +37,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Null3 - Null evaluation-[3] It is unknown - i.e. null - if a null is not equal to a null",
@@ -53,7 +55,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Null3 - Null evaluation-[4] Using null in IN [elt=null, coll=null, result=null]",
@@ -72,7 +75,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Null3 - Null evaluation-[4] Using null in IN [elt=null, coll=[1, 2, 3], result=null]",
@@ -91,7 +95,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Null3 - Null evaluation-[4] Using null in IN [elt=null, coll=[1, 2, 3, null], result=null]",
@@ -110,7 +115,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Null3 - Null evaluation-[4] Using null in IN [elt=null, coll=[], result=false]",
@@ -129,7 +135,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Null3 - Null evaluation-[4] Using null in IN [elt=1, coll=[1, 2, 3, null], result=true]",
@@ -148,7 +155,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Null3 - Null evaluation-[4] Using null in IN [elt=1, coll=[null, 1], result=true]",
@@ -167,7 +175,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Null3 - Null evaluation-[4] Using null in IN [elt=5, coll=[1, 2, 3, null], result=null]",
@@ -186,7 +195,8 @@
       "requires": [
         "IN"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     }
   ]
 }

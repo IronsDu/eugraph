@@ -36,7 +36,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match2 - Match relationships-[3] Matching a self-loop with an undirected relationship pattern",
@@ -57,7 +58,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match2 - Match relationships-[4] Matching a self-loop with a directed relationship pattern",
@@ -78,7 +80,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match2 - Match relationships-[5] Match relationship with inline property value",
@@ -98,7 +101,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match2 - Match relationships-[6] Match relationships with multiple types",
@@ -121,7 +125,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match2 - Match relationships-[7] Matching twice with conflicting relationship types on same relationship",
@@ -139,7 +144,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Match2 - Match relationships-[8] Fail when using parameter as relationship predicate in MATCH",
@@ -151,7 +157,8 @@
       "query": "MATCH ()-[r:FOO $param]->()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)]",
@@ -163,7 +170,8 @@
       "query": "MATCH (r)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)-[]-()]",
@@ -175,7 +183,8 @@
       "query": "MATCH (r)-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)-[]->()]",
@@ -187,7 +196,8 @@
       "query": "MATCH (r)-[]->()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)<-[]-()]",
@@ -199,7 +209,8 @@
       "query": "MATCH (r)<-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)-[]-(r)]",
@@ -211,7 +222,8 @@
       "query": "MATCH (r)-[]-(r)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]->(r)]",
@@ -223,7 +235,8 @@
       "query": "MATCH ()-[]->(r)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=()<-[]-(r)]",
@@ -235,7 +248,8 @@
       "query": "MATCH ()<-[]-(r)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]-(r)]",
@@ -247,7 +261,8 @@
       "query": "MATCH ()-[]-(r)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)-[]->(r)]",
@@ -259,7 +274,8 @@
       "query": "MATCH (r)-[]->(r)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)<-[]-(r)]",
@@ -271,7 +287,8 @@
       "query": "MATCH (r)<-[]-(r)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)-[]-()-[]-()]",
@@ -283,7 +300,8 @@
       "query": "MATCH (r)-[]-()-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]-(r)-[]-()]",
@@ -295,7 +313,8 @@
       "query": "MATCH ()-[]-(r)-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)-[]-()-[*]-()]",
@@ -307,7 +326,8 @@
       "query": "MATCH (r)-[]-()-[*]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]-(r)-[*]-()]",
@@ -319,7 +339,8 @@
       "query": "MATCH ()-[]-(r)-[*]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r), ()-[]-()]",
@@ -331,7 +352,8 @@
       "query": "MATCH (r), ()-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)-[]-(), ()-[]-()]",
@@ -343,7 +365,8 @@
       "query": "MATCH (r)-[]-(), ()-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]-(r), ()-[]-()]",
@@ -355,7 +378,8 @@
       "query": "MATCH ()-[]-(r), ()-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]-(), (r)-[]-()]",
@@ -367,7 +391,8 @@
       "query": "MATCH ()-[]-(), (r)-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=()-[]-(), ()-[]-(r)]",
@@ -379,7 +404,8 @@
       "query": "MATCH ()-[]-(), ()-[]-(r)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(r)-[]-(t), (s)-[]-(t)]",
@@ -391,7 +417,8 @@
       "query": "MATCH (r)-[]-(t), (s)-[]-(t)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(s)-[]-(r), (s)-[]-(t)]",
@@ -403,7 +430,8 @@
       "query": "MATCH (s)-[]-(r), (s)-[]-(t)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(s)-[]-(t), (r)-[]-(t)]",
@@ -415,7 +443,8 @@
       "query": "MATCH (s)-[]-(t), (r)-[]-(t)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(s)-[]-(t), (s)-[]-(r)]",
@@ -427,7 +456,8 @@
       "query": "MATCH (s)-[]-(t), (s)-[]-(r)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(s), (a)-[q]-(b), (r), (s)-[]-(t)-[]-(b)]",
@@ -439,7 +469,8 @@
       "query": "MATCH (s), (a)-[q]-(b), (r), (s)-[]-(t)-[]-(b)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(s), (a)-[q]-(b), (r), (s)-[]->(t)<-[]-(b)]",
@@ -451,7 +482,8 @@
       "query": "MATCH (s), (a)-[q]-(b), (r), (s)-[]->(t)<-[]-(b)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[9] Fail when a node has the same variable in a preceding MATCH [pattern=(s), (a)-[q]-(b), (t), (s)-[]->(r)<-[]-(b)]",
@@ -463,7 +495,8 @@
       "query": "MATCH (s), (a)-[q]-(b), (t), (s)-[]->(r)<-[]-(b)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[]-()]",
@@ -475,7 +508,8 @@
       "query": "MATCH r = ()-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[]->()]",
@@ -487,7 +521,8 @@
       "query": "MATCH r = ()-[]->()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()<-[]-()]",
@@ -499,7 +534,8 @@
       "query": "MATCH r = ()<-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[*]-()]",
@@ -511,7 +547,8 @@
       "query": "MATCH r = ()-[*]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[*]->()]",
@@ -523,7 +560,8 @@
       "query": "MATCH r = ()-[*]->()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()<-[*]-()]",
@@ -535,7 +573,8 @@
       "query": "MATCH r = ()<-[*]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[p*]-()]",
@@ -547,7 +586,8 @@
       "query": "MATCH r = ()-[p*]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()-[p*]->()]",
@@ -559,7 +599,8 @@
       "query": "MATCH r = ()-[p*]->()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=r = ()<-[p*]-()]",
@@ -571,7 +612,8 @@
       "query": "MATCH r = ()<-[p*]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=(), r = ()-[]-()]",
@@ -583,7 +625,8 @@
       "query": "MATCH (), r = ()-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=()-[]-(), r = ()-[]-()]",
@@ -595,7 +638,8 @@
       "query": "MATCH ()-[]-(), r = ()-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=()-[]->(), r = ()<-[]-()]",
@@ -607,7 +651,8 @@
       "query": "MATCH ()-[]->(), r = ()<-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=()<-[]-(), r = ()-[]->()]",
@@ -619,7 +664,8 @@
       "query": "MATCH ()<-[]-(), r = ()-[]->()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=()-[*]->(), r = ()<-[]-()]",
@@ -631,7 +677,8 @@
       "query": "MATCH ()-[*]->(), r = ()<-[]-()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=()<-[p*]-(), r = ()-[*]->()]",
@@ -643,7 +690,8 @@
       "query": "MATCH ()<-[p*]-(), r = ()-[*]->()\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=(x), (a)-[q]-(b), (r), (s)-[]->(t)<-[]-(b)]",
@@ -655,7 +703,8 @@
       "query": "MATCH (x), (a)-[q]-(b), (r), (s)-[]->(t)<-[]-(b)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=(x), (a)-[q]-(b), r = (s)-[p]->(t)<-[]-(b)]",
@@ -667,7 +716,8 @@
       "query": "MATCH (x), (a)-[q]-(b), r = (s)-[p]->(t)<-[]-(b)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=(x), (a)-[q*]-(b), r = (s)-[p]->(t)<-[]-(b)]",
@@ -679,7 +729,8 @@
       "query": "MATCH (x), (a)-[q*]-(b), r = (s)-[p]->(t)<-[]-(b)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[10] Fail when a path has the same variable in a preceding MATCH [pattern=(x), (a)-[q]-(b), r = (s)-[p*]->(t)<-[]-(b)]",
@@ -691,7 +742,8 @@
       "query": "MATCH (x), (a)-[q]-(b), r = (s)-[p*]->(t)<-[]-(b)\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r)-[r]-()]",
@@ -703,7 +755,8 @@
       "query": "MATCH (r)-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r)-[r]->()]",
@@ -715,7 +768,8 @@
       "query": "MATCH (r)-[r]->()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r)<-[r]-()]",
@@ -727,7 +781,8 @@
       "query": "MATCH (r)<-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r)-[r]-(r)]",
@@ -739,7 +794,8 @@
       "query": "MATCH (r)-[r]-(r)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r)-[r]->(r)]",
@@ -751,7 +807,8 @@
       "query": "MATCH (r)-[r]->(r)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r)<-[r]-(r)]",
@@ -763,7 +820,8 @@
       "query": "MATCH (r)<-[r]-(r)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r)-[]-()-[r]-()]",
@@ -775,7 +833,8 @@
       "query": "MATCH (r)-[]-()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=()-[]-(r)-[r]-()]",
@@ -787,7 +846,8 @@
       "query": "MATCH ()-[]-(r)-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r)-[]-()-[r*]-()]",
@@ -799,7 +859,8 @@
       "query": "MATCH (r)-[]-()-[r*]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=()-[]-(r)-[r*]-()]",
@@ -811,7 +872,8 @@
       "query": "MATCH ()-[]-(r)-[r*]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r), ()-[r]-()]",
@@ -823,7 +885,8 @@
       "query": "MATCH (r), ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r)-[]-(), ()-[r]-()]",
@@ -835,7 +898,8 @@
       "query": "MATCH (r)-[]-(), ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=()-[]-(r), ()-[r]-()]",
@@ -847,7 +911,8 @@
       "query": "MATCH ()-[]-(r), ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r)-[]-(t), (s)-[r]-(t)]",
@@ -859,7 +924,8 @@
       "query": "MATCH (r)-[]-(t), (s)-[r]-(t)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(s)-[]-(r), (s)-[r]-(t)]",
@@ -871,7 +937,8 @@
       "query": "MATCH (s)-[]-(r), (s)-[r]-(t)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r), (a)-[q]-(b), (s), (s)-[r]-(t)-[]-(b)]",
@@ -883,7 +950,8 @@
       "query": "MATCH (r), (a)-[q]-(b), (s), (s)-[r]-(t)-[]-(b)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[11] Fail when a node has the same variable in the same pattern [pattern=(r), (a)-[q]-(b), (s), (s)-[r]->(t)<-[]-(b)]",
@@ -895,7 +963,8 @@
       "query": "MATCH (r), (a)-[q]-(b), (s), (s)-[r]->(t)<-[]-(b)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[12] Fail when a path has the same variable in the same pattern [pattern=r = ()-[]-(), ()-[r]-()]",
@@ -907,7 +976,8 @@
       "query": "MATCH r = ()-[]-(), ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[12] Fail when a path has the same variable in the same pattern [pattern=r = ()-[]-(), ()-[r*]-()]",
@@ -919,7 +989,8 @@
       "query": "MATCH r = ()-[]-(), ()-[r*]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[12] Fail when a path has the same variable in the same pattern [pattern=r = (a)-[p]-(s)-[]-(b), (s)-[]-(t), (t), (t)-[r]-(b)]",
@@ -931,7 +1002,8 @@
       "query": "MATCH r = (a)-[p]-(s)-[]-(b), (s)-[]-(t), (t), (t)-[r]-(b)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[12] Fail when a path has the same variable in the same pattern [pattern=r = (a)-[p]-(s)-[]-(b), (s)-[]-(t), (t), (t)-[r*]-(b)]",
@@ -943,7 +1015,8 @@
       "query": "MATCH r = (a)-[p]-(s)-[]-(b), (s)-[]-(t), (t), (t)-[r*]-(b)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[12] Fail when a path has the same variable in the same pattern [pattern=r = (a)-[p]-(s)-[*]-(b), (s)-[]-(t), (t), (t)-[r*]-(b)]",
@@ -955,7 +1028,8 @@
       "query": "MATCH r = (a)-[p]-(s)-[*]-(b), (s)-[]-(t), (t), (t)-[r*]-(b)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[12] Fail when a path has the same variable in the same pattern [pattern=(a)-[p]-(s)-[]-(b), r = (s)-[]-(t), (t), (t)-[r*]-(b)]",
@@ -967,7 +1041,8 @@
       "query": "MATCH (a)-[p]-(s)-[]-(b), r = (s)-[]-(t), (t), (t)-[r*]-(b)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[12] Fail when a path has the same variable in the same pattern [pattern=(a)-[p]-(s)-[]-(b), r = (s)-[*]-(t), (t), (t)-[r]-(b)]",
@@ -979,7 +1054,8 @@
       "query": "MATCH (a)-[p]-(s)-[]-(b), r = (s)-[*]-(t), (t), (t)-[r]-(b)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[12] Fail when a path has the same variable in the same pattern [pattern=(a)-[p]-(s)-[]-(b), r = (s)-[*]-(t), (t), (t)-[r*]-(b)]",
@@ -991,7 +1067,8 @@
       "query": "MATCH (a)-[p]-(s)-[]-(b), r = (s)-[*]-(t), (t), (t)-[r*]-(b)\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Match2 - Match relationships-[13] Fail when matching a relationship variable bound to a value [invalid=true]",
@@ -1003,7 +1080,8 @@
       "query": "WITH true AS r\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[13] Fail when matching a relationship variable bound to a value [invalid=123]",
@@ -1015,7 +1093,8 @@
       "query": "WITH 123 AS r\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[13] Fail when matching a relationship variable bound to a value [invalid=123.4]",
@@ -1027,7 +1106,8 @@
       "query": "WITH 123.4 AS r\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[13] Fail when matching a relationship variable bound to a value [invalid='foo']",
@@ -1039,7 +1119,8 @@
       "query": "WITH 'foo' AS r\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[13] Fail when matching a relationship variable bound to a value [invalid=[]]",
@@ -1051,7 +1132,8 @@
       "query": "WITH [] AS r\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[13] Fail when matching a relationship variable bound to a value [invalid=[10]]",
@@ -1063,7 +1145,8 @@
       "query": "WITH [10] AS r\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[13] Fail when matching a relationship variable bound to a value [invalid={x: 1}]",
@@ -1075,7 +1158,8 @@
       "query": "WITH {x: 1} AS r\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Match2 - Match relationships-[13] Fail when matching a relationship variable bound to a value [invalid={x: []}]",
@@ -1087,7 +1171,8 @@
       "query": "WITH {x: []} AS r\nMATCH ()-[r]-()\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: leading WITH not supported"
     }
   ]
 }

@@ -26,7 +26,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[2] ORDER BY DESC should order booleans in the expected order",
@@ -50,7 +51,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[3] ORDER BY should order strings in the expected order",
@@ -80,7 +82,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[4] ORDER BY DESC should order strings in the expected order",
@@ -110,7 +113,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[5] ORDER BY should order ints in the expected order",
@@ -137,7 +141,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[6] ORDER BY DESC should order ints in the expected order",
@@ -164,7 +169,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[7] ORDER BY should order floats in the expected order",
@@ -191,7 +197,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[8] ORDER BY DESC should order floats in the expected order",
@@ -218,7 +225,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[9] ORDER BY should order lists in the expected order",
@@ -260,7 +268,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[10] ORDER BY DESC should order lists in the expected order",
@@ -302,7 +311,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[11] ORDER BY should order distinct types in the expected order",
@@ -352,7 +362,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnOrderBy1 - Order by a single variable (correct order of values according to their type)-[12] ORDER BY DESC should order distinct types in the expected order",
@@ -402,7 +413,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     }
   ]
 }

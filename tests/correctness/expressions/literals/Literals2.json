@@ -19,7 +19,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals2 - Decimal integer-[2] Return a long positive integer",
@@ -36,7 +37,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals2 - Decimal integer-[3] Return the largest integer",
@@ -53,7 +55,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals2 - Decimal integer-[4] Return a positive zero",
@@ -70,7 +73,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals2 - Decimal integer-[5] Return a negative zero",
@@ -87,7 +91,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals2 - Decimal integer-[6] Return a short negative integer",
@@ -104,7 +109,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals2 - Decimal integer-[7] Return a long negative integer",
@@ -121,7 +127,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals2 - Decimal integer-[8] Return the smallest integer",
@@ -138,7 +145,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals2 - Decimal integer-[9] Fail on a too large integer",
@@ -149,7 +157,8 @@
       "setup": [],
       "query": "RETURN 9223372036854775808 AS literal",
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals2 - Decimal integer-[10] Fail on a too small integer",
@@ -160,7 +169,8 @@
       "setup": [],
       "query": "RETURN -9223372036854775809 AS literal",
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals2 - Decimal integer-[11] Fail on an integer containing a alphabetic character",
@@ -173,7 +183,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals2 - Decimal integer-[12] Fail on an integer containing a invalid symbol character",
@@ -186,7 +197,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

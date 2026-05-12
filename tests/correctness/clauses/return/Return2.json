@@ -20,7 +20,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[2] Returning a node property value",
@@ -40,7 +41,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[3] Missing node property should become null",
@@ -60,7 +62,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[4] Returning a relationship property value",
@@ -80,7 +83,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[5] Missing relationship property should become null",
@@ -100,7 +104,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[6] Adding a property and a literal in projection",
@@ -120,7 +125,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[7] Adding list properties in projection",
@@ -140,7 +146,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[8] Returning label predicate expression",
@@ -163,7 +170,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[9] Returning a projected map",
@@ -183,7 +191,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[10] Return count aggregation over an empty graph",
@@ -221,7 +230,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[12] Projecting a list of nodes and relationships",
@@ -242,7 +252,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[13] Projecting a map of nodes and relationships",
@@ -263,7 +274,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[14] Do not fail when returning type of deleted relationships",
@@ -285,7 +297,8 @@
         "DELETE"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: DELETE clause not yet bound"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[15] Fail when returning properties of deleted nodes",
@@ -301,7 +314,8 @@
         "DELETE"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: DELETE clause not yet bound"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[16] Fail when returning labels of deleted nodes",
@@ -317,7 +331,8 @@
         "DELETE"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: DELETE clause not yet bound"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[17] Fail when returning properties of deleted relationships",
@@ -333,7 +348,8 @@
         "DELETE"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: DELETE clause not yet bound"
     },
     {
       "id": "Return2 - Return single expression (correctly projecting an expression)-[18] Fail on projecting a non-existent function",
@@ -345,7 +361,8 @@
       "query": "MATCH (a)\nRETURN foo(a)",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

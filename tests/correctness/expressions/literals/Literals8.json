@@ -19,7 +19,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[2] Return a map containing one value with alphabetic lower case key",
@@ -36,7 +37,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[3] Return a map containing one value with alphabetic upper case key",
@@ -53,7 +55,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[4] Return a map containing one value with alphabetic mixed case key",
@@ -70,7 +73,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[5] Return a map containing one value with alphanumeric mixed case key",
@@ -87,7 +91,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[6] Return a map containing a boolean",
@@ -104,7 +109,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[7] Return a map containing a null",
@@ -121,7 +127,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[8] Return a map containing a integer",
@@ -138,7 +145,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[9] Return a map containing a hexadecimal integer",
@@ -155,7 +163,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[10] Return a map containing a octal integer",
@@ -172,7 +181,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[11] Return a map containing a float",
@@ -189,7 +199,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[12] Return a map containing a string",
@@ -206,7 +217,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[13] Return a map containing an empty map",
@@ -223,7 +235,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[14] Return seven-deep nested maps",
@@ -240,7 +253,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[15] Return 20-deep nested maps",
@@ -257,7 +271,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[16] Return 40-deep nested maps",
@@ -274,7 +289,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[17] Return a map containing real and fake nested maps",
@@ -291,7 +307,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[18] Return a complex map containing multiple mixed and nested values",
@@ -310,7 +327,8 @@
       "requires": [],
       "tags": [
         "@skipStyleCheck"
-      ]
+      ],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals8 - Maps-[19] Fail on a map containing key starting with a number",
@@ -323,7 +341,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals8 - Maps-[20] Fail on a map containing key with symbol",
@@ -336,7 +355,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals8 - Maps-[21] Fail on a map containing key with dot",
@@ -349,7 +369,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals8 - Maps-[22] Fail on a map containing unquoted string",
@@ -360,7 +381,8 @@
       "setup": [],
       "query": "RETURN {k1: k2} AS literal",
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals8 - Maps-[23] Fail on a map containing only a comma",
@@ -373,7 +395,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals8 - Maps-[24] Fail on a map containing a value without key",
@@ -386,7 +409,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals8 - Maps-[25] Fail on a map containing a list without key",
@@ -399,7 +423,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals8 - Maps-[26] Fail on a map containing a map without key",
@@ -412,7 +437,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals8 - Maps-[27] Fail on a nested map with non-matching braces",
@@ -425,7 +451,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

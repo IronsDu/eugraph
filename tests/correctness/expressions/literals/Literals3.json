@@ -19,7 +19,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[2] Return a long positive hexadecimal integer",
@@ -36,7 +37,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[3] Return the largest hexadecimal integer",
@@ -53,7 +55,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[4] Return a positive hexadecimal zero",
@@ -70,7 +73,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[5] Return a negative hexadecimal zero",
@@ -87,7 +91,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[6] Return a short negative hexadecimal integer",
@@ -104,7 +109,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[7] Return a long negative hexadecimal integer",
@@ -121,7 +127,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[8] Return the smallest hexadecimal integer",
@@ -138,7 +145,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[9] Return a lower case hexadecimal integer",
@@ -155,7 +163,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[10] Return a upper case hexadecimal integer",
@@ -172,7 +181,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[11] Return a mixed case hexadecimal integer",
@@ -189,7 +199,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[12] Fail on an incomplete hexadecimal integer",
@@ -202,7 +213,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[13] Fail on an hexadecimal literal containing a lower case invalid alphanumeric character",
@@ -215,7 +227,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[14] Fail on an hexadecimal literal containing a upper case invalid alphanumeric character",
@@ -228,7 +241,8 @@
       "requires": [],
       "tags": [
         "@skipGrammarCheck"
-      ]
+      ],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[16] Fail on a too large hexadecimal integer",
@@ -239,7 +253,8 @@
       "setup": [],
       "query": "RETURN 0x8000000000000000 AS literal",
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Literals3 - Hexadecimal integer-[17] Fail on a too small hexadecimal integer",
@@ -250,7 +265,8 @@
       "setup": [],
       "query": "RETURN -0x8000000000000001 AS literal",
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

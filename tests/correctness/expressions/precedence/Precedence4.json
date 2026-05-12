@@ -23,7 +23,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[1] Null predicate takes precedence over comparison operator [null1=NULL, comp=<>, null2=NULL, right=false, wrong=true]",
@@ -44,7 +45,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[1] Null predicate takes precedence over comparison operator [null1=NULL, comp=<>, null2=NOT NULL, right=true, wrong=false]",
@@ -65,7 +67,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[2] Null predicate takes precedence over boolean negation",
@@ -86,7 +89,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=null, op=AND, truth2=null, null=NULL, right=null, wrong=true]",
@@ -107,7 +111,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=null, op=AND, truth2=true, null=NULL, right=false, wrong=true]",
@@ -128,7 +133,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=false, op=AND, truth2=false, null=NOT NULL, right=false, wrong=true]",
@@ -149,7 +155,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=null, op=OR, truth2=false, null=NULL, right=null, wrong=true]",
@@ -170,7 +177,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=true, op=OR, truth2=null, null=NULL, right=true, wrong=false]",
@@ -191,7 +199,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=true, op=XOR, truth2=null, null=NOT NULL, right=true, wrong=false]",
@@ -214,7 +223,8 @@
       "requires": [
         "XOR"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[3] Null predicate takes precedence over binary boolean operator [truth1=true, op=XOR, truth2=false, null=NULL, right=true, wrong=false]",
@@ -237,7 +247,8 @@
       "requires": [
         "XOR"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Precedence4 - On null value-[4] String predicate takes precedence over binary boolean operator",
@@ -262,7 +273,8 @@
       "requires": [
         "STARTS WITH"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "runtime: STARTS WITH function not implemented"
     }
   ]
 }

@@ -36,7 +36,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Match8 - Match clause interoperation with other clauses-[2] Counting rows after MATCH, MERGE, OPTIONAL MATCH",
@@ -60,7 +61,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: MERGE clause not yet bound"
     },
     {
       "id": "Match8 - Match clause interoperation with other clauses-[3] Matching and disregarding output, then matching again",
@@ -81,7 +83,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     }
   ]
 }

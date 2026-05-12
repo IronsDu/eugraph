@@ -22,7 +22,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Return4 - Column renaming-[2] Support column renaming",
@@ -42,7 +43,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return4 - Column renaming-[3] Aliasing expressions",
@@ -64,7 +66,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Return4 - Column renaming-[4] Keeping used expression 1",
@@ -189,7 +192,8 @@
         "coalesce"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: coalesce function not implemented"
     },
     {
       "id": "Return4 - Column renaming-[10] Fail when returning multiple columns with same name",
@@ -201,7 +205,8 @@
       "query": "RETURN 1 AS a, 2 AS a",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     },
     {
       "id": "Return4 - Column renaming-[11] Reusing variable names in RETURN",
@@ -225,7 +230,8 @@
         "collect"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     }
   ]
 }

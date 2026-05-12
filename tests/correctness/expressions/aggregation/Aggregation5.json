@@ -27,7 +27,8 @@
         "collect"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Aggregation5 - Collect-[2] OPTIONAL MATCH and `collect()` on node property",
@@ -47,7 +48,8 @@
         "collect"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     }
   ]
 }

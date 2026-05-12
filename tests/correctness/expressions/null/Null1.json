@@ -23,7 +23,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Null1 - IS NULL validation-[2] Property null check on optional non-null node",
@@ -46,7 +47,8 @@
       "requires": [
         "OPTIONAL MATCH"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Null1 - IS NULL validation-[3] Property null check on null node",
@@ -65,7 +67,8 @@
       "requires": [
         "OPTIONAL MATCH"
       ],
-      "tags": []
+      "tags": [],
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Null1 - IS NULL validation-[4] A literal null IS null",
@@ -82,7 +85,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: 'Mats', name2: 'Pontus'}, key=name, result=false]",
@@ -99,7 +103,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: 'Mats', name2: 'Pontus'}, key=name2, result=false]",
@@ -116,7 +121,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: 'Mats', name2: null}, key=name, result=false]",
@@ -133,7 +139,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: 'Mats', name2: null}, key=name2, result=true]",
@@ -150,7 +157,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: null}, key=name, result=true]",
@@ -167,7 +175,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: null, name2: null}, key=name, result=true]",
@@ -184,7 +193,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={name: null, name2: null}, key=name2, result=true]",
@@ -201,7 +211,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={notName: null, notName2: null}, key=name, result=true]",
@@ -218,7 +229,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={notName: 0, notName2: null}, key=name, result=true]",
@@ -235,7 +247,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={notName: 0}, key=name, result=true]",
@@ -252,7 +265,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map={}, key=name, result=true]",
@@ -269,7 +283,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[5] IS NULL on a map [map=null, key=name, result=true]",
@@ -286,7 +301,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: leading WITH not supported"
     },
     {
       "id": "Null1 - IS NULL validation-[6] IS NULL is case insensitive",
@@ -313,7 +329,8 @@
       "requires": [],
       "tags": [
         "@skipStyleCheck"
-      ]
+      ],
+      "skip_reason": "catalog: labels must be pre-registered"
     }
   ]
 }

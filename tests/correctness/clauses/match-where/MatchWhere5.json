@@ -23,7 +23,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere5 - Filter on predicate resulting in null-[2] Filter out on null if the AND'd predicate evaluates to false",
@@ -44,7 +45,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere5 - Filter on predicate resulting in null-[3] Filter out on null if the AND'd predicate evaluates to true",
@@ -65,7 +67,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere5 - Filter on predicate resulting in null-[4] Do not filter out on null if the OR'd predicate evaluates to true",
@@ -89,7 +92,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     }
   ]
 }

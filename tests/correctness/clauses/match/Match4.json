@@ -22,7 +22,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match4 - Match variable length patterns scenarios-[2] Simple variable length pattern",
@@ -49,7 +50,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match4 - Match variable length patterns scenarios-[3] Zero-length variable length pattern in the middle of the pattern",
@@ -86,7 +88,8 @@
         "CONTAINS"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: CONTAINS function not implemented"
     },
     {
       "id": "Match4 - Match variable length patterns scenarios-[4] Matching longer variable length paths",
@@ -113,7 +116,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match4 - Match variable length patterns scenarios-[5] Matching variable length pattern with property predicate",
@@ -136,7 +140,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Match4 - Match variable length patterns scenarios-[6] Matching variable length patterns from a bound node",
@@ -151,7 +156,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match4 - Match variable length patterns scenarios-[7] Matching variable length patterns including a bound relationship",
@@ -171,7 +177,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match4 - Match variable length patterns scenarios-[8] Matching relationships into a list and matching variable length using the list",
@@ -196,7 +203,8 @@
         "LIMIT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Match4 - Match variable length patterns scenarios-[9] Fail when asterisk operator is missing",
@@ -213,7 +221,8 @@
       "tags": [
         "@skipGrammarCheck"
       ],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "Match4 - Match variable length patterns scenarios-[10] Fail on negative bound",
@@ -230,7 +239,8 @@
       "tags": [
         "@skipGrammarCheck"
       ],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     }
   ]
 }

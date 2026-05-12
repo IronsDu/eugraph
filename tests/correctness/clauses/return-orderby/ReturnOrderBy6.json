@@ -22,7 +22,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnOrderBy6 - Aggregation expressions in order by-[2] Handle returned aliases inside an order by item which contains an aggregation expression",
@@ -39,7 +40,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnOrderBy6 - Aggregation expressions in order by-[3] Handle returned property accesses inside an order by item which contains an aggregation expression",
@@ -56,7 +58,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnOrderBy6 - Aggregation expressions in order by-[4] Fail if not returned variables are used inside an order by item which contains an aggregation expression",
@@ -70,7 +73,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnOrderBy6 - Aggregation expressions in order by-[5] Fail if more complex expressions, even if returned, are used inside an order by item which contains an aggregation expression",
@@ -84,7 +88,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     }
   ]
 }

@@ -24,7 +24,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[2] Filter node with node label predicate on multi variables without any bindings",
@@ -40,7 +41,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[3] Filter node with property predicate on a single variable with multiple bindings",
@@ -60,7 +62,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[4] Filter start node of relationship with property predicate on multi variables with multiple bindings",
@@ -81,7 +84,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[5] Filter end node of relationship with property predicate on multi variables with multiple bindings",
@@ -101,7 +105,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[6] Filter node with a parameter in a property predicate on multi variables with one binding",
@@ -121,7 +126,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[7] Filter relationship with relationship type predicate on multi variables with multiple bindings",
@@ -141,7 +147,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[8] Filter relationship with property predicate on multi variables with multiple bindings",
@@ -161,7 +168,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[9] Filter relationship with a parameter in a property predicate on multi variables with one binding",
@@ -181,7 +189,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[10] Filter node with disjunctive property predicate on single variables with multiple bindings",
@@ -204,7 +213,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[11] Filter relationship with disjunctive relationship type predicate on multi variables with multiple bindings",
@@ -227,7 +237,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[12] Filter path with path length predicate on multi variables with one binding",
@@ -247,7 +258,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[13] Filter path with false path length predicate on multi variables with one binding",
@@ -263,7 +275,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[14] Fail when filtering path with property predicate",
@@ -275,7 +288,8 @@
       "query": "MATCH (n)\nMATCH r = (n)-[*]->()\nWHERE r.name = 'apa'\nRETURN r",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: multiple MATCH without WITH not supported"
     },
     {
       "id": "MatchWhere1 - Filter single variable-[15] Fail on aggregation in WHERE",
@@ -287,7 +301,8 @@
       "query": "MATCH (a)\nWHERE count(a) > 10\nRETURN a",
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "checker: semantic error detection not yet implemented"
     }
   ]
 }

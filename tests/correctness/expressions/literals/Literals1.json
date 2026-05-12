@@ -19,7 +19,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals1 - Boolean and Null-[2] Return a boolean true upper case",
@@ -38,7 +39,8 @@
       "requires": [],
       "tags": [
         "@skipStyleCheck"
-      ]
+      ],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals1 - Boolean and Null-[3] Return a boolean false lower case",
@@ -55,7 +57,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals1 - Boolean and Null-[4] Return a boolean false upper case",
@@ -74,7 +77,8 @@
       "requires": [],
       "tags": [
         "@skipStyleCheck"
-      ]
+      ],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals1 - Boolean and Null-[5] Return null lower case",
@@ -91,7 +95,8 @@
       ],
       "ordered": false,
       "requires": [],
-      "tags": []
+      "tags": [],
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Literals1 - Boolean and Null-[6] Return null upper case",
@@ -110,7 +115,8 @@
       "requires": [],
       "tags": [
         "@skipStyleCheck"
-      ]
+      ],
+      "skip_reason": "engine: standalone RETURN not supported"
     }
   ]
 }

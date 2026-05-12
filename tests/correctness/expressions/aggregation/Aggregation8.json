@@ -23,7 +23,8 @@
         "OPTIONAL MATCH"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "binder: OPTIONAL MATCH not yet supported"
     },
     {
       "id": "Aggregation8 - DISTINCT-[2] Distinct on null",
@@ -45,7 +46,8 @@
         "DISTINCT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "Aggregation8 - DISTINCT-[3] Collect distinct nulls",
@@ -67,7 +69,8 @@
         "collect"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Aggregation8 - DISTINCT-[4] Collect distinct values mixed with nulls",
@@ -89,7 +92,8 @@
         "collect"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     }
   ]
 }

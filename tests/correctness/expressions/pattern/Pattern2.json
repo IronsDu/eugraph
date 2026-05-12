@@ -29,7 +29,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern2 - Pattern Comprehension-[2] Return a pattern comprehension with label predicate",
@@ -50,7 +51,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern2 - Pattern Comprehension-[3] Return a pattern comprehension with bound nodes",
@@ -71,7 +73,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern2 - Pattern Comprehension-[4] Introduce a new node variable in pattern comprehension",
@@ -98,7 +101,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern2 - Pattern Comprehension-[5] Introduce a new relationship variable in pattern comprehension",
@@ -125,7 +129,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern2 - Pattern Comprehension-[6] Aggregate on a pattern comprehension",
@@ -146,7 +151,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern2 - Pattern Comprehension-[7] Use a pattern comprehension inside a list comprehension",
@@ -178,7 +184,8 @@
         "nodes"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: nodes function not implemented"
     },
     {
       "id": "Pattern2 - Pattern Comprehension-[8] Use a pattern comprehension in WITH",
@@ -205,7 +212,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Pattern2 - Pattern Comprehension-[9] Use a variable-length pattern comprehension in WITH",
@@ -227,7 +235,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: WITH clause in pipeline not fully supported"
     },
     {
       "id": "Pattern2 - Pattern Comprehension-[10] Use a pattern comprehension in RETURN",
@@ -254,7 +263,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Pattern2 - Pattern Comprehension-[11] Use a pattern comprehension and ORDER BY",
@@ -280,7 +290,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     }
   ]
 }

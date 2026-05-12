@@ -26,7 +26,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[2] Limit to two hits with explicit order",
@@ -52,7 +53,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[3] LIMIT 0 should return an empty result",
@@ -70,7 +72,8 @@
         "LIMIT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[4] Handle ORDER BY with LIMIT 1",
@@ -93,7 +96,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[5] ORDER BY with LIMIT 0 should not generate errors",
@@ -110,7 +114,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[6] LIMIT with an expression that does not depend on variables",
@@ -134,7 +139,8 @@
         "toInteger"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: toInteger function not implemented"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[7] Limit to more rows than actual results 1",
@@ -163,7 +169,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[8] Limit to more rows than actual results 2",
@@ -193,7 +200,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[9] Fail when using non-constants in LIMIT",
@@ -207,7 +215,8 @@
         "LIMIT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[10] Negative parameter for LIMIT should fail",
@@ -223,7 +232,8 @@
         "LIMIT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[11] Negative parameter for LIMIT with ORDER BY should fail",
@@ -240,7 +250,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[12] Fail when using negative value in LIMIT 1",
@@ -254,7 +265,8 @@
         "LIMIT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[13] Fail when using negative value in LIMIT 2",
@@ -270,7 +282,8 @@
         "LIMIT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[14] Floating point parameter for LIMIT should fail",
@@ -286,7 +299,8 @@
         "LIMIT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[15] Floating point parameter for LIMIT with ORDER BY should fail",
@@ -303,7 +317,8 @@
         "ORDER BY"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[16] Fail when using floating point in LIMIT 1",
@@ -317,7 +332,8 @@
         "LIMIT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnSkipLimit2 - Limit-[17] Fail when using floating point in LIMIT 2",
@@ -333,7 +349,8 @@
         "LIMIT"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     }
   ]
 }

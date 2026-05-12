@@ -22,7 +22,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[2] Comparing strings and integers using > in a OR'd predicate",
@@ -45,7 +46,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[3] Comparing across types yields null, except numbers [operator=<, lhs=1, rhs=3.14]",
@@ -69,7 +71,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[3] Comparing across types yields null, except numbers [operator=<=, lhs=1, rhs=3.14]",
@@ -93,7 +96,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[3] Comparing across types yields null, except numbers [operator=>=, lhs=3.14, rhs=1]",
@@ -117,7 +121,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[3] Comparing across types yields null, except numbers [operator=>, lhs=3.14, rhs=1]",
@@ -141,7 +146,8 @@
         "UNWIND"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "parser: UNWIND keyword not yet in grammar"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[4] Comparing lists [lhs=[1, 0], rhs=[1], result=true]",
@@ -159,7 +165,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[4] Comparing lists [lhs=[1, null], rhs=[1], result=true]",
@@ -177,7 +184,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[4] Comparing lists [lhs=[1, 2], rhs=[1, null], result=null]",
@@ -195,7 +203,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[4] Comparing lists [lhs=[1, 'a'], rhs=[1, null], result=null]",
@@ -213,7 +222,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[4] Comparing lists [lhs=[1, 2], rhs=[3, null], result=false]",
@@ -231,7 +241,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs=1, result=false]",
@@ -255,7 +266,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs=1.0, result=false]",
@@ -279,7 +291,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs=0.0 / 0.0, result=false]",
@@ -303,7 +316,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[5] Comparing NaN [lhs=0.0 / 0.0, rhs='a', result=null]",
@@ -327,7 +341,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs=1.0, rhs=1.0, result=false]",
@@ -345,7 +360,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs=1, rhs=1.0, result=false]",
@@ -363,7 +379,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs='1.0', rhs=1.0, result=null]",
@@ -381,7 +398,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     },
     {
       "id": "Comparison2 - Half-bounded Range-[6] Comparability between numbers and strings [lhs='1', rhs=1, result=null]",
@@ -399,7 +417,8 @@
       "ordered": false,
       "requires": [],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "engine: standalone RETURN not supported"
     }
   ]
 }

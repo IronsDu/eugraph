@@ -31,7 +31,8 @@
         "SKIP"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit1 - Skip-[2] Start the result from the second row by param",
@@ -60,7 +61,8 @@
         "SKIP"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit1 - Skip-[3] SKIP with an expression that does not depend on variables",
@@ -84,7 +86,8 @@
         "toInteger"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: toInteger function not implemented"
     },
     {
       "id": "ReturnSkipLimit1 - Skip-[4] Accept skip zero",
@@ -100,7 +103,8 @@
         "SKIP"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnSkipLimit1 - Skip-[5] SKIP with an expression that depends on variables should fail",
@@ -114,7 +118,8 @@
         "SKIP"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnSkipLimit1 - Skip-[6] Negative parameter for SKIP should fail",
@@ -130,7 +135,8 @@
         "SKIP"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit1 - Skip-[7] Negative SKIP should fail",
@@ -146,7 +152,8 @@
         "SKIP"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit1 - Skip-[8] Floating point parameter for SKIP should fail",
@@ -162,7 +169,8 @@
         "SKIP"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit1 - Skip-[9] Floating point SKIP should fail",
@@ -178,7 +186,8 @@
         "SKIP"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "catalog: labels must be pre-registered"
     },
     {
       "id": "ReturnSkipLimit1 - Skip-[10] Fail when using non-constants in SKIP",
@@ -192,7 +201,8 @@
         "SKIP"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     },
     {
       "id": "ReturnSkipLimit1 - Skip-[11] Fail when using negative value in SKIP",
@@ -206,7 +216,8 @@
         "SKIP"
       ],
       "tags": [],
-      "note": "partial: may need manual adjustment"
+      "note": "partial: may need manual adjustment",
+      "skip_reason": "runtime: sort/pagination not fully verified"
     }
   ]
 }
