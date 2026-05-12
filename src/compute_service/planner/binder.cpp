@@ -159,15 +159,7 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                         error("Cannot have MATCH without preceding context");
                         return std::nullopt;
                     }
-                    auto match_op = bindMatch(*ptr);
-                    if (match_op) {
-                        // If there was a previous clause, chain it
-                        if (current) {
-                            // Replace child of the new match's root with current
-                            // For now, we return the match as the new root
-                            // (In practice, hold previous as sibling or child)
-                        }
-                    }
+                    auto match_op = bindMatch(*ptr, std::move(current));
                     first_clause = false;
                     return match_op;
                 } else if constexpr (std::is_same_v<Elem, cypher::ReturnClause>) {
@@ -229,7 +221,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
 // ==================== Clause Binding ====================
 
-std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause& match) {
+std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause& match,
+                                                      std::optional<BoundLogicalOperator> parent) {
     if (match.patterns.empty()) {
         error("MATCH clause has no patterns");
         return std::nullopt;
@@ -241,20 +234,41 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         const auto& pp = match.patterns[pi];
         const auto& element = pp.element;
 
+        // Only the first pattern in a correlated MATCH reuses the parent.
+        bool correlated = (pi == 0) && parent.has_value();
+
         // Bind start node
         std::string start_var;
         uint32_t start_col;
         std::optional<LabelId> start_label;
         std::vector<uint16_t> start_prop_ids;
-        if (!bindNodePattern(element.node, start_var, start_col, start_label, start_prop_ids))
-            return std::nullopt;
+
+        if (correlated) {
+            if (!element.node.variable) {
+                error("MATCH after WITH requires a named start variable");
+                return std::nullopt;
+            }
+            auto* col = ctx_.lookup(*element.node.variable);
+            if (!col) {
+                error("MATCH after WITH on unrelated variable '" + *element.node.variable + "' is not yet supported");
+                return std::nullopt;
+            }
+            if (!bindNodePattern(element.node, start_var, start_col, start_label, start_prop_ids, true))
+                return std::nullopt;
+            start_col = col->column_index;
+        } else {
+            if (!bindNodePattern(element.node, start_var, start_col, start_label, start_prop_ids))
+                return std::nullopt;
+        }
 
         // Collect bound variable names for path building
         std::vector<std::string> path_element_vars;
         path_element_vars.push_back(start_var);
 
-        // Create scan operator
-        if (start_label) {
+        // Create scan operator (or reuse parent for correlated MATCH)
+        if (correlated) {
+            current = std::move(*parent);
+        } else if (start_label) {
             BoundLabelScanOp scan;
             scan.variable = start_var;
             scan.column_index = start_col;
@@ -1668,11 +1682,18 @@ BoundType Binder::inferUnaryOpType(cypher::UnaryOperator op, const BoundType& op
 // ==================== Pattern Binding ====================
 
 bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_name, uint32_t& col_idx,
-                             std::optional<LabelId>& label_id, std::vector<uint16_t>& /*default_prop_ids*/) {
+                             std::optional<LabelId>& label_id, std::vector<uint16_t>& /*default_prop_ids*/,
+                             bool skip_register) {
     var_name = node.variable.value_or("");
     if (var_name.empty())
         var_name = "__anon_" + std::to_string(nextAnonId());
-    col_idx = nextColumnIndex();
+
+    if (skip_register) {
+        auto* col = ctx_.lookup(var_name);
+        col_idx = col ? col->column_index : nextColumnIndex();
+    } else {
+        col_idx = nextColumnIndex();
+    }
 
     label_id = std::nullopt;
     if (!node.labels.empty()) {
@@ -1688,7 +1709,7 @@ bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_n
         label_id = lid;
     }
 
-    if (!var_name.empty()) {
+    if (!var_name.empty() && !skip_register) {
         ctx_.symbols[var_name] = makeColumnInfo(var_name, BoundType::Vertex(), label_id);
     }
 

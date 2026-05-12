@@ -494,7 +494,7 @@ using Schema = vector<string>;   // 列名列表
 
 - **投影下推仅支持点查**：存储层通过逐属性 `getVertexProperty` 点查实现 projection，未利用 prefix scan 批量获取
 - **Expand N+1 模式**：Expand 算子逐顶点调用 `getVertexLabels` + `getVertexProperties`，未批量预取
-- **WITH 后 MATCH 不关联**：WITH 后接 MATCH 时，MATCH 创建独立扫描算子，不使用 WITH 输出作为输入。需让 MATCH 支持以 WITH 输出为 child 的关联查找模式
+- **WITH 后 MATCH 关联（部分支持）**：WITH 后接 MATCH，当 MATCH 起点变量引用 WITH 输出时可关联执行（ExpandPhysicalOp 从 child DataChunk 读取源顶点）。MATCH 起点变量不引用 WITH 输出时返回明确错误，待实现 CrossProduct/Join 算子后支持
 
 ### 待实现
 
