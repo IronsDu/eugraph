@@ -65,7 +65,7 @@ public:
 
 ## 二、类型系统
 
-`src/query/binder/bound_type.hpp`
+`src/query/planner/bound_type.hpp`
 
 ```cpp
 enum class BoundTypeKind {
@@ -160,7 +160,7 @@ class FunctionRegistry {
 
 ## 四、Bound Expression（绑定后表达式）
 
-`src/query/binder/bound_expression/`
+`src/query/planner/bound_expression/`
 
 BoundExpression 将符号引用解析为具体索引/指针，每个节点带有确定的返回类型。与 AST Expression 的区别：AST 是语法树（名称为字符串），BoundExpression 是语义树（名称已解析为索引/指针）。
 
@@ -477,27 +477,7 @@ using Schema = vector<string>;   // 列名列表
 
 ---
 
-## 十二、实现状态
-
-### 已实现功能
-
-- Cypher Parser + AST（含 `n::Label` 转型语法）
-- Binder 语义绑定：AST → BoundStatement（符号解析、类型推断、属性需求收集）
-- BoundLogicalPlan（16 种算子）
-- Catalog 目录系统 + FunctionRegistry 函数注册表
-- BoundExpression 18 种类型，BoundType 类型系统（隐式转换、类型合并）
-- ColumnResolver：两阶段列解析（`BoundVariableRef` → `BoundColumnRef`）
-- DataChunk 列存数据块（FLAT/CONSTANT/DICTIONARY + SelectionVector）
-- VectorizedEvaluator 向量化表达式求值（批量函数指针，消除 `switch(op)` 分发）
-- 读算子：Scan / IndexScan / EdgeIndexScan / Expand / Filter / Project / Limit / Sort / Skip / Distinct / Aggregate
-- 写算子：CreateNode / CreateEdge / SetOp / RemoveOp（含索引维护）
-- 聚合：count/sum/avg/min/max + GROUP BY + DISTINCT
-- 多标签查询：per-label 属性存储、弱类型属性访问、强类型转型
-- 索引扫描优化（Filter + 可索引谓词 → IndexScanPhysicalOp / EdgeIndexScanPhysicalOp）
-- Cascades 逻辑优化器（Columbia 风格 RBO，FilterPushdownRule）
-- 投影下推：per-label 属性 ID 精确控制，空 map = 不加载属性
-- 流式执行（StreamContext + Thrift ServerStream）
-- 索引 DDL（CREATE/DROP/SHOW INDEX，含边索引）
+## 十二、已知限制与后续规划
 
 ### 已知限制
 
