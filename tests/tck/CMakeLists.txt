@@ -6,7 +6,7 @@
 #
 # We build the runner, copy its artifacts to a staging dir, and import them.
 
-option(TCK_RUN_TESTS "Register TCK tests with CTest (many expected failures)" OFF)
+option(TCK_RUN_TESTS "Register TCK tests with CTest (many expected failures)" ON)
 
 include(ExternalProject)
 
