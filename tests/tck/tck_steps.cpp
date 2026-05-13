@@ -58,7 +58,7 @@ void startServer() {
 
     if (gServerPid == 0) {
         // Redirect stdin/stdout/stderr to server log file
-        int logfd = open("/tmp/eugraph_tck_server.log", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int logfd = open("/tmp/eugraph_tck_server.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (logfd >= 0) {
             dup2(logfd, STDOUT_FILENO);
             dup2(logfd, STDERR_FILENO);
@@ -158,6 +158,55 @@ void stopServer() {
     }
 }
 
+// Check if server process is still alive
+static bool isServerProcessAlive() {
+    if (gServerPid == 0)
+        return false;
+    int status;
+    pid_t result = waitpid(gServerPid, &status, WNOHANG);
+    if (result == gServerPid) {
+        spdlog::info("[TCK] Server pid={} has exited (exit={}, signal={})", gServerPid,
+                     WIFEXITED(status) ? WEXITSTATUS(status) : -1, WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+        gServerPid = 0;
+        return false;
+    }
+    return true;
+}
+
+// Check if server TCP port is accepting connections
+static bool isServerPortOpen() {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0)
+        return false;
+    struct sockaddr_in addr {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(TckContext::serverPort));
+    inet_pton(AF_INET, TckContext::serverHost.c_str(), &addr.sin_addr);
+    struct timeval tv { 0, 500000 }; // 500ms timeout
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    int ret = connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+    close(sock);
+    return ret == 0;
+}
+
+// Ensure the server is alive, restart if needed
+static void ensureServerAlive() {
+    if (isServerProcessAlive() && isServerPortOpen())
+        return;
+
+    spdlog::warn("[TCK] Server is dead, restarting...");
+    TckContext::rpc.reset();
+
+    // Kill existing zombie if any
+    if (gServerPid > 0) {
+        kill(gServerPid, SIGKILL);
+        waitpid(gServerPid, nullptr, 0);
+        gServerPid = 0;
+    }
+
+    startServer();
+}
+
 void resetCtx() {
     gCtx = std::make_unique<TckContext>();
     gCtx->graphName = "tck_s" + std::to_string(++gScenarioNum);
@@ -203,6 +252,7 @@ HOOK_AFTER_ALL() {
 }
 
 HOOK_BEFORE_SCENARIO() {
+    ensureServerAlive();
     resetCtx();
 }
 

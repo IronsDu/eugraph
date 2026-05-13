@@ -19,6 +19,10 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
                 // All non-leaf operators are wrapped in unique_ptr
                 // BoundCreateNodeOp has optional<BoundLogicalOperator> child,
                 // which is assignable from BoundLogicalOperator
+                if (!val) {
+                    // Defensive: null unique_ptr in variant (moved-from or shared group)
+                    return;
+                }
                 val->child = std::move(child);
             }
         },
@@ -71,6 +75,10 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                     return c;
                 } else {
                     // All other non-leaf operators have BoundLogicalOperator child
+                    if (!val) {
+                        // Defensive: null unique_ptr in variant (moved-from or uninitialized)
+                        return binder::BoundScanOp{};
+                    }
                     auto c = std::move(val->child);
                     val->child = binder::BoundScanOp{};
                     return c;

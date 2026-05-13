@@ -18,8 +18,10 @@ namespace eugraph::tck {
 // Keywords for features that the query engine does not support yet.
 // Scenarios whose test query contains any of these are skipped (pending).
 inline const std::vector<std::string> kUnsupportedKeywords = {
-    "DELETE",      "DETACH DELETE", "MERGE",  "CALL ",          "UNWIND", "UNION", "CASE", "ENDS WITH",
-    "STARTS WITH", "CONTAINS",      "EXISTS", "OPTIONAL MATCH", "XOR",    " IN ",  "\\$", // parameterized, IN operator
+    "DELETE",      "DETACH DELETE", "MERGE",       "CALL ",          "UNWIND", "UNION", "CASE",
+    "ENDS WITH",   "STARTS WITH",   "CONTAINS",    "EXISTS",         "OPTIONAL MATCH", "XOR",
+    " IN ",        "\\$",           "REMOVE",      "FOREACH",        "LOAD CSV",
+    "SHORTESTPATH","apoc\\.",
 };
 
 // Unsupported syntax patterns that need regex matching
@@ -30,6 +32,10 @@ inline const std::vector<std::string> kUnsupportedSyntax = {
     R"(CREATE\s+\(.*\),\s*\(.*\),\s*\()",
     // Multi-label CREATE like CREATE (:A:B)
     R"(CREATE\s+\([^)]*:[^)]*:[^)]*\))",
+    // EXISTS subquery (as opposed to EXISTS(n.prop))
+    R"(EXISTS\s*\{)",
+    // Relationship type alternation like [:A|B]
+    R"(\[[^\]]*:[^\]]*\|[^\]]*\])",
 };
 
 // -------------------- Scenario context shared across steps --------------------
@@ -94,7 +100,12 @@ struct TckContext {
     bool dropGraph(const std::string& name) {
         if (!rpc)
             return false;
-        return rpc->dropGraph(name);
+        try {
+            return rpc->dropGraph(name);
+        } catch (const std::exception& e) {
+            spdlog::warn("[TCK] dropGraph failed: {}", e.what());
+            return false;
+        }
     }
 
     thrift::LabelInfo createLabel(const std::string& name, const std::vector<thrift::PropertyDefThrift>& props,

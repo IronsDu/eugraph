@@ -37,6 +37,7 @@ ExternalProject_Add(ccr_ext
         -DCCR_FETCH_DEPS=ON
         -DCCR_BUILD_TESTS=OFF
         -DCMAKE_CXX_STANDARD=20
+        "-DCMAKE_CXX_FLAGS=-Wno-error=deprecated-declarations"
     INSTALL_COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/copy_ccr_artifacts.sh"
         <SOURCE_DIR> <BINARY_DIR> "${CUKE_STAGE}"
     BUILD_BYPRODUCTS
