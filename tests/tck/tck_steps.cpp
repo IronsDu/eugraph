@@ -117,12 +117,14 @@ void startServer() {
         // Raw TCP connect to check if server is accepting
         int sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock >= 0) {
-            struct sockaddr_in addr{};
+            struct sockaddr_in addr {};
             addr.sin_family = AF_INET;
             addr.sin_port = htons(static_cast<uint16_t>(TckContext::serverPort));
             inet_pton(AF_INET, TckContext::serverHost.c_str(), &addr.sin_addr);
 
-            struct timeval tv{1, 0}; // 1s timeout
+            struct timeval tv {
+                1, 0
+            }; // 1s timeout
             setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
             if (connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
@@ -176,11 +178,13 @@ static bool isServerPortOpen() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0)
         return false;
-    struct sockaddr_in addr{};
+    struct sockaddr_in addr {};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(static_cast<uint16_t>(TckContext::serverPort));
     inet_pton(AF_INET, TckContext::serverHost.c_str(), &addr.sin_addr);
-    struct timeval tv{0, 500000}; // 500ms timeout
+    struct timeval tv {
+        0, 500000
+    }; // 500ms timeout
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     int ret = connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
     close(sock);
