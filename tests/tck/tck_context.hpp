@@ -27,14 +27,15 @@ inline const std::vector<std::string> kUnsupportedKeywords = {
 inline const std::vector<std::string> kUnsupportedSyntax = {
     // Multiple MATCH clauses
     R"(MATCH\s+\(.*\)\s+MATCH\s+\()",
-    // Multiple pattern parts (comma-separated paths)
-    R"(CREATE\s+\(.*\),\s*\(.*\),\s*\()",
     // Multi-label CREATE like CREATE (:A:B)
     R"(CREATE\s+\([^)]*:[^)]*:[^)]*\))",
     // EXISTS subquery (as opposed to EXISTS(n.prop))
     R"(EXISTS\s*\{)",
     // Relationship type alternation like [:A|B]
     R"(\[[^\]]*:[^\]]*\|[^\]]*\])",
+    // Comma-separated CREATE paths (binder doesn't support multi-pattern CREATE yet):
+    // matches ),\n  ( patterns like (a)-[:T]->(b),\n  (c)-[:T]->(d)
+    R"(\)\s*,\s*\n\s*\()",
 };
 
 // -------------------- Scenario context shared across steps --------------------
