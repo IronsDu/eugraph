@@ -130,7 +130,7 @@ OF         : 'OF';
 ADD        : 'ADD';
 DROP       : 'DROP';
 
-ID: LetterOrDigit+;
+ID: Letter LetterOrDigit*;
 
 ESC_LITERAL    : '`' .*? '`';
 CHAR_LITERAL   : '\'' (~['\\\r\n] | EscapeSequence)* '\'';
