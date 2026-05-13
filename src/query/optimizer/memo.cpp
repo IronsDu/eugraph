@@ -36,9 +36,9 @@ int getChildCount(const binder::BoundLogicalOperator& op) {
             if constexpr (std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
                 return 0;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
-                return val->child.has_value() ? 1 : 0;
+                return (val && val->child.has_value()) ? 1 : 0;
             } else {
-                return 1;
+                return val ? 1 : 0;
             }
         },
         op);
