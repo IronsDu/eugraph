@@ -18,10 +18,9 @@ namespace eugraph::tck {
 // Keywords for features that the query engine does not support yet.
 // Scenarios whose test query contains any of these are skipped (pending).
 inline const std::vector<std::string> kUnsupportedKeywords = {
-    "DELETE",      "DETACH DELETE", "MERGE",       "CALL ",          "UNWIND", "UNION", "CASE",
-    "ENDS WITH",   "STARTS WITH",   "CONTAINS",    "EXISTS",         "OPTIONAL MATCH", "XOR",
-    " IN ",        "\\$",           "REMOVE",      "FOREACH",        "LOAD CSV",
-    "SHORTESTPATH","apoc\\.",
+    "DELETE",    "DETACH DELETE", "MERGE",    "CALL ",    "UNWIND",         "UNION",   "CASE",
+    "ENDS WITH", "STARTS WITH",   "CONTAINS", "EXISTS",   "OPTIONAL MATCH", "XOR",     " IN ",
+    "\\$",       "REMOVE",        "FOREACH",  "LOAD CSV", "SHORTESTPATH",   "apoc\\.",
 };
 
 // Unsupported syntax patterns that need regex matching
