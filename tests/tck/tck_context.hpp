@@ -15,28 +15,9 @@
 
 namespace eugraph::tck {
 
-// Keywords for features that the query engine does not support yet.
-// Scenarios whose test query contains any of these are skipped (pending).
-inline const std::vector<std::string> kUnsupportedKeywords = {
-    "DELETE",    "DETACH DELETE", "MERGE",    "CALL ",    "UNWIND",         "UNION",   "CASE",
-    "ENDS WITH", "STARTS WITH",   "CONTAINS", "EXISTS",   "OPTIONAL MATCH", "XOR",     " IN ",
-    "\\$",       "REMOVE",        "FOREACH",  "LOAD CSV", "SHORTESTPATH",   "apoc\\.",
-};
-
-// Unsupported syntax patterns that need regex matching
-inline const std::vector<std::string> kUnsupportedSyntax = {
-    // Multiple MATCH clauses
-    R"(MATCH\s+\(.*\)\s+MATCH\s+\()",
-    // Multi-label CREATE like CREATE (:A:B)
-    R"(CREATE\s+\([^)]*:[^)]*:[^)]*\))",
-    // EXISTS subquery (as opposed to EXISTS(n.prop))
-    R"(EXISTS\s*\{)",
-    // Relationship type alternation like [:A|B]
-    R"(\[[^\]]*:[^\]]*\|[^\]]*\])",
-    // Comma-separated CREATE paths (binder doesn't support multi-pattern CREATE yet):
-    // matches ),\n  ( patterns like (a)-[:T]->(b),\n  (c)-[:T]->(d)
-    R"(\)\s*,\s*\n\s*\()",
-};
+// Unsupported features are now detected by parsing the query with
+// CypherQueryParser and walking the AST. Two items have no AST
+// representation and are kept as regex: FOREACH and LOAD CSV.
 
 // -------------------- Scenario context shared across steps --------------------
 
@@ -61,27 +42,10 @@ struct TckContext {
     // Side-effect results from last query
     SideEffects lastSideEffects;
 
-    // Check whether a Cypher query uses unsupported syntax
-    static bool isQuerySupported(const std::string& query) {
-        std::string upper = query;
-        // Check keyword patterns
-        for (const auto& kw : kUnsupportedKeywords) {
-            std::regex re(kw, std::regex::icase);
-            if (std::regex_search(query, re)) {
-                spdlog::info("[TCK] skipping: unsupported keyword '{}'", kw);
-                return false;
-            }
-        }
-        // Check syntax patterns
-        for (const auto& pat : kUnsupportedSyntax) {
-            std::regex re(pat, std::regex::icase);
-            if (std::regex_search(query, re)) {
-                spdlog::info("[TCK] skipping: unsupported pattern");
-                return false;
-            }
-        }
-        return true;
-    }
+    // Check whether a Cypher query uses unsupported syntax.
+    // Uses the Cypher parser AST for precise detection; falls back
+    // to regex for FOREACH and LOAD CSV (no AST nodes exist).
+    static bool isQuerySupported(const std::string& query);
 
     // ---------- RPC helpers ----------
 

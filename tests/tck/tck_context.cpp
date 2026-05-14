@@ -1,14 +1,369 @@
 #include "tck_context.hpp"
 
+#include "query/parser/ast.hpp"
+#include "query/parser/cypher_parser.hpp"
+
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cctype>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <unordered_set>
 
 namespace eugraph::tck {
+namespace {
+
+// ---- AST walkers for unsupported-feature detection ----------
+
+namespace ast = cypher;
+
+bool hasUnsupportedExpr(const ast::Expression& expr);
+
+bool hasUnsupportedPattern(const ast::PatternPart& pp) {
+    // Check path pattern: node + chain
+    const ast::PatternElement& el = pp.element;
+
+    // Check start node: multi-label?
+    if (el.node.labels.size() > 1) {
+        spdlog::info("[TCK] skipping: multi-label node pattern");
+        return true;
+    }
+    if (el.node.properties.has_value()) {
+        for (const auto& [k, v] : el.node.properties->entries) {
+            if (hasUnsupportedExpr(v))
+                return true;
+        }
+    }
+
+    // Check each chain step: (rel, node)
+    for (const auto& [rel, node] : el.chain) {
+        // Multi-label node?
+        if (node.labels.size() > 1) {
+            spdlog::info("[TCK] skipping: multi-label node pattern");
+            return true;
+        }
+        // Relationship type alternation? [:A|B]
+        if (rel.rel_types.size() > 1) {
+            spdlog::info("[TCK] skipping: relationship type alternation");
+            return true;
+        }
+        // Check properties in rel and node
+        if (rel.properties.has_value()) {
+            for (const auto& [k, v] : rel.properties->entries) {
+                if (hasUnsupportedExpr(v))
+                    return true;
+            }
+        }
+        if (node.properties.has_value()) {
+            for (const auto& [k, v] : node.properties->entries) {
+                if (hasUnsupportedExpr(v))
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool hasUnsupportedExpr(const ast::Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> bool {
+            using T = std::decay_t<decltype(ptr)>;
+            using Inner = typename T::element_type;
+
+            if constexpr (std::is_same_v<Inner, ast::Parameter>) {
+                spdlog::info("[TCK] skipping: parameter ($)");
+                return true;
+            } else if constexpr (std::is_same_v<Inner, ast::CaseExpr>) {
+                spdlog::info("[TCK] skipping: CASE expression");
+                return true;
+            } else if constexpr (std::is_same_v<Inner, ast::ExistsExpr>) {
+                spdlog::info("[TCK] skipping: EXISTS subquery");
+                return true;
+            } else if constexpr (std::is_same_v<Inner, ast::BinaryOp>) {
+                switch (ptr->op) {
+                case ast::BinaryOperator::STARTS_WITH:
+                    spdlog::info("[TCK] skipping: STARTS WITH");
+                    return true;
+                case ast::BinaryOperator::ENDS_WITH:
+                    spdlog::info("[TCK] skipping: ENDS WITH");
+                    return true;
+                case ast::BinaryOperator::CONTAINS:
+                    spdlog::info("[TCK] skipping: CONTAINS");
+                    return true;
+                case ast::BinaryOperator::IN:
+                    spdlog::info("[TCK] skipping: IN");
+                    return true;
+                case ast::BinaryOperator::XOR:
+                    spdlog::info("[TCK] skipping: XOR");
+                    return true;
+                default:
+                    break;
+                }
+                return hasUnsupportedExpr(ptr->left) || hasUnsupportedExpr(ptr->right);
+            } else if constexpr (std::is_same_v<Inner, ast::FunctionCall>) {
+                const std::string& name = ptr->name;
+                // apoc.*
+                if (name.starts_with("apoc.")) {
+                    spdlog::info("[TCK] skipping: apoc function '{}'", name);
+                    return true;
+                }
+                // shortestPath (case-insensitive)
+                std::string lower = name;
+                std::transform(lower.begin(), lower.end(), lower.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+                if (lower.find("shortestpath") != std::string::npos) {
+                    spdlog::info("[TCK] skipping: shortestPath function");
+                    return true;
+                }
+                // Recurse into args
+                for (const auto& arg : ptr->args) {
+                    if (hasUnsupportedExpr(arg))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Inner, ast::UnaryOp>) {
+                return hasUnsupportedExpr(ptr->operand);
+            } else if constexpr (std::is_same_v<Inner, ast::PropertyAccess>) {
+                return hasUnsupportedExpr(ptr->object);
+            } else if constexpr (std::is_same_v<Inner, ast::ListExpr>) {
+                for (const auto& e : ptr->elements) {
+                    if (hasUnsupportedExpr(e))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Inner, ast::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries) {
+                    if (hasUnsupportedExpr(v))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Inner, ast::LabelCastExpr>) {
+                return hasUnsupportedExpr(ptr->object);
+            } else if constexpr (std::is_same_v<Inner, ast::ListComprehension>) {
+                if (hasUnsupportedExpr(ptr->list_expr))
+                    return true;
+                if (ptr->where_pred && hasUnsupportedExpr(*ptr->where_pred))
+                    return true;
+                if (ptr->projection && hasUnsupportedExpr(*ptr->projection))
+                    return true;
+                return false;
+            } else if constexpr (std::is_same_v<Inner, ast::PatternComprehension>) {
+                spdlog::info("[TCK] skipping: pattern comprehension");
+                return true;
+            } else if constexpr (std::is_same_v<Inner, ast::SubscriptExpr>) {
+                return hasUnsupportedExpr(ptr->list) || hasUnsupportedExpr(ptr->index);
+            } else if constexpr (std::is_same_v<Inner, ast::SliceExpr>) {
+                bool r = hasUnsupportedExpr(ptr->list);
+                if (ptr->from)
+                    r = r || hasUnsupportedExpr(*ptr->from);
+                if (ptr->to)
+                    r = r || hasUnsupportedExpr(*ptr->to);
+                return r;
+            } else if constexpr (std::is_same_v<Inner, ast::AllExpr> || std::is_same_v<Inner, ast::AnyExpr> ||
+                                 std::is_same_v<Inner, ast::NoneExpr> || std::is_same_v<Inner, ast::SingleExpr>) {
+                spdlog::info("[TCK] skipping: quantifier expression (ALL/ANY/NONE/SINGLE)");
+                return true;
+            } else {
+                // Literal, Variable — leaf types, no unsupported features
+                return false;
+            }
+        },
+        expr);
+}
+
+int countMatchClauses(const std::vector<ast::Clause>& clauses) {
+    int count = 0;
+    for (const auto& c : clauses) {
+        std::visit(
+            [&count](const auto& ptr) {
+                using Inner = typename std::decay_t<decltype(ptr)>::element_type;
+                if constexpr (std::is_same_v<Inner, ast::MatchClause>) {
+                    ++count;
+                }
+            },
+            c);
+    }
+    return count;
+}
+
+bool hasUnsupportedClause(const ast::Clause& clause) {
+    return std::visit(
+        [](const auto& ptr) -> bool {
+            using Inner = typename std::decay_t<decltype(ptr)>::element_type;
+
+            if constexpr (std::is_same_v<Inner, ast::MatchClause>) {
+                if (ptr->optional) {
+                    spdlog::info("[TCK] skipping: OPTIONAL MATCH");
+                    return true;
+                }
+                for (const auto& pp : ptr->patterns) {
+                    if (hasUnsupportedPattern(pp))
+                        return true;
+                }
+                if (ptr->where_pred && hasUnsupportedExpr(*ptr->where_pred))
+                    return true;
+                return false;
+            } else if constexpr (std::is_same_v<Inner, ast::CreateClause>) {
+                if (ptr->patterns.size() > 1) {
+                    spdlog::info("[TCK] skipping: comma-separated CREATE paths");
+                    return true;
+                }
+                for (const auto& pp : ptr->patterns) {
+                    if (hasUnsupportedPattern(pp))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Inner, ast::DeleteClause>) {
+                if (ptr->detach) {
+                    spdlog::info("[TCK] skipping: DETACH DELETE");
+                } else {
+                    spdlog::info("[TCK] skipping: DELETE");
+                }
+                return true;
+            } else if constexpr (std::is_same_v<Inner, ast::MergeClause>) {
+                spdlog::info("[TCK] skipping: MERGE");
+                return true;
+            } else if constexpr (std::is_same_v<Inner, ast::UnwindClause>) {
+                spdlog::info("[TCK] skipping: UNWIND");
+                return true;
+            } else if constexpr (std::is_same_v<Inner, ast::CallClause>) {
+                spdlog::info("[TCK] skipping: CALL");
+                return true;
+            } else if constexpr (std::is_same_v<Inner, ast::RemoveClause>) {
+                spdlog::info("[TCK] skipping: REMOVE");
+                return true;
+            } else if constexpr (std::is_same_v<Inner, ast::ReturnClause>) {
+                for (const auto& item : ptr->items) {
+                    if (hasUnsupportedExpr(item.expr))
+                        return true;
+                }
+                if (ptr->order_by.has_value()) {
+                    for (const auto& si : ptr->order_by->items) {
+                        if (hasUnsupportedExpr(si.expr))
+                            return true;
+                    }
+                }
+                if (ptr->skip && hasUnsupportedExpr(*ptr->skip))
+                    return true;
+                if (ptr->limit && hasUnsupportedExpr(*ptr->limit))
+                    return true;
+                return false;
+            } else if constexpr (std::is_same_v<Inner, ast::WithClause>) {
+                for (const auto& item : ptr->items) {
+                    if (hasUnsupportedExpr(item.expr))
+                        return true;
+                }
+                if (ptr->order_by.has_value()) {
+                    for (const auto& si : ptr->order_by->items) {
+                        if (hasUnsupportedExpr(si.expr))
+                            return true;
+                    }
+                }
+                if (ptr->skip && hasUnsupportedExpr(*ptr->skip))
+                    return true;
+                if (ptr->limit && hasUnsupportedExpr(*ptr->limit))
+                    return true;
+                if (ptr->where_pred && hasUnsupportedExpr(*ptr->where_pred))
+                    return true;
+                return false;
+            } else if constexpr (std::is_same_v<Inner, ast::SetClause>) {
+                // SET clause: check expressions in set items
+                for (const auto& item : ptr->items) {
+                    if (hasUnsupportedExpr(item.target))
+                        return true;
+                    if (item.value && hasUnsupportedExpr(*item.value))
+                        return true;
+                }
+                return false;
+            } else {
+                return false;
+            }
+        },
+        clause);
+}
+
+bool hasUnsupportedFeature(const ast::Statement& stmt) {
+    return std::visit(
+        [](const auto& ptr) -> bool {
+            using Inner = typename std::decay_t<decltype(ptr)>::element_type;
+
+            if constexpr (std::is_same_v<Inner, ast::RegularQuery>) {
+                const auto& rq = *ptr;
+
+                // UNION?
+                if (!rq.unions.empty()) {
+                    spdlog::info("[TCK] skipping: UNION");
+                    return true;
+                }
+
+                // Multiple MATCH clauses?
+                if (countMatchClauses(rq.first.clauses) > 1) {
+                    spdlog::info("[TCK] skipping: multiple MATCH clauses");
+                    return true;
+                }
+
+                // Walk clauses
+                for (const auto& c : rq.first.clauses) {
+                    if (hasUnsupportedClause(c))
+                        return true;
+                }
+                // Also check union parts
+                for (const auto& [ucl, sq] : rq.unions) {
+                    for (const auto& c : sq.clauses) {
+                        if (hasUnsupportedClause(c))
+                            return true;
+                    }
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Inner, ast::StandaloneCall>) {
+                spdlog::info("[TCK] skipping: standalone CALL");
+                return true;
+            } else if constexpr (std::is_same_v<Inner, ast::ExplainStatement>) {
+                spdlog::info("[TCK] skipping: EXPLAIN");
+                return true;
+            } else {
+                return false;
+            }
+        },
+        stmt);
+}
+
+// Regex fallbacks for constructs with no AST representation
+const std::regex kForeachRe(R"(\bFOREACH\b)", std::regex::icase);
+const std::regex kLoadCsvRe(R"(\bLOAD\s+CSV\b)", std::regex::icase);
+
+} // anonymous namespace
+
+bool TckContext::isQuerySupported(const std::string& query) {
+    // Regex fallback: FOREACH and LOAD CSV have no AST nodes
+    if (std::regex_search(query, kForeachRe)) {
+        spdlog::info("[TCK] skipping: FOREACH");
+        return false;
+    }
+    if (std::regex_search(query, kLoadCsvRe)) {
+        spdlog::info("[TCK] skipping: LOAD CSV");
+        return false;
+    }
+
+    // Parse with the Cypher parser; if parsing fails, the syntax is not
+    // supported by our parser (which means we cannot execute it either).
+    static thread_local cypher::CypherQueryParser parser;
+    auto result = parser.parse(query);
+
+    if (std::holds_alternative<cypher::ParseError>(result)) {
+        spdlog::info("[TCK] skipping: parse error — {}", std::get<cypher::ParseError>(result).message);
+        return false;
+    }
+
+    auto& stmt = std::get<cypher::Statement>(result);
+    if (hasUnsupportedFeature(stmt))
+        return false;
+
+    return true;
+}
 
 // Static members
 std::unique_ptr<shell::EuGraphRpcClient> TckContext::rpc;
