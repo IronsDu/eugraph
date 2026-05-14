@@ -80,6 +80,7 @@ HOOK_AFTER_ALL() {
 
 HOOK_BEFORE_SCENARIO() {
     resetCtx();
+    spdlog::info("[TCK] === Scenario {} (graph: {}) ===", gScenarioNum.load(), gCtx->graphName);
 }
 
 HOOK_AFTER_SCENARIO() {
@@ -109,7 +110,7 @@ STEP("^having executed:$") {
     if (skipIfUnsupported(q)) {
         GTEST_SKIP() << "Unsupported Cypher syntax";
     }
-    spdlog::info("[TCK] setup query: {}", q);
+    spdlog::info("[TCK] [{}] setup query: {}", gCtx->graphName, q);
     gCtx->ensureTypesForQuery(q);
     gCtx->executeQuery(q);
 }
@@ -123,7 +124,7 @@ WHEN("^executing query:$") {
     if (skipIfUnsupported(q)) {
         GTEST_SKIP() << "Unsupported Cypher syntax";
     }
-    spdlog::info("[TCK] test query: {}", q);
+    spdlog::info("[TCK] [{}] test query: {}", gCtx->graphName, q);
     gCtx->ensureTypesForQuery(q);
 
     // Snapshot before for side effects

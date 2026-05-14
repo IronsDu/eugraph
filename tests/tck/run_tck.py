@@ -182,6 +182,19 @@ def main():
         print(f"[run_tck] WARNING: Server crashed (signal {abs(server_status)})",
               file=sys.stderr, flush=True)
         server_crashed = True
+        # Dump server log tail to help diagnose the crash
+        server_log_path = "/tmp/eugraph_tck_server.log"
+        try:
+            with open(server_log_path) as f:
+                lines = f.readlines()
+                tail = lines[-100:] if len(lines) > 100 else lines
+                print(f"[run_tck] Server log tail ({len(tail)} lines):",
+                      file=sys.stderr, flush=True)
+                for line in tail:
+                    print(f"[server] {line.rstrip()}", file=sys.stderr, flush=True)
+        except OSError as e:
+            print(f"[run_tck] Could not read server log: {e}",
+                  file=sys.stderr, flush=True)
     elif server_status != 0:
         print(f"[run_tck] WARNING: Server exited with non-zero code {server_status}",
               file=sys.stderr, flush=True)

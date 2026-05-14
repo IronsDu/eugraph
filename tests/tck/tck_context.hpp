@@ -83,7 +83,7 @@ struct TckContext {
         } catch (const std::exception& e) {
             std::string msg = e.what();
             if (isConnectionError(msg)) {
-                spdlog::critical("[TCK] Connection lost during createGraph — aborting: {}", msg);
+                spdlog::critical("[TCK] [{}] Connection lost during createGraph — aborting: {}", graphName, msg);
                 std::exit(1);
             }
             throw;
@@ -108,7 +108,7 @@ struct TckContext {
         } catch (const std::exception& e) {
             std::string msg = e.what();
             if (isConnectionError(msg)) {
-                spdlog::critical("[TCK] Connection lost during createLabel — aborting: {}", msg);
+                spdlog::critical("[TCK] [{}] Connection lost during createLabel — aborting: {}", graphName, msg);
                 std::exit(1);
             }
             throw;
@@ -122,7 +122,7 @@ struct TckContext {
         } catch (const std::exception& e) {
             std::string msg = e.what();
             if (isConnectionError(msg)) {
-                spdlog::critical("[TCK] Connection lost during createEdgeLabel — aborting: {}", msg);
+                spdlog::critical("[TCK] [{}] Connection lost during createEdgeLabel — aborting: {}", graphName, msg);
                 std::exit(1);
             }
             throw;
