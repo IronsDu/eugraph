@@ -172,10 +172,6 @@ target_link_options(tck_tests PRIVATE
     -Wl,--end-group
 )
 
-target_compile_definitions(tck_tests PRIVATE
-    EUGRAPH_SERVER_PATH="${CMAKE_BINARY_DIR}/eugraph-server"
-)
-
 add_dependencies(tck_tests eugraph-server ccr_ext)
 
 # Symlink features/ -> openCypher TCK features for cucumber discovery
@@ -188,8 +184,14 @@ add_custom_command(TARGET tck_tests POST_BUILD
 )
 
 # Register with CTest so CI can optionally run the TCK tests.
-# Default OFF: many scenarios are expected to fail until the query engine matures.
+# Uses Python script to manage server lifecycle (start/stop), so server
+# crashes are not silently hidden by auto-restart logic.
 if(TCK_RUN_TESTS)
-    add_test(NAME tck_tests COMMAND tck_tests
-             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME tck_tests
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/run_tck.py"
+            --server-bin "$<TARGET_FILE:eugraph-server>"
+            --tck-bin "$<TARGET_FILE:tck_tests>"
+            --features "${CMAKE_CURRENT_BINARY_DIR}/features"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    )
 endif()

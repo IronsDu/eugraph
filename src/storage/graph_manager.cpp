@@ -139,38 +139,33 @@ bool GraphManager::dropGraph(const std::string& name) {
     if (name == kDefaultGraphName)
         throw std::runtime_error("Cannot drop the default graph");
 
-    // Extract the instance pointer under the lock, then release the lock
-    // before performing blocking operations (close, blockingWait).
-    // This prevents the IO pool threads from being blocked while holding
-    // the exclusive lock, which would deadlock handler coroutines that
-    // need a shared_lock (e.g. resolveGraph during executeCypher).
-    GraphInstance* inst = nullptr;
+    // Move the instance out of the map under the lock, then release the lock
+    // before performing blocking close operations. This prevents the IO pool
+    // threads from being blocked while holding the exclusive lock, which would
+    // deadlock handler coroutines that need a shared_lock (e.g. resolveGraph
+    // during executeCypher).
+    //
+    // Moving out of the map (rather than just extracting a raw pointer) also
+    // prevents a race with checkpointAll(): since the entry is removed from
+    // graphs_ immediately, the checkpoint thread can never see a graph that
+    // is in the process of being closed.
+    std::unique_ptr<GraphInstance> inst;
     uint32_t graph_id = 0;
     {
         std::unique_lock lock(mu_);
         auto it = graphs_.find(name);
         if (it == graphs_.end())
             throw std::runtime_error("Graph not found: " + name);
-        inst = it->second.get();
+        inst = std::move(it->second);
         graph_id = inst->graph_id;
+        graphs_.erase(it);
+        catalog_.dropGraph(name);
     }
-    // lock released — safe to block on I/O
+    // lock released — safe to block on I/O; inst owns the GraphInstance
 
     folly::coro::blockingWait(inst->async_meta->close());
     inst->sync_data->close();
     inst->sync_meta->close();
-
-    // Re-acquire lock to clean up the map and catalog.
-    // Verify the pointer still matches — if the graph was re-created under
-    // the same name between lock release and re-acquire, don't erase it.
-    {
-        std::unique_lock lock(mu_);
-        auto it = graphs_.find(name);
-        if (it != graphs_.end() && it->second.get() == inst) {
-            graphs_.erase(it);
-            catalog_.dropGraph(name);
-        }
-    }
 
     std::string graph_dir = data_dir_ + "/graph_" + std::to_string(graph_id);
     std::error_code ec;
@@ -236,10 +231,10 @@ void GraphManager::checkpointAll() {
         auto t0 = std::chrono::steady_clock::now();
         inst->sync_data->checkpoint();
         inst->sync_meta->checkpoint();
-        catalog_.checkpoint();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
         spdlog::info("Periodic checkpoint for graph '{}' completed ({}ms)", name, ms);
     }
+    catalog_.checkpoint();
 }
 
 void GraphManager::checkpointLoop() {

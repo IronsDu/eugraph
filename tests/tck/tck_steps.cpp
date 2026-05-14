@@ -11,28 +11,10 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
-#include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <sstream>
 #include <string>
-#include <thread>
-
-// POSIX for server management
-#include <dirent.h>
-#include <fcntl.h>
-#include <signal.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-
-#include <cerrno>
-#include <cstdlib>
-#include <cstring>
 
 using namespace eugraph::tck;
 
@@ -44,170 +26,6 @@ namespace {
 
 std::unique_ptr<TckContext> gCtx;
 std::atomic<int> gScenarioNum{0};
-pid_t gServerPid = 0;
-
-void startServer() {
-    const char* path = EUGRAPH_SERVER_PATH;
-    int port = 9999;
-
-    gServerPid = fork();
-    if (gServerPid < 0) {
-        spdlog::error("[TCK] fork failed: {}", strerror(errno));
-        return;
-    }
-
-    if (gServerPid == 0) {
-        // Redirect stdin/stdout/stderr to server log file
-        int logfd = open("/tmp/eugraph_tck_server.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
-        if (logfd >= 0) {
-            dup2(logfd, STDOUT_FILENO);
-            dup2(logfd, STDERR_FILENO);
-            if (logfd > 2)
-                close(logfd);
-        }
-        int devnull = open("/dev/null", O_RDONLY);
-        if (devnull >= 0) {
-            dup2(devnull, STDIN_FILENO);
-            if (devnull > 2)
-                close(devnull);
-        }
-
-        // Close inherited fds so pipe/socket writers in parent see EOF
-        DIR* d = opendir("/proc/self/fd");
-        if (d) {
-            int dfd = ::dirfd(d);
-            struct dirent* ent;
-            while ((ent = readdir(d)) != nullptr) {
-                if (ent->d_name[0] == '.')
-                    continue;
-                int fd = atoi(ent->d_name);
-                if (fd > 2 && fd != dfd)
-                    close(fd);
-            }
-            closedir(d);
-        }
-
-        execl(path, path, "--port", std::to_string(port).c_str(), "--data-dir", "/tmp/eugraph_tck_data", nullptr);
-        // execl failed
-        std::cerr << "exec failed: " << strerror(errno) << std::endl;
-        _exit(1);
-    }
-
-    spdlog::info("[TCK] Server starting pid={} port={}", gServerPid, port);
-
-    TckContext::serverHost = "127.0.0.1";
-    TckContext::serverPort = port;
-
-    // Poll until server is ready or dies (raw TCP probe, no Folly/Thrift)
-    static constexpr auto kTimeout = std::chrono::seconds(15);
-    auto start = std::chrono::steady_clock::now();
-    while (true) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-        int status;
-        pid_t result = waitpid(gServerPid, &status, WNOHANG);
-        if (result == gServerPid) {
-            spdlog::error("[TCK] Server died before accepting connections "
-                          "(exit={}, signal={})",
-                          WIFEXITED(status) ? WEXITSTATUS(status) : -1, WIFSIGNALED(status) ? WTERMSIG(status) : 0);
-            gServerPid = 0;
-            return;
-        }
-
-        // Raw TCP connect to check if server is accepting
-        int sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (sock >= 0) {
-            struct sockaddr_in addr {};
-            addr.sin_family = AF_INET;
-            addr.sin_port = htons(static_cast<uint16_t>(TckContext::serverPort));
-            inet_pton(AF_INET, TckContext::serverHost.c_str(), &addr.sin_addr);
-
-            struct timeval tv {
-                1, 0
-            }; // 1s timeout
-            setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-            if (connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0) {
-                close(sock);
-                auto elapsed =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
-                        .count();
-                spdlog::info("[TCK] Server ready ({}ms)", elapsed);
-                break;
-            }
-            close(sock);
-        }
-
-        if (std::chrono::steady_clock::now() - start > kTimeout) {
-            spdlog::error("[TCK] Server startup timed out");
-            kill(gServerPid, SIGKILL);
-            waitpid(gServerPid, nullptr, 0);
-            gServerPid = 0;
-            return;
-        }
-    }
-}
-
-void stopServer() {
-    if (gServerPid > 0) {
-        kill(gServerPid, SIGTERM);
-        int status;
-        waitpid(gServerPid, &status, 0);
-        spdlog::info("[TCK] Server stopped pid={} exit={}", gServerPid, WIFEXITED(status) ? WEXITSTATUS(status) : -1);
-        gServerPid = 0;
-    }
-}
-
-// Check if server process is still alive
-static bool isServerProcessAlive() {
-    if (gServerPid == 0)
-        return false;
-    int status;
-    pid_t result = waitpid(gServerPid, &status, WNOHANG);
-    if (result == gServerPid) {
-        spdlog::info("[TCK] Server pid={} has exited (exit={}, signal={})", gServerPid,
-                     WIFEXITED(status) ? WEXITSTATUS(status) : -1, WIFSIGNALED(status) ? WTERMSIG(status) : 0);
-        gServerPid = 0;
-        return false;
-    }
-    return true;
-}
-
-// Check if server TCP port is accepting connections
-static bool isServerPortOpen() {
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0)
-        return false;
-    struct sockaddr_in addr {};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(static_cast<uint16_t>(TckContext::serverPort));
-    inet_pton(AF_INET, TckContext::serverHost.c_str(), &addr.sin_addr);
-    struct timeval tv {
-        0, 500000
-    }; // 500ms timeout
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    int ret = connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
-    close(sock);
-    return ret == 0;
-}
-
-// Ensure the server is alive, restart if needed
-static void ensureServerAlive() {
-    if (isServerProcessAlive() && isServerPortOpen())
-        return;
-
-    spdlog::warn("[TCK] Server is dead, restarting...");
-    TckContext::rpc.reset();
-
-    // Kill existing zombie if any
-    if (gServerPid > 0) {
-        kill(gServerPid, SIGKILL);
-        waitpid(gServerPid, nullptr, 0);
-        gServerPid = 0;
-    }
-
-    startServer();
-}
 
 void resetCtx() {
     gCtx = std::make_unique<TckContext>();
@@ -222,10 +40,11 @@ std::string trim(const std::string& s) {
     return s.substr(a, b - a + 1);
 }
 
-void skipIfUnsupported(const std::string& query) {
+bool skipIfUnsupported(const std::string& query) {
     if (!TckContext::isQuerySupported(query)) {
-        GTEST_SKIP() << "Unsupported Cypher syntax";
+        return true;
     }
+    return false;
 }
 
 // Get query from doc string (may be null)
@@ -243,18 +62,23 @@ std::string getDocString(const std::optional<cucumber_cpp::library::util::DocStr
 // -----------------------------------------------------------------------
 
 HOOK_BEFORE_ALL() {
-    // Ensure Folly singletons are initialized before any RPC calls
     folly::SingletonVault::singleton()->registrationComplete();
-    startServer();
+
+    const char* host = std::getenv("EUGRAPH_HOST");
+    const char* port = std::getenv("EUGRAPH_PORT");
+    if (host)
+        TckContext::serverHost = host;
+    if (port)
+        TckContext::serverPort = std::stoi(port);
+
+    spdlog::info("[TCK] Server config from env: {}:{}", TckContext::serverHost, TckContext::serverPort);
 }
 
 HOOK_AFTER_ALL() {
     TckContext::rpc.reset();
-    stopServer();
 }
 
 HOOK_BEFORE_SCENARIO() {
-    ensureServerAlive();
     resetCtx();
 }
 
@@ -282,7 +106,9 @@ GIVEN("^any graph$") {
 
 STEP("^having executed:$") {
     std::string q = getDocString(docString);
-    skipIfUnsupported(q);
+    if (skipIfUnsupported(q)) {
+        GTEST_SKIP() << "Unsupported Cypher syntax";
+    }
     spdlog::info("[TCK] setup query: {}", q);
     gCtx->ensureTypesForQuery(q);
     gCtx->executeQuery(q);
@@ -294,7 +120,9 @@ STEP("^having executed:$") {
 
 WHEN("^executing query:$") {
     std::string q = getDocString(docString);
-    skipIfUnsupported(q);
+    if (skipIfUnsupported(q)) {
+        GTEST_SKIP() << "Unsupported Cypher syntax";
+    }
     spdlog::info("[TCK] test query: {}", q);
     gCtx->ensureTypesForQuery(q);
 
