@@ -405,8 +405,16 @@ void TckContext::executeQuery(const std::string& query) {
             }
         });
     } catch (const std::exception& e) {
-        lastQueryHadError = true;
         std::string errMsg = e.what();
+
+        // Connection loss is a fatal infrastructure failure — abort
+        if (isConnectionError(errMsg)) {
+            spdlog::critical("[TCK] Connection lost — server may have crashed. Aborting test.");
+            spdlog::critical("[TCK] Error: {}", errMsg);
+            std::exit(1);
+        }
+
+        lastQueryHadError = true;
 
         // Classify error by message content
         if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
@@ -669,7 +677,12 @@ void TckContext::ensureTypesForQuery(const std::string& query) {
         try {
             rpc->createLabel(label, {}, graphName);
         } catch (const std::exception& e) {
-            spdlog::info("[TCK] Label {} may already exist: {}", label, e.what());
+            std::string msg = e.what();
+            if (isConnectionError(msg)) {
+                spdlog::critical("[TCK] Connection lost during ensureTypes — aborting: {}", msg);
+                std::exit(1);
+            }
+            spdlog::info("[TCK] Label {} may already exist: {}", label, msg);
         }
     }
 
@@ -679,7 +692,12 @@ void TckContext::ensureTypesForQuery(const std::string& query) {
         try {
             rpc->createEdgeLabel(et, {}, graphName);
         } catch (const std::exception& e) {
-            spdlog::info("[TCK] EdgeLabel {} may already exist: {}", et, e.what());
+            std::string msg = e.what();
+            if (isConnectionError(msg)) {
+                spdlog::critical("[TCK] Connection lost during ensureTypes — aborting: {}", msg);
+                std::exit(1);
+            }
+            spdlog::info("[TCK] EdgeLabel {} may already exist: {}", et, msg);
         }
     }
 }

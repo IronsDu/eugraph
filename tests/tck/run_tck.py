@@ -132,7 +132,7 @@ def main():
     # ---- Start server ----
     server_cmd = [args.server_bin, "--port", str(args.port),
                   "--data-dir", args.data_dir]
-    print(f"[run_tck] Starting server: {' '.join(server_cmd)}")
+    print(f"[run_tck] Starting server: {' '.join(server_cmd)}", flush=True)
 
     server_log = open("/tmp/eugraph_tck_server.log", "w")
     server_proc = subprocess.Popen(
@@ -144,14 +144,14 @@ def main():
 
     # ---- Wait for server ----
     print(f"[run_tck] Waiting for server on {args.host}:{args.port} "
-          f"(timeout={args.timeout}s)...")
+          f"(timeout={args.timeout}s)...", flush=True)
     if not wait_for_server(args.host, args.port, args.timeout, server_proc.pid):
-        print("[run_tck] Server failed to start", file=sys.stderr)
+        print("[run_tck] Server failed to start", file=sys.stderr, flush=True)
         stop_server(server_proc.pid)
         sys.exit(1)
 
     elapsed = time.monotonic()
-    print(f"[run_tck] Server ready")
+    print(f"[run_tck] Server ready", flush=True)
 
     # ---- Run tck_tests ----
     tck_cmd = [args.tck_bin, args.features] + args.extra
@@ -159,12 +159,13 @@ def main():
     env["EUGRAPH_HOST"] = args.host
     env["EUGRAPH_PORT"] = str(args.port)
 
-    print(f"[run_tck] Running: {' '.join(tck_cmd)}")
+    print(f"[run_tck] Running: {' '.join(tck_cmd)}", flush=True)
+    sys.stdout.flush()  # Ensure logs appear before tck_tests output
     tck_start = time.monotonic()
     tck_result = subprocess.run(tck_cmd, env=env)
     tck_elapsed = time.monotonic() - tck_start
     print(f"[run_tck] tck_tests finished in {tck_elapsed:.1f}s "
-          f"(exit={tck_result.returncode})")
+          f"(exit={tck_result.returncode})", flush=True)
 
     # ---- Stop server ----
     server_status = stop_server(server_proc.pid)
@@ -176,15 +177,23 @@ def main():
         shutil.rmtree(args.data_dir)
 
     # ---- Report ----
+    server_crashed = False
     if server_status < 0:
         print(f"[run_tck] WARNING: Server crashed (signal {abs(server_status)})",
-              file=sys.stderr)
+              file=sys.stderr, flush=True)
+        server_crashed = True
     elif server_status != 0:
         print(f"[run_tck] WARNING: Server exited with non-zero code {server_status}",
-              file=sys.stderr)
+              file=sys.stderr, flush=True)
+
+    # --exit-zero only masks expected scenario failures, not infrastructure crashes
+    if server_crashed:
+        print("[run_tck] Failing due to server crash", file=sys.stderr, flush=True)
+        sys.exit(1)
 
     if args.exit_zero:
-        print(f"[run_tck] Exiting 0 (--exit-zero, tck_tests returned {tck_result.returncode})")
+        print(f"[run_tck] Exiting 0 (--exit-zero, tck_tests returned {tck_result.returncode})",
+              flush=True)
         sys.exit(0)
 
     sys.exit(tck_result.returncode)

@@ -56,9 +56,38 @@ struct TckContext {
         }
     }
 
+    // Reconnect after connection loss. Returns false if reconnection fails.
+    bool reconnectRpc() {
+        rpc.reset();
+        try {
+            rpc = std::make_unique<shell::EuGraphRpcClient>(serverHost, serverPort);
+            return rpc->connect();
+        } catch (const std::exception& e) {
+            spdlog::error("[TCK] Reconnection failed: {}", e.what());
+            rpc.reset();
+            return false;
+        }
+    }
+
+    // Check if exception is a transport/connection error
+    static bool isConnectionError(const std::string& msg) {
+        return msg.find("Channel got EOF") != std::string::npos ||
+               msg.find("Connection not open") != std::string::npos ||
+               msg.find("TTransportException") != std::string::npos;
+    }
+
     thrift::GraphInfo createGraph(const std::string& name) {
         connectRpc();
-        return rpc->createGraph(name);
+        try {
+            return rpc->createGraph(name);
+        } catch (const std::exception& e) {
+            std::string msg = e.what();
+            if (isConnectionError(msg)) {
+                spdlog::critical("[TCK] Connection lost during createGraph — aborting: {}", msg);
+                std::exit(1);
+            }
+            throw;
+        }
     }
 
     bool dropGraph(const std::string& name) {
@@ -74,12 +103,30 @@ struct TckContext {
 
     thrift::LabelInfo createLabel(const std::string& name, const std::vector<thrift::PropertyDefThrift>& props,
                                   const std::string& gname) {
-        return rpc->createLabel(name, props, gname);
+        try {
+            return rpc->createLabel(name, props, gname);
+        } catch (const std::exception& e) {
+            std::string msg = e.what();
+            if (isConnectionError(msg)) {
+                spdlog::critical("[TCK] Connection lost during createLabel — aborting: {}", msg);
+                std::exit(1);
+            }
+            throw;
+        }
     }
 
     thrift::EdgeLabelInfo createEdgeLabel(const std::string& name, const std::vector<thrift::PropertyDefThrift>& props,
                                           const std::string& gname) {
-        return rpc->createEdgeLabel(name, props, gname);
+        try {
+            return rpc->createEdgeLabel(name, props, gname);
+        } catch (const std::exception& e) {
+            std::string msg = e.what();
+            if (isConnectionError(msg)) {
+                spdlog::critical("[TCK] Connection lost during createEdgeLabel — aborting: {}", msg);
+                std::exit(1);
+            }
+            throw;
+        }
     }
 
     // ---------- Query execution ----------
