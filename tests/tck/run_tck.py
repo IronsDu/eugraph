@@ -72,9 +72,17 @@ def stop_server(pid: int) -> int:
                           file=sys.stderr)
                     return os.WEXITSTATUS(status)
                 elif os.WIFSIGNALED(status):
-                    print(f"[run_tck] Server killed by signal {os.WTERMSIG(status)}",
+                    sig = os.WTERMSIG(status)
+                    if sig == signal.SIGTERM:
+                        # SIGTERM is expected — we sent it. folly treats
+                        # SIGTERM as a fatal signal and re-raises it,
+                        # causing the process to exit via signal rather
+                        # than calling _exit(0).
+                        print(f"[run_tck] Server stopped (SIGTERM)", file=sys.stderr)
+                        return 0
+                    print(f"[run_tck] Server killed by signal {sig}",
                           file=sys.stderr)
-                    return -os.WTERMSIG(status)
+                    return -sig
         except ChildProcessError:
             return 0
         time.sleep(0.1)
