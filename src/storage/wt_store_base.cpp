@@ -61,17 +61,21 @@ void WtStoreBase::closeConnection() {
         }
         txns_.clear();
     }
-    if (defaultSession_) {
-        auto t0 = std::chrono::steady_clock::now();
-        int ret = defaultSession_.get()->checkpoint(defaultSession_.get(), nullptr);
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-        if (ret != 0) {
-            spdlog::warn("Checkpoint before close failed: error {} ({}ms)", ret, ms);
-        } else {
-            spdlog::info("Checkpoint completed ({}ms)", ms);
+    {
+        std::lock_guard<std::mutex> lock(sessionMutex_);
+        if (defaultSession_) {
+            auto t0 = std::chrono::steady_clock::now();
+            int ret = defaultSession_.get()->checkpoint(defaultSession_.get(), nullptr);
+            auto ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+            if (ret != 0) {
+                spdlog::warn("Checkpoint before close failed: error {} ({}ms)", ret, ms);
+            } else {
+                spdlog::info("Checkpoint completed ({}ms)", ms);
+            }
         }
+        defaultSession_ = WtSession{};
     }
-    defaultSession_ = WtSession{};
     conn_.close();
 }
 
@@ -99,11 +103,14 @@ bool WtStoreBase::openConnection(const std::string& db_path) {
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
     spdlog::info("Opened WT connection at {} ({}ms)", db_path, ms);
 
-    defaultSession_ = conn_.openSession();
-    if (!defaultSession_) {
-        spdlog::error("Failed to open default session");
-        conn_.close();
-        return false;
+    {
+        std::lock_guard<std::mutex> lock(sessionMutex_);
+        defaultSession_ = conn_.openSession();
+        if (!defaultSession_) {
+            spdlog::error("Failed to open default session");
+            conn_.close();
+            return false;
+        }
     }
 
     return true;
@@ -130,6 +137,7 @@ void WtStoreBase::closeTxnCursors(TxnState* state) {
 }
 
 bool WtStoreBase::ensureGlobalTable(WT_SESSION* session, const char* table_name) {
+    std::lock_guard<std::mutex> lock(sessionMutex_);
     int ret = session->create(session, table_name, WT_TABLE_CONFIG);
     if (ret != 0 && ret != EBUSY) {
         spdlog::error("Failed to create table {}: error {}", table_name, ret);
@@ -139,6 +147,7 @@ bool WtStoreBase::ensureGlobalTable(WT_SESSION* session, const char* table_name)
 }
 
 bool WtStoreBase::checkpoint() {
+    std::lock_guard<std::mutex> lock(sessionMutex_);
     if (!defaultSession_)
         return false;
     int ret = defaultSession_.get()->checkpoint(defaultSession_.get(), nullptr);
@@ -153,6 +162,7 @@ bool WtStoreBase::checkpoint() {
 
 bool WtStoreBase::tablePut(WT_SESSION* session, const std::string& table, std::string_view key,
                            std::string_view value) {
+    std::lock_guard<std::mutex> lock(sessionMutex_);
     auto cursor = openCursor(session, table);
     if (!cursor)
         return false;
@@ -169,6 +179,7 @@ bool WtStoreBase::tablePut(WT_SESSION* session, const std::string& table, std::s
 }
 
 std::optional<std::string> WtStoreBase::tableGet(WT_SESSION* session, const std::string& table, std::string_view key) {
+    std::lock_guard<std::mutex> lock(sessionMutex_);
     auto cursor = openCursor(session, table);
     if (!cursor)
         return std::nullopt;
@@ -183,6 +194,7 @@ std::optional<std::string> WtStoreBase::tableGet(WT_SESSION* session, const std:
 }
 
 bool WtStoreBase::tableDel(WT_SESSION* session, const std::string& table, std::string_view key) {
+    std::lock_guard<std::mutex> lock(sessionMutex_);
     auto cursor = openCursor(session, table);
     if (!cursor)
         return false;
@@ -199,6 +211,7 @@ bool WtStoreBase::tableDel(WT_SESSION* session, const std::string& table, std::s
 
 void WtStoreBase::tableScan(WT_SESSION* session, const std::string& table, std::string_view prefix,
                             const std::function<bool(std::string_view, std::string_view)>& callback) {
+    std::lock_guard<std::mutex> lock(sessionMutex_);
     auto cursor = openCursor(session, table);
     if (!cursor)
         return;
