@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
@@ -26,6 +27,11 @@ namespace {
 
 std::unique_ptr<TckContext> gCtx;
 std::atomic<int> gScenarioNum{0};
+
+// Track scenario results for summary
+std::vector<std::string> gPassedScenarios;
+std::vector<std::string> gFailedScenarios;
+std::vector<std::string> gSkippedScenarios;
 
 void resetCtx() {
     gCtx = std::make_unique<TckContext>();
@@ -76,6 +82,19 @@ HOOK_BEFORE_ALL() {
 
 HOOK_AFTER_ALL() {
     TckContext::rpc.reset();
+
+    std::cout << "\n[TCK] ==================== SUMMARY ====================\n";
+    int total = static_cast<int>(gPassedScenarios.size() + gFailedScenarios.size() + gSkippedScenarios.size());
+    std::cout << "[TCK] Total: " << total << "  |  Passed: " << gPassedScenarios.size()
+              << "  |  Failed: " << gFailedScenarios.size() << "  |  Skipped: " << gSkippedScenarios.size() << "\n";
+
+    if (!gPassedScenarios.empty()) {
+        std::cout << "\n[TCK] === PASSED SCENARIOS ===\n";
+        for (const auto& name : gPassedScenarios) {
+            std::cout << "[TCK]   PASS: " << name << "\n";
+        }
+    }
+    std::cout << std::endl;
 }
 
 HOOK_BEFORE_SCENARIO() {
@@ -84,6 +103,21 @@ HOOK_BEFORE_SCENARIO() {
 }
 
 HOOK_AFTER_SCENARIO() {
+    // Determine scenario name for reporting
+    std::string scenario_name = "#" + std::to_string(gScenarioNum.load());
+    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    if (test_info) {
+        scenario_name = test_info->name();
+    }
+
+    if (::testing::Test::IsSkipped()) {
+        gSkippedScenarios.push_back(scenario_name);
+    } else if (::testing::Test::HasFailure()) {
+        gFailedScenarios.push_back(scenario_name);
+    } else {
+        gPassedScenarios.push_back(scenario_name);
+    }
+
     if (gCtx) {
         gCtx->dropGraph(gCtx->graphName);
     }
