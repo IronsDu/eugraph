@@ -141,6 +141,11 @@ bool SyncGraphMetaStore::createEdgeLabel(EdgeLabelId /*edge_label_id*/) {
     return true;
 }
 
+bool SyncGraphMetaStore::addEdgeLabelProperties(EdgeLabelId /*edge_label_id*/,
+                                                const std::vector<std::string>& /*prop_names*/) {
+    return true;
+}
+
 bool SyncGraphMetaStore::dropEdgeLabel(EdgeLabelId /*edge_label_id*/) {
     return true;
 }

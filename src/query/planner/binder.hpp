@@ -81,7 +81,8 @@ private:
                          std::optional<LabelId>& label_id, std::vector<uint16_t>& default_prop_ids,
                          bool skip_register = false);
     bool bindRelationshipPattern(const cypher::RelationshipPattern& rel, std::string& var_name, uint32_t& col_idx,
-                                 std::vector<EdgeLabelId>& edge_label_ids, std::vector<uint16_t>& default_prop_ids);
+                                 std::vector<EdgeLabelId>& edge_label_ids, std::vector<uint16_t>& default_prop_ids,
+                                 bool for_create = false);
 
     // ── Helpers ──
     uint32_t nextColumnIndex() {

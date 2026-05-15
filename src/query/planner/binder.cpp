@@ -1120,12 +1120,13 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
             if (!current)
                 break;
 
-            // Bind relationship
+            // Bind relationship (CREATE context: allow unknown edge types)
             std::string edge_var;
             uint32_t edge_col;
             std::vector<EdgeLabelId> edge_label_ids;
             std::vector<uint16_t> edge_prop_ids;
-            if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids))
+            if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids,
+                                         /*for_create=*/true))
                 return std::nullopt;
 
             // Bind target node
@@ -1155,17 +1156,25 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
             // Create edge between them
             auto create_edge = std::make_unique<BoundCreateEdgeOp>();
             create_edge->variable = edge_var;
-            create_edge->label_id = edge_label_ids.empty() ? INVALID_EDGE_LABEL_ID : edge_label_ids[0];
+            create_edge->label_id = edge_label_ids.empty() ? std::nullopt : std::make_optional(edge_label_ids[0]);
+            create_edge->label_name = (!rel_pat.rel_types.empty() && edge_label_ids.empty())
+                                          ? std::make_optional(rel_pat.rel_types[0])
+                                          : std::nullopt;
             create_edge->src_variable = start_var;
             create_edge->dst_variable = dst_var;
-            if (rel_pat.properties && create_edge->label_id != INVALID_EDGE_LABEL_ID) {
+            if (rel_pat.properties) {
                 for (const auto& [prop_name, prop_expr] : rel_pat.properties->entries) {
-                    auto* pd = catalog_.lookupEdgeLabelProperty(create_edge->label_id, prop_name);
-                    if (pd) {
-                        auto bound_val = bindExpression(prop_expr);
-                        if (bound_val)
+                    auto bound_val = bindExpression(prop_expr);
+                    if (!bound_val)
+                        continue;
+                    if (create_edge->label_id.has_value()) {
+                        auto* pd = catalog_.lookupEdgeLabelProperty(*create_edge->label_id, prop_name);
+                        if (pd) {
                             create_edge->properties.emplace_back(pd->id, std::move(*bound_val));
+                            continue;
+                        }
                     }
+                    create_edge->pending_props.emplace_back(prop_name, std::move(*bound_val));
                 }
             }
             BoundLogicalOperator dst_node_op = std::move(create_dst);
@@ -1718,7 +1727,7 @@ bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_n
 
 bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std::string& var_name, uint32_t& col_idx,
                                      std::vector<EdgeLabelId>& edge_label_ids,
-                                     std::vector<uint16_t>& /*default_prop_ids*/) {
+                                     std::vector<uint16_t>& /*default_prop_ids*/, bool for_create) {
     var_name = rel.variable.value_or("");
     if (var_name.empty())
         var_name = "__anon_edge_" + std::to_string(nextAnonId());
@@ -1727,7 +1736,7 @@ bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std
     edge_label_ids.clear();
     if (!rel.rel_types.empty()) {
         edge_label_ids = catalog_.resolveEdgeLabelIds(rel.rel_types);
-        if (edge_label_ids.empty()) {
+        if (edge_label_ids.empty() && !for_create) {
             error("Edge type '" + rel.rel_types[0] + "' does not exist");
             return false;
         }
