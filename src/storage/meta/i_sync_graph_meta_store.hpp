@@ -40,6 +40,7 @@ public:
     virtual bool createLabel(LabelId label_id) = 0;
     virtual bool dropLabel(LabelId label_id) = 0;
     virtual bool createEdgeLabel(EdgeLabelId edge_label_id) = 0;
+    virtual bool addEdgeLabelProperties(EdgeLabelId edge_label_id, const std::vector<std::string>& prop_names) = 0;
     virtual bool dropEdgeLabel(EdgeLabelId edge_label_id) = 0;
 
     // ==================== Durability ====================

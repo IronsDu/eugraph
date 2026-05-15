@@ -298,7 +298,7 @@ struct SelectionVector {
 | `BoundDistinctOp` | `bound_distinct_op.hpp` | 去重 | 嵌入 `BoundLogicalOperator child` |
 | `BoundLimitOp` | `bound_limit_op.hpp` | 限制行数 | 嵌入 `BoundLogicalOperator child` |
 | `BoundCreateNodeOp` | `bound_create_node_op.hpp` | 创建顶点 | — |
-| `BoundCreateEdgeOp` | `bound_create_edge_op.hpp` | 创建边 | — |
+| `BoundCreateEdgeOp` | `bound_create_edge_op.hpp` | 创建边。`label_id` 和 `label_name` 均为 `optional`（边类型可能不存在，binder 不修改数据库，仅标记）。`pending_props` 记录尚未解析的属性名→表达式映射，留给物理算子执行时按名解析。 | — |
 | `BoundSetOp` | `bound_set_op.hpp` | 设置属性/标签 | 嵌入 `BoundLogicalOperator child` |
 | `BoundRemoveOp` | `bound_remove_op.hpp` | 移除属性/标签 | 嵌入 `BoundLogicalOperator child` |
 | `BoundPathBuildOp` | `bound_path_build_op.hpp` | 组装路径变量 | 嵌入 `BoundLogicalOperator child` |
@@ -359,7 +359,9 @@ class PhysicalOperator {
 | `DistinctOp` | — | DICTIONARY hash set 去重 |
 | `LimitPhysicalOp` | `int64_t limit` | DICTIONARY 截断 selection |
 | `CreateNodePhysicalOp` | `IAsyncGraphDataStore&`, `VertexId` | drain child → 写入 → 单行 FLAT |
-| `CreateEdgePhysicalOp` | `IAsyncGraphDataStore&`, `EdgeId` | drain child → 写入 → 单行 FLAT |
+| `CreateEdgePhysicalOp` | `IAsyncGraphDataStore&`, `EdgeId`, `pending_props` | drain child → 解析 `pending_props`（按属性名匹配 pid）→ 写入边 → 单行 FLAT |
+| `CreateEdgeLabelPhysicalOp` | `IAsyncGraphMetaStore&`, `IAsyncGraphDataStore&`, 标签名, 属性名列表, 共享的 `name_to_id`/`defs` 映射 | 运行时创建边类型：写元数据 → 创建 WT 数据表 → 重载定义同步本地映射 → 透传子算子输出 |
+| `AlterEdgeLabelPhysicalOp` | `IAsyncGraphMetaStore&`, 标签名, 新属性名列表, 共享的 `defs` 映射 | 运行时为已有边类型添加缺失的属性列 → 重载定义 → 透传子算子输出 |
 | `SetPhysicalOp` | `IAsyncGraphDataStore&`, items | child 原样 yield |
 | `RemovePhysicalOp` | `IAsyncGraphDataStore&`, items | child 原样 yield |
 | `PathBuildPhysicalOp` | 路径变量名, 元素列名列表 | 复制 child 列 + 新建 PATH FLAT 列 |
@@ -388,11 +390,18 @@ class PhysicalOperator {
 
 **CreateNode/CreateEdge**：通过 `co_await store_.insertVertex/insertEdge` 异步写入。写入前检查唯一约束，写入后维护索引条目。
 
+**CreateEdgeLabel / AlterEdgeLabel（运行时 DDL）**：当 binder 检测到 CREATE 语句引用了不存在的边类型或属性时，不会在绑定阶段修改数据库（binder 只检测并标记），而是在物理计划中插入 `CreateEdgeLabelPhysicalOp` 或 `AlterEdgeLabelPhysicalOp`。这两个算子先完成元数据变更和 WT 数据表创建，再执行子算子的实际边写入操作。`CreateEdgePhysicalOp` 执行时通过 `pending_props` 按属性名解析 pid（因为 pid 在 DDL 算子执行后才分配）。
+
 ### PhysicalPlanner
 
 `src/query/physical_plan/physical_planner.hpp`
 
-唯一入口为 `planBound(BoundLogicalPlan&, IAsyncGraphDataStore&, PlanContext&)`。`PlanContext` 携带 label/edge_label 映射和 ID 分配器。每个算子的 `planBoundOperator()` 返回 `output_schema` + `output_types`。
+唯一入口为 `planBound(BoundLogicalPlan&, IAsyncGraphDataStore&, IAsyncGraphMetaStore&, PlanContext&)`。`PlanContext` 携带 label/edge_label 映射和 ID 分配器。每个算子的 `planBoundOperator()` 返回 `output_schema` + `output_types`。
+
+**运行时 DDL 自动插入**：处理 `BoundCreateEdgeOp` 时，planBound 根据 `label_name` 和 `pending_props` 字段决定是否插入额外的物理算子：
+- `label_name` 有值（边类型不存在）→ 插入 `CreateEdgeLabelPhysicalOp`（携带属性名列表），一次性创建边类型及其属性
+- `label_id` 有值但 `pending_props` 非空（边类型存在但缺少属性）→ 插入 `AlterEdgeLabelPhysicalOp`，为已有边类型添加属性列
+- 插入的 DDL 算子先于 `CreateEdgePhysicalOp` 执行，确保边写入时 schema 已就绪
 
 **索引扫描优化**（已接入 planBound 管线）：
 - `Filter(LabelScan)` + 可索引谓词 → `tryBoundIndexScan()` → `IndexScanPhysicalOp`

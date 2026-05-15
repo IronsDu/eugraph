@@ -2,6 +2,8 @@
 
 #include "query/physical_plan/operator/aggregate_physical_op.hpp"
 #include "query/physical_plan/operator/all_node_scan_physical_op.hpp"
+#include "query/physical_plan/operator/alter_edge_label_physical_op.hpp"
+#include "query/physical_plan/operator/create_edge_label_physical_op.hpp"
 #include "query/physical_plan/operator/create_edge_physical_op.hpp"
 #include "query/physical_plan/operator/create_node_physical_op.hpp"
 #include "query/physical_plan/operator/distinct_physical_op.hpp"

@@ -43,6 +43,7 @@ public:
     bool createLabel(LabelId label_id) override;
     bool dropLabel(LabelId label_id) override;
     bool createEdgeLabel(EdgeLabelId edge_label_id) override;
+    bool addEdgeLabelProperties(EdgeLabelId edge_label_id, const std::vector<std::string>& prop_names) override;
     bool dropEdgeLabel(EdgeLabelId edge_label_id) override;
 
     // Durability

@@ -444,6 +444,35 @@ folly::coro::Task<EdgeLabelId> AsyncGraphMetaStore::createEdgeLabel(const std::s
     co_return id;
 }
 
+folly::coro::Task<bool> AsyncGraphMetaStore::addEdgeLabelProperties(const std::string& name,
+                                                                    const std::vector<std::string>& prop_names) {
+    auto label_opt = schema_.getEdgeLabel(name);
+    if (!label_opt.has_value()) {
+        spdlog::error("EdgeLabel '{}' does not exist, cannot add properties", name);
+        co_return false;
+    }
+    auto& def = schema_.edge_labels[label_opt->id];
+    uint16_t next_prop_id = static_cast<uint16_t>(def.properties.size());
+    for (const auto& pname : prop_names) {
+        if (findPropId(def.properties, pname)) {
+            spdlog::warn("Property '{}' already exists on EdgeLabel '{}', skipped", pname, name);
+            continue;
+        }
+        PropertyDef pd;
+        pd.id = next_prop_id++;
+        pd.name = pname;
+        pd.type = PropertyType::STRING; // Auto-created properties default to STRING
+        def.properties.push_back(std::move(pd));
+    }
+
+    auto& s = store_->get();
+    auto& i = io_->get();
+    co_await i.dispatchVoid([&]() { persistEdgeLabelDef(s, def); });
+
+    spdlog::info("Added {} properties to edge_label '{}'", prop_names.size(), name);
+    co_return true;
+}
+
 folly::coro::Task<std::optional<EdgeLabelId>> AsyncGraphMetaStore::getEdgeLabelId(const std::string& name) {
     auto it = schema_.edge_label_name_to_id.find(name);
     if (it != schema_.edge_label_name_to_id.end())

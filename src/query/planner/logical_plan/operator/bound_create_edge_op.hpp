@@ -5,6 +5,7 @@
 #include "query/planner/bound_logical_plan_fwd.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,10 +15,12 @@ namespace binder {
 
 struct BoundCreateEdgeOp {
     std::string variable;
-    EdgeLabelId label_id;
+    std::optional<EdgeLabelId> label_id;
+    std::optional<std::string> label_name;
     std::string src_variable;
     std::string dst_variable;
     std::vector<std::pair<uint16_t, BoundExpression>> properties;
+    std::vector<std::pair<std::string, BoundExpression>> pending_props;
     BoundLogicalOperator child;
 };
 

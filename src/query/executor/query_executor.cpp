@@ -163,7 +163,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
 
     // 3. Physical planning from BoundLogicalPlan
     PhysicalPlanner physical_planner;
-    auto phys_result = physical_planner.planBound(bound_stmt->plan, async_data_, plan_ctx);
+    auto phys_result = physical_planner.planBound(bound_stmt->plan, async_data_, async_meta_, plan_ctx);
     if (std::holds_alternative<std::string>(phys_result)) {
         ctx->error = std::get<std::string>(phys_result);
         co_await async_data_.rollbackTran(txn);

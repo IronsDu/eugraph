@@ -29,7 +29,8 @@ class IAsyncGraphMetaStore {
     virtual folly::coro::Task<vector<LabelDef>> listLabels() = 0;
 
     // EdgeLabel 管理
-    virtual folly::coro::Task<EdgeLabelId> createEdgeLabel(name, properties, directed) = 0;
+    virtual folly::coro::Task<EdgeLabelId> createEdgeLabel(name, properties) = 0;
+    virtual folly::coro::Task<bool> addEdgeLabelProperties(name, prop_names) = 0;
     virtual folly::coro::Task<optional<EdgeLabelId>> getEdgeLabelId(name) = 0;
     virtual folly::coro::Task<optional<string>> getEdgeLabelName(id) = 0;
     virtual folly::coro::Task<optional<EdgeLabelDef>> getEdgeLabelDef(name) = 0;
@@ -108,15 +109,25 @@ M|next_ids              → {next_vertex_id:u64}{next_edge_id:u64}{next_label_id
 3. 扫描 `M|index:*` → 加载索引元数据
 4. 读取 `M|next_ids` → 恢复 ID 计数器
 
-### createLabel
+### createEdgeLabel
 
 1. 检查名称是否已存在
-2. 分配 LabelId = schema_.next_label_id++
+2. 分配 EdgeLabelId = schema_.next_edge_label_id++
 3. 为 properties 分配 prop_id（从 1 开始递增）
-4. 持久化 `M|label:{name}` 和 `M|label_id:{id}`
+4. 持久化 `M|edge_label:{name}` 和 `M|edge_label_id:{id}`
 5. `saveNextIds()` 持久化计数器
 6. 更新内存 schema
-7. 不创建物理数据表（DDL 协调由 handler 负责：先调 meta_.createLabel 持久化元数据，再调 data_.createLabel 创建物理表）
+7. 不创建物理数据表（DDL 协调由 handler 或运行时 DDL 算子负责）
+
+### addEdgeLabelProperties
+
+用于运行时 DDL：在已有边类型上添加新属性列。
+
+1. 查找 `name` → `EdgeLabelId`，不存在返回 false
+2. 过滤掉已存在的属性名（幂等），若无新增属性则直接返回 true
+3. 从当前最大 prop_id + 1 开始为新增属性分配 pid
+4. 更新 `EdgeLabelDef.properties`，持久化 `M|edge_label:{name}` 和 `M|edge_label_id:{id}`
+5. 更新内存 schema
 
 ### ID 分配
 

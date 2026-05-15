@@ -214,6 +214,7 @@ public:
     virtual bool createLabel(LabelId label_id) = 0;
     virtual bool dropLabel(LabelId label_id) = 0;
     virtual bool createEdgeLabel(EdgeLabelId edge_label_id) = 0;
+    virtual bool addEdgeLabelProperties(EdgeLabelId edge_label_id, const std::vector<std::string>& prop_names) = 0;
     virtual bool dropEdgeLabel(EdgeLabelId edge_label_id) = 0;
 
     // Durability
@@ -243,8 +244,9 @@ public:
 
     // EdgeLabel 管理
     virtual folly::coro::Task<EdgeLabelId> createEdgeLabel(const std::string& name,
-                                                           const std::vector<PropertyDef>& properties = {},
-                                                           bool directed = true) = 0;
+                                                           const std::vector<PropertyDef>& properties = {}) = 0;
+    virtual folly::coro::Task<bool> addEdgeLabelProperties(const std::string& name,
+                                                           const std::vector<std::string>& prop_names) = 0;
     virtual folly::coro::Task<std::optional<EdgeLabelId>> getEdgeLabelId(const std::string& name) = 0;
     virtual folly::coro::Task<std::optional<std::string>> getEdgeLabelName(EdgeLabelId id) = 0;
     virtual folly::coro::Task<std::optional<EdgeLabelDef>> getEdgeLabelDef(const std::string& name) = 0;
@@ -277,6 +279,6 @@ public:
 1. **独立 WT 连接**：meta store 和 data store 各自拥有独立的 WiredTiger 连接，分别存储在 `{db}/meta/` 和 `{db}/data/`。
 2. **compute 层零 sync 依赖**：`QueryExecutor` 和 `PhysicalOperator` 只依赖 `IAsyncGraphDataStore` 和 `IAsyncGraphMetaStore`。
 3. **事务通过 async 接口**：`beginTran/commitTran/rollbackTran` 是 async 方法，内部 dispatch 到 IO 线程池。
-4. **DDL 协调在 handler 层**：handler 先调 `async_meta_.createLabel()` 持久化元数据，再调 `async_data_.createLabel()` 创建物理表。
+4. **DDL 协调**：显式 DDL（CREATE LABEL/EDGE LABEL）由 handler 层协调（先调 `async_meta_.createLabel()` 持久化元数据，再调 `async_data_.createLabel()` 创建物理表）。运行时隐式 DDL（CREATE 语句中引用不存在的边类型或属性）由物理算子 `CreateEdgeLabelPhysicalOp` / `AlterEdgeLabelPhysicalOp` 在执行阶段处理。
 5. **ISyncGraphMetaStore DDL 方法为 no-op**：元数据只存在自己的 `table:metadata` 中；物理表的创建由 data store 负责。
 6. **批量操作使用独立事务**：`batchInsertVertices`/`batchInsertEdges` 内部自行 begin+commit，不参与外层 Cypher 事务。
