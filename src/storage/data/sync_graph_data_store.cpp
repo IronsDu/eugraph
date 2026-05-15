@@ -159,8 +159,14 @@ bool SyncGraphDataStore::dropLabel(LabelId label_id) {
     auto vprop = vpropTable(label_id);
 
     // Drop requires exclusive access; close default session first
-    defaultSession_ = WtSession{};
-    auto reopen = [this]() { defaultSession_ = conn_.openSession(); };
+    {
+        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
+        defaultSession_ = WtSession{};
+    }
+    auto reopen = [this]() {
+        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
+        defaultSession_ = conn_.openSession();
+    };
 
     WtSession ddl_session(conn_.get());
     if (!ddl_session) {
@@ -185,7 +191,10 @@ bool SyncGraphDataStore::dropLabel(LabelId label_id) {
     }
 
     reopen();
-    return defaultSession_.operator bool();
+    {
+        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
+        return defaultSession_.operator bool();
+    }
 }
 
 bool SyncGraphDataStore::createEdgeLabel(EdgeLabelId edge_label_id) {
@@ -209,8 +218,14 @@ bool SyncGraphDataStore::dropEdgeLabel(EdgeLabelId edge_label_id) {
     auto eprop = epropTable(edge_label_id);
 
     // Drop requires exclusive access; close default session first
-    defaultSession_ = WtSession{};
-    auto reopen = [this]() { defaultSession_ = conn_.openSession(); };
+    {
+        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
+        defaultSession_ = WtSession{};
+    }
+    auto reopen = [this]() {
+        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
+        defaultSession_ = conn_.openSession();
+    };
 
     WtSession ddl_session(conn_.get());
     if (!ddl_session) {
@@ -235,7 +250,10 @@ bool SyncGraphDataStore::dropEdgeLabel(EdgeLabelId edge_label_id) {
     }
 
     reopen();
-    return defaultSession_.operator bool();
+    {
+        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
+        return defaultSession_.operator bool();
+    }
 }
 
 // ==================== Vertex ====================

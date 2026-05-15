@@ -1,0 +1,265 @@
+// Step definitions for openCypher TCK
+#include "tck_context.hpp"
+
+#include <cucumber_cpp/library/Context.hpp>
+#include <cucumber_cpp/library/Hooks.hpp>
+#include <cucumber_cpp/library/Steps.hpp>
+
+#include <folly/Singleton.h>
+#include <gtest/gtest.h>
+#include <spdlog/spdlog.h>
+
+#include <algorithm>
+#include <atomic>
+#include <cstdlib>
+#include <map>
+#include <sstream>
+#include <string>
+
+using namespace eugraph::tck;
+
+// -----------------------------------------------------------------------
+// Global state
+// -----------------------------------------------------------------------
+
+namespace {
+
+std::unique_ptr<TckContext> gCtx;
+std::atomic<int> gScenarioNum{0};
+
+void resetCtx() {
+    gCtx = std::make_unique<TckContext>();
+    gCtx->graphName = "tck_s" + std::to_string(++gScenarioNum);
+}
+
+std::string trim(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos)
+        return "";
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return s.substr(a, b - a + 1);
+}
+
+bool skipIfUnsupported(const std::string& query) {
+    if (!TckContext::isQuerySupported(query)) {
+        return true;
+    }
+    return false;
+}
+
+// Get query from doc string (may be null)
+std::string getDocString(const std::optional<cucumber_cpp::library::util::DocString>& ds) {
+    if (ds.has_value() && !ds->content.empty()) {
+        return trim(ds->content);
+    }
+    return "";
+}
+
+} // anonymous namespace
+
+// -----------------------------------------------------------------------
+// Hooks
+// -----------------------------------------------------------------------
+
+HOOK_BEFORE_ALL() {
+    folly::SingletonVault::singleton()->registrationComplete();
+
+    const char* host = std::getenv("EUGRAPH_HOST");
+    const char* port = std::getenv("EUGRAPH_PORT");
+    if (host)
+        TckContext::serverHost = host;
+    if (port)
+        TckContext::serverPort = std::stoi(port);
+
+    spdlog::info("[TCK] Server config from env: {}:{}", TckContext::serverHost, TckContext::serverPort);
+}
+
+HOOK_AFTER_ALL() {
+    TckContext::rpc.reset();
+}
+
+HOOK_BEFORE_SCENARIO() {
+    resetCtx();
+    spdlog::info("[TCK] === Scenario {} (graph: {}) ===", gScenarioNum.load(), gCtx->graphName);
+}
+
+HOOK_AFTER_SCENARIO() {
+    if (gCtx) {
+        gCtx->dropGraph(gCtx->graphName);
+    }
+}
+
+// -----------------------------------------------------------------------
+// Given: initial graph state
+// -----------------------------------------------------------------------
+
+GIVEN("^an empty graph$") {
+    gCtx->createGraph(gCtx->graphName);
+}
+
+GIVEN("^any graph$") {
+    gCtx->createGraph(gCtx->graphName);
+}
+
+// -----------------------------------------------------------------------
+// Setup query: "And having executed:"
+// -----------------------------------------------------------------------
+
+STEP("^having executed:$") {
+    std::string q = getDocString(docString);
+    if (skipIfUnsupported(q)) {
+        GTEST_SKIP() << "Unsupported Cypher syntax";
+    }
+    spdlog::info("[TCK] [{}] setup query: {}", gCtx->graphName, q);
+    gCtx->ensureTypesForQuery(q);
+    gCtx->executeQuery(q);
+}
+
+// -----------------------------------------------------------------------
+// Test query: "When executing query:"
+// -----------------------------------------------------------------------
+
+WHEN("^executing query:$") {
+    std::string q = getDocString(docString);
+    if (skipIfUnsupported(q)) {
+        GTEST_SKIP() << "Unsupported Cypher syntax";
+    }
+    spdlog::info("[TCK] [{}] test query: {}", gCtx->graphName, q);
+    gCtx->ensureTypesForQuery(q);
+
+    // Snapshot before for side effects
+    gCtx->snapshotBefore = gCtx->takeSnapshot();
+
+    gCtx->executeQuery(q);
+
+    auto after = gCtx->takeSnapshot();
+    gCtx->lastSideEffects = gCtx->computeSideEffects(gCtx->snapshotBefore, after);
+}
+
+// -----------------------------------------------------------------------
+// Then: empty result
+// -----------------------------------------------------------------------
+
+THEN("^the result should be empty$") {
+    ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected empty result but got error: " << gCtx->lastErrorType;
+    EXPECT_TRUE(gCtx->lastRows.empty()) << "Expected 0 rows, got " << gCtx->lastRows.size();
+}
+
+// -----------------------------------------------------------------------
+// Then: result in any order (with data table)
+// -----------------------------------------------------------------------
+
+THEN("^the result should be, in any order:$") {
+    ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected result but got error: " << gCtx->lastErrorType;
+
+    if (dataTable->rows.empty()) {
+        EXPECT_TRUE(gCtx->lastRows.empty()) << "Expected empty, got " << gCtx->lastRows.size();
+        return;
+    }
+
+    // First row = column headers, rest = data rows
+    std::vector<std::string> expCols;
+    for (const auto& c : dataTable->rows[0].cells) {
+        expCols.push_back(c.value);
+    }
+    EXPECT_EQ(gCtx->lastColumns, expCols);
+
+    std::vector<std::vector<std::string>> expRows;
+    for (size_t i = 1; i < dataTable->rows.size(); ++i) {
+        std::vector<std::string> row;
+        for (const auto& c : dataTable->rows[i].cells) {
+            row.push_back(c.value);
+        }
+        if (!row.empty()) {
+            expRows.push_back(row);
+        }
+    }
+
+    ASSERT_EQ(gCtx->lastRows.size(), expRows.size());
+
+    auto sortFunc = [](std::vector<std::vector<std::string>> r) {
+        std::sort(r.begin(), r.end());
+        return r;
+    };
+
+    EXPECT_EQ(sortFunc(gCtx->lastRows), sortFunc(expRows));
+}
+
+// -----------------------------------------------------------------------
+// Then: result in order (with data table)
+// -----------------------------------------------------------------------
+
+THEN("^the result should be, in order:$") {
+    ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected result but got error: " << gCtx->lastErrorType;
+
+    if (dataTable->rows.empty()) {
+        EXPECT_TRUE(gCtx->lastRows.empty());
+        return;
+    }
+
+    std::vector<std::string> expCols;
+    for (const auto& c : dataTable->rows[0].cells) {
+        expCols.push_back(c.value);
+    }
+    EXPECT_EQ(gCtx->lastColumns, expCols);
+
+    std::vector<std::vector<std::string>> expRows;
+    for (size_t i = 1; i < dataTable->rows.size(); ++i) {
+        std::vector<std::string> row;
+        for (const auto& c : dataTable->rows[i].cells) {
+            row.push_back(c.value);
+        }
+        if (!row.empty()) {
+            expRows.push_back(row);
+        }
+    }
+
+    ASSERT_EQ(gCtx->lastRows.size(), expRows.size());
+    EXPECT_EQ(gCtx->lastRows, expRows);
+}
+
+// -----------------------------------------------------------------------
+// Then: error assertions  (TYPE at PHASE: DETAIL)
+// -----------------------------------------------------------------------
+
+// Pattern: "a SyntaxError should be raised at compile time: UndefinedVariable"
+THEN(
+    R"(^a (SyntaxError|SemanticError|TypeError|ArgumentError|ArithmeticError|EntityNotFound|PropertyNotFound|LabelNotFound|ConstraintVerificationFailed|ConstraintValidationFailed|ParameterMissing) should be raised at (compile time|runtime): (.+)$)",
+    (const std::string& expType, const std::string& expPhase, const std::string& expDetail)) {
+    ASSERT_TRUE(gCtx->lastQueryHadError) << "Expected error " << expType << " but query succeeded";
+    EXPECT_EQ(gCtx->lastErrorType, expType);
+    EXPECT_EQ(gCtx->lastErrorPhase, expPhase);
+    EXPECT_EQ(gCtx->lastErrorDetail, expDetail);
+}
+
+// -----------------------------------------------------------------------
+// And: side effects (with data table)
+// -----------------------------------------------------------------------
+
+STEP("^the side effects should be:$") {
+    // Each row is | metric | value | (including first row)
+    std::map<std::string, int64_t> expected;
+    for (const auto& row : dataTable->rows) {
+        if (row.cells.size() >= 2) {
+            expected[row.cells[0].value] = std::stoll(row.cells[1].value);
+        }
+    }
+
+    SideEffects& se = gCtx->lastSideEffects;
+
+    EXPECT_EQ(se.nodes, expected.count("+nodes") ? expected["+nodes"] : 0);
+    EXPECT_EQ(se.relationships, expected.count("+relationships") ? expected["+relationships"] : 0);
+    EXPECT_EQ(se.labels, expected.count("+labels") ? expected["+labels"] : 0);
+    EXPECT_EQ(se.properties, expected.count("+properties") ? expected["+properties"] : 0);
+}
+
+// -----------------------------------------------------------------------
+// And: no side effects
+// -----------------------------------------------------------------------
+
+STEP("^no side effects$") {
+    SideEffects& se = gCtx->lastSideEffects;
+    EXPECT_TRUE(se.isZero()) << "Expected no side effects but got: "
+                             << "nodes=" << se.nodes << " rels=" << se.relationships << " labels=" << se.labels
+                             << " props=" << se.properties;
+}

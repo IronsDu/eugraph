@@ -588,4 +588,9 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(catalog_tests wiredtiger_ext)
     gtest_add_tests(TARGET catalog_tests)
+
+    # TCK tests (Cucumber BDD for openCypher TCK) — requires eugraph-server built
+    if(NOT DEFINED SKIP_TCK_TESTS)
+        add_subdirectory(tests/tck)
+    endif()
 endif()

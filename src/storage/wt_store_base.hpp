@@ -64,6 +64,7 @@ protected:
 
     WtConnection conn_;
     WtSession defaultSession_;
+    mutable std::recursive_mutex sessionMutex_; // protects defaultSession_ from concurrent use
 
     std::mutex txnMutex_;
     std::unordered_map<GraphTxnHandle, std::unique_ptr<TxnState>> txns_;

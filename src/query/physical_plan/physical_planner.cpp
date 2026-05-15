@@ -271,13 +271,17 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
 
 namespace {
 std::unique_ptr<PhysicalOperator> finalizePlanResult(PlanOperatorResult&& result) {
+    if (!result.op)
+        return nullptr;
     result.op->setOutputSchema(std::move(result.output_schema), std::move(result.output_types));
     return std::move(result.op);
 }
 
 PlanOperatorResult extractChildResult(std::variant<PlanOperatorResult, std::string>&& child_result) {
     auto cr = std::move(std::get<PlanOperatorResult>(child_result));
-    cr.op->setOutputSchema(Schema(cr.output_schema), std::vector<binder::BoundType>(cr.output_types));
+    if (cr.op) {
+        cr.op->setOutputSchema(Schema(cr.output_schema), std::vector<binder::BoundType>(cr.output_types));
+    }
     return cr;
 }
 } // namespace
@@ -323,6 +327,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
             } else {
                 using Elem = typename T::element_type;
+                if (!val)
+                    return std::string("internal error: null operator in plan");
                 auto& v = *val;
 
                 if constexpr (std::is_same_v<Elem, binder::BoundExpandOp>) {
