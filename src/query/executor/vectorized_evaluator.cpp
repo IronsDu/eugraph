@@ -262,7 +262,7 @@ void VectorizedEvaluator::evalFunctionCall(const binder::BoundFunctionCall& fc, 
         for (const auto& ar : arg_results) {
             arg_cols.push_back(ar.column);
         }
-        fc.func_def->batch_scalar_fn(arg_cols, result, count);
+        fc.func_def->batch_scalar_fn(arg_cols, result, count, eval_ctx_);
         return;
     }
 
@@ -280,7 +280,7 @@ void VectorizedEvaluator::evalFunctionCall(const binder::BoundFunctionCall& fc, 
                 args.emplace_back();
             }
         }
-        result.setValue(i, fc.func_def->scalar_fn(args));
+        result.setValue(i, fc.func_def->scalar_fn(args, eval_ctx_));
     }
 }
 

@@ -10,6 +10,9 @@
 #include <vector>
 
 namespace eugraph {
+namespace catalog {
+class Catalog;
+}
 struct Column;
 namespace function {
 
@@ -18,11 +21,19 @@ struct AggStateBase {
     virtual ~AggStateBase() = default;
 };
 
-/// Scalar function execution callback: takes argument values, returns result.
-using ScalarFn = std::function<Value(const std::vector<Value>&)>;
+/// Execution context passed to function callbacks at evaluation time.
+/// Provides access to catalog metadata (e.g. for type() to resolve edge label names).
+/// Extend with additional fields as needed by future functions.
+struct EvalContext {
+    const catalog::Catalog* catalog = nullptr;
+};
+
+/// Scalar function execution callback: takes argument values and context, returns result.
+using ScalarFn = std::function<Value(const std::vector<Value>&, const EvalContext&)>;
 
 /// Batch scalar function: processes all rows at once.
-using BatchScalarFn = std::function<void(const std::vector<const Column*>& args, Column& result, size_t count)>;
+using BatchScalarFn =
+    std::function<void(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&)>;
 
 /// Aggregate state factory.
 using AggInitFn = std::function<std::unique_ptr<AggStateBase>()>;

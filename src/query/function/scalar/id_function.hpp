@@ -21,14 +21,15 @@ inline Value idImpl(const Value& arg) {
 }
 
 /// Unified scalar callback for FunctionRegistry.
-inline Value idScalarFn(const std::vector<Value>& args) {
+inline Value idScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
     if (args.empty())
         return Value{};
     return idImpl(args[0]);
 }
 
 /// Batch scalar callback: extracts id for all rows at once.
-inline void idBatchFn(const std::vector<const Column*>& args, Column& result, size_t count) {
+inline void idBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                      const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];

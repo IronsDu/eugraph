@@ -1137,23 +1137,7 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
             if (!bindNodePattern(node_pat, dst_var, dst_col, dst_label, dst_prop_ids))
                 return std::nullopt;
 
-            // Create target node
-            auto create_dst = std::make_unique<BoundCreateNodeOp>();
-            create_dst->variable = dst_var;
-            create_dst->label_id = dst_label.value_or(INVALID_LABEL_ID);
-            if (node_pat.properties && dst_label) {
-                for (const auto& [prop_name, prop_expr] : node_pat.properties->entries) {
-                    auto* pd = catalog_.lookupProperty(*dst_label, prop_name);
-                    if (pd) {
-                        auto bound_val = bindExpression(prop_expr);
-                        if (bound_val)
-                            create_dst->properties.emplace_back(pd->id, std::move(*bound_val));
-                    }
-                }
-            }
-            create_dst->child = std::move(*current);
-
-            // Create edge between them
+            // Create edge
             auto create_edge = std::make_unique<BoundCreateEdgeOp>();
             create_edge->variable = edge_var;
             create_edge->label_id = edge_label_ids.empty() ? std::nullopt : std::make_optional(edge_label_ids[0]);
@@ -1177,8 +1161,29 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
                     create_edge->pending_props.emplace_back(prop_name, std::move(*bound_val));
                 }
             }
-            BoundLogicalOperator dst_node_op = std::move(create_dst);
-            create_edge->child = std::move(dst_node_op);
+
+            if (dst_var == start_var) {
+                // Self-loop: reuse the existing start node, don't create a duplicate.
+                create_edge->child = std::move(*current);
+            } else {
+                // Create target node
+                auto create_dst = std::make_unique<BoundCreateNodeOp>();
+                create_dst->variable = dst_var;
+                create_dst->label_id = dst_label.value_or(INVALID_LABEL_ID);
+                if (node_pat.properties && dst_label) {
+                    for (const auto& [prop_name, prop_expr] : node_pat.properties->entries) {
+                        auto* pd = catalog_.lookupProperty(*dst_label, prop_name);
+                        if (pd) {
+                            auto bound_val = bindExpression(prop_expr);
+                            if (bound_val)
+                                create_dst->properties.emplace_back(pd->id, std::move(*bound_val));
+                        }
+                    }
+                }
+                create_dst->child = std::move(*current);
+                BoundLogicalOperator dst_node_op = std::move(create_dst);
+                create_edge->child = std::move(dst_node_op);
+            }
             current = std::move(create_edge);
 
             start_var = dst_var;
@@ -1408,7 +1413,12 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                         sig += arg_types[i].toString();
                     }
                     sig += ")";
-                    error("Function not found: " + sig);
+                    if (func_registry_.exists(ptr->name)) {
+                        // Function exists but no overload matches these argument types
+                        error("Invalid argument type for function '" + ptr->name + "': got " + sig);
+                    } else {
+                        error("Function not found: " + sig);
+                    }
                     return std::nullopt;
                 }
 

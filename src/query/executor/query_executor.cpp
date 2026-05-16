@@ -152,10 +152,12 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
         .edge_label_defs = ctx->edge_label_defs,
         .variable_vertex_ids = {},
         .variable_edge_ids = {},
+        .eval_ctx = {},
     };
 
     plan_ctx.next_vertex_id = co_await async_meta_.nextVertexId();
     plan_ctx.next_edge_id = co_await async_meta_.nextEdgeId();
+    plan_ctx.eval_ctx.catalog = ctx->catalog.get();
 
     // 2.5. Logical optimization
     optimizer::LogicalOptimizer logical_optimizer;

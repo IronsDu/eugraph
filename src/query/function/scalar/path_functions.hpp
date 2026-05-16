@@ -43,19 +43,19 @@ inline Value lengthImpl(const Value& arg) {
 }
 
 /// Unified scalar callbacks for FunctionRegistry.
-inline Value nodesScalarFn(const std::vector<Value>& args) {
+inline Value nodesScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
     if (args.empty())
         return Value{};
     return nodesImpl(args[0]);
 }
 
-inline Value relationshipsScalarFn(const std::vector<Value>& args) {
+inline Value relationshipsScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
     if (args.empty())
         return Value{};
     return relationshipsImpl(args[0]);
 }
 
-inline Value lengthScalarFn(const std::vector<Value>& args) {
+inline Value lengthScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
     if (args.empty())
         return Value{};
     return lengthImpl(args[0]);
@@ -63,7 +63,8 @@ inline Value lengthScalarFn(const std::vector<Value>& args) {
 
 /// Batch scalar callbacks.
 
-inline void nodesBatchFn(const std::vector<const Column*>& args, Column& result, size_t count) {
+inline void nodesBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                         const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
@@ -72,7 +73,8 @@ inline void nodesBatchFn(const std::vector<const Column*>& args, Column& result,
     }
 }
 
-inline void relationshipsBatchFn(const std::vector<const Column*>& args, Column& result, size_t count) {
+inline void relationshipsBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                                 const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
@@ -81,7 +83,8 @@ inline void relationshipsBatchFn(const std::vector<const Column*>& args, Column&
     }
 }
 
-inline void lengthBatchFn(const std::vector<const Column*>& args, Column& result, size_t count) {
+inline void lengthBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                          const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
