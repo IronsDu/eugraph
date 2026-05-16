@@ -2364,13 +2364,32 @@ TEST_F(QueryExecutorWithTest, WithThenMatchMultiHop) {
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Carol");
 }
 
-TEST_F(QueryExecutorWithTest, WithThenIndependentMatchError) {
+TEST_F(QueryExecutorWithTest, WithThenIndependentMatch) {
     insertPersonData();
 
-    // MATCH after WITH with a variable not in WITH output should produce an error
+    // MATCH after WITH with a variable not in WITH output → cross product
     auto result = execSync(*executor_, "MATCH (a:Person) WITH a MATCH (b:Person) RETURN a.name, b.name");
-    EXPECT_FALSE(result.error.empty());
-    EXPECT_NE(result.error.find("not yet supported"), std::string::npos) << "Actual error: " << result.error;
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // 3 persons × 3 persons = 9 rows
+    EXPECT_EQ(result.rows.size(), 9u);
+}
+
+TEST_F(QueryExecutorWithTest, WithThenIndependentMatchWhere) {
+    insertPersonData();
+
+    // MATCH after WITH + WHERE referencing both sides (cross-side filter)
+    auto result = execSync(*executor_, "MATCH (a:Person) WITH a MATCH (b:Person) WHERE a.name = 'Alice' AND b.age > 28 RETURN a.name, b.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // Alice × (people with age > 28: Charlie) = 1 row
+    EXPECT_GE(result.rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorWithTest, WithThenCorrelatedMatchStillWorks) {
+    insertPersonWithEdges();
+
+    // Correlated MATCH after WITH: expanding from a variable passed through WITH
+    auto result = execSync(*executor_, "MATCH (a:Person {name: 'Alice'})-[:KNOWS]->(b) WITH b MATCH (b)-[:KNOWS]->(c) RETURN c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
 }
 
 TEST_F(QueryExecutorTest, VarLenExpandExact2Hops) {

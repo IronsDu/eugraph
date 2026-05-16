@@ -1,4 +1,5 @@
 #include "query/physical_plan/physical_planner.hpp"
+#include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/varlen_expand_physical_op.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
@@ -741,6 +742,30 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                                            ctx.label_name_to_id, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundBinaryJoinOp>) {
+                    auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(left_result))
+                        return std::get<std::string>(left_result);
+                    auto lr = extractChildResult(std::move(left_result));
+
+                    Schema right_input_schema;
+                    std::vector<binder::BoundType> right_input_types;
+                    auto right_result =
+                        planBoundOperator(v.right, store, meta, ctx, right_input_schema, right_input_types);
+                    if (std::holds_alternative<std::string>(right_result))
+                        return std::get<std::string>(right_result);
+                    auto rr = extractChildResult(std::move(right_result));
+
+                    Schema output_schema = lr.output_schema;
+                    output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
+                    auto output_types = lr.output_types;
+                    output_types.insert(output_types.end(), rr.output_types.begin(), rr.output_types.end());
+
+                    auto result = std::make_unique<CrossProductPhysicalOp>(
+                        std::move(lr.op), std::move(rr.op), std::move(lr.output_schema),
+                        std::move(rr.output_schema), std::move(output_types));
+                    result->setEvalContext(ctx.eval_ctx);
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else {
                     return std::string("Unknown bound logical operator type");
                 }

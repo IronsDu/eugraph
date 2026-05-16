@@ -1,5 +1,6 @@
 #include "query/planner/column_resolver.hpp"
 
+#include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 namespace eugraph {
@@ -78,6 +79,9 @@ bool ColumnResolver::resolveOperator(BoundLogicalOperator& op, const BindContext
                 return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundPathBuildOp>>) {
                 return resolveOperator(val->child, ctx, errors);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryJoinOp>>) {
+                return resolveOperator(val->left, ctx, errors) &&
+                       resolveOperator(val->right, ctx, errors);
             } else {
                 // BoundScanOp, BoundLabelScanOp — no expressions or children
                 return true;

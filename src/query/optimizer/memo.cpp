@@ -1,6 +1,7 @@
 #include "query/optimizer/memo.hpp"
 
 #include "query/planner/bound_logical_plan.hpp"
+#include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 namespace eugraph {
@@ -15,6 +16,8 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
                 // Leaf operators — no child field
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+                // Binary operators have left/right, not a single child — skip
             } else {
                 // All non-leaf operators are wrapped in unique_ptr
                 // BoundCreateNodeOp has optional<BoundLogicalOperator> child,
@@ -35,6 +38,8 @@ int getChildCount(const binder::BoundLogicalOperator& op) {
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
                 return 0;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+                return 2;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 return (val && val->child.has_value()) ? 1 : 0;
             } else {
@@ -61,12 +66,16 @@ ExprId Memo::newExprId() {
 GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
     // Recursively insert children first (bottom-up)
     std::vector<GroupId> child_groups;
-    if (getChildCount(op) == 1) {
+    int n_children = getChildCount(op);
+    if (n_children == 1) {
         binder::BoundLogicalOperator child = std::visit(
             [](auto& val) -> binder::BoundLogicalOperator {
                 using T = std::decay_t<decltype(val)>;
                 if constexpr (std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
                     // Should not reach here
+                    return binder::BoundScanOp{};
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+                    // Handled by n_children==2 branch, should not reach here
                     return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                     // BoundCreateNodeOp has optional<BoundLogicalOperator> child
@@ -86,6 +95,14 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
             },
             op);
         child_groups.push_back(copyIn(child));
+    } else if (n_children == 2) {
+        auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(op);
+        auto left = std::move(join->left);
+        join->left = binder::BoundScanOp{};
+        child_groups.push_back(copyIn(left));
+        auto right = std::move(join->right);
+        join->right = binder::BoundScanOp{};
+        child_groups.push_back(copyIn(right));
     }
 
     // Create a new group for this operator
@@ -107,9 +124,13 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
     binder::BoundLogicalOperator result = std::move(expr.op);
 
     // Recursively rebuild children
-    if (!expr.child_groups.empty()) {
+    if (expr.child_groups.size() == 1) {
         auto child = copyOut(expr.child_groups[0]);
         setChild(result, std::move(child));
+    } else if (expr.child_groups.size() == 2) {
+        auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
+        join->left = copyOut(expr.child_groups[0]);
+        join->right = copyOut(expr.child_groups[1]);
     }
 
     return result;

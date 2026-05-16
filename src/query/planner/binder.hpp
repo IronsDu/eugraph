@@ -60,7 +60,8 @@ private:
 
     // ── Clause binding ──
     std::optional<BoundLogicalOperator> bindMatch(const cypher::MatchClause& match,
-                                                  std::optional<BoundLogicalOperator> parent = std::nullopt);
+                                                  std::optional<BoundLogicalOperator> parent = std::nullopt,
+                                                  bool skip_where = false);
     std::optional<BoundLogicalOperator> bindReturn(const cypher::ReturnClause& ret, BoundLogicalOperator child);
     std::optional<BoundLogicalOperator>
     bindWhere(const cypher::Expression& pred, BoundLogicalOperator child,

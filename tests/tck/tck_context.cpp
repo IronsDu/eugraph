@@ -299,12 +299,6 @@ bool hasUnsupportedFeature(const ast::Statement& stmt) {
                     return true;
                 }
 
-                // Multiple MATCH clauses?
-                if (countMatchClauses(rq.first.clauses) > 1) {
-                    spdlog::info("[TCK] skipping: multiple MATCH clauses");
-                    return true;
-                }
-
                 // Walk clauses
                 for (const auto& c : rq.first.clauses) {
                     if (hasUnsupportedClause(c))
