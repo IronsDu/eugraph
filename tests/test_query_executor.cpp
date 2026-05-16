@@ -742,6 +742,35 @@ TEST_F(QueryExecutorTest, CreateNodesAndEdgesThenExpand) {
     EXPECT_EQ(filtered.size(), 2);
 }
 
+TEST_F(QueryExecutorTest, CommaCreateTwoNodes) {
+    auto result = execSync(*executor_, "CREATE (:Person), (:Person)");
+    EXPECT_TRUE(result.error.empty()) << result.error;
+
+    // Verify two new Person nodes exist via label scan
+    auto rows = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
+    EXPECT_EQ(rows.size(), 2);
+}
+
+TEST_F(QueryExecutorTest, CommaCreateNodeAndEdge) {
+    auto result = execSync(*executor_, "CREATE (a:Person), (b:Person), (a)-[:KNOWS]->(b)");
+    EXPECT_TRUE(result.error.empty()) << result.error;
+
+    auto persons = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
+    EXPECT_EQ(persons.size(), 2);
+    auto edges = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b").rows;
+    EXPECT_EQ(edges.size(), 1);
+}
+
+TEST_F(QueryExecutorTest, CommaCreateChainThenIndependent) {
+    auto result = execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person), (c:Person)");
+    EXPECT_TRUE(result.error.empty()) << result.error;
+
+    auto persons = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
+    EXPECT_EQ(persons.size(), 3);
+    auto edges = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b").rows;
+    EXPECT_EQ(edges.size(), 1);
+}
+
 TEST_F(QueryExecutorTest, EmptyGraphAllOperations) {
     EXPECT_EQ(execSync(*executor_, "MATCH (n:Person) RETURN n").rows.size(), 0);
     EXPECT_EQ(execSync(*executor_, "MATCH (n) RETURN n").rows.size(), 0);

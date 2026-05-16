@@ -192,10 +192,6 @@ bool hasUnsupportedClause(const ast::Clause& clause) {
                     return true;
                 return false;
             } else if constexpr (std::is_same_v<Inner, ast::CreateClause>) {
-                if (ptr->patterns.size() > 1) {
-                    spdlog::info("[TCK] skipping: comma-separated CREATE paths");
-                    return true;
-                }
                 for (const auto& pp : ptr->patterns) {
                     if (hasUnsupportedPattern(pp))
                         return true;

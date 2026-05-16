@@ -1113,7 +1113,8 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
                                                        std::optional<BoundLogicalOperator> child) {
     std::optional<BoundLogicalOperator> current;
 
-    for (const auto& pp : create.patterns) {
+    for (size_t pi = 0; pi < create.patterns.size(); ++pi) {
+        const auto& pp = create.patterns[pi];
         const auto& element = pp.element;
 
         // Create start node
@@ -1145,8 +1146,12 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
             }
         }
 
-        if (child) {
+        // Chain: first pattern connects to preceding clause (MATCH/WITH),
+        // subsequent patterns connect to the previous pattern's output.
+        if (pi == 0 && child) {
             create_node->child = std::move(*child);
+        } else if (pi > 0 && current) {
+            create_node->child = std::move(*current);
         }
         BoundLogicalOperator node_op = std::move(create_node);
 
