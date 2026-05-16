@@ -64,7 +64,7 @@ inline Value lengthScalarFn(const std::vector<Value>& args, const EvalContext& /
 /// Batch scalar callbacks.
 
 inline void nodesBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                          const EvalContext& /*ctx*/) {
+                         const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
@@ -74,7 +74,7 @@ inline void nodesBatchFn(const std::vector<const Column*>& args, Column& result,
 }
 
 inline void relationshipsBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                                  const EvalContext& /*ctx*/) {
+                                 const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
@@ -84,7 +84,7 @@ inline void relationshipsBatchFn(const std::vector<const Column*>& args, Column&
 }
 
 inline void lengthBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                           const EvalContext& /*ctx*/) {
+                          const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];

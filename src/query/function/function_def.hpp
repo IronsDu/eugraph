@@ -32,8 +32,8 @@ struct EvalContext {
 using ScalarFn = std::function<Value(const std::vector<Value>&, const EvalContext&)>;
 
 /// Batch scalar function: processes all rows at once.
-using BatchScalarFn = std::function<void(const std::vector<const Column*>& args, Column& result, size_t count,
-                                          const EvalContext&)>;
+using BatchScalarFn =
+    std::function<void(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&)>;
 
 /// Aggregate state factory.
 using AggInitFn = std::function<std::unique_ptr<AggStateBase>()>;

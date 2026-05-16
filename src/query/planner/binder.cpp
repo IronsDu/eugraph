@@ -1415,8 +1415,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     sig += ")";
                     if (func_registry_.exists(ptr->name)) {
                         // Function exists but no overload matches these argument types
-                        error("Invalid argument type for function '" + ptr->name +
-                              "': got " + sig);
+                        error("Invalid argument type for function '" + ptr->name + "': got " + sig);
                     } else {
                         error("Function not found: " + sig);
                     }

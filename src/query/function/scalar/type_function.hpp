@@ -28,8 +28,7 @@ inline Value typeScalarFn(const std::vector<Value>& args, const EvalContext& ctx
     return typeImpl(args[0], ctx);
 }
 
-inline void typeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                        const EvalContext& ctx) {
+inline void typeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext& ctx) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
