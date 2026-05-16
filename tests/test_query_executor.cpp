@@ -2395,6 +2395,29 @@ TEST_F(QueryExecutorWithTest, WithThenCorrelatedMatchStillWorks) {
     ASSERT_TRUE(result.error.empty()) << result.error;
 }
 
+TEST_F(QueryExecutorWithTest, WithAsFirstClauseLiteral) {
+    // WITH as first clause: literal projection
+    auto result = execSync(*executor_, "WITH 1 AS x RETURN x");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorWithTest, WithAsFirstClauseExpression) {
+    // WITH as first clause: expression
+    auto result = execSync(*executor_, "WITH 2 + 3 AS sum RETURN sum");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorWithTest, WithAsFirstClauseThenMatch) {
+    insertPersonData();
+
+    // WITH as first clause + MATCH: cross product of singleton × persons
+    auto result = execSync(*executor_, "WITH 1 AS n MATCH (p:Person) RETURN n, p.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3u);
+}
+
 TEST_F(QueryExecutorTest, VarLenExpandExact2Hops) {
     // KNOWS chain: 1->2->3->4, LIVES_IN: 1->5, 2->6
     insertMultiHopEdges();

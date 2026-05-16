@@ -14,7 +14,8 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
     std::visit(
         [&child](auto& val) {
             using T = std::decay_t<decltype(val)>;
-            if constexpr (std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
+            if constexpr (std::is_same_v<T, binder::BoundSingletonOp> || std::is_same_v<T, binder::BoundScanOp> ||
+                          std::is_same_v<T, binder::BoundLabelScanOp>) {
                 // Leaf operators — no child field
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
                 // Binary operators have left/right, not a single child — skip
@@ -36,7 +37,8 @@ int getChildCount(const binder::BoundLogicalOperator& op) {
     return std::visit(
         [](const auto& val) -> int {
             using T = std::decay_t<decltype(val)>;
-            if constexpr (std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
+            if constexpr (std::is_same_v<T, binder::BoundSingletonOp> || std::is_same_v<T, binder::BoundScanOp> ||
+                          std::is_same_v<T, binder::BoundLabelScanOp>) {
                 return 0;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
                 return 2;
@@ -71,7 +73,8 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
         binder::BoundLogicalOperator child = std::visit(
             [](auto& val) -> binder::BoundLogicalOperator {
                 using T = std::decay_t<decltype(val)>;
-                if constexpr (std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
+                if constexpr (std::is_same_v<T, binder::BoundSingletonOp> || std::is_same_v<T, binder::BoundScanOp> ||
+                              std::is_same_v<T, binder::BoundLabelScanOp>) {
                     // Should not reach here
                     return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {

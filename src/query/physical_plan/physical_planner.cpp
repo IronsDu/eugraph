@@ -1,5 +1,6 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
+#include "query/physical_plan/operator/singleton_physical_op.hpp"
 #include "query/physical_plan/operator/varlen_expand_physical_op.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
@@ -307,7 +308,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
          &input_types](auto& val) -> std::variant<PlanOperatorResult, std::string> {
             using T = std::decay_t<decltype(val)>;
 
-            if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
+            if constexpr (std::is_same_v<T, binder::BoundSingletonOp>) {
+                Schema output_schema;
+                std::vector<binder::BoundType> output_types;
+                auto result = std::make_unique<SingletonPhysicalOp>(std::vector<binder::BoundType>(output_types));
+                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+            } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
                 Schema output_schema;
                 std::vector<binder::BoundType> output_types;
                 if (!val.variable.empty()) {
