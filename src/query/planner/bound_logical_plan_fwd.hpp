@@ -2,6 +2,7 @@
 
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
+#include "query/planner/logical_plan/operator/bound_singleton_op.hpp"
 
 #include <memory>
 #include <variant>
@@ -26,12 +27,13 @@ struct BoundVarLenExpandOp;
 struct BoundBinaryJoinOp;
 
 using BoundLogicalOperator =
-    std::variant<BoundScanOp, BoundLabelScanOp, std::unique_ptr<BoundExpandOp>, std::unique_ptr<BoundFilterOp>,
-                 std::unique_ptr<BoundProjectOp>, std::unique_ptr<BoundAggregateOp>, std::unique_ptr<BoundSortOp>,
-                 std::unique_ptr<BoundSkipOp>, std::unique_ptr<BoundLimitOp>, std::unique_ptr<BoundDistinctOp>,
-                 std::unique_ptr<BoundCreateNodeOp>, std::unique_ptr<BoundCreateEdgeOp>, std::unique_ptr<BoundSetOp>,
-                 std::unique_ptr<BoundRemoveOp>, std::unique_ptr<BoundPathBuildOp>,
-                 std::unique_ptr<BoundVarLenExpandOp>, std::unique_ptr<BoundBinaryJoinOp>>;
+    std::variant<BoundSingletonOp, BoundScanOp, BoundLabelScanOp, std::unique_ptr<BoundExpandOp>,
+                 std::unique_ptr<BoundFilterOp>, std::unique_ptr<BoundProjectOp>, std::unique_ptr<BoundAggregateOp>,
+                 std::unique_ptr<BoundSortOp>, std::unique_ptr<BoundSkipOp>, std::unique_ptr<BoundLimitOp>,
+                 std::unique_ptr<BoundDistinctOp>, std::unique_ptr<BoundCreateNodeOp>,
+                 std::unique_ptr<BoundCreateEdgeOp>, std::unique_ptr<BoundSetOp>, std::unique_ptr<BoundRemoveOp>,
+                 std::unique_ptr<BoundPathBuildOp>, std::unique_ptr<BoundVarLenExpandOp>,
+                 std::unique_ptr<BoundBinaryJoinOp>>;
 
 struct BoundLogicalPlan;
 

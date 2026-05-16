@@ -206,8 +206,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                     return bindReturn(*ptr, std::move(*current));
                 } else if constexpr (std::is_same_v<Elem, cypher::WithClause>) {
                     if (!current) {
-                        error("WITH without preceding clause");
-                        return std::nullopt;
+                        // WITH as first clause: create a singleton source
+                        current = BoundSingletonOp{};
                     }
                     return bindWith(*ptr, std::move(*current));
                 } else if constexpr (std::is_same_v<Elem, cypher::CreateClause>) {
@@ -1883,7 +1883,9 @@ void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
     std::visit(
         [this](auto& val) {
             using T = std::decay_t<decltype(val)>;
-            if constexpr (std::is_same_v<T, BoundLabelScanOp>) {
+            if constexpr (std::is_same_v<T, BoundSingletonOp>) {
+                // No children, no properties to collect
+            } else if constexpr (std::is_same_v<T, BoundLabelScanOp>) {
                 collectLabelPropIds(val.variable, val.label_prop_ids);
             } else if constexpr (std::is_same_v<T, BoundScanOp>) {
                 collectLabelPropIds(val.variable, val.label_prop_ids);
