@@ -513,6 +513,7 @@ using Schema = vector<string>;   // 列名列表
 - DELETE, MERGE 执行
 - Inner/Left Join（`BoundBinaryJoinOp` 已预留 `JoinType::Inner/Left`）
 - UNWIND + 列表操作
+- 逗号分隔 CREATE 路径（已支持）
 - DDL 异步执行（DdlWorker 后台线程）
 - 崩溃恢复（索引 DDL 状态恢复）
 
