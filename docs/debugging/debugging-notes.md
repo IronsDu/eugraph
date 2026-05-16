@@ -160,3 +160,43 @@ EuGraphRpcClient::EuGraphRpcClient(const std::string& host, int port)
 1. **fbthrift `sync_*` 方法会内部驱动 EventBase**——不能在已有 `loopForever()` 的 EventBase 上使用。
 2. **正确模式是 `semifuture_*` + `.via(evb).get()`**——EventBase 在后台线程持续运行，RPC 通过 `.via()` 调度到该线程。
 3. **`evb_->runInEventBaseThreadAndWait()` 也不要混用**——只在初始化阶段（如 `connect()`）使用，常规 RPC 应走 `semifuture` 路径。
+
+---
+
+## 案例 5：variant 新增类型后忘记更新映射表导致 global-buffer-overflow
+
+### 现象
+
+ASAN 构建下 ctest 多个测试 Subprocess aborted，报错：
+```
+ERROR: AddressSanitizer: global-buffer-overflow on address 0x0000011af000
+READ of size 4 at 0x0000011af000 thread T0
+    #0 nodeTypeFromVariantIndex(unsigned long) opt_rule.cpp:27
+```
+
+所有使用 BoundLogicalOperator variant 的测试都崩溃。
+
+### 排查过程
+
+1. ASAN 精确指向 `opt_rule.cpp:27`：`return mapping[index];`
+2. 检查 `mapping[]` 数组：一个 `constexpr` 静态数组，将 variant index 映射到 `OptNodeType` 枚举。
+3. 确认根因：`BoundLogicalOperator` variant 新增了 `std::unique_ptr<BoundBinaryJoinOp>`（CrossProduct 实现），variant index 增加了一个位置。但 `nodeTypeFromVariantIndex()` 的静态映射表未添加对应条目，导致 variant index 16 时越界读取。
+
+### 根因
+
+**Variant 新增类型后，所有硬编码的索引映射表必须同步更新。** 在这个项目中，至少有三处需要同步：
+
+1. `opt_rule.cpp` 的 `nodeTypeFromVariantIndex()` 映射数组
+2. `opt_rule.hpp` 的 `OptNodeType` 枚举
+3. 所有对 variant 使用 `std::visit` 的地方（编译期检查，不会遗漏）
+
+### 修复
+
+在 `OptNodeType` 枚举和映射数组中添加 `BinaryJoin` 条目（index 16）。
+
+### 经验
+
+1. **新增 variant 类型时，全局搜索与 variant index 相关的硬编码映射**——尤其是 `constexpr` 数组、`switch-case`、枚举到 index 的配对。
+2. **优先用 `std::visit` 而非手动 index 分发**——`std::visit` 由编译器保证覆盖所有类型，遗漏会导致编译错误而非运行时崩溃。
+3. **ASAN + ctest 串行跑**——并行跑时 /tmp 目录冲突会导致假阳性（Disk quota exceeded），串行跑才能得到可靠的 ASAN 报告。
+4. **测试残留数据要清理**——WiredTiger 测试在 /tmp 下会留下数百 MB 的数据，多次运行不清理会导致磁盘满。ctest 前执行 `find /tmp -name "eugraph*" -exec rm -rf {} +`。
