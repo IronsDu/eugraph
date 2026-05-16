@@ -439,6 +439,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     auto result =
                         std::make_unique<FilterPhysicalOp>(std::move(v.predicate), cr.output_schema, std::move(cr.op));
+                    result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundProjectOp>) {
@@ -462,6 +463,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     auto result = std::make_unique<ProjectPhysicalOp>(std::move(items), std::move(cr.output_schema),
                                                                       std::move(child_op));
+                    result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundAggregateOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
@@ -511,6 +513,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result =
                         std::make_unique<AggregatePhysicalOp>(std::move(group_keys), std::move(aggregates),
                                                               std::move(child_op), std::move(output_type_kinds));
+                    result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSortOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
@@ -527,6 +530,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
 
                     auto result = std::make_unique<SortPhysicalOp>(std::move(sort_items), std::move(cr.op));
+                    result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSkipOp>) {
@@ -713,6 +717,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result =
                         std::make_unique<SetPhysicalOp>(std::move(items), cr.output_schema, store, ctx.label_defs,
                                                         ctx.label_name_to_id, std::move(cr.op));
+                    result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundRemoveOp>) {

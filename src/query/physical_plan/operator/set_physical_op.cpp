@@ -39,7 +39,7 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
 
         // Pre-evaluate all value expressions for this chunk.
         std::vector<std::vector<Value>> value_results(items_.size());
-        VectorizedEvaluator evaluator;
+        VectorizedEvaluator evaluator(eval_ctx_);
         for (size_t idx = 0; idx < items_.size(); ++idx) {
             if (items_[idx].value.has_value()) {
                 auto col = Column::flat(binder::BoundTypeKind::ANY, n);

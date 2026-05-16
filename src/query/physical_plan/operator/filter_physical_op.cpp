@@ -9,7 +9,7 @@ folly::coro::AsyncGenerator<DataChunk> FilterPhysicalOp::executeChunk() {
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
 
-        VectorizedEvaluator evaluator;
+        VectorizedEvaluator evaluator(eval_ctx_);
         std::vector<bool> predicate(n);
         evaluator.evaluatePredicate(predicate_, *chunk, predicate);
 

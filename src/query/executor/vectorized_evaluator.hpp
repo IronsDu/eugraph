@@ -1,6 +1,7 @@
 #pragma once
 
 #include "query/executor/data_chunk.hpp"
+#include "query/function/function_def.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 
 #include <cstdint>
@@ -26,6 +27,7 @@ enum class QuantifierKind {
 class VectorizedEvaluator {
 public:
     VectorizedEvaluator() = default;
+    explicit VectorizedEvaluator(const function::EvalContext& eval_ctx) : eval_ctx_(eval_ctx) {}
 
     /// Evaluate a bound expression for all logical rows in the chunk.
     /// Result is written into `result` column (must be FLAT, pre-sized).
@@ -38,6 +40,7 @@ public:
 private:
     // Temporary storage for recursive sub-expression evaluation.
     std::deque<Column> temp_columns_;
+    function::EvalContext eval_ctx_;
 
     /// Evaluate an expression and return a reference to the result column.
     struct EvalResult {

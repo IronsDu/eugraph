@@ -8,7 +8,9 @@
 #include "query/function/aggregate/min_function.hpp" // also provides MaxState
 #include "query/function/aggregate/sum_function.hpp"
 #include "query/function/scalar/id_function.hpp"
+#include "query/function/scalar/list_functions.hpp"
 #include "query/function/scalar/path_functions.hpp"
+#include "query/function/scalar/type_function.hpp"
 
 namespace eugraph {
 namespace function {
@@ -83,6 +85,30 @@ void FunctionRegistry::registerScalarBuiltins() {
                                     {},
                                     {},
                                     {}});
+
+    // type(Edge) -> String
+    functions_["type"].push_back({"type",
+                                  {BoundType::Edge()},
+                                  BoundType::String(),
+                                  false,
+                                  false,
+                                  scalar::typeScalarFn,
+                                  scalar::typeBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+
+    // last(List<Any>) -> Any
+    functions_["last"].push_back({"last",
+                                  {BoundType::List(BoundType::Any())},
+                                  BoundType::Any(),
+                                  false,
+                                  false,
+                                  scalar::lastScalarFn,
+                                  scalar::lastBatchFn,
+                                  {},
+                                  {},
+                                  {}});
 }
 
 void FunctionRegistry::registerAggregateBuiltins() {

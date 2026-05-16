@@ -15,7 +15,7 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
     size_t num_cols = 0;
 
     auto child_gen = child_->executeChunk();
-    VectorizedEvaluator evaluator;
+    VectorizedEvaluator evaluator(eval_ctx_);
 
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();

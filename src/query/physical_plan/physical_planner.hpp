@@ -27,6 +27,7 @@ struct PlanContext {
     std::unordered_map<std::string, EdgeId> variable_edge_ids;     // for CREATE: assigned IDs
     VertexId next_vertex_id = 1;
     EdgeId next_edge_id = 1;
+    function::EvalContext eval_ctx;
 };
 
 /// Result of planning an operator: the physical operator + its output schema + types.

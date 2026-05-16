@@ -422,6 +422,9 @@ void TckContext::executeQuery(const std::string& query) {
             errMsg.find("VariableAlreadyBound") != std::string::npos) {
             lastErrorType = "SyntaxError";
             lastErrorPhase = "compile time";
+        } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
+            lastErrorType = "SyntaxError";
+            lastErrorPhase = "compile time";
         } else if (errMsg.find("SemanticError") != std::string::npos || errMsg.find("semantic") != std::string::npos) {
             lastErrorType = "SemanticError";
             lastErrorPhase = "compile time";
@@ -438,6 +441,8 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "UndefinedVariable";
         } else if (errMsg.find("VariableAlreadyBound") != std::string::npos) {
             lastErrorDetail = "VariableAlreadyBound";
+        } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
+            lastErrorDetail = "InvalidArgumentType";
         } else if (errMsg.find("InvalidInput") != std::string::npos) {
             lastErrorDetail = "InvalidInput";
         } else {

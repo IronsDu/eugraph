@@ -2,6 +2,7 @@
 
 #include "query/executor/data_chunk.hpp"
 #include "query/executor/row.hpp"
+#include "query/function/function_def.hpp"
 #include "query/planner/bound_type.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
@@ -45,7 +46,13 @@ public:
         return output_types_;
     }
 
+    void setEvalContext(const function::EvalContext& ctx) {
+        eval_ctx_ = ctx;
+    }
+
 protected:
+    function::EvalContext eval_ctx_;
+
     /// Bridge for upgraded operators: wraps executeChunk() output as RowBatch.
     /// Use for the legacy execute() override:
     ///   folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
