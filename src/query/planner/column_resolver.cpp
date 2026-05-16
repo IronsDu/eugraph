@@ -80,8 +80,7 @@ bool ColumnResolver::resolveOperator(BoundLogicalOperator& op, const BindContext
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundPathBuildOp>>) {
                 return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryJoinOp>>) {
-                return resolveOperator(val->left, ctx, errors) &&
-                       resolveOperator(val->right, ctx, errors);
+                return resolveOperator(val->left, ctx, errors) && resolveOperator(val->right, ctx, errors);
             } else {
                 // BoundScanOp, BoundLabelScanOp — no expressions or children
                 return true;

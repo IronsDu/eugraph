@@ -3,20 +3,21 @@
 namespace eugraph {
 namespace compute {
 
-folly::coro::AsyncGenerator<DataChunk>
-CrossProductPhysicalOp::executeChunk() {
+folly::coro::AsyncGenerator<DataChunk> CrossProductPhysicalOp::executeChunk() {
     size_t left_cols = left_schema_.size();
     size_t right_cols = right_schema_.size();
 
     auto left_gen = left_->executeChunk();
     while (auto left_chunk = co_await left_gen.next()) {
-        if (!left_chunk || left_chunk->count == 0) continue;
+        if (!left_chunk || left_chunk->count == 0)
+            continue;
         size_t n_left = left_chunk->count;
 
         // For each left batch, restart right scan from scratch
         auto right_gen = right_->executeChunk();
         while (auto right_chunk = co_await right_gen.next()) {
-            if (!right_chunk || right_chunk->count == 0) continue;
+            if (!right_chunk || right_chunk->count == 0)
+                continue;
             size_t n_right = right_chunk->count;
 
             DataChunk output;

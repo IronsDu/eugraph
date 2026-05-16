@@ -2378,7 +2378,9 @@ TEST_F(QueryExecutorWithTest, WithThenIndependentMatchWhere) {
     insertPersonData();
 
     // MATCH after WITH + WHERE referencing both sides (cross-side filter)
-    auto result = execSync(*executor_, "MATCH (a:Person) WITH a MATCH (b:Person) WHERE a.name = 'Alice' AND b.age > 28 RETURN a.name, b.name");
+    auto result = execSync(
+        *executor_,
+        "MATCH (a:Person) WITH a MATCH (b:Person) WHERE a.name = 'Alice' AND b.age > 28 RETURN a.name, b.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     // Alice × (people with age > 28: Charlie) = 1 row
     EXPECT_GE(result.rows.size(), 1u);
@@ -2388,7 +2390,8 @@ TEST_F(QueryExecutorWithTest, WithThenCorrelatedMatchStillWorks) {
     insertPersonWithEdges();
 
     // Correlated MATCH after WITH: expanding from a variable passed through WITH
-    auto result = execSync(*executor_, "MATCH (a:Person {name: 'Alice'})-[:KNOWS]->(b) WITH b MATCH (b)-[:KNOWS]->(c) RETURN c.name");
+    auto result = execSync(
+        *executor_, "MATCH (a:Person {name: 'Alice'})-[:KNOWS]->(b) WITH b MATCH (b)-[:KNOWS]->(c) RETURN c.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
 }
 

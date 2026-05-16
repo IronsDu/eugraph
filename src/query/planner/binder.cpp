@@ -174,7 +174,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                     if (needs_cross) {
                         auto left = std::move(*current);
                         auto right = bindMatch(*ptr, std::nullopt, /*skip_where=*/true);
-                        if (!right) return std::nullopt;
+                        if (!right)
+                            return std::nullopt;
 
                         auto join = std::make_unique<BoundBinaryJoinOp>();
                         join->join_type = JoinType::Cross;
@@ -185,7 +186,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
                         if (ptr->where_pred) {
                             auto where_op = bindWhere(*ptr->where_pred, std::move(result));
-                            if (!where_op) return std::nullopt;
+                            if (!where_op)
+                                return std::nullopt;
                             result = std::move(*where_op);
                         }
 
@@ -256,8 +258,7 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 // ==================== Clause Binding ====================
 
 std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause& match,
-                                                      std::optional<BoundLogicalOperator> parent,
-                                                      bool skip_where) {
+                                                      std::optional<BoundLogicalOperator> parent, bool skip_where) {
     if (match.patterns.empty()) {
         error("MATCH clause has no patterns");
         return std::nullopt;

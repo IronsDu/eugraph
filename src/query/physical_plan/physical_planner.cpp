@@ -762,8 +762,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_types.insert(output_types.end(), rr.output_types.begin(), rr.output_types.end());
 
                     auto result = std::make_unique<CrossProductPhysicalOp>(
-                        std::move(lr.op), std::move(rr.op), std::move(lr.output_schema),
-                        std::move(rr.output_schema), std::move(output_types));
+                        std::move(lr.op), std::move(rr.op), std::move(lr.output_schema), std::move(rr.output_schema),
+                        std::move(output_types));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else {
