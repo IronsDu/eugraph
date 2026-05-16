@@ -4,6 +4,7 @@
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
+#include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_create_edge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_create_node_op.hpp"
 #include "query/planner/logical_plan/operator/bound_distinct_op.hpp"

@@ -209,7 +209,7 @@ BoundExpression = variant<
 8. 为 `BoundBinaryOp`/`BoundUnaryOp` 解析类型特化的批量函数指针（`BinaryBatchFn`/`UnaryBatchFn`）
 9. 产出 `BoundStatement`（含 `BoundLogicalPlan` + `BindContext`）
 
-`BoundLogicalPlan` 的 root 是 `BoundLogicalOperator`（variant），包含 16 种 BoundXxxOp 类型，定义在 `planner/logical_plan/operator/` 下各自独立的头文件中。所有符号引用已解析为具体 ID，但变量引用此时仍为 `BoundVariableRef`（名称 + 类型），由 ColumnResolver 在 Binder 之后解析为 `BoundColumnRef`（列索引）。
+`BoundLogicalPlan` 的 root 是 `BoundLogicalOperator`（variant），包含 17 种 BoundXxxOp 类型，定义在 `planner/logical_plan/operator/` 下各自独立的头文件中。所有符号引用已解析为具体 ID，但变量引用此时仍为 `BoundVariableRef`（名称 + 类型），由 ColumnResolver 在 Binder 之后解析为 `BoundColumnRef`（列索引）。
 
 ### ColumnResolver（变量名 → 列索引）
 
@@ -282,7 +282,7 @@ struct SelectionVector {
 
 `BoundLogicalOperator` 是一个 variant，包含 16 种算子。"子节点"通过 variant 值嵌入（非 unique_ptr），形成递归的算子树。
 
-### 算子类型（16 种）
+### 算子类型（17 种）
 
 | 算子 | 定义文件 | 说明 | 子节点 |
 |------|---------|------|--------|
@@ -302,6 +302,17 @@ struct SelectionVector {
 | `BoundSetOp` | `bound_set_op.hpp` | 设置属性/标签 | 嵌入 `BoundLogicalOperator child` |
 | `BoundRemoveOp` | `bound_remove_op.hpp` | 移除属性/标签 | 嵌入 `BoundLogicalOperator child` |
 | `BoundPathBuildOp` | `bound_path_build_op.hpp` | 组装路径变量 | 嵌入 `BoundLogicalOperator child` |
+| `BoundBinaryJoinOp` | `bound_binary_join_op.hpp` | 二元 Join（Cross/Inner/Left） | 嵌入 `BoundLogicalOperator left` + `right` |
+
+> **开发注意：新增 Variant 类型的检查清单**
+>
+> `BoundLogicalOperator` 是 `std::variant`，新增算子类型时，除 variant 定义外，以下位置必须同步更新：
+>
+> 1. `opt_rule.hpp` 的 `OptNodeType` 枚举 — 添加对应的节点类型
+> 2. `opt_rule.cpp` 的 `nodeTypeFromVariantIndex()` 映射数组 — 添加 variant index → 枚举的映射
+> 3. `column_resolver.cpp` 的 `resolveOperator()` — 添加 `std::visit` 分支（递归处理子节点）
+> 4. 所有 `std::visit` 访问 `BoundLogicalOperator` 的位置（`binder.cpp` 的 `applyProjectionPushdown`、`memo.cpp`、`physical_planner.cpp` 的 `planBoundOperator`）
+> 5. 本项目禁用 `-Wno-error`——漏更新导致 `unused-function` 或越界会直接编译失败或 ASAN 崩溃
 
 **符号表**：`Binder` 通过 `BindContext` 维护变量→列索引映射，MATCH 中每个变量分配列索引（在 `BoundScanOp::column_index` / `BoundLabelScanOp::column_index` 等字段中）。表达式中的变量引用在 Binder 阶段为 `BoundVariableRef`（变量名），经 `ColumnResolver` 解析为 `BoundColumnRef`（列索引）。
 
@@ -365,6 +376,7 @@ class PhysicalOperator {
 | `SetPhysicalOp` | `IAsyncGraphDataStore&`, items | child 原样 yield |
 | `RemovePhysicalOp` | `IAsyncGraphDataStore&`, items | child 原样 yield |
 | `PathBuildPhysicalOp` | 路径变量名, 元素列名列表 | 复制 child 列 + 新建 PATH FLAT 列 |
+| `CrossProductPhysicalOp` | 左/右 child PhysicalOperator, 左/右 Schema | 嵌套循环笛卡尔积：左输入 DICTIONARY + 右输入 DICTIONARY |
 
 ### 各算子执行逻辑
 
@@ -492,12 +504,14 @@ using Schema = vector<string>;   // 列名列表
 
 - **投影下推仅支持点查**：存储层通过逐属性 `getVertexProperty` 点查实现 projection，未利用 prefix scan 批量获取
 - **Expand N+1 模式**：Expand 算子逐顶点调用 `getVertexLabels` + `getVertexProperties`，未批量预取
-- **WITH 后 MATCH 关联（部分支持）**：WITH 后接 MATCH，当 MATCH 起点变量引用 WITH 输出时可关联执行（ExpandPhysicalOp 从 child DataChunk 读取源顶点）。MATCH 起点变量不引用 WITH 输出时返回明确错误，待实现 CrossProduct/Join 算子后支持
+- **WITH 后 MATCH 独立变量（已支持）**：`MATCH ... WITH ... MATCH (newVar) RETURN ...` 通过 `BoundBinaryJoinOp`（JoinType::Cross）+ `CrossProductPhysicalOp` 实现笛卡尔积语义。右孩子可以是任意算子链（Scan → Filter → Expand）。
+- **WITH 后 MATCH 混合模式（部分支持）**：`MATCH (x:X), (a)-->(b)` 中同时包含独立扫描和关联扩展的模式暂不支持。
+- **WITH 作为首个子句（暂不支持）**：`WITH 1 AS x RETURN x` 因 `bindWith` 拒绝空 `current` 而失败。
 
 ### 待实现
 
 - DELETE, MERGE 执行
-- 多 MATCH + JOIN
+- Inner/Left Join（`BoundBinaryJoinOp` 已预留 `JoinType::Inner/Left`）
 - UNWIND + 列表操作
 - DDL 异步执行（DdlWorker 后台线程）
 - 崩溃恢复（索引 DDL 状态恢复）

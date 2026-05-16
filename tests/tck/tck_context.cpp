@@ -174,21 +174,6 @@ bool hasUnsupportedExpr(const ast::Expression& expr) {
         expr);
 }
 
-int countMatchClauses(const std::vector<ast::Clause>& clauses) {
-    int count = 0;
-    for (const auto& c : clauses) {
-        std::visit(
-            [&count](const auto& ptr) {
-                using Inner = typename std::decay_t<decltype(ptr)>::element_type;
-                if constexpr (std::is_same_v<Inner, ast::MatchClause>) {
-                    ++count;
-                }
-            },
-            c);
-    }
-    return count;
-}
-
 bool hasUnsupportedClause(const ast::Clause& clause) {
     return std::visit(
         [](const auto& ptr) -> bool {
@@ -296,12 +281,6 @@ bool hasUnsupportedFeature(const ast::Statement& stmt) {
                 // UNION?
                 if (!rq.unions.empty()) {
                     spdlog::info("[TCK] skipping: UNION");
-                    return true;
-                }
-
-                // Multiple MATCH clauses?
-                if (countMatchClauses(rq.first.clauses) > 1) {
-                    spdlog::info("[TCK] skipping: multiple MATCH clauses");
                     return true;
                 }
 

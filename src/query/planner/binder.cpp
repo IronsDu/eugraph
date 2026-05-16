@@ -1,6 +1,7 @@
 #include "query/planner/binder.hpp"
 
 #include "query/function/batch_ops.hpp"
+#include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 #include <spdlog/spdlog.h>
@@ -159,6 +160,41 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                         error("Cannot have MATCH without preceding context");
                         return std::nullopt;
                     }
+
+                    // Check if this MATCH needs CrossProduct: preceding context exists
+                    // but the start variable is not in scope (independent scan after WITH).
+                    bool needs_cross = false;
+                    if (current.has_value() && !ptr->patterns.empty()) {
+                        const auto& node = ptr->patterns[0].element.node;
+                        if (!node.variable || !ctx_.lookup(*node.variable)) {
+                            needs_cross = true;
+                        }
+                    }
+
+                    if (needs_cross) {
+                        auto left = std::move(*current);
+                        auto right = bindMatch(*ptr, std::nullopt, /*skip_where=*/true);
+                        if (!right)
+                            return std::nullopt;
+
+                        auto join = std::make_unique<BoundBinaryJoinOp>();
+                        join->join_type = JoinType::Cross;
+                        join->left = std::move(left);
+                        join->right = std::move(*right);
+
+                        BoundLogicalOperator result = std::move(join);
+
+                        if (ptr->where_pred) {
+                            auto where_op = bindWhere(*ptr->where_pred, std::move(result));
+                            if (!where_op)
+                                return std::nullopt;
+                            result = std::move(*where_op);
+                        }
+
+                        first_clause = false;
+                        return result;
+                    }
+
                     auto match_op = bindMatch(*ptr, std::move(current));
                     first_clause = false;
                     return match_op;
@@ -222,7 +258,7 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 // ==================== Clause Binding ====================
 
 std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause& match,
-                                                      std::optional<BoundLogicalOperator> parent) {
+                                                      std::optional<BoundLogicalOperator> parent, bool skip_where) {
     if (match.patterns.empty()) {
         error("MATCH clause has no patterns");
         return std::nullopt;
@@ -592,7 +628,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
     }
 
     // Bind WHERE predicate
-    if (match.where_pred && current) {
+    if (match.where_pred && current && !skip_where) {
         auto where_op = bindWhere(*match.where_pred, std::move(*current));
         current = std::move(where_op);
     }
@@ -1889,6 +1925,9 @@ void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
                     applyProjectionPushdown(v.child);
                 } else if constexpr (std::is_same_v<Elem, BoundPathBuildOp>) {
                     applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundBinaryJoinOp>) {
+                    applyProjectionPushdown(v.left);
+                    applyProjectionPushdown(v.right);
                 }
                 // BoundCreateNodeOp, BoundCreateEdgeOp: no child traversal needed
             }
