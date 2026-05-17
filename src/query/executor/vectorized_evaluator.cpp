@@ -277,6 +277,22 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                                     r = Value(std::get<double>(*pv));
                                 else if (std::holds_alternative<std::string>(*pv))
                                     r = Value(std::get<std::string>(*pv));
+                                else if (std::holds_alternative<std::vector<int64_t>>(*pv)) {
+                                    ListValue lv;
+                                    for (auto v : std::get<std::vector<int64_t>>(*pv))
+                                        lv.elements.push_back(ValueStorage{Value(v)});
+                                    r = Value(std::move(lv));
+                                } else if (std::holds_alternative<std::vector<double>>(*pv)) {
+                                    ListValue lv;
+                                    for (auto v : std::get<std::vector<double>>(*pv))
+                                        lv.elements.push_back(ValueStorage{Value(v)});
+                                    r = Value(std::move(lv));
+                                } else if (std::holds_alternative<std::vector<std::string>>(*pv)) {
+                                    ListValue lv;
+                                    for (auto& s : std::get<std::vector<std::string>>(*pv))
+                                        lv.elements.push_back(ValueStorage{Value(std::move(s))});
+                                    r = Value(std::move(lv));
+                                }
                             }
                         }
                         goto found;

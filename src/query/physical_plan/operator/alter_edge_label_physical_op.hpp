@@ -9,20 +9,19 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace eugraph {
 namespace compute {
 
 /// Adds missing properties to an existing edge label at runtime.
-/// Runs before CreateEdgePhysicalOp, updates the shared maps so CreateEdgePhysicalOp
-/// can resolve the new property IDs.
 class AlterEdgeLabelPhysicalOp : public PhysicalOperator {
 public:
-    AlterEdgeLabelPhysicalOp(std::string label_name, std::vector<std::string> prop_names, IAsyncGraphMetaStore& meta,
-                             std::unordered_map<EdgeLabelId, EdgeLabelDef>& defs,
+    AlterEdgeLabelPhysicalOp(std::string label_name, std::vector<std::pair<std::string, PropertyType>> prop_defs,
+                             IAsyncGraphMetaStore& meta, std::unordered_map<EdgeLabelId, EdgeLabelDef>& defs,
                              std::unique_ptr<PhysicalOperator> child)
-        : label_name_(std::move(label_name)), prop_names_(std::move(prop_names)), meta_(meta), defs_(defs),
+        : label_name_(std::move(label_name)), prop_defs_(std::move(prop_defs)), meta_(meta), defs_(defs),
           child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
@@ -38,7 +37,7 @@ public:
 
 private:
     std::string label_name_;
-    std::vector<std::string> prop_names_;
+    std::vector<std::pair<std::string, PropertyType>> prop_defs_;
     IAsyncGraphMetaStore& meta_;
     std::unordered_map<EdgeLabelId, EdgeLabelDef>& defs_;
     std::unique_ptr<PhysicalOperator> child_;

@@ -10,21 +10,21 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace eugraph {
 namespace compute {
 
 /// Auto-creates a missing edge label (and optionally its properties) at runtime.
-/// Runs before CreateEdgePhysicalOp, updates shared maps so downstream operators
-/// can resolve the new EdgeLabelId and property IDs.
 class CreateEdgeLabelPhysicalOp : public PhysicalOperator {
 public:
-    CreateEdgeLabelPhysicalOp(std::string label_name, std::vector<std::string> prop_names, IAsyncGraphMetaStore& meta,
-                              IAsyncGraphDataStore& store, std::unordered_map<std::string, EdgeLabelId>& name_to_id,
+    CreateEdgeLabelPhysicalOp(std::string label_name, std::vector<std::pair<std::string, PropertyType>> prop_defs,
+                              IAsyncGraphMetaStore& meta, IAsyncGraphDataStore& store,
+                              std::unordered_map<std::string, EdgeLabelId>& name_to_id,
                               std::unordered_map<EdgeLabelId, EdgeLabelDef>& defs,
                               std::unique_ptr<PhysicalOperator> child)
-        : label_name_(std::move(label_name)), prop_names_(std::move(prop_names)), meta_(meta), store_(store),
+        : label_name_(std::move(label_name)), prop_defs_(std::move(prop_defs)), meta_(meta), store_(store),
           name_to_id_(name_to_id), defs_(defs), child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
@@ -40,7 +40,7 @@ public:
 
 private:
     std::string label_name_;
-    std::vector<std::string> prop_names_;
+    std::vector<std::pair<std::string, PropertyType>> prop_defs_;
     IAsyncGraphMetaStore& meta_;
     IAsyncGraphDataStore& store_;
     std::unordered_map<std::string, EdgeLabelId>& name_to_id_;

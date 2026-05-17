@@ -6,7 +6,7 @@ namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> AlterEdgeLabelPhysicalOp::executeChunk() {
-    co_await meta_.addEdgeLabelProperties(label_name_, prop_names_);
+    co_await meta_.addEdgeLabelProperties(label_name_, prop_defs_);
 
     // Reload the updated def from metadata to keep shared maps in sync
     auto updated = co_await meta_.getEdgeLabelDef(label_name_);

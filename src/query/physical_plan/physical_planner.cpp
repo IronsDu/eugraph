@@ -665,22 +665,33 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_cr = extractChildResult(std::move(child_result));
                     auto child_op = std::move(child_cr.op);
 
-                    // Extract property names from pending_props for schema registration
-                    std::vector<std::string> pending_prop_names;
-                    for (const auto& [name, _] : v.pending_props)
-                        pending_prop_names.push_back(name);
+                    // Extract property (name, type) from pending_props for schema registration
+                    std::vector<std::pair<std::string, PropertyType>> pending_prop_defs;
+                    for (const auto& [name, expr] : v.pending_props) {
+                        PropertyType pt = PropertyType::STRING;
+                        if (std::holds_alternative<binder::BoundLiteral>(expr)) {
+                            auto& lit = std::get<binder::BoundLiteral>(expr);
+                            if (std::holds_alternative<bool>(lit.value))
+                                pt = PropertyType::BOOL;
+                            else if (std::holds_alternative<int64_t>(lit.value))
+                                pt = PropertyType::INT64;
+                            else if (std::holds_alternative<double>(lit.value))
+                                pt = PropertyType::DOUBLE;
+                        }
+                        pending_prop_defs.emplace_back(name, pt);
+                    }
 
                     if (v.label_name.has_value()) {
                         // Edge type doesn't exist: create it (with properties if any)
                         child_op = std::make_unique<CreateEdgeLabelPhysicalOp>(
-                            *v.label_name, std::move(pending_prop_names), meta, store, ctx.edge_label_name_to_id,
+                            *v.label_name, std::move(pending_prop_defs), meta, store, ctx.edge_label_name_to_id,
                             ctx.edge_label_defs, std::move(child_op));
                     } else if (v.label_id.has_value() && !v.pending_props.empty()) {
                         // Edge type exists but has new properties: alter it
                         auto def_it = ctx.edge_label_defs.find(*v.label_id);
                         if (def_it != ctx.edge_label_defs.end()) {
                             child_op = std::make_unique<AlterEdgeLabelPhysicalOp>(
-                                def_it->second.name, std::move(pending_prop_names), meta, ctx.edge_label_defs,
+                                def_it->second.name, std::move(pending_prop_defs), meta, ctx.edge_label_defs,
                                 std::move(child_op));
                         }
                     }

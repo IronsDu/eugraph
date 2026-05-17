@@ -39,8 +39,9 @@ public:
     // EdgeLabel management
     virtual folly::coro::Task<EdgeLabelId> createEdgeLabel(const std::string& name,
                                                            const std::vector<PropertyDef>& properties = {}) = 0;
-    virtual folly::coro::Task<bool> addEdgeLabelProperties(const std::string& name,
-                                                           const std::vector<std::string>& prop_names) = 0;
+    virtual folly::coro::Task<bool>
+    addEdgeLabelProperties(const std::string& name,
+                           const std::vector<std::pair<std::string, PropertyType>>& prop_defs) = 0;
     virtual folly::coro::Task<std::optional<EdgeLabelId>> getEdgeLabelId(const std::string& name) = 0;
     virtual folly::coro::Task<std::optional<std::string>> getEdgeLabelName(EdgeLabelId id) = 0;
     virtual folly::coro::Task<std::optional<EdgeLabelDef>> getEdgeLabelDef(const std::string& name) = 0;
