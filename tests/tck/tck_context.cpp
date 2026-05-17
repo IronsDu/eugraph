@@ -393,13 +393,11 @@ void TckContext::executeQuery(const std::string& query) {
     } catch (const std::exception& e) {
         std::string errMsg = e.what();
 
+        // Connection loss is a fatal infrastructure failure — abort
         if (isConnectionError(errMsg)) {
-            spdlog::error("[TCK] [{}] Connection error — marking scenario as failed: {}", graphName, errMsg);
-            lastQueryHadError = true;
-            lastErrorType = "RuntimeError";
-            lastErrorPhase = "runtime";
-            lastErrorDetail = errMsg;
-            return;
+            spdlog::critical("[TCK] [{}] Connection lost — server may have crashed. Aborting test.", graphName);
+            spdlog::critical("[TCK] Error: {}", errMsg);
+            std::exit(1);
         }
 
         lastQueryHadError = true;
@@ -672,7 +670,8 @@ void TckContext::ensureTypesForQuery(const std::string& query) {
         } catch (const std::exception& e) {
             std::string msg = e.what();
             if (isConnectionError(msg)) {
-                spdlog::error("[TCK] [{}] Connection error during ensureTypes: {}", graphName, msg);
+                spdlog::critical("[TCK] [{}] Connection lost during ensureTypes — aborting: {}", graphName, msg);
+                std::exit(1);
             }
             spdlog::info("[TCK] Label {} may already exist: {}", label, msg);
         }
@@ -686,7 +685,8 @@ void TckContext::ensureTypesForQuery(const std::string& query) {
         } catch (const std::exception& e) {
             std::string msg = e.what();
             if (isConnectionError(msg)) {
-                spdlog::error("[TCK] [{}] Connection error during ensureTypes: {}", graphName, msg);
+                spdlog::critical("[TCK] [{}] Connection lost during ensureTypes — aborting: {}", graphName, msg);
+                std::exit(1);
             }
             spdlog::info("[TCK] EdgeLabel {} may already exist: {}", et, msg);
         }
