@@ -882,6 +882,26 @@ TEST_F(QueryExecutorTest, UnlabeledNodeAutoRegisterProperty) {
     EXPECT_EQ(std::get<std::string>(rows[0][0]), "auto");
 }
 
+TEST_F(QueryExecutorTest, UnlabeledNodeTwoProperties) {
+    auto anon_id = blockingWait(async_meta_->createLabel("__anon__", {}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto result = execSync(*executor_, "CREATE ({name: 'hello', age: 42})");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n.name, n.age").rows;
+    ASSERT_EQ(rows.size(), 1u);
+    ASSERT_EQ(rows[0].size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(rows[0][0]), "hello");
+    ASSERT_TRUE(std::holds_alternative<int64_t>(rows[0][1]));
+    EXPECT_EQ(std::get<int64_t>(rows[0][1]), 42);
+}
+
 // ==================== Limit Edge Cases ====================
 
 TEST_F(QueryExecutorTest, LimitGreaterThanRowCount) {

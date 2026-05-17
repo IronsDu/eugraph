@@ -626,12 +626,23 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (!v.pending_props.empty() && v.label_id != INVALID_LABEL_ID) {
                         auto def_it = ctx.label_defs.find(v.label_id);
                         if (def_it != ctx.label_defs.end() && def_it->second.name == "__anon__") {
-                            std::vector<std::string> pending_prop_names;
-                            for (const auto& [name, _] : v.pending_props)
-                                pending_prop_names.push_back(name);
+                            std::vector<std::pair<std::string, PropertyType>> pending_prop_defs;
+                            for (const auto& [name, expr] : v.pending_props) {
+                                PropertyType pt = PropertyType::STRING;
+                                if (std::holds_alternative<binder::BoundLiteral>(expr)) {
+                                    auto& lit = std::get<binder::BoundLiteral>(expr);
+                                    if (std::holds_alternative<bool>(lit.value))
+                                        pt = PropertyType::BOOL;
+                                    else if (std::holds_alternative<int64_t>(lit.value))
+                                        pt = PropertyType::INT64;
+                                    else if (std::holds_alternative<double>(lit.value))
+                                        pt = PropertyType::DOUBLE;
+                                }
+                                pending_prop_defs.emplace_back(name, pt);
+                            }
 
                             auto alter = std::make_unique<AlterVertexLabelPhysicalOp>(
-                                def_it->second.name, std::move(pending_prop_names), meta, ctx.label_defs,
+                                def_it->second.name, std::move(pending_prop_defs), meta, ctx.label_defs,
                                 std::move(child));
                             child = std::move(alter);
                         }
