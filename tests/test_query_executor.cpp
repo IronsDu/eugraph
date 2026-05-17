@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "common/types/graph_types.hpp"
 #include "query/executor/query_executor.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
@@ -783,7 +784,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodePropertyAccess) {
     PropertyDef name_pd;
     name_pd.name = "name";
     name_pd.type = PropertyType::STRING;
-    auto anon_id = blockingWait(async_meta_->createLabel("__anon__", {name_pd}));
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {name_pd}));
     ASSERT_NE(anon_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(anon_id));
 
@@ -804,7 +805,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeReturnWholeVertex) {
     PropertyDef name_pd;
     name_pd.name = "name";
     name_pd.type = PropertyType::STRING;
-    auto anon_id = blockingWait(async_meta_->createLabel("__anon__", {name_pd}));
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {name_pd}));
     ASSERT_NE(anon_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(anon_id));
 
@@ -820,7 +821,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeWhereFilter) {
     PropertyDef name_pd;
     name_pd.name = "name";
     name_pd.type = PropertyType::STRING;
-    auto anon_id = blockingWait(async_meta_->createLabel("__anon__", {name_pd}));
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {name_pd}));
     ASSERT_NE(anon_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(anon_id));
 
@@ -836,7 +837,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeCrossProductWithLabeled) {
     PropertyDef name_pd;
     name_pd.name = "name";
     name_pd.type = PropertyType::STRING;
-    auto anon_id = blockingWait(async_meta_->createLabel("__anon__", {name_pd}));
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {name_pd}));
     ASSERT_NE(anon_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(anon_id));
 
@@ -863,7 +864,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeCrossProductWithLabeled) {
 TEST_F(QueryExecutorTest, UnlabeledNodeAutoRegisterProperty) {
     // Create __anon__ WITHOUT pre-registering any properties
     // The AlterVertexLabelPhysicalOp should auto-register them
-    auto anon_id = blockingWait(async_meta_->createLabel("__anon__", {}));
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {}));
     ASSERT_NE(anon_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(anon_id));
 
@@ -883,7 +884,7 @@ TEST_F(QueryExecutorTest, UnlabeledNodeAutoRegisterProperty) {
 }
 
 TEST_F(QueryExecutorTest, UnlabeledNodeTwoProperties) {
-    auto anon_id = blockingWait(async_meta_->createLabel("__anon__", {}));
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {}));
     ASSERT_NE(anon_id, INVALID_LABEL_ID);
     blockingWait(async_data_->createLabel(anon_id));
 
@@ -900,6 +901,40 @@ TEST_F(QueryExecutorTest, UnlabeledNodeTwoProperties) {
     EXPECT_EQ(std::get<std::string>(rows[0][0]), "hello");
     ASSERT_TRUE(std::holds_alternative<int64_t>(rows[0][1]));
     EXPECT_EQ(std::get<int64_t>(rows[0][1]), 42);
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodeSamePropNameDifferentTypes) {
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    // First node: prop1 is INT64
+    auto r1 = execSync(*executor_, "CREATE ({prop1: 42})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Second node: prop1 is STRING (same name, different type)
+    auto r2 = execSync(*executor_, "CREATE ({prop1: 'hello'})");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // Both should be readable with correct types
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n.prop1").rows;
+    ASSERT_EQ(rows.size(), 2u);
+
+    bool found_int = false, found_str = false;
+    for (auto& row : rows) {
+        if (std::holds_alternative<int64_t>(row[0])) {
+            EXPECT_EQ(std::get<int64_t>(row[0]), 42);
+            found_int = true;
+        } else if (std::holds_alternative<std::string>(row[0])) {
+            EXPECT_EQ(std::get<std::string>(row[0]), "hello");
+            found_str = true;
+        }
+    }
+    EXPECT_TRUE(found_int) << "Missing INT64 value for prop1";
+    EXPECT_TRUE(found_str) << "Missing STRING value for prop1";
 }
 
 // ==================== Limit Edge Cases ====================

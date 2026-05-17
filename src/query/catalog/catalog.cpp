@@ -14,7 +14,7 @@ void Catalog::load(std::unordered_map<LabelId, LabelDef> label_defs,
         label_name_to_id_[ldef.name] = lid;
     }
     // Identify __anon__ label and remove from user-visible name map
-    auto anon_it = label_name_to_id_.find("__anon__");
+    auto anon_it = label_name_to_id_.find(std::string(kAnonLabelName));
     if (anon_it != label_name_to_id_.end()) {
         anon_label_id_ = anon_it->second;
         label_name_to_id_.erase(anon_it);
