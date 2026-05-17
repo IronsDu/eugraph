@@ -14,16 +14,17 @@
 | 内部 Skip (AST 检测到不支持语法) | ~1914 | 49.1% |
 | 实际运行 | ~1983 | 50.9% |
 
-> **已修复分类汇总**:
-> - 分类3 (无标签节点属性): ~444 场景, Property not found → **0**
+> **已修复分类汇总（TCK partial run 377/3897 验证）**:
+> - 分类3 (无标签节点属性): `Property not found` → **0** ✅
 > - 分类4 (边类型自动创建): ~8 场景
 > - 分类5 (type/last 函数): ~6 场景
-> - 分类6 (WITH/MATCH 顺序): ~24 场景, CrossProduct
-> - 分类9 (WITH 为首子句): ~478 场景, BoundSingletonOp
-> - 分类1.2 (逗号 CREATE): ~187 场景
-> - 分类1.2 (多 MATCH): ~198 场景, skip 移除
+> - 分类6 (WITH/MATCH 顺序): `not yet supported` → **0** ✅
+> - 分类9 (WITH 为首子句): `WITH without preceding` → **0** ✅
+> - 分类1.2 (逗号 CREATE + 多 MATCH): ~385 场景
 >
 > **合计修复 ~1345 个场景**（各分类间可能有重叠）。剩余主要阻塞：分类1 MERGE/DELETE/UNWIND/OPTIONAL (~2800) + 分类2 步骤定义 (162)。
+>
+> *注：全量 TCK 在 scenario 377 因变长查询 `[:T*]` 超时被中断（已有问题，非本次引入）。上述修复数据基于 partial run 交叉验证。*
 
 > **本次更新**: 实现分类3 __anon__ 标签 + BoundDynamicPropertyRef + AlterVertexLabelPhysicalOp。
 > 分类3 `Property 'X' not found on any label`: 444 → **0** (完全消除)。
