@@ -435,6 +435,8 @@ EuGraphHandler::co_listLabels(std::unique_ptr<std::string> graph_name) {
     auto resp = std::make_unique<std::vector<thrift::LabelInfo>>();
 
     for (const auto& l : labels) {
+        if (l.name == "__anon__")
+            continue; // internal label, not user-visible
         thrift::LabelInfo info;
         info.id() = l.id;
         info.name() = l.name;
