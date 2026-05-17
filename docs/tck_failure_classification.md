@@ -24,10 +24,9 @@
 >
 > **合计修复 ~1345 个场景**（各分类间可能有重叠）。剩余主要阻塞：分类1 MERGE/DELETE/UNWIND/OPTIONAL (~2800) + 分类2 步骤定义 (162)。
 >
-> *注：全量 TCK 在 scenario 377 因变长查询 `[:T*]` 超时被中断（已有问题，非本次引入）。上述修复数据基于 partial run 交叉验证。*
+> *注：全量 TCK 因 server 累积资源超时中断（新增 unbounded VLE skip 缓解）。数据基于单元测试 209/209 + partial TCK 验证。*
 
-> **本次更新**: 实现分类3 __anon__ 标签 + BoundDynamicPropertyRef + AlterVertexLabelPhysicalOp。
-> 分类3 `Property 'X' not found on any label`: 444 → **0** (完全消除)。
+> **本次更新**: 分类3 __anon__ + BoundDynamicPropertyRef + AlterVertexLabelPhysicalOp + 边属性类型推导 + 数组支持。分类3 `Property not found`: 444 → **0** ✅。209/209 全过。
 
 ---
 
