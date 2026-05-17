@@ -27,6 +27,8 @@ public:
     // Label management
     virtual folly::coro::Task<LabelId> createLabel(const std::string& name,
                                                    const std::vector<PropertyDef>& properties = {}) = 0;
+    virtual folly::coro::Task<bool> addVertexLabelProperties(const std::string& name,
+                                                             const std::vector<std::string>& prop_names) = 0;
     virtual folly::coro::Task<std::optional<LabelId>> getLabelId(const std::string& name) = 0;
     virtual folly::coro::Task<std::optional<std::string>> getLabelName(LabelId id) = 0;
     virtual folly::coro::Task<std::optional<LabelDef>> getLabelDef(const std::string& name) = 0;

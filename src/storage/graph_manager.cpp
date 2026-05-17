@@ -217,6 +217,20 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstance(uint32_t graph_id
         return nullptr;
     }
 
+    // Ensure __anon__ label exists for unlabeled node properties
+    {
+        auto anon_def = folly::coro::blockingWait(instance->async_meta->getLabelDef("__anon__"));
+        if (!anon_def.has_value()) {
+            auto anon_id = folly::coro::blockingWait(instance->async_meta->createLabel("__anon__", {}));
+            if (anon_id == INVALID_LABEL_ID) {
+                spdlog::error("Failed to create __anon__ label for graph '{}'", name);
+                return nullptr;
+            }
+            folly::coro::blockingWait(instance->async_data->createLabel(anon_id));
+            spdlog::info("Created __anon__ label (id={}) for graph '{}'", anon_id, name);
+        }
+    }
+
     compute::QueryExecutor::Config executor_config;
     executor_config.compute_threads = compute_threads_;
     instance->executor =

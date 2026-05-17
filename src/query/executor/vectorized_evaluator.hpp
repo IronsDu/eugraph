@@ -56,6 +56,8 @@ private:
     void evalBinaryOp(const binder::BoundBinaryOp& op, const DataChunk& input, Column& result, size_t count);
     void evalUnaryOp(const binder::BoundUnaryOp& op, const DataChunk& input, Column& result, size_t count);
     void evalPropertyRef(const binder::BoundPropertyRef& ref, const DataChunk& input, Column& result, size_t count);
+    void evalDynamicPropertyRef(const binder::BoundDynamicPropertyRef& ref, const DataChunk& input, Column& result,
+                                size_t count);
     void evalFunctionCall(const binder::BoundFunctionCall& fc, const DataChunk& input, Column& result, size_t count);
 
     /// Evaluate a quantifier expression (ALL/ANY/NONE/SINGLE).

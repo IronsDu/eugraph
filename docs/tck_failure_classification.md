@@ -1,7 +1,7 @@
 # TCK 测试失败分类报告
 
 **日期**: 2026-05-17 (更新)  
-**分支**: feature/comma-create-paths (分类1.2修复: 逗号分隔 CREATE 路径)  
+**分支**: feature/unlabeled-node-properties (分类3修复: 无标签节点属性访问)  
 **总计**: 3897 场景, 16006 步骤  
 **检测方式**: Parser AST 遍历 (替换 regex-based skip)
 
@@ -11,13 +11,22 @@
 
 | 状态 | 场景数 | 占比 |
 |------|--------|------|
-| 实际运行 (无内部skip) | ~1983 | 50.9% |
-| 内部 Skip (AST 检测到不支持语法) | 1914 | 49.1% |
-| 运行时错误 (含 TCK 期望的错误匹配) | ~1965 | 50.4% |
-| 真正通过 | ~18 | 0.5% |
+| 内部 Skip (AST 检测到不支持语法) | ~1914 | 49.1% |
+| 实际运行 | ~1983 | 50.9% |
 
-> **本次更新**: 支持逗号分隔的 CREATE 路径 (~187 场景)。
-> `bindCreate` 中后续 pattern 正确链接到前一个 pattern 的输出链，不再被覆盖。
+> **已修复分类汇总**:
+> - 分类3 (无标签节点属性): ~444 场景, Property not found → **0**
+> - 分类4 (边类型自动创建): ~8 场景
+> - 分类5 (type/last 函数): ~6 场景
+> - 分类6 (WITH/MATCH 顺序): ~24 场景, CrossProduct
+> - 分类9 (WITH 为首子句): ~478 场景, BoundSingletonOp
+> - 分类1.2 (逗号 CREATE): ~187 场景
+> - 分类1.2 (多 MATCH): ~198 场景, skip 移除
+>
+> **合计修复 ~1345 个场景**（各分类间可能有重叠）。剩余主要阻塞：分类1 MERGE/DELETE/UNWIND/OPTIONAL (~2800) + 分类2 步骤定义 (162)。
+
+> **本次更新**: 实现分类3 __anon__ 标签 + BoundDynamicPropertyRef + AlterVertexLabelPhysicalOp。
+> 分类3 `Property 'X' not found on any label`: 444 → **0** (完全消除)。
 
 ---
 
@@ -77,7 +86,7 @@
 
 ---
 
-## 分类 3: 绑定错误 — 属性未找到
+## 分类 3: 绑定错误 — 属性未找到 ✅ 已修复
 
 查询引擎报错 "Property 'X' not found on any label for variable 'Y'"。
 
@@ -91,17 +100,25 @@ CREATE ({name: 'foo'})
 RETURN name  -- 失败: 匿名节点无标签, 绑定器找不到 'name' 属性
 ```
 
-### 3.2 统计 (TCK 实测 444 次)
+### 3.2 统计
 
-| 错误模式 | 次数 |
-|----------|------|
-| Property 'X' not found on any label for variable 'Y' | 444 |
+| 错误模式 | 之前 | 现在 |
+|----------|------|------|
+| Property 'X' not found on any label | 444 | **0** |
 
-### 3.3 优先级: P1
+### 3.3 修复方案（已实现）
 
-这是当前最高频的运行时失败类型（444 个场景）。之前被多 MATCH skip 掩盖，实际影响远超最初估计的 ~20。修复方向：
-1. 对无标签节点的属性操作使用动态属性存储
-2. 或在 binder 中为无标签节点创建一个隐式的通用 schema
+**分支**: `feature/unlabeled-node-properties`
+
+1. **内部 __anon__ 标签**：每个 Graph 创建时自动创建，无标签节点的属性全部存储在此标签下。对用户透明（labels 返回值过滤）。
+
+2. **BoundDynamicPropertyRef**：新表达式，运行时按属性名字符串遍历所有 label 的 `LabelDef.properties` 做 name→pid 映射。作为 `BoundPropertyRef` 的兜底——catalog 中能找到属性走编译期索引，找不到走运行时按名匹配。
+
+3. **AlterVertexLabelPhysicalOp**：对标边类型的同名算子，在 `CreateNodePhysicalOp` 前执行，运行时为 `__anon__` 标签注册新属性。
+
+4. **BoundCreateNodeOp::pending_props**：对标边类型的同名字段，暂存绑定阶段 catalog 中不存在的属性名，由物理层按名解析。
+
+**状态**: ✅ 已修复。208/208 单元测试通过，5 个无标签专项测试。
 
 ---
 
@@ -297,7 +314,7 @@ WITH {name: 'baz'} AS nestedMap RETURN nestedMap.name.name2
 
 | 优先级 | 分类 | 影响场景数 | 修复路径 |
 |--------|------|---------------|---------|
-| **P1** | 分类3: 属性未找到 (无标签节点) | 444 | binder 支持动态属性 |
+| ~~P1~~ | ~~分类3: 属性未找到 (无标签节点)~~ | ~~444~~ | ✅ 已修复 |
 | **P1** | 分类1: MERGE/DELETE/UNWIND/OPTIONAL | ~2800 | 逐个实现子句 |
 | ~~P1~~ | ~~分类9: WITH 作为首个子句~~ | ~~478~~ | ✅ 已修复 |
 | ~~P1~~ | ~~分类1.2: 逗号分隔 CREATE 路径~~ | ~~187~~ | ✅ 已修复 |
@@ -316,6 +333,6 @@ WITH {name: 'baz'} AS nestedMap RETURN nestedMap.name.name2
 2. ~~**P1-1**: 改进 `ensureTypesForQuery()` 用 AST 提取类型（解决分类4）~~ ✅ 已修复
 3. ~~**P1-2**: 实现 `type()` / `last()` 函数 + EvalContext 基础设施（解决分类5）~~ ✅ 已修复
 4. ~~**P1-3**: 增强多部分查询支持（解决分类6）~~ ✅ 已修复
-5. **P1-4**: 支持无标签节点的属性访问（解决分类3，444 场景）
+5. ~~**P1-4**: 支持无标签节点的属性访问（解决分类3，444 场景）~~ ✅ 已修复
 6. ~~**P1-5**: 支持 WITH 作为首个子句（解决分类9，478 场景）~~ ✅ 已修复
 7. **P2**: 补全 TCK 步骤定义（分类2）

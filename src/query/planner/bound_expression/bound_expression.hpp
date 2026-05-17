@@ -9,6 +9,7 @@
 #include "query/planner/bound_expression/bound_list.hpp"
 #include "query/planner/bound_expression/bound_literal.hpp"
 #include "query/planner/bound_expression/bound_map.hpp"
+#include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_parameter.hpp"
 #include "query/planner/bound_expression/bound_property_ref.hpp"
 #include "query/planner/bound_expression/bound_quantifier_expr.hpp"

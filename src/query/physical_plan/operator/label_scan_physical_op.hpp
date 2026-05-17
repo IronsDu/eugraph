@@ -19,9 +19,11 @@ class LabelScanPhysicalOp : public PhysicalOperator {
 public:
     LabelScanPhysicalOp(std::string variable, LabelId label_id, std::vector<binder::BoundType> output_types,
                         IAsyncGraphDataStore& store, std::unordered_map<LabelId, LabelDef> label_defs,
+                        LabelId anon_label_id = INVALID_LABEL_ID,
                         std::unordered_map<LabelId, std::vector<uint16_t>> label_prop_ids = {})
         : variable_(std::move(variable)), label_id_(label_id), output_types_(std::move(output_types)), store_(store),
-          label_defs_(std::move(label_defs)), label_prop_ids_(std::move(label_prop_ids)) {}
+          label_defs_(std::move(label_defs)), anon_label_id_(anon_label_id),
+          label_prop_ids_(std::move(label_prop_ids)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
@@ -84,6 +86,7 @@ private:
     std::vector<binder::BoundType> output_types_;
     IAsyncGraphDataStore& store_;
     std::unordered_map<LabelId, LabelDef> label_defs_;
+    LabelId anon_label_id_ = INVALID_LABEL_ID;
     std::unordered_map<LabelId, std::vector<uint16_t>> label_prop_ids_;
 };
 

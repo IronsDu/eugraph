@@ -7,6 +7,20 @@
 namespace eugraph {
 namespace compute {
 
+namespace {
+PropertyValue valueToPropertyValue(const Value& v) {
+    if (std::holds_alternative<bool>(v))
+        return std::get<bool>(v);
+    if (std::holds_alternative<int64_t>(v))
+        return std::get<int64_t>(v);
+    if (std::holds_alternative<double>(v))
+        return std::get<double>(v);
+    if (std::holds_alternative<std::string>(v))
+        return std::get<std::string>(v);
+    return PropertyValue{};
+}
+} // namespace
+
 std::string CreateNodePhysicalOp::toString() const {
     std::string s;
     for (size_t i = 0; i < label_ids_.size(); i++) {
@@ -28,6 +42,31 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
         while (auto chunk = co_await child_gen.next()) {
             // Discard child output — we just need the side effects
         }
+    }
+
+    // Resolve pending_props_ (by name) after DDL operators may have registered them
+    for (auto& [prop_name, expr] : pending_props_) {
+        for (size_t i = 0; i < label_props_.size(); ++i) {
+            auto lid = label_props_[i].first;
+            auto def_it = label_defs_.find(lid);
+            if (def_it == label_defs_.end())
+                continue;
+            for (const auto& pd : def_it->second.properties) {
+                if (pd.name == prop_name) {
+                    if (std::holds_alternative<binder::BoundLiteral>(expr)) {
+                        auto& lit = std::get<binder::BoundLiteral>(expr);
+                        if (!isNull(lit.value)) {
+                            auto& props = label_props_[i].second;
+                            if (props.size() <= pd.id)
+                                props.resize(pd.id + 1);
+                            props[pd.id] = valueToPropertyValue(lit.value);
+                        }
+                    }
+                    goto next_pending;
+                }
+            }
+        }
+    next_pending:;
     }
 
     // Check unique constraints before inserting vertex
