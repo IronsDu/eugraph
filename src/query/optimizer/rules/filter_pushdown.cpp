@@ -10,7 +10,6 @@ bool isPenetrable(OptNodeType type) {
     case OptNodeType::Expand:
     case OptNodeType::VarLenExpand:
     case OptNodeType::PathBuild:
-    case OptNodeType::Filter:
     case OptNodeType::Sort:
     case OptNodeType::Skip:
     case OptNodeType::Limit:

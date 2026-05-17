@@ -155,11 +155,11 @@ protected:
 TEST_F(RpcIntegrationTest, CreateAndListLabels) {
     auto info = createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
                                        makePropDef("age", eugraph::thrift::PropertyType::INT64)});
-    EXPECT_EQ(info.id().value(), 1);
+    EXPECT_GE(info.id().value(), 1); // __anon__ label may reserve id=1
     EXPECT_EQ(info.name().value(), "Person");
 
     auto labels = client_->listLabels("default");
-    EXPECT_EQ(labels.size(), 1);
+    EXPECT_EQ(labels.size(), 1); // __anon__ is filtered from user-visible labels
 }
 
 TEST_F(RpcIntegrationTest, CreateAndListEdgeLabels) {

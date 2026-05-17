@@ -1,6 +1,7 @@
 #include "query/planner/binder.hpp"
 
 #include "query/function/batch_ops.hpp"
+#include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
@@ -1127,21 +1128,23 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
 
         auto create_node = std::make_unique<BoundCreateNodeOp>();
         create_node->variable = start_var;
-        create_node->label_id = start_label.value_or(INVALID_LABEL_ID);
+        create_node->label_id = start_label.value_or(catalog_.getAnonLabelId());
 
         // Bind inline properties as expressions
-        if (element.node.properties && start_label) {
-            const auto* ldef = catalog_.lookupLabel(*start_label);
+        if (element.node.properties && create_node->label_id != INVALID_LABEL_ID) {
+            const auto* ldef = catalog_.lookupLabel(create_node->label_id);
             if (ldef) {
                 for (const auto& [prop_name, prop_expr] : element.node.properties->entries) {
-                    auto* pd = catalog_.lookupProperty(*start_label, prop_name);
+                    auto* pd = catalog_.lookupProperty(create_node->label_id, prop_name);
                     if (pd) {
                         auto bound_val = bindExpression(prop_expr);
                         if (bound_val)
                             create_node->properties.emplace_back(pd->id, std::move(*bound_val));
+                    } else {
+                        auto bound_val = bindExpression(prop_expr);
+                        if (bound_val)
+                            create_node->pending_props.emplace_back(prop_name, std::move(*bound_val));
                     }
-                    // Unknown properties on CREATE are silently skipped;
-                    // they will be auto-registered when write path supports dynamic schema.
                 }
             }
         }
@@ -1210,14 +1213,18 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
                 // Create target node
                 auto create_dst = std::make_unique<BoundCreateNodeOp>();
                 create_dst->variable = dst_var;
-                create_dst->label_id = dst_label.value_or(INVALID_LABEL_ID);
-                if (node_pat.properties && dst_label) {
+                create_dst->label_id = dst_label.value_or(catalog_.getAnonLabelId());
+                if (node_pat.properties && create_dst->label_id != INVALID_LABEL_ID) {
                     for (const auto& [prop_name, prop_expr] : node_pat.properties->entries) {
-                        auto* pd = catalog_.lookupProperty(*dst_label, prop_name);
+                        auto* pd = catalog_.lookupProperty(create_dst->label_id, prop_name);
                         if (pd) {
                             auto bound_val = bindExpression(prop_expr);
                             if (bound_val)
                                 create_dst->properties.emplace_back(pd->id, std::move(*bound_val));
+                        } else {
+                            auto bound_val = bindExpression(prop_expr);
+                            if (bound_val)
+                                create_dst->pending_props.emplace_back(prop_name, std::move(*bound_val));
                         }
                     }
                 }
@@ -1522,9 +1529,12 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
 
                         auto candidates = catalog_.lookupPropertyAcrossLabels(all_labels, ptr->property);
                         if (candidates.empty()) {
-                            error("Property '" + ptr->property + "' not found on any label for variable '" +
-                                  col_ref.name + "'");
-                            return std::nullopt;
+                            // Fallback: runtime property lookup by name
+                            auto dyn_ref = std::make_unique<BoundDynamicPropertyRef>();
+                            dyn_ref->object = std::move(*obj);
+                            dyn_ref->property = ptr->property;
+                            dyn_ref->result_type = BoundType::Any();
+                            return BoundExpression(std::move(dyn_ref));
                         }
 
                         auto saved_var_name = col_ref.name;

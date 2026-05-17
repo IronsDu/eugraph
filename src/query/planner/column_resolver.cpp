@@ -1,5 +1,6 @@
 #include "query/planner/column_resolver.hpp"
 
+#include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
@@ -122,6 +123,8 @@ bool ColumnResolver::resolveExpression(BoundExpression& expr, const BindContext&
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundUnaryOp>>) {
                 return resolveExpression(val->operand, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundPropertyRef>>) {
+                return resolveExpression(val->object, ctx, errors);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundDynamicPropertyRef>>) {
                 return resolveExpression(val->object, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundFunctionCall>>) {
                 for (auto& arg : val->args) {

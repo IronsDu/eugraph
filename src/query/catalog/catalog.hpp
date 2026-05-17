@@ -71,9 +71,17 @@ public:
     LabelId labelNameToId(const std::string& name) const;
     EdgeLabelId edgeLabelNameToId(const std::string& name) const;
 
+    /// Returns the internal __anon__ label ID (for unlabeled node properties).
+    /// Returns INVALID_LABEL_ID if not initialized.
+    LabelId getAnonLabelId() const {
+        return anon_label_id_;
+    }
+
 private:
     std::unordered_map<std::string, LabelId> label_name_to_id_;
     std::unordered_map<LabelId, LabelDef> label_defs_;
+
+    LabelId anon_label_id_ = INVALID_LABEL_ID;
 
     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id_;
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs_;

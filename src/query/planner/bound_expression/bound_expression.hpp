@@ -3,6 +3,7 @@
 #include "query/planner/bound_expression/bound_binary_op.hpp"
 #include "query/planner/bound_expression/bound_case.hpp"
 #include "query/planner/bound_expression/bound_column_ref.hpp"
+#include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_expression_fwd.hpp"
 #include "query/planner/bound_expression/bound_function_call.hpp"
 #include "query/planner/bound_expression/bound_label_cast.hpp"

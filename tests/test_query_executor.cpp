@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "common/types/graph_types.hpp"
 #include "query/executor/query_executor.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
@@ -776,6 +777,164 @@ TEST_F(QueryExecutorTest, EmptyGraphAllOperations) {
     EXPECT_EQ(execSync(*executor_, "MATCH (n) RETURN n").rows.size(), 0);
     EXPECT_EQ(execSync(*executor_, "MATCH (n:Person) WHERE true RETURN n").rows.size(), 0);
     EXPECT_EQ(execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b").rows.size(), 0);
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodePropertyAccess) {
+    // Create __anon__ label with a 'name' property
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {name_pd}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    // Recreate executor so new catalog picks up __anon__ label
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    // Create unlabeled node and return its property
+    auto result = execSync(*executor_, "CREATE ({name: 'hello'})");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n.name").rows;
+    ASSERT_EQ(rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodeReturnWholeVertex) {
+    // __anon__ label with properties
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {name_pd}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    execSync(*executor_, "CREATE ({name: 'whole'})");
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n").rows;
+    ASSERT_EQ(rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodeWhereFilter) {
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {name_pd}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    execSync(*executor_, "CREATE ({name: 'target'}), ({name: 'other'})");
+    auto rows = execSync(*executor_, "MATCH (n) WHERE n.name = 'target' RETURN n.name").rows;
+    ASSERT_EQ(rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodeCrossProductWithLabeled) {
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {name_pd}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    insertTestVertices(); // 5 Person nodes
+    execSync(*executor_, "CREATE ({name: 'anon'})");
+    // Cross product of unlabeled + labeled nodes
+    auto rows = execSync(*executor_, "MATCH (n) WITH n MATCH (p:Person) RETURN n.name, p").rows;
+    // 1 unlabeled node + 5 Person nodes = 6 nodes total × 5 Person = 30
+    ASSERT_GE(rows.size(), 5u);
+    // Verify at least one row has the unlabeled node's property
+    bool found_anon = false;
+    for (const auto& row : rows) {
+        if (row.size() >= 1 && std::holds_alternative<std::string>(row[0])) {
+            if (std::get<std::string>(row[0]) == "anon")
+                found_anon = true;
+        }
+    }
+    ASSERT_TRUE(found_anon);
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodeAutoRegisterProperty) {
+    // Create __anon__ WITHOUT pre-registering any properties
+    // The AlterVertexLabelPhysicalOp should auto-register them
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    // CREATE with a property not yet registered → pending_props triggers DDL
+    auto result = execSync(*executor_, "CREATE ({name: 'auto'})");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    // MATCH should find the property value (not null)
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n.name").rows;
+    ASSERT_EQ(rows.size(), 1u);
+    ASSERT_EQ(rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(rows[0][0]), "auto");
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodeTwoProperties) {
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto result = execSync(*executor_, "CREATE ({name: 'hello', age: 42})");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n.name, n.age").rows;
+    ASSERT_EQ(rows.size(), 1u);
+    ASSERT_EQ(rows[0].size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(rows[0][0]), "hello");
+    ASSERT_TRUE(std::holds_alternative<int64_t>(rows[0][1]));
+    EXPECT_EQ(std::get<int64_t>(rows[0][1]), 42);
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodeSamePropNameDifferentTypes) {
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    // First node: prop1 is INT64
+    auto r1 = execSync(*executor_, "CREATE ({prop1: 42})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Second node: prop1 is STRING (same name, different type)
+    auto r2 = execSync(*executor_, "CREATE ({prop1: 'hello'})");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // Both should be readable with correct types
+    auto rows = execSync(*executor_, "MATCH (n) RETURN n.prop1").rows;
+    ASSERT_EQ(rows.size(), 2u);
+
+    bool found_int = false, found_str = false;
+    for (auto& row : rows) {
+        if (std::holds_alternative<int64_t>(row[0])) {
+            EXPECT_EQ(std::get<int64_t>(row[0]), 42);
+            found_int = true;
+        } else if (std::holds_alternative<std::string>(row[0])) {
+            EXPECT_EQ(std::get<std::string>(row[0]), "hello");
+            found_str = true;
+        }
+    }
+    EXPECT_TRUE(found_int) << "Missing INT64 value for prop1";
+    EXPECT_TRUE(found_str) << "Missing STRING value for prop1";
 }
 
 // ==================== Limit Edge Cases ====================

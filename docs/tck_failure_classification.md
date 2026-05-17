@@ -1,8 +1,9 @@
 # TCK 测试失败分类报告
 
 **日期**: 2026-05-17 (更新)  
-**分支**: feature/comma-create-paths (分类1.2修复: 逗号分隔 CREATE 路径)  
+**分支**: feature/unlabeled-node-properties  
 **总计**: 3897 场景, 16006 步骤  
+**运行耗时**: 12 分 40 秒  
 **检测方式**: Parser AST 遍历 (替换 regex-based skip)
 
 ---
@@ -11,42 +12,53 @@
 
 | 状态 | 场景数 | 占比 |
 |------|--------|------|
-| 实际运行 (无内部skip) | ~1983 | 50.9% |
-| 内部 Skip (AST 检测到不支持语法) | 1914 | 49.1% |
-| 运行时错误 (含 TCK 期望的错误匹配) | ~1965 | 50.4% |
-| 真正通过 | ~18 | 0.5% |
-
-> **本次更新**: 支持逗号分隔的 CREATE 路径 (~187 场景)。
-> `bindCreate` 中后续 pattern 正确链接到前一个 pattern 的输出链，不再被覆盖。
+| 通过 | 44 | 1.1% |
+| AST 跳过 (不支持的语法) | 1451 | 37.2% |
+| 查询错误 (server 返回错误) | 1438 | 36.9% |
+| 结果不匹配 (断言失败) | 802 | 20.6% |
+| 未定义步骤 (缺少 step 定义) | 162 | 4.2% |
 
 ---
 
 ## 分类 1: AST 精确 SKIP — 不支持的语法（设计如此，不修复）
 
-这些场景因查询使用了尚未实现的语法而被 AST 遍历器跳过。
-跳过是预期的，因为对应的查询引擎能力尚未实现。
+1451 个场景因查询使用了尚未实现的语法而被 AST 遍历器跳过。跳过是预期的，因为对应的查询引擎能力尚未实现。
 
 ### 1.1 不支持的子句类型
 
 | 子句 | 跳过次数 | 优先级 | 说明 |
 |------|---------|--------|------|
-| MERGE | 63 | P1 | 合并创建，需要条件扫描+创建逻辑 |
-| DELETE / DETACH DELETE | 38 | P1 | 删除顶点/边 |
-| UNWIND | 16 | P1 | 展开列表为行 |
-| REMOVE | 16 | P2 | 删除属性/标签 |
-| OPTIONAL MATCH | 8 | P1 | 可选匹配，需要 outer join 语义 |
+| UNWIND | 191 | P1 | 展开列表为行 |
+| MERGE | 72 | P1 | 合并创建，需要条件扫描+创建逻辑 |
+| DELETE / DETACH DELETE | 41 | P1 | 删除顶点/边 |
+| OPTIONAL MATCH | 78 | P1 | 可选匹配，需要 outer join 语义 |
+| REMOVE | 30 | P2 | 删除属性/标签 |
 | CALL | 2 | P3 | 存储过程调用 |
 | standalone CALL | 1 | P3 | 顶层 CALL |
+| UNION | 12 | P2 | 查询结果合并 |
 
-### 1.2 不支持的语法模式
+### 1.2 不支持的表达式
+
+| 表达式 | 跳过次数 | 优先级 | 说明 |
+|--------|---------|--------|------|
+| 量词 (ALL/ANY/NONE/SINGLE) | 532 | P2 | 列表量词谓词 |
+| IN 运算符 | 62 | P2 | `x IN [1,2,3]` |
+| XOR 运算符 | 30 | P3 | 异或布尔运算 |
+| CASE 表达式 | 12 | P2 | 条件表达式 |
+| STARTS WITH | 11 | P2 | 字符串前缀匹配 |
+| ENDS WITH | 8 | P2 | 字符串后缀匹配 |
+| CONTAINS | 8 | P2 | 字符串包含 |
+| EXISTS 子查询 | 10 | P2 | 存在性子查询 |
+| 模式推导 (Pattern comprehension) | 15 | P3 | `[x IN ... \| ...]` |
+
+### 1.3 不支持的语法模式
 
 | 模式 | 跳过次数 | 优先级 | 说明 |
 |------|---------|--------|------|
-| ~~逗号分隔的 CREATE 路径~~ | ~~187~~ | ~~P1~~ | ✅ 已支持 |
-| 多标签节点 | 7 | P2 | `CREATE (:A:B)` |
+| Parser 限制 (无法解析) | 232 | P3 | 各种 parser 无法处理的语法变体 |
+| 无上界变长扩展 | 77 | P2 | `[:T*]` 无 max 上界，DFS 资源耗尽 |
+| 多标签节点 | 25 | P2 | `CREATE (:A:B)` |
 | 关系类型交替 | 3 | P2 | `[:A|B]` |
-| Parse Error | 4 | P3 | Parser 无法解析的语法变体 |
-| ~~多个 MATCH 子句~~ | ~~198~~ | ~~P1~~ | ✅ 已支持 (CrossProduct) |
 
 **结论**: 此分类均属于查询引擎功能缺失，不需要修改 TCK 框架。优先在后续版本中实现对应功能。
 
@@ -54,268 +66,125 @@
 
 ## 分类 2: 缺少步骤定义（Undefined Steps）
 
-80 个场景因缺少 Gherkin 步骤定义而标记为 undefined（另有 82 个场景因 AST skip 更精确而新暴露）。
+162 个场景因缺少 Gherkin 步骤定义而标记为 undefined。
 
 ### 2.1 步骤模式统计
 
-| 缺失步骤模式 | 次数 | 优先级 | 说明 |
-|-------------|------|--------|------|
-| `the result should be (ignoring element order for lists)` | 21 | P2 | 列表忽略顺序比较 |
-| `parameters are:` | ~40 | P2 | 参数化查询 |
-| `executing control query:` | ~30 | P2 | 控制查询（setup 的一部分） |
-| `there exists a procedure ...` | ~35 | P2 | 存储过程定义 |
-| `a TypeError should be raised at any time: ...` | ~15 | P2 | 任意时间抛 TypeError |
-| `the binary-tree-1 graph` | ~10 | P3 | 预定义图结构（二叉树） |
-| `the binary-tree-2 graph` | ~10 | P3 | 预定义图结构（二叉树变体） |
+| 缺失步骤模式 | 涉及场景数 | 优先级 | 说明 |
+|-------------|-----------|--------|------|
+| `And parameters are:` | 64 | P2 | 参数化查询 ($param) |
+| `And there exists a procedure ...` | 50 | P3 | 存储过程定义 (CALL 子句前置) |
+| `When executing control query:` | 33 | P2 | 控制查询（setup 验证） |
+| `Then the result should be (ignoring element order for lists)` | 23 | P2 | 列表忽略顺序比较 |
+| `Then a TypeError should be raised at any time: ...` | 18 | P2 | 任意阶段抛 TypeError |
+| `Then a ProcedureError should be raised ...` | 2 | P3 | 存储过程错误 |
+| `Given the binary-tree-N graph` | 19 | P3 | 预定义图结构（二叉树） |
 
 ### 2.2 分析与建议
 
-- **参数支持** (`parameters are:`) 和 **控制查询** (`executing control query:`) 是 TCK 框架的基础能力，建议在 P1/P2 中实现
+- **参数支持** (`parameters are:`) 和 **控制查询** (`executing control query:`) 是 TCK 框架的基础能力，建议 P2 实现
 - **列表忽略顺序比较** 可用于当前 MATCH 结果验证
 - **存储过程** 相关步骤是远期目标
 - **预定义图结构** 需要根据 TCK feature 文件定义来加载
 
 ---
 
-## 分类 3: 绑定错误 — 属性未找到
+## 分类 3: 查询错误 — 服务端返回错误
 
-查询引擎报错 "Property 'X' not found on any label for variable 'Y'"。
+1438 个场景的服务端查询返回了错误。按根因分类如下：
 
-### 3.1 根因
+### 3.1 绑定错误 — 无返回列 (NothingToReturn)
 
-TCK 特征文件中的 `CREATE ({prop: val})` 创建无标签节点，之后 `RETURN n.prop` 时 binder 无法找到属性到标签的映射。
+**次数**: 1077  
+**根因**: Binder 遇到无法绑定的模式后，没有可用的 RETURN 列。通常是被其他绑定错误级联触发（如分类 3.2~3.5 的前置错误）。
 
-**典型查询**:
-```cypher
-CREATE ({name: 'foo'})
-RETURN name  -- 失败: 匿名节点无标签, 绑定器找不到 'name' 属性
-```
+### 3.2 绑定错误 — 变量未定义 (UndefinedVariable)
 
-### 3.2 统计 (TCK 实测 444 次)
+**次数**: 199  
+**根因**: 查询引用了不在作用域内的变量名，或 TCK 测试用例预期抛出 UndefinedVariable 错误。
 
-| 错误模式 | 次数 |
-|----------|------|
-| Property 'X' not found on any label for variable 'Y' | 444 |
+### 3.3 绑定错误 — 类型不匹配 (TypeMismatch)
 
-### 3.3 优先级: P1
+**次数**: 67  
+**根因**: 算术运算/比较操作接收了非数值类型（如 `ANY + INT64`, `STRING + STRING` 等）。
 
-这是当前最高频的运行时失败类型（444 个场景）。之前被多 MATCH skip 掩盖，实际影响远超最初估计的 ~20。修复方向：
-1. 对无标签节点的属性操作使用动态属性存储
-2. 或在 binder 中为无标签节点创建一个隐式的通用 schema
+### 3.4 绑定错误 — 函数未找到 (UnknownFunction)
 
----
+**次数**: 37  
+**根因**: 使用了尚未注册的函数（如 `labels(VERTEX)` 等）。
 
-## 分类 4: 绑定错误 — 边类型未找到 ✅ 已修复
+### 3.5 绑定错误 — 属性访问非实体类型 (Property on non-entity)
 
-查询引擎报错 "Edge type 'X' does not exist"。
+**次数**: 22  
+**根因**: 对非顶点/边类型（BOOL、STRING、LIST 等）进行属性访问（`n.name` 其中 n 是标量）。
 
-### 4.1 根因
+### 3.6 绑定错误 — 不支持的 SET 语法
 
-`ensureTypesForQuery()` 未能从 query 文本中提取到边类型名称，或 CREATE 语句中边类型需要在创建边之前预先注册。
+**次数**: 8  
+**根因**: `SET n += {props}` 等动态属性设置语法尚未实现。
 
-**典型查询**:
-```cypher
-CREATE ()-[r:R {num: 42}]->()
-RETURN r.num  -- 失败: Edge type 'R' does not exist
-```
+### 3.7 其他绑定错误
 
-### 4.2 统计
-
-| 错误模式 | 次数 |
-|----------|------|
-| Edge type 'R' does not exist | ~5 |
-| Edge type 'X' does not exist | ~1 |
-| Edge type 'FOO' does not exist | ~1 |
-| Edge type 'KNOWS' does not exist | ~1 |
-
-### 4.3 修复方案（已实现）
-
-**分支**: `feature/auto-create-edge-type-on-create`
-
-Binder 检测到边类型或属性不存在时，不修改数据库，仅在 `BoundCreateEdgeOp` 中标记 `label_name`（边类型缺失）和 `pending_props`（属性缺失）。PhysicalPlanner 在 planBound 阶段自动插入运行时 DDL 算子：
-
-1. **边类型不存在** → 插入 `CreateEdgeLabelPhysicalOp`：创建元数据 + WT 数据表 + 属性定义
-2. **边类型存在但属性缺失** → 插入 `AlterEdgeLabelPhysicalOp`：为已有边类型添加属性列
-3. `CreateEdgePhysicalOp` 执行时通过 `pending_props` 按属性名解析 pid（pid 在 DDL 算子执行后才分配）
-
-**状态**: ✅ 已修复，所有 Classification 4 场景现已通过。
+| 错误 | 次数 | 说明 |
+|------|------|------|
+| 标签不存在 (UnknownLabel) | 16 | 引用未创建的标签 |
+| 边类型不存在 (UnknownEdgeType) | 2 | 引用未创建的边类型 |
+| 混合路径不支持 (Mixed path) | 3 | 定长/变长混合路径链 |
+| 无效变长范围 (Invalid VLE range) | 3 | 变长跳数范围无效 |
+| 无效参数类型 | 4 | 函数参数类型不匹配 |
 
 ---
 
-## 分类 5: 绑定错误 — 函数未找到 ✅ 已修复
+## 分类 4: 结果不匹配 — 断言失败
 
-查询引擎报错 "Function not found: XXX"。
+802 个场景的查询成功执行，但返回结果与 TCK 预期不符。
 
-### 5.1 统计
+### 4.1 可能原因
 
-| 缺失函数 | 次数 | 优先级 | 状态 |
-|----------|------|--------|------|
-| `type(EDGE)` | ~5 | P1 | ✅ 已实现 |
-| `last(LIST<EDGE>)` | 1 | P2 | ✅ 已实现 |
-| `shortestPath()` | 已 SKIP | P2 | 待实现 |
+- **排序差异**: TCK 期望有序结果但 server 返回无序（或反之）
+- **格式差异**: 数值精度（浮点数）、NULL 表示、列表格式等
+- **路径格式**: 路径的序列化/反序列化格式差异
+- **未实现语义**: 某些 Cypher 语义（如聚合空值处理、null 传播等）行为与标准不一致
 
-### 5.2 修复方案（已实现）
+### 4.2 优先级: P2
 
-**分支**: `feature/type-last-functions-evalctx`
-
-1. **`type(Edge) -> String`**: 通过 `EvalContext` 将 Catalog 传入函数回调。
-   `EdgeValue.label_id` → `Catalog::lookupEdgeLabel()` → `EdgeLabelDef.name`。
-2. **`last(List<Any>) -> Any`**: 返回 `ListValue.elements.back()`，空列表返回 null。
-3. **`type(Vertex)` 错误分类**: 绑定时检测到参数类型不匹配，报
-   `SyntaxError: InvalidArgumentType`（而非泛化的 `Function not found`）。
-4. **`EvalContext` 基础设施**: `ScalarFn` / `BatchScalarFn` 签名新增 `const EvalContext&`
-   参数，为后续需要访问 schema 的函数提供通用上下文传递机制。
-5. **自环修复**: `CREATE (a)-[:T]->(a)` 在 binder 中不再为同一变量创建重复的
-   `BoundCreateNodeOp`。
-
-**状态**: ✅ 已修复。TCK 场景 [7] "Failing when using `type()` on a node" 通过。
-其余 `type()` 场景的失败根因是前置依赖（分类 3 无标签节点、分类 6 WITH/MATCH 顺序）。
+需要逐一分析失败场景，区分是格式问题还是语义问题。
 
 ---
 
-## 分类 6: 绑定错误 — WITH/MATCH 子句顺序 ✅ 已修复
+## 已修复分类汇总
 
-查询引擎报错 "WITH without preceding clause" / "Cannot have MATCH without preceding context"。
-
-### 6.1 根因
-
-某些 TCK 测试是多部分查询（Multi-part Query），格式为：
-```cypher
-MATCH ...
-WITH ...
-MATCH ...
-RETURN ...
-```
-
-Binder 在 MATCH 出现在 WITH 之后时，如果 MATCH 引入的新变量不在 WITH 输出作用域内，会错误拒绝。
-
-### 6.2 统计
-
-| 错误模式 | 之前 | 现在 |
-|----------|------|------|
-| MATCH after WITH on unrelated variable (分类6) | ~24 | **0** |
-| Cannot have MATCH without preceding context (级联) | ~24 | 9 (根源是分类3) |
-
-> `WITH without preceding clause` 的 478 次出现已确认为独立问题（分类9），非分类6。
-
-### 6.3 修复方案（已实现）
-
-**分支**: `feature/with-match-order-binder`
-
-新增 `BoundBinaryJoinOp`（逻辑层）+ `CrossProductPhysicalOp`（物理层）算子，支持 MATCH-after-WITH 引入独立变量的笛卡尔积语义。
-
-**架构**:
-```
-         CrossProduct         ← BoundBinaryJoinOp (JoinType::Cross)
-        /            \
-  Project(a)     LabelScan(b)  ← 右边可以是任意算子链
-```
-
-**修改要点**:
-1. 新增 `JoinType` 枚举 + `BoundBinaryJoinOp` 逻辑算子（`join_type.hpp`, `bound_binary_join_op.hpp`）
-2. 新增 `CrossProductPhysicalOp` 物理算子（流式嵌套循环）
-3. `bindSingleQuery`: 检测 MATCH+WITH 独立模式，自动构建 CrossProduct + 延迟 MATCH WHERE
-4. `bindMatch`: 新增 `skip_where` 参数
-5. 所有 visit 分支（column_resolver, pushdown, memo, physical_planner）均更新
-
-**物理执行**: 流式嵌套循环，内存 O(left_batch + right_batch + output_buffer)，无暴涨风险。
-
-**Join 扩展性**: `BoundBinaryJoinOp.join_type` 支持 Cross/Inner/Left，后续实现 InnerJoin 只需在物理层替换为 HashJoinPhysicalOp。
-
-**已移除了 TCK 的 `countMatchClauses > 1` skip**。
-
-**状态**: ✅ 已修复。所有 WITH 相关单元测试通过（45/45），完整测试套通过（197/197）。
-
-**暂未支持**:
-- WITH 作为首个子句 (`WITH 1 AS x RETURN x`) — 独立问题
-- 同个 MATCH 中的混合模式 (`MATCH (x), (a)-->(b)` 在 WITH 之后) — 后续迭代
-
----
-
-## 分类 7: 错误消息不匹配 — 引擎报错但类型/消息与 TCK 期望不符
-
-TCK 期望特定错误类型（如 SyntaxError / TypeError），但引擎返回的是 RuntimeError 或其他错误消息。
-
-### 7.1 典型情况
-
-| TCK 期望 | 实际返回 | 原因 |
-|----------|---------|------|
-| SyntaxError: UndefinedVariable | RuntimeError: Property 'name' not found | 错误分类逻辑不够精细 |
-| TypeError: InvalidArgumentType | RuntimeError: ... | 参数类型校验未实现 |
-| SemanticError: ... | RuntimeError: ... | 缺少语义分析阶段的错误分类 |
-
-### 7.2 优先级: P2
-
-需要完善 `tck_context.cpp` 中的 `executeQuery()` 错误分类逻辑，
-以及服务端的错误类型定义。
-
----
-
-## 分类 8: 其他引擎局限性
-
-| 错误 | 次数 | 优先级 | 说明 |
-|------|------|--------|------|
-| Named path with mixed fixed/varlen chain | ~2 | P2 | 混合定长/变长路径链 |
-| Variable '(a)-[:T*]->(b:MissingLabel)' not defined | ~1 | P2 | 变长路径的标签推导 |
-
----
-
-## 分类 9: 绑定错误 — WITH 作为首个子句 ✅ 已修复
-
-查询引擎报错 "WITH without preceding clause"。
-
-### 9.1 根因
-
-`bindWith` 检查 `!current` 时拒绝没有前置子句的 WITH：
-```cypher
-WITH 1 AS x RETURN x
-WITH {name: 'baz'} AS nestedMap RETURN nestedMap.name.name2
-```
-
-但 openCypher 允许 WITH 作为查询的第一个子句。
-
-### 9.2 统计
-
-| 错误模式 | 之前 | 现在 |
-|----------|------|------|
-| WITH without preceding clause | 478 | **0** |
-
-### 9.3 修复方案（已实现）
-
-**分支**: `feature/with-first-clause`
-
-新增 `BoundSingletonOp`（逻辑层）+ `SingletonPhysicalOp`（物理层）算子：
-- `BoundSingletonOp` 是一个空 struct（叶子算子），作为 variant 的第一个替代项（index 0）
-- `SingletonPhysicalOp::executeChunk()` 产生一个空 DataChunk（count=1，0 列），作为投影的数据源
-- `bindSingleQuery` 中，当 WITH 是第一个子句（`current == nullopt`）时，插入 `BoundSingletonOp` 作为 `current`，然后正常走 `bindWith` 路径
-
-**状态**: ✅ 已修复。单元测试 200/200 全部通过。
+| 分类 | 修复前 | 修复后 | 状态 |
+|------|--------|--------|------|
+| 分类: 无标签节点属性 (`Property not found`) | 444 | 0 | ✅ |
+| 分类: 边类型自动创建 (`Edge type does not exist`) | ~8 | 0 | ✅ |
+| 分类: type/last 函数 (`Function not found`) | ~6 | 0 | ✅ |
+| 分类: WITH/MATCH 顺序 | ~24 | 0 | ✅ |
+| 分类: WITH 为首子句 | 478 | 0 | ✅ |
+| 分类: 逗号分隔 CREATE 路径 | 187 | 0 | ✅ |
+| 分类: 多个 MATCH 子句 | 198 | 0 | ✅ |
+| 分类: 优化器无限循环 (FilterPushdown) | 导致超时卡死 | 已修复 | ✅ |
 
 ---
 
 ## 优先级汇总
 
 | 优先级 | 分类 | 影响场景数 | 修复路径 |
-|--------|------|---------------|---------|
-| **P1** | 分类3: 属性未找到 (无标签节点) | 444 | binder 支持动态属性 |
-| **P1** | 分类1: MERGE/DELETE/UNWIND/OPTIONAL | ~2800 | 逐个实现子句 |
-| ~~P1~~ | ~~分类9: WITH 作为首个子句~~ | ~~478~~ | ✅ 已修复 |
-| ~~P1~~ | ~~分类1.2: 逗号分隔 CREATE 路径~~ | ~~187~~ | ✅ 已修复 |
+|--------|------|-----------|---------|
+| **P1** | 分类1: MERGE/DELETE/UNWIND/OPTIONAL | ~421 | 逐个实现子句 |
+| **P1** | 分类1: 量词表达式 (ALL/ANY/NONE/SINGLE) | 532 | 实现列表量词 |
 | **P2** | 分类2: 缺失步骤定义 | 162 | 补实现步骤 |
+| **P2** | 分类4: 结果不匹配 | 802 | 逐一分析 |
+| **P2** | 分类3: NothingToReturn 级联错误 | 1077 | 修复前置绑定问题 |
+| **P2** | 分类1: CASE/IN/STARTS WITH/ENDS WITH 等 | ~123 | 实现表达式 |
 | **P2** | 分类7: 错误消息不匹配 | ~50 | 错误分类精细化 |
-| **P3** | 分类8: 引擎局限性 | ~3 | 后续迭代 |
-| ~~P1~~ | ~~分类4: 边类型未找到~~ | ~~~8~~ | ✅ 已修复 |
-| ~~P1~~ | ~~分类5: 函数未找到 (type等)~~ | ~~~6~~ | ✅ 已修复 |
-| ~~P1~~ | ~~分类6: WITH/MATCH 顺序~~ | ~~~24~~ | ✅ 已修复 |
+| **P3** | 分类1: Parser 限制 | 232 | Parser 增强 |
+| **P3** | 分类3: 其他绑定错误 | ~30 | 后续迭代 |
 
 ---
 
-## 下一步建议
+## 测试基础设施改进
 
-1. ~~**立即**: 合并当前 PR（TCK 基础设施 + graph_manager 竞态修复 + AST 精准 skip）~~ ✅ 已完成
-2. ~~**P1-1**: 改进 `ensureTypesForQuery()` 用 AST 提取类型（解决分类4）~~ ✅ 已修复
-3. ~~**P1-2**: 实现 `type()` / `last()` 函数 + EvalContext 基础设施（解决分类5）~~ ✅ 已修复
-4. ~~**P1-3**: 增强多部分查询支持（解决分类6）~~ ✅ 已修复
-5. **P1-4**: 支持无标签节点的属性访问（解决分类3，444 场景）
-6. ~~**P1-5**: 支持 WITH 作为首个子句（解决分类9，478 场景）~~ ✅ 已修复
-7. **P2**: 补全 TCK 步骤定义（分类2）
+本次更新包含以下修复：
+
+1. **优化器无限循环修复**: `FilterPushdownRule` 允许 Filter 穿透 Filter 导致对换循环（`Filter_A → Filter_B` 变成 `Filter_B → Filter_A` 再变回来，无限循环）。`findDuplicate` 只检查 group_id + child_groups + variant index，不比较算子内容，因此无法识别语义等价。修复：从 `isPenetrable` 中移除 `OptNodeType::Filter`，并增加 1024 次最大迭代安全限制。

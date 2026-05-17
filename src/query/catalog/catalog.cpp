@@ -9,8 +9,15 @@ void Catalog::load(std::unordered_map<LabelId, LabelDef> label_defs,
     edge_label_defs_ = std::move(edge_label_defs);
 
     label_name_to_id_.clear();
+    anon_label_id_ = INVALID_LABEL_ID;
     for (const auto& [lid, ldef] : label_defs_) {
         label_name_to_id_[ldef.name] = lid;
+    }
+    // Identify __anon__ label and remove from user-visible name map
+    auto anon_it = label_name_to_id_.find(std::string(kAnonLabelName));
+    if (anon_it != label_name_to_id_.end()) {
+        anon_label_id_ = anon_it->second;
+        label_name_to_id_.erase(anon_it);
     }
     edge_label_name_to_id_.clear();
     for (const auto& [elid, eldef] : edge_label_defs_) {

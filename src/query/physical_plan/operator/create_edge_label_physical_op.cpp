@@ -4,14 +4,14 @@ namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> CreateEdgeLabelPhysicalOp::executeChunk() {
-    // Build PropertyDef vector from prop_names_
+    // Build PropertyDef vector from prop_defs_
     std::vector<PropertyDef> property_defs;
     uint16_t next_pid = 0;
-    for (const auto& name : prop_names_) {
+    for (const auto& [name, type] : prop_defs_) {
         PropertyDef pd;
         pd.id = next_pid++;
         pd.name = name;
-        pd.type = PropertyType::STRING;
+        pd.type = type;
         property_defs.push_back(std::move(pd));
     }
 

@@ -16,7 +16,9 @@ namespace binder {
 struct BoundCreateNodeOp {
     std::string variable;
     LabelId label_id;
+    std::optional<std::string> label_name; // set when label doesn't exist (needs creation)
     std::vector<std::pair<uint16_t, BoundExpression>> properties;
+    std::vector<std::pair<std::string, BoundExpression>> pending_props; // property names → expressions
     std::optional<BoundLogicalOperator> child;
 };
 

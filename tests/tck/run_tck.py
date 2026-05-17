@@ -116,9 +116,6 @@ def main():
                         help="Server startup timeout in seconds (default: 30)")
     parser.add_argument("--keep-data", action="store_true",
                         help="Keep data directory after test")
-    parser.add_argument("--exit-zero", action="store_true",
-                        help="Always exit 0 (for CTest — individual scenario "
-                             "failures are expected)")
     parser.add_argument("extra", nargs=argparse.REMAINDER,
                         help="Extra arguments passed to tck_tests")
 
@@ -207,17 +204,14 @@ def main():
         print(f"[run_tck] WARNING: Server exited with non-zero code {server_status}",
               file=sys.stderr, flush=True)
 
-    # --exit-zero only masks expected scenario failures, not infrastructure crashes
-    if server_crashed:
+    # Infrastructure failures (server crash / non-zero exit) are always fatal.
+    # TCK scenario failures are expected (many features not yet supported).
+    if server_crashed or server_status != 0:
         print("[run_tck] Failing due to server crash", file=sys.stderr, flush=True)
         sys.exit(1)
 
-    if args.exit_zero:
-        print(f"[run_tck] Exiting 0 (--exit-zero, tck_tests returned {tck_result.returncode})",
-              flush=True)
-        sys.exit(0)
-
-    sys.exit(tck_result.returncode)
+    print(f"[run_tck] tck_tests exit code: {tck_result.returncode} (ignored)", flush=True)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

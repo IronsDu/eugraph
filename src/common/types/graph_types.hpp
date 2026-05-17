@@ -72,8 +72,12 @@ enum class PropertyType {
     STRING,
     INT64_ARRAY,
     DOUBLE_ARRAY,
-    STRING_ARRAY
+    STRING_ARRAY,
+    ANY
 };
+
+// Internal label name for unlabeled nodes (never user-visible)
+constexpr std::string_view kAnonLabelName = "__anon__";
 
 struct PropertyDef {
     uint16_t id = 0;

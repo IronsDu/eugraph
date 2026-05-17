@@ -9,18 +9,19 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace eugraph {
 namespace compute {
 
-/// Adds missing properties to an existing edge label at runtime.
-class AlterEdgeLabelPhysicalOp : public PhysicalOperator {
+/// Adds missing properties to an existing vertex label at runtime.
+/// Runs before CreateNodePhysicalOp, updates the shared maps so
+/// CreateNodePhysicalOp can resolve the new property IDs.
+class AlterVertexLabelPhysicalOp : public PhysicalOperator {
 public:
-    AlterEdgeLabelPhysicalOp(std::string label_name, std::vector<std::pair<std::string, PropertyType>> prop_defs,
-                             IAsyncGraphMetaStore& meta, std::unordered_map<EdgeLabelId, EdgeLabelDef>& defs,
-                             std::unique_ptr<PhysicalOperator> child)
+    AlterVertexLabelPhysicalOp(std::string label_name, std::vector<std::pair<std::string, PropertyType>> prop_defs,
+                               IAsyncGraphMetaStore& meta, std::unordered_map<LabelId, LabelDef>& defs,
+                               std::unique_ptr<PhysicalOperator> child)
         : label_name_(std::move(label_name)), prop_defs_(std::move(prop_defs)), meta_(meta), defs_(defs),
           child_(std::move(child)) {}
 
@@ -29,7 +30,7 @@ public:
     }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
-        return "AlterEdgeLabel(name=" + label_name_ + ")";
+        return "AlterVertexLabel(name=" + label_name_ + ")";
     }
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
@@ -39,7 +40,7 @@ private:
     std::string label_name_;
     std::vector<std::pair<std::string, PropertyType>> prop_defs_;
     IAsyncGraphMetaStore& meta_;
-    std::unordered_map<EdgeLabelId, EdgeLabelDef>& defs_;
+    std::unordered_map<LabelId, LabelDef>& defs_;
     std::unique_ptr<PhysicalOperator> child_;
 };
 

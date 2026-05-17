@@ -14,6 +14,9 @@ folly::coro::AsyncGenerator<DataChunk> LabelScanPhysicalOp::executeChunk() {
 
         for (VertexId vid : *batch) {
             auto labels = co_await store_.getVertexLabels(vid);
+            if (anon_label_id_ != INVALID_LABEL_ID) {
+                labels.erase(anon_label_id_);
+            }
             VertexValue vv;
             vv.id = vid;
             vv.labels = labels;

@@ -68,6 +68,8 @@ namespace server {
 
 thrift::PropertyType EuGraphHandler::fromPropertyType(::eugraph::PropertyType t) {
     switch (t) {
+    case ::eugraph::PropertyType::ANY:
+        return thrift::PropertyType::STRING;
     case ::eugraph::PropertyType::BOOL:
         return thrift::PropertyType::BOOL;
     case ::eugraph::PropertyType::INT64:
@@ -435,6 +437,8 @@ EuGraphHandler::co_listLabels(std::unique_ptr<std::string> graph_name) {
     auto resp = std::make_unique<std::vector<thrift::LabelInfo>>();
 
     for (const auto& l : labels) {
+        if (l.name == kAnonLabelName)
+            continue; // internal label, not user-visible
         thrift::LabelInfo info;
         info.id() = l.id;
         info.name() = l.name;

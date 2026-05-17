@@ -737,6 +737,10 @@ private:
                     // *n (exact hop count) => min=n, max=n
                     auto v = parseBound(bound_tokens[0].second);
                     rp.range = std::make_pair(makeLiteral(v), makeLiteral(v));
+                } else {
+                    // * (bare star) => unbounded, min=1, max=-1
+                    rp.range =
+                        std::make_pair(makeLiteral(static_cast<int64_t>(1)), makeLiteral(static_cast<int64_t>(-1)));
                 }
             }
             if (d->properties())

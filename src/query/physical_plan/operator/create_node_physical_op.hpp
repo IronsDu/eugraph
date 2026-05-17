@@ -2,6 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
+#include "query/planner/bound_expression/bound_expression.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
@@ -19,10 +20,12 @@ class CreateNodePhysicalOp : public PhysicalOperator {
 public:
     CreateNodePhysicalOp(std::string variable, std::vector<LabelId> label_ids,
                          std::vector<std::pair<LabelId, Properties>> label_props, IAsyncGraphDataStore& store,
-                         VertexId assigned_vid, std::unique_ptr<PhysicalOperator> child = nullptr,
-                         std::unordered_map<LabelId, LabelDef> label_defs = {})
+                         VertexId assigned_vid, std::unique_ptr<PhysicalOperator> child,
+                         std::unordered_map<LabelId, LabelDef>& label_defs,
+                         std::vector<std::pair<std::string, binder::BoundExpression>> pending_props = {})
         : variable_(std::move(variable)), label_ids_(std::move(label_ids)), label_props_(std::move(label_props)),
-          store_(store), assigned_vid_(assigned_vid), child_(std::move(child)), label_defs_(std::move(label_defs)) {}
+          store_(store), assigned_vid_(assigned_vid), child_(std::move(child)), label_defs_(label_defs),
+          pending_props_(std::move(pending_props)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
@@ -42,7 +45,8 @@ private:
     IAsyncGraphDataStore& store_;
     VertexId assigned_vid_;
     std::unique_ptr<PhysicalOperator> child_;
-    std::unordered_map<LabelId, LabelDef> label_defs_;
+    std::unordered_map<LabelId, LabelDef>& label_defs_;
+    std::vector<std::pair<std::string, binder::BoundExpression>> pending_props_;
 };
 
 } // namespace compute

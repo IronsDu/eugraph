@@ -17,6 +17,9 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
                 if (vv.id == INVALID_VERTEX_ID) {
                     vv.id = vid;
                     vv.labels = co_await store_.getVertexLabels(vid);
+                    if (vv.labels && anon_label_id_ != INVALID_LABEL_ID) {
+                        vv.labels->erase(anon_label_id_);
+                    }
                 }
                 auto it = label_prop_ids_.find(label_id);
                 if (it != label_prop_ids_.end() && !it->second.empty()) {
