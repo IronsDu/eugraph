@@ -29,8 +29,8 @@ struct BoundNoneExpr;
 struct BoundSingleExpr;
 
 using BoundExpression =
-    std::variant<BoundLiteral, BoundColumnRef, BoundVariableRef, BoundParameter, std::unique_ptr<BoundDynamicPropertyRef>,
-                 std::unique_ptr<BoundPropertyRef>,
+    std::variant<BoundLiteral, BoundColumnRef, BoundVariableRef, BoundParameter,
+                 std::unique_ptr<BoundDynamicPropertyRef>, std::unique_ptr<BoundPropertyRef>,
                  std::unique_ptr<BoundLabelCast>, std::unique_ptr<BoundBinaryOp>, std::unique_ptr<BoundUnaryOp>,
                  std::unique_ptr<BoundFunctionCall>, std::unique_ptr<BoundList>, std::unique_ptr<BoundMap>,
                  std::unique_ptr<BoundCase>, std::unique_ptr<BoundSubscript>, std::unique_ptr<BoundSlice>,
