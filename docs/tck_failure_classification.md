@@ -1,7 +1,7 @@
 # TCK 测试失败分类报告
 
-**日期**: 2026-05-16 (更新)  
-**分支**: feature/with-first-clause (分类9修复: WITH 作为首个子句)  
+**日期**: 2026-05-17 (更新)  
+**分支**: feature/comma-create-paths (分类1.2修复: 逗号分隔 CREATE 路径)  
 **总计**: 3897 场景, 16006 步骤  
 **检测方式**: Parser AST 遍历 (替换 regex-based skip)
 
@@ -16,9 +16,8 @@
 | 运行时错误 (含 TCK 期望的错误匹配) | ~1965 | 50.4% |
 | 真正通过 | ~18 | 0.5% |
 
-> **本次更新**: 实现分类9 WITH 作为首子句支持。
-> 分类9 `WITH without preceding clause`: 478 → **0** (完全消除)。
-> 新增 BoundSingletonOp + SingletonPhysicalOp，WITH 首子句时产生单行空数据源。
+> **本次更新**: 支持逗号分隔的 CREATE 路径 (~187 场景)。
+> `bindCreate` 中后续 pattern 正确链接到前一个 pattern 的输出链，不再被覆盖。
 
 ---
 
@@ -43,7 +42,7 @@
 
 | 模式 | 跳过次数 | 优先级 | 说明 |
 |------|---------|--------|------|
-| 逗号分隔的 CREATE 路径 | 187 | P1 | `CREATE (a), (b), (a)-[:R]->(b)` |
+| ~~逗号分隔的 CREATE 路径~~ | ~~187~~ | ~~P1~~ | ✅ 已支持 |
 | 多标签节点 | 7 | P2 | `CREATE (:A:B)` |
 | 关系类型交替 | 3 | P2 | `[:A|B]` |
 | Parse Error | 4 | P3 | Parser 无法解析的语法变体 |
@@ -301,6 +300,7 @@ WITH {name: 'baz'} AS nestedMap RETURN nestedMap.name.name2
 | **P1** | 分类3: 属性未找到 (无标签节点) | 444 | binder 支持动态属性 |
 | **P1** | 分类1: MERGE/DELETE/UNWIND/OPTIONAL | ~2800 | 逐个实现子句 |
 | ~~P1~~ | ~~分类9: WITH 作为首个子句~~ | ~~478~~ | ✅ 已修复 |
+| ~~P1~~ | ~~分类1.2: 逗号分隔 CREATE 路径~~ | ~~187~~ | ✅ 已修复 |
 | **P2** | 分类2: 缺失步骤定义 | 162 | 补实现步骤 |
 | **P2** | 分类7: 错误消息不匹配 | ~50 | 错误分类精细化 |
 | **P3** | 分类8: 引擎局限性 | ~3 | 后续迭代 |
