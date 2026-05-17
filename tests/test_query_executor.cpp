@@ -874,12 +874,12 @@ TEST_F(QueryExecutorTest, UnlabeledNodeAutoRegisterProperty) {
     auto result = execSync(*executor_, "CREATE ({name: 'auto'})");
     ASSERT_TRUE(result.error.empty()) << result.error;
 
-    // Recreate executor to pick up updated metadata
-    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
-
-    // MATCH should find the property
+    // MATCH should find the property value (not null)
     auto rows = execSync(*executor_, "MATCH (n) RETURN n.name").rows;
     ASSERT_EQ(rows.size(), 1u);
+    ASSERT_EQ(rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(rows[0][0]), "auto");
 }
 
 // ==================== Limit Edge Cases ====================
