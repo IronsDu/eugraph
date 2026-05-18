@@ -33,7 +33,9 @@ public:
         return "AlterVertexLabel(name=" + label_name_ + ")";
     }
     std::vector<const PhysicalOperator*> children() const override {
-        return {child_.get()};
+        if (child_)
+            return {child_.get()};
+        return {};
     }
 
 private:
