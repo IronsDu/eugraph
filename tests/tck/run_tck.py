@@ -7,12 +7,14 @@ Usage:
 
 import argparse
 import os
+import re
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import time
+from collections import Counter
 
 
 def tcp_probe(host: str, port: int, timeout_s: float = 1.0) -> bool:
@@ -31,7 +33,6 @@ def wait_for_server(host: str, port: int, timeout: int, pid: int) -> bool:
     """Poll until server is ready or process dies or timeout expires."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        # Check if process is still alive
         try:
             wpid, status = os.waitpid(pid, os.WNOHANG)
             if wpid == pid:
@@ -61,7 +62,6 @@ def stop_server(pid: int) -> int:
     except ProcessLookupError:
         return 0
 
-    # Wait up to 5s for graceful shutdown
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         try:
@@ -70,14 +70,10 @@ def stop_server(pid: int) -> int:
                 if os.WIFEXITED(status):
                     print(f"[run_tck] Server exited with code {os.WEXITSTATUS(status)}",
                           file=sys.stderr)
-                    return os.WEXITSTATUS(status)
+                    return os.WEXITEXITSTATUS(status)
                 elif os.WIFSIGNALED(status):
                     sig = os.WTERMSIG(status)
                     if sig == signal.SIGTERM:
-                        # SIGTERM is expected — we sent it. folly treats
-                        # SIGTERM as a fatal signal and re-raises it,
-                        # causing the process to exit via signal rather
-                        # than calling _exit(0).
                         print(f"[run_tck] Server stopped (SIGTERM)", file=sys.stderr)
                         return 0
                     print(f"[run_tck] Server killed by signal {sig}",
@@ -87,7 +83,6 @@ def stop_server(pid: int) -> int:
             return 0
         time.sleep(0.1)
 
-    # Force kill
     print("[run_tck] Server did not stop, sending SIGKILL", file=sys.stderr)
     try:
         os.kill(pid, signal.SIGKILL)
@@ -95,6 +90,123 @@ def stop_server(pid: int) -> int:
         return -signal.SIGKILL
     except ProcessLookupError:
         return 0
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text."""
+    return re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
+
+
+def parse_skip_reasons(stderr_text: str) -> Counter:
+    """Extract [TCK] skipping: reason counts from stderr."""
+    counter = Counter()
+    for line in stderr_text.splitlines():
+        m = re.search(r'\[TCK\] skipping: (.+)$', line)
+        if m:
+            counter[m.group(1).strip()] += 1
+    return counter
+
+
+def parse_cucumber_summary(stdout_text: str):
+    """Parse cucumber summary lines for scenarios and steps."""
+    scenarios = None
+    steps = None
+
+    # Scenarios: "N scenarios X passed, Y undefined, Z failed"
+    m = re.search(
+        r'(\d+) scenarios\s+'
+        r'(\d+) passed,?\s*'
+        r'(?:(\d+) undefined,?\s*)?'
+        r'(\d+) failed',
+        stdout_text,
+    )
+    if m:
+        scenarios = {
+            'total': int(m.group(1)),
+            'passed': int(m.group(2)),
+            'undefined': int(m.group(3) or 0),
+            'failed': int(m.group(4)),
+        }
+    else:
+        # "N scenarios X passed" (all passed, no failures)
+        m = re.search(r'(\d+) scenarios\s+(\d+) passed', stdout_text)
+        if m:
+            scenarios = {
+                'total': int(m.group(1)),
+                'passed': int(m.group(2)),
+                'undefined': 0,
+                'failed': 0,
+            }
+
+    # Steps: "N steps X passed, Y skipped, Z undefined, W failed"
+    m = re.search(
+        r'(\d+) steps\s+'
+        r'(\d+) passed,?\s*'
+        r'(?:(\d+) skipped,?\s*)?'
+        r'(?:(\d+) undefined,?\s*)?'
+        r'(\d+) failed',
+        stdout_text,
+    )
+    if m:
+        steps = {
+            'total': int(m.group(1)),
+            'passed': int(m.group(2)),
+            'skipped': int(m.group(3) or 0),
+            'undefined': int(m.group(4) or 0),
+            'failed': int(m.group(5)),
+        }
+
+    if not scenarios:
+        return None
+    return {'scenarios': scenarios, 'steps': steps}
+
+
+def generate_report(summary, skip_reasons: Counter, elapsed_s: float) -> str:
+    """Generate a markdown report string."""
+    lines = []
+    lines.append('### TCK Test Report')
+    lines.append('')
+    lines.append('#### Scenarios')
+    lines.append('')
+    lines.append('| Metric | Value |')
+    lines.append('|--------|-------|')
+    lines.append(f'| Total | {summary["scenarios"]["total"]} |')
+    lines.append(f'| **Passed** | **{summary["scenarios"]["passed"]}** |')
+    lines.append(f'| Undefined | {summary["scenarios"]["undefined"]} |')
+    lines.append(f'| Failed | {summary["scenarios"]["failed"]} |')
+
+    skipped_total = sum(skip_reasons.values())
+    failed_no_skip = summary['scenarios']['failed'] - skipped_total
+    lines.append(f'| AST skipped (unsupported syntax) | {skipped_total} |')
+    lines.append(f'| Executed failures (query error / result mismatch) | {failed_no_skip} |')
+    lines.append('')
+
+    if summary.get('steps'):
+        s = summary['steps']
+        lines.append('#### Steps')
+        lines.append('')
+        lines.append('| Metric | Value |')
+        lines.append('|--------|-------|')
+        lines.append(f'| Total | {s["total"]} |')
+        lines.append(f'| Passed | {s["passed"]} |')
+        lines.append(f'| Skipped | {s["skipped"]} |')
+        lines.append(f'| Undefined | {s["undefined"]} |')
+        lines.append(f'| Failed | {s["failed"]} |')
+        lines.append('')
+
+    lines.append(f'Elapsed: {elapsed_s:.1f}s')
+    lines.append('')
+
+    if skip_reasons:
+        lines.append('#### Skipped Scenarios by Reason')
+        lines.append('')
+        lines.append('| Reason | Count |')
+        lines.append('|--------|-------|')
+        for reason, count in skip_reasons.most_common():
+            lines.append(f'| {reason} | {count} |')
+        lines.append('')
+
+    return '\n'.join(lines)
 
 
 def main():
@@ -116,6 +228,8 @@ def main():
                         help="Server startup timeout in seconds (default: 30)")
     parser.add_argument("--keep-data", action="store_true",
                         help="Keep data directory after test")
+    parser.add_argument("--report", default=None,
+                        help="Write markdown report to this file path")
     parser.add_argument("extra", nargs=argparse.REMAINDER,
                         help="Extra arguments passed to tck_tests")
 
@@ -155,7 +269,6 @@ def main():
         stop_server(server_proc.pid)
         sys.exit(1)
 
-    elapsed = time.monotonic()
     print(f"[run_tck] Server ready", flush=True)
 
     # ---- Run tck_tests ----
@@ -165,12 +278,34 @@ def main():
     env["EUGRAPH_PORT"] = str(args.port)
 
     print(f"[run_tck] Running: {' '.join(tck_cmd)}", flush=True)
-    sys.stdout.flush()  # Ensure logs appear before tck_tests output
+    sys.stdout.flush()
     tck_start = time.monotonic()
-    tck_result = subprocess.run(tck_cmd, env=env)
+    tck_result = subprocess.run(tck_cmd, env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
     tck_elapsed = time.monotonic() - tck_start
+
+    # Print captured output
+    if tck_result.stdout:
+        sys.stdout.write(tck_result.stdout)
+    if tck_result.stderr:
+        sys.stderr.write(tck_result.stderr)
+
     print(f"[run_tck] tck_tests finished in {tck_elapsed:.1f}s "
           f"(exit={tck_result.returncode})", flush=True)
+
+    # ---- Generate report ----
+    if args.report:
+        summary = parse_cucumber_summary(strip_ansi(tck_result.stdout or ''))
+        skip_reasons = parse_skip_reasons(tck_result.stderr or '')
+        if summary:
+            report = generate_report(summary, skip_reasons, tck_elapsed)
+            with open(args.report, 'w') as f:
+                f.write(report + '\n')
+            print(f"[run_tck] Report written to {args.report}", flush=True)
+        else:
+            print("[run_tck] WARNING: Could not parse cucumber summary, "
+                  "report not generated", file=sys.stderr, flush=True)
 
     # ---- Stop server ----
     server_status = stop_server(server_proc.pid)
@@ -187,7 +322,6 @@ def main():
         print(f"[run_tck] WARNING: Server crashed (signal {abs(server_status)})",
               file=sys.stderr, flush=True)
         server_crashed = True
-        # Dump server log tail to help diagnose the crash
         server_log_path = "/tmp/eugraph_tck_server.log"
         try:
             with open(server_log_path) as f:
@@ -204,8 +338,6 @@ def main():
         print(f"[run_tck] WARNING: Server exited with non-zero code {server_status}",
               file=sys.stderr, flush=True)
 
-    # Infrastructure failures (server crash / non-zero exit) are always fatal.
-    # TCK scenario failures are expected (many features not yet supported).
     if server_crashed or server_status != 0:
         print("[run_tck] Failing due to server crash", file=sys.stderr, flush=True)
         sys.exit(1)
