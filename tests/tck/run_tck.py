@@ -92,6 +92,11 @@ def stop_server(pid: int) -> int:
         return 0
 
 
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text."""
+    return re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', text)
+
+
 def parse_skip_reasons(stderr_text: str) -> Counter:
     """Extract [TCK] skipping: reason counts from stderr."""
     counter = Counter()
@@ -291,7 +296,7 @@ def main():
 
     # ---- Generate report ----
     if args.report:
-        summary = parse_cucumber_summary(tck_result.stdout or '')
+        summary = parse_cucumber_summary(strip_ansi(tck_result.stdout or ''))
         skip_reasons = parse_skip_reasons(tck_result.stderr or '')
         if summary:
             report = generate_report(summary, skip_reasons, tck_elapsed)
