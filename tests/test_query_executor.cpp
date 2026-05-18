@@ -163,6 +163,79 @@ ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
 
 } // anonymous namespace
 
+// ==================== Sourceless RETURN Tests ====================
+
+TEST_F(QueryExecutorTest, SourcelessReturnTrue) {
+    auto result = execSync(*executor_, "RETURN true");
+    EXPECT_TRUE(result.error.empty());
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(result.rows[0].size(), 1);
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[0][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[0][0]), true);
+}
+
+TEST_F(QueryExecutorTest, SourcelessReturnFalse) {
+    auto result = execSync(*executor_, "RETURN false");
+    EXPECT_TRUE(result.error.empty());
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(result.rows[0].size(), 1);
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[0][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[0][0]), false);
+}
+
+TEST_F(QueryExecutorTest, SourcelessReturnTrueOrFalse) {
+    auto result = execSync(*executor_, "RETURN true OR false");
+    EXPECT_TRUE(result.error.empty());
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(result.rows[0].size(), 1);
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[0][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[0][0]), true);
+}
+
+TEST_F(QueryExecutorTest, SourcelessReturnInteger) {
+    auto result = execSync(*executor_, "RETURN 42");
+    EXPECT_TRUE(result.error.empty());
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(result.rows[0].size(), 1);
+    EXPECT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 42);
+}
+
+TEST_F(QueryExecutorTest, SourcelessReturnArithmetic) {
+    auto result = execSync(*executor_, "RETURN 1 + 2 * 3");
+    EXPECT_TRUE(result.error.empty());
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(result.rows[0].size(), 1);
+    EXPECT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 7);
+}
+
+TEST_F(QueryExecutorTest, SourcelessReturnString) {
+    auto result = execSync(*executor_, "RETURN \"hello\"");
+    EXPECT_TRUE(result.error.empty());
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(result.rows[0].size(), 1);
+    EXPECT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "hello");
+}
+
+TEST_F(QueryExecutorTest, SourcelessReturnNotFalse) {
+    auto result = execSync(*executor_, "RETURN NOT false");
+    EXPECT_TRUE(result.error.empty());
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(result.rows[0].size(), 1);
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[0][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[0][0]), true);
+}
+
+TEST_F(QueryExecutorTest, SourcelessReturnNull) {
+    auto result = execSync(*executor_, "RETURN null");
+    EXPECT_TRUE(result.error.empty());
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_EQ(result.rows[0].size(), 1);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[0][0]));
+}
+
 // ==================== Basic Scan Tests ====================
 
 TEST_F(QueryExecutorTest, LabelScanReturnVertex) {

@@ -139,6 +139,8 @@ RETURN n.name AS name, n.age AS age
 RETURN *                     -- 返回所有变量
 RETURN DISTINCT n.city       -- 去重
 RETURN n::Employee           -- 返回指定标签全部属性
+RETURN true OR false         -- 无源 RETURN（无需 MATCH，求值常量表达式）
+RETURN 1 + 2 * 3            -- 算术表达式
 ```
 
 ### ORDER BY — 排序

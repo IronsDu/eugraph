@@ -328,6 +328,7 @@ struct SelectionVector {
 | `MATCH p = ...` | `PathBuildOp` |
 | `WHERE pred` | `FilterOp` |
 | `RETURN items` | `ProjectOp`（无聚合）/ `AggregateOp`（有聚合） |
+| `RETURN expr`（无 MATCH） | `SingletonOp` + `ProjectOp` |
 | `RETURN ... ORDER BY` | `SortOp` |
 | `RETURN ... SKIP N` | `SkipOp` |
 | `RETURN ... LIMIT N` | `LimitOp` |
@@ -506,7 +507,7 @@ using Schema = vector<string>;   // 列名列表
 - **Expand N+1 模式**：Expand 算子逐顶点调用 `getVertexLabels` + `getVertexProperties`，未批量预取
 - **WITH 后 MATCH 独立变量（已支持）**：`MATCH ... WITH ... MATCH (newVar) RETURN ...` 通过 `BoundBinaryJoinOp`（JoinType::Cross）+ `CrossProductPhysicalOp` 实现笛卡尔积语义。右孩子可以是任意算子链（Scan → Filter → Expand）。
 - **WITH 后 MATCH 混合模式（部分支持）**：`MATCH (x:X), (a)-->(b)` 中同时包含独立扫描和关联扩展的模式暂不支持。
-- **WITH 作为首个子句（暂不支持）**：`WITH 1 AS x RETURN x` 因 `bindWith` 拒绝空 `current` 而失败。
+- **WITH 作为首个子句（已支持）**：`WITH 1 AS x RETURN x` 通过 `BoundSingletonOp` 提供单行空数据源。
 
 ### 待实现
 

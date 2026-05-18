@@ -188,6 +188,7 @@
 | 分类: 优化器无限循环 (FilterPushdown) | 导致超时卡死 | 已修复 | ✅ |
 | 分类: 量词表达式 TCK 跳过 | 532 跳过 | 28 通过 | ✅ |
 | 分类: IN/XOR/CASE 表达式 | 104 跳过 | 待验证 | ✅ 已实现 |
+| 分类: 无源 RETURN (sourceless RETURN) | 不可用 | ✅ 已实现 | `RETURN true OR false` 等常量表达式无需 MATCH |
 
 ---
 
