@@ -103,8 +103,11 @@ def parse_skip_reasons(stderr_text: str) -> Counter:
 
 
 def parse_cucumber_summary(stdout_text: str):
-    """Parse cucumber summary line."""
-    # Format: "N scenarios X passed, Y undefined, Z failed"
+    """Parse cucumber summary lines for scenarios and steps."""
+    scenarios = None
+    steps = None
+
+    # Scenarios: "N scenarios X passed, Y undefined, Z failed"
     m = re.search(
         r'(\d+) scenarios\s+'
         r'(\d+) passed,?\s*'
@@ -113,22 +116,44 @@ def parse_cucumber_summary(stdout_text: str):
         stdout_text,
     )
     if m:
-        return {
+        scenarios = {
             'total': int(m.group(1)),
             'passed': int(m.group(2)),
             'undefined': int(m.group(3) or 0),
             'failed': int(m.group(4)),
         }
-    # Format: "N scenarios X passed" (all passed, no failures)
-    m = re.search(r'(\d+) scenarios\s+(\d+) passed', stdout_text)
+    else:
+        # "N scenarios X passed" (all passed, no failures)
+        m = re.search(r'(\d+) scenarios\s+(\d+) passed', stdout_text)
+        if m:
+            scenarios = {
+                'total': int(m.group(1)),
+                'passed': int(m.group(2)),
+                'undefined': 0,
+                'failed': 0,
+            }
+
+    # Steps: "N steps X passed, Y skipped, Z undefined, W failed"
+    m = re.search(
+        r'(\d+) steps\s+'
+        r'(\d+) passed,?\s*'
+        r'(?:(\d+) skipped,?\s*)?'
+        r'(?:(\d+) undefined,?\s*)?'
+        r'(\d+) failed',
+        stdout_text,
+    )
     if m:
-        return {
+        steps = {
             'total': int(m.group(1)),
             'passed': int(m.group(2)),
-            'undefined': 0,
-            'failed': 0,
+            'skipped': int(m.group(3) or 0),
+            'undefined': int(m.group(4) or 0),
+            'failed': int(m.group(5)),
         }
-    return None
+
+    if not scenarios:
+        return None
+    return {'scenarios': scenarios, 'steps': steps}
 
 
 def generate_report(summary, skip_reasons: Counter, elapsed_s: float) -> str:
@@ -136,18 +161,35 @@ def generate_report(summary, skip_reasons: Counter, elapsed_s: float) -> str:
     lines = []
     lines.append('### TCK Test Report')
     lines.append('')
-    lines.append(f'| Metric | Value |')
-    lines.append(f'|--------|-------|')
-    lines.append(f'| Total scenarios | {summary["total"]} |')
-    lines.append(f'| **Passed** | **{summary["passed"]}** |')
-    lines.append(f'| Undefined steps | {summary["undefined"]} |')
-    lines.append(f'| Failed | {summary["failed"]} |')
+    lines.append('#### Scenarios')
+    lines.append('')
+    lines.append('| Metric | Value |')
+    lines.append('|--------|-------|')
+    lines.append(f'| Total | {summary["scenarios"]["total"]} |')
+    lines.append(f'| **Passed** | **{summary["scenarios"]["passed"]}** |')
+    lines.append(f'| Undefined | {summary["scenarios"]["undefined"]} |')
+    lines.append(f'| Failed | {summary["scenarios"]["failed"]} |')
 
     skipped_total = sum(skip_reasons.values())
-    failed_no_skip = summary['failed'] - skipped_total
+    failed_no_skip = summary['scenarios']['failed'] - skipped_total
     lines.append(f'| AST skipped (unsupported syntax) | {skipped_total} |')
     lines.append(f'| Executed failures (query error / result mismatch) | {failed_no_skip} |')
-    lines.append(f'| Elapsed | {elapsed_s:.1f}s |')
+    lines.append('')
+
+    if summary.get('steps'):
+        s = summary['steps']
+        lines.append('#### Steps')
+        lines.append('')
+        lines.append('| Metric | Value |')
+        lines.append('|--------|-------|')
+        lines.append(f'| Total | {s["total"]} |')
+        lines.append(f'| Passed | {s["passed"]} |')
+        lines.append(f'| Skipped | {s["skipped"]} |')
+        lines.append(f'| Undefined | {s["undefined"]} |')
+        lines.append(f'| Failed | {s["failed"]} |')
+        lines.append('')
+
+    lines.append(f'Elapsed: {elapsed_s:.1f}s')
     lines.append('')
 
     if skip_reasons:
