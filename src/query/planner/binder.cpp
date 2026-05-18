@@ -1126,6 +1126,11 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
         if (!bindNodePattern(element.node, start_var, start_col, start_label, start_prop_ids))
             return std::nullopt;
 
+        // Mark as CREATE variable so property resolution uses source_label
+        auto* sym = ctx_.lookup(start_var);
+        if (sym)
+            ctx_.symbols[start_var].is_create_variable = true;
+
         auto create_node = std::make_unique<BoundCreateNodeOp>();
         create_node->variable = start_var;
         create_node->label_id = start_label.value_or(catalog_.getAnonLabelId());
@@ -1520,8 +1525,35 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     // Weak type: check if object is a ColumnRef
                     if (std::holds_alternative<BoundColumnRef>(*obj)) {
                         auto& col_ref = std::get<BoundColumnRef>(*obj);
-                        // Collect all labels for this variable (from context)
-                        // For now, we scan ALL labels in the catalog
+
+                        // For CREATE variables, avoid picking up wrong candidates from
+                        // unrelated labels. Use source_label if set, otherwise dynamic.
+                        auto* col_info = ctx_.lookup(col_ref.name);
+                        if (col_info && col_info->is_create_variable) {
+                            if (col_info->source_label) {
+                                auto* pd = catalog_.lookupProperty(*col_info->source_label, ptr->property);
+                                if (pd) {
+                                    auto prop_ref = std::make_unique<BoundPropertyRef>();
+                                    prop_ref->object = std::move(*obj);
+                                    BoundPropertyRef::ResolvedProperty rp;
+                                    rp.label_id = *col_info->source_label;
+                                    rp.prop_id = pd->id;
+                                    rp.type = propertyTypeToBoundType(pd->type);
+                                    prop_ref->candidates.push_back(rp);
+                                    prop_ref->result_type = rp.type;
+                                    ctx_.addPropertyRequirement(col_ref.name, rp.label_id, rp.prop_id);
+                                    return BoundExpression(std::move(prop_ref));
+                                }
+                            }
+                            // No source_label or property not yet registered → dynamic
+                            auto dyn_ref = std::make_unique<BoundDynamicPropertyRef>();
+                            dyn_ref->object = std::move(*obj);
+                            dyn_ref->property = ptr->property;
+                            dyn_ref->result_type = BoundType::Any();
+                            return BoundExpression(std::move(dyn_ref));
+                        }
+
+                        // Non-CREATE: scan ALL labels in the catalog
                         LabelIdSet all_labels;
                         for (const auto& [lid, ldef] : catalog_.allLabels()) {
                             all_labels.insert(lid);

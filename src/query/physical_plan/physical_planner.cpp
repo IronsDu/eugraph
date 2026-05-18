@@ -623,16 +623,26 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         child = finalizePlanResult(std::move(std::get<PlanOperatorResult>(child_result)));
                     }
 
-                    // Insert AlterVertexLabelPhysicalOp if there are pending_props on __anon__
+                    // Insert AlterVertexLabelPhysicalOp if there are pending_props
                     if (!v.pending_props.empty() && v.label_id != INVALID_LABEL_ID) {
                         auto def_it = ctx.label_defs.find(v.label_id);
-                        if (def_it != ctx.label_defs.end() && def_it->second.name == kAnonLabelName) {
+                        if (def_it != ctx.label_defs.end()) {
                             std::vector<std::pair<std::string, PropertyType>> pending_prop_defs;
+                            bool is_anon = def_it->second.name == kAnonLabelName;
                             for (const auto& [name, expr] : v.pending_props) {
-                                // Use ANY for __anon__ properties so the catalog
-                                // accepts any runtime type (int, string, etc.)
-                                (void)expr;
-                                pending_prop_defs.emplace_back(name, PropertyType::ANY);
+                                PropertyType pt = PropertyType::ANY;
+                                if (!is_anon && std::holds_alternative<binder::BoundLiteral>(expr)) {
+                                    auto& lit = std::get<binder::BoundLiteral>(expr);
+                                    if (std::holds_alternative<bool>(lit.value))
+                                        pt = PropertyType::BOOL;
+                                    else if (std::holds_alternative<int64_t>(lit.value))
+                                        pt = PropertyType::INT64;
+                                    else if (std::holds_alternative<double>(lit.value))
+                                        pt = PropertyType::DOUBLE;
+                                    else if (std::holds_alternative<std::string>(lit.value))
+                                        pt = PropertyType::STRING;
+                                }
+                                pending_prop_defs.emplace_back(name, pt);
                             }
 
                             auto alter = std::make_unique<AlterVertexLabelPhysicalOp>(

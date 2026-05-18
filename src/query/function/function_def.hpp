@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/types/graph_types.hpp"
 #include "query/executor/row.hpp"
 #include "query/planner/bound_type.hpp"
 
@@ -7,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace eugraph {
@@ -26,6 +28,8 @@ struct AggStateBase {
 /// Extend with additional fields as needed by future functions.
 struct EvalContext {
     const catalog::Catalog* catalog = nullptr;
+    /// Live label definitions, updated by DDL operators mid-query.
+    const std::unordered_map<LabelId, LabelDef>* label_defs = nullptr;
 };
 
 /// Scalar function execution callback: takes argument values and context, returns result.

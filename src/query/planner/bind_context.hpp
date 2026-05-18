@@ -23,6 +23,8 @@ struct ColumnInfo {
     std::optional<uint16_t> source_prop_id;
     /// Whether this column came from a strong-typed access (n::Label.prop).
     bool strong_typed = false;
+    /// Whether this variable was introduced by a CREATE clause.
+    bool is_create_variable = false;
 };
 
 /// Property requirement pushed down to scan operators.

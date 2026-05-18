@@ -261,7 +261,14 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
         if (std::holds_alternative<VertexValue>(ov)) {
             const auto& vertex = std::get<VertexValue>(ov);
             for (const auto& [label_id, props_vec] : vertex.properties) {
-                auto* ldef = eval_ctx_.catalog->lookupLabel(label_id);
+                const LabelDef* ldef = nullptr;
+                if (eval_ctx_.label_defs) {
+                    auto it = eval_ctx_.label_defs->find(label_id);
+                    if (it != eval_ctx_.label_defs->end())
+                        ldef = &it->second;
+                }
+                if (!ldef)
+                    ldef = eval_ctx_.catalog->lookupLabel(label_id);
                 if (!ldef)
                     continue;
                 for (const auto& pd : ldef->properties) {

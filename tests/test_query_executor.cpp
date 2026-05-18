@@ -937,6 +937,78 @@ TEST_F(QueryExecutorTest, UnlabeledNodeSamePropNameDifferentTypes) {
     EXPECT_TRUE(found_str) << "Missing STRING value for prop1";
 }
 
+// ==================== CREATE + RETURN Property (single query) ====================
+
+TEST_F(QueryExecutorTest, UnlabeledNodeCreateAndReturnProperty) {
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    // Single query: CREATE with property + RETURN that property
+    auto result = execSync(*executor_, "CREATE (n {new_prop: 'foo'}) RETURN n.new_prop");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]))
+        << "Expected string, got " << result.rows[0][0].index();
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "foo");
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodeCreatePropertyWithExistingLabelProp) {
+    auto anon_id = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {}));
+    ASSERT_NE(anon_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(anon_id));
+
+    auto dog_id = blockingWait(async_meta_->createLabel("Dog"));
+    ASSERT_NE(dog_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(dog_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    // Create a labeled node with 'name' property
+    auto dog_result = execSync(*executor_, "CREATE (:Dog {name: 'Buddy'})");
+    ASSERT_TRUE(dog_result.error.empty()) << dog_result.error;
+
+    // Now CREATE unlabeled node with same prop name 'name' + RETURN
+    auto result = execSync(*executor_, "CREATE (n {name: 'foo'}) RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]))
+        << "Expected string, got " << result.rows[0][0].index();
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "foo");
+}
+
+TEST_F(QueryExecutorTest, NamedLabelCreatePropertyWithExistingLabelProp) {
+    auto cat_id = blockingWait(async_meta_->createLabel("Cat"));
+    ASSERT_NE(cat_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(cat_id));
+
+    auto dog_id = blockingWait(async_meta_->createLabel("Dog"));
+    ASSERT_NE(dog_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(dog_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    // Create a labeled node with 'name' property
+    auto dog_result = execSync(*executor_, "CREATE (:Dog {name: 'Buddy'})");
+    ASSERT_TRUE(dog_result.error.empty()) << dog_result.error;
+
+    // Create Cat node with same prop name 'name' + RETURN
+    auto result = execSync(*executor_, "CREATE (n:Cat {name: 'kitty'}) RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]))
+        << "Expected string, got " << result.rows[0][0].index();
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "kitty");
+}
+
 // ==================== Limit Edge Cases ====================
 
 TEST_F(QueryExecutorTest, LimitGreaterThanRowCount) {
