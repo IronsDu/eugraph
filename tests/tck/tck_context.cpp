@@ -175,8 +175,7 @@ bool hasUnsupportedExpr(const ast::Expression& expr) {
                 return r;
             } else if constexpr (std::is_same_v<Inner, ast::AllExpr> || std::is_same_v<Inner, ast::AnyExpr> ||
                                  std::is_same_v<Inner, ast::NoneExpr> || std::is_same_v<Inner, ast::SingleExpr>) {
-                spdlog::info("[TCK] skipping: quantifier expression (ALL/ANY/NONE/SINGLE)");
-                return true;
+                return false;
             } else {
                 // Literal, Variable — leaf types, no unsupported features
                 return false;
