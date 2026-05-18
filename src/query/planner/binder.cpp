@@ -201,8 +201,7 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                     return match_op;
                 } else if constexpr (std::is_same_v<Elem, cypher::ReturnClause>) {
                     if (!current) {
-                        error("Nothing to return");
-                        return std::nullopt;
+                        current = BoundSingletonOp{};
                     }
                     return bindReturn(*ptr, std::move(*current));
                 } else if constexpr (std::is_same_v<Elem, cypher::WithClause>) {
