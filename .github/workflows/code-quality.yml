@@ -111,10 +111,11 @@ jobs:
         ctest --output-on-failure --verbose
       env:
         ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        TCK_REPORT_PATH: ${{ github.workspace }}/build/tck-report.md
 
     - name: Post TCK report to PR
       uses: marocchino/sticky-pull-request-comment@v2
-      if: github.event_name == 'pull_request' && always()
+      if: github.event_name == 'pull_request' && hashFiles('build/tck-report.md') != '' && always()
       with:
         path: build/tck-report.md
         header: tck-report

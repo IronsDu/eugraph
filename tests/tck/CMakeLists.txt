@@ -183,6 +183,13 @@ add_custom_command(TARGET tck_tests POST_BUILD
     COMMENT "Linking TCK features for cucumber discovery"
 )
 
+# Report path: prefer env var (set by CI), fallback to build dir.
+if(DEFINED ENV{TCK_REPORT_PATH})
+    set(TCK_REPORT_FILE "$ENV{TCK_REPORT_PATH}")
+else()
+    set(TCK_REPORT_FILE "${CMAKE_BINARY_DIR}/tck-report.md")
+endif()
+
 # Register with CTest so CI can optionally run the TCK tests.
 # Uses Python script to manage server lifecycle (start/stop), so server
 # crashes are not silently hidden by auto-restart logic.
@@ -192,7 +199,7 @@ if(TCK_RUN_TESTS)
             --server-bin "$<TARGET_FILE:eugraph-server>"
             --tck-bin "$<TARGET_FILE:tck_tests>"
             --features "${CMAKE_CURRENT_BINARY_DIR}/features"
-            --report "${CMAKE_BINARY_DIR}/tck-report.md"
+            --report "${TCK_REPORT_FILE}"
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     )
 endif()
