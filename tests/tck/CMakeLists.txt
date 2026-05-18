@@ -192,6 +192,7 @@ if(TCK_RUN_TESTS)
             --server-bin "$<TARGET_FILE:eugraph-server>"
             --tck-bin "$<TARGET_FILE:tck_tests>"
             --features "${CMAKE_CURRENT_BINARY_DIR}/features"
+            --report "${CMAKE_BINARY_DIR}/tck-report.md"
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     )
 endif()
