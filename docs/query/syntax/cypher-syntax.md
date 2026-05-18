@@ -64,8 +64,8 @@ WHERE x IS NULL / x IS NOT NULL
 | 算术 | `+`, `-`, `*`, `/` | 已实现 |
 | 算术 | `%`, `^` | 仅解析 |
 | 字符串 | `STARTS WITH`, `ENDS WITH`, `CONTAINS` | 仅解析 |
-| 列表 | `IN` | 仅解析 |
-| 逻辑 | `XOR` | 仅解析 |
+| 列表 | `IN` | 已实现 |
+| 逻辑 | `XOR` | 已实现 |
 
 **索引优化**：当 Filter 在 LabelScan 之上且谓词为 `n.prop = literal` 模式，且该属性存在 PUBLIC 索引时，自动使用 IndexScan（还支持 `>`, `>=`, `<`, `<=` 的范围扫描）。
 

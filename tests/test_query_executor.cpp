@@ -10,6 +10,7 @@
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
+#include <set>
 
 using namespace eugraph;
 using namespace eugraph::compute;
@@ -3355,4 +3356,142 @@ TEST_F(QueryExecutorTest, VarLenExpandUnionTypes) {
     // 1-hop: 1->2(K), 1->5(LI), 2->3(K), 2->6(LI), 3->4(K) = 5
     // 2-hop: 1->2->3(K+K), 1->2->6(K+LI), 2->3->4(K+K) = 3
     EXPECT_EQ(result.rows.size(), 8u);
+}
+
+// ==================== XOR Tests ====================
+
+TEST_F(QueryExecutorTest, WhereXorTrueFalse) {
+    insertTestVertices();
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE true XOR false RETURN n");
+    ASSERT_TRUE(result.error.empty()) << "Error: " << result.error;
+    EXPECT_EQ(result.rows.size(), 5);
+}
+
+TEST_F(QueryExecutorTest, WhereXorTrueTrue) {
+    insertTestVertices();
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE true XOR true RETURN n").rows;
+    EXPECT_EQ(rows.size(), 0);
+}
+
+TEST_F(QueryExecutorTest, WhereXorFalseFalse) {
+    insertTestVertices();
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE false XOR false RETURN n").rows;
+    EXPECT_EQ(rows.size(), 0);
+}
+
+TEST_F(QueryExecutorTest, WhereXorChained) {
+    insertTestVertices();
+    // true XOR true XOR true = false XOR true = true
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE true XOR true XOR true RETURN n").rows;
+    EXPECT_EQ(rows.size(), 5);
+}
+
+// ==================== IN Tests ====================
+
+TEST_F(QueryExecutorTest, WhereInListMatch) {
+    execSync(*executor_, "CREATE (:Person {name: 'name1'}), (:Person {name: 'name2'}), (:Person {name: 'name3'})");
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE n.name IN ['name1', 'name3'] RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    std::set<std::string> names;
+    for (auto& row : result.rows) {
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[0]));
+        names.insert(std::get<std::string>(row[0]));
+    }
+    EXPECT_TRUE(names.count("name1"));
+    EXPECT_TRUE(names.count("name3"));
+}
+
+TEST_F(QueryExecutorTest, WhereInListNoMatch) {
+    insertTestVertices();
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE n.name IN ['name99'] RETURN n").rows;
+    EXPECT_EQ(rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, WhereInMixedTypes) {
+    insertTestVertices();
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE 1 IN [1, 'a', true] RETURN n LIMIT 1").rows;
+    EXPECT_EQ(rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, WhereInStringNotInIntList) {
+    insertTestVertices();
+    auto rows = execSync(*executor_, "MATCH (n:Person) WHERE 'a' IN [1, 2, 3] RETURN n").rows;
+    EXPECT_EQ(rows.size(), 0u);
+}
+
+// ==================== CASE Tests ====================
+
+TEST_F(QueryExecutorTest, CaseSimpleMatch) {
+    execSync(*executor_, "CREATE (:Person {name: 'name1'}), (:Person {name: 'name2'}), (:Person {name: 'name3'})");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN CASE n.name WHEN 'name1' THEN 'first' WHEN 'name2' "
+                                       "THEN 'second' ELSE 'other' END AS label, n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_GE(result.rows.size(), 3u);
+    bool found_first = false, found_second = false, found_other = false;
+    for (auto& row : result.rows) {
+        auto& label = std::get<std::string>(row[0]);
+        if (label == "first")
+            found_first = true;
+        if (label == "second")
+            found_second = true;
+        if (label == "other")
+            found_other = true;
+    }
+    EXPECT_TRUE(found_first);
+    EXPECT_TRUE(found_second);
+    EXPECT_TRUE(found_other);
+}
+
+TEST_F(QueryExecutorTest, CaseSearchedWithCondition) {
+    insertTestVertices();
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN CASE WHEN true THEN 'yes' ELSE 'no' END AS val");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    for (auto& row : result.rows) {
+        EXPECT_EQ(std::get<std::string>(row[0]), "yes");
+    }
+}
+
+TEST_F(QueryExecutorTest, CaseSearchedMultipleWhen) {
+    insertTestVertices();
+    auto result =
+        execSync(*executor_, "MATCH (n:Person) RETURN CASE WHEN false THEN 'a' WHEN true THEN 'b' ELSE 'c' END AS val");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    for (auto& row : result.rows) {
+        EXPECT_EQ(std::get<std::string>(row[0]), "b");
+    }
+}
+
+TEST_F(QueryExecutorTest, CaseAnyReturnType) {
+    insertTestVertices();
+    auto result = execSync(
+        *executor_, "MATCH (n:Person) RETURN CASE WHEN true THEN 42 WHEN false THEN 'hello' ELSE null END AS val");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    for (auto& row : result.rows) {
+        ASSERT_TRUE(std::holds_alternative<int64_t>(row[0]));
+        EXPECT_EQ(std::get<int64_t>(row[0]), 42);
+    }
+}
+
+TEST_F(QueryExecutorTest, CaseNoElseReturnsNull) {
+    insertTestVertices();
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN CASE WHEN false THEN 'yes' END AS val");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    for (auto& row : result.rows) {
+        EXPECT_TRUE(std::holds_alternative<std::monostate>(row[0]));
+    }
+}
+
+TEST_F(QueryExecutorTest, CaseInWhere) {
+    execSync(*executor_, "CREATE (:Person {name: 'name1'}), (:Person {name: 'name2'}), (:Person {name: 'name3'})");
+    auto result =
+        execSync(*executor_,
+                 "MATCH (n:Person) WHERE CASE n.name WHEN 'name1' THEN 'match' ELSE 'no' END = 'match' RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name1");
 }

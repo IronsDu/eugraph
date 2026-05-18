@@ -1694,6 +1694,33 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     result = BoundExpression(std::move(e));
                 }
                 return result;
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                auto bc = std::make_unique<BoundCase>();
+
+                if (ptr->subject) {
+                    auto bound_subject = bindExpression(*ptr->subject);
+                    if (!bound_subject)
+                        return std::nullopt;
+                    bc->subject = std::move(*bound_subject);
+                }
+
+                for (const auto& [when_expr, then_expr] : ptr->when_thens) {
+                    auto bound_when = bindExpression(when_expr);
+                    auto bound_then = bindExpression(then_expr);
+                    if (!bound_when || !bound_then)
+                        return std::nullopt;
+                    bc->when_thens.emplace_back(std::move(*bound_when), std::move(*bound_then));
+                }
+
+                if (ptr->else_expr) {
+                    auto bound_else = bindExpression(*ptr->else_expr);
+                    if (!bound_else)
+                        return std::nullopt;
+                    bc->else_expr = std::move(*bound_else);
+                }
+
+                bc->result_type = BoundType::Any();
+                return BoundExpression(std::move(bc));
             } else {
                 // Other types not yet supported
                 return std::nullopt;
@@ -1740,6 +1767,12 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
             return BoundType::Double();
         error_msg =
             "Arithmetic requires numeric operands: got " + left_type.toString() + " and " + right_type.toString();
+        return BoundType::Any();
+
+    case cypher::BinaryOperator::IN:
+        if (right_type.kind == BoundTypeKind::LIST || right_type.kind == BoundTypeKind::ANY)
+            return BoundType::Bool();
+        error_msg = "IN requires a list on the right side, got " + right_type.toString();
         return BoundType::Any();
 
     case cypher::BinaryOperator::LIST_CONCAT:

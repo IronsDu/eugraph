@@ -64,6 +64,9 @@ private:
     void evalQuantifierExpr(QuantifierKind kind, uint32_t loop_column_index, const binder::BoundExpression& list_expr,
                             const std::optional<binder::BoundExpression>& where_pred, const DataChunk& input,
                             Column& result, size_t count);
+
+    /// Evaluate a CASE WHEN expression.
+    void evalCase(const binder::BoundCase& case_expr, const DataChunk& input, Column& result, size_t count);
 };
 
 } // namespace compute

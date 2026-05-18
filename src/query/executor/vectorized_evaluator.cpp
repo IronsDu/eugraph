@@ -145,6 +145,10 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 evalQuantifierExpr(QuantifierKind::SINGLE, val->loop_column_index, val->list_expr, val->where_pred,
                                    input, col, count);
                 return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
+                auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
+                evalCase(*val, input, col, count);
+                return {&col, true};
             } else {
                 auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
                 return {&col, true};
@@ -168,6 +172,44 @@ void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
 
     if (!left.column || !right.column)
         return;
+
+    using BO = cypher::BinaryOperator;
+
+    if (op.op == BO::XOR) {
+        for (size_t i = 0; i < count; ++i) {
+            Value lv = left.column->getValue(i);
+            Value rv = right.column->getValue(i);
+            bool lb = std::holds_alternative<bool>(lv) && std::get<bool>(lv);
+            bool rb = std::holds_alternative<bool>(rv) && std::get<bool>(rv);
+            result.setValue(i, Value(lb != rb));
+        }
+        return;
+    }
+
+    if (op.op == BO::IN) {
+        for (size_t i = 0; i < count; ++i) {
+            if (left.column->isNull(i) || right.column->isNull(i)) {
+                result.setNull(i);
+                continue;
+            }
+            Value lv = left.column->getValue(i);
+            Value rv = right.column->getValue(i);
+            if (!std::holds_alternative<ListValue>(rv)) {
+                result.setNull(i);
+                continue;
+            }
+            const auto& list = std::get<ListValue>(rv);
+            bool found = false;
+            for (const auto& elem : list.elements) {
+                if (!eugraph::isNull(elem.value) && elem.value == lv) {
+                    found = true;
+                    break;
+                }
+            }
+            result.setValue(i, Value(found));
+        }
+        return;
+    }
 
     if (op.batch_fn) {
         op.batch_fn(*left.column, *right.column, result, count);
@@ -460,6 +502,70 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             final_result = (single_match_count == 1);
         }
         result.setValue(i, Value(final_result));
+    }
+}
+
+void VectorizedEvaluator::evalCase(const binder::BoundCase& case_expr, const DataChunk& input, Column& result,
+                                   size_t count) {
+    // Evaluate subject once if present (simple CASE: CASE expr WHEN val THEN ...)
+    EvalResult subject_eval;
+    if (case_expr.subject) {
+        subject_eval = evaluateInternal(*case_expr.subject, input);
+    }
+
+    // Evaluate all WHEN conditions and THEN expressions
+    struct WhenThenEval {
+        EvalResult when_col;
+        EvalResult then_col;
+    };
+    std::vector<WhenThenEval> branches;
+    branches.reserve(case_expr.when_thens.size());
+    for (const auto& [when_expr, then_expr] : case_expr.when_thens) {
+        WhenThenEval wte;
+        wte.when_col = evaluateInternal(when_expr, input);
+        wte.then_col = evaluateInternal(then_expr, input);
+        branches.push_back(std::move(wte));
+    }
+
+    // Evaluate ELSE once if present
+    EvalResult else_eval;
+    if (case_expr.else_expr) {
+        else_eval = evaluateInternal(*case_expr.else_expr, input);
+    }
+
+    for (size_t i = 0; i < count; ++i) {
+        bool matched = false;
+
+        for (const auto& br : branches) {
+            if (!br.when_col.column || !br.then_col.column)
+                continue;
+
+            bool condition_met = false;
+            if (subject_eval.column) {
+                // Simple CASE: compare subject == when_value
+                Value sv = subject_eval.column->getValue(i);
+                Value wv = br.when_col.column->getValue(i);
+                condition_met = !eugraph::isNull(sv) && !eugraph::isNull(wv) && sv == wv;
+            } else {
+                // Searched CASE: when_value is a boolean condition
+                Value wv = br.when_col.column->getValue(i);
+                condition_met = std::holds_alternative<bool>(wv) && std::get<bool>(wv);
+            }
+
+            if (condition_met) {
+                result.setValue(i, br.then_col.column->getValue(i));
+                matched = true;
+                break;
+            }
+        }
+
+        if (!matched) {
+            if (else_eval.column) {
+                result.setValue(i, else_eval.column->getValue(i));
+            } else {
+                result.setNull(i);
+            }
+        }
     }
 }
 
