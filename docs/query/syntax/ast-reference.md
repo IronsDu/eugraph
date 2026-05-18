@@ -161,6 +161,6 @@ LabelCastExpr { Expression object; string label; }
 
 **仅解析**的子句：DELETE, MERGE, UNWIND, WITH, CALL, UNION
 
-**已执行的表达式**：Literal, Variable, PropertyAccess, LabelCastExpr, FunctionCall(`id`/聚合), BinaryOp(比较/算术/逻辑), UnaryOp(NOT/NEGATE/IS_NULL)
+**已执行的表达式**：Literal, Variable, PropertyAccess, LabelCastExpr, FunctionCall(`id`/聚合), BinaryOp(比较/算术/逻辑/IN/XOR), UnaryOp(NOT/NEGATE/IS_NULL), CaseExpr, List, 量词(ALL/ANY/NONE/SINGLE)
 
-**仅解析的表达式**：% ^, STARTS_WITH/ENDS_WITH/CONTAINS/IN/XOR, CASE, ListComprehension, PatternComprehension, 量词, Exists, Subscript/Slice, $param
+**仅解析的表达式**：% ^, STARTS_WITH/ENDS_WITH/CONTAINS, ListComprehension, PatternComprehension, Exists, Subscript/Slice, $param

@@ -40,6 +40,40 @@ void boolOrBatch(const Column& left, const Column& right, Column& result, size_t
     }
 }
 
+void boolXorBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        bool lb = std::holds_alternative<bool>(lv) ? std::get<bool>(lv) : false;
+        bool rb = std::holds_alternative<bool>(rv) ? std::get<bool>(rv) : false;
+        result.setValue(i, Value(lb ^ rb));
+    }
+}
+
+void inBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        if (left.isNull(i) || right.isNull(i)) {
+            result.setNull(i);
+            continue;
+        }
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (!std::holds_alternative<ListValue>(rv)) {
+            result.setNull(i);
+            continue;
+        }
+        const auto& list = std::get<ListValue>(rv);
+        bool found = false;
+        for (const auto& elem : list.elements) {
+            if (!eugraph::isNull(elem.value) && elem.value == lv) {
+                found = true;
+                break;
+            }
+        }
+        result.setValue(i, Value(found));
+    }
+}
+
 // ==================== Int64 arithmetic batch functions ====================
 
 void int64AddBatch(const Column& left, const Column& right, Column& result, size_t count) {
@@ -344,11 +378,17 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
     if (op == BO::NEQ)
         return genericNeqBatch;
 
-    // AND / OR — bool extraction
+    // AND / OR / XOR — bool extraction
     if (op == BO::AND)
         return boolAndBatch;
     if (op == BO::OR)
         return boolOrBatch;
+    if (op == BO::XOR)
+        return boolXorBatch;
+
+    // IN — scalar IN list → bool
+    if (op == BO::IN)
+        return inBatch;
 
     // String-specific operations
     if (left_type == BTK::STRING && right_type == BTK::STRING) {
