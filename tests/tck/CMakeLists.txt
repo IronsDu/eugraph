@@ -43,6 +43,20 @@ ExternalProject_Add(ccr_ext
     BUILD_BYPRODUCTS
         "${CUKE_STAGE}/lib/libcucumber_cpp.library.a"
         "${CUKE_STAGE}/lib/libcucumber_cpp.runner.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.api.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.assemble.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.cucumber_expression.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.engine.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.formatter.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.formatter.helper.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.query.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.runtime.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.support.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.tag_expression.a"
+        "${CUKE_STAGE}/lib/libcucumber_cpp.library.util.a"
+        "${CUKE_STAGE}/lib/libcucumber_gherkin.a"
+        "${CUKE_STAGE}/lib/libcucumber_messages.a"
+        "${CUKE_STAGE}/lib/libpugixml.a"
 )
 
 # ---- Import cucumber-cpp-runner libraries ----
