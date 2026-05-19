@@ -67,14 +67,13 @@ jobs:
         key: ${{ runner.os }}-ccache-asan-${{ github.sha }}
         restore-keys: ${{ runner.os }}-ccache-asan-
 
-    - name: Cache vcpkg packages
+    - name: Cache vcpkg
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
         path: |
           vcpkg
           ~/.cache/vcpkg/archives
-          vcpkg_installed
         key: ${{ runner.os }}-vcpkg-asan-${{ hashFiles('vcpkg.json') }}
 
     - name: Install vcpkg
@@ -168,14 +167,13 @@ jobs:
         key: ${{ runner.os }}-ccache-ubsan-${{ github.sha }}
         restore-keys: ${{ runner.os }}-ccache-ubsan-
 
-    - name: Cache vcpkg packages
+    - name: Cache vcpkg
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
         path: |
           vcpkg
           ~/.cache/vcpkg/archives
-          vcpkg_installed
         key: ${{ runner.os }}-vcpkg-ubsan-${{ hashFiles('vcpkg.json') }}
 
     - name: Install vcpkg
@@ -254,14 +252,13 @@ jobs:
           core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
           core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
-    - name: Cache vcpkg packages
+    - name: Cache vcpkg
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
         path: |
           vcpkg
           ~/.cache/vcpkg/archives
-          vcpkg_installed
         key: ${{ runner.os }}-vcpkg-clang-tidy-${{ hashFiles('vcpkg.json') }}
 
     - name: Install vcpkg
@@ -344,14 +341,13 @@ jobs:
         key: ${{ runner.os }}-ccache-warnings-${{ github.sha }}
         restore-keys: ${{ runner.os }}-ccache-warnings-
 
-    - name: Cache vcpkg packages
+    - name: Cache vcpkg
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
         path: |
           vcpkg
           ~/.cache/vcpkg/archives
-          vcpkg_installed
         key: ${{ runner.os }}-vcpkg-warnings-${{ hashFiles('vcpkg.json') }}
 
     - name: Install vcpkg
