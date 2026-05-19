@@ -96,16 +96,18 @@
 |-------------|-----------|--------|------|
 | `And parameters are:` | 64 | P2 | 参数化查询 ($param) |
 | `And there exists a procedure ...` | 50 | P3 | 存储过程定义 (CALL 子句前置) |
-| `When executing control query:` | 33 | P2 | 控制查询（setup 验证） |
-| `Then the result should be (ignoring element order for lists)` | 23 | P2 | 列表忽略顺序比较 |
-| `Then a TypeError should be raised at any time: ...` | 18 | P2 | 任意阶段抛 TypeError |
+| ~~`When executing control query:`~~ | ~~33~~ | ~~P2~~ | ✅ 已实现 |
+| ~~`Then the result should be (ignoring element order for lists)`~~ | ~~23~~ | ~~P2~~ | ✅ 已实现 |
+| ~~`Then a TypeError should be raised at any time: ...`~~ | ~~18~~ | ~~P2~~ | ✅ 已实现 |
 | `Then a ProcedureError should be raised ...` | 2 | P3 | 存储过程错误 |
 | `Given the binary-tree-N graph` | 19 | P3 | 预定义图结构（二叉树） |
 
 ### 2.2 分析与建议
 
-- **参数支持** (`parameters are:`) 和 **控制查询** (`executing control query:`) 是 TCK 框架的基础能力，建议 P2 实现
-- **列表忽略顺序比较** 可用于当前 MATCH 结果验证
+- **参数支持** (`parameters are:`) 是 TCK 框架的基础能力，建议 P2 实现
+- **控制查询** (`executing control query:`) 已实现 ✅
+- **列表忽略顺序比较** 已实现 ✅，支持行有序/无序两种变体
+- **`at any time` 错误匹配** 已实现 ✅，扩展了已有 error step 正则以匹配 `any time` 阶段
 - **存储过程** 相关步骤是远期目标
 - **预定义图结构** 需要根据 TCK feature 文件定义来加载
 
@@ -189,6 +191,9 @@
 | 分类: 量词表达式 TCK 跳过 | 532 跳过 | 28 通过 | ✅ |
 | 分类: IN/XOR/CASE 表达式 | 104 跳过 | 待验证 | ✅ 已实现 |
 | 分类: 无源 RETURN (sourceless RETURN) | 不可用 | ✅ 已实现 | `RETURN true OR false` 等常量表达式无需 MATCH |
+| 步骤: `executing control query:` | undefined | 已实现 | ✅ |
+| 步骤: `ignoring element order for lists` | undefined | 已实现 | ✅ 含行有序/无序两种变体 |
+| 步骤: `at any time` 错误匹配 | undefined | 已实现 | ✅ 支持 `*` 通配 detail |
 
 ---
 
@@ -197,7 +202,7 @@
 | 优先级 | 分类 | 影响场景数 | 修复路径 |
 |--------|------|-----------|---------|
 | **P1** | 分类1: MERGE/DELETE/UNWIND/OPTIONAL | ~421 | 逐个实现子句 |
-| **P2** | 分类2: 缺失步骤定义 | 162 | 补实现步骤 |
+| **P2** | 分类2: 缺失步骤定义 | 162→74 | 补实现步骤（已实现 control query、list order、at any time） |
 | **P2** | 分类4: 结果不匹配 | ~994 | 逐一分析 |
 | **P2** | 分类3: NothingToReturn 级联错误 | ~1200 | 修复前置绑定问题 |
 | **P2** | 分类1: STARTS WITH/ENDS WITH 等 | ~27 | 实现表达式 |
@@ -213,3 +218,4 @@
 
 1. **优化器无限循环修复**: `FilterPushdownRule` 允许 Filter 穿透 Filter 导致对换循环（`Filter_A → Filter_B` 变成 `Filter_B → Filter_A` 再变回来，无限循环）。`findDuplicate` 只检查 group_id + child_groups + variant index，不比较算子内容，因此无法识别语义等价。修复：从 `isPenetrable` 中移除 `OptNodeType::Filter`，并增加 1024 次最大迭代安全限制。
 2. **量词表达式 TCK 启用**: 移除了 `tck_context.cpp` 中对 ALL/ANY/NONE/SINGLE 表达式的跳过逻辑，使 TCK 测试实际执行量词场景。
+3. **TCK 步骤定义补全**: 新增 `executing control query:` 步骤（复用已有查询执行，不做 side effects 快照）；新增 `ignoring element order for lists` 两种变体（行有序/无序 + cell 内 list 元素排序归一化）；扩展 error step 正则以支持 `at any time` 阶段匹配和 `*` 通配 detail。
