@@ -91,7 +91,7 @@ jobs:
 
     - name: Install vcpkg dependencies
       env:
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+        VCPKG_BINARY_SOURCES: "x-gha,readwrite"
       run: |
         ./vcpkg/vcpkg install --triplet=x64-linux-release
 
@@ -191,7 +191,7 @@ jobs:
 
     - name: Install vcpkg dependencies
       env:
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+        VCPKG_BINARY_SOURCES: "x-gha,readwrite"
       run: |
         ./vcpkg/vcpkg install --triplet=x64-linux-release
 
@@ -276,7 +276,7 @@ jobs:
 
     - name: Install vcpkg dependencies
       env:
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+        VCPKG_BINARY_SOURCES: "x-gha,readwrite"
       run: |
         ./vcpkg/vcpkg install --triplet=x64-linux-release
 
@@ -365,7 +365,7 @@ jobs:
 
     - name: Install vcpkg dependencies
       env:
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+        VCPKG_BINARY_SOURCES: "x-gha,readwrite"
       run: |
         ./vcpkg/vcpkg install --triplet=x64-linux-release
 
