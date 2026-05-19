@@ -53,6 +53,58 @@ bool skipIfUnsupported(const std::string& query) {
     return false;
 }
 
+// Parse top-level elements from a list string like "[a, [b, c], d]"
+// Respects nested brackets and parentheses.
+std::vector<std::string> parseTopLevelElements(const std::string& s) {
+    std::vector<std::string> elems;
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (c == '[' || c == '(' || c == '{')
+            ++depth;
+        else if (c == ']' || c == ')' || c == '}')
+            --depth;
+        else if (c == ',' && depth == 0) {
+            std::string elem = s.substr(start, i - start);
+            // trim
+            size_t a = elem.find_first_not_of(' ');
+            size_t b = elem.find_last_not_of(' ');
+            if (a != std::string::npos)
+                elems.push_back(elem.substr(a, b - a + 1));
+            start = i + 1;
+        }
+    }
+    // last element
+    std::string elem = s.substr(start);
+    size_t a = elem.find_first_not_of(' ');
+    size_t b = elem.find_last_not_of(' ');
+    if (a != std::string::npos)
+        elems.push_back(elem.substr(a, b - a + 1));
+    return elems;
+}
+
+// Normalize a cell value: if it's a top-level list, sort its elements.
+std::string normalizeListOrder(const std::string& cell) {
+    if (cell.size() < 2 || cell.front() != '[' || cell.back() != ']')
+        return cell;
+    // Check for empty list
+    std::string inner = cell.substr(1, cell.size() - 2);
+    size_t firstNonSpace = inner.find_first_not_of(' ');
+    if (firstNonSpace == std::string::npos)
+        return cell; // empty list "[]"
+    auto elems = parseTopLevelElements(inner);
+    std::sort(elems.begin(), elems.end());
+    std::string result = "[";
+    for (size_t i = 0; i < elems.size(); ++i) {
+        if (i > 0)
+            result += ", ";
+        result += elems[i];
+    }
+    result += "]";
+    return result;
+}
+
 // Get query from doc string (may be null)
 std::string getDocString(const std::optional<cucumber_cpp::library::util::DocString>& ds) {
     if (ds.has_value() && !ds->content.empty()) {
@@ -171,6 +223,20 @@ WHEN("^executing query:$") {
 }
 
 // -----------------------------------------------------------------------
+// Control query: "When executing control query:" (verification, no side effects)
+// -----------------------------------------------------------------------
+
+WHEN("^executing control query:$") {
+    std::string q = getDocString(docString);
+    if (skipIfUnsupported(q)) {
+        GTEST_SKIP() << "Unsupported Cypher syntax";
+    }
+    spdlog::info("[TCK] [{}] control query: {}", gCtx->graphName, q);
+    gCtx->ensureTypesForQuery(q);
+    gCtx->executeQuery(q);
+}
+
+// -----------------------------------------------------------------------
 // Then: empty result
 // -----------------------------------------------------------------------
 
@@ -258,12 +324,16 @@ THEN("^the result should be, in order:$") {
 
 // Pattern: "a SyntaxError should be raised at compile time: UndefinedVariable"
 THEN(
-    R"(^a (SyntaxError|SemanticError|TypeError|ArgumentError|ArithmeticError|EntityNotFound|PropertyNotFound|LabelNotFound|ConstraintVerificationFailed|ConstraintValidationFailed|ParameterMissing) should be raised at (compile time|runtime): (.+)$)",
+    R"(^a (SyntaxError|SemanticError|TypeError|ArgumentError|ArithmeticError|EntityNotFound|PropertyNotFound|LabelNotFound|ConstraintVerificationFailed|ConstraintValidationFailed|ParameterMissing) should be raised at (compile time|runtime|any time): (.+)$)",
     (const std::string& expType, const std::string& expPhase, const std::string& expDetail)) {
     ASSERT_TRUE(gCtx->lastQueryHadError) << "Expected error " << expType << " but query succeeded";
     EXPECT_EQ(gCtx->lastErrorType, expType);
-    EXPECT_EQ(gCtx->lastErrorPhase, expPhase);
-    EXPECT_EQ(gCtx->lastErrorDetail, expDetail);
+    if (expPhase != "any time") {
+        EXPECT_EQ(gCtx->lastErrorPhase, expPhase);
+    }
+    if (expDetail != "*") {
+        EXPECT_EQ(gCtx->lastErrorDetail, expDetail);
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -296,4 +366,93 @@ STEP("^no side effects$") {
     EXPECT_TRUE(se.isZero()) << "Expected no side effects but got: "
                              << "nodes=" << se.nodes << " rels=" << se.relationships << " labels=" << se.labels
                              << " props=" << se.properties;
+}
+
+// -----------------------------------------------------------------------
+// Then: result ignoring element order within lists (rows in any order)
+// -----------------------------------------------------------------------
+
+THEN(R"(^the result should be \(ignoring element order for lists\):$)") {
+    ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected result but got error: " << gCtx->lastErrorType;
+
+    if (dataTable->rows.empty()) {
+        EXPECT_TRUE(gCtx->lastRows.empty()) << "Expected empty, got " << gCtx->lastRows.size();
+        return;
+    }
+
+    std::vector<std::string> expCols;
+    for (const auto& c : dataTable->rows[0].cells) {
+        expCols.push_back(c.value);
+    }
+    EXPECT_EQ(gCtx->lastColumns, expCols);
+
+    std::vector<std::vector<std::string>> expRows;
+    for (size_t i = 1; i < dataTable->rows.size(); ++i) {
+        std::vector<std::string> row;
+        for (const auto& c : dataTable->rows[i].cells) {
+            row.push_back(c.value);
+        }
+        if (!row.empty()) {
+            expRows.push_back(row);
+        }
+    }
+
+    ASSERT_EQ(gCtx->lastRows.size(), expRows.size());
+
+    // Normalize list order within cells, then sort rows for order-independent comparison
+    auto normalizeRow = [](std::vector<std::vector<std::string>> rows) {
+        for (auto& row : rows) {
+            for (auto& cell : row) {
+                cell = normalizeListOrder(cell);
+            }
+        }
+        std::sort(rows.begin(), rows.end());
+        return rows;
+    };
+
+    EXPECT_EQ(normalizeRow(gCtx->lastRows), normalizeRow(expRows));
+}
+
+// -----------------------------------------------------------------------
+// Then: result in order, ignoring element order within lists
+// -----------------------------------------------------------------------
+
+THEN(R"(^the result should be, in order \(ignoring element order for lists\):$)") {
+    ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected result but got error: " << gCtx->lastErrorType;
+
+    if (dataTable->rows.empty()) {
+        EXPECT_TRUE(gCtx->lastRows.empty());
+        return;
+    }
+
+    std::vector<std::string> expCols;
+    for (const auto& c : dataTable->rows[0].cells) {
+        expCols.push_back(c.value);
+    }
+    EXPECT_EQ(gCtx->lastColumns, expCols);
+
+    std::vector<std::vector<std::string>> expRows;
+    for (size_t i = 1; i < dataTable->rows.size(); ++i) {
+        std::vector<std::string> row;
+        for (const auto& c : dataTable->rows[i].cells) {
+            row.push_back(c.value);
+        }
+        if (!row.empty()) {
+            expRows.push_back(row);
+        }
+    }
+
+    ASSERT_EQ(gCtx->lastRows.size(), expRows.size());
+
+    // Normalize list order within cells, keep row order
+    auto normalizeCells = [](std::vector<std::vector<std::string>> rows) {
+        for (auto& row : rows) {
+            for (auto& cell : row) {
+                cell = normalizeListOrder(cell);
+            }
+        }
+        return rows;
+    };
+
+    EXPECT_EQ(normalizeCells(gCtx->lastRows), normalizeCells(expRows));
 }
