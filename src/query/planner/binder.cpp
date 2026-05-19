@@ -1776,8 +1776,8 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
             (right_type.kind == BoundTypeKind::STRING || right_type.kind == BoundTypeKind::ANY ||
              right_type.kind == BoundTypeKind::NULL_TYPE))
             return BoundType::Bool();
-        error_msg = "String operations require string operands: got " + left_type.toString() + " and " +
-                    right_type.toString();
+        error_msg =
+            "String operations require string operands: got " + left_type.toString() + " and " + right_type.toString();
         return BoundType::Any();
 
     case cypher::BinaryOperator::IN:

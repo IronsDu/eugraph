@@ -326,7 +326,8 @@ void stringStartsWithBatch(const Column& left, const Column& right, Column& resu
         if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv)) {
             const auto& str = std::get<std::string>(lv);
             const auto& prefix = std::get<std::string>(rv);
-            result.setValue(i, Value(prefix.empty() || (str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0)));
+            result.setValue(i, Value(prefix.empty() ||
+                                     (str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0)));
         } else {
             result.setNull(i);
         }
@@ -340,7 +341,9 @@ void stringEndsWithBatch(const Column& left, const Column& right, Column& result
         if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv)) {
             const auto& str = std::get<std::string>(lv);
             const auto& suffix = std::get<std::string>(rv);
-            result.setValue(i, Value(suffix.empty() || (str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0)));
+            result.setValue(
+                i, Value(suffix.empty() || (str.size() >= suffix.size() &&
+                                            str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0)));
         } else {
             result.setNull(i);
         }
