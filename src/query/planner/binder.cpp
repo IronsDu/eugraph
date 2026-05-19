@@ -1768,6 +1768,18 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
             "Arithmetic requires numeric operands: got " + left_type.toString() + " and " + right_type.toString();
         return BoundType::Any();
 
+    case cypher::BinaryOperator::STARTS_WITH:
+    case cypher::BinaryOperator::ENDS_WITH:
+    case cypher::BinaryOperator::CONTAINS:
+        if ((left_type.kind == BoundTypeKind::STRING || left_type.kind == BoundTypeKind::ANY ||
+             left_type.kind == BoundTypeKind::NULL_TYPE) &&
+            (right_type.kind == BoundTypeKind::STRING || right_type.kind == BoundTypeKind::ANY ||
+             right_type.kind == BoundTypeKind::NULL_TYPE))
+            return BoundType::Bool();
+        error_msg = "String operations require string operands: got " + left_type.toString() + " and " +
+                    right_type.toString();
+        return BoundType::Any();
+
     case cypher::BinaryOperator::IN:
         if (right_type.kind == BoundTypeKind::LIST || right_type.kind == BoundTypeKind::ANY)
             return BoundType::Bool();

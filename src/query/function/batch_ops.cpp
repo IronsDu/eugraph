@@ -319,6 +319,48 @@ void stringGteBatch(const Column& left, const Column& right, Column& result, siz
     }
 }
 
+void stringStartsWithBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv)) {
+            const auto& str = std::get<std::string>(lv);
+            const auto& prefix = std::get<std::string>(rv);
+            result.setValue(i, Value(prefix.empty() || (str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0)));
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
+void stringEndsWithBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv)) {
+            const auto& str = std::get<std::string>(lv);
+            const auto& suffix = std::get<std::string>(rv);
+            result.setValue(i, Value(suffix.empty() || (str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0)));
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
+void stringContainsBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv)) {
+            const auto& str = std::get<std::string>(lv);
+            const auto& sub = std::get<std::string>(rv);
+            result.setValue(i, Value(str.find(sub) != std::string::npos));
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
 // ==================== Unary batch functions ====================
 
 void boolNotBatch(const Column& operand, Column& result, size_t count) {
@@ -403,6 +445,12 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             return stringLteBatch;
         case BO::GTE:
             return stringGteBatch;
+        case BO::STARTS_WITH:
+            return stringStartsWithBatch;
+        case BO::ENDS_WITH:
+            return stringEndsWithBatch;
+        case BO::CONTAINS:
+            return stringContainsBatch;
         default:
             return nullptr;
         }

@@ -63,7 +63,7 @@ WHERE x IS NULL / x IS NOT NULL
 | 空判断 | `IS NULL`, `IS NOT NULL` | 已实现 |
 | 算术 | `+`, `-`, `*`, `/` | 已实现 |
 | 算术 | `%`, `^` | 仅解析 |
-| 字符串 | `STARTS WITH`, `ENDS WITH`, `CONTAINS` | 仅解析 |
+| 字符串 | `STARTS WITH`, `ENDS WITH`, `CONTAINS` | 已实现 |
 | 列表 | `IN` | 已实现 |
 | 逻辑 | `XOR` | 已实现 |
 
