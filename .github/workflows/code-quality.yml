@@ -105,6 +105,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
           -DVCPKG_TARGET_TRIPLET=x64-linux-release \
+          -DVCPKG_INSTALLED_DIR=${{ github.workspace }}/vcpkg_installed \
           -DEUGRAPH_ENABLE_CCACHE=ON \
           -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
           -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
@@ -205,6 +206,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
           -DVCPKG_TARGET_TRIPLET=x64-linux-release \
+          -DVCPKG_INSTALLED_DIR=${{ github.workspace }}/vcpkg_installed \
           -DEUGRAPH_ENABLE_CCACHE=ON \
           -DCMAKE_CXX_FLAGS="-fsanitize=undefined -g" \
           -DCMAKE_C_FLAGS="-fsanitize=undefined -g" \
@@ -290,6 +292,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
           -DVCPKG_TARGET_TRIPLET=x64-linux-release \
+          -DVCPKG_INSTALLED_DIR=${{ github.workspace }}/vcpkg_installed \
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
     - name: Run clang-tidy
@@ -379,6 +382,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
           -DVCPKG_TARGET_TRIPLET=x64-linux-release \
+          -DVCPKG_INSTALLED_DIR=${{ github.workspace }}/vcpkg_installed \
           -DEUGRAPH_ENABLE_CCACHE=ON \
           -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror" \
           -DCMAKE_C_FLAGS="-Wall -Wextra -Werror"
