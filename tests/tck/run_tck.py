@@ -226,9 +226,17 @@ def generate_diff_section(baseline: dict, current: dict) -> str:
     if not rows:
         return ''
 
-    lines = ['### TCK Report vs main', '',
-             '| Metric | main | This PR | Delta |',
-             '|--------|------|---------|-------|']
+    warning = ''
+    if b_total > 0 and c_total > 0 and c_rate < b_rate:
+        warning = (f'> [!WARNING]\n'
+                   f'> **TCK pass rate regressed**: '
+                   f'{c_rate:.1f}% < {b_rate:.1f}% (main)\n\n')
+
+    lines = ['### TCK Report vs main', '']
+    if warning:
+        lines.append(warning)
+    lines.extend(['| Metric | main | This PR | Delta |',
+                   '|--------|------|---------|-------|'])
     lines.extend(rows)
     lines.append('')
     return '\n'.join(lines)
