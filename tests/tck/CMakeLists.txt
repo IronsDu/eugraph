@@ -208,16 +208,28 @@ else()
     set(TCK_REPORT_FILE "${CMAKE_BINARY_DIR}/tck-report.md")
 endif()
 
+# Baseline report path for comparison (set by CI).
+if(DEFINED ENV{TCK_BASELINE_REPORT_PATH})
+    set(TCK_BASELINE_REPORT_FILE "$ENV{TCK_BASELINE_REPORT_PATH}")
+else()
+    set(TCK_BASELINE_REPORT_FILE "")
+endif()
+
 # Register with CTest so CI can optionally run the TCK tests.
 # Uses Python script to manage server lifecycle (start/stop), so server
 # crashes are not silently hidden by auto-restart logic.
 if(TCK_RUN_TESTS)
+    set(TCK_BASELINE_ARG "")
+    if(TCK_BASELINE_REPORT_FILE)
+        set(TCK_BASELINE_ARG "--baseline-report" "${TCK_BASELINE_REPORT_FILE}")
+    endif()
     add_test(NAME tck_tests
         COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/run_tck.py"
             --server-bin "$<TARGET_FILE:eugraph-server>"
             --tck-bin "$<TARGET_FILE:tck_tests>"
             --features "${CMAKE_CURRENT_BINARY_DIR}/features"
             --report "${TCK_REPORT_FILE}"
+            ${TCK_BASELINE_ARG}
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     )
 endif()

@@ -161,6 +161,79 @@ def parse_cucumber_summary(stdout_text: str):
     return {'scenarios': scenarios, 'steps': steps}
 
 
+def parse_report_metrics(text: str) -> dict | None:
+    """Extract scenario and step metrics from a markdown TCK report."""
+    metrics = {}
+    section = None
+    for line in text.splitlines():
+        heading = re.match(r'####\s+(.+)', line)
+        if heading:
+            section = heading.group(1).strip().lower()
+            continue
+        m = re.match(r'\|\s*\*?\*?(.+?)\*?\*?\s*\|\s*\*?\*?(\d+)\*?\*?\s*\|', line)
+        if m:
+            key = m.group(1).strip()
+            val = int(m.group(2))
+            prefix = ''
+            if section == 'scenarios':
+                prefix = 'Scenarios '
+            elif section == 'steps':
+                prefix = 'Steps '
+            metrics[f'{prefix}{key}'] = val
+    if not metrics:
+        return None
+    return metrics
+
+
+def generate_diff_section(baseline: dict, current: dict) -> str:
+    """Generate a markdown table comparing current report against baseline."""
+    rows = []
+    comparisons = [
+        ('Scenarios Passed', True),
+        ('Scenarios Failed', False),
+        ('Scenarios Undefined', False),
+        ('Steps Passed', True),
+        ('Steps Failed', False),
+        ('Steps Skipped', False),
+    ]
+    for label, higher_is_better in comparisons:
+        b = baseline.get(label)
+        c = current.get(label)
+        if b is None or c is None:
+            continue
+        delta = c - b
+        sign = '+' if delta > 0 else ''
+        emoji = ''
+        if delta > 0:
+            emoji = ' :white_check_mark:' if higher_is_better else ' :x:'
+        elif delta < 0:
+            emoji = ' :x:' if higher_is_better else ' :white_check_mark:'
+        rows.append(f'| {label} | {b} | {c} | {sign}{delta}{emoji} |')
+
+    # Pass rate
+    b_total = baseline.get('Scenarios Total', 0)
+    c_total = current.get('Scenarios Total', 0)
+    b_passed = baseline.get('Scenarios Passed', 0)
+    c_passed = current.get('Scenarios Passed', 0)
+    if b_total > 0 and c_total > 0:
+        b_rate = b_passed / b_total * 100
+        c_rate = c_passed / c_total * 100
+        delta = c_rate - b_rate
+        sign = '+' if delta > 0 else ''
+        emoji = ' :white_check_mark:' if delta > 0 else (' :x:' if delta < 0 else '')
+        rows.append(f'| Pass Rate | {b_rate:.1f}% | {c_rate:.1f}% | {sign}{delta:.1f}%{emoji} |')
+
+    if not rows:
+        return ''
+
+    lines = ['### TCK Report vs main', '',
+             '| Metric | main | This PR | Delta |',
+             '|--------|------|---------|-------|']
+    lines.extend(rows)
+    lines.append('')
+    return '\n'.join(lines)
+
+
 def generate_report(summary, skip_reasons: Counter, elapsed_s: float) -> str:
     """Generate a markdown report string."""
     lines = []
@@ -230,6 +303,8 @@ def main():
                         help="Keep data directory after test")
     parser.add_argument("--report", default=None,
                         help="Write markdown report to this file path")
+    parser.add_argument("--baseline-report", default=None,
+                        help="Path to baseline TCK report for comparison")
     parser.add_argument("extra", nargs=argparse.REMAINDER,
                         help="Extra arguments passed to tck_tests")
 
@@ -300,6 +375,24 @@ def main():
         skip_reasons = parse_skip_reasons(tck_result.stderr or '')
         if summary:
             report = generate_report(summary, skip_reasons, tck_elapsed)
+
+            # Append baseline diff if available
+            baseline_path = args.baseline_report or os.environ.get('TCK_BASELINE_REPORT_PATH')
+            if baseline_path and os.path.isfile(baseline_path):
+                try:
+                    with open(baseline_path) as f:
+                        baseline_text = f.read()
+                    baseline_metrics = parse_report_metrics(baseline_text)
+                    current_metrics = parse_report_metrics(report)
+                    if baseline_metrics and current_metrics:
+                        diff_section = generate_diff_section(baseline_metrics, current_metrics)
+                        if diff_section:
+                            report = report + '\n' + diff_section
+                            print("[run_tck] Baseline comparison appended", flush=True)
+                except OSError as e:
+                    print(f"[run_tck] Could not read baseline report: {e}",
+                          file=sys.stderr, flush=True)
+
             with open(args.report, 'w') as f:
                 f.write(report + '\n')
             print(f"[run_tck] Report written to {args.report}", flush=True)
