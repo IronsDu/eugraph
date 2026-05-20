@@ -616,6 +616,31 @@ if(EUGRAPH_BUILD_TESTS)
     add_dependencies(catalog_tests wiredtiger_ext)
     gtest_add_tests(TARGET catalog_tests)
 
+    # Vertex serialization tests
+    add_executable(vertex_serialization_tests
+        tests/test_vertex_serialization.cpp
+    )
+
+    target_include_directories(vertex_serialization_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(vertex_serialization_tests PRIVATE
+        eugraph_shell_lib
+        eugraph_query_engine
+        eugraph_metadata
+        eugraph_thrift
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(vertex_serialization_tests wiredtiger_ext)
+    gtest_add_tests(TARGET vertex_serialization_tests)
+
     # TCK tests (Cucumber BDD for openCypher TCK) — requires eugraph-server built
     if(NOT DEFINED SKIP_TCK_TESTS)
         add_subdirectory(tests/tck)

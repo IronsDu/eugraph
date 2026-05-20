@@ -227,9 +227,16 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
     } else if (std::holds_alternative<VertexValue>(val)) {
         auto& v = std::get<VertexValue>(val);
         std::ostringstream oss;
-        oss << "{\"_vid\":" << v.id;
+        oss << "{\"id\":" << v.id;
 
         if (v.labels.has_value()) {
+            for (LabelId lid : *v.labels) {
+                auto it = label_defs.find(lid);
+                if (it == label_defs.end())
+                    continue;
+                oss << ",\"label\":\"" << it->second.name << '"';
+                break;
+            }
             for (LabelId lid : *v.labels) {
                 auto it = label_defs.find(lid);
                 if (it == label_defs.end())
