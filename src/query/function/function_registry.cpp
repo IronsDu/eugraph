@@ -109,6 +109,66 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   {},
                                   {},
                                   {}});
+
+    // head(List<Any>) -> Any
+    functions_["head"].push_back({"head",
+                                  {BoundType::List(BoundType::Any())},
+                                  BoundType::Any(),
+                                  false,
+                                  false,
+                                  scalar::headScalarFn,
+                                  scalar::headBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+
+    // tail(List<Any>) -> List<Any>
+    functions_["tail"].push_back({"tail",
+                                  {BoundType::List(BoundType::Any())},
+                                  BoundType::List(BoundType::Any()),
+                                  false,
+                                  false,
+                                  scalar::tailScalarFn,
+                                  scalar::tailBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+
+    // reverse(List<Any>) -> List<Any>
+    functions_["reverse"].push_back({"reverse",
+                                     {BoundType::List(BoundType::Any())},
+                                     BoundType::List(BoundType::Any()),
+                                     false,
+                                     false,
+                                     scalar::reverseScalarFn,
+                                     scalar::reverseBatchFn,
+                                     {},
+                                     {},
+                                     {}});
+
+    // size(List<Any>) -> Int64
+    functions_["size"].push_back({"size",
+                                  {BoundType::List(BoundType::Any())},
+                                  BoundType::Int64(),
+                                  false,
+                                  false,
+                                  scalar::sizeScalarFn,
+                                  scalar::sizeListBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+
+    // size(String) -> Int64
+    functions_["size"].push_back({"size",
+                                  {BoundType::String()},
+                                  BoundType::Int64(),
+                                  false,
+                                  false,
+                                  scalar::sizeScalarFn,
+                                  scalar::sizeStringBatchFn,
+                                  {},
+                                  {},
+                                  {}});
 }
 
 void FunctionRegistry::registerAggregateBuiltins() {
