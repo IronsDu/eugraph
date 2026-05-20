@@ -24,7 +24,8 @@ OptNodeType nodeTypeFromVariantIndex(size_t index) {
         OptNodeType::Remove,       // 14
         OptNodeType::PathBuild,    // 15
         OptNodeType::VarLenExpand, // 16
-        OptNodeType::BinaryJoin    // 17
+        OptNodeType::BinaryJoin,   // 17
+        OptNodeType::Unwind        // 18
     };
     return mapping[index];
 }

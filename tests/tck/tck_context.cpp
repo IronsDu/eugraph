@@ -208,9 +208,6 @@ bool hasUnsupportedClause(const ast::Clause& clause) {
             } else if constexpr (std::is_same_v<Inner, ast::MergeClause>) {
                 spdlog::info("[TCK] skipping: MERGE");
                 return true;
-            } else if constexpr (std::is_same_v<Inner, ast::UnwindClause>) {
-                spdlog::info("[TCK] skipping: UNWIND");
-                return true;
             } else if constexpr (std::is_same_v<Inner, ast::CallClause>) {
                 spdlog::info("[TCK] skipping: CALL");
                 return true;

@@ -3,6 +3,7 @@
 #include "query/function/batch_ops.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 #include <spdlog/spdlog.h>
@@ -224,6 +225,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                         return std::nullopt;
                     }
                     return bindRemove(*ptr, std::move(*current));
+                } else if constexpr (std::is_same_v<Elem, cypher::UnwindClause>) {
+                    return bindUnwind(*ptr, std::move(current));
                 } else {
                     error("Clause type not yet supported in binder");
                     return std::nullopt;
@@ -1368,6 +1371,36 @@ std::optional<BoundLogicalOperator> Binder::bindRemove(const cypher::RemoveClaus
     return rem_op;
 }
 
+std::optional<BoundLogicalOperator> Binder::bindUnwind(const cypher::UnwindClause& unwind,
+                                                       std::optional<BoundLogicalOperator> child) {
+    // Bind the list expression
+    auto bound_list = bindExpression(unwind.list_expr);
+    if (!bound_list)
+        return std::nullopt;
+
+    // Create singleton source if no preceding clause
+    if (!child) {
+        child = BoundSingletonOp{};
+    }
+
+    // Determine element type from list expression type
+    const BoundType& list_type = getBoundExprType(*bound_list);
+    BoundType elem_type = (list_type.kind == BoundTypeKind::LIST && list_type.element_type)
+                              ? BoundType::clone(*list_type.element_type)
+                              : BoundType::Any();
+
+    // Register the UNWIND variable in BindContext
+    uint32_t var_col = nextColumnIndex();
+    ctx_.symbols[unwind.variable] = makeColumnInfo(unwind.variable, BoundType::clone(elem_type));
+
+    auto unwind_op = std::make_unique<BoundUnwindOp>();
+    unwind_op->list_expr = std::move(*bound_list);
+    unwind_op->variable = unwind.variable;
+    unwind_op->variable_column_index = var_col;
+    unwind_op->child = std::move(*child);
+    return unwind_op;
+}
+
 // ==================== Expression Binding ====================
 
 std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& expr) {
@@ -2021,6 +2054,8 @@ void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
                 } else if constexpr (std::is_same_v<Elem, BoundBinaryJoinOp>) {
                     applyProjectionPushdown(v.left);
                     applyProjectionPushdown(v.right);
+                } else if constexpr (std::is_same_v<Elem, BoundUnwindOp>) {
+                    applyProjectionPushdown(v.child);
                 }
                 // BoundCreateNodeOp, BoundCreateEdgeOp: no child traversal needed
             }

@@ -28,7 +28,8 @@ enum class OptNodeType {
     Remove,       // 14
     PathBuild,    // 15
     VarLenExpand, // 16
-    BinaryJoin    // 17
+    BinaryJoin,   // 17
+    Unwind        // 18
 };
 
 // Convert BoundLogicalOperator variant index to OptNodeType.

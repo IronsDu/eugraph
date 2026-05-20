@@ -282,7 +282,7 @@ struct SelectionVector {
 
 `BoundLogicalOperator` 是一个 variant，包含 16 种算子。"子节点"通过 variant 值嵌入（非 unique_ptr），形成递归的算子树。
 
-### 算子类型（17 种）
+### 算子类型（18 种）
 
 | 算子 | 定义文件 | 说明 | 子节点 |
 |------|---------|------|--------|
@@ -302,6 +302,7 @@ struct SelectionVector {
 | `BoundSetOp` | `bound_set_op.hpp` | 设置属性/标签 | 嵌入 `BoundLogicalOperator child` |
 | `BoundRemoveOp` | `bound_remove_op.hpp` | 移除属性/标签 | 嵌入 `BoundLogicalOperator child` |
 | `BoundPathBuildOp` | `bound_path_build_op.hpp` | 组装路径变量 | 嵌入 `BoundLogicalOperator child` |
+| `BoundUnwindOp` | `bound_unwind_op.hpp` | 列表展开为行（UNWIND） | 嵌入 `BoundLogicalOperator child` |
 | `BoundBinaryJoinOp` | `bound_binary_join_op.hpp` | 二元 Join（Cross/Inner/Left） | 嵌入 `BoundLogicalOperator left` + `right` |
 
 > **开发注意：新增 Variant 类型的检查清单**
@@ -337,6 +338,7 @@ struct SelectionVector {
 | `CREATE (a)-[r:TYPE]->(b)` | `CreateEdgeOp` |
 | `SET n:Label` / `SET n.prop = val` | `SetOp` |
 | `REMOVE n:Label` / `REMOVE n.prop` | `RemoveOp` |
+| `UNWIND expr AS var` | `UnwindOp` |
 
 ---
 
@@ -421,6 +423,8 @@ class PhysicalOperator {
 - `Filter(Expand)` + 可索引谓词 → `tryBoundEdgeIndexScan()` → `EdgeIndexScanPhysicalOp`
 
 可索引谓词提取通过 `collectBoundConditions()` / `tryExtractBoundCondition()`，支持等值和范围条件。
+
+**Unwind**：对输入的每个 DataChunk，通过 `VectorizedEvaluator` 求值列表表达式得到每行的列表值。遍历每个列表元素，复制输入列并设置 UNWIND 变量列，产出展开后的行。空列表和 NULL 跳过该行。累积到 `DEFAULT_CAPACITY`(1024) 行后 yield 一个 DataChunk。
 
 ---
 
@@ -513,8 +517,10 @@ using Schema = vector<string>;   // 列名列表
 
 - DELETE, MERGE 执行
 - Inner/Left Join（`BoundBinaryJoinOp` 已预留 `JoinType::Inner/Left`）
-- UNWIND + 列表操作
-- 逗号分隔 CREATE 路径（已支持）
+- `range()` 函数注册（配合 UNWIND 使用）
+- `collect()` 函数注册（聚合函数）
+- 列表拼接 `+` 的 LIST_CONCAT 绑定
+- `RETURN *` 变量展开
 - DDL 异步执行（DdlWorker 后台线程）
 - 崩溃恢复（索引 DDL 状态恢复）
 
