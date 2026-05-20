@@ -116,6 +116,13 @@ jobs:
         cd build
         ninja -j$(nproc)
 
+    - name: Restore TCK baseline report
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@v4
+      with:
+        path: build/tck-baseline-report.md
+        key: tck-baseline-report-${{ github.base_ref }}
+
     - name: Run tests with ASan
       working-directory: build
       run: |
@@ -123,6 +130,7 @@ jobs:
       env:
         ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         TCK_REPORT_PATH: ${{ github.workspace }}/build/tck-report.md
+        TCK_BASELINE_REPORT_PATH: ${{ github.workspace }}/build/tck-baseline-report.md
 
     - name: Post TCK report to PR
       uses: marocchino/sticky-pull-request-comment@v2
@@ -130,6 +138,17 @@ jobs:
       with:
         path: build/tck-report.md
         header: tck-report
+
+    - name: Save TCK baseline report
+      if: github.event_name == 'push' && hashFiles('build/tck-report.md') != ''
+      run: cp build/tck-report.md build/tck-baseline-report.md
+
+    - name: Cache TCK baseline report
+      if: github.event_name == 'push'
+      uses: actions/cache/save@v4
+      with:
+        path: build/tck-baseline-report.md
+        key: tck-baseline-report-${{ github.ref_name }}
 
   # Undefined Behavior Sanitizer
   ubsan:
