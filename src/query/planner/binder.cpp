@@ -1778,14 +1778,45 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
 
     case cypher::BinaryOperator::AND:
     case cypher::BinaryOperator::OR:
-    case cypher::BinaryOperator::XOR:
-        if (left_type.kind == BoundTypeKind::BOOL || left_type.kind == BoundTypeKind::NULL_TYPE ||
-            left_type.kind == BoundTypeKind::ANY)
+    case cypher::BinaryOperator::XOR: {
+        auto ok = [](const BoundType& t) {
+            return t.kind == BoundTypeKind::BOOL || t.kind == BoundTypeKind::NULL_TYPE || t.kind == BoundTypeKind::ANY;
+        };
+        if (ok(left_type) && ok(right_type))
             return BoundType::Bool();
         error_msg = "Logical operators require boolean operands";
         return BoundType::Any();
+    }
 
-    case cypher::BinaryOperator::ADD:
+    case cypher::BinaryOperator::ADD: {
+        // String concatenation
+        if (left_type.kind == BoundTypeKind::STRING && right_type.kind == BoundTypeKind::STRING)
+            return BoundType::String();
+        if ((left_type.kind == BoundTypeKind::STRING || left_type.kind == BoundTypeKind::ANY ||
+             left_type.kind == BoundTypeKind::NULL_TYPE) &&
+            (right_type.kind == BoundTypeKind::STRING || right_type.kind == BoundTypeKind::ANY ||
+             right_type.kind == BoundTypeKind::NULL_TYPE) &&
+            (left_type.kind == BoundTypeKind::STRING || right_type.kind == BoundTypeKind::STRING))
+            return BoundType::String();
+        // List concatenation: LIST + LIST
+        if (left_type.kind == BoundTypeKind::LIST && right_type.kind == BoundTypeKind::LIST)
+            return BoundType::Any();
+        // List append: LIST + scalar or scalar + LIST
+        if (left_type.kind == BoundTypeKind::LIST || right_type.kind == BoundTypeKind::LIST)
+            return BoundType::Any();
+        // ANY/NULL: defer to runtime
+        if (left_type.kind == BoundTypeKind::ANY || left_type.kind == BoundTypeKind::NULL_TYPE ||
+            right_type.kind == BoundTypeKind::ANY || right_type.kind == BoundTypeKind::NULL_TYPE)
+            return BoundType::Any();
+        // Numeric arithmetic (fallthrough)
+        if (left_type == BoundType::Int64() && right_type == BoundType::Int64())
+            return BoundType::Int64();
+        if ((left_type.kind == BoundTypeKind::INT64 || left_type.kind == BoundTypeKind::DOUBLE) &&
+            (right_type.kind == BoundTypeKind::INT64 || right_type.kind == BoundTypeKind::DOUBLE))
+            return BoundType::Double();
+        error_msg = "Cannot apply + to " + left_type.toString() + " and " + right_type.toString();
+        return BoundType::Any();
+    }
     case cypher::BinaryOperator::SUB:
     case cypher::BinaryOperator::MUL:
     case cypher::BinaryOperator::DIV:
@@ -1797,6 +1828,10 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
         if ((left_type.kind == BoundTypeKind::INT64 || left_type.kind == BoundTypeKind::DOUBLE) &&
             (right_type.kind == BoundTypeKind::INT64 || right_type.kind == BoundTypeKind::DOUBLE))
             return BoundType::Double();
+        // ANY/NULL: defer to runtime
+        if (left_type.kind == BoundTypeKind::ANY || left_type.kind == BoundTypeKind::NULL_TYPE ||
+            right_type.kind == BoundTypeKind::ANY || right_type.kind == BoundTypeKind::NULL_TYPE)
+            return BoundType::Any();
         error_msg =
             "Arithmetic requires numeric operands: got " + left_type.toString() + " and " + right_type.toString();
         return BoundType::Any();
@@ -1819,11 +1854,15 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
         error_msg = "IN requires a list on the right side, got " + right_type.toString();
         return BoundType::Any();
 
-    case cypher::BinaryOperator::LIST_CONCAT:
-        if (left_type.kind == BoundTypeKind::LIST && right_type.kind == BoundTypeKind::LIST)
-            return BoundType::Any(); // Simplified
+    case cypher::BinaryOperator::LIST_CONCAT: {
+        auto is_listy = [](const BoundType& t) {
+            return t.kind == BoundTypeKind::LIST || t.kind == BoundTypeKind::ANY || t.kind == BoundTypeKind::NULL_TYPE;
+        };
+        if (is_listy(left_type) && is_listy(right_type))
+            return BoundType::Any();
         error_msg = "List concatenation requires list operands";
         return BoundType::Any();
+    }
 
     default:
         error_msg = "Operator not implemented";
