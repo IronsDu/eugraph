@@ -95,15 +95,6 @@ bool hasUnsupportedExpr(const ast::Expression& expr) {
                 return true;
             } else if constexpr (std::is_same_v<Inner, ast::BinaryOp>) {
                 switch (ptr->op) {
-                case ast::BinaryOperator::STARTS_WITH:
-                    spdlog::info("[TCK] skipping: STARTS WITH");
-                    return true;
-                case ast::BinaryOperator::ENDS_WITH:
-                    spdlog::info("[TCK] skipping: ENDS WITH");
-                    return true;
-                case ast::BinaryOperator::CONTAINS:
-                    spdlog::info("[TCK] skipping: CONTAINS");
-                    return true;
                 case ast::BinaryOperator::IN:
                     spdlog::info("[TCK] skipping: IN");
                     return true;
