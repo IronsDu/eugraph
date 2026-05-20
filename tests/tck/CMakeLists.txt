@@ -28,12 +28,14 @@ ExternalProject_Add(ccr_ext
         <SOURCE_DIR>/CMakeLists.txt &&
         sed -i
         "s|add_link_options(-fsanitize=address -fsanitize=undefined)|# PATCHED: sanitizers removed|"
+        <SOURCE_DIR>/CMakeLists.txt &&
+        sed -i
+        "s|add_subdirectory(compatibility)|# PATCHED: skip compatibility tests|"
         <SOURCE_DIR>/CMakeLists.txt
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
         -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-        -DCCR_STANDALONE=ON
         -DCCR_FETCH_DEPS=ON
         -DCCR_BUILD_TESTS=OFF
         -DCMAKE_CXX_STANDARD=20
