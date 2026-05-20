@@ -10,6 +10,20 @@ endif()
 
 # Options
 option(EUGRAPH_BUILD_TESTS "Build unit tests" ON)
+option(EUGRAPH_ENABLE_CCACHE "Enable ccache for faster rebuilds" OFF)
+option(EUGRAPH_UNITY_BUILD "Enable unity builds to reduce compilation time" OFF)
+
+# ccache support
+if(EUGRAPH_ENABLE_CCACHE)
+    find_program(CCACHE_PROGRAM ccache)
+    if(CCACHE_PROGRAM)
+        message(STATUS "ccache found: ${CCACHE_PROGRAM}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+        set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    else()
+        message(WARNING "ccache requested but not found")
+    endif()
+endif()
 
 # Dependencies
 find_package(spdlog CONFIG REQUIRED)
@@ -178,6 +192,13 @@ target_link_libraries(eugraph_query_engine PUBLIC
     Folly::folly_deps
     spdlog::spdlog
 )
+
+if(EUGRAPH_UNITY_BUILD)
+    set_target_properties(eugraph_query_engine PROPERTIES
+        UNITY_BUILD ON
+        UNITY_BUILD_BATCH_SIZE 8
+    )
+endif()
 
 # ==================== Thrift Generated Code ====================
 
