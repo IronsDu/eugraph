@@ -93,8 +93,7 @@ TEST_F(VertexSerializationTest, IncludesLabelName) {
     ASSERT_EQ(result.getType(), thrift::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
-    EXPECT_NE(json.find("\"label\":\"User\""), std::string::npos)
-        << "JSON should contain label name, got: " << json;
+    EXPECT_NE(json.find("\"label\":\"User\""), std::string::npos) << "JSON should contain label name, got: " << json;
 }
 
 TEST_F(VertexSerializationTest, SerializesProperties) {
@@ -117,10 +116,8 @@ TEST_F(VertexSerializationTest, SerializesProperties) {
     ASSERT_EQ(result.getType(), thrift::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
-    EXPECT_NE(json.find("\"name\":\"ABCDEF\""), std::string::npos)
-        << "Should contain name property, got: " << json;
-    EXPECT_NE(json.find("\"age\":30"), std::string::npos)
-        << "Should contain age property, got: " << json;
+    EXPECT_NE(json.find("\"name\":\"ABCDEF\""), std::string::npos) << "Should contain name property, got: " << json;
+    EXPECT_NE(json.find("\"age\":30"), std::string::npos) << "Should contain age property, got: " << json;
 }
 
 TEST_F(VertexSerializationTest, VertexWithoutLabels) {
@@ -134,12 +131,9 @@ TEST_F(VertexSerializationTest, VertexWithoutLabels) {
     ASSERT_EQ(result.getType(), thrift::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
-    EXPECT_NE(json.find("\"id\":99"), std::string::npos)
-        << "Should contain id, got: " << json;
-    EXPECT_EQ(json.find("\"label\":"), std::string::npos)
-        << "Should NOT contain label when none set, got: " << json;
-    EXPECT_EQ(json.find("\"_vid\":"), std::string::npos)
-        << "Should NOT contain _vid, got: " << json;
+    EXPECT_NE(json.find("\"id\":99"), std::string::npos) << "Should contain id, got: " << json;
+    EXPECT_EQ(json.find("\"label\":"), std::string::npos) << "Should NOT contain label when none set, got: " << json;
+    EXPECT_EQ(json.find("\"_vid\":"), std::string::npos) << "Should NOT contain _vid, got: " << json;
 }
 
 } // namespace
