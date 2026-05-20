@@ -131,6 +131,45 @@ MATCH (n:Person) WITH DISTINCT n.city AS city RETURN city
 - 聚合结果类型为 `ANY`，WHERE 中与具体类型（如 int64）比较可能失败（如 `WHERE count > 1`）
 - WITH 后 SET 属性更新可能不生效（作用域重置后列索引变化）
 
+### UNWIND — 列表展开
+
+UNWIND 子句将列表表达式展开为独立行，每个元素产生一行输出。
+
+```cypher
+UNWIND [1, 2, 3] AS x
+RETURN x
+
+-- 空列表 → 0 行
+UNWIND [] AS empty
+RETURN empty
+
+-- NULL → 0 行
+UNWIND null AS nil
+RETURN nil
+
+-- 嵌套列表双层展开
+WITH [[1,2,3],[4,5,6]] AS lol
+UNWIND lol AS x
+UNWIND x AS y
+RETURN y
+
+-- 重复值保留
+UNWIND [1, 1, 2, 2] AS duplicate
+RETURN duplicate
+```
+
+**语义**：
+- 空列表 → 不产生任何行
+- NULL → 不产生任何行
+- 非列表值 → 运行时错误
+- 可作为首子句（无输入源）或接在其他子句之后
+- 原始变量在 UNWIND 后仍保持作用域（不裁剪上下文）
+
+**限制**：
+- 列表拼接 `+` 尚未支持 LIST_CONCAT 语义（`UNWIND (first + second) AS x` 会报错）
+- `range()` 函数尚未注册（`UNWIND range(1, 3) AS x` 会报错）
+- `RETURN *` 尚未实现变量展开（配合 UNWIND 时无法返回全部变量）
+
 ### RETURN — 返回
 
 ```cypher
@@ -206,7 +245,6 @@ REMOVE n.name                     -- 移除属性（便捷模式）
 |-----------|------|
 | `DELETE` / `DETACH DELETE` | 删除顶点/边 |
 | `MERGE` | 条件创建（含 ON CREATE/MATCH SET） |
-| `UNWIND` | 列表展开为行 |
 | `CALL` | 过程调用/子查询 |
 | `UNION` / `UNION ALL` | 查询合并 |
 | `OPTIONAL MATCH` | 可选匹配 |

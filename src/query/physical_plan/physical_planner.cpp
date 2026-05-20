@@ -3,6 +3,7 @@
 #include "query/physical_plan/operator/alter_vertex_label_physical_op.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
+#include "query/physical_plan/operator/unwind_physical_op.hpp"
 #include "query/physical_plan/operator/varlen_expand_physical_op.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
@@ -799,6 +800,23 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                                            ctx.label_name_to_id, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundUnwindOp>) {
+                    auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = extractChildResult(std::move(child_result));
+                    auto child_op = std::move(cr.op);
+                    auto child_schema = std::move(cr.output_schema);
+                    auto output_types = std::move(cr.output_types);
+
+                    Schema output_schema = child_schema;
+                    output_schema.push_back(v.variable);
+                    output_types.push_back(binder::BoundType::Any());
+
+                    auto result = std::make_unique<UnwindPhysicalOp>(
+                        std::move(v.list_expr), v.variable_column_index, binder::BoundType::Any(),
+                        std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op));
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundBinaryJoinOp>) {
                     auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(left_result))

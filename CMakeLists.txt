@@ -155,6 +155,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/singleton_physical_op.cpp
     src/query/physical_plan/operator/skip_physical_op.cpp
     src/query/physical_plan/operator/sort_physical_op.cpp
+    src/query/physical_plan/operator/unwind_physical_op.cpp
     src/query/physical_plan/physical_operator_base.cpp
     src/query/physical_plan/physical_planner.cpp
     src/query/executor/query_executor.cpp

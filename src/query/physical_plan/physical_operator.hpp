@@ -19,4 +19,5 @@
 #include "query/physical_plan/operator/set_physical_op.hpp"
 #include "query/physical_plan/operator/skip_physical_op.hpp"
 #include "query/physical_plan/operator/sort_physical_op.hpp"
+#include "query/physical_plan/operator/unwind_physical_op.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"

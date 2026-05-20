@@ -51,7 +51,7 @@
 
 | 子句 | 跳过次数 | 优先级 | 说明 |
 |------|---------|--------|------|
-| UNWIND | 191 | P1 | 展开列表为行 |
+| UNWIND | 191 | ~~P1~~ 已实现 | 展开列表为行（缺少 range()/collect() 等依赖函数的场景仍失败） |
 | MERGE | 72 | P1 | 合并创建，需要条件扫描+创建逻辑 |
 | DELETE / DETACH DELETE | 41 | P1 | 删除顶点/边 |
 | OPTIONAL MATCH | 78 | P1 | 可选匹配，需要 outer join 语义 |
@@ -213,6 +213,7 @@
 | 分类: IN/XOR/CASE 表达式 | 104 跳过 | 待验证 | ✅ 已实现 |
 | 分类: STARTS WITH/ENDS WITH/CONTAINS | ~27 跳过 | 已实现（过滤逻辑正确，断言失败为顶点序列化格式问题） | ✅ |
 | 分类: 无源 RETURN (sourceless RETURN) | 不可用 | ✅ 已实现 | `RETURN true OR false` 等常量表达式无需 MATCH |
+| 分类: UNWIND 子句 | 191 跳过 | 5 通过，其余因缺少 range()/collect() 等依赖失败 | ✅ 已实现 |
 | 步骤: `executing control query:` | undefined | 已实现 | ✅ |
 | 步骤: `ignoring element order for lists` | undefined | 已实现 | ✅ 含行有序/无序两种变体 |
 | 步骤: `at any time` 错误匹配 | undefined | 已实现 | ✅ 支持 `*` 通配 detail |
