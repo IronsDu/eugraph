@@ -196,7 +196,7 @@ add_dependencies(tck_tests eugraph-server ccr_ext)
 add_custom_command(TARGET tck_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/features"
     COMMAND ${CMAKE_COMMAND} -E create_symlink
-        "${PROJECT_SOURCE_DIR}/tests/tck/features/opencypher_tck"
+        "${PROJECT_SOURCE_DIR}/third_party/openCypher/tck/features"
         "${CMAKE_CURRENT_BINARY_DIR}/features"
     COMMENT "Linking TCK features for cucumber discovery"
 )
