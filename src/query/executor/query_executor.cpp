@@ -24,7 +24,9 @@ QueryExecutor::QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaSt
 
 QueryExecutor::~QueryExecutor() = default;
 
-folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(const std::string& cypher_query) {
+folly::coro::Task<std::shared_ptr<StreamContext>>
+QueryExecutor::prepareStream(const std::string& cypher_query,
+                             const std::unordered_map<std::string, Value>& params) {
     auto ctx = std::make_shared<StreamContext>(async_data_);
 
     // 0. Quick guard: skip DDL if query starts with EXPLAIN (so DDL isn't executed for EXPLAIN queries)
@@ -114,7 +116,7 @@ folly::coro::Task<std::shared_ptr<StreamContext>> QueryExecutor::prepareStream(c
     auto func_registry = std::make_unique<function::FunctionRegistry>();
 
     // 2. Bind: AST → BoundLogicalPlan
-    binder::Binder binder(*catalog, *func_registry);
+    binder::Binder binder(*catalog, *func_registry, params);
     auto bound_stmt = binder.bind(stmt);
     if (!bound_stmt) {
         std::string err = "Binding failed";

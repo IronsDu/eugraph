@@ -1,5 +1,7 @@
 #include "program/server/eugraph_handler.hpp"
 
+#include "query/parser/cypher_parser.hpp"
+
 #include <thrift/lib/cpp2/async/ServerStream.h>
 
 #include <spdlog/spdlog.h>
@@ -527,12 +529,41 @@ EuGraphHandler::co_listEdgeLabels(std::unique_ptr<std::string> graph_name) {
 // ==================== DML: Cypher (streaming) ====================
 
 folly::coro::Task<apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
-EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name) {
+EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name,
+                                 std::unique_ptr<std::map<std::string, std::string>> parameters) {
     auto t0 = nowMs();
     spdlog::info("[handler] executeCypher start, graph='{}', query='{}'", *graph_name, *query);
     auto* inst = resolveGraph(*graph_name);
 
-    auto ctx = co_await inst->executor->prepareStream(*query);
+    // Parse parameter values from Cypher literal strings to runtime Values
+    std::unordered_map<std::string, Value> params;
+    if (parameters && !parameters->empty()) {
+        static thread_local cypher::CypherQueryParser parser;
+        for (const auto& [name, literal_str] : *parameters) {
+            auto result = parser.parse("RETURN " + literal_str);
+            if (std::holds_alternative<cypher::Statement>(result)) {
+                auto& stmt = std::get<cypher::Statement>(result);
+                auto* rq = std::get_if<std::unique_ptr<cypher::RegularQuery>>(&stmt);
+                if (rq && *rq && !(*rq)->first.clauses.empty()) {
+                    auto* ret = std::get_if<std::unique_ptr<cypher::ReturnClause>>(&(*rq)->first.clauses[0]);
+                    if (ret && *ret && !(*ret)->items.empty()) {
+                        const auto& expr = (*ret)->items[0].expr;
+                        auto* lit = std::get_if<std::unique_ptr<cypher::Literal>>(&expr);
+                        if (lit && *lit) {
+                            std::visit([&params, &name](const auto& v) {
+                                using V = std::decay_t<decltype(v)>;
+                                if constexpr (!std::is_same_v<V, cypher::NullValue>) {
+                                    params[name] = Value(v);
+                                }
+                            }, (*lit)->value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    auto ctx = co_await inst->executor->prepareStream(*query, params);
 
     if (!ctx->error.empty()) {
         spdlog::info("[handler] executeCypher error: {}, took={}ms", ctx->error, nowMs() - t0);

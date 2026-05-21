@@ -269,7 +269,11 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 bl->result_type = BoundType::List(BoundType::clone(merged_elem));
                 return BoundExpression(std::move(bl));
             } else if constexpr (std::is_same_v<Elem, cypher::Parameter>) {
-                return BoundExpression(BoundParameter(ptr->name, BoundType::Any()));
+                auto it = params_.find(ptr->name);
+                if (it != params_.end()) {
+                    return BoundExpression(BoundLiteral(it->second));
+                }
+                return BoundExpression(BoundLiteral{});
             } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
                                  std::is_same_v<Elem, cypher::NoneExpr> || std::is_same_v<Elem, cypher::SingleExpr>) {
                 auto list_expr = bindExpression(ptr->list_expr);

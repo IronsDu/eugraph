@@ -41,10 +41,12 @@ public:
 
     // DML - returns streaming response
     apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>
-    executeCypher(const std::string& query, const std::string& graph_name);
+    executeCypher(const std::string& query, const std::string& graph_name,
+                  const std::map<std::string, std::string>& params = {});
 
     folly::coro::Task<apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
-    co_executeCypher(const std::string& query, const std::string& graph_name);
+    co_executeCypher(const std::string& query, const std::string& graph_name,
+                     const std::map<std::string, std::string>& params = {});
 
     // Batch import
     thrift::BatchInsertVerticesResult batchInsertVertices(const std::string& label_name,

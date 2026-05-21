@@ -1,6 +1,7 @@
 #pragma once
 
 #include "query/catalog/catalog.hpp"
+#include "query/dataset/row.hpp"
 #include "query/function/function_registry.hpp"
 #include "query/parser/ast.hpp"
 #include "query/planner/bind_context.hpp"
@@ -9,6 +10,7 @@
 
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace eugraph {
@@ -24,8 +26,9 @@ namespace binder {
 /// 5. Produce a BoundLogicalPlan with typed output schema
 class Binder {
 public:
-    Binder(const catalog::Catalog& catalog, const function::FunctionRegistry& func_registry)
-        : catalog_(catalog), func_registry_(func_registry) {}
+    Binder(const catalog::Catalog& catalog, const function::FunctionRegistry& func_registry,
+           const std::unordered_map<std::string, Value>& params = {})
+        : catalog_(catalog), func_registry_(func_registry), params_(params) {}
 
     /// Bind a top-level Cypher statement. Returns errors on failure.
     std::optional<BoundStatement> bind(const cypher::Statement& stmt);
@@ -46,6 +49,7 @@ public:
 private:
     const catalog::Catalog& catalog_;
     const function::FunctionRegistry& func_registry_;
+    const std::unordered_map<std::string, Value>& params_;
     BindContext ctx_;
     std::vector<std::string> errors_;
     uint32_t anon_id_ = 0;

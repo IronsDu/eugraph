@@ -40,7 +40,8 @@ public:
     co_listEdgeLabels(std::unique_ptr<std::string> graph_name) override;
 
     folly::coro::Task<apache::thrift::ResponseAndServerStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
-    co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name) override;
+    co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name,
+                     std::unique_ptr<std::map<std::string, std::string>> parameters) override;
 
     folly::coro::Task<std::unique_ptr<thrift::BatchInsertVerticesResult>>
     co_batchInsertVertices(std::unique_ptr<std::string> label_name,
