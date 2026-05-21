@@ -94,7 +94,7 @@
 
 | 缺失步骤模式 | 涉及场景数 | 优先级 | 说明 |
 |-------------|-----------|--------|------|
-| `And parameters are:` | 64 | P2 | 参数化查询 ($param) |
+| ~~`And parameters are:`~~ | ~~64~~ | ~~P2~~ | ✅ 已实现（参数在 Binder 阶段替换为 BoundLiteral） |
 | `And there exists a procedure ...` | 50 | P3 | 存储过程定义 (CALL 子句前置) |
 | ~~`When executing control query:`~~ | ~~33~~ | ~~P2~~ | ✅ 已实现 |
 | ~~`Then the result should be (ignoring element order for lists)`~~ | ~~23~~ | ~~P2~~ | ✅ 已实现 |
@@ -104,7 +104,7 @@
 
 ### 2.2 分析与建议
 
-- **参数支持** (`parameters are:`) 是 TCK 框架的基础能力，建议 P2 实现
+- **参数支持** (`parameters are:`) 已实现 ✅，通过 Thrift RPC 传递参数，Binder 阶段替换为 BoundLiteral
 - **控制查询** (`executing control query:`) 已实现 ✅
 - **列表忽略顺序比较** 已实现 ✅，支持行有序/无序两种变体
 - **`at any time` 错误匹配** 已实现 ✅，扩展了已有 error step 正则以匹配 `any time` 阶段
@@ -219,6 +219,7 @@
 | 步骤: `executing control query:` | undefined | 已实现 | ✅ |
 | 步骤: `ignoring element order for lists` | undefined | 已实现 | ✅ 含行有序/无序两种变体 |
 | 步骤: `at any time` 错误匹配 | undefined | 已实现 | ✅ 支持 `*` 通配 detail |
+| 分类: 参数化查询 ($param) | 64 undefined | 待验证 | ✅ 已实现（Thrift RPC 传参 + Binder 替换为 BoundLiteral） |
 
 ---
 

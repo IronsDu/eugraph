@@ -249,7 +249,6 @@ REMOVE n.name                     -- 移除属性（便捷模式）
 | `UNION` / `UNION ALL` | 查询合并 |
 | `OPTIONAL MATCH` | 可选匹配 |
 | `CASE WHEN THEN ELSE END` | 条件表达式 |
-| `$param` | 参数化查询 |
 | `[x IN list WHERE pred \| proj]` | 列表推导 |
 | `ALL/ANY/NONE/SINGLE(...)` | 量词谓词（已实现，见 WHERE 子句） |
 | `EXISTS { pattern }` | 存在性子查询 |
@@ -269,6 +268,7 @@ REMOVE n.name                     -- 移除属性（便捷模式）
 | `avg(expr)` | 平均值（返回 double） | 已实现 |
 | `min(expr)` | 最小值（仅数值） | 已实现 |
 | `max(expr)` | 最大值（仅数值） | 已实现 |
+| `collect(expr)` | 聚合为列表（跳过 null） | 已实现 |
 
 支持 GROUP BY：RETURN 中的非聚合表达式自动成为分组键。全局聚合（无 GROUP BY）在无输入时返回一行（count=0，其余 null）。
 
@@ -276,13 +276,45 @@ REMOVE n.name                     -- 移除属性（便捷模式）
 
 ## 五、内置函数
 
+### 标量函数
+
 | 函数 | 说明 |
 |------|------|
 | `id(node)` | 返回顶点/边的全局 ID（int64_t） |
+| `type(edge)` | 返回边的类型名（string） |
+| `last(list)` | 返回列表最后一个元素 |
+| `head(list)` | 返回列表第一个元素 |
+| `reverse(list)` | 返回反转后的列表 |
+| `size(list)` | 返回列表长度 |
+| `range(start, end)` | 生成 [start, end] 整数列表（步长 1） |
+| `range(start, end, step)` | 生成 [start, end] 整数列表（自定义步长） |
+| `toInteger(x)` | 转换为整数（string/double/bool → int64） |
+| `toFloat(x)` | 转换为浮点数（string/int64/bool → double） |
+| `toString(x)` | 转换为字符串 |
+| `labels(vertex)` | 返回顶点的标签名列表（List\<String\>） |
+| `keys(vertex)` | 返回顶点的属性名列表（List\<String\>） |
+| `keys(edge)` | 返回边的属性名列表（List\<String\>） |
+| `nodes(path)` | 返回路径中的顶点列表 |
+| `relationships(path)` | 返回路径中的边列表 |
+| `length(path)` | 返回路径长度（边数） |
 
 ---
 
-## 六、索引 DDL
+---
+
+## 六、参数化查询
+
+```cypher
+-- 通过 Thrift RPC 传递参数（$param_name）
+MATCH (n:Person) WHERE n.name = $name RETURN n
+MATCH (n:Node) WHERE n.val > $threshold RETURN n.val
+```
+
+参数通过 RPC `executeCypher(query, graph_name, parameters)` 传递，值为 Cypher 字面值字符串（如 `"42"`、`"'hello'"`、`"true"`）。参数在 Binder 阶段替换为字面值，优化器可利用参数值进行下推优化。
+
+---
+
+## 七、索引 DDL
 
 ```cypher
 -- 创建顶点索引
