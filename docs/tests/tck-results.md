@@ -220,6 +220,7 @@
 | 步骤: `ignoring element order for lists` | undefined | 已实现 | ✅ 含行有序/无序两种变体 |
 | 步骤: `at any time` 错误匹配 | undefined | 已实现 | ✅ 支持 `*` 通配 detail |
 | 分类: 参数化查询 ($param) | 64 undefined | 待验证 | ✅ 已实现（Thrift RPC 传参 + Binder 替换为 BoundLiteral） |
+| 分类: trim/ltrim/rtrim/split/replace/substring/left/right/coalesce | UnknownFunction | 已实现 | ✅ `scalar/string_functions.hpp` + `scalar/coalesce_function.hpp` |
 
 ---
 
@@ -265,17 +266,17 @@
 
 **前置依赖**: 在 `Value` variant 中添加 `MapValue` 类型（`std::map<std::string, ValueStorage>` 或 `std::vector<std::pair<std::string, ValueStorage>>`），同步修改 BoundType、序列化等。
 
-### 其他待实现函数
+### ~~其他待实现函数~~ ✅ 已实现
 
-| 函数 | 签名 | TCK 场景数 | 说明 |
-|------|------|-----------|------|
-| `coalesce(Any...)` | `-> Any` | 少量 | 变参函数，返回第一个非 null 参数 |
-| `trim(String)` | `-> String` | 少量 | 去除两端空白 |
-| `ltrim(String)` | `-> String` | 少量 | 去除左端空白 |
-| `rtrim(String)` | `-> String` | 少量 | 去除右端空白 |
-| `split(String, String)` | `-> List<String>` | 少量 | 按分隔符拆分字符串 |
-| `replace(String, String, String)` | `-> String` | 少量 | 替换子串 |
-| `substring(String, Int64 [, Int64])` | `-> String` | 少量 | 截取子串 |
-| `left(String, Int64)` | `-> String` | 少量 | 左侧 N 字符 |
-| `right(String, Int64)` | `-> String` | 少量 | 右侧 N 字符 |
+| 函数 | 签名 | 说明 | 源码 |
+|------|------|------|------|
+| ~~`coalesce(Any...)`~~ | `-> Any` | 返回第一个非 null 参数 | `scalar/coalesce_function.hpp` |
+| ~~`trim(String)`~~ | `-> String` | 去除两端空白 | `scalar/string_functions.hpp` |
+| ~~`ltrim(String)`~~ | `-> String` | 去除左端空白 | `scalar/string_functions.hpp` |
+| ~~`rtrim(String)`~~ | `-> String` | 去除右端空白 | `scalar/string_functions.hpp` |
+| ~~`split(String, String)`~~ | `-> List<String>` | 按分隔符拆分字符串 | `scalar/string_functions.hpp` |
+| ~~`replace(String, String, String)`~~ | `-> String` | 替换子串 | `scalar/string_functions.hpp` |
+| ~~`substring(String, Int64 [, Int64])`~~ | `-> String` | 截取子串（2/3 参数重载） | `scalar/string_functions.hpp` |
+| ~~`left(String, Int64)`~~ | `-> String` | 左侧 N 字符 | `scalar/string_functions.hpp` |
+| ~~`right(String, Int64)`~~ | `-> String` | 右侧 N 字符 | `scalar/string_functions.hpp` |
 

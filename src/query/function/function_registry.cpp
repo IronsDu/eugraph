@@ -8,11 +8,13 @@
 #include "query/function/aggregate/min_function.hpp"
 #include "query/function/aggregate/min_function.hpp" // also provides MaxState
 #include "query/function/aggregate/sum_function.hpp"
+#include "query/function/scalar/coalesce_function.hpp"
 #include "query/function/scalar/conversion_functions.hpp"
 #include "query/function/scalar/graph_functions.hpp"
 #include "query/function/scalar/id_function.hpp"
 #include "query/function/scalar/list_functions.hpp"
 #include "query/function/scalar/path_functions.hpp"
+#include "query/function/scalar/string_functions.hpp"
 #include "query/function/scalar/type_function.hpp"
 
 namespace eugraph {
@@ -260,6 +262,122 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   {},
                                   {},
                                   {}});
+
+    // --- String functions ---
+
+    // trim(String) -> String
+    functions_["trim"].push_back({"trim",
+                                  {BoundType::String()},
+                                  BoundType::String(),
+                                  false,
+                                  false,
+                                  scalar::trimScalarFn,
+                                  scalar::trimBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+
+    // ltrim(String) -> String
+    functions_["ltrim"].push_back({"ltrim",
+                                   {BoundType::String()},
+                                   BoundType::String(),
+                                   false,
+                                   false,
+                                   scalar::ltrimScalarFn,
+                                   scalar::ltrimBatchFn,
+                                   {},
+                                   {},
+                                   {}});
+
+    // rtrim(String) -> String
+    functions_["rtrim"].push_back({"rtrim",
+                                   {BoundType::String()},
+                                   BoundType::String(),
+                                   false,
+                                   false,
+                                   scalar::rtrimScalarFn,
+                                   scalar::rtrimBatchFn,
+                                   {},
+                                   {},
+                                   {}});
+
+    // split(String, String) -> List<String>
+    functions_["split"].push_back({"split",
+                                   {BoundType::String(), BoundType::String()},
+                                   BoundType::List(BoundType::String()),
+                                   false,
+                                   false,
+                                   scalar::splitScalarFn,
+                                   scalar::splitBatchFn,
+                                   {},
+                                   {},
+                                   {}});
+
+    // replace(String, String, String) -> String
+    functions_["replace"].push_back({"replace",
+                                     {BoundType::String(), BoundType::String(), BoundType::String()},
+                                     BoundType::String(),
+                                     false,
+                                     false,
+                                     scalar::replaceScalarFn,
+                                     scalar::replaceBatchFn,
+                                     {},
+                                     {},
+                                     {}});
+
+    // substring(String, Int64) -> String
+    functions_["substring"].push_back({"substring",
+                                       {BoundType::String(), BoundType::Int64()},
+                                       BoundType::String(),
+                                       false,
+                                       false,
+                                       scalar::substringScalarFn,
+                                       scalar::substringBatchFn,
+                                       {},
+                                       {},
+                                       {}});
+
+    // substring(String, Int64, Int64) -> String
+    functions_["substring"].push_back({"substring",
+                                       {BoundType::String(), BoundType::Int64(), BoundType::Int64()},
+                                       BoundType::String(),
+                                       false,
+                                       false,
+                                       scalar::substringScalarFn,
+                                       scalar::substringBatchFn,
+                                       {},
+                                       {},
+                                       {}});
+
+    // left(String, Int64) -> String
+    functions_["left"].push_back({"left",
+                                  {BoundType::String(), BoundType::Int64()},
+                                  BoundType::String(),
+                                  false,
+                                  false,
+                                  scalar::leftScalarFn,
+                                  scalar::leftBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+
+    // right(String, Int64) -> String
+    functions_["right"].push_back({"right",
+                                   {BoundType::String(), BoundType::Int64()},
+                                   BoundType::String(),
+                                   false,
+                                   false,
+                                   scalar::rightScalarFn,
+                                   scalar::rightBatchFn,
+                                   {},
+                                   {},
+                                   {}});
+
+    // --- Coalesce ---
+
+    // coalesce(Any...) -> Any
+    functions_["coalesce"].push_back(
+        {"coalesce", {}, BoundType::Any(), false, true, scalar::coalesceScalarFn, scalar::coalesceBatchFn, {}, {}, {}});
 }
 
 void FunctionRegistry::registerAggregateBuiltins() {
