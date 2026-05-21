@@ -1,6 +1,6 @@
 #pragma once
 
-#include "query/executor/row.hpp"
+#include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
 
 #include <cstdint>

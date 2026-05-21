@@ -228,7 +228,7 @@ ColumnResolver: BoundVariableRef → BoundColumnRef（列索引，直接引用 D
 
 ## 六、DataChunk（列存数据块）
 
-`src/query/executor/data_chunk.hpp`
+`src/query/dataset/data_chunk.hpp`
 
 ### Column（单列）
 
@@ -430,7 +430,7 @@ class PhysicalOperator {
 
 ## 九、表达式求值
 
-`src/query/executor/vectorized_evaluator.hpp`
+`src/query/evaluator/vectorized_evaluator.hpp`
 
 `VectorizedEvaluator` 对 `BoundExpression` 求值，直接操作 DataChunk 列数据，无运行时字符串查找。
 

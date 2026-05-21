@@ -1,5 +1,5 @@
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
-#include "query/executor/row.hpp"
+#include "query/dataset/row.hpp"
 
 namespace eugraph {
 namespace compute {

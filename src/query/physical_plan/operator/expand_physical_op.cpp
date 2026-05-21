@@ -1,7 +1,7 @@
 #include "query/physical_plan/operator/expand_physical_op.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
-#include "query/executor/row.hpp"
+#include "query/dataset/row.hpp"
 
 namespace eugraph {
 namespace compute {

@@ -1,6 +1,6 @@
 #include "query/physical_plan/operator/varlen_expand_physical_op.hpp"
 #include "common/types/constants.hpp"
-#include "query/executor/row.hpp"
+#include "query/dataset/row.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
 
 namespace eugraph {

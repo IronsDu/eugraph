@@ -1,6 +1,6 @@
 #include "query/physical_plan/operator/set_physical_op.hpp"
 #include "common/types/graph_types.hpp"
-#include "query/executor/vectorized_evaluator.hpp"
+#include "query/evaluator/vectorized_evaluator.hpp"
 
 namespace eugraph {
 namespace compute {

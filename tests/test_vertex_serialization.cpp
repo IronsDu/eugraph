@@ -2,7 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "program/server/eugraph_handler.hpp"
-#include "query/executor/row.hpp"
+#include "query/dataset/row.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/graph_manager.hpp"

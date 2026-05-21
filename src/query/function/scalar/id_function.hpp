@@ -1,8 +1,8 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "query/executor/data_chunk.hpp"
-#include "query/executor/row.hpp"
+#include "query/dataset/data_chunk.hpp"
+#include "query/dataset/row.hpp"
 
 namespace eugraph {
 namespace function {

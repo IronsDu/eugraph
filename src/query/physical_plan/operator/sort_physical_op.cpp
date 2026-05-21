@@ -1,6 +1,6 @@
 #include "query/physical_plan/operator/sort_physical_op.hpp"
-#include "query/executor/row.hpp"
-#include "query/executor/vectorized_evaluator.hpp"
+#include "query/dataset/row.hpp"
+#include "query/evaluator/vectorized_evaluator.hpp"
 
 #include <algorithm>
 #include <numeric>

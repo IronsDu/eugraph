@@ -1,6 +1,6 @@
 #include "query/physical_plan/operator/aggregate_physical_op.hpp"
-#include "query/executor/row.hpp"
-#include "query/executor/vectorized_evaluator.hpp"
+#include "query/dataset/row.hpp"
+#include "query/evaluator/vectorized_evaluator.hpp"
 
 #include <unordered_map>
 #include <unordered_set>

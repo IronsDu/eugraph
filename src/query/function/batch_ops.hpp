@@ -1,6 +1,6 @@
 #pragma once
 
-#include "query/executor/data_chunk.hpp"
+#include "query/dataset/data_chunk.hpp"
 #include "query/parser/ast.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "query/executor/row.hpp"
+#include "query/dataset/row.hpp"
 #include "query/physical_plan/physical_operator.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"
 #include "query/planner/bound_type.hpp"
