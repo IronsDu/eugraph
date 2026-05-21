@@ -550,12 +550,14 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
                         const auto& expr = (*ret)->items[0].expr;
                         auto* lit = std::get_if<std::unique_ptr<cypher::Literal>>(&expr);
                         if (lit && *lit) {
-                            std::visit([&params, &name](const auto& v) {
-                                using V = std::decay_t<decltype(v)>;
-                                if constexpr (!std::is_same_v<V, cypher::NullValue>) {
-                                    params[name] = Value(v);
-                                }
-                            }, (*lit)->value);
+                            std::visit(
+                                [&params, &name](const auto& v) {
+                                    using V = std::decay_t<decltype(v)>;
+                                    if constexpr (!std::is_same_v<V, cypher::NullValue>) {
+                                        params[name] = Value(v);
+                                    }
+                                },
+                                (*lit)->value);
                         }
                     }
                 }

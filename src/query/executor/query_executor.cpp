@@ -25,8 +25,7 @@ QueryExecutor::QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaSt
 QueryExecutor::~QueryExecutor() = default;
 
 folly::coro::Task<std::shared_ptr<StreamContext>>
-QueryExecutor::prepareStream(const std::string& cypher_query,
-                             const std::unordered_map<std::string, Value>& params) {
+QueryExecutor::prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params) {
     auto ctx = std::make_shared<StreamContext>(async_data_);
 
     // 0. Quick guard: skip DDL if query starts with EXPLAIN (so DDL isn't executed for EXPLAIN queries)
