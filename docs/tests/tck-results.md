@@ -215,6 +215,7 @@
 | 分类: 顶点序列化格式 (`_vid` → `id` + `label`) | 广泛影响 | 已修复 | ✅ |
 | 分类: 无源 RETURN (sourceless RETURN) | 不可用 | ✅ 已实现 | `RETURN true OR false` 等常量表达式无需 MATCH |
 | 分类: UNWIND 子句 | 191 跳过 | 5 通过，其余因缺少 range()/collect() 等依赖失败 | ✅ 已实现 |
+| 分类: range()/toInteger()/toFloat()/toString()/labels()/keys()/collect() | ~40 | 待验证 | ✅ 已实现 |
 | 步骤: `executing control query:` | undefined | 已实现 | ✅ |
 | 步骤: `ignoring element order for lists` | undefined | 已实现 | ✅ 含行有序/无序两种变体 |
 | 步骤: `at any time` 错误匹配 | undefined | 已实现 | ✅ 支持 `*` 通配 detail |
@@ -243,3 +244,37 @@
 1. **优化器无限循环修复**: `FilterPushdownRule` 允许 Filter 穿透 Filter 导致对换循环（`Filter_A → Filter_B` 变成 `Filter_B → Filter_A` 再变回来，无限循环）。`findDuplicate` 只检查 group_id + child_groups + variant index，不比较算子内容，因此无法识别语义等价。修复：从 `isPenetrable` 中移除 `OptNodeType::Filter`，并增加 1024 次最大迭代安全限制。
 2. **量词表达式 TCK 启用**: 移除了 `tck_context.cpp` 中对 ALL/ANY/NONE/SINGLE 表达式的跳过逻辑，使 TCK 测试实际执行量词场景。
 3. **TCK 步骤定义补全**: 新增 `executing control query:` 步骤（复用已有查询执行，不做 side effects 快照）；新增 `ignoring element order for lists` 两种变体（行有序/无序 + cell 内 list 元素排序归一化）；扩展 error step 正则以支持 `at any time` 阶段匹配和 `*` 通配 detail。
+
+---
+
+## 待实现函数（后续迭代）
+
+以下函数尚未实现，记录于此避免遗忘：
+
+### 需要新增 MapValue 类型的函数
+
+当前 `Value` variant 没有 Map 类型，需先扩展类型系统：
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `properties(Vertex)` | `-> Map<String, Any>` | 返回顶点所有属性为 map |
+| `properties(Edge)` | `-> Map<String, Any>` | 返回边所有属性为 map |
+| `properties(Map)` | `-> Map<String, Any>` | 返回 map 本身（恒等） |
+| `keys(Map)` | `-> List<String>` | 返回 map 的键集合 |
+
+**前置依赖**: 在 `Value` variant 中添加 `MapValue` 类型（`std::map<std::string, ValueStorage>` 或 `std::vector<std::pair<std::string, ValueStorage>>`），同步修改 BoundType、序列化等。
+
+### 其他待实现函数
+
+| 函数 | 签名 | TCK 场景数 | 说明 |
+|------|------|-----------|------|
+| `coalesce(Any...)` | `-> Any` | 少量 | 变参函数，返回第一个非 null 参数 |
+| `trim(String)` | `-> String` | 少量 | 去除两端空白 |
+| `ltrim(String)` | `-> String` | 少量 | 去除左端空白 |
+| `rtrim(String)` | `-> String` | 少量 | 去除右端空白 |
+| `split(String, String)` | `-> List<String>` | 少量 | 按分隔符拆分字符串 |
+| `replace(String, String, String)` | `-> String` | 少量 | 替换子串 |
+| `substring(String, Int64 [, Int64])` | `-> String` | 少量 | 截取子串 |
+| `left(String, Int64)` | `-> String` | 少量 | 左侧 N 字符 |
+| `right(String, Int64)` | `-> String` | 少量 | 右侧 N 字符 |
+
