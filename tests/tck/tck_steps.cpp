@@ -202,6 +202,25 @@ STEP("^having executed:$") {
 }
 
 // -----------------------------------------------------------------------
+// Parameters: "And parameters are:"
+// -----------------------------------------------------------------------
+
+STEP("^parameters are:$") {
+    if (!dataTable || dataTable->rows.empty()) {
+        return;
+    }
+    // TCK parameter table: each row is | param_name | param_value |
+    for (const auto& row : dataTable->rows) {
+        if (row.cells.size() >= 2) {
+            std::string name = trim(row.cells[0].value);
+            std::string value = trim(row.cells[1].value);
+            gCtx->pendingParams[name] = value;
+            spdlog::info("[TCK] [{}] parameter: {} = {}", gCtx->graphName, name, value);
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
 // Test query: "When executing query:"
 // -----------------------------------------------------------------------
 
@@ -217,6 +236,7 @@ WHEN("^executing query:$") {
     gCtx->snapshotBefore = gCtx->takeSnapshot();
 
     gCtx->executeQuery(q);
+    gCtx->pendingParams.clear();
 
     auto after = gCtx->takeSnapshot();
     gCtx->lastSideEffects = gCtx->computeSideEffects(gCtx->snapshotBefore, after);

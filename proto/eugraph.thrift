@@ -109,7 +109,7 @@ service EuGraphService {
   list<EdgeLabelInfo> listEdgeLabels(1: string graph_name)
 
   // DML: Cypher query execution (streaming)
-  QueryStreamMeta,stream<ResultRowBatch> executeCypher(1: string query, 2: string graph_name)
+  QueryStreamMeta,stream<ResultRowBatch> executeCypher(1: string query, 2: string graph_name, 3: map<string, string> parameters)
 
   // Batch import
   BatchInsertVerticesResult batchInsertVertices(1: string label_name, 2: list<VertexRecord> records, 3: string graph_name)

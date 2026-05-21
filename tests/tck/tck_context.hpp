@@ -42,6 +42,9 @@ struct TckContext {
     // Side-effect results from last query
     SideEffects lastSideEffects;
 
+    // Parameterized query support
+    std::map<std::string, std::string> pendingParams;
+
     // Check whether a Cypher query uses unsupported syntax.
     // Uses the Cypher parser AST for precise detection; falls back
     // to regex for FOREACH and LOAD CSV (no AST nodes exist).

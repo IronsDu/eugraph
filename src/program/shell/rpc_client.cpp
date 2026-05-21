@@ -94,13 +94,15 @@ std::vector<thrift::EdgeLabelInfo> EuGraphRpcClient::listEdgeLabels(const std::s
 // ==================== DML ====================
 
 apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>
-EuGraphRpcClient::executeCypher(const std::string& query, const std::string& graph_name) {
-    return client_->semifuture_executeCypher(query, graph_name).via(evb_.get()).get();
+EuGraphRpcClient::executeCypher(const std::string& query, const std::string& graph_name,
+                                const std::map<std::string, std::string>& params) {
+    return client_->semifuture_executeCypher(query, graph_name, params).via(evb_.get()).get();
 }
 
 folly::coro::Task<apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
-EuGraphRpcClient::co_executeCypher(const std::string& query, const std::string& graph_name) {
-    co_return client_->semifuture_executeCypher(query, graph_name).via(evb_.get()).get();
+EuGraphRpcClient::co_executeCypher(const std::string& query, const std::string& graph_name,
+                                   const std::map<std::string, std::string>& params) {
+    co_return client_->semifuture_executeCypher(query, graph_name, params).via(evb_.get()).get();
 }
 
 // ==================== Batch Import ====================

@@ -141,6 +141,26 @@ protected:
         return result;
     }
 
+    CypherResult execCypherWithParams(const std::string& query, const std::map<std::string, std::string>& params) {
+        CypherResult result;
+        try {
+            auto [meta, stream] = client_->executeCypher(query, "default", params);
+            result.columns = *meta.columns();
+            std::move(stream).subscribeInline([&](folly::Try<ResultRowBatch> batch) {
+                if (batch.hasValue()) {
+                    for (auto& row : *batch->rows()) {
+                        result.rows.push_back(std::move(row));
+                    }
+                } else if (batch.hasException()) {
+                    result.error = batch.exception().what();
+                }
+            });
+        } catch (const std::exception& e) {
+            result.error = e.what();
+        }
+        return result;
+    }
+
     LabelInfo createLabel(const std::string& name, std::vector<PropertyDefThrift> props = {}) {
         return client_->createLabel(name, props, "default");
     }
@@ -544,6 +564,45 @@ TEST_F(RpcIntegrationTest, MultiGraphCypherIsolation) {
 
     auto result_b = execCypherOnGraph("MATCH (n:Node) RETURN n.val", "beta");
     EXPECT_EQ(result_b.rows.size(), 0u);
+}
+
+// ==================== Parameterized Queries ====================
+
+TEST_F(RpcIntegrationTest, ParameterizedQueryNodeProperty) {
+    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING)});
+    execCypher("CREATE (:Person {name: 'Alice'}), (:Person {name: 'Bob'})");
+
+    auto result = execCypherWithParams("MATCH (n:Person) WHERE n.name = $name RETURN n.name", {{"name", "'Alice'"}});
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].values()->size(), 1u);
+    EXPECT_EQ(result.rows[0].values()->at(0).get_string_val(), "Alice");
+}
+
+TEST_F(RpcIntegrationTest, ParameterizedQueryIntegerParam) {
+    createLabel("Node", {makePropDef("val", eugraph::thrift::PropertyType::INT64)});
+    execCypher("CREATE (:Node {val: 10}), (:Node {val: 20}), (:Node {val: 30})");
+
+    auto result = execCypherWithParams("MATCH (n:Node) WHERE n.val > $threshold RETURN n.val", {{"threshold", "15"}});
+    ASSERT_EQ(result.rows.size(), 2u);
+}
+
+TEST_F(RpcIntegrationTest, ParameterizedQueryMultipleParams) {
+    createLabel("Item", {makePropDef("price", eugraph::thrift::PropertyType::INT64)});
+    execCypher("CREATE (:Item {price: 5}), (:Item {price: 15}), (:Item {price: 25})");
+
+    auto result = execCypherWithParams("MATCH (n:Item) WHERE n.price >= $min AND n.price <= $max RETURN n.price",
+                                       {{"min", "10"}, {"max", "20"}});
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].values()->at(0).get_int_val(), 15);
+}
+
+TEST_F(RpcIntegrationTest, ParameterizedQueryEmptyParams) {
+    createLabel("Thing", {makePropDef("x", eugraph::thrift::PropertyType::INT64)});
+    execCypher("CREATE (:Thing {x: 1})");
+
+    auto result = execCypherWithParams("MATCH (n:Thing) RETURN n.x", {});
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(result.rows[0].values()->at(0).get_int_val(), 1);
 }
 
 } // anonymous namespace

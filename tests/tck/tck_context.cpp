@@ -84,10 +84,7 @@ bool hasUnsupportedExpr(const ast::Expression& expr) {
             using T = std::decay_t<decltype(ptr)>;
             using Inner = typename T::element_type;
 
-            if constexpr (std::is_same_v<Inner, ast::Parameter>) {
-                spdlog::info("[TCK] skipping: parameter ($)");
-                return true;
-            } else if constexpr (std::is_same_v<Inner, ast::CaseExpr>) {
+            if constexpr (std::is_same_v<Inner, ast::CaseExpr>) {
                 spdlog::info("[TCK] skipping: CASE expression");
                 return true;
             } else if constexpr (std::is_same_v<Inner, ast::ExistsExpr>) {
@@ -354,7 +351,11 @@ void TckContext::executeQuery(const std::string& query) {
     lastErrorDetail.clear();
 
     try {
-        auto [meta, stream] = rpc->executeCypher(query, graphName);
+        std::map<std::string, std::string> params;
+        if (!pendingParams.empty()) {
+            params.insert(pendingParams.begin(), pendingParams.end());
+        }
+        auto [meta, stream] = rpc->executeCypher(query, graphName, params);
 
         // Extract column names from metadata
         lastColumns = *meta.columns();

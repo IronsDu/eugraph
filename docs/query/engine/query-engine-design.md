@@ -153,6 +153,7 @@ class FunctionRegistry {
 | `avg(Double)` | Double | Double | 是 | `AvgState` |
 | `min(Any)` | Any | Any | 是 | `MinState` |
 | `max(Any)` | Any | Any | 是 | `MaxState` |
+| `collect(Any)` | Any | List\<Any\> | 是 | `CollectState` |
 
 聚合状态类（`src/query/function/aggregate/`）继承 `AggStateBase`，提供 `add()` 和 `finalize()` 方法。
 
@@ -169,7 +170,7 @@ BoundExpression = variant<
     BoundLiteral,           // 字面量 + 类型
     BoundColumnRef,         // 列索引 + 类型（零拷贝引用 DataChunk 列）
     BoundVariableRef,       // 变量名 + 类型（Binder 产出，ColumnResolver 解析为 BoundColumnRef）
-    BoundParameter,         // $param
+    BoundParameter,         // $param（已弃用：Binder 阶段直接替换为 BoundLiteral）
     BoundPropertyRef,       // 属性访问（prop_id + 类型，支持多候选）
     BoundLabelCast,         // n::Label 转型
     BoundBinaryOp,          // 二元运算 + 结果类型
@@ -208,6 +209,8 @@ BoundExpression = variant<
 7. 收集投影下推所需属性信息
 8. 为 `BoundBinaryOp`/`BoundUnaryOp` 解析类型特化的批量函数指针（`BinaryBatchFn`/`UnaryBatchFn`）
 9. 产出 `BoundStatement`（含 `BoundLogicalPlan` + `BindContext`）
+
+**参数化查询**：Binder 构造时接受 `params: map<string, Value>`。遇到 `$param` 时查表，找到则替换为 `BoundLiteral(value)`，未找到则替换为 `BoundLiteral{}`（null）。参数在 Binder 阶段确定值，优化器可直接看到字面值进行下推优化（如 Filter pushdown）。
 
 `BoundLogicalPlan` 的 root 是 `BoundLogicalOperator`（variant），包含 17 种 BoundXxxOp 类型，定义在 `planner/logical_plan/operator/` 下各自独立的头文件中。所有符号引用已解析为具体 ID，但变量引用此时仍为 `BoundVariableRef`（名称 + 类型），由 ColumnResolver 在 Binder 之后解析为 `BoundColumnRef`（列索引）。
 
@@ -517,12 +520,11 @@ using Schema = vector<string>;   // 列名列表
 
 - DELETE, MERGE 执行
 - Inner/Left Join（`BoundBinaryJoinOp` 已预留 `JoinType::Inner/Left`）
-- `range()` 函数注册（配合 UNWIND 使用）
-- `collect()` 函数注册（聚合函数）
 - 列表拼接 `+` 的 LIST_CONCAT 绑定
 - `RETURN *` 变量展开
 - DDL 异步执行（DdlWorker 后台线程）
 - 崩溃恢复（索引 DDL 状态恢复）
+- `properties(vertex/edge)` 函数（需先扩展 `Value` variant 添加 Map 类型）
 
 ### 待优化：边属性邻接存储
 
