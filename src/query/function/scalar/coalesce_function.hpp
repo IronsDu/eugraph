@@ -1,6 +1,6 @@
 #pragma once
 
-#include "query/dataset/row.hpp"
+#include "query/dataset/data_chunk.hpp"
 #include "query/function/function_def.hpp"
 
 namespace eugraph {
