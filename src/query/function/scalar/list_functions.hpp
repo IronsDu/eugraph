@@ -163,6 +163,54 @@ inline void sizeStringBatchFn(const std::vector<const Column*>& args, Column& re
     }
 }
 
+// --- range ---
+
+inline Value rangeImpl(int64_t start, int64_t end, int64_t step) {
+    if (step == 0)
+        return Value{};
+    ListValue lv;
+    if (step > 0) {
+        for (int64_t i = start; i <= end; i += step) {
+            lv.elements.push_back(ValueStorage{Value(i)});
+        }
+    } else {
+        for (int64_t i = start; i >= end; i += step) {
+            lv.elements.push_back(ValueStorage{Value(i)});
+        }
+    }
+    return Value(std::move(lv));
+}
+
+inline Value rangeScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
+    if (args.size() < 2)
+        return Value{};
+    if (isNull(args[0]) || isNull(args[1]))
+        return Value{};
+    auto start = std::get<int64_t>(args[0]);
+    auto end = std::get<int64_t>(args[1]);
+    int64_t step = 1;
+    if (args.size() >= 3) {
+        if (isNull(args[2]))
+            return Value{};
+        step = std::get<int64_t>(args[2]);
+    }
+    return rangeImpl(start, end, step);
+}
+
+inline void rangeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                         const EvalContext& ctx) {
+    if (args.size() < 2)
+        return;
+    for (size_t i = 0; i < count; ++i) {
+        std::vector<Value> row_args;
+        row_args.reserve(args.size());
+        for (auto* col : args) {
+            row_args.push_back(col->getValue(i));
+        }
+        result.setValue(i, rangeScalarFn(row_args, ctx));
+    }
+}
+
 } // namespace scalar
 } // namespace function
 } // namespace eugraph

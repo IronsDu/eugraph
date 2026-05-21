@@ -3,10 +3,13 @@
 #include <climits>
 
 #include "query/function/aggregate/avg_function.hpp"
+#include "query/function/aggregate/collect_function.hpp"
 #include "query/function/aggregate/count_function.hpp"
 #include "query/function/aggregate/min_function.hpp"
 #include "query/function/aggregate/min_function.hpp" // also provides MaxState
 #include "query/function/aggregate/sum_function.hpp"
+#include "query/function/scalar/conversion_functions.hpp"
+#include "query/function/scalar/graph_functions.hpp"
 #include "query/function/scalar/id_function.hpp"
 #include "query/function/scalar/list_functions.hpp"
 #include "query/function/scalar/path_functions.hpp"
@@ -169,6 +172,102 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   {},
                                   {},
                                   {}});
+
+    // range(Int64, Int64) -> List<Int64>
+    functions_["range"].push_back({"range",
+                                   {BoundType::Int64(), BoundType::Int64()},
+                                   BoundType::List(BoundType::Int64()),
+                                   false,
+                                   false,
+                                   scalar::rangeScalarFn,
+                                   scalar::rangeBatchFn,
+                                   {},
+                                   {},
+                                   {}});
+
+    // range(Int64, Int64, Int64) -> List<Int64>
+    functions_["range"].push_back({"range",
+                                   {BoundType::Int64(), BoundType::Int64(), BoundType::Int64()},
+                                   BoundType::List(BoundType::Int64()),
+                                   false,
+                                   false,
+                                   scalar::rangeScalarFn,
+                                   scalar::rangeBatchFn,
+                                   {},
+                                   {},
+                                   {}});
+
+    // toInteger(Any) -> Int64
+    functions_["toInteger"].push_back({"toInteger",
+                                       {},
+                                       BoundType::Int64(),
+                                       false,
+                                       true,
+                                       scalar::toIntegerScalarFn,
+                                       scalar::toIntegerBatchFn,
+                                       {},
+                                       {},
+                                       {}});
+
+    // toFloat(Any) -> Double
+    functions_["toFloat"].push_back({"toFloat",
+                                     {},
+                                     BoundType::Double(),
+                                     false,
+                                     true,
+                                     scalar::toFloatScalarFn,
+                                     scalar::toFloatBatchFn,
+                                     {},
+                                     {},
+                                     {}});
+
+    // toString(Any) -> String
+    functions_["toString"].push_back({"toString",
+                                      {},
+                                      BoundType::String(),
+                                      false,
+                                      true,
+                                      scalar::toStringScalarFn,
+                                      scalar::toStringBatchFn,
+                                      {},
+                                      {},
+                                      {}});
+
+    // labels(Vertex) -> List<String>
+    functions_["labels"].push_back({"labels",
+                                    {BoundType::Vertex()},
+                                    BoundType::List(BoundType::String()),
+                                    false,
+                                    false,
+                                    scalar::labelsScalarFn,
+                                    scalar::labelsBatchFn,
+                                    {},
+                                    {},
+                                    {}});
+
+    // keys(Vertex) -> List<String>
+    functions_["keys"].push_back({"keys",
+                                  {BoundType::Vertex()},
+                                  BoundType::List(BoundType::String()),
+                                  false,
+                                  false,
+                                  scalar::keysScalarFn,
+                                  scalar::keysBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+
+    // keys(Edge) -> List<String>
+    functions_["keys"].push_back({"keys",
+                                  {BoundType::Edge()},
+                                  BoundType::List(BoundType::String()),
+                                  false,
+                                  false,
+                                  scalar::keysScalarFn,
+                                  scalar::keysBatchFn,
+                                  {},
+                                  {},
+                                  {}});
 }
 
 void FunctionRegistry::registerAggregateBuiltins() {
@@ -262,6 +361,19 @@ void FunctionRegistry::registerAggregateBuiltins() {
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::MaxState>(); },
          [](AggStateBase& s, const Value& v) { static_cast<aggregate::MaxState&>(s).add(v); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::MaxState&>(s).finalize(); }});
+
+    // collect(Any) -> List<Any>
+    functions_["collect"].push_back(
+        {"collect",
+         {},
+         BoundType::List(BoundType::Any()),
+         true,
+         true,
+         {},
+         {},
+         []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::CollectState>(); },
+         [](AggStateBase& s, const Value& v) { static_cast<aggregate::CollectState&>(s).add(v); },
+         [](const AggStateBase& s) -> Value { return static_cast<const aggregate::CollectState&>(s).finalize(); }});
 }
 
 void FunctionRegistry::registerFunction(FunctionDef def) {
