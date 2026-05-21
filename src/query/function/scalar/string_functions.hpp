@@ -201,8 +201,7 @@ inline Value substringScalarFn(const std::vector<Value>& args, const EvalContext
     return substringImpl(args[0], start, length);
 }
 
-inline void substringBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                             const EvalContext&) {
+inline void substringBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.size() < 2)
         return;
     const auto& str_col = *args[0];

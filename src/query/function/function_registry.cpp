@@ -8,14 +8,14 @@
 #include "query/function/aggregate/min_function.hpp"
 #include "query/function/aggregate/min_function.hpp" // also provides MaxState
 #include "query/function/aggregate/sum_function.hpp"
+#include "query/function/scalar/coalesce_function.hpp"
 #include "query/function/scalar/conversion_functions.hpp"
 #include "query/function/scalar/graph_functions.hpp"
 #include "query/function/scalar/id_function.hpp"
 #include "query/function/scalar/list_functions.hpp"
 #include "query/function/scalar/path_functions.hpp"
-#include "query/function/scalar/type_function.hpp"
 #include "query/function/scalar/string_functions.hpp"
-#include "query/function/scalar/coalesce_function.hpp"
+#include "query/function/scalar/type_function.hpp"
 
 namespace eugraph {
 namespace function {
@@ -376,16 +376,8 @@ void FunctionRegistry::registerScalarBuiltins() {
     // --- Coalesce ---
 
     // coalesce(Any...) -> Any
-    functions_["coalesce"].push_back({"coalesce",
-                                      {},
-                                      BoundType::Any(),
-                                      false,
-                                      true,
-                                      scalar::coalesceScalarFn,
-                                      scalar::coalesceBatchFn,
-                                      {},
-                                      {},
-                                      {}});
+    functions_["coalesce"].push_back(
+        {"coalesce", {}, BoundType::Any(), false, true, scalar::coalesceScalarFn, scalar::coalesceBatchFn, {}, {}, {}});
 }
 
 void FunctionRegistry::registerAggregateBuiltins() {
