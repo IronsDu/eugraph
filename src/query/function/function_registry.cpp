@@ -210,16 +210,8 @@ void FunctionRegistry::registerScalarBuiltins() {
                                        {}});
 
     // toFloat(Any) -> Double
-    functions_["toFloat"].push_back({"toFloat",
-                                     {},
-                                     BoundType::Double(),
-                                     false,
-                                     true,
-                                     scalar::toFloatScalarFn,
-                                     scalar::toFloatBatchFn,
-                                     {},
-                                     {},
-                                     {}});
+    functions_["toFloat"].push_back(
+        {"toFloat", {}, BoundType::Double(), false, true, scalar::toFloatScalarFn, scalar::toFloatBatchFn, {}, {}, {}});
 
     // toString(Any) -> String
     functions_["toString"].push_back({"toString",

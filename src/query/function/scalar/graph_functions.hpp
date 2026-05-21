@@ -34,7 +34,7 @@ inline Value labelsScalarFn(const std::vector<Value>& args, const EvalContext& c
 }
 
 inline void labelsBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                           const EvalContext& ctx) {
+                          const EvalContext& ctx) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
@@ -103,8 +103,7 @@ inline Value keysScalarFn(const std::vector<Value>& args, const EvalContext& ctx
     return Value{};
 }
 
-inline void keysBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                         const EvalContext& ctx) {
+inline void keysBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext& ctx) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];

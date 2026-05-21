@@ -41,7 +41,7 @@ inline Value toIntegerScalarFn(const std::vector<Value>& args, const EvalContext
 }
 
 inline void toIntegerBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                              const EvalContext& /*ctx*/) {
+                             const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
@@ -81,7 +81,7 @@ inline Value toFloatScalarFn(const std::vector<Value>& args, const EvalContext& 
 }
 
 inline void toFloatBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                            const EvalContext& /*ctx*/) {
+                           const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];
@@ -125,7 +125,7 @@ inline Value toStringScalarFn(const std::vector<Value>& args, const EvalContext&
 }
 
 inline void toStringBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                             const EvalContext& /*ctx*/) {
+                            const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
     const auto& arg_col = *args[0];

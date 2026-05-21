@@ -197,8 +197,7 @@ inline Value rangeScalarFn(const std::vector<Value>& args, const EvalContext& /*
     return rangeImpl(start, end, step);
 }
 
-inline void rangeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                         const EvalContext& ctx) {
+inline void rangeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext& ctx) {
     if (args.size() < 2)
         return;
     for (size_t i = 0; i < count; ++i) {
