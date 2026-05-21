@@ -5,3 +5,6 @@
 	path = third_party/wiredtiger
 	url = https://github.com/wiredtiger/wiredtiger.git
 	branch = mongodb-8.2.7
+[submodule "third_party/openCypher"]
+	path = third_party/openCypher
+	url = https://github.com/opencypher/openCypher.git

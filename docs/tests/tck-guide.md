@@ -18,7 +18,7 @@ cmake --build build --target tck_tests
 python3 tests/tck/run_tck.py \
   --server-bin build/eugraph-server \
   --tck-bin build/tests/tck/tck_tests \
-  --features tests/tck/features \
+  --features third_party/openCypher/tck/features \
   --timeout 60
 ```
 
@@ -27,13 +27,15 @@ python3 tests/tck/run_tck.py \
 2. 运行 `tck_tests` 执行所有 `.feature` 场景
 3. 停止 server 并清理临时数据
 
+> TCK feature 文件来自 git submodule `third_party/openCypher`（即 [openCypher/openCypher](https://github.com/opencypher/openCypher) 仓库的 `tck/features/` 目录）。如需更新 TCK 用例，执行 `git submodule update --remote third_party/openCypher`。
+
 ## 运行指定 feature 文件
 
 ```bash
 python3 tests/tck/run_tck.py \
   --server-bin build/eugraph-server \
   --tck-bin build/tests/tck/tck_tests \
-  -- features/opencypher_tck/clauses/create/Create1.feature
+  -- third_party/openCypher/tck/features/clauses/create/Create1.feature
 ```
 
 ## 测试结果说明
@@ -52,5 +54,5 @@ python3 tests/tck/run_tck.py \
 | `tests/tck/run_tck.py` | 测试启动脚本 |
 | `tests/tck/tck_steps.cpp` | Cucumber 步骤定义 |
 | `tests/tck/tck_context.cpp` | TCK 上下文（含 AST 跳过逻辑） |
-| `tests/tck/features/` | openCypher TCK feature 文件 |
+| `third_party/openCypher/tck/features/` | openCypher TCK feature 文件（git submodule） |
 | `docs/tests/tck-results.md` | 测试结果分类报告 |
