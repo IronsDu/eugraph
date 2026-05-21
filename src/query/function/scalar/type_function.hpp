@@ -1,8 +1,8 @@
 #pragma once
 
 #include "query/catalog/catalog.hpp"
-#include "query/executor/data_chunk.hpp"
-#include "query/executor/row.hpp"
+#include "query/dataset/data_chunk.hpp"
+#include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
 
 namespace eugraph {

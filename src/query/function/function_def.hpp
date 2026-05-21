@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "query/executor/row.hpp"
+#include "query/dataset/row.hpp"
 #include "query/planner/bound_type.hpp"
 
 #include <cstdint>

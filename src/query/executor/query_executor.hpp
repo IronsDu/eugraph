@@ -1,8 +1,8 @@
 #pragma once
 
 #include "query/catalog/catalog.hpp"
-#include "query/executor/data_chunk.hpp"
-#include "query/executor/row.hpp"
+#include "query/dataset/data_chunk.hpp"
+#include "query/dataset/row.hpp"
 #include "query/function/function_registry.hpp"
 #include "query/parser/ast.hpp"
 #include "query/parser/cypher_parser.hpp"

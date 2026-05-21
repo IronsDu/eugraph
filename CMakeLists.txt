@@ -166,9 +166,20 @@ add_library(eugraph_query_engine STATIC
     src/query/catalog/catalog.cpp
     src/query/function/batch_ops.cpp
     src/query/function/function_registry.cpp
-    src/query/planner/binder.cpp
+    src/query/planner/binder/binder.cpp
+    src/query/planner/binder/bind_match.cpp
+    src/query/planner/binder/bind_return.cpp
+    src/query/planner/binder/bind_mutation.cpp
+    src/query/planner/binder/bind_expression.cpp
+    src/query/planner/binder/bind_pattern.cpp
+    src/query/planner/binder/bind_projection.cpp
     src/query/planner/column_resolver.cpp
-    src/query/executor/vectorized_evaluator.cpp
+    src/query/evaluator/vectorized_evaluator.cpp
+    src/query/evaluator/eval_binary_op.cpp
+    src/query/evaluator/eval_property.cpp
+    src/query/evaluator/eval_function_call.cpp
+    src/query/evaluator/eval_quantifier.cpp
+    src/query/evaluator/eval_case.cpp
     src/query/physical_plan/operator/edge_index_scan_physical_op.cpp
     src/query/physical_plan/operator/aggregate_physical_op.cpp
     src/query/physical_plan/operator/all_node_scan_physical_op.cpp

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "query/executor/data_chunk.hpp"
+#include "query/dataset/data_chunk.hpp"
 #include "query/parser/ast.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_type.hpp"

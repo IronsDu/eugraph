@@ -1,7 +1,7 @@
 #include "query/physical_plan/operator/create_node_physical_op.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
-#include "query/executor/row.hpp"
+#include "query/dataset/row.hpp"
 #include <spdlog/spdlog.h>
 
 namespace eugraph {

@@ -1,5 +1,5 @@
 #include "query/physical_plan/operator/skip_physical_op.hpp"
-#include "query/executor/data_chunk.hpp"
+#include "query/dataset/data_chunk.hpp"
 
 namespace eugraph {
 namespace compute {

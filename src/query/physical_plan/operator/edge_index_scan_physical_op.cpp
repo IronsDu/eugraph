@@ -1,7 +1,7 @@
 #include "query/physical_plan/operator/edge_index_scan_physical_op.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
-#include "query/executor/data_chunk.hpp"
+#include "query/dataset/data_chunk.hpp"
 
 namespace eugraph {
 namespace compute {
