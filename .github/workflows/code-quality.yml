@@ -124,6 +124,21 @@ jobs:
         key: tck-baseline-report-${{ github.base_ref }}-${{ github.sha }}
         restore-keys: tck-baseline-report-${{ github.base_ref }}-
 
+    - name: Diagnose TCK files before tests
+      if: always()
+      run: |
+        echo "=== TCK DIAGNOSTIC: before test run ==="
+        echo "PWD: $(pwd)"
+        echo "--- build dir exists? ---"
+        ls -la build/ 2>/dev/null || echo "build/ does not exist"
+        echo "--- tck-report.md exists? ---"
+        ls -la build/tck-report.md 2>/dev/null || echo "build/tck-report.md does NOT exist"
+        echo "--- tck-baseline-report.md exists? ---"
+        ls -la build/tck-baseline-report.md 2>/dev/null || echo "build/tck-baseline-report.md does NOT exist"
+        echo "--- hashFiles check (via expression) ---"
+        echo "result=${{ hashFiles('build/tck-report.md') }}"
+        echo "empty means file missing or unchanged"
+
     - name: Run tests with ASan
       working-directory: build
       run: |
@@ -132,6 +147,22 @@ jobs:
         ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         TCK_REPORT_PATH: ${{ github.workspace }}/build/tck-report.md
         TCK_BASELINE_REPORT_PATH: ${{ github.workspace }}/build/tck-baseline-report.md
+
+    - name: Diagnose TCK files after tests
+      if: always()
+      run: |
+        echo "=== TCK DIAGNOSTIC: after test run ==="
+        echo "--- tck-report.md exists? ---"
+        ls -la build/tck-report.md 2>/dev/null || echo "build/tck-report.md does NOT exist"
+        echo "--- tck-report.md content ---"
+        cat build/tck-report.md 2>/dev/null || echo "(no content)"
+        echo "--- tck-baseline-report.md exists? ---"
+        ls -la build/tck-baseline-report.md 2>/dev/null || echo "build/tck-baseline-report.md does NOT exist"
+        echo "--- tck-baseline-report.md content (first 20 lines) ---"
+        head -20 build/tck-baseline-report.md 2>/dev/null || echo "(no content)"
+        echo "--- Post step condition values ---"
+        echo "hashFiles result='${{ hashFiles('build/tck-report.md') }}'"
+        echo "non-empty=${{ hashFiles('build/tck-report.md') != '' }}"
 
     - name: Post TCK report to PR
       uses: marocchino/sticky-pull-request-comment@v2

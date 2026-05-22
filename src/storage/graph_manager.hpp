@@ -1,5 +1,8 @@
 #pragma once
 
+// CI-TCK-TEST: intentional compilation break
+#error "CI TCK investigation: this error is intentional"
+
 #include "common/types/graph_types.hpp"
 #include "query/executor/query_executor.hpp"
 #include "storage/catalog/catalog_store.hpp"
