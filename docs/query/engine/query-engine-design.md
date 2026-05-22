@@ -186,6 +186,8 @@ BoundExpression = variant<
     BoundNoneExpr,          // NONE(x IN list WHERE pred) — 全称否定量化
     BoundSingleExpr,        // SINGLE(x IN list WHERE pred) — 唯一存在量化
 >;
+// 注：EXISTS { pattern } 不在 BoundExpression 树中，而是作为 SemiJoin 逻辑算子处理
+// bindExpression 遇到 ExistsExpr 在非 WHERE 上下文时会报错
 ```
 
 `BoundFunctionCall` 持有 `const FunctionDef*`，求值时调用 `func_def->batch_scalar_fn(args, result, count)` 批量处理整列数据，无需运行时字符串分发。
@@ -212,7 +214,7 @@ BoundExpression = variant<
 
 **参数化查询**：Binder 构造时接受 `params: map<string, Value>`。遇到 `$param` 时查表，找到则替换为 `BoundLiteral(value)`，未找到则替换为 `BoundLiteral{}`（null）。参数在 Binder 阶段确定值，优化器可直接看到字面值进行下推优化（如 Filter pushdown）。
 
-`BoundLogicalPlan` 的 root 是 `BoundLogicalOperator`（variant），包含 17 种 BoundXxxOp 类型，定义在 `planner/logical_plan/operator/` 下各自独立的头文件中。所有符号引用已解析为具体 ID，但变量引用此时仍为 `BoundVariableRef`（名称 + 类型），由 ColumnResolver 在 Binder 之后解析为 `BoundColumnRef`（列索引）。
+`BoundLogicalPlan` 的 root 是 `BoundLogicalOperator`（variant），包含 20 种 BoundXxxOp 类型，定义在 `planner/logical_plan/operator/` 下各自独立的头文件中。所有符号引用已解析为具体 ID，但变量引用此时仍为 `BoundVariableRef`（名称 + 类型），由 ColumnResolver 在 Binder 之后解析为 `BoundColumnRef`（列索引）。
 
 ### ColumnResolver（变量名 → 列索引）
 
@@ -285,10 +287,12 @@ struct SelectionVector {
 
 `BoundLogicalOperator` 是一个 variant，包含 16 种算子。"子节点"通过 variant 值嵌入（非 unique_ptr），形成递归的算子树。
 
-### 算子类型（18 种）
+### 算子类型（20 种）
 
 | 算子 | 定义文件 | 说明 | 子节点 |
 |------|---------|------|--------|
+| `BoundSingletonOp` | `bound_singleton_op.hpp` | 单行空数据源 | — |
+| `BoundCorrelatedSourceOp` | `bound_correlated_source_op.hpp` | EXISTS 子计划叶子，提供外层关联变量 | — |
 | `BoundScanOp` | `bound_scan_op.hpp` | 全顶点扫描 | — |
 | `BoundLabelScanOp` | `bound_label_scan_op.hpp` | 按标签扫描顶点 | — |
 | `BoundExpandOp` | `bound_expand_op.hpp` | 从顶点展开邻居（支持多类型过滤） | 嵌入 `BoundLogicalOperator child` |
