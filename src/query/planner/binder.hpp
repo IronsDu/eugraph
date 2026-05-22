@@ -91,6 +91,24 @@ private:
                                  std::vector<EdgeLabelId>& edge_label_ids, std::vector<uint16_t>& default_prop_ids,
                                  bool for_create = false);
 
+    // ── EXISTS subquery binding ──
+    /// Bind an EXISTS pattern as a SemiJoin operator. Returns the SemiJoin wrapping the given child.
+    std::optional<BoundLogicalOperator> bindExistsAsSemiJoin(const cypher::ExistsExpr& exists,
+                                                             BoundLogicalOperator child, bool anti = false);
+    /// Bind the pattern inside an EXISTS subquery, producing a logical sub-plan.
+    /// The sub-plan uses an independent column space; correlated variables are registered
+    /// as columns 0, 1, ... in a BoundCorrelatedSourceOp leaf.
+    std::optional<BoundLogicalOperator> bindExistsSubPlan(const cypher::ExistsExpr& exists,
+                                                          std::vector<std::pair<uint32_t, uint32_t>>& correlation);
+    /// Collect EXISTS expressions from the top-level AND chain of a WHERE predicate.
+    /// Each entry is (ExistsExpr pointer, is_anti). is_anti=true means the EXISTS
+    /// was wrapped in a NOT, i.e. NOT EXISTS { ... }.
+    static void collectExistsFromAnd(const cypher::Expression& expr,
+                                     std::vector<std::pair<const cypher::ExistsExpr*, bool>>& out);
+    /// Remove EXISTS expressions (and their wrapping NOT, if any) from the top-level
+    /// AND chain. Returns nullopt if the entire expression was EXISTS-related.
+    static std::optional<cypher::Expression> removeExistsFromWhere(const cypher::Expression& expr);
+
     // ── Helpers ──
     uint32_t nextColumnIndex() {
         return ctx_.next_column_index++;

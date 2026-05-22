@@ -11,25 +11,27 @@ namespace optimizer {
 
 // Maps BoundLogicalOperator variant indices to operator type enum.
 enum class OptNodeType {
-    Singleton,    // 0
-    Scan,         // 1
-    LabelScan,    // 2
-    Expand,       // 3
-    Filter,       // 4
-    Project,      // 5
-    Aggregate,    // 6
-    Sort,         // 7
-    Skip,         // 8
-    Limit,        // 9
-    Distinct,     // 10
-    CreateNode,   // 11
-    CreateEdge,   // 12
-    Set,          // 13
-    Remove,       // 14
-    PathBuild,    // 15
-    VarLenExpand, // 16
-    BinaryJoin,   // 17
-    Unwind        // 18
+    Singleton,        // 0
+    CorrelatedSource, // 1
+    Scan,             // 2
+    LabelScan,        // 3
+    Expand,           // 4
+    Filter,           // 5
+    Project,          // 6
+    Aggregate,        // 7
+    Sort,             // 8
+    Skip,             // 9
+    Limit,            // 10
+    Distinct,         // 11
+    CreateNode,       // 12
+    CreateEdge,       // 13
+    Set,              // 14
+    Remove,           // 15
+    PathBuild,        // 16
+    VarLenExpand,     // 17
+    BinaryJoin,       // 18
+    SemiJoin,         // 19
+    Unwind            // 20
 };
 
 // Convert BoundLogicalOperator variant index to OptNodeType.

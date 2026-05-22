@@ -7,25 +7,27 @@ namespace optimizer {
 
 OptNodeType nodeTypeFromVariantIndex(size_t index) {
     static constexpr OptNodeType mapping[] = {
-        OptNodeType::Singleton,    // 0
-        OptNodeType::Scan,         // 1
-        OptNodeType::LabelScan,    // 2
-        OptNodeType::Expand,       // 3
-        OptNodeType::Filter,       // 4
-        OptNodeType::Project,      // 5
-        OptNodeType::Aggregate,    // 6
-        OptNodeType::Sort,         // 7
-        OptNodeType::Skip,         // 8
-        OptNodeType::Limit,        // 9
-        OptNodeType::Distinct,     // 10
-        OptNodeType::CreateNode,   // 11
-        OptNodeType::CreateEdge,   // 12
-        OptNodeType::Set,          // 13
-        OptNodeType::Remove,       // 14
-        OptNodeType::PathBuild,    // 15
-        OptNodeType::VarLenExpand, // 16
-        OptNodeType::BinaryJoin,   // 17
-        OptNodeType::Unwind        // 18
+        OptNodeType::Singleton,        // 0
+        OptNodeType::CorrelatedSource, // 1
+        OptNodeType::Scan,             // 2
+        OptNodeType::LabelScan,        // 3
+        OptNodeType::Expand,           // 4
+        OptNodeType::Filter,           // 5
+        OptNodeType::Project,          // 6
+        OptNodeType::Aggregate,        // 7
+        OptNodeType::Sort,             // 8
+        OptNodeType::Skip,             // 9
+        OptNodeType::Limit,            // 10
+        OptNodeType::Distinct,         // 11
+        OptNodeType::CreateNode,       // 12
+        OptNodeType::CreateEdge,       // 13
+        OptNodeType::Set,              // 14
+        OptNodeType::Remove,           // 15
+        OptNodeType::PathBuild,        // 16
+        OptNodeType::VarLenExpand,     // 17
+        OptNodeType::BinaryJoin,       // 18
+        OptNodeType::SemiJoin,         // 19
+        OptNodeType::Unwind            // 20
     };
     return mapping[index];
 }

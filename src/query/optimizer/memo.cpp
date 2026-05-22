@@ -2,6 +2,7 @@
 
 #include "query/planner/bound_logical_plan.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_semi_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
@@ -15,10 +16,12 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
     std::visit(
         [&child](auto& val) {
             using T = std::decay_t<decltype(val)>;
-            if constexpr (std::is_same_v<T, binder::BoundSingletonOp> || std::is_same_v<T, binder::BoundScanOp> ||
-                          std::is_same_v<T, binder::BoundLabelScanOp>) {
+            if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
+                          std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
+                          std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
                 // Leaf operators — no child field
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
                 // Binary operators have left/right, not a single child — skip
             } else {
                 // All non-leaf operators are wrapped in unique_ptr
@@ -38,10 +41,12 @@ int getChildCount(const binder::BoundLogicalOperator& op) {
     return std::visit(
         [](const auto& val) -> int {
             using T = std::decay_t<decltype(val)>;
-            if constexpr (std::is_same_v<T, binder::BoundSingletonOp> || std::is_same_v<T, binder::BoundScanOp> ||
-                          std::is_same_v<T, binder::BoundLabelScanOp>) {
+            if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
+                          std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
+                          std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
                 return 0;
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
                 return 2;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 return (val && val->child.has_value()) ? 1 : 0;
@@ -74,11 +79,13 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
         binder::BoundLogicalOperator child = std::visit(
             [](auto& val) -> binder::BoundLogicalOperator {
                 using T = std::decay_t<decltype(val)>;
-                if constexpr (std::is_same_v<T, binder::BoundSingletonOp> || std::is_same_v<T, binder::BoundScanOp> ||
-                              std::is_same_v<T, binder::BoundLabelScanOp>) {
+                if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
+                              std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
+                              std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
                     // Should not reach here
                     return binder::BoundScanOp{};
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
                     // Handled by n_children==2 branch, should not reach here
                     return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
@@ -100,13 +107,24 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
             op);
         child_groups.push_back(copyIn(child));
     } else if (n_children == 2) {
-        auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(op);
-        auto left = std::move(join->left);
-        join->left = binder::BoundScanOp{};
-        child_groups.push_back(copyIn(left));
-        auto right = std::move(join->right);
-        join->right = binder::BoundScanOp{};
-        child_groups.push_back(copyIn(right));
+        // Handle both BoundBinaryJoinOp and BoundSemiJoinOp
+        if (std::holds_alternative<std::unique_ptr<binder::BoundBinaryJoinOp>>(op)) {
+            auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(op);
+            auto left = std::move(join->left);
+            join->left = binder::BoundScanOp{};
+            child_groups.push_back(copyIn(left));
+            auto right = std::move(join->right);
+            join->right = binder::BoundScanOp{};
+            child_groups.push_back(copyIn(right));
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(op)) {
+            auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(op);
+            auto left = std::move(sj->left);
+            sj->left = binder::BoundScanOp{};
+            child_groups.push_back(copyIn(left));
+            auto right = std::move(sj->right);
+            sj->right = binder::BoundScanOp{};
+            child_groups.push_back(copyIn(right));
+        }
     }
 
     // Create a new group for this operator
@@ -132,9 +150,15 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
         auto child = copyOut(expr.child_groups[0]);
         setChild(result, std::move(child));
     } else if (expr.child_groups.size() == 2) {
-        auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
-        join->left = copyOut(expr.child_groups[0]);
-        join->right = copyOut(expr.child_groups[1]);
+        if (std::holds_alternative<std::unique_ptr<binder::BoundBinaryJoinOp>>(result)) {
+            auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
+            join->left = copyOut(expr.child_groups[0]);
+            join->right = copyOut(expr.child_groups[1]);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(result)) {
+            auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
+            sj->left = copyOut(expr.child_groups[0]);
+            sj->right = copyOut(expr.child_groups[1]);
+        }
     }
 
     return result;

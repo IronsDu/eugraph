@@ -2,6 +2,7 @@
 
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_semi_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
@@ -82,6 +83,8 @@ bool ColumnResolver::resolveOperator(BoundLogicalOperator& op, const BindContext
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundPathBuildOp>>) {
                 return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryJoinOp>>) {
+                return resolveOperator(val->left, ctx, errors) && resolveOperator(val->right, ctx, errors);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundSemiJoinOp>>) {
                 return resolveOperator(val->left, ctx, errors) && resolveOperator(val->right, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundUnwindOp>>) {
                 if (!resolveExpression(val->list_expr, ctx, errors))

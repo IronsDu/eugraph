@@ -1,12 +1,15 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/physical_plan/operator/alter_vertex_label_physical_op.hpp"
+#include "query/physical_plan/operator/correlated_source_physical_op.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
+#include "query/physical_plan/operator/semi_join_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
 #include "query/physical_plan/operator/unwind_physical_op.hpp"
 #include "query/physical_plan/operator/varlen_expand_physical_op.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
+#include <functional>
 #include <stdexcept>
 
 namespace eugraph {
@@ -324,6 +327,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 Schema output_schema;
                 std::vector<binder::BoundType> output_types;
                 auto result = std::make_unique<SingletonPhysicalOp>(std::vector<binder::BoundType>(output_types));
+                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+            } else if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
+                Schema output_schema = val.variables;
+                std::vector<binder::BoundType> output_types = val.types;
+                auto result = std::make_unique<CorrelatedSourcePhysicalOp>(std::vector<std::string>(val.variables),
+                                                                           std::vector<binder::BoundType>(val.types));
                 return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
             } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
                 Schema output_schema;
@@ -841,6 +850,48 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         std::move(output_types));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundSemiJoinOp>) {
+                    auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(left_result))
+                        return std::get<std::string>(left_result);
+                    auto lr = extractChildResult(std::move(left_result));
+
+                    Schema right_input_schema;
+                    std::vector<binder::BoundType> right_input_types;
+                    auto right_result =
+                        planBoundOperator(v.right, store, meta, ctx, right_input_schema, right_input_types);
+                    if (std::holds_alternative<std::string>(right_result))
+                        return std::get<std::string>(right_result);
+                    auto rr = extractChildResult(std::move(right_result));
+
+                    // Find the CorrelatedSourcePhysicalOp leaf in the right sub-plan.
+                    // It must be the unique leaf node of the EXISTS sub-plan.
+                    std::function<CorrelatedSourcePhysicalOp*(PhysicalOperator*)> findCorrelatedSource =
+                        [&](PhysicalOperator* node) -> CorrelatedSourcePhysicalOp* {
+                        if (auto* cs = dynamic_cast<CorrelatedSourcePhysicalOp*>(node))
+                            return cs;
+                        for (auto* child : node->children()) {
+                            if (auto* cs = findCorrelatedSource(const_cast<PhysicalOperator*>(child)))
+                                return cs;
+                        }
+                        return nullptr;
+                    };
+
+                    CorrelatedSourcePhysicalOp* correlated = findCorrelatedSource(rr.op.get());
+                    if (!correlated)
+                        return std::string("SemiJoin: CorrelatedSourcePhysicalOp not found in right sub-plan");
+
+                    // Build left correlation column indices from the mapping
+                    std::vector<uint32_t> left_corr_cols;
+                    left_corr_cols.reserve(v.correlation.size());
+                    for (const auto& [left_col, _] : v.correlation) {
+                        left_corr_cols.push_back(left_col);
+                    }
+
+                    auto result = std::make_unique<SemiJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), correlated,
+                                                                       std::move(left_corr_cols), v.anti);
+                    return PlanOperatorResult{std::move(result), std::move(lr.output_schema),
+                                              std::move(lr.output_types)};
                 } else {
                     return std::string("Unknown bound logical operator type");
                 }

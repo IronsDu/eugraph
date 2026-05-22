@@ -335,6 +335,9 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     result = BoundExpression(std::move(e));
                 }
                 return result;
+            } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                error("EXISTS is only supported in WHERE clauses");
+                return std::nullopt;
             } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
                 auto bc = std::make_unique<BoundCase>();
 

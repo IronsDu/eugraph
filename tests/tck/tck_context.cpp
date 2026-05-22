@@ -88,8 +88,10 @@ bool hasUnsupportedExpr(const ast::Expression& expr) {
                 spdlog::info("[TCK] skipping: CASE expression");
                 return true;
             } else if constexpr (std::is_same_v<Inner, ast::ExistsExpr>) {
-                spdlog::info("[TCK] skipping: EXISTS subquery");
-                return true;
+                // EXISTS subquery is now partially supported (simple form only).
+                // Full form (EXISTS { MATCH ... RETURN ... }) and nested EXISTS
+                // may still fail in binding.
+                return false;
             } else if constexpr (std::is_same_v<Inner, ast::BinaryOp>) {
                 switch (ptr->op) {
                 case ast::BinaryOperator::IN:
