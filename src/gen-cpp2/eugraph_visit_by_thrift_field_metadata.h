@@ -157,6 +157,8 @@ struct VisitByFieldId<::eugraph::thrift::ResultValue> {
       return f(6, static_cast<T&&>(t).path_json_ref());
     case 8:
       return f(7, static_cast<T&&>(t).list_json_ref());
+    case 9:
+      return f(8, static_cast<T&&>(t).map_json_ref());
     default:
       throwInvalidThriftId(fieldId, "::eugraph::thrift::ResultValue");
     }

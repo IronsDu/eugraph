@@ -512,6 +512,9 @@ std::string TckContext::formatValue(const thrift::ResultValue& val) {
     case thrift::ResultValue::Type::list_json:
         return val.get_list_json(); // JSON array format
 
+    case thrift::ResultValue::Type::map_json:
+        return val.get_map_json(); // JSON object format
+
     default:
         return "null";
     }

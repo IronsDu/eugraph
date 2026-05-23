@@ -83,6 +83,7 @@ struct ColumnBuffer {
     std::vector<EdgeValue> edge_data;
     std::vector<PathValue> path_data;
     std::vector<ListValue> list_data;
+    std::vector<MapValue> map_data;
     std::vector<uint8_t> bool_data; // bool as uint8_t (not vector<bool>)
     std::vector<Value> any_data;
 
@@ -119,6 +120,9 @@ struct ColumnBuffer {
             break;
         case binder::BoundTypeKind::LIST:
             list_data.resize(n);
+            break;
+        case binder::BoundTypeKind::MAP:
+            map_data.resize(n);
             break;
         case binder::BoundTypeKind::ANY:
         case binder::BoundTypeKind::NULL_TYPE:
@@ -164,6 +168,8 @@ struct ColumnBuffer {
             return Value(path_data[i]);
         case binder::BoundTypeKind::LIST:
             return Value(list_data[i]);
+        case binder::BoundTypeKind::MAP:
+            return Value(map_data[i]);
         case binder::BoundTypeKind::ANY:
         case binder::BoundTypeKind::NULL_TYPE:
             return i < any_data.size() ? any_data[i] : Value{};
@@ -213,6 +219,10 @@ struct ColumnBuffer {
         case binder::BoundTypeKind::LIST:
             if (std::holds_alternative<ListValue>(val))
                 list_data[i] = std::get<ListValue>(val);
+            break;
+        case binder::BoundTypeKind::MAP:
+            if (std::holds_alternative<MapValue>(val))
+                map_data[i] = std::get<MapValue>(val);
             break;
         case binder::BoundTypeKind::ANY:
         case binder::BoundTypeKind::NULL_TYPE:

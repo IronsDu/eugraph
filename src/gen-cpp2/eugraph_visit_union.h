@@ -62,6 +62,8 @@ struct VisitUnion<::eugraph::thrift::ResultValue> {
       return f(6, *static_cast<T&&>(t).path_json_ref());
     case Union::Type::list_json:
       return f(7, *static_cast<T&&>(t).list_json_ref());
+    case Union::Type::map_json:
+      return f(8, *static_cast<T&&>(t).map_json_ref());
     case Union::Type::__EMPTY__:
       return decltype(f(0, *static_cast<T&&>(t).bool_val_ref()))();
     }

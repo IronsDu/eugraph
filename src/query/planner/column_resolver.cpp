@@ -213,7 +213,11 @@ bool ColumnResolver::resolveExpression(BoundExpression& expr, const BindContext&
                 }
                 return true;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundMap>>) {
-                return true; // no resolvable references inside
+                for (auto& [key, entry] : val->entries) {
+                    if (!resolveExpression(entry, ctx, errors))
+                        return false;
+                }
+                return true;
             } else {
                 return true;
             }

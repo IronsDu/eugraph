@@ -1081,6 +1081,9 @@ void ResultValue::__fbthrift_destruct() {
     case Type::list_json:
       ::std::destroy_at(::std::addressof(value_.list_json));
       break;
+    case Type::map_json:
+      ::std::destroy_at(::std::addressof(value_.map_json));
+      break;
     default:
       assert(false);
       break;
@@ -1128,6 +1131,9 @@ bool ResultValue::__fbthrift_is_empty() const {
       case Type::list_json:
         set_list_json(rhs.value_.list_json);
         break;
+      case Type::map_json:
+        set_map_json(rhs.value_.map_json);
+        break;
       default:
         assert(false);
     }
@@ -1162,6 +1168,9 @@ bool ResultValue::__fbthrift_is_empty() const {
         break;
       case Type::list_json:
         set_list_json(rhs.value_.list_json);
+        break;
+      case Type::map_json:
+        set_map_json(rhs.value_.map_json);
         break;
       default:
         __fbthrift_clear();

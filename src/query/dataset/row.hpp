@@ -52,14 +52,21 @@ struct ListValue {
     }
 };
 
+struct MapValue {
+    std::vector<std::pair<std::string, struct ValueStorage>> entries;
+    bool operator==(const MapValue& /*o*/) const {
+        return true; /* simplified */
+    }
+};
+
 // Forward-declare the storage variant.
 struct ValueStorage;
 
 // The actual runtime value type.
 // VertexId and EdgeId are both uint64_t — use VertexValue/EdgeValue to distinguish,
 // or just use int64_t for IDs in the runtime Value.
-using Value =
-    std::variant<std::monostate, bool, int64_t, double, std::string, VertexValue, EdgeValue, PathValue, ListValue>;
+using Value = std::variant<std::monostate, bool, int64_t, double, std::string, VertexValue, EdgeValue, PathValue,
+                           ListValue, MapValue>;
 
 struct ValueStorage {
     Value value;
@@ -115,6 +122,11 @@ inline bool isList(const Value& v) {
     return std::holds_alternative<ListValue>(v);
 }
 
+// Convenience: check if a Value holds a MapValue
+inline bool isMap(const Value& v) {
+    return std::holds_alternative<MapValue>(v);
+}
+
 // ==================== Hash Support ====================
 
 struct ValueHash {
@@ -146,6 +158,13 @@ struct ValueHash {
                     size_t h = 0;
                     for (const auto& elem : val.elements) {
                         h ^= ValueHash{}(elem.value) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    }
+                    return h;
+                } else if constexpr (std::is_same_v<T, MapValue>) {
+                    size_t h = 0;
+                    for (const auto& [k, v] : val.entries) {
+                        h ^= std::hash<std::string>{}(k) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                        h ^= ValueHash{}(v.value) + 0x9e3779b9 + (h << 6) + (h >> 2);
                     }
                     return h;
                 }

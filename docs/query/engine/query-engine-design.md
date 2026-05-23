@@ -528,7 +528,10 @@ using Schema = vector<string>;   // 列名列表
 - `RETURN *` 变量展开
 - DDL 异步执行（DdlWorker 后台线程）
 - 崩溃恢复（索引 DDL 状态恢复）
-- `properties(vertex/edge)` 函数（需先扩展 `Value` variant 添加 Map 类型）
+- `properties(vertex/edge)` / `keys(map)` 函数 ✅ 已实现（`MapValue` 类型 + `BoundType::MAP`，2026-05-23）
+- **`properties(Edge)` + 普通 Expand 限制**：普通 `ExpandPhysicalOp` 不加载边属性（EdgeValue 的 properties 为空），因此 `properties(r)` 对定长 `(a)-[r:TYPE]->(b)` 中的边返回空 MapValue。变长 `VarLenExpandPhysicalOp` 已通过 `getEdgeProperties()` 加载边属性（用于属性过滤），故变长路径的 `properties(r)` 正常工作。普通 Expand 的边属性加载需后续补充。
+- **MapValue RPC 序列化**：`MapValue` 序列化为 JSON 字符串通过 `ResultValue::map_json`（Thrift union 字段 9）传输。需注意：修改 `proto/eugraph.thrift` 后运行 `thrift1 --gen mstch_cpp2 -o src/ proto/eugraph.thrift` 重新生成代码，并用 `sed 's|"proto/gen-cpp2/|"gen-cpp2/|g'` 修正 include 路径。
+- **`properties()` 触发全属性加载**：Binder 遇到 `properties(n)`（Vertex 参数）时，通过 `BindContext::addPropertyRequirement` 请求所有已知 Label 的全部属性 ID。此策略在单标签场景下开销可接受，多标签/宽表场景需后续优化为按需加载。
 
 ### 待优化：边属性邻接存储
 

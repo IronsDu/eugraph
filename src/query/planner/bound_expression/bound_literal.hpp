@@ -34,6 +34,8 @@ private:
             return BoundType::String();
         if (std::holds_alternative<ListValue>(v))
             return BoundType::List(BoundType::Any());
+        if (std::holds_alternative<MapValue>(v))
+            return BoundType::Map(BoundType::String(), BoundType::Any());
         return BoundType::Null();
     }
 

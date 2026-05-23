@@ -2,6 +2,9 @@
 
 #include "query/function/batch_ops.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
+#include "query/planner/bound_expression/bound_map.hpp"
+#include "query/planner/bound_expression/bound_slice.hpp"
+#include "query/planner/bound_expression/bound_subscript.hpp"
 
 namespace eugraph {
 namespace binder {
@@ -117,6 +120,33 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 fc->args = std::move(bound_args);
                 fc->return_type = BoundType::clone(func->return_type);
                 fc->distinct = ptr->distinct;
+
+                // properties(n) needs all vertex/edge properties loaded
+                if (func->name == "properties" && fc->args.size() == 1) {
+                    const BoundType& arg_type = getBoundExprType(fc->args[0]);
+                    std::optional<std::string> var_name;
+                    if (std::holds_alternative<BoundColumnRef>(fc->args[0])) {
+                        var_name = std::get<BoundColumnRef>(fc->args[0]).name;
+                    } else if (std::holds_alternative<BoundVariableRef>(fc->args[0])) {
+                        var_name = std::get<BoundVariableRef>(fc->args[0]).name;
+                    }
+                    if (var_name) {
+                        if (arg_type.kind == BoundTypeKind::VERTEX) {
+                            for (const auto& [lid, ldef] : catalog_.allLabels()) {
+                                for (const auto& pd : ldef.properties) {
+                                    ctx_.addPropertyRequirement(*var_name, lid, pd.id);
+                                }
+                            }
+                        } else if (arg_type.kind == BoundTypeKind::EDGE) {
+                            for (const auto& [elid, eldef] : catalog_.allEdgeLabels()) {
+                                for (const auto& pd : eldef.properties) {
+                                    ctx_.addPropertyRequirement(*var_name, elid, pd.id);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 return BoundExpression(std::move(fc));
             } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
                 auto obj = bindExpression(ptr->object);
@@ -237,7 +267,17 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     return BoundExpression(std::move(prop_ref));
                 }
 
-                error("Property access on non-vertex/edge type: " + obj_type.toString());
+                if (obj_type.kind == BoundTypeKind::MAP) {
+                    // Map property access: convert map.key to subscript map["key"]
+                    auto sub = std::make_unique<BoundSubscript>();
+                    sub->list = std::move(*obj);
+                    sub->index = BoundLiteral(std::string(ptr->property));
+                    sub->result_type =
+                        obj_type.map_value_type ? BoundType::clone(*obj_type.map_value_type) : BoundType::Any();
+                    return BoundExpression(std::move(sub));
+                }
+
+                error("Property access on non-vertex/edge/map type: " + obj_type.toString());
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
                 auto obj = bindExpression(ptr->object);
@@ -365,6 +405,59 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
 
                 bc->result_type = BoundType::Any();
                 return BoundExpression(std::move(bc));
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                auto bm = std::make_unique<BoundMap>();
+                BoundType merged_value_type = BoundType::Null();
+                for (const auto& [key, expr] : ptr->entries) {
+                    auto bound_expr = bindExpression(expr);
+                    if (!bound_expr)
+                        return std::nullopt;
+                    merged_value_type = BoundType::merge(merged_value_type, getBoundExprType(*bound_expr));
+                    bm->entries.push_back({key, std::move(*bound_expr)});
+                }
+                bm->result_type = BoundType::Map(BoundType::String(), std::move(merged_value_type));
+                return BoundExpression(std::move(bm));
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                auto bound_list = bindExpression(ptr->list);
+                auto bound_index = bindExpression(ptr->index);
+                if (!bound_list || !bound_index)
+                    return std::nullopt;
+                auto sub = std::make_unique<BoundSubscript>();
+                const BoundType& list_type = getBoundExprType(*bound_list);
+                const BoundType& idx_type = getBoundExprType(*bound_index);
+                if (list_type.kind == BoundTypeKind::LIST) {
+                    sub->result_type =
+                        list_type.element_type ? BoundType::clone(*list_type.element_type) : BoundType::Any();
+                } else if (list_type.kind == BoundTypeKind::MAP) {
+                    sub->result_type =
+                        list_type.map_value_type ? BoundType::clone(*list_type.map_value_type) : BoundType::Any();
+                } else {
+                    sub->result_type = BoundType::Any();
+                }
+                sub->list = std::move(*bound_list);
+                sub->index = std::move(*bound_index);
+                return BoundExpression(std::move(sub));
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                auto bound_list = bindExpression(ptr->list);
+                if (!bound_list)
+                    return std::nullopt;
+                auto sl = std::make_unique<BoundSlice>();
+                const BoundType& list_type = getBoundExprType(*bound_list);
+                sl->result_type = BoundType::clone(list_type);
+                sl->list = std::move(*bound_list);
+                if (ptr->from) {
+                    auto bound_from = bindExpression(*ptr->from);
+                    if (!bound_from)
+                        return std::nullopt;
+                    sl->from = std::move(*bound_from);
+                }
+                if (ptr->to) {
+                    auto bound_to = bindExpression(*ptr->to);
+                    if (!bound_to)
+                        return std::nullopt;
+                    sl->to = std::move(*bound_to);
+                }
+                return BoundExpression(std::move(sl));
             } else {
                 // Other types not yet supported
                 return std::nullopt;

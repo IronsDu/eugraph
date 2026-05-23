@@ -17,26 +17,33 @@ enum class BoundTypeKind : uint8_t {
     EDGE,
     PATH,
     LIST,      // List<T>
+    MAP,       // Map<K, V>
     ANY,       // 多标签弱类型访问，运行时类型不确定
     NULL_TYPE, // 字面量 NULL
 };
 
 struct BoundType {
     BoundTypeKind kind = BoundTypeKind::NULL_TYPE;
-    std::unique_ptr<BoundType> element_type; // only for LIST
+    std::unique_ptr<BoundType> element_type;   // only for LIST
+    std::unique_ptr<BoundType> map_value_type; // only for MAP
 
     BoundType() = default;
     BoundType(BoundTypeKind k, std::unique_ptr<BoundType> elem) : kind(k), element_type(std::move(elem)) {}
+    BoundType(BoundTypeKind k, std::unique_ptr<BoundType> key, std::unique_ptr<BoundType> val)
+        : kind(k), element_type(std::move(key)), map_value_type(std::move(val)) {}
 
     // Copy: deep-clone the element_type tree
     BoundType(const BoundType& other) : kind(other.kind) {
         if (other.element_type)
             element_type = std::make_unique<BoundType>(*other.element_type);
+        if (other.map_value_type)
+            map_value_type = std::make_unique<BoundType>(*other.map_value_type);
     }
     BoundType& operator=(const BoundType& other) {
         if (this != &other) {
             kind = other.kind;
             element_type = other.element_type ? std::make_unique<BoundType>(*other.element_type) : nullptr;
+            map_value_type = other.map_value_type ? std::make_unique<BoundType>(*other.map_value_type) : nullptr;
         }
         return *this;
     }
@@ -75,6 +82,10 @@ struct BoundType {
     static BoundType List(BoundType elem) {
         return {BoundTypeKind::LIST, std::make_unique<BoundType>(std::move(elem))};
     }
+    static BoundType Map(BoundType key, BoundType val) {
+        return {BoundTypeKind::MAP, std::make_unique<BoundType>(std::move(key)),
+                std::make_unique<BoundType>(std::move(val))};
+    }
 
     bool operator==(const BoundType& other) const {
         if (kind != other.kind)
@@ -85,6 +96,13 @@ struct BoundType {
             if (!element_type || !other.element_type)
                 return false;
             return *element_type == *other.element_type;
+        }
+        if (kind == BoundTypeKind::MAP) {
+            bool key_eq = element_type && other.element_type ? *element_type == *other.element_type
+                                                             : element_type == other.element_type;
+            bool val_eq = map_value_type && other.map_value_type ? *map_value_type == *other.map_value_type
+                                                                 : map_value_type == other.map_value_type;
+            return key_eq && val_eq;
         }
         return true;
     }
@@ -110,6 +128,9 @@ struct BoundType {
             return "PATH";
         case BoundTypeKind::LIST:
             return "LIST<" + (element_type ? element_type->toString() : "?") + ">";
+        case BoundTypeKind::MAP:
+            return "MAP<" + (element_type ? element_type->toString() : "?") + ", " +
+                   (map_value_type ? map_value_type->toString() : "?") + ">";
         case BoundTypeKind::ANY:
             return "ANY";
         case BoundTypeKind::NULL_TYPE:
@@ -136,6 +157,24 @@ struct BoundType {
         // NULL -> anything
         if (kind == BoundTypeKind::NULL_TYPE)
             return 1;
+        // LIST -> LIST with compatible elements
+        if (kind == BoundTypeKind::LIST && target.kind == BoundTypeKind::LIST) {
+            if (!element_type || !target.element_type)
+                return 1;
+            return element_type->implicitCastCost(*target.element_type);
+        }
+        // MAP -> MAP with compatible key/value types
+        if (kind == BoundTypeKind::MAP && target.kind == BoundTypeKind::MAP) {
+            int key_cost = 0;
+            int val_cost = 0;
+            if (element_type && target.element_type)
+                key_cost = element_type->implicitCastCost(*target.element_type);
+            if (map_value_type && target.map_value_type)
+                val_cost = map_value_type->implicitCastCost(*target.map_value_type);
+            if (key_cost < 0 || val_cost < 0)
+                return -1;
+            return key_cost + val_cost;
+        }
         // ANY -> anything or anything -> ANY (runtime checked)
         if (kind == BoundTypeKind::ANY || target.kind == BoundTypeKind::ANY)
             return 1;
@@ -163,6 +202,8 @@ struct BoundType {
         result.kind = src.kind;
         if (src.element_type)
             result.element_type = std::make_unique<BoundType>(clone(*src.element_type));
+        if (src.map_value_type)
+            result.map_value_type = std::make_unique<BoundType>(clone(*src.map_value_type));
         return result;
     }
 };

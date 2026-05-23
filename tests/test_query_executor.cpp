@@ -3691,3 +3691,124 @@ TEST_F(QueryExecutorTest, ExistsInReturnError) {
     // EXISTS in RETURN is not supported in Phase 1
     EXPECT_FALSE(result.error.empty());
 }
+
+// ── MapValue / properties() / keys() ──
+
+TEST_F(QueryExecutorTest, PropertiesVertex) {
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    PropertyDef age_pd;
+    age_pd.name = "age";
+    age_pd.type = PropertyType::INT64;
+    auto person_id = blockingWait(async_meta_->createLabel("PersonWithProps", {name_pd, age_pd}));
+    ASSERT_NE(person_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(person_id));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    auto create = execSync(*executor_, "CREATE (:PersonWithProps {name: 'Alice', age: 30})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+
+    auto result = execSync(*executor_, "MATCH (n:PersonWithProps) RETURN properties(n)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<MapValue>(result.rows[0][0]));
+    const auto& mv = std::get<MapValue>(result.rows[0][0]);
+    ASSERT_EQ(mv.entries.size(), 2u);
+    EXPECT_EQ(mv.entries[0].first, "name");
+    EXPECT_EQ(mv.entries[1].first, "age");
+}
+
+TEST_F(QueryExecutorTest, PropertiesVertexEmpty) {
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto person_id = blockingWait(async_meta_->createLabel("PersonEmpty", {name_pd}));
+    ASSERT_NE(person_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(person_id));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    auto create = execSync(*executor_, "CREATE (:PersonEmpty)");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+
+    auto result = execSync(*executor_, "MATCH (n:PersonEmpty) RETURN properties(n)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<MapValue>(result.rows[0][0]));
+    const auto& mv = std::get<MapValue>(result.rows[0][0]);
+    EXPECT_EQ(mv.entries.size(), 0u); // no properties set
+}
+
+TEST_F(QueryExecutorTest, PropertiesEdge) {
+    PropertyDef since_pd;
+    since_pd.name = "since";
+    since_pd.type = PropertyType::INT64;
+    auto knows_id = blockingWait(async_meta_->createEdgeLabel("KNOWS_WITH_PROPS", {since_pd}));
+    ASSERT_NE(knows_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(knows_id));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    auto c1 = execSync(*executor_, "CREATE (:Person)-[:KNOWS_WITH_PROPS {since: 2020}]->(:Person)");
+    ASSERT_TRUE(c1.error.empty()) << c1.error;
+
+    auto result = execSync(*executor_, "MATCH ()-[r:KNOWS_WITH_PROPS]->() RETURN properties(r)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    // properties() returns a MapValue; entries may be empty until Expand loads edge properties
+    EXPECT_TRUE(std::holds_alternative<MapValue>(result.rows[0][0]));
+}
+
+TEST_F(QueryExecutorTest, KeysMap) {
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto person_id = blockingWait(async_meta_->createLabel("KeyMapTest", {name_pd}));
+    ASSERT_NE(person_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(person_id));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    auto create = execSync(*executor_, "CREATE (:KeyMapTest {name: 'test'})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+
+    auto result = execSync(*executor_, "MATCH (n:KeyMapTest) RETURN keys(properties(n))");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<ListValue>(result.rows[0][0]));
+    const auto& lv = std::get<ListValue>(result.rows[0][0]);
+    ASSERT_EQ(lv.elements.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::string>(lv.elements[0].value));
+    EXPECT_EQ(std::get<std::string>(lv.elements[0].value), "name");
+}
+
+TEST_F(QueryExecutorTest, MapLiteral) {
+    auto result = execSync(*executor_, "RETURN {name: 'Alice', age: 30}");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<MapValue>(result.rows[0][0]));
+    const auto& mv = std::get<MapValue>(result.rows[0][0]);
+    ASSERT_EQ(mv.entries.size(), 2u);
+    EXPECT_EQ(mv.entries[0].first, "name");
+    EXPECT_EQ(mv.entries[1].first, "age");
+}
+
+TEST_F(QueryExecutorTest, PropertiesInWhere) {
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto person_id = blockingWait(async_meta_->createLabel("PersonWhere", {name_pd}));
+    ASSERT_NE(person_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(person_id));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    auto c1 = execSync(*executor_, "CREATE (:PersonWhere {name: 'Alice'})");
+    ASSERT_TRUE(c1.error.empty()) << c1.error;
+    auto c2 = execSync(*executor_, "CREATE (:PersonWhere {name: 'Bob'})");
+    ASSERT_TRUE(c2.error.empty()) << c2.error;
+
+    // properties(n).name accesses map by key, returns the value
+    auto result = execSync(*executor_, "MATCH (n:PersonWhere) WHERE properties(n).name = 'Alice' RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+}
