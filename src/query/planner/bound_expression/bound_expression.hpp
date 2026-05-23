@@ -62,8 +62,9 @@ inline const BoundType& getBoundExprType(const BoundExpression& expr) {
                 return val->result_type;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundSingleExpr>>) {
                 return val->result_type;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundMap>>) {
+                return val->result_type;
             } else {
-                // BoundMap has no meaningful result type
                 static const BoundType any = BoundType::Any();
                 return any;
             }

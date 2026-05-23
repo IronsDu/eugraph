@@ -43,6 +43,8 @@ std::string resultValueToString(const ResultValue& rv) {
         return rv.get_path_json();
     case ResultValue::Type::list_json:
         return rv.get_list_json();
+    case ResultValue::Type::map_json:
+        return rv.get_map_json();
     }
     return "?";
 }

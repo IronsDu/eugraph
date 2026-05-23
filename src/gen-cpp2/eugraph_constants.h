@@ -14,8 +14,8 @@ namespace eugraph::thrift {
 /** Glean {"file": "proto/eugraph.thrift"} */
 namespace eugraph_constants {
 
-  FOLLY_EXPORT ::std::string_view _fbthrift_schema_fd4a6e893c899952();
-  FOLLY_EXPORT ::folly::Range<const ::std::string_view*> _fbthrift_schema_fd4a6e893c899952_includes();
+  FOLLY_EXPORT ::std::string_view _fbthrift_schema_5cf50ca5b2433ae7();
+  FOLLY_EXPORT ::folly::Range<const ::std::string_view*> _fbthrift_schema_5cf50ca5b2433ae7_includes();
 
 } // namespace eugraph_constants
 } // namespace eugraph::thrift

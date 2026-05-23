@@ -147,6 +147,18 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
                 evalCase(*val, input, col, count);
                 return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
+                auto& col = acquireTempColumn(binder::BoundTypeKind::MAP, count);
+                evalMap(*val, input, col, count);
+                return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
+                auto& col = acquireTempColumn(val->result_type.kind, count);
+                evalSubscript(*val, input, col, count);
+                return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
+                auto& col = acquireTempColumn(binder::BoundTypeKind::LIST, count);
+                evalSlice(*val, input, col, count);
+                return {&col, true};
             } else {
                 auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
                 return {&col, true};

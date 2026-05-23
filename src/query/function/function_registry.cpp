@@ -263,6 +263,42 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   {},
                                   {}});
 
+    // keys(Map) -> List<String>
+    functions_["keys"].push_back({"keys",
+                                  {BoundType::Map(BoundType::String(), BoundType::Any())},
+                                  BoundType::List(BoundType::String()),
+                                  false,
+                                  false,
+                                  scalar::keysScalarFn,
+                                  scalar::keysBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+
+    // properties(Vertex) -> Map<String, Any>
+    functions_["properties"].push_back({"properties",
+                                        {BoundType::Vertex()},
+                                        BoundType::Map(BoundType::String(), BoundType::Any()),
+                                        false,
+                                        false,
+                                        scalar::propertiesScalarFn,
+                                        scalar::propertiesBatchFn,
+                                        {},
+                                        {},
+                                        {}});
+
+    // properties(Edge) -> Map<String, Any>
+    functions_["properties"].push_back({"properties",
+                                        {BoundType::Edge()},
+                                        BoundType::Map(BoundType::String(), BoundType::Any()),
+                                        false,
+                                        false,
+                                        scalar::propertiesScalarFn,
+                                        scalar::propertiesBatchFn,
+                                        {},
+                                        {},
+                                        {}});
+
     // --- String functions ---
 
     // trim(String) -> String

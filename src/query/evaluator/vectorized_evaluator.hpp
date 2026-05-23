@@ -67,6 +67,15 @@ private:
 
     /// Evaluate a CASE WHEN expression.
     void evalCase(const binder::BoundCase& case_expr, const DataChunk& input, Column& result, size_t count);
+
+    /// Evaluate a BoundMap literal expression.
+    void evalMap(const binder::BoundMap& map, const DataChunk& input, Column& result, size_t count);
+
+    /// Evaluate a subscript expression: list[index] or map[key].
+    void evalSubscript(const binder::BoundSubscript& sub, const DataChunk& input, Column& result, size_t count);
+
+    /// Evaluate a slice expression: list[from..to].
+    void evalSlice(const binder::BoundSlice& slice, const DataChunk& input, Column& result, size_t count);
 };
 
 } // namespace compute

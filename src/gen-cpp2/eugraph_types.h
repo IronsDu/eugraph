@@ -42,6 +42,7 @@ struct vertex_json;
 struct edge_json;
 struct path_json;
 struct list_json;
+struct map_json;
 struct values;
 struct columns;
 struct rows;
@@ -173,6 +174,10 @@ APACHE_THRIFT_DEFINE_ACCESSOR(path_json);
 #ifndef APACHE_THRIFT_ACCESSOR_list_json
 #define APACHE_THRIFT_ACCESSOR_list_json
 APACHE_THRIFT_DEFINE_ACCESSOR(list_json);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_map_json
+#define APACHE_THRIFT_ACCESSOR_map_json
+APACHE_THRIFT_DEFINE_ACCESSOR(map_json);
 #endif
 #ifndef APACHE_THRIFT_ACCESSOR_values
 #define APACHE_THRIFT_ACCESSOR_values
@@ -2337,9 +2342,9 @@ class ResultValue final  {
   FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
     return "eugraph";
   }
-  static constexpr std::size_t __fbthrift_num_fields = 8;
+  static constexpr std::size_t __fbthrift_num_fields = 9;
 
-  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3,4,5,6,7,8};
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3,4,5,6,7,8,9};
 
   using __fbthrift_reflection_idents = folly::tag_t<
     ::apache::thrift::ident::bool_val,
@@ -2349,13 +2354,15 @@ class ResultValue final  {
     ::apache::thrift::ident::vertex_json,
     ::apache::thrift::ident::edge_json,
     ::apache::thrift::ident::path_json,
-    ::apache::thrift::ident::list_json
+    ::apache::thrift::ident::list_json,
+    ::apache::thrift::ident::map_json
   >;
 
   using __fbthrift_reflection_type_tags = folly::tag_t<
     ::apache::thrift::type::bool_t,
     ::apache::thrift::type::i64_t,
     ::apache::thrift::type::double_t,
+    ::apache::thrift::type::string_t,
     ::apache::thrift::type::string_t,
     ::apache::thrift::type::string_t,
     ::apache::thrift::type::string_t,
@@ -2385,6 +2392,7 @@ class ResultValue final  {
     edge_json = 6,
     path_json = 7,
     list_json = 8,
+    map_json = 9,
   } ;
 
   ResultValue()
@@ -2436,6 +2444,11 @@ class ResultValue final  {
       case Type::list_json:
       {
         set_list_json(std::move(rhs.value_.list_json));
+        break;
+      }
+      case Type::map_json:
+      {
+        set_map_json(std::move(rhs.value_.map_json));
         break;
       }
       default:
@@ -2497,6 +2510,11 @@ class ResultValue final  {
         set_list_json(std::move(rhs.value_.list_json));
         break;
       }
+      case Type::map_json:
+      {
+        set_map_json(std::move(rhs.value_.map_json));
+        break;
+      }
       default:
       {
         assert(false);
@@ -2520,6 +2538,7 @@ class ResultValue final  {
     ::std::string edge_json;
     ::std::string path_json;
     ::std::string list_json;
+    ::std::string map_json;
 
     storage_type() {}
     ~storage_type() {}
@@ -2719,6 +2738,37 @@ class ResultValue final  {
   }
 
 
+  /** Glean { "field": "map_json" } */
+  template <typename... A, std::enable_if_t<!sizeof...(A), int> = 0>
+  ::std::string& set_map_json(::std::string const &t) {
+    using T0 = ::std::string;
+    using T = folly::type_t<T0, A...>;
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::map_json);
+    ::new (std::addressof(value_.map_json)) T(t);
+    return value_.map_json;
+  }
+
+  /** Glean { "field": "map_json" } */
+  template <typename... A, std::enable_if_t<!sizeof...(A), int> = 0>
+  ::std::string& set_map_json(::std::string&& t) {
+    using T0 = ::std::string;
+    using T = folly::type_t<T0, A...>;
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::map_json);
+    ::new (std::addressof(value_.map_json)) T(std::move(t));
+    return value_.map_json;
+  }
+
+  /** Glean { "field": "map_json" } */
+  template<typename... T, typename = ::apache::thrift::safe_overload_t<::std::string, T...>> ::std::string& set_map_json(T&&... t) {
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::map_json);
+    ::new (std::addressof(value_.map_json)) ::std::string(std::forward<T>(t)...);
+    return value_.map_json;
+  }
+
+
   /** Glean { "field": "bool_val" } */
   bool const& get_bool_val() const {
     if (getType() != Type::bool_val) {
@@ -2783,6 +2833,14 @@ class ResultValue final  {
     return value_.list_json;
   }
 
+  /** Glean { "field": "map_json" } */
+  ::std::string const& get_map_json() const {
+    if (getType() != Type::map_json) {
+      ::apache::thrift::detail::throw_on_bad_union_field_access();
+    }
+    return value_.map_json;
+  }
+
   bool& mutable_bool_val() {
     assert(getType() == Type::bool_val);
     return value_.bool_val;
@@ -2821,6 +2879,11 @@ class ResultValue final  {
   ::std::string& mutable_list_json() {
     assert(getType() == Type::list_json);
     return value_.list_json;
+  }
+
+  ::std::string& mutable_map_json() {
+    assert(getType() == Type::map_json);
+    return value_.map_json;
   }
 
   template <typename..., typename T = bool>
@@ -2869,6 +2932,12 @@ class ResultValue final  {
   T move_list_json() {
     assert(getType() == Type::list_json);
     return std::move(value_.list_json);
+  }
+
+  template <typename..., typename T = ::std::string>
+  T move_map_json() {
+    assert(getType() == Type::map_json);
+    return std::move(value_.map_json);
   }
 
   /** Glean { "field": "bool_val" } */
@@ -3054,6 +3123,29 @@ class ResultValue final  {
   template <typename..., typename T = ::std::string>
   FOLLY_ERASE ::apache::thrift::union_field_ref<T&&> list_json_ref() && {
     return {std::move(value_.list_json), type_, folly::to_underlying(Type::list_json), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+  /** Glean { "field": "map_json" } */
+  template <typename..., typename T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<const T&> map_json_ref() const& {
+    return {value_.map_json, type_, folly::to_underlying(Type::map_json), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "map_json" } */
+  template <typename..., typename T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<const T&&> map_json_ref() const&& {
+    return {std::move(value_.map_json), type_, folly::to_underlying(Type::map_json), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "map_json" } */
+  template <typename..., typename T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<T&> map_json_ref() & {
+    return {value_.map_json, type_, folly::to_underlying(Type::map_json), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "map_json" } */
+  template <typename..., typename T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<T&&> map_json_ref() && {
+    return {std::move(value_.map_json), type_, folly::to_underlying(Type::map_json), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
   }
   Type getType() const { return static_cast<Type>(type_); }
 
@@ -3785,7 +3877,7 @@ template <> struct TEnumDataStorage<::eugraph::thrift::ResultValue::Type>;
 template <> struct TEnumTraits<::eugraph::thrift::ResultValue::Type> {
   using type = ::eugraph::thrift::ResultValue::Type;
 
-  static constexpr std::size_t const size = 8;
+  static constexpr std::size_t const size = 9;
   static folly::Range<type const*> const values;
   static folly::Range<std::string_view const*> const names;
 
@@ -3803,67 +3895,67 @@ template <> struct TEnumTraits<::eugraph::thrift::ResultValue::Type> {
 namespace apache::thrift::detail {
 template <> struct TSchemaAssociation<::eugraph::thrift::PropertyDefThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\xbe\x38\xd4\xd9\xdc\xe7\x0f\xda\x07\xcc\x34\x0d\xee\x1b\xe7\x45", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\x34\x6c\x51\x97\xaa\x6d\x6f\x66\x8d\xfb\xbb\x4e\x15\x89\xb5\x37", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::PropertyValueThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\x67\x5c\x04\x40\x28\xf6\xc2\xc5\xb0\x48\xdc\x94\x3d\xb8\x29\x22", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\x67\xac\x16\x45\x80\xa1\xa6\xce\xe3\x7a\x4c\x6f\x6a\x77\x20\x91", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::LabelInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\x89\xb9\xd9\xc8\x8b\x79\x00\x43\xda\x96\xf7\x78\xb6\xa6\xb4\x6c", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\x9a\xe9\x00\x4b\x6d\x49\xcf\x24\x97\x6b\x7c\x88\x8b\x86\x65\x67", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::EdgeLabelInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\x8c\x0f\xbe\xab\xc0\xa4\xfc\xf5\x64\xd6\x5d\x2a\x19\x91\x96\xf1", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\xdb\x19\x09\x91\xed\xd0\xe0\xac\x72\x78\xe9\x0e\x95\x34\x22\x0a", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::VertexRecord, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\xf8\x1e\x13\x97\x05\x7f\x34\x4e\xbc\x52\x1a\x66\x90\x30\xf8\x77", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\x7c\x80\x3e\x3a\xee\xc2\xd6\x8a\xf2\x05\x07\x3a\x6d\xd5\xa4\x88", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::EdgeRecord, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\xc9\x86\xed\xf8\x51\xec\xfb\xff\x71\x9d\xa7\x63\xda\x4e\xfe\xae", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\x9d\x57\xd0\x54\x04\x3e\xea\x09\x21\x9a\x43\x24\xb9\xfd\x41\x06", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::BatchInsertVerticesResult, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\x01\x41\xf3\x0a\x55\xdd\xf5\xd7\xcc\xce\x99\x3e\xe9\xbb\x0b\x5b", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\x87\xdf\xbd\x6a\xe3\x1f\x63\x4e\x7b\x48\xf5\x1d\x9b\x1c\x59\x39", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::ResultValue, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\x9b\x51\xe1\x0d\xfc\x6a\xfa\xda\x30\x32\x0b\x70\x92\xa9\x40\xb4", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\xd7\x2b\x4f\xf8\x34\x37\x42\xd8\xfd\x2d\x44\xf7\x18\xf2\x12\xc8", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::ResultRow, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\xa9\x48\x49\x70\xf7\xa3\xb7\x5e\xa8\x26\x55\x0d\x12\x27\x40\x34", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\x2a\x4e\x5c\xd8\xb2\x52\x01\x5c\xce\x68\x38\x81\x8c\xfb\x76\x83", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::QueryStreamMeta, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\xc3\xd8\x3d\xba\x36\xba\x97\x0c\x1c\x09\x96\xdc\x79\xd9\xe2\x18", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\xea\x27\x2c\xe7\xeb\x24\x65\x68\xa5\x3f\x81\x51\x33\x4e\x15\xd4", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::ResultRowBatch, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\x0e\x46\xcf\xad\xd4\x65\xaf\xdd\x4a\x5c\x33\x7f\x75\x91\x64\xb5", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\xc6\x9e\x85\x48\xff\x77\x4c\xd4\x4e\xe9\x52\xc8\xcc\x0a\x61\x1b", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::GraphInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\xb8\x6e\xb5\xc7\xf8\x3d\xdf\x43\xb4\x20\xba\x82\x38\x79\xdb\x88", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\xdf\x5e\x37\x75\x21\x6c\xc4\xc2\xa1\xad\x07\xd4\x6b\x59\x21\x7d", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::PropertyType, true> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -195222098131969710;
-  static constexpr ::std::string_view definitionKey = {"\xdc\xe9\xa0\xed\xbc\x71\xae\x9b\x17\xf9\x64\x09\xbb\x94\x6f\x03", 16};
+  static constexpr int64_t programId = 6698273926583368423;
+  static constexpr ::std::string_view definitionKey = {"\x95\xd7\xd5\xc7\xa1\x33\x61\x28\xe6\x94\xb7\x81\xbd\x18\xda\xea", 16};
 };
 } // namespace apache::thrift::detail

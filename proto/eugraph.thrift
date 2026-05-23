@@ -69,6 +69,7 @@ union ResultValue {
   6: string edge_json
   7: string path_json
   8: string list_json
+  9: string map_json
 }
 
 struct ResultRow {
@@ -115,3 +116,4 @@ service EuGraphService {
   BatchInsertVerticesResult batchInsertVertices(1: string label_name, 2: list<VertexRecord> records, 3: string graph_name)
   i32 batchInsertEdges(1: string edge_label_name, 2: list<EdgeRecord> records, 3: string graph_name)
 }
+

@@ -249,6 +249,29 @@
 
 ---
 
+## 实施路线图
+
+按优先级排序的后续实施计划：
+
+| 序号 | 需求 | 优先级 | 影响场景 | 难度 | 说明 |
+|------|------|--------|---------|------|------|
+| 1 | **MapValue + properties()/keys()** | P2 | ~40+ | 中 | 类型系统扩展，解锁函数生态 |
+| 2 | **DELETE / DETACH DELETE** | P1 | 41 | 低 | 独立写操作，逻辑简单 |
+| 3 | **OPTIONAL MATCH** | P1 | 78+ | 高 | outer join 语义，级联收益最大 |
+| 4 | **EXISTS 子查询** | P2 | 10+ | 中 | 解锁量词结合场景 |
+| 5 | **UndefinedVariable 根因分析** | P2 | ~210 | 中 | 批量减少级联 NothingToReturn |
+| 6 | **TypeMismatch 修复** | P2 | ~70 | 低 | 隐式类型转换/类型检查完善 |
+
+### 已排期（当前迭代）
+
+- ~~**MapValue 类型扩展**~~ ✅ 已完成 — `Value` variant 新增 `MapValue`，实现 `properties()`、`keys(Map)`、`BoundType::MAP`、map 下标访问、list 下标/切片求值
+
+### 已知新限制
+
+- **`properties(Edge)` + 普通 Expand**：普通 `(a)-[r:TYPE]->(b)` 中 `ExpandPhysicalOp` 不加载边属性，`properties(r)` 返回空 map。变长路径的边属性加载已支持。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
+
+---
+
 ## 待实现函数（后续迭代）
 
 以下函数尚未实现，记录于此避免遗忘：

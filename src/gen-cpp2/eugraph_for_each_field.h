@@ -97,6 +97,7 @@ struct ForEachField<::eugraph::thrift::ResultValue> {
     f(5, static_cast<T&&>(t).edge_json_ref()...);
     f(6, static_cast<T&&>(t).path_json_ref()...);
     f(7, static_cast<T&&>(t).list_json_ref()...);
+    f(8, static_cast<T&&>(t).map_json_ref()...);
   }
 };
 
