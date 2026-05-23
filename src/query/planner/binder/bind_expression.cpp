@@ -424,7 +424,6 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     return std::nullopt;
                 auto sub = std::make_unique<BoundSubscript>();
                 const BoundType& list_type = getBoundExprType(*bound_list);
-                const BoundType& idx_type = getBoundExprType(*bound_index);
                 if (list_type.kind == BoundTypeKind::LIST) {
                     sub->result_type =
                         list_type.element_type ? BoundType::clone(*list_type.element_type) : BoundType::Any();
