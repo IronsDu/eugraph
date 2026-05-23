@@ -471,5 +471,196 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
     return current;
 }
 
+// ==================== EXISTS Subquery Binding ====================
+
+void Binder::collectExistsFromAnd(const cypher::Expression& expr,
+                                  std::vector<std::pair<const cypher::ExistsExpr*, bool>>& out) {
+    std::visit(
+        [&](const auto& ptr) {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                if (ptr->op == cypher::BinaryOperator::AND) {
+                    collectExistsFromAnd(ptr->left, out);
+                    collectExistsFromAnd(ptr->right, out);
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                out.emplace_back(ptr.get(), false);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                if (ptr->op == cypher::UnaryOperator::NOT) {
+                    // Check if NOT wraps an EXISTS
+                    bool found = false;
+                    std::visit(
+                        [&](const auto& inner) {
+                            if constexpr (std::is_same_v<typename std::decay_t<decltype(inner)>::element_type,
+                                                         cypher::ExistsExpr>) {
+                                out.emplace_back(inner.get(), true);
+                                found = true;
+                            }
+                        },
+                        ptr->operand);
+                    if (!found) {
+                        // NOT wraps something else — also recurse into it for AND chains
+                        // inside the NOT (e.g., NOT (a AND b AND EXISTS ...))
+                        collectExistsFromAnd(ptr->operand, out);
+                    }
+                }
+            }
+        },
+        expr);
+}
+
+std::optional<cypher::Expression> Binder::removeExistsFromWhere(const cypher::Expression& expr) {
+    return std::visit(
+        [&](const auto& ptr) -> std::optional<cypher::Expression> {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                if (ptr->op == cypher::BinaryOperator::AND) {
+                    auto left = removeExistsFromWhere(ptr->left);
+                    auto right = removeExistsFromWhere(ptr->right);
+                    if (left && right)
+                        return cypher::makeBinaryOp(cypher::BinaryOperator::AND, std::move(*left), std::move(*right));
+                    if (left)
+                        return left;
+                    return right;
+                }
+                return cloneExpression(expr);
+            } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                if (ptr->op == cypher::UnaryOperator::NOT) {
+                    auto inner = removeExistsFromWhere(ptr->operand);
+                    if (!inner)
+                        return std::nullopt; // NOT(EXISTS) → fully removed
+                    return cypher::makeUnaryOp(cypher::UnaryOperator::NOT, std::move(*inner));
+                }
+                return cloneExpression(expr);
+            } else {
+                return cloneExpression(expr);
+            }
+        },
+        expr);
+}
+
+std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::ExistsExpr& exists,
+                                                              std::vector<std::pair<uint32_t, uint32_t>>& correlation) {
+    if (exists.patterns.empty()) {
+        error("EXISTS subquery has no patterns");
+        return std::nullopt;
+    }
+
+    // Determine correlation before saving context: first pattern node variable
+    // must exist in outer scope.
+    const auto& first_node = exists.patterns[0].element.node;
+    if (!first_node.variable) {
+        error("EXISTS subquery pattern must have a named start variable");
+        return std::nullopt;
+    }
+
+    auto* outer_col = ctx_.lookup(*first_node.variable);
+    if (!outer_col) {
+        error("EXISTS subquery start variable '" + *first_node.variable +
+              "' must reference an outer variable (non-correlated EXISTS not yet supported)");
+        return std::nullopt;
+    }
+
+    uint32_t outer_idx = outer_col->column_index;
+    ColumnInfo saved_outer_info = *outer_col; // copy before resetting
+
+    // Save outer binding context
+    auto saved_ctx = ctx_.save();
+
+    // Reset to independent sub-scope
+    ctx_.beginSubScope();
+
+    // Register correlated variable in sub-scope (preserving metadata from outer scope)
+    ColumnInfo sub_info = saved_outer_info;
+    sub_info.column_index = nextColumnIndex();
+    uint32_t sub_idx = sub_info.column_index;
+    ctx_.symbols[*first_node.variable] = sub_info;
+    correlation.emplace_back(outer_idx, sub_idx);
+
+    // Also check for additional correlated variables in the WHERE predicate
+    // (any outer variable referenced in the WHERE must also be correlated)
+    // For Phase 1, only the start node is handled as correlated.
+
+    // Create the correlated source leaf operator
+    BoundCorrelatedSourceOp source;
+    source.variables.push_back(*first_node.variable);
+    source.types.push_back(BoundType::Vertex());
+    source.column_indices.push_back(sub_idx);
+
+    // Deep-clone the EXISTS patterns into a synthetic MatchClause.
+    // (Expression contains unique_ptr and cannot be trivially copied.)
+    cypher::MatchClause synthetic_match;
+    synthetic_match.patterns.reserve(exists.patterns.size());
+    for (const auto& pp : exists.patterns) {
+        cypher::PatternPart cloned_pp;
+        cloned_pp.variable = pp.variable;
+        cloned_pp.element.node.variable = pp.element.node.variable;
+        cloned_pp.element.node.labels = pp.element.node.labels;
+        if (pp.element.node.properties) {
+            cloned_pp.element.node.properties = cypher::PropertiesMap{};
+            for (const auto& [name, expr] : pp.element.node.properties->entries) {
+                cloned_pp.element.node.properties->entries.emplace_back(name, cloneExpression(expr));
+            }
+        }
+        for (const auto& [rel_pat, node_pat] : pp.element.chain) {
+            cypher::RelationshipPattern cloned_rel;
+            cloned_rel.variable = rel_pat.variable;
+            cloned_rel.rel_types = rel_pat.rel_types;
+            cloned_rel.direction = rel_pat.direction;
+            if (rel_pat.range) {
+                cloned_rel.range = {cloneExpression(rel_pat.range->first), cloneExpression(rel_pat.range->second)};
+            }
+            if (rel_pat.properties) {
+                cloned_rel.properties = cypher::PropertiesMap{};
+                for (const auto& [name, expr] : rel_pat.properties->entries) {
+                    cloned_rel.properties->entries.emplace_back(name, cloneExpression(expr));
+                }
+            }
+            cypher::NodePattern cloned_node;
+            cloned_node.variable = node_pat.variable;
+            cloned_node.labels = node_pat.labels;
+            if (node_pat.properties) {
+                cloned_node.properties = cypher::PropertiesMap{};
+                for (const auto& [name, expr] : node_pat.properties->entries) {
+                    cloned_node.properties->entries.emplace_back(name, cloneExpression(expr));
+                }
+            }
+            cloned_pp.element.chain.emplace_back(std::move(cloned_rel), std::move(cloned_node));
+        }
+        synthetic_match.patterns.push_back(std::move(cloned_pp));
+    }
+    if (exists.where_pred) {
+        synthetic_match.where_pred = cloneExpression(*exists.where_pred);
+    }
+
+    // Bind the sub-plan with the correlated source as parent
+    BoundLogicalOperator parent_op = std::move(source);
+    auto sub_plan = bindMatch(synthetic_match, std::move(parent_op), false);
+    if (!sub_plan)
+        return std::nullopt;
+
+    // Restore outer binding context
+    ctx_.restore(saved_ctx);
+
+    return sub_plan;
+}
+
+std::optional<BoundLogicalOperator> Binder::bindExistsAsSemiJoin(const cypher::ExistsExpr& exists,
+                                                                 BoundLogicalOperator child, bool anti) {
+    std::vector<std::pair<uint32_t, uint32_t>> correlation;
+    auto sub_plan = bindExistsSubPlan(exists, correlation);
+    if (!sub_plan)
+        return std::nullopt;
+
+    auto semi_join = std::make_unique<BoundSemiJoinOp>();
+    semi_join->left = std::move(child);
+    semi_join->right = std::move(*sub_plan);
+    semi_join->correlation = std::move(correlation);
+    semi_join->anti = anti;
+    return semi_join;
+}
+
 } // namespace binder
 } // namespace eugraph

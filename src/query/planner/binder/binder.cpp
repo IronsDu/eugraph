@@ -170,6 +170,35 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
 std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& pred, BoundLogicalOperator child,
                                                       std::optional<BoundLogicalOperator> /*extra_filter_child*/) {
+    // Check for EXISTS subqueries in the top-level AND chain.
+    std::vector<std::pair<const cypher::ExistsExpr*, bool>> exists_list;
+    collectExistsFromAnd(pred, exists_list);
+
+    if (!exists_list.empty()) {
+        // Wrap each EXISTS as a SemiJoin operator.
+        auto current = std::move(child);
+        for (auto& [ex, anti] : exists_list) {
+            auto sj = bindExistsAsSemiJoin(*ex, std::move(current), anti);
+            if (!sj)
+                return std::nullopt;
+            current = std::move(*sj);
+        }
+
+        // Bind remaining (non-EXISTS) WHERE conditions as a Filter above the SemiJoin chain.
+        auto remaining = removeExistsFromWhere(pred);
+        if (remaining) {
+            auto bound_rem = bindExpression(*remaining);
+            if (!bound_rem)
+                return std::nullopt;
+            auto filter = std::make_unique<BoundFilterOp>();
+            filter->predicate = std::move(*bound_rem);
+            filter->child = std::move(current);
+            return filter;
+        }
+        return current;
+    }
+
+    // No EXISTS: original behavior.
     auto bound_pred = bindExpression(pred);
     if (!bound_pred)
         return std::nullopt;

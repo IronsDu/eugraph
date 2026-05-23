@@ -82,6 +82,30 @@ struct BindContext {
         }
         property_requirements.push_back({var_name, label_id, {prop_id}});
     }
+
+    /// Save the current binding state for EXISTS sub-plan scoping.
+    /// Returns a copy of the state that can be restored later.
+    struct Snapshot {
+        std::unordered_map<std::string, ColumnInfo> symbols;
+        uint32_t next_column_index = 0;
+    };
+
+    Snapshot save() const {
+        return {symbols, next_column_index};
+    }
+
+    /// Restore binding state from a previously saved snapshot.
+    void restore(const Snapshot& snap) {
+        symbols = snap.symbols;
+        next_column_index = snap.next_column_index;
+    }
+
+    /// Reset to an independent scope for EXISTS sub-plan binding.
+    /// Only the given correlated variables are visible (registered in the sub-scope).
+    void beginSubScope() {
+        symbols.clear();
+        next_column_index = 0;
+    }
 };
 
 } // namespace binder

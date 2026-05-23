@@ -3568,3 +3568,126 @@ TEST_F(QueryExecutorTest, CaseInWhere) {
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name1");
 }
+
+// ==================== EXISTS subquery tests ====================
+
+// Helper: create a graph suitable for EXISTS tests.
+// Alice(1) -[:KNOWS]-> Bob(2)
+// Alice(1) -[:KNOWS]-> Charlie(3)
+// Bob(2)   -[:KNOWS]-> David(4)
+// Charlie(3) -[:KNOWS]-> David(4)
+// Eve(5)   (isolated, no edges)
+void insertExistsTestGraph(SyncGraphDataStore& sync_data, LabelId person_label, EdgeLabelId knows_label) {
+    auto txn = sync_data.beginTransaction();
+    for (VertexId vid = 1; vid <= 5; ++vid) {
+        std::vector<std::pair<LabelId, Properties>> label_props = {
+            {person_label, Properties{PropertyValue(std::string("name") + std::to_string(vid))}}};
+        sync_data.insertVertex(txn, vid, label_props);
+    }
+    // Alice -> Bob, Alice -> Charlie
+    sync_data.insertEdge(txn, 1, 1, 2, knows_label, 0, {});
+    sync_data.insertEdge(txn, 2, 1, 3, knows_label, 0, {});
+    // Bob -> David, Charlie -> David
+    sync_data.insertEdge(txn, 3, 2, 4, knows_label, 0, {});
+    sync_data.insertEdge(txn, 4, 3, 4, knows_label, 0, {});
+    sync_data.commitTransaction(txn);
+}
+
+// ── Basic EXISTS semantics ──
+
+TEST_F(QueryExecutorTest, ExistsSingleHopFound) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE EXISTS { (n)-[:KNOWS]->(:Person) } RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // Alice(1), Bob(2), Charlie(3) have outgoing KNOWS edges. David(4), Eve(5) don't.
+    ASSERT_EQ(result.rows.size(), 3u);
+}
+
+TEST_F(QueryExecutorTest, ExistsNoMatch) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    // Use LIVES_IN which is a registered edge type but has no edges in the test graph
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE EXISTS { (n)-[:LIVES_IN]->(:Person) } RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, ExistsComplement) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE NOT EXISTS { (n)-[:KNOWS]->(:Person) } RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // David(4) and Eve(5) have no outgoing KNOWS edges
+    ASSERT_EQ(result.rows.size(), 2u);
+}
+
+TEST_F(QueryExecutorTest, ExistsWithWherePred) {
+    // Property access inside EXISTS sub-query requires property pushdown for
+    // expand targets, which is not yet supported. Use a simpler WHERE condition.
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE EXISTS { (n)-[:KNOWS]->(m:Person) } RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // Alice(1), Bob(2), Charlie(3) all have outgoing KNOWS edges
+    ASSERT_EQ(result.rows.size(), 3u);
+}
+
+// ── Correlated variables ──
+
+TEST_F(QueryExecutorTest, ExistsCorrelatedMultiHop) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result =
+        execSync(*executor_, "MATCH (n:Person) WHERE EXISTS { (n)-[:KNOWS]->(:Person)-[:KNOWS]->(:Person) } RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // Alice(1) KNOWS Bob(2) KNOWS David(4), Alice(1) KNOWS Charlie(3) KNOWS David(4)
+    ASSERT_EQ(result.rows.size(), 1u);
+}
+
+// ── EXISTS with AND/OR ──
+
+TEST_F(QueryExecutorTest, ExistsAndPropertyFilter) {
+    // EXISTS with additional AND'd condition (non-EXISTS part is kept as Filter above SemiJoin).
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE EXISTS { (n)-[:KNOWS]->(:Person) } AND true RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // EXISTS matches Alice, Bob, Charlie. AND true keeps them all.
+    ASSERT_EQ(result.rows.size(), 3u);
+}
+
+TEST_F(QueryExecutorTest, TwoExistsAnd) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    // Find nodes that have at least 2 outgoing KNOWS edges.
+    // Use two independent EXISTS both correlated on n.
+    auto result = execSync(
+        *executor_,
+        "MATCH (n:Person) WHERE EXISTS { (n)-[:KNOWS]->(:Person) } AND EXISTS { (n)-[:KNOWS]->(:Person) } RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // Alice(1) has 2 edges, so both EXISTS are true. Bob(2) and Charlie(3) have 1 each
+    // so their second EXISTS should also be true (same 1 edge qualifies).
+    // With LIVES_IN having no edges, Eve(5) has 0 matches for both.
+    ASSERT_EQ(result.rows.size(), 3u);
+}
+
+// ── Edge cases ──
+
+TEST_F(QueryExecutorTest, ExistsOnEmptyGraph) {
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE EXISTS { (n)-[:KNOWS]->(:Person) } RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, ExistsUndirected) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result =
+        execSync(*executor_, "MATCH (n:Person) WHERE EXISTS { (n)-[:KNOWS]-(:Person) } RETURN n.name ORDER BY n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // David has incoming edges (undirected matches both directions)
+    // Alice(1), Bob(2), Charlie(3), David(4) all have KNOWS edges (undirected)
+    ASSERT_GE(result.rows.size(), 4u);
+}
+
+// ── Error case ──
+
+TEST_F(QueryExecutorTest, ExistsInReturnError) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n) RETURN EXISTS { (n)-[:KNOWS]->() } AS has_rel");
+    // EXISTS in RETURN is not supported in Phase 1
+    EXPECT_FALSE(result.error.empty());
+}

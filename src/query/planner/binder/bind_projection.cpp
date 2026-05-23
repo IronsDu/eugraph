@@ -58,6 +58,8 @@ void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, BoundSingletonOp>) {
                 // No children, no properties to collect
+            } else if constexpr (std::is_same_v<T, BoundCorrelatedSourceOp>) {
+                // Leaf operator, no children
             } else if constexpr (std::is_same_v<T, BoundLabelScanOp>) {
                 collectLabelPropIds(val.variable, val.label_prop_ids);
             } else if constexpr (std::is_same_v<T, BoundScanOp>) {
@@ -101,6 +103,9 @@ void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
                 } else if constexpr (std::is_same_v<Elem, BoundPathBuildOp>) {
                     applyProjectionPushdown(v.child);
                 } else if constexpr (std::is_same_v<Elem, BoundBinaryJoinOp>) {
+                    applyProjectionPushdown(v.left);
+                    applyProjectionPushdown(v.right);
+                } else if constexpr (std::is_same_v<Elem, BoundSemiJoinOp>) {
                     applyProjectionPushdown(v.left);
                     applyProjectionPushdown(v.right);
                 } else if constexpr (std::is_same_v<Elem, BoundUnwindOp>) {

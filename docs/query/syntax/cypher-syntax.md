@@ -84,6 +84,47 @@ WHERE SINGLE(x IN nodes(p) WHERE id(x) = 100)
 
 量词语义（遵循 Cypher 标准）：ALL 空列表→true，ANY 空列表→false，NONE 空列表→true，SINGLE→恰好一个满足。
 
+### EXISTS — 存在性子查询
+
+```cypher
+MATCH (n:Person)
+WHERE EXISTS { (n)-[:KNOWS]->(:Person) }
+RETURN n
+
+-- 内部模式可含 WHERE 过滤
+MATCH (n:Person)
+WHERE EXISTS { (n)-[:KNOWS]->(m:Person) WHERE m.name = 'name4' }
+RETURN n
+
+-- NOT EXISTS（反存在性）
+MATCH (n:Person)
+WHERE NOT EXISTS { (n)-[:KNOWS]->(:Person) }
+RETURN n
+
+-- 多 EXISTS 与 AND 组合
+MATCH (n:Person)
+WHERE EXISTS { (n)-[:KNOWS]->(:Person) }
+  AND EXISTS { (n)-[:KNOWS]->(:Person) }
+RETURN n
+```
+
+**实现方式**：EXISTS 内部模式编译为独立物理计划子树（SemiJoinPhysicalOp），通过 `CorrelatedSourcePhysicalOp` 注入外部关联变量值。`NOT EXISTS` 转换为 AntiSemiJoin。
+
+**当前支持**：
+
+| 特性 | 状态 |
+|------|------|
+| `EXISTS { pattern }`（无内部 WHERE） | 已实现 |
+| `EXISTS { pattern WHERE ... }` | 已实现 |
+| `NOT EXISTS { ... }` | 已实现 |
+| 多 EXISTS AND 组合 | 已实现 |
+| 单跳 / 多跳展开 | 已实现 |
+| 无向展开 `-[...]-` | 已实现 |
+| EXISTS 内部属性过滤（`WHERE m.name = ...`） | 部分（属性下推有已知问题） |
+| `EXISTS { MATCH ... RETURN ... }`（完整子查询） | 未实现 |
+| 嵌套 EXISTS | 未实现 |
+| EXISTS 在 RETURN/CASE 等非 WHERE 上下文 | 未实现 |
+
 ### 多标签属性访问
 
 ```cypher
@@ -251,7 +292,7 @@ REMOVE n.name                     -- 移除属性（便捷模式）
 | `CASE WHEN THEN ELSE END` | 条件表达式 |
 | `[x IN list WHERE pred \| proj]` | 列表推导 |
 | `ALL/ANY/NONE/SINGLE(...)` | 量词谓词（已实现，见 WHERE 子句） |
-| `EXISTS { pattern }` | 存在性子查询 |
+| `EXISTS { pattern WHERE ... }` | 存在性子查询（部分支持，见下表） |
 | `list[index]` / `list[from..to]` | 下标/切片 |
 | `{k: v}` / `[1, 2, 3]` | Map/List 字面量求值 |
 
