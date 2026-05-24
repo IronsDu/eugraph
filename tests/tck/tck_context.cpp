@@ -180,10 +180,6 @@ bool hasUnsupportedClause(const ast::Clause& clause) {
             using Inner = typename std::decay_t<decltype(ptr)>::element_type;
 
             if constexpr (std::is_same_v<Inner, ast::MatchClause>) {
-                if (ptr->optional) {
-                    spdlog::info("[TCK] skipping: OPTIONAL MATCH");
-                    return true;
-                }
                 for (const auto& pp : ptr->patterns) {
                     if (hasUnsupportedPattern(pp))
                         return true;
