@@ -92,6 +92,10 @@ private:
                                  std::vector<EdgeLabelId>& edge_label_ids, std::vector<uint16_t>& default_prop_ids,
                                  bool for_create = false);
 
+    // ── OPTIONAL MATCH binding ──
+    std::optional<BoundLogicalOperator> bindOptionalMatch(const cypher::MatchClause& match,
+                                                          BoundLogicalOperator current);
+
     // ── EXISTS subquery binding ──
     /// Bind an EXISTS pattern as a SemiJoin operator. Returns the SemiJoin wrapping the given child.
     std::optional<BoundLogicalOperator> bindExistsAsSemiJoin(const cypher::ExistsExpr& exists,

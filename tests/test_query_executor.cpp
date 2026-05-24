@@ -3956,3 +3956,117 @@ TEST_F(QueryExecutorTest, DeleteSyntaxErrorExpression) {
     auto del = execSync(*executor_, "MATCH (n) DELETE 1 + 1");
     EXPECT_FALSE(del.error.empty());
 }
+
+// ==================== OPTIONAL MATCH Tests ====================
+
+TEST_F(QueryExecutorTest, OptionalMatchWithSomeMatches) {
+    // Person 1 has KNOWS edges to 2 and 3; persons 4 and 5 have no KNOWS edges.
+    insertTestVertices();
+    insertTestEdges();
+
+    auto result = execSync(*executor_, "MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.columns.size(), 3u);
+
+    // Person 1 should produce 2 rows (to 2 and 3).
+    // Persons 2, 3, 4, 5 should each produce 1 row with null r and b.
+    // Total = 2 + 4 = 6 rows.
+    ASSERT_EQ(result.rows.size(), 6u);
+
+    // Check that at least some rows have null b (no match)
+    int null_count = 0;
+    for (const auto& row : result.rows) {
+        if (row.size() >= 3 && isNull(row[2]))
+            null_count++;
+    }
+    EXPECT_EQ(null_count, 4);
+}
+
+TEST_F(QueryExecutorTest, OptionalMatchNoMatchesAllNull) {
+    // All 5 persons, no KNOWS edges at all → every optional match fails.
+    insertTestVertices();
+
+    auto result = execSync(*executor_, "MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+
+    // All rows should have null r and b
+    for (const auto& row : result.rows) {
+        ASSERT_GE(row.size(), 3u);
+        EXPECT_TRUE(isNull(row[1])) << "r should be null when no match";
+        EXPECT_TRUE(isNull(row[2])) << "b should be null when no match";
+    }
+}
+
+TEST_F(QueryExecutorTest, OptionalMatchWrongEdgeType) {
+    // Person 1 has LIVES_IN edges (not KNOWS). The OPTIONAL MATCH asks for KNOWS.
+    insertMixedEdges();
+
+    auto result = execSync(*executor_, "MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    // Person 1 has no KNOWS edges (only LIVES_IN), so b should be null
+    int null_count = 0;
+    for (const auto& row : result.rows) {
+        if (row.size() >= 3 && isNull(row[2]))
+            null_count++;
+    }
+    // Person 1 has KNOWS edges (to 2 and 3), so only 4 persons have null b
+    EXPECT_EQ(null_count, 4);
+}
+
+TEST_F(QueryExecutorTest, OptionalMatchWithReturnNulls) {
+    insertTestVertices();
+    insertTestEdges();
+
+    // Return only the optional variable to verify null handling in output
+    auto result = execSync(*executor_, "MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    // 2 matched rows with non-null b, 4 rows with null b
+    int non_null = 0, null_cnt = 0;
+    for (const auto& row : result.rows) {
+        if (isNull(row[0]))
+            null_cnt++;
+        else
+            non_null++;
+    }
+    EXPECT_EQ(non_null, 2);
+    EXPECT_EQ(null_cnt, 4);
+}
+
+TEST_F(QueryExecutorTest, OptionalMatchColumnTypeVerification) {
+    // Verify that r is an EdgeValue and b is a VertexValue in matched rows,
+    // not a misaligned column from the left or correlated source.
+    insertTestVertices();
+    insertTestEdges();
+
+    auto result = execSync(*executor_, "MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 6u);
+
+    for (const auto& row : result.rows) {
+        ASSERT_GE(row.size(), 3u);
+        // a is always a valid vertex
+        EXPECT_TRUE(std::holds_alternative<VertexValue>(row[0])) << "a should be VertexValue";
+
+        if (isNull(row[2])) {
+            // Unmatched row: r and b should both be null
+            EXPECT_TRUE(isNull(row[1])) << "r should be null when b is null";
+        } else {
+            // Matched row: r must be an EdgeValue, b must be a VertexValue
+            EXPECT_TRUE(std::holds_alternative<EdgeValue>(row[1]))
+                << "r should be EdgeValue in matched row, got type index " << row[1].index();
+            EXPECT_TRUE(std::holds_alternative<VertexValue>(row[2]))
+                << "b should be VertexValue in matched row, got type index " << row[2].index();
+        }
+    }
+}
+
+// Reproduce TCK scenario 106: WITH + UNWIND + CREATE edge
+// This scenario crashed the server under ASAN in CI.
+TEST_F(QueryExecutorTest, WithUnwindCreateEdge) {
+    // Step 1: CREATE (a) WITH a UNWIND [0] AS i CREATE (b) CREATE (a)<-[:T]-(b)
+    auto r1 = execSync(*executor_, "CREATE (a) WITH a UNWIND [0] AS i CREATE (b) CREATE (a)<-[:T]-(b)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+}

@@ -27,8 +27,9 @@ OptNodeType nodeTypeFromVariantIndex(size_t index) {
         OptNodeType::PathBuild,        // 17
         OptNodeType::VarLenExpand,     // 18
         OptNodeType::BinaryJoin,       // 19
-        OptNodeType::SemiJoin,         // 20
-        OptNodeType::Unwind            // 21
+        OptNodeType::LeftJoin,         // 20
+        OptNodeType::SemiJoin,         // 21
+        OptNodeType::Unwind            // 22
     };
     return mapping[index];
 }

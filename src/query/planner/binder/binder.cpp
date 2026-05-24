@@ -73,6 +73,17 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                         return std::nullopt;
                     }
 
+                    // OPTIONAL MATCH: create a LeftJoin
+                    if (ptr->optional) {
+                        if (!current) {
+                            error("OPTIONAL MATCH requires a preceding clause");
+                            return std::nullopt;
+                        }
+                        auto result = bindOptionalMatch(*ptr, std::move(*current));
+                        first_clause = false;
+                        return result;
+                    }
+
                     // Check if this MATCH needs CrossProduct: preceding context exists
                     // but the start variable is not in scope (independent scan after WITH).
                     bool needs_cross = false;
