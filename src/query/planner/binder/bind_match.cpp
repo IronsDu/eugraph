@@ -727,10 +727,15 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
 
         ctx_.restore(saved_ctx);
 
-        // Register new variables in outer scope (preserving their sub-scope column indices)
+        // Adjust column indices: sub-scope indices start from 0, but the
+        // LeftJoin physical output is [left_cols... | right_cols...], so
+        // right-side variables need an offset equal to the left column count.
+        uint32_t col_offset = ctx_.next_column_index;
         for (auto& [name, info] : new_vars) {
+            info.column_index += col_offset;
             ctx_.symbols[name] = std::move(info);
         }
+        ctx_.next_column_index = col_offset + static_cast<uint32_t>(new_vars.size());
 
         auto left_join = std::make_unique<BoundLeftJoinOp>();
         left_join->left = std::move(current);
@@ -755,10 +760,13 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
 
         ctx_.restore(saved_ctx);
 
-        // Register new variables in outer scope
+        // Adjust column indices (same as correlated case)
+        uint32_t col_offset = ctx_.next_column_index;
         for (auto& [name, info] : new_vars) {
+            info.column_index += col_offset;
             ctx_.symbols[name] = std::move(info);
         }
+        ctx_.next_column_index = col_offset + static_cast<uint32_t>(new_vars.size());
 
         auto left_join = std::make_unique<BoundLeftJoinOp>();
         left_join->left = std::move(current);

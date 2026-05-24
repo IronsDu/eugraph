@@ -4034,3 +4034,31 @@ TEST_F(QueryExecutorTest, OptionalMatchWithReturnNulls) {
     EXPECT_EQ(non_null, 2);
     EXPECT_EQ(null_cnt, 4);
 }
+
+TEST_F(QueryExecutorTest, OptionalMatchColumnTypeVerification) {
+    // Verify that r is an EdgeValue and b is a VertexValue in matched rows,
+    // not a misaligned column from the left or correlated source.
+    insertTestVertices();
+    insertTestEdges();
+
+    auto result = execSync(*executor_, "MATCH (a:Person) OPTIONAL MATCH (a)-[r:KNOWS]->(b) RETURN a, r, b");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 6u);
+
+    for (const auto& row : result.rows) {
+        ASSERT_GE(row.size(), 3u);
+        // a is always a valid vertex
+        EXPECT_TRUE(std::holds_alternative<VertexValue>(row[0])) << "a should be VertexValue";
+
+        if (isNull(row[2])) {
+            // Unmatched row: r and b should both be null
+            EXPECT_TRUE(isNull(row[1])) << "r should be null when b is null";
+        } else {
+            // Matched row: r must be an EdgeValue, b must be a VertexValue
+            EXPECT_TRUE(std::holds_alternative<EdgeValue>(row[1]))
+                << "r should be EdgeValue in matched row, got type index " << row[1].index();
+            EXPECT_TRUE(std::holds_alternative<VertexValue>(row[2]))
+                << "b should be VertexValue in matched row, got type index " << row[2].index();
+        }
+    }
+}
