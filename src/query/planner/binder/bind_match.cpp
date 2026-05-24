@@ -1,6 +1,7 @@
 #include "query/planner/binder.hpp"
 
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 #include <algorithm>
@@ -660,6 +661,110 @@ std::optional<BoundLogicalOperator> Binder::bindExistsAsSemiJoin(const cypher::E
     semi_join->correlation = std::move(correlation);
     semi_join->anti = anti;
     return semi_join;
+}
+
+// ==================== OPTIONAL MATCH Binding ====================
+
+std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::MatchClause& match,
+                                                              BoundLogicalOperator current) {
+    if (match.patterns.empty()) {
+        error("OPTIONAL MATCH clause has no patterns");
+        return std::nullopt;
+    }
+
+    const auto& first_node = match.patterns[0].element.node;
+
+    // Determine if the OPTIONAL MATCH is correlated (reuses a variable from current scope)
+    bool correlated = false;
+    std::string corr_var_name;
+    const ColumnInfo* outer_col = nullptr;
+
+    if (first_node.variable) {
+        outer_col = ctx_.lookup(*first_node.variable);
+        if (outer_col) {
+            correlated = true;
+            corr_var_name = *first_node.variable;
+        }
+    }
+
+    if (correlated) {
+        // ── Correlated OPTIONAL MATCH ──
+        // Similar to bindExistsSubPlan: create a CorrelatedSource sub-plan
+        uint32_t outer_idx = outer_col->column_index;
+        ColumnInfo saved_outer_info = *outer_col;
+
+        auto saved_ctx = ctx_.save();
+        ctx_.beginSubScope();
+
+        // Register correlated variable in sub-scope
+        ColumnInfo sub_info = saved_outer_info;
+        sub_info.column_index = nextColumnIndex();
+        uint32_t sub_idx = sub_info.column_index;
+        ctx_.symbols[corr_var_name] = sub_info;
+
+        std::vector<std::pair<uint32_t, uint32_t>> correlation;
+        correlation.emplace_back(outer_idx, sub_idx);
+
+        // Create CorrelatedSource leaf
+        BoundCorrelatedSourceOp source;
+        source.variables.push_back(corr_var_name);
+        source.types.push_back(sub_info.type);
+        source.column_indices.push_back(sub_idx);
+
+        // Bind the MATCH pattern in the sub-scope
+        BoundLogicalOperator parent_op = std::move(source);
+        auto sub_plan = bindMatch(match, std::move(parent_op), /*skip_where=*/false);
+        if (!sub_plan)
+            return std::nullopt;
+
+        // Collect new variables from sub-scope before restoring
+        std::vector<std::pair<std::string, ColumnInfo>> new_vars;
+        for (const auto& [name, info] : ctx_.symbols) {
+            if (name != corr_var_name) {
+                new_vars.emplace_back(name, info);
+            }
+        }
+
+        ctx_.restore(saved_ctx);
+
+        // Register new variables in outer scope (preserving their sub-scope column indices)
+        for (auto& [name, info] : new_vars) {
+            ctx_.symbols[name] = std::move(info);
+        }
+
+        auto left_join = std::make_unique<BoundLeftJoinOp>();
+        left_join->left = std::move(current);
+        left_join->right = std::move(*sub_plan);
+        left_join->correlation = std::move(correlation);
+        return left_join;
+    } else {
+        // ── Independent (non-correlated) OPTIONAL MATCH ──
+        // Bind the pattern as an independent sub-plan, then left-join
+        auto saved_ctx = ctx_.save();
+        ctx_.beginSubScope();
+
+        auto sub_plan = bindMatch(match, std::nullopt, /*skip_where=*/false);
+        if (!sub_plan)
+            return std::nullopt;
+
+        // Collect new variables from sub-scope
+        std::vector<std::pair<std::string, ColumnInfo>> new_vars;
+        for (const auto& [name, info] : ctx_.symbols) {
+            new_vars.emplace_back(name, info);
+        }
+
+        ctx_.restore(saved_ctx);
+
+        // Register new variables in outer scope
+        for (auto& [name, info] : new_vars) {
+            ctx_.symbols[name] = std::move(info);
+        }
+
+        auto left_join = std::make_unique<BoundLeftJoinOp>();
+        left_join->left = std::move(current);
+        left_join->right = std::move(*sub_plan);
+        return left_join;
+    }
 }
 
 } // namespace binder

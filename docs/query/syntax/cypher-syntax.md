@@ -43,7 +43,7 @@ MATCH (a)-[:KNOWS*1..5]-(b)                -- 无向变长
 **限制**：
 - 仅支持单个 MATCH 子句（多 MATCH 不支持）
 - 仅支持单个 pattern part（逗号分隔的多个模式不支持）
-- OPTIONAL MATCH 仅解析，执行按普通 MATCH 处理
+- OPTIONAL MATCH 已支持：匹配失败时右侧变量为 NULL（左连接语义）
 
 ### WHERE — 过滤
 

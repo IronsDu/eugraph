@@ -526,7 +526,7 @@ using Schema = vector<string>;   // 列名列表
 ### 待实现
 
 - MERGE 执行
-- Inner/Left Join（`BoundBinaryJoinOp` 已预留 `JoinType::Inner/Left`）
+- Inner/Left Join（`BoundBinaryJoinOp` 已预留 `JoinType::Inner/Left`）— ~~Left Join~~ 已通过 `BoundLeftJoinOp` + `LeftJoinPhysicalOp` 实现 OPTIONAL MATCH
 - 列表拼接 `+` 的 LIST_CONCAT 绑定
 - `RETURN *` 变量展开
 - DDL 异步执行（DdlWorker 后台线程）

@@ -27,7 +27,7 @@
 量词表达式已完整实现（解析器、Binder、求值器），TCK 中不再跳过。
 
 - **之前**: 532 个场景被 AST 跳过
-- **现在**: 28 个通过，504 个失败（失败原因：结合了其他未实现的语法如 IN、CASE、OPTIONAL MATCH 等）
+- **现在**: 28 个通过，504 个失败（失败原因：结合了其他未实现的语法如 CASE、EXISTS 子查询等）
 
 ### 通过的量词场景类型
 
@@ -36,8 +36,7 @@
 
 ### 仍失败的量词场景原因
 
-- 与 OPTIONAL MATCH 结合
-- 与 EXISTS 子查询结合
+- 与 EXISTS 子查询结合（部分场景 EXISTS 已实现但结果断言仍失败）
 - 使用了未定义的 TCK 步骤（如参数化查询）
 - 与未实现的表达式结合（STARTS WITH、ENDS WITH 等）
 
@@ -54,7 +53,7 @@
 | UNWIND | 191 | ~~P1~~ 已实现 | 展开列表为行（缺少 range()/collect() 等依赖函数的场景仍失败） |
 | MERGE | 72 | P1 | 合并创建，需要条件扫描+创建逻辑 |
 | DELETE / DETACH DELETE | 41 | ~~P1~~ 已实现 | 删除顶点/边，支持 DETACH 级联删除 |
-| OPTIONAL MATCH | 78 | P1 | 可选匹配，需要 outer join 语义 |
+| OPTIONAL MATCH | 78 | ~~P1~~ 已实现 | 可选匹配，左连接语义（`BoundLeftJoinOp` + `LeftJoinPhysicalOp`） |
 | REMOVE | 30 | P2 | 删除属性/标签 |
 | CALL | 2 | P3 | 存储过程调用 |
 | standalone CALL | 1 | P3 | 顶层 CALL |
@@ -70,7 +69,7 @@
 | STARTS WITH | 11 | ~~P2~~ 已实现 | 字符串前缀匹配 |
 | ENDS WITH | 8 | ~~P2~~ 已实现 | 字符串后缀匹配 |
 | CONTAINS | 8 | ~~P2~~ 已实现 | 字符串包含 |
-| EXISTS 子查询 | 10 | P2 | 存在性子查询 |
+| EXISTS 子查询 | 10 | ~~P2~~ 已实现 | 存在性子查询（SemiJoin + AntiSemiJoin） |
 | 模式推导 (Pattern comprehension) | 15 | P3 | `[x IN ... \| ...]` |
 
 ### 1.3 不支持的语法模式
@@ -229,7 +228,7 @@
 
 | 优先级 | 分类 | 影响场景数 | 修复路径 |
 |--------|------|-----------|---------|
-| **P1** | 分类1: MERGE/DELETE/UNWIND/OPTIONAL | ~421 | 逐个实现子句 |
+| **P1** | 分类1: MERGE（DELETE/UNWIND/OPTIONAL 已实现） | ~72 | MERGE 子句实现 |
 | **P2** | 分类2: 缺失步骤定义 | 162→74 | 补实现步骤（已实现 control query、list order、at any time） |
 | **P2** | 分类4: 结果不匹配 | ~994 | 逐一分析 |
 | **P2** | 分类3: NothingToReturn 级联错误 | ~1200 | 修复前置绑定问题 |
@@ -256,9 +255,9 @@
 
 | 序号 | 需求 | 优先级 | 影响场景 | 难度 | 说明 |
 |------|------|--------|---------|------|------|
-| 1 | **MapValue + properties()/keys()** | P2 | ~40+ | 中 | 类型系统扩展，解锁函数生态 |
+| 1 | ~~**MapValue + properties()/keys()**~~ | ~~P2~~ | ~40+ | 中 | ✅ 已实现 |
 | 2 | ~~**DELETE / DETACH DELETE**~~ | ~~P1~~ | 41 | 低 | ✅ 已实现（独立写操作，DETACH 级联删除邻边） |
-| 3 | **OPTIONAL MATCH** | P1 | 78+ | 高 | outer join 语义，级联收益最大 |
+| 3 | ~~**OPTIONAL MATCH**~~ | ~~P1~~ | 78+ | 高 | ✅ 已实现（`BoundLeftJoinOp` + `LeftJoinPhysicalOp`，左连接语义） |
 | 4 | **EXISTS 子查询** | P2 | 10+ | 中 | 解锁量词结合场景 |
 | 5 | **UndefinedVariable 根因分析** | P2 | ~210 | 中 | 批量减少级联 NothingToReturn |
 | 6 | **TypeMismatch 修复** | P2 | ~70 | 低 | 隐式类型转换/类型检查完善 |

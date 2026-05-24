@@ -199,6 +199,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/index_scan_physical_op.cpp
     src/query/physical_plan/operator/label_scan_physical_op.cpp
     src/query/physical_plan/operator/limit_physical_op.cpp
+    src/query/physical_plan/operator/left_join_physical_op.cpp
     src/query/physical_plan/operator/varlen_expand_physical_op.cpp
     src/query/physical_plan/operator/path_build_physical_op.cpp
     src/query/physical_plan/operator/project_physical_op.cpp

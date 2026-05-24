@@ -4,6 +4,7 @@
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/delete_physical_op.hpp"
+#include "query/physical_plan/operator/left_join_physical_op.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
 #include "query/physical_plan/operator/unwind_physical_op.hpp"
@@ -913,6 +914,53 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                                                        std::move(left_corr_cols), v.anti);
                     return PlanOperatorResult{std::move(result), std::move(lr.output_schema),
                                               std::move(lr.output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundLeftJoinOp>) {
+                    auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(left_result))
+                        return std::get<std::string>(left_result);
+                    auto lr = extractChildResult(std::move(left_result));
+
+                    Schema right_input_schema;
+                    std::vector<binder::BoundType> right_input_types;
+                    auto right_result =
+                        planBoundOperator(v.right, store, meta, ctx, right_input_schema, right_input_types);
+                    if (std::holds_alternative<std::string>(right_result))
+                        return std::get<std::string>(right_result);
+                    auto rr = extractChildResult(std::move(right_result));
+
+                    Schema output_schema = lr.output_schema;
+                    output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
+                    auto output_types = lr.output_types;
+                    output_types.insert(output_types.end(), rr.output_types.begin(), rr.output_types.end());
+
+                    // Find CorrelatedSourcePhysicalOp in right sub-plan (if correlated)
+                    CorrelatedSourcePhysicalOp* correlated = nullptr;
+                    if (!v.correlation.empty()) {
+                        std::function<CorrelatedSourcePhysicalOp*(PhysicalOperator*)> findCorrelatedSource =
+                            [&](PhysicalOperator* node) -> CorrelatedSourcePhysicalOp* {
+                            if (auto* cs = dynamic_cast<CorrelatedSourcePhysicalOp*>(node))
+                                return cs;
+                            for (auto* child : node->children()) {
+                                if (auto* cs = findCorrelatedSource(const_cast<PhysicalOperator*>(child)))
+                                    return cs;
+                            }
+                            return nullptr;
+                        };
+                        correlated = findCorrelatedSource(rr.op.get());
+                        if (!correlated)
+                            return std::string("LeftJoin: CorrelatedSourcePhysicalOp not found in right sub-plan");
+                    }
+
+                    std::vector<uint32_t> left_corr_cols;
+                    left_corr_cols.reserve(v.correlation.size());
+                    for (const auto& [left_col, _] : v.correlation) {
+                        left_corr_cols.push_back(left_col);
+                    }
+
+                    auto result =
+                        std::make_unique<LeftJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), correlated,
+                                                             std::move(left_corr_cols), std::move(rr.output_types));
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else {
                     return std::string("Unknown bound logical operator type");
                 }
