@@ -4062,3 +4062,11 @@ TEST_F(QueryExecutorTest, OptionalMatchColumnTypeVerification) {
         }
     }
 }
+
+// Reproduce TCK scenario 106: WITH + UNWIND + CREATE edge
+// This scenario crashed the server under ASAN in CI.
+TEST_F(QueryExecutorTest, WithUnwindCreateEdge) {
+    // Step 1: CREATE (a) WITH a UNWIND [0] AS i CREATE (b) CREATE (a)<-[:T]-(b)
+    auto r1 = execSync(*executor_, "CREATE (a) WITH a UNWIND [0] AS i CREATE (b) CREATE (a)<-[:T]-(b)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+}
