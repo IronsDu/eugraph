@@ -70,7 +70,7 @@ def stop_server(pid: int) -> int:
                 if os.WIFEXITED(status):
                     print(f"[run_tck] Server exited with code {os.WEXITSTATUS(status)}",
                           file=sys.stderr)
-                    return os.WEXITEXITSTATUS(status)
+                    return os.WEXITSTATUS(status)
                 elif os.WIFSIGNALED(status):
                     sig = os.WTERMSIG(status)
                     if sig == signal.SIGTERM:
