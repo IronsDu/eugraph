@@ -65,6 +65,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             VertexId dst_id;
             EdgeId edge_id;
             EdgeLabelId edge_label_id;
+            uint64_t seq;
         };
         std::vector<EdgeEntry> edges;
 
@@ -85,7 +86,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
                 while (auto edge_batch = co_await edge_gen.next()) {
                     for (const auto& entry : *edge_batch) {
-                        edges.push_back({src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id});
+                        edges.push_back({src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq});
                     }
                 }
             }
@@ -156,6 +157,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 ev.src_id = INVALID_VERTEX_ID; // will be filled below
                 ev.dst_id = edges[i].dst_id;
                 ev.label_id = edges[i].edge_label_id;
+                ev.seq = edges[i].seq;
 
                 // Determine src_id
                 VertexId sid = INVALID_VERTEX_ID;

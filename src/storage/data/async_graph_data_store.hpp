@@ -586,6 +586,23 @@ public:
         }
     }
 
+    // ==================== Delete Operations ====================
+
+    folly::coro::Task<bool> deleteVertex(VertexId vid) override {
+        auto txn = txn_;
+        auto ok = co_await io_.dispatch([this, txn, vid]() { return store_.deleteVertex(txn, vid); });
+        co_return ok;
+    }
+
+    folly::coro::Task<bool> deleteEdge(EdgeId eid, EdgeLabelId label_id, VertexId src_id, VertexId dst_id,
+                                       uint64_t seq) override {
+        auto txn = txn_;
+        auto ok = co_await io_.dispatch([this, txn, eid, label_id, src_id, dst_id, seq]() {
+            return store_.deleteEdge(txn, eid, label_id, src_id, dst_id, seq);
+        });
+        co_return ok;
+    }
+
     // ==================== Batch Write ====================
 
     folly::coro::Task<void> batchInsertVertices(LabelId label_id, std::vector<BatchVertexEntry> entries) override {

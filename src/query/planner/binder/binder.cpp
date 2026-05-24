@@ -135,6 +135,12 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                         return std::nullopt;
                     }
                     return bindRemove(*ptr, std::move(*current));
+                } else if constexpr (std::is_same_v<Elem, cypher::DeleteClause>) {
+                    if (!current) {
+                        error("DELETE without preceding clause");
+                        return std::nullopt;
+                    }
+                    return bindDelete(*ptr, std::move(*current));
                 } else if constexpr (std::is_same_v<Elem, cypher::UnwindClause>) {
                     return bindUnwind(*ptr, std::move(current));
                 } else {

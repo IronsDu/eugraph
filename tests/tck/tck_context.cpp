@@ -197,13 +197,6 @@ bool hasUnsupportedClause(const ast::Clause& clause) {
                         return true;
                 }
                 return false;
-            } else if constexpr (std::is_same_v<Inner, ast::DeleteClause>) {
-                if (ptr->detach) {
-                    spdlog::info("[TCK] skipping: DETACH DELETE");
-                } else {
-                    spdlog::info("[TCK] skipping: DELETE");
-                }
-                return true;
             } else if constexpr (std::is_same_v<Inner, ast::MergeClause>) {
                 spdlog::info("[TCK] skipping: MERGE");
                 return true;

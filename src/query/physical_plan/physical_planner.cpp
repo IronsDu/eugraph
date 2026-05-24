@@ -3,6 +3,7 @@
 #include "query/physical_plan/operator/alter_vertex_label_physical_op.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
+#include "query/physical_plan/operator/delete_physical_op.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
 #include "query/physical_plan/operator/unwind_physical_op.hpp"
@@ -807,6 +808,26 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result =
                         std::make_unique<RemovePhysicalOp>(std::move(items), cr.output_schema, store, ctx.label_defs,
                                                            ctx.label_name_to_id, std::move(cr.op));
+                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
+                                              std::move(cr.output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundDeleteOp>) {
+                    auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = extractChildResult(std::move(child_result));
+
+                    std::vector<DeletePhysicalOp::DeleteTarget> targets;
+                    for (auto& dt : v.targets) {
+                        DeletePhysicalOp::DeleteTarget target;
+                        target.kind = (dt.kind == binder::BoundDeleteOp::TargetKind::VERTEX)
+                                          ? DeletePhysicalOp::TargetKind::VERTEX
+                                          : DeletePhysicalOp::TargetKind::EDGE;
+                        target.var_name = dt.variable_name;
+                        targets.push_back(std::move(target));
+                    }
+
+                    auto result = std::make_unique<DeletePhysicalOp>(std::move(targets), v.detach, cr.output_schema,
+                                                                     store, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundUnwindOp>) {

@@ -28,6 +28,7 @@ struct EdgeValue {
     VertexId src_id = INVALID_VERTEX_ID;
     VertexId dst_id = INVALID_VERTEX_ID;
     EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
+    uint64_t seq = 0;
     std::optional<Properties> properties;
     bool operator==(const EdgeValue& o) const {
         return id == o.id;

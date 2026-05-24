@@ -53,7 +53,7 @@
 |------|---------|--------|------|
 | UNWIND | 191 | ~~P1~~ 已实现 | 展开列表为行（缺少 range()/collect() 等依赖函数的场景仍失败） |
 | MERGE | 72 | P1 | 合并创建，需要条件扫描+创建逻辑 |
-| DELETE / DETACH DELETE | 41 | P1 | 删除顶点/边 |
+| DELETE / DETACH DELETE | 41 | ~~P1~~ 已实现 | 删除顶点/边，支持 DETACH 级联删除 |
 | OPTIONAL MATCH | 78 | P1 | 可选匹配，需要 outer join 语义 |
 | REMOVE | 30 | P2 | 删除属性/标签 |
 | CALL | 2 | P3 | 存储过程调用 |
@@ -220,6 +220,7 @@
 | 步骤: `ignoring element order for lists` | undefined | 已实现 | ✅ 含行有序/无序两种变体 |
 | 步骤: `at any time` 错误匹配 | undefined | 已实现 | ✅ 支持 `*` 通配 detail |
 | 分类: 参数化查询 ($param) | 64 undefined | 待验证 | ✅ 已实现（Thrift RPC 传参 + Binder 替换为 BoundLiteral） |
+| 分类: DELETE / DETACH DELETE | 41 跳过 | 待验证 | ✅ 已实现（storage API + BoundDeleteOp + DeletePhysicalOp） |
 | 分类: trim/ltrim/rtrim/split/replace/substring/left/right/coalesce | UnknownFunction | 已实现 | ✅ `scalar/string_functions.hpp` + `scalar/coalesce_function.hpp` |
 
 ---
@@ -256,7 +257,7 @@
 | 序号 | 需求 | 优先级 | 影响场景 | 难度 | 说明 |
 |------|------|--------|---------|------|------|
 | 1 | **MapValue + properties()/keys()** | P2 | ~40+ | 中 | 类型系统扩展，解锁函数生态 |
-| 2 | **DELETE / DETACH DELETE** | P1 | 41 | 低 | 独立写操作，逻辑简单 |
+| 2 | ~~**DELETE / DETACH DELETE**~~ | ~~P1~~ | 41 | 低 | ✅ 已实现（独立写操作，DETACH 级联删除邻边） |
 | 3 | **OPTIONAL MATCH** | P1 | 78+ | 高 | outer join 语义，级联收益最大 |
 | 4 | **EXISTS 子查询** | P2 | 10+ | 中 | 解锁量词结合场景 |
 | 5 | **UndefinedVariable 根因分析** | P2 | ~210 | 中 | 批量减少级联 NothingToReturn |

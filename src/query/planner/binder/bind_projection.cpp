@@ -100,6 +100,8 @@ void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
                     applyProjectionPushdown(v.child);
                 } else if constexpr (std::is_same_v<Elem, BoundRemoveOp>) {
                     applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundDeleteOp>) {
+                    applyProjectionPushdown(v.child);
                 } else if constexpr (std::is_same_v<Elem, BoundPathBuildOp>) {
                     applyProjectionPushdown(v.child);
                 } else if constexpr (std::is_same_v<Elem, BoundBinaryJoinOp>) {

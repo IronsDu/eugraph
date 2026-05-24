@@ -8,6 +8,7 @@
 #include "query/planner/logical_plan/operator/bound_correlated_source_op.hpp"
 #include "query/planner/logical_plan/operator/bound_create_edge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_create_node_op.hpp"
+#include "query/planner/logical_plan/operator/bound_delete_op.hpp"
 #include "query/planner/logical_plan/operator/bound_distinct_op.hpp"
 #include "query/planner/logical_plan/operator/bound_expand_op.hpp"
 #include "query/planner/logical_plan/operator/bound_filter_op.hpp"

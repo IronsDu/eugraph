@@ -23,11 +23,12 @@ OptNodeType nodeTypeFromVariantIndex(size_t index) {
         OptNodeType::CreateEdge,       // 13
         OptNodeType::Set,              // 14
         OptNodeType::Remove,           // 15
-        OptNodeType::PathBuild,        // 16
-        OptNodeType::VarLenExpand,     // 17
-        OptNodeType::BinaryJoin,       // 18
-        OptNodeType::SemiJoin,         // 19
-        OptNodeType::Unwind            // 20
+        OptNodeType::Delete,           // 16
+        OptNodeType::PathBuild,        // 17
+        OptNodeType::VarLenExpand,     // 18
+        OptNodeType::BinaryJoin,       // 19
+        OptNodeType::SemiJoin,         // 20
+        OptNodeType::Unwind            // 21
     };
     return mapping[index];
 }
