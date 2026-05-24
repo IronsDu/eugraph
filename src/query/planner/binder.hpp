@@ -75,6 +75,7 @@ private:
                                                    std::optional<BoundLogicalOperator> child);
     std::optional<BoundLogicalOperator> bindSet(const cypher::SetClause& set, BoundLogicalOperator child);
     std::optional<BoundLogicalOperator> bindRemove(const cypher::RemoveClause& rem, BoundLogicalOperator child);
+    std::optional<BoundLogicalOperator> bindDelete(const cypher::DeleteClause& del, BoundLogicalOperator child);
     std::optional<BoundLogicalOperator> bindUnwind(const cypher::UnwindClause& unwind,
                                                    std::optional<BoundLogicalOperator> child);
 

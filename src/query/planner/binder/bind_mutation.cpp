@@ -270,6 +270,62 @@ std::optional<BoundLogicalOperator> Binder::bindRemove(const cypher::RemoveClaus
     return rem_op;
 }
 
+// ==================== DELETE Binding ====================
+
+std::optional<BoundLogicalOperator> Binder::bindDelete(const cypher::DeleteClause& del, BoundLogicalOperator child) {
+    auto del_op = std::make_unique<BoundDeleteOp>();
+    del_op->detach = del.detach;
+
+    for (const auto& expr : del.expressions) {
+        BoundDeleteOp::DeleteTarget target;
+
+        // Resolve expression to variable: only simple variables are valid DELETE targets
+        std::string var_name;
+        std::visit(
+            [&](const auto& ptr) {
+                using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+                if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                    var_name = ptr->name;
+                }
+            },
+            expr);
+
+        if (var_name.empty()) {
+            error("DELETE requires variable references, not expressions");
+            continue;
+        }
+
+        // Validate the variable exists and determine its type
+        auto* col = ctx_.lookup(var_name);
+        if (!col) {
+            error("DELETE: variable '" + var_name + "' not defined");
+            continue;
+        }
+
+        switch (col->type.kind) {
+        case BoundTypeKind::VERTEX:
+            target.kind = BoundDeleteOp::TargetKind::VERTEX;
+            break;
+        case BoundTypeKind::EDGE:
+            target.kind = BoundDeleteOp::TargetKind::EDGE;
+            break;
+        default:
+            error("DELETE: variable '" + var_name + "' is not a vertex or edge");
+            continue;
+        }
+
+        target.variable_name = var_name;
+        del_op->targets.push_back(std::move(target));
+    }
+
+    if (del_op->targets.empty()) {
+        return std::nullopt;
+    }
+
+    del_op->child = std::move(child);
+    return del_op;
+}
+
 // ==================== UNWIND Binding ====================
 
 std::optional<BoundLogicalOperator> Binder::bindUnwind(const cypher::UnwindClause& unwind,

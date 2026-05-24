@@ -80,6 +80,8 @@ bool ColumnResolver::resolveOperator(BoundLogicalOperator& op, const BindContext
                 return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundRemoveOp>>) {
                 return resolveOperator(val->child, ctx, errors);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundDeleteOp>>) {
+                return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundPathBuildOp>>) {
                 return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryJoinOp>>) {

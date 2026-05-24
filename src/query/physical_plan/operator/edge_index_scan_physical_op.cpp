@@ -87,6 +87,7 @@ folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
                 ev.src_id = entry.src_id;
                 ev.dst_id = entry.dst_id;
                 ev.label_id = entry.label_id;
+                ev.seq = entry.seq;
                 values.push_back(Value(std::move(ev)));
             }
             chunk.appendRow(values);

@@ -78,6 +78,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
             bool has_incoming;
             EdgeId incoming_edge_id = INVALID_EDGE_ID;
             EdgeLabelId incoming_edge_label_id = INVALID_EDGE_LABEL_ID;
+            uint64_t incoming_edge_seq = 0;
         };
 
         for (size_t src_row = 0; src_row < rows.size(); ++src_row) {
@@ -191,6 +192,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                             ev.src_id = stack[si - 1].vertex;
                             ev.dst_id = stack[si].vertex;
                             ev.label_id = stack[si].incoming_edge_label_id;
+                            ev.seq = stack[si].incoming_edge_seq;
                             pv.elements.push_back(ValueStorage{Value(std::move(ev))});
                             VertexValue vv;
                             vv.id = stack[si].vertex;
@@ -202,6 +204,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                         ev.src_id = frame.vertex;
                         ev.dst_id = edge.neighbor_id;
                         ev.label_id = edge.edge_label_id;
+                        ev.seq = edge.seq;
                         pv.elements.push_back(ValueStorage{Value(std::move(ev))});
                         VertexValue dst_vv;
                         dst_vv.id = edge.neighbor_id;
@@ -217,6 +220,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                             ev.src_id = stack[si - 1].vertex;
                             ev.dst_id = stack[si].vertex;
                             ev.label_id = stack[si].incoming_edge_label_id;
+                            ev.seq = stack[si].incoming_edge_seq;
                             lv.elements.push_back(ValueStorage{Value(std::move(ev))});
                         }
                         EdgeValue ev;
@@ -224,6 +228,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                         ev.src_id = frame.vertex;
                         ev.dst_id = edge.neighbor_id;
                         ev.label_id = edge.edge_label_id;
+                        ev.seq = edge.seq;
                         lv.elements.push_back(ValueStorage{Value(std::move(ev))});
                         entry.edge_list = std::move(lv);
                     }
@@ -327,7 +332,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                     }
 
                     stack.push_back({edge.neighbor_id, next_depth, std::move(next_edges), 0, edge_key, true,
-                                     edge.edge_id, edge.edge_label_id});
+                                     edge.edge_id, edge.edge_label_id, edge.seq});
                 }
             }
         }

@@ -308,6 +308,7 @@ struct SelectionVector {
 | `BoundCreateEdgeOp` | `bound_create_edge_op.hpp` | 创建边。`label_id` 和 `label_name` 均为 `optional`（边类型可能不存在，binder 不修改数据库，仅标记）。`pending_props` 记录尚未解析的属性名→表达式映射，留给物理算子执行时按名解析。 | — |
 | `BoundSetOp` | `bound_set_op.hpp` | 设置属性/标签 | 嵌入 `BoundLogicalOperator child` |
 | `BoundRemoveOp` | `bound_remove_op.hpp` | 移除属性/标签 | 嵌入 `BoundLogicalOperator child` |
+| `BoundDeleteOp` | `bound_delete_op.hpp` | 删除顶点/边（DETACH 可选） | 嵌入 `BoundLogicalOperator child` |
 | `BoundPathBuildOp` | `bound_path_build_op.hpp` | 组装路径变量 | 嵌入 `BoundLogicalOperator child` |
 | `BoundUnwindOp` | `bound_unwind_op.hpp` | 列表展开为行（UNWIND） | 嵌入 `BoundLogicalOperator child` |
 | `BoundBinaryJoinOp` | `bound_binary_join_op.hpp` | 二元 Join（Cross/Inner/Left） | 嵌入 `BoundLogicalOperator left` + `right` |
@@ -345,6 +346,7 @@ struct SelectionVector {
 | `CREATE (a)-[r:TYPE]->(b)` | `CreateEdgeOp` |
 | `SET n:Label` / `SET n.prop = val` | `SetOp` |
 | `REMOVE n:Label` / `REMOVE n.prop` | `RemoveOp` |
+| `DELETE n` / `DETACH DELETE n` | `DeleteOp` |
 | `UNWIND expr AS var` | `UnwindOp` |
 
 ---
@@ -385,6 +387,7 @@ class PhysicalOperator {
 | `AlterEdgeLabelPhysicalOp` | `IAsyncGraphMetaStore&`, 标签名, 新属性名列表, 共享的 `defs` 映射 | 运行时为已有边类型添加缺失的属性列 → 重载定义 → 透传子算子输出 |
 | `SetPhysicalOp` | `IAsyncGraphDataStore&`, items | child 原样 yield |
 | `RemovePhysicalOp` | `IAsyncGraphDataStore&`, items | child 原样 yield |
+| `DeletePhysicalOp` | `IAsyncGraphDataStore&`, targets, detach | child 原样 yield，detach 时先扫描并删除邻边 |
 | `PathBuildPhysicalOp` | 路径变量名, 元素列名列表 | 复制 child 列 + 新建 PATH FLAT 列 |
 | `CrossProductPhysicalOp` | 左/右 child PhysicalOperator, 左/右 Schema | 嵌套循环笛卡尔积：左输入 DICTIONARY + 右输入 DICTIONARY |
 
@@ -522,7 +525,7 @@ using Schema = vector<string>;   // 列名列表
 
 ### 待实现
 
-- DELETE, MERGE 执行
+- MERGE 执行
 - Inner/Left Join（`BoundBinaryJoinOp` 已预留 `JoinType::Inner/Left`）
 - 列表拼接 `+` 的 LIST_CONCAT 绑定
 - `RETURN *` 变量展开

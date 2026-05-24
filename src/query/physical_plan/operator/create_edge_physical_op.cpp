@@ -135,6 +135,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
         ev.src_id = src_id_;
         ev.dst_id = dst_id_;
         ev.label_id = effective_label_id;
+        ev.seq = 0;
 
         DataChunk output;
         output.columns.push_back(Column::flat(binder::BoundTypeKind::EDGE, 1));
