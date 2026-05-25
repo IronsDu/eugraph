@@ -28,6 +28,9 @@ class IAsyncGraphMetaStore {
     virtual folly::coro::Task<optional<LabelDef>> getLabelDefById(id) = 0;
     virtual folly::coro::Task<vector<LabelDef>> listLabels() = 0;
 
+    // __anon__ 轻量属性分配
+    virtual folly::coro::Task<uint16_t> getOrCreateAnonPropId(prop_name, prop_type) = 0;
+
     // EdgeLabel 管理
     virtual folly::coro::Task<EdgeLabelId> createEdgeLabel(name, properties) = 0;
     virtual folly::coro::Task<bool> addEdgeLabelProperties(name, prop_names) = 0;
@@ -132,6 +135,19 @@ M|next_ids              → {next_vertex_id:u64}{next_edge_id:u64}{next_label_id
 ### ID 分配
 
 `nextVertexId()`/`nextEdgeId()` 每次分配一个 ID 并持久化 `M|next_ids`。`nextVertexIdRange(n)`/`nextEdgeIdRange(n)` 批量分配 N 个连续 ID 并一次持久化，用于 loader 批量导入。
+
+### getOrCreateAnonPropId（`__anon__` 轻量属性分配）
+
+用于 `__anon__` 标签的动态属性名 → prop_id 映射，替代重型 `AlterVertexLabelPhysicalOp` 路径：
+
+1. 锁 mutex，检查内存缓存 `anon_prop_cache_` → 命中直接返回
+2. 查找 `schema_.labels` 中 `__anon__` 的 `LabelDef`，搜索已有属性
+3. 若属性已存在 → 缓存并返回 `prop_id`
+4. 若为新属性：分配 `prop_id = properties.size()`，追加 `PropertyDef` 到 `LabelDef`
+5. 异步持久化到元数据（通过 `io_->dispatchVoid`，不阻塞 DML 事务）
+6. 缓存并返回 `prop_id`
+
+并发安全：`std::mutex anon_prop_mu_` + `std::unordered_map<string, uint16_t> anon_prop_cache_`。
 
 ### 索引管理
 

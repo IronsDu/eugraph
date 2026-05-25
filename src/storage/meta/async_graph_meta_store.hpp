@@ -5,8 +5,10 @@
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace eugraph {
@@ -29,6 +31,7 @@ public:
     folly::coro::Task<bool>
     addVertexLabelProperties(const std::string& name,
                              const std::vector<std::pair<std::string, PropertyType>>& prop_defs) override;
+    folly::coro::Task<uint16_t> getOrCreateAnonPropId(const std::string& prop_name, PropertyType prop_type) override;
     folly::coro::Task<std::optional<LabelId>> getLabelId(const std::string& name) override;
     folly::coro::Task<std::optional<std::string>> getLabelName(LabelId id) override;
     folly::coro::Task<std::optional<LabelDef>> getLabelDef(const std::string& name) override;
@@ -74,6 +77,10 @@ private:
     std::optional<std::reference_wrapper<ISyncGraphMetaStore>> store_;
     std::optional<std::reference_wrapper<IoScheduler>> io_;
     GraphSchema schema_;
+
+    // Lightweight __anon__ prop_id allocation
+    std::mutex anon_prop_mu_;
+    std::unordered_map<std::string, uint16_t> anon_prop_cache_;
 };
 
 } // namespace eugraph

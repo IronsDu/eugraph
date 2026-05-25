@@ -4,6 +4,15 @@
 #include "query/dataset/row.hpp"
 #include <spdlog/spdlog.h>
 
+namespace {
+
+bool isAnonLabel(const std::unordered_map<eugraph::LabelId, eugraph::LabelDef>& label_defs, eugraph::LabelId lid) {
+    auto it = label_defs.find(lid);
+    return it != label_defs.end() && it->second.name == eugraph::kAnonLabelName;
+}
+
+} // namespace
+
 namespace eugraph {
 namespace compute {
 
@@ -45,28 +54,54 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
     }
 
     // Resolve pending_props_ (by name) after DDL operators may have registered them
-    for (auto& [prop_name, expr] : pending_props_) {
-        for (size_t i = 0; i < label_props_.size(); ++i) {
-            auto lid = label_props_[i].first;
-            auto def_it = label_defs_.find(lid);
-            if (def_it == label_defs_.end())
-                continue;
-            for (const auto& pd : def_it->second.properties) {
-                if (pd.name == prop_name) {
-                    if (std::holds_alternative<binder::BoundLiteral>(expr)) {
-                        auto& lit = std::get<binder::BoundLiteral>(expr);
-                        if (!isNull(lit.value)) {
-                            auto& props = label_props_[i].second;
-                            if (props.size() <= pd.id)
-                                props.resize(pd.id + 1);
-                            props[pd.id] = valueToPropertyValue(lit.value);
-                        }
-                    }
-                    goto next_pending;
+    bool anon_mode = !label_props_.empty() && isAnonLabel(label_defs_, label_props_[0].first);
+
+    if (anon_mode) {
+        // __anon__ lightweight path: allocate prop_ids and write directly
+        LabelId anon_lid = label_props_[0].first;
+        for (auto& [prop_name, expr] : pending_props_) {
+            uint16_t pid = co_await meta_.getOrCreateAnonPropId(prop_name, PropertyType::ANY);
+            if (std::holds_alternative<binder::BoundLiteral>(expr)) {
+                auto& lit = std::get<binder::BoundLiteral>(expr);
+                if (!isNull(lit.value)) {
+                    auto& props = label_props_[0].second;
+                    if (props.size() <= pid)
+                        props.resize(pid + 1);
+                    props[pid] = valueToPropertyValue(lit.value);
                 }
             }
         }
-    next_pending:;
+        // Sync updated __anon__ LabelDef back to the shared label_defs_ map
+        // so that subsequent property evaluators can resolve dynamic properties
+        auto updated_def = co_await meta_.getLabelDefById(anon_lid);
+        if (updated_def) {
+            label_defs_[anon_lid] = std::move(*updated_def);
+        }
+    } else {
+        // Non-anon path: relies on AlterVertexLabelPhysicalOp having registered properties
+        for (auto& [prop_name, expr] : pending_props_) {
+            for (size_t i = 0; i < label_props_.size(); ++i) {
+                auto lid = label_props_[i].first;
+                auto def_it = label_defs_.find(lid);
+                if (def_it == label_defs_.end())
+                    continue;
+                for (const auto& pd : def_it->second.properties) {
+                    if (pd.name == prop_name) {
+                        if (std::holds_alternative<binder::BoundLiteral>(expr)) {
+                            auto& lit = std::get<binder::BoundLiteral>(expr);
+                            if (!isNull(lit.value)) {
+                                auto& props = label_props_[i].second;
+                                if (props.size() <= pd.id)
+                                    props.resize(pd.id + 1);
+                                props[pd.id] = valueToPropertyValue(lit.value);
+                            }
+                        }
+                        goto next_pending;
+                    }
+                }
+            }
+        next_pending:;
+        }
     }
 
     // Check unique constraints before inserting vertex

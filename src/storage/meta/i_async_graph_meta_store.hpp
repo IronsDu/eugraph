@@ -30,6 +30,11 @@ public:
     virtual folly::coro::Task<bool>
     addVertexLabelProperties(const std::string& name,
                              const std::vector<std::pair<std::string, PropertyType>>& prop_defs) = 0;
+
+    /// Lightweight prop_id allocation for __anon__ label.
+    /// Thread-safe: uses internal mutex + cache. First encounter of a new property name
+    /// allocates a new prop_id and persists asynchronously. Subsequent calls return cached id.
+    virtual folly::coro::Task<uint16_t> getOrCreateAnonPropId(const std::string& prop_name, PropertyType prop_type) = 0;
     virtual folly::coro::Task<std::optional<LabelId>> getLabelId(const std::string& name) = 0;
     virtual folly::coro::Task<std::optional<std::string>> getLabelName(LabelId id) = 0;
     virtual folly::coro::Task<std::optional<LabelDef>> getLabelDef(const std::string& name) = 0;

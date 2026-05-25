@@ -185,25 +185,27 @@ std::optional<BoundLogicalOperator> Binder::bindSet(const cypher::SetClause& set
             bound_item.target_variable = var_name;
 
             if (label_name) {
+                // Strong mode (::Label): validate at compile time
                 LabelId lid = catalog_.labelNameToId(*label_name);
-                if (lid != INVALID_LABEL_ID) {
-                    auto* pd = catalog_.lookupProperty(lid, prop_name);
-                    if (pd) {
-                        bound_item.prop_id = pd->id;
-                        bound_item.label_id = lid;
-                    }
+                if (lid == INVALID_LABEL_ID) {
+                    error("Label '" + *label_name + "' not found.");
+                    continue;
                 }
+                auto* pd = catalog_.lookupProperty(lid, prop_name);
+                if (!pd) {
+                    error("Property '" + prop_name + "' does not exist in label '" + *label_name +
+                          "'. Use DDL to add the property, or use " + var_name + "." + prop_name +
+                          " (without ::) to write to the weak mode space.");
+                    continue;
+                }
+                bound_item.prop_id = pd->id;
+                bound_item.label_id = lid;
+                bound_item.strong_mode = true;
             } else {
-                // Weak type: try to find the property in all labels of the variable
-                auto* col = ctx_.lookup(var_name);
-                if (col && col->source_label) {
-                    auto* pd = catalog_.lookupProperty(*col->source_label, prop_name);
-                    if (pd) {
-                        bound_item.prop_id = pd->id;
-                        bound_item.label_id = *col->source_label;
-                    }
-                }
+                // Convenience mode: runtime inference, don't resolve at bind time
+                bound_item.strong_mode = false;
             }
+            bound_item.prop_name = prop_name;
 
             if (item.value) {
                 auto bound_val = bindExpression(*item.value);
@@ -251,18 +253,58 @@ std::optional<BoundLogicalOperator> Binder::bindRemove(const cypher::RemoveClaus
             LabelId lid = catalog_.labelNameToId(item.name);
             if (lid != INVALID_LABEL_ID)
                 bound_item.label_id = lid;
+            std::visit(
+                [&](const auto& ptr) {
+                    using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+                    if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                        bound_item.target_variable = ptr->name;
+                    }
+                },
+                item.target);
         } else {
             bound_item.kind = BoundRemoveOp::ItemKind::REMOVE_PROPERTY;
+            bound_item.prop_name = item.name;
+            // Handle PropertyAccess(Variable, prop) or PropertyAccess(LabelCastExpr(Variable, label), prop)
+            std::visit(
+                [&](const auto& ptr) {
+                    using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+                    if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                        // Extract variable name from object (Variable or LabelCastExpr)
+                        std::visit(
+                            [&](const auto& obj) {
+                                using ObjElem = typename std::decay_t<decltype(obj)>::element_type;
+                                if constexpr (std::is_same_v<ObjElem, cypher::Variable>) {
+                                    bound_item.target_variable = obj->name;
+                                    bound_item.strong_mode = false;
+                                } else if constexpr (std::is_same_v<ObjElem, cypher::LabelCastExpr>) {
+                                    if (auto* inner_var =
+                                            std::get_if<std::unique_ptr<cypher::Variable>>(&obj->object)) {
+                                        bound_item.target_variable = (*inner_var)->name;
+                                    }
+                                    // Strong mode: resolve label_id and prop_id
+                                    LabelId lid = catalog_.labelNameToId(obj->label);
+                                    if (lid != INVALID_LABEL_ID) {
+                                        auto* pd = catalog_.lookupProperty(lid, item.name);
+                                        if (pd) {
+                                            bound_item.prop_id = pd->id;
+                                            bound_item.label_id = lid;
+                                            bound_item.strong_mode = true;
+                                        } else {
+                                            error("Property '" + item.name + "' does not exist in label '" +
+                                                  obj->label + "'.");
+                                        }
+                                    } else {
+                                        error("Label '" + obj->label + "' not found.");
+                                    }
+                                }
+                            },
+                            ptr->object);
+                    } else if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                        bound_item.target_variable = ptr->name;
+                    }
+                },
+                item.target);
         }
-        std::visit(
-            [&](const auto& ptr) {
-                using Elem = typename std::decay_t<decltype(ptr)>::element_type;
-                if constexpr (std::is_same_v<Elem, cypher::Variable>) {
-                    bound_item.target_variable = ptr->name;
-                }
-            },
-            item.target);
-
         rem_op->items.push_back(std::move(bound_item));
     }
 

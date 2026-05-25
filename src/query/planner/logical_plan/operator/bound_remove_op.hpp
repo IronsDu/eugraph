@@ -19,8 +19,10 @@ struct BoundRemoveOp {
     struct RemoveItem {
         ItemKind kind;
         std::string target_variable;
-        uint16_t prop_id;
+        std::string prop_name;
+        uint16_t prop_id = 0;
         std::optional<LabelId> label_id;
+        bool strong_mode = false;
     };
     std::vector<RemoveItem> items;
     BoundLogicalOperator child;

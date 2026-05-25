@@ -563,6 +563,65 @@ folly::coro::Task<EdgeId> AsyncGraphMetaStore::nextEdgeIdRange(uint64_t count) {
     co_return start;
 }
 
+// ==================== __anon__ lightweight prop allocation ====================
+
+folly::coro::Task<uint16_t> AsyncGraphMetaStore::getOrCreateAnonPropId(const std::string& prop_name,
+                                                                       PropertyType prop_type) {
+    {
+        std::lock_guard lock(anon_prop_mu_);
+        auto it = anon_prop_cache_.find(prop_name);
+        if (it != anon_prop_cache_.end())
+            co_return it->second;
+    }
+
+    // Find __anon__ label in schema
+    LabelId anon_id = INVALID_LABEL_ID;
+    for (const auto& [lid, ldef] : schema_.labels) {
+        if (ldef.name == kAnonLabelName) {
+            anon_id = lid;
+            break;
+        }
+    }
+    if (anon_id == INVALID_LABEL_ID) {
+        spdlog::error("__anon__ label not found in schema");
+        co_return 0;
+    }
+
+    auto& def = schema_.labels[anon_id];
+
+    {
+        std::lock_guard lock(anon_prop_mu_);
+        // Double-check after acquiring lock
+        auto it = anon_prop_cache_.find(prop_name);
+        if (it != anon_prop_cache_.end())
+            co_return it->second;
+
+        // Check if property already exists in LabelDef
+        for (const auto& pd : def.properties) {
+            if (pd.name == prop_name) {
+                anon_prop_cache_[prop_name] = pd.id;
+                co_return pd.id;
+            }
+        }
+
+        // Allocate new prop_id
+        uint16_t new_id = static_cast<uint16_t>(def.properties.size());
+        PropertyDef pd;
+        pd.id = new_id;
+        pd.name = prop_name;
+        pd.type = prop_type;
+        def.properties.push_back(std::move(pd));
+        anon_prop_cache_[prop_name] = new_id;
+
+        // Async persist (fire-and-forget)
+        auto& s = store_->get();
+        auto& i = io_->get();
+        co_await i.dispatchVoid([&s, &def]() { persistLabelDef(s, def); });
+
+        co_return new_id;
+    }
+}
+
 // ==================== Private ====================
 
 folly::coro::Task<void> AsyncGraphMetaStore::saveNextIds() {

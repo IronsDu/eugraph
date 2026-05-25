@@ -635,37 +635,40 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         child = finalizePlanResult(std::move(std::get<PlanOperatorResult>(child_result)));
                     }
 
-                    // Insert AlterVertexLabelPhysicalOp if there are pending_props
+                    // Insert AlterVertexLabelPhysicalOp if there are pending_props (skip for __anon__)
                     if (!v.pending_props.empty() && v.label_id != INVALID_LABEL_ID) {
                         auto def_it = ctx.label_defs.find(v.label_id);
                         if (def_it != ctx.label_defs.end()) {
-                            std::vector<std::pair<std::string, PropertyType>> pending_prop_defs;
                             bool is_anon = def_it->second.name == kAnonLabelName;
-                            for (const auto& [name, expr] : v.pending_props) {
-                                PropertyType pt = PropertyType::ANY;
-                                if (!is_anon && std::holds_alternative<binder::BoundLiteral>(expr)) {
-                                    auto& lit = std::get<binder::BoundLiteral>(expr);
-                                    if (std::holds_alternative<bool>(lit.value))
-                                        pt = PropertyType::BOOL;
-                                    else if (std::holds_alternative<int64_t>(lit.value))
-                                        pt = PropertyType::INT64;
-                                    else if (std::holds_alternative<double>(lit.value))
-                                        pt = PropertyType::DOUBLE;
-                                    else if (std::holds_alternative<std::string>(lit.value))
-                                        pt = PropertyType::STRING;
+                            if (!is_anon) {
+                                std::vector<std::pair<std::string, PropertyType>> pending_prop_defs;
+                                for (const auto& [name, expr] : v.pending_props) {
+                                    PropertyType pt = PropertyType::ANY;
+                                    if (std::holds_alternative<binder::BoundLiteral>(expr)) {
+                                        auto& lit = std::get<binder::BoundLiteral>(expr);
+                                        if (std::holds_alternative<bool>(lit.value))
+                                            pt = PropertyType::BOOL;
+                                        else if (std::holds_alternative<int64_t>(lit.value))
+                                            pt = PropertyType::INT64;
+                                        else if (std::holds_alternative<double>(lit.value))
+                                            pt = PropertyType::DOUBLE;
+                                        else if (std::holds_alternative<std::string>(lit.value))
+                                            pt = PropertyType::STRING;
+                                    }
+                                    pending_prop_defs.emplace_back(name, pt);
                                 }
-                                pending_prop_defs.emplace_back(name, pt);
-                            }
 
-                            auto alter = std::make_unique<AlterVertexLabelPhysicalOp>(
-                                def_it->second.name, std::move(pending_prop_defs), meta, ctx.label_defs,
-                                std::move(child));
-                            child = std::move(alter);
+                                auto alter = std::make_unique<AlterVertexLabelPhysicalOp>(
+                                    def_it->second.name, std::move(pending_prop_defs), meta, ctx.label_defs,
+                                    std::move(child));
+                                child = std::move(alter);
+                            }
+                            // For __anon__: skip ALTER, CreateNodePhysicalOp uses lightweight allocation
                         }
                     }
 
                     auto result = std::make_unique<CreateNodePhysicalOp>(
-                        v.variable, std::move(label_ids), std::move(label_props), store, vid, std::move(child),
+                        v.variable, std::move(label_ids), std::move(label_props), store, meta, vid, std::move(child),
                         ctx.label_defs, std::move(v.pending_props));
                     Schema node_schema;
                     if (!v.variable.empty())
@@ -760,17 +763,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             break;
                         }
                         bsi.var_name = si.target_variable;
-                        if (si.prop_id && si.label_id) {
-                            auto it = ctx.label_defs.find(*si.label_id);
-                            if (it != ctx.label_defs.end()) {
-                                for (const auto& pd : it->second.properties) {
-                                    if (pd.id == *si.prop_id) {
-                                        bsi.prop_name = pd.name;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        bsi.prop_name = si.prop_name;
+                        bsi.strong_mode = si.strong_mode;
+                        bsi.resolved_label_id = si.label_id;
+                        bsi.resolved_prop_id = si.prop_id;
                         if (si.label_id) {
                             for (auto& [name, id] : ctx.label_name_to_id) {
                                 if (id == *si.label_id) {
@@ -785,8 +781,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
 
                     auto result =
-                        std::make_unique<SetPhysicalOp>(std::move(items), cr.output_schema, store, ctx.label_defs,
-                                                        ctx.label_name_to_id, std::move(cr.op));
+                        std::make_unique<SetPhysicalOp>(std::move(items), cr.output_schema, store, meta, ctx.label_defs,
+                                                        ctx.label_name_to_id, anon_id, std::move(cr.op));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
@@ -803,12 +799,16 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                        ? RemovePhysicalOp::BoundRemoveItem::Kind::LABEL
                                        : RemovePhysicalOp::BoundRemoveItem::Kind::PROPERTY;
                         bri.var_name = ri.target_variable;
+                        bri.name = ri.prop_name;
+                        bri.strong_mode = ri.strong_mode;
+                        bri.resolved_label_id = ri.label_id;
+                        bri.resolved_prop_id = ri.prop_id;
                         items.push_back(std::move(bri));
                     }
 
                     auto result =
                         std::make_unique<RemovePhysicalOp>(std::move(items), cr.output_schema, store, ctx.label_defs,
-                                                           ctx.label_name_to_id, std::move(cr.op));
+                                                           ctx.label_name_to_id, anon_id, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundDeleteOp>) {

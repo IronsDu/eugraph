@@ -381,12 +381,12 @@ class PhysicalOperator {
 | `SkipPhysicalOp` | `int64_t skip` | DICTIONARY 调整 selection |
 | `DistinctOp` | — | DICTIONARY hash set 去重 |
 | `LimitPhysicalOp` | `int64_t limit` | DICTIONARY 截断 selection |
-| `CreateNodePhysicalOp` | `IAsyncGraphDataStore&`, `VertexId` | drain child → 写入 → 单行 FLAT |
+| `CreateNodePhysicalOp` | `IAsyncGraphDataStore&`, `IAsyncGraphMetaStore&`, `VertexId`, `pending_props` | drain child → `__anon__` 走轻量 prop_id 分配 → 写入 → 单行 FLAT |
 | `CreateEdgePhysicalOp` | `IAsyncGraphDataStore&`, `EdgeId`, `pending_props` | drain child → 解析 `pending_props`（按属性名匹配 pid）→ 写入边 → 单行 FLAT |
 | `CreateEdgeLabelPhysicalOp` | `IAsyncGraphMetaStore&`, `IAsyncGraphDataStore&`, 标签名, 属性名列表, 共享的 `name_to_id`/`defs` 映射 | 运行时创建边类型：写元数据 → 创建 WT 数据表 → 重载定义同步本地映射 → 透传子算子输出 |
 | `AlterEdgeLabelPhysicalOp` | `IAsyncGraphMetaStore&`, 标签名, 新属性名列表, 共享的 `defs` 映射 | 运行时为已有边类型添加缺失的属性列 → 重载定义 → 透传子算子输出 |
-| `SetPhysicalOp` | `IAsyncGraphDataStore&`, items | child 原样 yield |
-| `RemovePhysicalOp` | `IAsyncGraphDataStore&`, items | child 原样 yield |
+| `SetPhysicalOp` | `IAsyncGraphDataStore&`, `IAsyncGraphMetaStore&`, items（含 `strong_mode`, `resolved_label_id`, `resolved_prop_id`） | 便捷模式：运行时推断目标标签；强模式：直接写入指定标签 |
+| `RemovePhysicalOp` | `IAsyncGraphDataStore&`, items（含 `strong_mode`, `resolved_label_id`, `resolved_prop_id`） | 便捷模式：删除所有匹配标签的属性；强模式：删除指定标签的属性 |
 | `DeletePhysicalOp` | `IAsyncGraphDataStore&`, targets, detach | child 原样 yield，detach 时先扫描并删除邻边 |
 | `PathBuildPhysicalOp` | 路径变量名, 元素列名列表 | 复制 child 列 + 新建 PATH FLAT 列 |
 | `CrossProductPhysicalOp` | 左/右 child PhysicalOperator, 左/右 Schema | 嵌套循环笛卡尔积：左输入 DICTIONARY + 右输入 DICTIONARY |
@@ -428,6 +428,10 @@ class PhysicalOperator {
 - `label_id` 有值但 `pending_props` 非空（边类型存在但缺少属性）→ 插入 `AlterEdgeLabelPhysicalOp`，为已有边类型添加属性列
 - 插入的 DDL 算子先于 `CreateEdgePhysicalOp` 执行，确保边写入时 schema 已就绪
 
+**`__anon__` 标签跳过 ALTER**：处理 `BoundCreateNodeOp` 时，如果目标标签是 `__anon__`，不再插入 `AlterVertexLabelPhysicalOp`。`__anon__` 的属性通过 `getOrCreateAnonPropId()` 轻量分配 prop_id（并发安全、异步持久化），由 `CreateNodePhysicalOp` 内部直接调用。非 `__anon__` 标签仍通过 `AlterVertexLabelPhysicalOp` 注册属性。
+
+**SET/REMOVE 双模式**：planBound 直接传递 binder 的 `strong_mode`、`resolved_label_id`、`resolved_prop_id`、`prop_name` 到物理算子。强模式使用已解析的 ID 精确操作；便捷模式在运行时根据节点实际标签推断目标。
+
 **索引扫描优化**（已接入 planBound 管线）：
 - `Filter(LabelScan)` + 可索引谓词 → `tryBoundIndexScan()` → `IndexScanPhysicalOp`
 - `Filter(Expand)` + 可索引谓词 → `tryBoundEdgeIndexScan()` → `EdgeIndexScanPhysicalOp`
@@ -453,6 +457,7 @@ class PhysicalOperator {
 | `BoundBinaryOp` | 递归求值左右操作数，通过 `BinaryBatchFn` 类型特化函数指针批量处理整列 |
 | `BoundUnaryOp` | 递归求值操作数，通过 `UnaryBatchFn` 类型特化函数指针批量处理整列 |
 | `BoundPropertyRef` | 从 VertexValue/EdgeValue 列提取指定 prop_id |
+| `BoundDynamicPropertyRef` | 遍历 VertexValue 所有标签的属性定义，按名字符串匹配（用于未注册属性和 `__anon__` 兜底） |
 | `BoundFunctionCall` | 调用 `func_def->batch_scalar_fn(args, result, count)` 批量处理 |
 | `BoundLabelCast` | 递归求值内部表达式 |
 | `BoundQuantifierExpr` | `evalQuantifierExpr()`：为 list 中每个元素构建临时单行 DataChunk 求值 where_pred |

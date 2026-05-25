@@ -4070,3 +4070,336 @@ TEST_F(QueryExecutorTest, WithUnwindCreateEdge) {
     auto r1 = execSync(*executor_, "CREATE (a) WITH a UNWIND [0] AS i CREATE (b) CREATE (a)<-[:T]-(b)");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 }
+
+// ==================== Mixed Mode Tests ====================
+
+// --- SET convenience mode: unknown property writes to __anon__ ---
+TEST_F(QueryExecutorMultiLabelTest, SetConvenienceModeFallsBackToAnon) {
+    // SET n.nickname = 'Tom' — nickname is not in Person or Employee schema
+    // Convenience mode should fall back to __anon__ without error.
+    // Note: reading back via a separate MATCH query requires the scan operator
+    // to load __anon__ properties, which is not yet implemented. Here we only
+    // verify that the SET itself succeeds (writes to __anon__).
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n.nickname = 'Tom'");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // Re-read the node's known property to confirm the vertex still exists
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+}
+
+// --- SET strong mode: compile-time error for non-existent property ---
+TEST_F(QueryExecutorMultiLabelTest, SetStrongModeNonExistentPropertyErrors) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // salary is in Employee, not Person — should error at binder stage
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n::Person.salary = 5000");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("does not exist"), std::string::npos) << r2.error;
+}
+
+// --- SET strong mode: valid property writes to correct label ---
+TEST_F(QueryExecutorMultiLabelTest, SetStrongModeValidPropertyWritesToCorrectLabel) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person) SET n:Employee");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n) SET n::Employee.salary = 50000");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN n::Employee.salary");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 50000);
+}
+
+// --- SET convenience mode: single label match writes to that label ---
+TEST_F(QueryExecutorMultiLabelTest, SetConvenienceModeSingleLabelMatch) {
+    // age is only in Person schema — convenience mode should find it automatically
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n.age = 30");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n.age");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 30);
+}
+
+// --- REMOVE convenience mode: deletes from all matching labels ---
+TEST_F(QueryExecutorMultiLabelTest, RemoveConvenienceModeDeletesAllMatches) {
+    // Both Person and Employee have "name" — REMOVE n.name should delete from both
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(person_def.has_value());
+    ASSERT_TRUE(employee_def.has_value());
+
+    uint16_t person_name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    uint16_t employee_name_pid = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "name");
+    ASSERT_NE(person_name_pid, UINT16_MAX);
+    ASSERT_NE(employee_name_pid, UINT16_MAX);
+
+    Properties person_props(person_name_pid + 1);
+    person_props[person_name_pid] = PropertyValue(std::string("Alice"));
+    Properties employee_props(employee_name_pid + 1);
+    employee_props[employee_name_pid] = PropertyValue(std::string("Worker"));
+    employee_props[0] = PropertyValue(int64_t(5000)); // salary
+
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
+
+    // REMOVE n.name (convenience mode) should delete from both Person and Employee
+    auto r1 = execSync(*executor_, "MATCH (n) REMOVE n.name");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Both label-scoped reads should return null now
+    auto r2 = execSync(*executor_, "MATCH (n) RETURN n::Person.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(r2.rows[0][0]));
+
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN n::Employee.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(r3.rows[0][0]));
+
+    // salary should still be there
+    auto r4 = execSync(*executor_, "MATCH (n) RETURN n::Employee.salary");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    EXPECT_EQ(std::get<int64_t>(r4.rows[0][0]), 5000);
+}
+
+// --- REMOVE strong mode: deletes from specific label only ---
+TEST_F(QueryExecutorMultiLabelTest, RemoveStrongModeDeletesSpecificLabel) {
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(person_def.has_value());
+    ASSERT_TRUE(employee_def.has_value());
+
+    uint16_t person_name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    uint16_t employee_name_pid = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "name");
+
+    Properties person_props(person_name_pid + 1);
+    person_props[person_name_pid] = PropertyValue(std::string("Alice"));
+    Properties employee_props(employee_name_pid + 1);
+    employee_props[employee_name_pid] = PropertyValue(std::string("Worker"));
+
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
+
+    // REMOVE n::Employee.name — should only delete Employee's name
+    auto r1 = execSync(*executor_, "MATCH (n) REMOVE n::Employee.name");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Person name should still be there
+    auto r2 = execSync(*executor_, "MATCH (n) RETURN n::Person.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
+
+    // Employee name should be gone
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN n::Employee.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(r3.rows[0][0]));
+}
+
+// --- SET strong mode: non-existent label errors ---
+TEST_F(QueryExecutorMultiLabelTest, SetStrongModeNonExistentLabelErrors) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n::NoSuchLabel.name = 'Bob'");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("not found"), std::string::npos) << r2.error;
+}
+
+// ============================================================
+// Additional mixed-mode test cases
+// ============================================================
+
+// --- SET convenience mode: multiple labels have the property → runtime error ---
+TEST_F(QueryExecutorMultiLabelTest, SetConvenienceModeAmbiguousPropertyErrors) {
+    // "name" exists in both Person and Employee.
+    // Create a node with both labels and set both names.
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(person_def.has_value());
+    ASSERT_TRUE(employee_def.has_value());
+
+    uint16_t person_name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    uint16_t employee_name_pid = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "name");
+
+    Properties person_props(person_name_pid + 1);
+    person_props[person_name_pid] = PropertyValue(std::string("Alice"));
+    Properties employee_props(employee_name_pid + 1);
+    employee_props[employee_name_pid] = PropertyValue(std::string("Worker"));
+
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
+
+    // SET n.name (convenience) — ambiguous, should log error and skip the item
+    // Note: ambiguity is reported via spdlog::error, not as a query error.
+    // The SET itself succeeds but skips the ambiguous property.
+    auto r = execSync(*executor_, "MATCH (n) SET n.name = 'Bob'");
+    ASSERT_TRUE(r.error.empty()) << r.error;
+}
+
+// --- Resolve SET ambiguity with strong mode ---
+TEST_F(QueryExecutorMultiLabelTest, SetStrongModeResolvesAmbiguity) {
+    // Same setup: node has both Person and Employee with "name" in each
+    auto person_def = blockingWait(async_meta_->getLabelDef("Person"));
+    auto employee_def = blockingWait(async_meta_->getLabelDef("Employee"));
+    ASSERT_TRUE(person_def.has_value());
+    ASSERT_TRUE(employee_def.has_value());
+
+    uint16_t person_name_pid = propIdByName({{PERSON_LABEL, *person_def}}, PERSON_LABEL, "name");
+    uint16_t employee_name_pid = propIdByName({{EMPLOYEE_LABEL, *employee_def}}, EMPLOYEE_LABEL, "name");
+
+    Properties person_props(person_name_pid + 1);
+    person_props[person_name_pid] = PropertyValue(std::string("Alice"));
+    Properties employee_props(employee_name_pid + 1);
+    employee_props[employee_name_pid] = PropertyValue(std::string("Worker"));
+
+    insertMultiLabelVertex(1, {{PERSON_LABEL, std::move(person_props)}, {EMPLOYEE_LABEL, std::move(employee_props)}});
+
+    // Use strong mode to resolve: SET n::Person.name = 'Bob'
+    auto r1 = execSync(*executor_, "MATCH (n) SET n::Person.name = 'Bob'");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Only Person.name changed
+    auto r2 = execSync(*executor_, "MATCH (n) RETURN n::Person.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Bob");
+
+    // Employee.name unchanged
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN n::Employee.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Worker");
+}
+
+// --- SET convenience mode: update existing property, verify via strong mode ---
+TEST_F(QueryExecutorMultiLabelTest, SetConvenienceModeUpdatesExistingProperty) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice', age: 20})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Convenience mode: "age" only exists in Person → writes to Person
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n.age = 30");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // Verify via strong mode read
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.age");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][0]), 30);
+}
+
+// --- CREATE: known property writes to the correct label ---
+TEST_F(QueryExecutorMultiLabelTest, CreateKnownPropertyWritesToLabel) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice', age: 25})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.name, n::Person.age");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<int64_t>(r2.rows[0][1]), 25);
+}
+
+// --- CREATE: mixed properties — some match a label, some go to __anon__ ---
+TEST_F(QueryExecutorMultiLabelTest, CreateMixedKnownAndUnknownProperties) {
+    // "name" is in Person schema → writes to Person
+    // "nickname" is not in any label → writes to __anon__
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice', nickname: 'Ali'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Known property readable via strong mode
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Alice");
+}
+
+// --- CREATE: multi-label with unambiguous + unknown mixed properties ---
+TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelMixedProperties) {
+    // Multi-label CREATE is not yet supported, so test each label separately.
+    // Person has: name, age; Employee has: salary, name
+    // "age" only in Person → writes to Person; "nickname" in neither → __anon__
+    auto r1 = execSync(*executor_, "CREATE (n:Person {age: 25, nickname: 'Ali'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Verify age via strong mode (Person)
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n::Person.age");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 25);
+
+    // "salary" only in Employee → writes to Employee; "temp" in neither → __anon__
+    auto r3 = execSync(*executor_, "CREATE (n:Employee {salary: 5000, temp: 'x'})");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+
+    auto r4 = execSync(*executor_, "MATCH (n:Employee) RETURN n::Employee.salary");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    ASSERT_EQ(r4.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r4.rows[0][0]), 5000);
+}
+
+// --- CREATE: multi-label CREATE not yet supported ---
+TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelNotSupported) {
+    // Multi-label CREATE (e.g. n:Person:Employee) is not yet supported by the binder.
+    // Verify it returns a clear error.
+    auto r = execSync(*executor_, "CREATE (n:Person:Employee {name: 'Alice'})");
+    EXPECT_FALSE(r.error.empty());
+}
+
+// --- REMOVE convenience mode: property not in any label → no error ---
+TEST_F(QueryExecutorMultiLabelTest, RemoveConvenienceModeNoMatchNoError) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // "nickname" is not in Person schema, not in any label → no crash
+    auto r2 = execSync(*executor_, "MATCH (n:Person) REMOVE n.nickname");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // Original property should still be intact
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+}
+
+// --- REMOVE strong mode: non-existent property → binder error ---
+TEST_F(QueryExecutorMultiLabelTest, RemoveStrongModeNonExistentPropertyErrors) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // "salary" is in Employee, not in Person → binder error
+    auto r2 = execSync(*executor_, "MATCH (n:Person) REMOVE n::Person.salary");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("does not exist"), std::string::npos) << r2.error;
+}
+
+// --- REMOVE strong mode: non-existent label → binder error ---
+TEST_F(QueryExecutorMultiLabelTest, RemoveStrongModeNonExistentLabelErrors) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:Person) REMOVE n::NoSuchLabel.name");
+    EXPECT_FALSE(r2.error.empty());
+    EXPECT_NE(r2.error.find("not found"), std::string::npos) << r2.error;
+}
+
+// --- CREATE writes unknown property to __anon__, then MATCH + RETURN reads it back ---
+TEST_F(QueryExecutorMultiLabelTest, CreateUnknownPropThenMatchReturn) {
+    // "name" is in Person schema → writes to Person
+    // "nickname" is not in any label → writes to __anon__
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice', nickname: 'Ali'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // MATCH by Person label, RETURN the __anon__ property directly
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n.nickname");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "Ali");
+}

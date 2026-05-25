@@ -132,21 +132,30 @@ create_node->label_id = start_label.value_or(catalog_.getAnonLabelId());
 
 **LabelScanPhysicalOp**：只扫描用户可见标签，不扫描 `__anon__`（因为 `__anon__` 不在 `Catalog::labelNameToId()` 中，用户无法写 `MATCH (n:__anon__)`）。
 
-**CreateNodePhysicalOp**：需新增 `pending_props` 字段支持（对标 `BoundCreateEdgeOp::pending_props`）。物理层执行时，针对 `__anon__` 标签下的 `pending_props` 做按名写入：
+**CreateNodePhysicalOp**：`pending_props` 字段支持按名暂存未注册属性。物理层执行时，针对 `__anon__` 标签下的 `pending_props` 走轻量级路径：
 
 ```
 executeChunk():
-  // 暂存 pending_props 的 (name, value) 用于写入
-  // 遍历 meta store 中 __anon__ label 的属性定义，找到 name → pid 映射
-  // 若属性已存在 → 直接按 pid 写入
-  // 若属性不存在 → 需要注册新属性（见下方 DDL 讨论）
+  if (anon_mode):  // label 是 __anon__
+    // 轻量级路径：通过 meta_.getOrCreateAnonPropId(name, type) 分配 prop_id
+    // 并发安全：内部有 mutex + cache，首次分配后缓存
+    // 异步持久化到元数据
+    for each (prop_name, expr) in pending_props:
+      pid = co_await meta_.getOrCreateAnonPropId(prop_name, ANY)
+      write value to props[pid]
+  else:
+    // 非 __anon__ 路径：依赖 AlterVertexLabelPhysicalOp 已注册属性
+    for each (prop_name, expr) in pending_props:
+      search label_defs_ for prop_name → pid
+      write value to props[pid]
 ```
 
-**属性注册（DDL vs 运行时）**：`pending_props` 中的属性名如果在 metadata 中不存在，需要注册才能获得 prop_id。可以选择：
-- A) 新增 `AlterVertexLabelPhysicalOp`（对标 `AlterEdgeLabelPhysicalOp`），在 `CreateNodePhysicalOp` 前执行
-- B) 在 `CreateNodePhysicalOp` 内部直接操作 meta store 注册属性
-
-这个选择和边类型完全相同——目前边类型走方案 A。建议走相同路径以保持一致性。
+**`__anon__` 轻量级 prop_id 分配**（替代 ALTER）：
+- 通过 `IAsyncGraphMetaStore::getOrCreateAnonPropId()` 接口实现
+- 内部使用 `std::mutex` + `std::unordered_map<string, uint16_t>` 缓存
+- 首次遇到新属性名时，分配 `prop_id = properties.size()`，追加到 `__anon__` 的 `LabelDef`，异步持久化
+- 不需要 `AlterVertexLabelPhysicalOp`，不需要同步 DDL 事务
+- 非 `__anon__` 标签的属性注册仍通过 `AlterVertexLabelPhysicalOp`（走完整 ALTER 路径）
 
 **labels 过滤**：所有返回 `VertexValue.labels` 给用户的位置，过滤掉 `__anon__id`：
 - `AllNodeScanPhysicalOp` 构造 `VertexValue` 时
@@ -181,9 +190,18 @@ SET n:Person → labels=[__anon__, Person]
 - `lookupPropertyAcrossLabels` 在 Person 找 `name`，找不到（Person 没注册 name）→ 走 `BoundDynamicPropertyRef("name")`
 - 运行时遍历 `vv.properties`：Person 为空，`__anon__` 有 name → 返回 "foo"
 
-**SET n.name = 'bar'**（混合状态下）：
-- 若变量来自 `MATCH (n)` 无标签 → `source_label = __anon__id` → 写 `__anon__`
-- 若变量来自 `MATCH (n:Person)` → `source_label = Person_id` → 写 `Person`（自动注册属性）
+**SET n.name = 'bar'**（混合模式下有两种模式）：
+
+**强模式** `SET n::Label.name = 'bar'`：
+- Binder 阶段校验 Label 是否有 `name` 属性，不存在则报错
+- 运行时直接写入指定 Label 的 prop_id 存储
+
+**便捷模式** `SET n.name = 'bar'`（无 `::`）：
+- 运行时根据节点实际持有的标签推断归属
+- 遍历节点实际标签的 schema，查找哪些标签定义了 `name`
+- 恰好一个标签命中 → 写入该标签
+- 无标签命中 → 写入 `__anon__`（通过 `getOrCreateAnonPropId` 轻量分配）
+- 多个标签命中 → 运行时报错，要求使用 `::` 显式指定
 
 **REMOVE n:Person**：回退为无标签节点，`__anon__` 保留。
 
@@ -205,7 +223,8 @@ SET n:Person → labels=[__anon__, Person]
 | `MATCH (n)` | `MatchClause { NodePattern { labels=[] } }` | `BoundScanOp` → `AllNodeScanPhysicalOp` | 扫描所有顶点（含 `__anon__` 节点） | labels 过滤 + 注入 `__anon__` |
 | `MATCH (n:Person)` | `MatchClause { NodePattern { labels=[Person] } }` | `BoundLabelScanOp(Person)` → `LabelScanPhysicalOp` | 仅扫描 Person 标签节点 | **无变化** |
 | `SET n:Person` on 无标签节点 | `SetClause { SET_LABELS, target=n, labels=[Person] }` | `BoundSetOp { SET_LABELS, var_name=n, label=Person }` | `addVertexLabel(vid, Person_id)` | __anon 保留 |
-| `SET n.name = 'bar'` | `SetClause { SET_PROPERTY, target=PropertyAccess(n, name), expr='bar' }` | `BoundSetOp { SET_PROPERTY, var_name=n, label_id=__anon__/Person, prop_id=... }` | 写入对应标签的属性 | 根据 `source_label` 判定目标标签 |
+| `SET n.name = 'bar'` | `SetClause { SET_PROPERTY, target=PropertyAccess(n, name), expr='bar' }` | `BoundSetOp { SET_PROPERTY, var_name=n, prop_name="name", strong_mode=false }` | 便捷模式：运行时推断写入目标标签 | 根据 `source_label` 判定目标标签 |
+| `SET n::Person.name = 'bar'` | `SetClause { SET_PROPERTY, target=PropertyAccess(LabelCastExpr(n, "Person"), name), expr='bar' }` | `BoundSetOp { SET_PROPERTY, var_name=n, prop_name="name", strong_mode=true, label_id=Person_id, prop_id=... }` | 强模式：编译期校验，直接写入 Person | 属性不存在于 Person → binder 报错 |
 
 ### 8. 多标签交互
 
@@ -374,5 +393,6 @@ TEST SameStmtCreateReturnUnlabeled:
 - **多标签下的候选优先级**：`BoundPropertyRef` 的 candidates 收集无条件包含 `__anon__`，作为最低优先级兜底。`BoundDynamicPropertyRef` 遍历时也是最后尝试 `__anon__`。
 - **Evaluator 依赖 EvalContext**：`evalDynamicPropertyRef` 需要访问 catalog（通过 `EvalContext`）才能拿到 label→property 的 name→pid 映射。当前 `EvalContext` 已传递到所有 PhysicalOperator，Evaluator 可通过 `eval_ctx_.catalog` 访问。
 - **ColumnResolver 处理**：`BoundDynamicPropertyRef` 的 `object` 字段是 `BoundExpression`，递归解析其中的 `BoundVariableRef` → `BoundColumnRef`。`property` 字符串不需要解析。
-- **`BoundDynamicPropertyRef` ≠ 跳过属性注册**：`Vev.properties` 是 `map<LabelId, vector<(prop_id, PropertyValue)>>`，只有 `(pid, value)` 没有名字。`evalDynamicPropertyRef` 通过 `ldef.properties` 做 name→pid 映射——这要求属性已在 metadata 中注册。所以 **动态属性的"动态"指的是 binder 不预先解析 pid，而非跳过 metadata 注册**。注册仍由 DDL 算子（`AlterVertexLabelPhysicalOp`）在物理阶段完成，注册后 `LabelDef.properties` 才有 name 条目，求值才能匹配。
-- **同语句 CREATE+RETURN 的完整链路**：`CREATE ({name: 'foo'}) RETURN n.name` → Binder: `bindCreate` 标记 `pending_props`，`bindReturn` 创建 `BoundDynamicPropertyRef("name")`（此时 catalog 无 name）→ PhysicalPlanner: 插入 `AlterVertexLabelPhysicalOp` 注册 name → CreateNodePhysicalOp 按名写入 → Evaluator: `evalDynamicPropertyRef` 用已注册的 `ldef.properties` 做 name→pid 映射，读到值 ✅
+- **`BoundDynamicPropertyRef` ≠ 跳过属性注册**：`Vev.properties` 是 `map<LabelId, vector<(prop_id, PropertyValue)>>`，只有 `(pid, value)` 没有名字。`evalDynamicPropertyRef` 通过 `ldef.properties` 做 name→pid 映射——这要求属性已在 metadata 中注册。对于 `__anon__` 标签，注册由 `CreateNodePhysicalOp` 内部的 `getOrCreateAnonPropId()` 轻量完成（不再需要 `AlterVertexLabelPhysicalOp`）。非 `__anon__` 标签仍通过 `AlterVertexLabelPhysicalOp` 注册。
+- **同语句 CREATE+RETURN 的完整链路**：`CREATE ({name: 'foo'}) RETURN n.name` → Binder: `bindCreate` 标记 `pending_props`，`bindReturn` 创建 `BoundDynamicPropertyRef("name")`（此时 catalog 无 name）→ PhysicalPlanner: 不再插入 `AlterVertexLabelPhysicalOp`（`__anon__` 跳过）→ CreateNodePhysicalOp 通过 `getOrCreateAnonPropId()` 轻量分配 prop_id → Evaluator: `evalDynamicPropertyRef` 用已注册的 `ldef.properties` 做 name→pid 映射，读到值 ✅
+- **跨语句 MATCH+RETURN 的链路**：`CREATE (n:Person {name: 'Alice', nickname: 'Ali'})` → `nickname` 通过 `getOrCreateAnonPropId()` 分配到 `__anon__` → 后续 `MATCH (n:Person) RETURN n.nickname` → Binder 创建 `BoundDynamicPropertyRef("nickname")` → 运行时 `evalDynamicPropertyRef` 遍历 `vertex.properties`（含 `__anon__`），按名匹配找到值 ✅
