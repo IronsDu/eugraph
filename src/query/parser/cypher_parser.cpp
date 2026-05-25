@@ -235,10 +235,9 @@ private:
             } else {
                 ri.kind = RemoveItem::Kind::PROPERTY;
                 ri.target = buildPropertyExpression(item->propertyExpression());
+                // Extract prop_name from expression tree without destroying it
                 if (auto* prop = std::get_if<std::unique_ptr<PropertyAccess>>(&ri.target)) {
                     ri.name = (*prop)->property;
-                    auto obj = std::move((*prop)->object);
-                    ri.target = std::move(obj);
                 }
             }
             r->items.push_back(std::move(ri));

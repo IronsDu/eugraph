@@ -43,21 +43,39 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                         continue;
                     co_await store_.removeVertexLabel(vid, lit->second);
                 } else if (item.kind == BoundRemoveItem::Kind::PROPERTY) {
-                    LabelId found_label = INVALID_LABEL_ID;
-                    uint16_t found_prop_id = 0;
-                    size_t match_count = 0;
-                    for (const auto& [lid, ldef] : label_defs_) {
-                        for (const auto& pd : ldef.properties) {
-                            if (pd.name == item.name) {
-                                found_label = lid;
-                                found_prop_id = pd.id;
-                                ++match_count;
+                    if (item.strong_mode && item.resolved_label_id && item.resolved_prop_id) {
+                        // Strong mode: delete from specific label
+                        co_await store_.deleteVertexProperty(vid, *item.resolved_label_id, *item.resolved_prop_id);
+                    } else {
+                        // Convenience mode: delete from ALL matching labels (no conflict error)
+                        bool any_deleted = false;
+                        if (vertex.labels.has_value()) {
+                            for (LabelId lid : *vertex.labels) {
+                                auto def_it = label_defs_.find(lid);
+                                if (def_it == label_defs_.end())
+                                    continue;
+                                for (const auto& pd : def_it->second.properties) {
+                                    if (pd.name == item.name) {
+                                        co_await store_.deleteVertexProperty(vid, lid, pd.id);
+                                        any_deleted = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (!any_deleted) {
+                            // No match in actual labels: try __anon__
+                            auto anon_it = label_defs_.find(anon_label_id_);
+                            if (anon_it != label_defs_.end()) {
+                                for (const auto& pd : anon_it->second.properties) {
+                                    if (pd.name == item.name) {
+                                        co_await store_.deleteVertexProperty(vid, anon_label_id_, pd.id);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
-                    if (match_count == 0 || match_count > 1)
-                        continue;
-                    co_await store_.deleteVertexProperty(vid, found_label, found_prop_id);
                 }
             }
         }

@@ -1,6 +1,8 @@
 #include "query/physical_plan/operator/set_physical_op.hpp"
+#include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
+#include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace compute {
@@ -74,29 +76,56 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         continue;
                     co_await store_.addVertexLabel(vid, lit->second);
                 } else if (item.kind == cypher::SetItemKind::SET_PROPERTY) {
-                    if (item.prop_name.empty())
-                        continue;
-
-                    LabelId found_label = INVALID_LABEL_ID;
-                    uint16_t found_prop_id = 0;
-                    size_t match_count = 0;
-                    for (const auto& [lid, ldef] : label_defs_) {
-                        for (const auto& pd : ldef.properties) {
-                            if (pd.name == item.prop_name) {
-                                found_label = lid;
-                                found_prop_id = pd.id;
-                                ++match_count;
-                            }
-                        }
-                    }
-                    if (match_count == 0 || match_count > 1)
-                        continue;
-                    if (!item.value.has_value())
+                    if (item.prop_name.empty() || !item.value.has_value())
                         continue;
 
                     Value v = value_results[idx][row_idx];
                     PropertyValue pv = valueToPropertyValue(v);
-                    co_await store_.putVertexProperty(vid, found_label, found_prop_id, pv);
+
+                    if (item.strong_mode && item.resolved_label_id && item.resolved_prop_id) {
+                        // Strong mode: use resolved IDs directly
+                        co_await store_.putVertexProperty(vid, *item.resolved_label_id, *item.resolved_prop_id, pv);
+                    } else {
+                        // Convenience mode: runtime inference based on actual labels
+                        std::vector<std::pair<LabelId, uint16_t>> matches;
+                        if (vertex.labels.has_value()) {
+                            for (LabelId lid : *vertex.labels) {
+                                auto def_it = label_defs_.find(lid);
+                                if (def_it == label_defs_.end())
+                                    continue;
+                                for (const auto& pd : def_it->second.properties) {
+                                    if (pd.name == item.prop_name) {
+                                        matches.emplace_back(lid, pd.id);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (matches.size() == 1) {
+                            co_await store_.putVertexProperty(vid, matches[0].first, matches[0].second, pv);
+                        } else if (matches.empty()) {
+                            // No match in actual labels: write to __anon__ via lightweight allocation
+                            if (anon_label_id_ != INVALID_LABEL_ID) {
+                                uint16_t anon_pid =
+                                    co_await meta_.getOrCreateAnonPropId(item.prop_name, PropertyType::ANY);
+                                co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, pv);
+                            }
+                        } else {
+                            // Multiple matches: runtime error
+                            std::string label_names;
+                            for (const auto& [lid, pid] : matches) {
+                                auto it = label_defs_.find(lid);
+                                if (it != label_defs_.end()) {
+                                    if (!label_names.empty())
+                                        label_names += ", ";
+                                    label_names += it->second.name;
+                                }
+                            }
+                            spdlog::error("Ambiguous property '{}' found in labels: {}. Use ::Label to specify.",
+                                          item.prop_name, label_names);
+                        }
+                    }
                 }
             }
         }
