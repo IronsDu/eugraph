@@ -194,25 +194,31 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                         auto& col_ref = std::get<BoundColumnRef>(*obj);
 
                         // For CREATE variables, avoid picking up wrong candidates from
-                        // unrelated labels. Use source_label if set, otherwise dynamic.
+                        // unrelated labels. Use source_labels if set, otherwise dynamic.
                         auto* col_info = ctx_.lookup(col_ref.name);
                         if (col_info && col_info->is_create_variable) {
-                            if (col_info->source_label) {
-                                auto* pd = catalog_.lookupProperty(*col_info->source_label, ptr->property);
-                                if (pd) {
-                                    auto prop_ref = std::make_unique<BoundPropertyRef>();
+                            if (!col_info->source_labels.empty()) {
+                                auto prop_ref = std::make_unique<BoundPropertyRef>();
+                                BoundType merged = BoundType::Null();
+                                for (auto lid : col_info->source_labels) {
+                                    auto* pd = catalog_.lookupProperty(lid, ptr->property);
+                                    if (pd) {
+                                        BoundPropertyRef::ResolvedProperty rp;
+                                        rp.label_id = lid;
+                                        rp.prop_id = pd->id;
+                                        rp.type = propertyTypeToBoundType(pd->type);
+                                        merged = BoundType::merge(merged, rp.type);
+                                        prop_ref->candidates.push_back(rp);
+                                        ctx_.addPropertyRequirement(col_ref.name, lid, pd->id);
+                                    }
+                                }
+                                if (!prop_ref->candidates.empty()) {
                                     prop_ref->object = std::move(*obj);
-                                    BoundPropertyRef::ResolvedProperty rp;
-                                    rp.label_id = *col_info->source_label;
-                                    rp.prop_id = pd->id;
-                                    rp.type = propertyTypeToBoundType(pd->type);
-                                    prop_ref->candidates.push_back(rp);
-                                    prop_ref->result_type = rp.type;
-                                    ctx_.addPropertyRequirement(col_ref.name, rp.label_id, rp.prop_id);
+                                    prop_ref->result_type = merged;
                                     return BoundExpression(std::move(prop_ref));
                                 }
                             }
-                            // No source_label or property not yet registered → dynamic
+                            // No source_labels or property not yet registered → dynamic
                             auto dyn_ref = std::make_unique<BoundDynamicPropertyRef>();
                             dyn_ref->object = std::move(*obj);
                             dyn_ref->property = ptr->property;

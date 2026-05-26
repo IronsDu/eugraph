@@ -47,9 +47,11 @@ bool ColumnResolver::resolveOperator(BoundLogicalOperator& op, const BindContext
                 }
                 return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundCreateNodeOp>>) {
-                for (auto& [prop_id, expr] : val->properties) {
-                    if (!resolveExpression(expr, ctx, errors))
-                        return false;
+                for (auto& [lid, props_vec] : val->label_properties) {
+                    for (auto& [prop_id, expr] : props_vec) {
+                        if (!resolveExpression(expr, ctx, errors))
+                            return false;
+                    }
                 }
                 if (val->child)
                     return resolveOperator(*val->child, ctx, errors);

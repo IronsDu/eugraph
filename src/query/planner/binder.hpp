@@ -86,7 +86,7 @@ private:
 
     // ── Pattern binding ──
     bool bindNodePattern(const cypher::NodePattern& node, std::string& var_name, uint32_t& col_idx,
-                         std::optional<LabelId>& label_id, std::vector<uint16_t>& default_prop_ids,
+                         std::vector<LabelId>& label_ids, std::vector<uint16_t>& default_prop_ids,
                          bool skip_register = false);
     bool bindRelationshipPattern(const cypher::RelationshipPattern& rel, std::string& var_name, uint32_t& col_idx,
                                  std::vector<EdgeLabelId>& edge_label_ids, std::vector<uint16_t>& default_prop_ids,
@@ -122,8 +122,7 @@ private:
         return anon_id_++;
     }
     BoundType propertyTypeToBoundType(PropertyType pt);
-    ColumnInfo makeColumnInfo(const std::string& name, BoundType type,
-                              std::optional<LabelId> source_label = std::nullopt,
+    ColumnInfo makeColumnInfo(const std::string& name, BoundType type, std::vector<LabelId> source_labels = {},
                               std::optional<uint16_t> source_prop_id = std::nullopt, bool strong_typed = false);
 
     // ── Projection pushdown ──

@@ -608,13 +608,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     VertexId vid = ctx.next_vertex_id++;
                     ctx.variable_vertex_ids[v.variable] = vid;
 
-                    std::vector<LabelId> label_ids;
+                    std::vector<LabelId> label_ids = v.label_ids;
                     std::vector<std::pair<LabelId, Properties>> label_props;
 
-                    if (v.label_id != INVALID_LABEL_ID) {
-                        label_ids.push_back(v.label_id);
+                    for (auto& [lid, props_vec] : v.label_properties) {
                         Properties props;
-                        for (auto& [pid, expr] : v.properties) {
+                        for (auto& [pid, expr] : props_vec) {
                             if (std::holds_alternative<binder::BoundLiteral>(expr)) {
                                 auto& lit = std::get<binder::BoundLiteral>(expr);
                                 if (!isNull(lit.value)) {
@@ -624,7 +623,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                 }
                             }
                         }
-                        label_props.emplace_back(v.label_id, std::move(props));
+                        label_props.emplace_back(lid, std::move(props));
                     }
 
                     std::unique_ptr<PhysicalOperator> child;
@@ -635,35 +634,36 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         child = finalizePlanResult(std::move(std::get<PlanOperatorResult>(child_result)));
                     }
 
-                    // Insert AlterVertexLabelPhysicalOp if there are pending_props (skip for __anon__)
-                    if (!v.pending_props.empty() && v.label_id != INVALID_LABEL_ID) {
-                        auto def_it = ctx.label_defs.find(v.label_id);
-                        if (def_it != ctx.label_defs.end()) {
-                            bool is_anon = def_it->second.name == kAnonLabelName;
-                            if (!is_anon) {
-                                std::vector<std::pair<std::string, PropertyType>> pending_prop_defs;
-                                for (const auto& [name, expr] : v.pending_props) {
-                                    PropertyType pt = PropertyType::ANY;
-                                    if (std::holds_alternative<binder::BoundLiteral>(expr)) {
-                                        auto& lit = std::get<binder::BoundLiteral>(expr);
-                                        if (std::holds_alternative<bool>(lit.value))
-                                            pt = PropertyType::BOOL;
-                                        else if (std::holds_alternative<int64_t>(lit.value))
-                                            pt = PropertyType::INT64;
-                                        else if (std::holds_alternative<double>(lit.value))
-                                            pt = PropertyType::DOUBLE;
-                                        else if (std::holds_alternative<std::string>(lit.value))
-                                            pt = PropertyType::STRING;
-                                    }
-                                    pending_prop_defs.emplace_back(name, pt);
-                                }
-
-                                auto alter = std::make_unique<AlterVertexLabelPhysicalOp>(
-                                    def_it->second.name, std::move(pending_prop_defs), meta, ctx.label_defs,
-                                    std::move(child));
-                                child = std::move(alter);
+                    // Insert AlterVertexLabelPhysicalOp for each non-anon label with pending_props
+                    if (!v.pending_props.empty()) {
+                        // Collect pending prop type info once
+                        std::vector<std::pair<std::string, PropertyType>> pending_prop_defs;
+                        for (const auto& [name, expr] : v.pending_props) {
+                            PropertyType pt = PropertyType::ANY;
+                            if (std::holds_alternative<binder::BoundLiteral>(expr)) {
+                                auto& lit = std::get<binder::BoundLiteral>(expr);
+                                if (std::holds_alternative<bool>(lit.value))
+                                    pt = PropertyType::BOOL;
+                                else if (std::holds_alternative<int64_t>(lit.value))
+                                    pt = PropertyType::INT64;
+                                else if (std::holds_alternative<double>(lit.value))
+                                    pt = PropertyType::DOUBLE;
+                                else if (std::holds_alternative<std::string>(lit.value))
+                                    pt = PropertyType::STRING;
                             }
-                            // For __anon__: skip ALTER, CreateNodePhysicalOp uses lightweight allocation
+                            pending_prop_defs.emplace_back(name, pt);
+                        }
+
+                        // Chain AlterVertexLabelPhysicalOp for each non-anon label
+                        for (auto lid : v.label_ids) {
+                            auto def_it = ctx.label_defs.find(lid);
+                            if (def_it == ctx.label_defs.end())
+                                continue;
+                            if (def_it->second.name == kAnonLabelName)
+                                continue;
+                            auto alter = std::make_unique<AlterVertexLabelPhysicalOp>(
+                                def_it->second.name, pending_prop_defs, meta, ctx.label_defs, std::move(child));
+                            child = std::move(alter);
                         }
                     }
 
