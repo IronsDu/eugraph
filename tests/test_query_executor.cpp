@@ -4077,6 +4077,55 @@ TEST_F(QueryExecutorTest, WithUnwindCreateEdge) {
     ASSERT_TRUE(r1.error.empty()) << r1.error;
 }
 
+// ==================== REMOVE Edge Property Tests ====================
+
+TEST_F(QueryExecutorTest, RemoveEdgePropertyBasic) {
+    // Create edge label with a property
+    PropertyDef score_prop{0, "score", PropertyType::INT64, false, std::nullopt};
+    auto rated_label = blockingWait(async_meta_->createEdgeLabel("RATED", {score_prop}));
+    ASSERT_NE(rated_label, INVALID_EDGE_LABEL_ID);
+    ASSERT_TRUE(blockingWait(async_data_->createEdgeLabel(rated_label)));
+
+    // Create vertices and edge with score: 10
+    auto r1 = execSync(*executor_, "CREATE (a:Person)-[:RATED {score: 10}]->(b:Person)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // REMOVE r.score
+    auto r2 = execSync(*executor_, "MATCH ()-[r:RATED]->() REMOVE r.score");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // Verify: r.score should be null
+    auto r3 = execSync(*executor_, "MATCH ()-[r:RATED]->() RETURN r.score");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(r3.rows[0][0]));
+}
+
+TEST_F(QueryExecutorTest, RemoveEdgePropertyNonexistentNoError) {
+    // Create edge label with score property
+    PropertyDef score_prop{0, "score", PropertyType::INT64, false, std::nullopt};
+    auto rated_label = blockingWait(async_meta_->createEdgeLabel("RATED_REM", {score_prop}));
+    ASSERT_NE(rated_label, INVALID_EDGE_LABEL_ID);
+    ASSERT_TRUE(blockingWait(async_data_->createEdgeLabel(rated_label)));
+
+    auto r1 = execSync(*executor_, "CREATE (a:Person)-[:RATED_REM {score: 10}]->(b:Person)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // REMOVE non-existent property should not error
+    auto r2 = execSync(*executor_, "MATCH ()-[r:RATED_REM]->() REMOVE r.nonexistent");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+}
+
+TEST_F(QueryExecutorTest, RemoveEdgePropertyNoPropertiesDefined) {
+    // KNOWS_LABEL has no properties defined — REMOVE should be no-op
+    auto r1 = execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // REMOVE on edge label without properties should not error
+    auto r2 = execSync(*executor_, "MATCH ()-[r:KNOWS]->() REMOVE r.since");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+}
+
 // ==================== Mixed Mode Tests ====================
 
 // --- SET convenience mode: unknown property writes to __anon__ ---

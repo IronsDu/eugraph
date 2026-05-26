@@ -303,9 +303,8 @@ DELETE r                     -- 删除边
 ```cypher
 REMOVE n:Employee                 -- 移除顶点标签
 REMOVE n.name                     -- 移除属性（便捷模式）
+REMOVE r.prop                     -- 移除边属性
 ```
-
-**限制**：REMOVE 边属性（如 `REMOVE r.prop`）尚未实现。
 
 ---
 
