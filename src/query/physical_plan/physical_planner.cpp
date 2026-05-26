@@ -755,16 +755,17 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         case binder::BoundSetOp::ItemKind::SET_PROPERTY:
                             bsi.kind = cypher::SetItemKind::SET_PROPERTY;
                             break;
+                        case binder::BoundSetOp::ItemKind::SET_PROPERTIES:
+                            bsi.kind = cypher::SetItemKind::SET_PROPERTIES;
+                            break;
                         case binder::BoundSetOp::ItemKind::SET_LABELS:
                             bsi.kind = cypher::SetItemKind::SET_LABELS;
-                            break;
-                        default:
-                            bsi.kind = cypher::SetItemKind::SET_PROPERTY;
                             break;
                         }
                         bsi.var_name = si.target_variable;
                         bsi.prop_name = si.prop_name;
                         bsi.strong_mode = si.strong_mode;
+                        bsi.is_add_assign = si.is_add_assign;
                         bsi.resolved_label_id = si.label_id;
                         bsi.resolved_prop_id = si.prop_id;
                         if (si.label_id) {

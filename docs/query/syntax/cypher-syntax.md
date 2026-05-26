@@ -267,8 +267,15 @@ CREATE (n:Person)-[:KNOWS {since: 2020}]->(m:Person)
 ```cypher
 SET n:Employee                    -- 给顶点添加标签
 SET n.name = 'Bob'                -- 设置属性（便捷模式，自动查找标签）
-SET n::Employee.salary = 10000    -- 设置指定标签下的属性
+SET n::Employee.salary = 10000    -- 设置指定标签下的属性（强模式）
+SET n += {age: 30, city: 'BJ'}   -- 合并 map 属性（+= 保留已有属性）
+SET n = {city: 'Beijing'}        -- 替换全部属性（= 先删除已有属性再写入）
 ```
+
+**SET += / SET = 语义**：
+- `+=` 合并（merge）：逐 key 写入 map 中的属性，不影响已有属性
+- `=` 替换（replace）：删除所有已有属性（含 `__anon__`），再写入 map 中的属性
+- 每个 map key 走便捷模式：单标签命中→写入该标签，无命中→写入 `__anon__`，多标签命中→运行时错误
 
 ### DELETE — 删除顶点/边
 
@@ -298,6 +305,8 @@ REMOVE n:Employee                 -- 移除顶点标签
 REMOVE n.name                     -- 移除属性（便捷模式）
 ```
 
+**限制**：REMOVE 边属性（如 `REMOVE r.prop`）尚未实现。
+
 ---
 
 ## 三、仅解析（执行层未实现）
@@ -307,7 +316,6 @@ REMOVE n.name                     -- 移除属性（便捷模式）
 | `MERGE` | 条件创建（含 ON CREATE/MATCH SET） |
 | `CALL` | 过程调用/子查询 |
 | `UNION` / `UNION ALL` | 查询合并 |
-| `OPTIONAL MATCH` | 可选匹配 |
 | `CASE WHEN THEN ELSE END` | 条件表达式 |
 | `[x IN list WHERE pred \| proj]` | 列表推导 |
 | `ALL/ANY/NONE/SINGLE(...)` | 量词谓词（已实现，见 WHERE 子句） |

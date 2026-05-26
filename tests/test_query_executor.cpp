@@ -1828,6 +1828,10 @@ protected:
         auto vip_def = blockingWait(async_meta_->createLabel("VIP"));
         VIP_LABEL = vip_def;
 
+        // Create __anon__ label for convenience-mode property fallback
+        auto anon_def = blockingWait(async_meta_->createLabel(std::string(kAnonLabelName), {}));
+        ASSERT_NE(anon_def, INVALID_LABEL_ID);
+
         ASSERT_NE(PERSON_LABEL, INVALID_LABEL_ID);
         ASSERT_NE(EMPLOYEE_LABEL, INVALID_LABEL_ID);
         ASSERT_NE(VIP_LABEL, INVALID_LABEL_ID);
@@ -1836,6 +1840,7 @@ protected:
         blockingWait(async_data_->createLabel(PERSON_LABEL));
         blockingWait(async_data_->createLabel(EMPLOYEE_LABEL));
         blockingWait(async_data_->createLabel(VIP_LABEL));
+        blockingWait(async_data_->createLabel(anon_def));
 
         executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
     }
@@ -4465,6 +4470,101 @@ TEST_F(QueryExecutorMultiLabelTest, RemoveStrongModeNonExistentLabelErrors) {
     auto r2 = execSync(*executor_, "MATCH (n:Person) REMOVE n::NoSuchLabel.name");
     EXPECT_FALSE(r2.error.empty());
     EXPECT_NE(r2.error.find("not found"), std::string::npos) << r2.error;
+}
+
+// --- SET += convenience mode: single key update ---
+TEST_F(QueryExecutorMultiLabelTest, SetAddAssignSingleKey) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // SET n += {age: 30} — should add 'age' without touching 'name'
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n += {age: 30}");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // name should still be 'Alice'
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+
+    // age should be 30
+    auto r4 = execSync(*executor_, "MATCH (n:Person) RETURN n.age");
+    ASSERT_TRUE(r4.error.empty()) << r4.error;
+    ASSERT_EQ(r4.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(r4.rows[0][0]), 30);
+}
+
+// --- SET += convenience mode: multi-key merge ---
+TEST_F(QueryExecutorMultiLabelTest, SetAddAssignMultiKey) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // SET n += {age: 30, city: 'Beijing'} — age is in Person schema, city falls back to __anon__
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n += {age: 30, city: 'Beijing'}");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n.name, n.age, n.city");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<int64_t>(r3.rows[0][1]), 30);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][2]), "Beijing");
+}
+
+// --- SET += convenience mode: overwrite existing property ---
+TEST_F(QueryExecutorMultiLabelTest, SetAddAssignOverwrite) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // SET n += {name: 'Bob'} — overwrite existing
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n += {name: 'Bob'}");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n.name");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Bob");
+}
+
+// --- SET = replace: deletes all existing properties, sets new ones ---
+TEST_F(QueryExecutorMultiLabelTest, SetAssignReplace) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person {name: 'Alice', age: 30})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // SET n = {city: 'Beijing'} — deletes name+age, sets city (goes to __anon__)
+    auto r2 = execSync(*executor_, "MATCH (n:Person) SET n = {city: 'Beijing'}");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN n.name, n.age, n.city");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    // name and age should be gone (null)
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(r3.rows[0][0]));
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(r3.rows[0][1]));
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][2]), "Beijing");
+}
+
+// --- REMOVE n:Label — verify label is actually removed ---
+TEST_F(QueryExecutorMultiLabelTest, RemoveVertexLabelVerifyRemoved) {
+    auto r1 = execSync(*executor_, "CREATE (n:Person:Employee)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // REMOVE n:Employee
+    auto r2 = execSync(*executor_, "MATCH (n:Person) REMOVE n:Employee");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+
+    // labels(n) should no longer contain Employee
+    auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN labels(n)");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    auto labels = std::get<ListValue>(r3.rows[0][0]);
+    // Should only contain "Person", not "Employee"
+    bool has_employee = false;
+    for (const auto& elem : labels.elements) {
+        if (std::holds_alternative<std::string>(elem.value) && std::get<std::string>(elem.value) == "Employee") {
+            has_employee = true;
+        }
+    }
+    EXPECT_FALSE(has_employee) << "Employee label should have been removed";
 }
 
 // --- CREATE writes unknown property to __anon__, then MATCH + RETURN reads it back ---

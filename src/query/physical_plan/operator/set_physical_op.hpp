@@ -30,6 +30,7 @@ public:
         std::optional<LabelId> resolved_label_id;
         std::optional<uint16_t> resolved_prop_id;
         bool strong_mode = false;
+        bool is_add_assign = false;
     };
 
     SetPhysicalOp(std::vector<BoundSetItem> items, Schema input_schema, IAsyncGraphDataStore& store,

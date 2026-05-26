@@ -310,6 +310,7 @@ struct SetItem {
     Expression target;
     std::optional<Expression> value;
     std::string label;
+    bool is_add_assign = false;
 };
 
 struct RemoveItem {

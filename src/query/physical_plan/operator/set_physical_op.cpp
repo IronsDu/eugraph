@@ -126,6 +126,79 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                           item.prop_name, label_names);
                         }
                     }
+                } else if (item.kind == cypher::SetItemKind::SET_PROPERTIES) {
+                    if (!item.value.has_value())
+                        continue;
+
+                    Value v = value_results[idx][row_idx];
+                    if (!std::holds_alternative<MapValue>(v))
+                        continue;
+                    const auto& mv = std::get<MapValue>(v);
+
+                    // For '=' (replace): delete all existing vertex properties first
+                    if (!item.is_add_assign) {
+                        if (vertex.labels.has_value()) {
+                            for (LabelId lid : *vertex.labels) {
+                                auto def_it = label_defs_.find(lid);
+                                if (def_it == label_defs_.end())
+                                    continue;
+                                for (const auto& pd : def_it->second.properties) {
+                                    co_await store_.deleteVertexProperty(vid, lid, pd.id);
+                                }
+                            }
+                        }
+                        // Also delete anon properties
+                        if (anon_label_id_ != INVALID_LABEL_ID) {
+                            auto anon_it = label_defs_.find(anon_label_id_);
+                            if (anon_it != label_defs_.end()) {
+                                for (const auto& pd : anon_it->second.properties) {
+                                    co_await store_.deleteVertexProperty(vid, anon_label_id_, pd.id);
+                                }
+                            }
+                        }
+                    }
+
+                    // Write each map entry via convenience mode resolution
+                    for (const auto& [key, vs] : mv.entries) {
+                        Value entry_val = vs.value;
+                        PropertyValue pv = valueToPropertyValue(entry_val);
+
+                        std::vector<std::pair<LabelId, uint16_t>> matches;
+                        if (vertex.labels.has_value()) {
+                            for (LabelId lid : *vertex.labels) {
+                                auto def_it = label_defs_.find(lid);
+                                if (def_it == label_defs_.end())
+                                    continue;
+                                for (const auto& pd : def_it->second.properties) {
+                                    if (pd.name == key) {
+                                        matches.emplace_back(lid, pd.id);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (matches.size() == 1) {
+                            co_await store_.putVertexProperty(vid, matches[0].first, matches[0].second, pv);
+                        } else if (matches.empty()) {
+                            if (anon_label_id_ != INVALID_LABEL_ID) {
+                                uint16_t anon_pid = co_await meta_.getOrCreateAnonPropId(key, PropertyType::ANY);
+                                co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, pv);
+                            }
+                        } else {
+                            std::string label_names;
+                            for (const auto& [lid, pid] : matches) {
+                                auto it = label_defs_.find(lid);
+                                if (it != label_defs_.end()) {
+                                    if (!label_names.empty())
+                                        label_names += ", ";
+                                    label_names += it->second.name;
+                                }
+                            }
+                            spdlog::error("Ambiguous property '{}' found in labels: {}. Use ::Label to specify.", key,
+                                          label_names);
+                        }
+                    }
                 }
             }
         }
