@@ -603,6 +603,13 @@ public:
         co_return ok;
     }
 
+    folly::coro::Task<bool> deleteEdgeProperty(EdgeId eid, EdgeLabelId label_id, uint16_t prop_id) override {
+        auto txn = txn_;
+        auto ok = co_await io_.dispatch(
+            [this, txn, eid, label_id, prop_id]() { return store_.deleteEdgeProperty(txn, eid, label_id, prop_id); });
+        co_return ok;
+    }
+
     // ==================== Batch Write ====================
 
     folly::coro::Task<void> batchInsertVertices(LabelId label_id, std::vector<BatchVertexEntry> entries) override {

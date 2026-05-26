@@ -69,6 +69,7 @@ public:
                                                       const PropertyValue& value) = 0;
     virtual folly::coro::Task<bool> putVertexProperties(VertexId vid, LabelId label_id, const Properties& props) = 0;
     virtual folly::coro::Task<bool> deleteVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id) = 0;
+    virtual folly::coro::Task<bool> deleteEdgeProperty(EdgeId eid, EdgeLabelId label_id, uint16_t prop_id) = 0;
 
     // Vertex Label Write
     virtual folly::coro::Task<bool> addVertexLabel(VertexId vid, LabelId label_id) = 0;

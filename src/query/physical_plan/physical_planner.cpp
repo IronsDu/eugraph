@@ -807,9 +807,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         items.push_back(std::move(bri));
                     }
 
-                    auto result =
-                        std::make_unique<RemovePhysicalOp>(std::move(items), cr.output_schema, store, ctx.label_defs,
-                                                           ctx.label_name_to_id, anon_id, std::move(cr.op));
+                    auto result = std::make_unique<RemovePhysicalOp>(std::move(items), cr.output_schema, store,
+                                                                     ctx.label_defs, ctx.label_name_to_id, anon_id,
+                                                                     ctx.edge_label_defs, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundDeleteOp>) {
