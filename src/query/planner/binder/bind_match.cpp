@@ -117,7 +117,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         // Bind start node
         std::string start_var;
         uint32_t start_col;
-        std::optional<LabelId> start_label;
+        std::vector<LabelId> start_labels;
         std::vector<uint16_t> start_prop_ids;
 
         if (correlated) {
@@ -130,11 +130,11 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 error("MATCH after WITH on unrelated variable '" + *element.node.variable + "' is not yet supported");
                 return std::nullopt;
             }
-            if (!bindNodePattern(element.node, start_var, start_col, start_label, start_prop_ids, true))
+            if (!bindNodePattern(element.node, start_var, start_col, start_labels, start_prop_ids, true))
                 return std::nullopt;
             start_col = col->column_index;
         } else {
-            if (!bindNodePattern(element.node, start_var, start_col, start_label, start_prop_ids))
+            if (!bindNodePattern(element.node, start_var, start_col, start_labels, start_prop_ids))
                 return std::nullopt;
         }
 
@@ -145,11 +145,11 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         // Create scan operator (or reuse parent for correlated MATCH)
         if (correlated) {
             current = std::move(*parent);
-        } else if (start_label) {
+        } else if (!start_labels.empty()) {
             BoundLabelScanOp scan;
             scan.variable = start_var;
             scan.column_index = start_col;
-            scan.label_id = *start_label;
+            scan.label_id = start_labels[0];
             scan.label_name = element.node.labels[0];
             current = scan;
         } else {
@@ -275,9 +275,9 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 // Bind target node
                 std::string dst_var;
                 uint32_t dst_col;
-                std::optional<LabelId> dst_label;
+                std::vector<LabelId> dst_labels;
                 std::vector<uint16_t> dst_prop_ids;
-                if (!bindNodePattern(node_pat, dst_var, dst_col, dst_label, dst_prop_ids))
+                if (!bindNodePattern(node_pat, dst_var, dst_col, dst_labels, dst_prop_ids))
                     return std::nullopt;
 
                 // Create varlen expand operator
@@ -361,9 +361,9 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             // Bind target node
             std::string dst_var;
             uint32_t dst_col;
-            std::optional<LabelId> dst_label;
+            std::vector<LabelId> dst_labels;
             std::vector<uint16_t> dst_prop_ids;
-            if (!bindNodePattern(node_pat, dst_var, dst_col, dst_label, dst_prop_ids))
+            if (!bindNodePattern(node_pat, dst_var, dst_col, dst_labels, dst_prop_ids))
                 return std::nullopt;
 
             // Create expand operator

@@ -380,7 +380,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         info.column_index = static_cast<uint32_t>(i);
         auto existing = ctx_.symbols.find(with_outputs[i].first);
         if (existing != ctx_.symbols.end()) {
-            info.source_label = existing->second.source_label;
+            info.source_labels = existing->second.source_labels;
             info.source_prop_id = existing->second.source_prop_id;
             info.strong_typed = existing->second.strong_typed;
         }
@@ -451,7 +451,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         // Carry forward metadata if this variable was known before WITH.
         auto it = old_symbols.find(with_outputs[i].first);
         if (it != old_symbols.end()) {
-            info.source_label = it->second.source_label;
+            info.source_labels = it->second.source_labels;
             info.source_prop_id = it->second.source_prop_id;
             info.strong_typed = it->second.strong_typed;
         }

@@ -5,6 +5,65 @@
 namespace eugraph {
 namespace binder {
 
+namespace {
+
+/// Bind inline properties for a multi-label CREATE node.
+/// Returns (label_properties, pending_props). Sets error_out on ambiguous property names.
+std::pair<std::vector<std::pair<LabelId, std::vector<std::pair<uint16_t, BoundExpression>>>>,
+          std::vector<std::pair<std::string, BoundExpression>>>
+bindCreateNodeProperties(const cypher::NodePattern& node, const std::vector<LabelId>& label_ids,
+                         const catalog::Catalog& catalog, Binder& binder, std::string* error_out) {
+    std::vector<std::pair<LabelId, std::vector<std::pair<uint16_t, BoundExpression>>>> label_properties;
+    std::vector<std::pair<std::string, BoundExpression>> pending_props;
+
+    // Initialize per-label property vectors for each label
+    for (auto lid : label_ids) {
+        label_properties.emplace_back(lid, std::vector<std::pair<uint16_t, BoundExpression>>{});
+    }
+
+    if (!node.properties)
+        return {std::move(label_properties), std::move(pending_props)};
+
+    for (const auto& [prop_name, prop_expr] : node.properties->entries) {
+        // Count how many specified labels define this property (without binding yet).
+        LabelId matched_lid = INVALID_LABEL_ID;
+        int match_count = 0;
+        for (const auto& [lid, props_vec] : label_properties) {
+            if (catalog.lookupProperty(lid, prop_name)) {
+                if (match_count == 0)
+                    matched_lid = lid;
+                match_count++;
+            }
+        }
+
+        if (match_count > 1) {
+            if (error_out && error_out->empty())
+                *error_out = "Ambiguous property '" + prop_name + "' found in multiple labels. Use ::Label to specify.";
+            continue;
+        }
+
+        auto bound_val = binder.bindExpression(prop_expr);
+        if (!bound_val)
+            continue;
+
+        if (match_count == 1) {
+            for (auto& [lid, props_vec] : label_properties) {
+                if (lid == matched_lid) {
+                    auto* pd = catalog.lookupProperty(lid, prop_name);
+                    props_vec.emplace_back(pd->id, std::move(*bound_val));
+                    break;
+                }
+            }
+        } else {
+            pending_props.emplace_back(prop_name, std::move(*bound_val));
+        }
+    }
+
+    return {std::move(label_properties), std::move(pending_props)};
+}
+
+} // namespace
+
 // ==================== CREATE Binding ====================
 
 std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClause& create,
@@ -18,38 +77,33 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
         // Create start node
         std::string start_var;
         uint32_t start_col;
-        std::optional<LabelId> start_label;
+        std::vector<LabelId> start_labels;
         std::vector<uint16_t> start_prop_ids;
-        if (!bindNodePattern(element.node, start_var, start_col, start_label, start_prop_ids))
+        if (!bindNodePattern(element.node, start_var, start_col, start_labels, start_prop_ids))
             return std::nullopt;
 
-        // Mark as CREATE variable so property resolution uses source_label
+        // Mark as CREATE variable so property resolution uses source_labels
         auto* sym = ctx_.lookup(start_var);
         if (sym)
             ctx_.symbols[start_var].is_create_variable = true;
 
         auto create_node = std::make_unique<BoundCreateNodeOp>();
         create_node->variable = start_var;
-        create_node->label_id = start_label.value_or(catalog_.getAnonLabelId());
-
-        // Bind inline properties as expressions
-        if (element.node.properties && create_node->label_id != INVALID_LABEL_ID) {
-            const auto* ldef = catalog_.lookupLabel(create_node->label_id);
-            if (ldef) {
-                for (const auto& [prop_name, prop_expr] : element.node.properties->entries) {
-                    auto* pd = catalog_.lookupProperty(create_node->label_id, prop_name);
-                    if (pd) {
-                        auto bound_val = bindExpression(prop_expr);
-                        if (bound_val)
-                            create_node->properties.emplace_back(pd->id, std::move(*bound_val));
-                    } else {
-                        auto bound_val = bindExpression(prop_expr);
-                        if (bound_val)
-                            create_node->pending_props.emplace_back(prop_name, std::move(*bound_val));
-                    }
-                }
-            }
+        if (start_labels.empty()) {
+            create_node->label_ids.push_back(catalog_.getAnonLabelId());
+        } else {
+            create_node->label_ids = start_labels;
         }
+
+        std::string prop_error;
+        auto [label_props, pending] =
+            bindCreateNodeProperties(element.node, create_node->label_ids, catalog_, *this, &prop_error);
+        if (!prop_error.empty()) {
+            error(prop_error);
+            return std::nullopt;
+        }
+        create_node->label_properties = std::move(label_props);
+        create_node->pending_props = std::move(pending);
 
         // Chain: first pattern connects to preceding clause (MATCH/WITH),
         // subsequent patterns connect to the previous pattern's output.
@@ -78,9 +132,9 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
             // Bind target node
             std::string dst_var;
             uint32_t dst_col;
-            std::optional<LabelId> dst_label;
+            std::vector<LabelId> dst_labels;
             std::vector<uint16_t> dst_prop_ids;
-            if (!bindNodePattern(node_pat, dst_var, dst_col, dst_label, dst_prop_ids))
+            if (!bindNodePattern(node_pat, dst_var, dst_col, dst_labels, dst_prop_ids))
                 return std::nullopt;
 
             // Create edge
@@ -115,21 +169,22 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
                 // Create target node
                 auto create_dst = std::make_unique<BoundCreateNodeOp>();
                 create_dst->variable = dst_var;
-                create_dst->label_id = dst_label.value_or(catalog_.getAnonLabelId());
-                if (node_pat.properties && create_dst->label_id != INVALID_LABEL_ID) {
-                    for (const auto& [prop_name, prop_expr] : node_pat.properties->entries) {
-                        auto* pd = catalog_.lookupProperty(create_dst->label_id, prop_name);
-                        if (pd) {
-                            auto bound_val = bindExpression(prop_expr);
-                            if (bound_val)
-                                create_dst->properties.emplace_back(pd->id, std::move(*bound_val));
-                        } else {
-                            auto bound_val = bindExpression(prop_expr);
-                            if (bound_val)
-                                create_dst->pending_props.emplace_back(prop_name, std::move(*bound_val));
-                        }
-                    }
+                if (dst_labels.empty()) {
+                    create_dst->label_ids.push_back(catalog_.getAnonLabelId());
+                } else {
+                    create_dst->label_ids = dst_labels;
                 }
+
+                std::string dst_prop_error;
+                auto [dst_label_props, dst_pending] =
+                    bindCreateNodeProperties(node_pat, create_dst->label_ids, catalog_, *this, &dst_prop_error);
+                if (!dst_prop_error.empty()) {
+                    error(dst_prop_error);
+                    return std::nullopt;
+                }
+                create_dst->label_properties = std::move(dst_label_props);
+                create_dst->pending_props = std::move(dst_pending);
+
                 create_dst->child = std::move(*current);
                 BoundLogicalOperator dst_node_op = std::move(create_dst);
                 create_edge->child = std::move(dst_node_op);

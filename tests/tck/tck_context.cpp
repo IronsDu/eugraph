@@ -22,12 +22,12 @@ namespace ast = cypher;
 
 bool hasUnsupportedExpr(const ast::Expression& expr);
 
-bool hasUnsupportedPattern(const ast::PatternPart& pp) {
+bool hasUnsupportedPattern(const ast::PatternPart& pp, bool is_create = false) {
     // Check path pattern: node + chain
     const ast::PatternElement& el = pp.element;
 
-    // Check start node: multi-label?
-    if (el.node.labels.size() > 1) {
+    // Check start node: multi-label? (allowed in CREATE)
+    if (!is_create && el.node.labels.size() > 1) {
         spdlog::info("[TCK] skipping: multi-label node pattern");
         return true;
     }
@@ -40,8 +40,8 @@ bool hasUnsupportedPattern(const ast::PatternPart& pp) {
 
     // Check each chain step: (rel, node)
     for (const auto& [rel, node] : el.chain) {
-        // Multi-label node?
-        if (node.labels.size() > 1) {
+        // Multi-label node? (allowed in CREATE)
+        if (!is_create && node.labels.size() > 1) {
             spdlog::info("[TCK] skipping: multi-label node pattern");
             return true;
         }
@@ -189,7 +189,7 @@ bool hasUnsupportedClause(const ast::Clause& clause) {
                 return false;
             } else if constexpr (std::is_same_v<Inner, ast::CreateClause>) {
                 for (const auto& pp : ptr->patterns) {
-                    if (hasUnsupportedPattern(pp))
+                    if (hasUnsupportedPattern(pp, /*is_create=*/true))
                         return true;
                 }
                 return false;
@@ -461,10 +461,66 @@ GraphSnapshot TckContext::takeSnapshot() {
         snap.edgeCount = 0;
     }
 
-    // For label/property counts, use simple approximation
-    // Label count = total number of label instances across all nodes
-    // Property count = total number of property instances
-    // For now, use 0 as baseline; side effects still work since we compute deltas
+    // Count label instances (total labels across all nodes)
+    try {
+        auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN sum(size(labels(n)))", graphName);
+        std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
+            if (batch.hasValue()) {
+                for (const auto& row : *batch->rows()) {
+                    if (row.values()->size() > 0) {
+                        const auto& v = (*row.values())[0];
+                        if (v.getType() == thrift::ResultValue::Type::int_val) {
+                            snap.labelCount = v.get_int_val();
+                        }
+                    }
+                }
+            }
+        });
+    } catch (...) {
+        snap.labelCount = 0;
+    }
+
+    // Count property instances: vertex properties
+    int64_t vprop_count = 0;
+    try {
+        auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN sum(size(keys(n)))", graphName);
+        std::move(stream).subscribeInline([&vprop_count](folly::Try<thrift::ResultRowBatch>&& batch) {
+            if (batch.hasValue()) {
+                for (const auto& row : *batch->rows()) {
+                    if (row.values()->size() > 0) {
+                        const auto& v = (*row.values())[0];
+                        if (v.getType() == thrift::ResultValue::Type::int_val) {
+                            vprop_count = v.get_int_val();
+                        }
+                    }
+                }
+            }
+        });
+    } catch (...) {
+        vprop_count = 0;
+    }
+
+    // Count property instances: edge properties
+    int64_t eprop_count = 0;
+    try {
+        auto [meta, stream] = rpc->executeCypher("MATCH ()-[r]->() RETURN sum(size(keys(r)))", graphName);
+        std::move(stream).subscribeInline([&eprop_count](folly::Try<thrift::ResultRowBatch>&& batch) {
+            if (batch.hasValue()) {
+                for (const auto& row : *batch->rows()) {
+                    if (row.values()->size() > 0) {
+                        const auto& v = (*row.values())[0];
+                        if (v.getType() == thrift::ResultValue::Type::int_val) {
+                            eprop_count = v.get_int_val();
+                        }
+                    }
+                }
+            }
+        });
+    } catch (...) {
+        eprop_count = 0;
+    }
+
+    snap.propertyCount = vprop_count + eprop_count;
 
     return snap;
 }

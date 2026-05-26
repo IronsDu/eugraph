@@ -112,19 +112,17 @@ bindExpression(PropertyAccess(n, "name")):
 
 ### 4. CREATE 路径
 
-**当前**（binder.cpp:1130）：
+**当前实现**（bind_mutation.cpp）：
 
 ```cpp
-create_node->label_id = start_label.value_or(INVALID_LABEL_ID);
+if (start_labels.empty()) {
+    create_node->label_ids.push_back(catalog_.getAnonLabelId());
+} else {
+    create_node->label_ids = start_labels;
+}
 ```
 
-**修改后**：
-
-```cpp
-create_node->label_id = start_label.value_or(catalog_.getAnonLabelId());
-```
-
-当 node pattern 有 `labels=[]` 时，使用 `__anon__` 标签。属性不要求预注册——如果有，走正常 `properties`；如果没有，走 `pending_props`（名字暂存，物理层按名写入）。
+当 node pattern 有 `labels=[]` 时，使用 `__anon__` 标签。多标签模式下，属性按标签解析（单个命中→该标签，无命中→`pending_props`/`__anon__`，多个命中→歧义报错）。
 
 ### 5. 物理层
 
@@ -218,8 +216,8 @@ SET n:Person → labels=[__anon__, Person]
 | `RETURN n` | `Variable(n)` | `BoundColumnRef(n, Vertex)` | 返回 VertexValue，labels 过滤 | labels 列表过滤 `__anon__` |
 | `RETURN n.name` | `PropertyAccess(Variable(n), "name")` | 同弱类型 | 同弱类型 | Binder 成功即无变化 |
 | `labels(n)` 函数 | `FunctionCall("labels", [n])` | `BoundFunctionCall(labels_fn, [BoundColumnRef(n)])` | `getVertexLabels(vid)` → 已过滤的列表 | **无变化**（labels 已过滤） |
-| `CREATE ({name:'foo'})` | `CreateClause { NodePattern { labels=[], props={name:'foo'} } }` | `BoundCreateNodeOp { label_id=__anon__id, pending_props=[("name", lit)] }` | 物理层 DDL 算子先注册属性，再按名写入 | label_id 从 `INVALID` → `__anon__id` |
-| `CREATE (n:Person {name:'foo'})` | `CreateClause { NodePattern { labels=[Person], props=...} }` | `BoundCreateNodeOp { label_id=Person_id, properties=[(pid, lit)] }` | 不变 | **无变化** |
+| `CREATE ({name:'foo'})` | `CreateClause { NodePattern { labels=[], props={name:'foo'} } }` | `BoundCreateNodeOp { label_ids=[__anon__id], pending_props=[("name", lit)] }` | 物理层按名写入 `__anon__` | labels 为空 → `label_ids`=[__anon__id] |
+| `CREATE (n:Person {name:'foo'})` | `CreateClause { NodePattern { labels=[Person], props=...} }` | `BoundCreateNodeOp { label_ids=[Person_id], label_properties=[(pid, lit)] }` | 不变 | **无变化** |
 | `MATCH (n)` | `MatchClause { NodePattern { labels=[] } }` | `BoundScanOp` → `AllNodeScanPhysicalOp` | 扫描所有顶点（含 `__anon__` 节点） | labels 过滤 + 注入 `__anon__` |
 | `MATCH (n:Person)` | `MatchClause { NodePattern { labels=[Person] } }` | `BoundLabelScanOp(Person)` → `LabelScanPhysicalOp` | 仅扫描 Person 标签节点 | **无变化** |
 | `SET n:Person` on 无标签节点 | `SetClause { SET_LABELS, target=n, labels=[Person] }` | `BoundSetOp { SET_LABELS, var_name=n, label=Person }` | `addVertexLabel(vid, Person_id)` | __anon 保留 |
