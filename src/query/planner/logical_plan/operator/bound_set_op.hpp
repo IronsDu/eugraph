@@ -26,6 +26,7 @@ struct BoundSetOp {
         std::optional<BoundExpression> value_expr;
         std::optional<LabelId> label_id;
         bool strong_mode = false;
+        bool is_add_assign = false;
     };
     std::vector<SetItem> items;
     BoundLogicalOperator child;

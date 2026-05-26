@@ -284,9 +284,32 @@ std::optional<BoundLogicalOperator> Binder::bindSet(const cypher::SetClause& set
                 item.target);
             break;
         }
-        case cypher::SetItemKind::SET_PROPERTIES:
+        case cypher::SetItemKind::SET_PROPERTIES: {
+            bound_item.kind = BoundSetOp::ItemKind::SET_PROPERTIES;
+            bound_item.is_add_assign = item.is_add_assign;
+            // Extract variable name from target
+            std::visit(
+                [&](const auto& ptr) {
+                    using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+                    if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                        bound_item.target_variable = ptr->name;
+                    }
+                },
+                item.target);
+            if (bound_item.target_variable.empty()) {
+                error("Cannot resolve SET target variable");
+                continue;
+            }
+            // Bind the map expression
+            if (item.value) {
+                auto bound_val = bindExpression(*item.value);
+                if (bound_val)
+                    bound_item.value_expr = std::move(*bound_val);
+            }
+            break;
+        }
         case cypher::SetItemKind::SET_DYNAMIC_PROPERTY:
-            error("SET properties/dynamic not yet supported in binder");
+            error("SET dynamic property not yet supported in binder");
             continue;
         }
         set_op->items.push_back(std::move(bound_item));
@@ -305,6 +328,7 @@ std::optional<BoundLogicalOperator> Binder::bindRemove(const cypher::RemoveClaus
         BoundRemoveOp::RemoveItem bound_item;
         if (item.kind == cypher::RemoveItem::Kind::LABEL) {
             bound_item.kind = BoundRemoveOp::ItemKind::REMOVE_LABEL;
+            bound_item.prop_name = item.name;
             LabelId lid = catalog_.labelNameToId(item.name);
             if (lid != INVALID_LABEL_ID)
                 bound_item.label_id = lid;

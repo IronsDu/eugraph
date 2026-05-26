@@ -20,6 +20,17 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
                     if (vv.labels && anon_label_id_ != INVALID_LABEL_ID) {
                         vv.labels->erase(anon_label_id_);
                     }
+                    if (anon_label_id_ != INVALID_LABEL_ID) {
+                        auto anon_def_it = label_defs_.find(anon_label_id_);
+                        if (anon_def_it != label_defs_.end() && !anon_def_it->second.properties.empty()) {
+                            std::vector<uint16_t> anon_pids;
+                            for (const auto& pd : anon_def_it->second.properties)
+                                anon_pids.push_back(pd.id);
+                            auto anon_props = co_await store_.getVertexProperties(vid, anon_label_id_, anon_pids);
+                            if (anon_props)
+                                vv.properties[anon_label_id_] = std::move(*anon_props);
+                        }
+                    }
                 }
                 auto it = label_prop_ids_.find(label_id);
                 if (it != label_prop_ids_.end() && !it->second.empty()) {

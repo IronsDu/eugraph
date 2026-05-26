@@ -200,8 +200,12 @@ bool hasUnsupportedClause(const ast::Clause& clause) {
                 spdlog::info("[TCK] skipping: CALL");
                 return true;
             } else if constexpr (std::is_same_v<Inner, ast::RemoveClause>) {
-                spdlog::info("[TCK] skipping: REMOVE");
-                return true;
+                // REMOVE clause: check expressions in remove items
+                for (const auto& item : ptr->items) {
+                    if (hasUnsupportedExpr(item.target))
+                        return true;
+                }
+                return false;
             } else if constexpr (std::is_same_v<Inner, ast::ReturnClause>) {
                 for (const auto& item : ptr->items) {
                     if (hasUnsupportedExpr(item.expr))

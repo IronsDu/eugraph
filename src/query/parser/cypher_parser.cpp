@@ -825,11 +825,7 @@ private:
         std::vector<SetItem> items;
         for (auto* si : ctx->setItem()) {
             SetItem item;
-            if (si->propertyExpression() && si->expression()) {
-                item.kind = SetItemKind::SET_PROPERTY;
-                item.target = buildPropertyExpression(si->propertyExpression());
-                item.value = buildExpression(si->expression());
-            } else if (si->symbol() && si->nodeLabels()) {
+            if (si->symbol() && si->nodeLabels()) {
                 item.kind = SetItemKind::SET_LABELS;
                 item.target = makeVariable(si->symbol()->getText());
                 for (auto* n : si->nodeLabels()->name())
@@ -838,6 +834,19 @@ private:
                 item.kind = SetItemKind::SET_PROPERTIES;
                 item.target = makeVariable(si->symbol()->getText());
                 item.value = buildExpression(si->expression());
+                item.is_add_assign = si->ADD_ASSIGN() != nullptr;
+            } else if (si->propertyExpression() && si->expression()) {
+                auto prop_expr = buildPropertyExpression(si->propertyExpression());
+                // Distinguish SET n = map (Variable only) from SET n.prop = val (PropertyAccess)
+                if (std::holds_alternative<std::unique_ptr<cypher::Variable>>(prop_expr)) {
+                    item.kind = SetItemKind::SET_PROPERTIES;
+                    item.target = std::move(prop_expr);
+                    item.value = buildExpression(si->expression());
+                } else {
+                    item.kind = SetItemKind::SET_PROPERTY;
+                    item.target = std::move(prop_expr);
+                    item.value = buildExpression(si->expression());
+                }
             }
             items.push_back(std::move(item));
         }
