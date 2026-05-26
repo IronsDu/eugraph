@@ -260,8 +260,7 @@ CREATE (n:Person)-[:KNOWS {since: 2020}]->(m:Person)
 **限制**：
 - 属性值仅支持字面量（字符串/整数/浮点/布尔），不支持表达式
 - 仅解析第一个关系类型名
-- CREATE 不能跟在 MATCH 等子句之后（仅支持独立 CREATE）
-- 不支持多标签 CREATE（`CREATE (n:Person:Employee)` 和 `CREATE (n:Person:Employee {...})` 均报错），多标签需通过 `SET n:Label` 添加
+- 支持多标签 CREATE（`CREATE (n:Person:Employee)` 和 `CREATE (n:Person:Employee {age: 30, salary: 50000})`），属性按标签解析（单个命中→写入该标签，无命中→`__anon__`，多个命中→歧义报错）
 
 ### SET — 属性/标签设置
 
