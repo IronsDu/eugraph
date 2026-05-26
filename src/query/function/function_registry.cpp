@@ -419,65 +419,181 @@ void FunctionRegistry::registerScalarBuiltins() {
     // --- Temporal constructors ---
 
     // date() -> String (0-arg: epoch 1970-01-01)
-    functions_["date"].push_back({"date", {}, BoundType::String(), false, true, scalar::dateScalarFn,
-                                  scalar::dateBatchFn, {}, {}, {}});
+    functions_["date"].push_back(
+        {"date", {}, BoundType::String(), false, true, scalar::dateScalarFn, scalar::dateBatchFn, {}, {}, {}});
     // date(MAP<STRING, ANY>) -> String
-    functions_["date"].push_back({"date", {BoundType::Map(BoundType::String(), BoundType::Any())}, BoundType::String(),
-                                  false, false, scalar::dateScalarFn, scalar::dateBatchFn, {}, {}, {}});
+    functions_["date"].push_back({"date",
+                                  {BoundType::Map(BoundType::String(), BoundType::Any())},
+                                  BoundType::String(),
+                                  false,
+                                  false,
+                                  scalar::dateScalarFn,
+                                  scalar::dateBatchFn,
+                                  {},
+                                  {},
+                                  {}});
     // date(STRING) -> String
-    functions_["date"].push_back({"date", {BoundType::String()}, BoundType::String(), false, false,
-                                  scalar::dateScalarFn, scalar::dateBatchFn, {}, {}, {}});
+    functions_["date"].push_back({"date",
+                                  {BoundType::String()},
+                                  BoundType::String(),
+                                  false,
+                                  false,
+                                  scalar::dateScalarFn,
+                                  scalar::dateBatchFn,
+                                  {},
+                                  {},
+                                  {}});
 
     // localtime() -> String (0-arg: epoch 00:00:00)
-    functions_["localtime"].push_back({"localtime", {}, BoundType::String(), false, true, scalar::localtimeScalarFn,
-                                       scalar::localtimeBatchFn, {}, {}, {}});
+    functions_["localtime"].push_back({"localtime",
+                                       {},
+                                       BoundType::String(),
+                                       false,
+                                       true,
+                                       scalar::localtimeScalarFn,
+                                       scalar::localtimeBatchFn,
+                                       {},
+                                       {},
+                                       {}});
     // localtime(MAP<STRING, ANY>) -> String
-    functions_["localtime"].push_back({"localtime", {BoundType::Map(BoundType::String(), BoundType::Any())},
-                                       BoundType::String(), false, false, scalar::localtimeScalarFn,
-                                       scalar::localtimeBatchFn, {}, {}, {}});
+    functions_["localtime"].push_back({"localtime",
+                                       {BoundType::Map(BoundType::String(), BoundType::Any())},
+                                       BoundType::String(),
+                                       false,
+                                       false,
+                                       scalar::localtimeScalarFn,
+                                       scalar::localtimeBatchFn,
+                                       {},
+                                       {},
+                                       {}});
     // localtime(STRING) -> String
-    functions_["localtime"].push_back({"localtime", {BoundType::String()}, BoundType::String(), false, false,
-                                       scalar::localtimeScalarFn, scalar::localtimeBatchFn, {}, {}, {}});
+    functions_["localtime"].push_back({"localtime",
+                                       {BoundType::String()},
+                                       BoundType::String(),
+                                       false,
+                                       false,
+                                       scalar::localtimeScalarFn,
+                                       scalar::localtimeBatchFn,
+                                       {},
+                                       {},
+                                       {}});
 
     // time() -> String (0-arg: epoch 00:00:00Z)
-    functions_["time"].push_back({"time", {}, BoundType::String(), false, true, scalar::timeScalarFn,
-                                  scalar::timeBatchFn, {}, {}, {}});
+    functions_["time"].push_back(
+        {"time", {}, BoundType::String(), false, true, scalar::timeScalarFn, scalar::timeBatchFn, {}, {}, {}});
     // time(MAP<STRING, ANY>) -> String
-    functions_["time"].push_back({"time", {BoundType::Map(BoundType::String(), BoundType::Any())}, BoundType::String(),
-                                  false, false, scalar::timeScalarFn, scalar::timeBatchFn, {}, {}, {}});
+    functions_["time"].push_back({"time",
+                                  {BoundType::Map(BoundType::String(), BoundType::Any())},
+                                  BoundType::String(),
+                                  false,
+                                  false,
+                                  scalar::timeScalarFn,
+                                  scalar::timeBatchFn,
+                                  {},
+                                  {},
+                                  {}});
     // time(STRING) -> String
-    functions_["time"].push_back({"time", {BoundType::String()}, BoundType::String(), false, false,
-                                  scalar::timeScalarFn, scalar::timeBatchFn, {}, {}, {}});
+    functions_["time"].push_back({"time",
+                                  {BoundType::String()},
+                                  BoundType::String(),
+                                  false,
+                                  false,
+                                  scalar::timeScalarFn,
+                                  scalar::timeBatchFn,
+                                  {},
+                                  {},
+                                  {}});
 
     // localdatetime() -> String (0-arg: epoch 1970-01-01T00:00:00)
-    functions_["localdatetime"].push_back({"localdatetime", {}, BoundType::String(), false, true,
-                                           scalar::localdatetimeScalarFn, scalar::localdatetimeBatchFn, {}, {}, {}});
+    functions_["localdatetime"].push_back({"localdatetime",
+                                           {},
+                                           BoundType::String(),
+                                           false,
+                                           true,
+                                           scalar::localdatetimeScalarFn,
+                                           scalar::localdatetimeBatchFn,
+                                           {},
+                                           {},
+                                           {}});
     // localdatetime(MAP<STRING, ANY>) -> String
-    functions_["localdatetime"].push_back({"localdatetime", {BoundType::Map(BoundType::String(), BoundType::Any())},
-                                           BoundType::String(), false, false, scalar::localdatetimeScalarFn,
-                                           scalar::localdatetimeBatchFn, {}, {}, {}});
+    functions_["localdatetime"].push_back({"localdatetime",
+                                           {BoundType::Map(BoundType::String(), BoundType::Any())},
+                                           BoundType::String(),
+                                           false,
+                                           false,
+                                           scalar::localdatetimeScalarFn,
+                                           scalar::localdatetimeBatchFn,
+                                           {},
+                                           {},
+                                           {}});
     // localdatetime(STRING) -> String
-    functions_["localdatetime"].push_back({"localdatetime", {BoundType::String()}, BoundType::String(), false, false,
-                                           scalar::localdatetimeScalarFn, scalar::localdatetimeBatchFn, {}, {}, {}});
+    functions_["localdatetime"].push_back({"localdatetime",
+                                           {BoundType::String()},
+                                           BoundType::String(),
+                                           false,
+                                           false,
+                                           scalar::localdatetimeScalarFn,
+                                           scalar::localdatetimeBatchFn,
+                                           {},
+                                           {},
+                                           {}});
 
     // datetime() -> String (0-arg: epoch 1970-01-01T00:00:00Z)
-    functions_["datetime"].push_back({"datetime", {}, BoundType::String(), false, true, scalar::datetimeScalarFn,
-                                      scalar::datetimeBatchFn, {}, {}, {}});
+    functions_["datetime"].push_back({"datetime",
+                                      {},
+                                      BoundType::String(),
+                                      false,
+                                      true,
+                                      scalar::datetimeScalarFn,
+                                      scalar::datetimeBatchFn,
+                                      {},
+                                      {},
+                                      {}});
     // datetime(MAP<STRING, ANY>) -> String
-    functions_["datetime"].push_back({"datetime", {BoundType::Map(BoundType::String(), BoundType::Any())},
-                                      BoundType::String(), false, false, scalar::datetimeScalarFn,
-                                      scalar::datetimeBatchFn, {}, {}, {}});
+    functions_["datetime"].push_back({"datetime",
+                                      {BoundType::Map(BoundType::String(), BoundType::Any())},
+                                      BoundType::String(),
+                                      false,
+                                      false,
+                                      scalar::datetimeScalarFn,
+                                      scalar::datetimeBatchFn,
+                                      {},
+                                      {},
+                                      {}});
     // datetime(STRING) -> String
-    functions_["datetime"].push_back({"datetime", {BoundType::String()}, BoundType::String(), false, false,
-                                      scalar::datetimeScalarFn, scalar::datetimeBatchFn, {}, {}, {}});
+    functions_["datetime"].push_back({"datetime",
+                                      {BoundType::String()},
+                                      BoundType::String(),
+                                      false,
+                                      false,
+                                      scalar::datetimeScalarFn,
+                                      scalar::datetimeBatchFn,
+                                      {},
+                                      {},
+                                      {}});
 
     // duration(MAP<STRING, ANY>) -> String
-    functions_["duration"].push_back({"duration", {BoundType::Map(BoundType::String(), BoundType::Any())},
-                                      BoundType::String(), false, false, scalar::durationScalarFn,
-                                      scalar::durationBatchFn, {}, {}, {}});
+    functions_["duration"].push_back({"duration",
+                                      {BoundType::Map(BoundType::String(), BoundType::Any())},
+                                      BoundType::String(),
+                                      false,
+                                      false,
+                                      scalar::durationScalarFn,
+                                      scalar::durationBatchFn,
+                                      {},
+                                      {},
+                                      {}});
     // duration(STRING) -> String
-    functions_["duration"].push_back({"duration", {BoundType::String()}, BoundType::String(), false, false,
-                                      scalar::durationScalarFn, scalar::durationBatchFn, {}, {}, {}});
+    functions_["duration"].push_back({"duration",
+                                      {BoundType::String()},
+                                      BoundType::String(),
+                                      false,
+                                      false,
+                                      scalar::durationScalarFn,
+                                      scalar::durationBatchFn,
+                                      {},
+                                      {},
+                                      {}});
 }
 
 void FunctionRegistry::registerAggregateBuiltins() {

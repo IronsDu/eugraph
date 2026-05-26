@@ -317,8 +317,7 @@ inline Value localtimeScalarFn(const std::vector<Value>& args, const EvalContext
     return localtimeImpl(args[0]);
 }
 
-inline void localtimeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                              const EvalContext&) {
+inline void localtimeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty()) {
         for (size_t i = 0; i < count; ++i)
             result.setValue(i, Value{std::string("00:00:00")});
@@ -421,7 +420,7 @@ inline Value localdatetimeScalarFn(const std::vector<Value>& args, const EvalCon
 }
 
 inline void localdatetimeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                                  const EvalContext&) {
+                                 const EvalContext&) {
     if (args.empty()) {
         for (size_t i = 0; i < count; ++i)
             result.setValue(i, Value{std::string("1970-01-01T00:00:00")});
@@ -564,8 +563,7 @@ inline Value durationScalarFn(const std::vector<Value>& args, const EvalContext&
     return durationImpl(args[0]);
 }
 
-inline void durationBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
-                             const EvalContext&) {
+inline void durationBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty()) {
         for (size_t i = 0; i < count; ++i)
             result.setValue(i, Value{std::string("PT0S")});
