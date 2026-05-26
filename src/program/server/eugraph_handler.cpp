@@ -1,5 +1,6 @@
 #include "program/server/eugraph_handler.hpp"
 
+#include "common/types/temporal_value.hpp"
 #include "query/parser/cypher_parser.hpp"
 
 #include <thrift/lib/cpp2/async/ServerStream.h>
@@ -350,6 +351,8 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
             }
         }
         rv.set_path_json(oss.str());
+    } else if (std::holds_alternative<TemporalValue>(val)) {
+        rv.set_string_val(temporalToString(std::get<TemporalValue>(val)));
     } else if (std::holds_alternative<ListValue>(val)) {
         auto& lv = std::get<ListValue>(val);
         std::ostringstream oss;

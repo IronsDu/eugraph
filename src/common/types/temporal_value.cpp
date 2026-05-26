@@ -100,6 +100,205 @@ bool temporalFieldReturnsString(TemporalField f) {
     }
 }
 
+bool isLeapYear(int64_t year) {
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+int64_t daysInMonth(int64_t year, int64_t month) {
+    static const int64_t kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1 || month > 12)
+        return 0;
+    if (month == 2 && isLeapYear(year))
+        return 29;
+    return kDays[month - 1];
+}
+
+void normalizeDate(int64_t& year, int64_t& month, int64_t& day) {
+    while (month > 12) {
+        month -= 12;
+        year++;
+    }
+    while (month < 1) {
+        month += 12;
+        year--;
+    }
+    while (day > daysInMonth(year, month)) {
+        day -= daysInMonth(year, month);
+        month++;
+        if (month > 12) {
+            month -= 12;
+            year++;
+        }
+    }
+    while (day < 1) {
+        month--;
+        if (month < 1) {
+            month = 12;
+            year--;
+        }
+        day += daysInMonth(year, month);
+    }
+}
+
+TemporalValue addDurationToTemporal(const TemporalValue& temporal, const TemporalValue& duration) {
+    if (duration.kind != TemporalKind::DURATION)
+        return temporal;
+
+    TemporalValue result = temporal;
+
+    bool hasDate = (result.kind == TemporalKind::DATE || result.kind == TemporalKind::DATETIME ||
+                    result.kind == TemporalKind::LOCAL_DATETIME);
+    bool hasTime = (result.kind != TemporalKind::DATE);
+
+    if (hasDate) {
+        result.month += duration.dur_months;
+        result.day += duration.dur_days;
+        normalizeDate(result.year, result.month, result.day);
+    }
+
+    if (hasTime) {
+        int64_t total_nanos = duration.dur_seconds * 1'000'000'000LL + duration.dur_nanos;
+        int64_t add_seconds = total_nanos / 1'000'000'000LL;
+        int64_t add_nanos = total_nanos % 1'000'000'000LL;
+        if (add_nanos < 0) {
+            add_nanos += 1'000'000'000LL;
+            add_seconds -= 1;
+        }
+
+        result.nanos += add_nanos;
+        result.second += add_seconds;
+        result.second += result.nanos / 1'000'000'000LL;
+        result.nanos %= 1'000'000'000LL;
+        result.minute += result.second / 60;
+        result.second %= 60;
+        result.hour += result.minute / 60;
+        result.minute %= 60;
+
+        if (hasDate) {
+            int64_t extra_days = result.hour / 24;
+            if (result.hour < 0)
+                extra_days = (result.hour - 23) / 24;
+            result.hour -= extra_days * 24;
+            result.day += extra_days;
+            normalizeDate(result.year, result.month, result.day);
+        }
+
+        if (result.nanos < 0) {
+            result.nanos += 1'000'000'000LL;
+            result.second -= 1;
+        }
+        if (result.second < 0) {
+            int64_t borrow_min = (-result.second + 59) / 60;
+            result.second += borrow_min * 60;
+            result.minute -= borrow_min;
+        }
+        if (result.minute < 0) {
+            int64_t borrow_hour = (-result.minute + 59) / 60;
+            result.minute += borrow_hour * 60;
+            result.hour -= borrow_hour;
+        }
+        if (result.hour < 0 && hasDate) {
+            int64_t borrow_day = (-result.hour + 23) / 24;
+            result.hour += borrow_day * 24;
+            result.day -= borrow_day;
+            normalizeDate(result.year, result.month, result.day);
+        }
+    }
+
+    return result;
+}
+
+TemporalValue subDurationFromTemporal(const TemporalValue& temporal, const TemporalValue& duration) {
+    TemporalValue neg = duration;
+    neg.dur_months = -neg.dur_months;
+    neg.dur_days = -neg.dur_days;
+    neg.dur_seconds = -neg.dur_seconds;
+    neg.dur_nanos = -neg.dur_nanos;
+    return addDurationToTemporal(temporal, neg);
+}
+
+TemporalValue subtractTemporals(const TemporalValue& a, const TemporalValue& b) {
+    if (a.kind != b.kind || a.kind == TemporalKind::DURATION)
+        return TemporalValue{TemporalKind::DURATION};
+
+    int64_t a_ns = temporalToComparable(a);
+    int64_t b_ns = temporalToComparable(b);
+    int64_t diff_ns = a_ns - b_ns;
+
+    TemporalValue result;
+    result.kind = TemporalKind::DURATION;
+    result.dur_months = 0;
+    int64_t ns_per_day = 86'400'000'000'000LL;
+    result.dur_days = diff_ns / ns_per_day;
+    int64_t remaining_ns = diff_ns % ns_per_day;
+    result.dur_seconds = remaining_ns / 1'000'000'000LL;
+    result.dur_nanos = remaining_ns % 1'000'000'000LL;
+    if (result.dur_nanos < 0) {
+        result.dur_nanos += 1'000'000'000LL;
+        result.dur_seconds -= 1;
+    }
+    return result;
+}
+
+TemporalValue addDurations(const TemporalValue& a, const TemporalValue& b) {
+    TemporalValue result;
+    result.kind = TemporalKind::DURATION;
+    result.dur_months = a.dur_months + b.dur_months;
+    result.dur_days = a.dur_days + b.dur_days;
+    int64_t total_a = a.dur_seconds * 1'000'000'000LL + a.dur_nanos;
+    int64_t total_b = b.dur_seconds * 1'000'000'000LL + b.dur_nanos;
+    int64_t total = total_a + total_b;
+    result.dur_seconds = total / 1'000'000'000LL;
+    result.dur_nanos = total % 1'000'000'000LL;
+    if (result.dur_nanos < 0) {
+        result.dur_nanos += 1'000'000'000LL;
+        result.dur_seconds -= 1;
+    }
+    return result;
+}
+
+TemporalValue subDurations(const TemporalValue& a, const TemporalValue& b) {
+    TemporalValue neg_b = b;
+    neg_b.dur_months = -neg_b.dur_months;
+    neg_b.dur_days = -neg_b.dur_days;
+    neg_b.dur_seconds = -neg_b.dur_seconds;
+    neg_b.dur_nanos = -neg_b.dur_nanos;
+    return addDurations(a, neg_b);
+}
+
+TemporalValue mulDuration(const TemporalValue& dur, int64_t factor) {
+    TemporalValue result;
+    result.kind = TemporalKind::DURATION;
+    result.dur_months = dur.dur_months * factor;
+    result.dur_days = dur.dur_days * factor;
+    int64_t total = (dur.dur_seconds * 1'000'000'000LL + dur.dur_nanos) * factor;
+    result.dur_seconds = total / 1'000'000'000LL;
+    result.dur_nanos = total % 1'000'000'000LL;
+    if (result.dur_nanos < 0) {
+        result.dur_nanos += 1'000'000'000LL;
+        result.dur_seconds -= 1;
+    }
+    return result;
+}
+
+TemporalValue divDuration(const TemporalValue& dur, int64_t divisor) {
+    if (divisor == 0)
+        return TemporalValue{TemporalKind::DURATION};
+    TemporalValue result;
+    result.kind = TemporalKind::DURATION;
+    result.dur_months = dur.dur_months / divisor;
+    result.dur_days = dur.dur_days / divisor;
+    int64_t total = dur.dur_seconds * 1'000'000'000LL + dur.dur_nanos;
+    total /= divisor;
+    result.dur_seconds = total / 1'000'000'000LL;
+    result.dur_nanos = total % 1'000'000'000LL;
+    if (result.dur_nanos < 0) {
+        result.dur_nanos += 1'000'000'000LL;
+        result.dur_seconds -= 1;
+    }
+    return result;
+}
+
 namespace {
 
 int64_t daysFromCivil(int64_t y, int64_t m, int64_t d) {

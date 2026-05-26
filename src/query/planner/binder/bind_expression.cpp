@@ -544,6 +544,9 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
         if (left_type.kind == BoundTypeKind::ANY || left_type.kind == BoundTypeKind::NULL_TYPE ||
             right_type.kind == BoundTypeKind::ANY || right_type.kind == BoundTypeKind::NULL_TYPE)
             return BoundType::Any();
+        // Temporal arithmetic: temporal + duration, duration + temporal, duration + duration
+        if (left_type.kind == BoundTypeKind::TEMPORAL && right_type.kind == BoundTypeKind::TEMPORAL)
+            return BoundType::Temporal();
         // Numeric arithmetic (fallthrough)
         if (left_type == BoundType::Int64() && right_type == BoundType::Int64())
             return BoundType::Int64();
@@ -558,6 +561,20 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
     case cypher::BinaryOperator::DIV:
     case cypher::BinaryOperator::MOD:
     case cypher::BinaryOperator::POW:
+        // Temporal subtraction: temporal - duration, temporal - temporal, duration - duration
+        if (op == cypher::BinaryOperator::SUB && left_type.kind == BoundTypeKind::TEMPORAL &&
+            right_type.kind == BoundTypeKind::TEMPORAL)
+            return BoundType::Temporal();
+        // Temporal * number  /  Temporal / number
+        if ((op == cypher::BinaryOperator::MUL || op == cypher::BinaryOperator::DIV) &&
+            left_type.kind == BoundTypeKind::TEMPORAL &&
+            (right_type.kind == BoundTypeKind::INT64 || right_type.kind == BoundTypeKind::DOUBLE))
+            return BoundType::Temporal();
+        // Number * temporal
+        if (op == cypher::BinaryOperator::MUL &&
+            (left_type.kind == BoundTypeKind::INT64 || left_type.kind == BoundTypeKind::DOUBLE) &&
+            right_type.kind == BoundTypeKind::TEMPORAL)
+            return BoundType::Temporal();
         // Arithmetic: INT64 or DOUBLE, with implicit conversion
         if (left_type == BoundType::Int64() && right_type == BoundType::Int64())
             return BoundType::Int64();

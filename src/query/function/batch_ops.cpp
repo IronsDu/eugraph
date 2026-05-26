@@ -1,5 +1,7 @@
 #include "query/function/batch_ops.hpp"
 
+#include "common/types/temporal_value.hpp"
+
 #include <cmath>
 
 namespace eugraph {
@@ -408,6 +410,184 @@ void isNotNullBatch(const Column& operand, Column& result, size_t count) {
     }
 }
 
+// ==================== Temporal comparison batch functions ====================
+
+void temporalLtBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<TemporalValue>(lv) && std::holds_alternative<TemporalValue>(rv)) {
+            const auto& a = std::get<TemporalValue>(lv);
+            const auto& b = std::get<TemporalValue>(rv);
+            if (a.kind == b.kind)
+                result.setValue(i, Value(temporalLess(a, b)));
+            else
+                result.setNull(i);
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
+void temporalGtBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<TemporalValue>(lv) && std::holds_alternative<TemporalValue>(rv)) {
+            const auto& a = std::get<TemporalValue>(lv);
+            const auto& b = std::get<TemporalValue>(rv);
+            if (a.kind == b.kind)
+                result.setValue(i, Value(temporalLess(b, a)));
+            else
+                result.setNull(i);
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
+void temporalLteBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<TemporalValue>(lv) && std::holds_alternative<TemporalValue>(rv)) {
+            const auto& a = std::get<TemporalValue>(lv);
+            const auto& b = std::get<TemporalValue>(rv);
+            if (a.kind == b.kind)
+                result.setValue(i, Value(!temporalLess(b, a)));
+            else
+                result.setNull(i);
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
+void temporalGteBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<TemporalValue>(lv) && std::holds_alternative<TemporalValue>(rv)) {
+            const auto& a = std::get<TemporalValue>(lv);
+            const auto& b = std::get<TemporalValue>(rv);
+            if (a.kind == b.kind)
+                result.setValue(i, Value(!temporalLess(a, b)));
+            else
+                result.setNull(i);
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
+// ==================== Temporal arithmetic batch functions ====================
+
+void temporalAddBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (!std::holds_alternative<TemporalValue>(lv) || !std::holds_alternative<TemporalValue>(rv)) {
+            result.setNull(i);
+            continue;
+        }
+        const auto& a = std::get<TemporalValue>(lv);
+        const auto& b = std::get<TemporalValue>(rv);
+        bool la = (a.kind == TemporalKind::DURATION);
+        bool lb = (b.kind == TemporalKind::DURATION);
+        if (la && lb)
+            result.setValue(i, Value(addDurations(a, b)));
+        else if (!la && lb)
+            result.setValue(i, Value(addDurationToTemporal(a, b)));
+        else if (la && !lb)
+            result.setValue(i, Value(addDurationToTemporal(b, a)));
+        else
+            result.setNull(i);
+    }
+}
+
+void temporalSubBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (!std::holds_alternative<TemporalValue>(lv) || !std::holds_alternative<TemporalValue>(rv)) {
+            result.setNull(i);
+            continue;
+        }
+        const auto& a = std::get<TemporalValue>(lv);
+        const auto& b = std::get<TemporalValue>(rv);
+        bool la = (a.kind == TemporalKind::DURATION);
+        bool lb = (b.kind == TemporalKind::DURATION);
+        if (la && lb)
+            result.setValue(i, Value(subDurations(a, b)));
+        else if (!la && lb)
+            result.setValue(i, Value(subDurationFromTemporal(a, b)));
+        else if (!la && !lb && a.kind == b.kind)
+            result.setValue(i, Value(subtractTemporals(a, b)));
+        else
+            result.setNull(i);
+    }
+}
+
+void temporalMulBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        TemporalValue dur;
+        int64_t factor = 0;
+        bool got = false;
+        if (std::holds_alternative<TemporalValue>(lv) && std::holds_alternative<int64_t>(rv)) {
+            dur = std::get<TemporalValue>(lv);
+            factor = std::get<int64_t>(rv);
+            got = true;
+        } else if (std::holds_alternative<TemporalValue>(lv) && std::holds_alternative<double>(rv)) {
+            dur = std::get<TemporalValue>(lv);
+            factor = static_cast<int64_t>(std::get<double>(rv));
+            got = true;
+        } else if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<TemporalValue>(rv)) {
+            dur = std::get<TemporalValue>(rv);
+            factor = std::get<int64_t>(lv);
+            got = true;
+        } else if (std::holds_alternative<double>(lv) && std::holds_alternative<TemporalValue>(rv)) {
+            dur = std::get<TemporalValue>(rv);
+            factor = static_cast<int64_t>(std::get<double>(lv));
+            got = true;
+        }
+        if (got && dur.kind == TemporalKind::DURATION)
+            result.setValue(i, Value(mulDuration(dur, factor)));
+        else
+            result.setNull(i);
+    }
+}
+
+void temporalDivBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (!std::holds_alternative<TemporalValue>(lv)) {
+            result.setNull(i);
+            continue;
+        }
+        const auto& dur = std::get<TemporalValue>(lv);
+        if (dur.kind != TemporalKind::DURATION) {
+            result.setNull(i);
+            continue;
+        }
+        int64_t divisor = 0;
+        if (std::holds_alternative<int64_t>(rv))
+            divisor = std::get<int64_t>(rv);
+        else if (std::holds_alternative<double>(rv))
+            divisor = static_cast<int64_t>(std::get<double>(rv));
+        else {
+            result.setNull(i);
+            continue;
+        }
+        if (divisor != 0)
+            result.setValue(i, Value(divDuration(dur, divisor)));
+        else
+            result.setNull(i);
+    }
+}
+
 } // anonymous namespace
 
 // ==================== Resolver functions ====================
@@ -502,6 +682,48 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             return doubleLteBatch;
         case BO::GTE:
             return doubleGteBatch;
+        default:
+            return nullptr;
+        }
+    }
+
+    // Temporal-specific: TEMPORAL + TEMPORAL
+    if (left_type == BTK::TEMPORAL && right_type == BTK::TEMPORAL) {
+        switch (op) {
+        case BO::LT:
+            return temporalLtBatch;
+        case BO::GT:
+            return temporalGtBatch;
+        case BO::LTE:
+            return temporalLteBatch;
+        case BO::GTE:
+            return temporalGteBatch;
+        case BO::ADD:
+            return temporalAddBatch;
+        case BO::SUB:
+            return temporalSubBatch;
+        default:
+            return nullptr;
+        }
+    }
+
+    // Temporal * number  /  Temporal / number
+    if (left_type == BTK::TEMPORAL && (right_type == BTK::INT64 || right_type == BTK::DOUBLE)) {
+        switch (op) {
+        case BO::MUL:
+            return temporalMulBatch;
+        case BO::DIV:
+            return temporalDivBatch;
+        default:
+            return nullptr;
+        }
+    }
+
+    // number * Temporal  (commutative MUL)
+    if ((left_type == BTK::INT64 || left_type == BTK::DOUBLE) && right_type == BTK::TEMPORAL) {
+        switch (op) {
+        case BO::MUL:
+            return temporalMulBatch;
         default:
             return nullptr;
         }

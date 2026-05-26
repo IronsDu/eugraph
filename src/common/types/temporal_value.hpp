@@ -81,7 +81,7 @@ struct TemporalValue {
     int64_t second = 0;
     int64_t nanos = 0;         // subsecond precision (0-999999999)
     int32_t tz_offset_min = 0; // timezone offset in minutes (0 for local / UTC)
-    std::string tz_name;       // zone name like "Europe/Stockholm" (empty for non-zoned)
+    std::string tz_name = {};  // zone name like "Europe/Stockholm" (empty for non-zoned)
 
     // Duration-specific fields
     int64_t dur_months = 0;
@@ -95,5 +95,19 @@ struct TemporalValue {
 bool temporalLess(const TemporalValue& a, const TemporalValue& b);
 std::string temporalToString(const TemporalValue& tv);
 int64_t temporalToComparable(const TemporalValue& tv);
+
+// Calendar helpers
+bool isLeapYear(int64_t year);
+int64_t daysInMonth(int64_t year, int64_t month);
+void normalizeDate(int64_t& year, int64_t& month, int64_t& day);
+
+// Temporal arithmetic
+TemporalValue addDurationToTemporal(const TemporalValue& temporal, const TemporalValue& duration);
+TemporalValue subDurationFromTemporal(const TemporalValue& temporal, const TemporalValue& duration);
+TemporalValue subtractTemporals(const TemporalValue& a, const TemporalValue& b);
+TemporalValue addDurations(const TemporalValue& a, const TemporalValue& b);
+TemporalValue subDurations(const TemporalValue& a, const TemporalValue& b);
+TemporalValue mulDuration(const TemporalValue& dur, int64_t factor);
+TemporalValue divDuration(const TemporalValue& dur, int64_t divisor);
 
 } // namespace eugraph

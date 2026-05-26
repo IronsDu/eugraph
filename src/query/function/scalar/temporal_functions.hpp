@@ -16,19 +16,6 @@ namespace scalar {
 
 namespace {
 
-bool isLeapYear(int64_t year) {
-    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-}
-
-int64_t daysInMonth(int64_t year, int64_t month) {
-    static const int64_t kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    if (month < 1 || month > 12)
-        return 0;
-    if (month == 2 && isLeapYear(year))
-        return 29;
-    return kDays[month - 1];
-}
-
 void isoWeekToDate(int64_t iso_year, int64_t iso_week, int64_t iso_dow, int64_t& out_year, int64_t& out_month,
                    int64_t& out_day) {
     struct tm tm_base = {};
@@ -67,33 +54,6 @@ void quarterToDate(int64_t year, int64_t quarter, int64_t day_of_quarter, int64_
     }
     out_month = m;
     out_day = remaining;
-}
-
-void normalizeDate(int64_t& year, int64_t& month, int64_t& day) {
-    while (month > 12) {
-        month -= 12;
-        year++;
-    }
-    while (month < 1) {
-        month += 12;
-        year--;
-    }
-    while (day > daysInMonth(year, month)) {
-        day -= daysInMonth(year, month);
-        month++;
-        if (month > 12) {
-            month -= 12;
-            year++;
-        }
-    }
-    while (day < 1) {
-        month--;
-        if (month < 1) {
-            month = 12;
-            year--;
-        }
-        day += daysInMonth(year, month);
-    }
 }
 
 int64_t dayOfWeekIso(int64_t year, int64_t month, int64_t day) {
@@ -601,7 +561,7 @@ inline Value temporalAccessorImpl(const Value& tv_val, TemporalField field) {
             return Value{std::string("Z")};
         {
             int32_t abs_m = tv.tz_offset_min < 0 ? -tv.tz_offset_min : tv.tz_offset_min;
-            char buf[7];
+            char buf[14];
             snprintf(buf, sizeof(buf), "%c%02d:%02d", tv.tz_offset_min >= 0 ? '+' : '-', static_cast<int>(abs_m / 60),
                      static_cast<int>(abs_m % 60));
             return Value{std::string(buf)};
@@ -613,7 +573,7 @@ inline Value temporalAccessorImpl(const Value& tv_val, TemporalField field) {
             return Value{std::string("+00:00")};
         {
             int32_t abs_m = tv.tz_offset_min < 0 ? -tv.tz_offset_min : tv.tz_offset_min;
-            char buf[7];
+            char buf[14];
             snprintf(buf, sizeof(buf), "%c%02d:%02d", tv.tz_offset_min >= 0 ? '+' : '-', static_cast<int>(abs_m / 60),
                      static_cast<int>(abs_m % 60));
             return Value{std::string(buf)};
