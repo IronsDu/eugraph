@@ -1,5 +1,6 @@
 #include "query/planner/binder.hpp"
 
+#include "common/types/temporal_value.hpp"
 #include "query/function/batch_ops.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_map.hpp"
@@ -281,6 +282,29 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     sub->result_type =
                         obj_type.map_value_type ? BoundType::clone(*obj_type.map_value_type) : BoundType::Any();
                     return BoundExpression(std::move(sub));
+                }
+
+                if (obj_type.kind == BoundTypeKind::TEMPORAL) {
+                    // Temporal member access: convert temporal.field to __temporal_field__(temporal, field_enum)
+                    auto field_opt = temporalFieldFromString(ptr->property);
+                    if (!field_opt) {
+                        error("Unknown temporal field: '" + ptr->property + "'");
+                        return std::nullopt;
+                    }
+                    auto field = *field_opt;
+
+                    auto* func =
+                        func_registry_.lookup("__temporal_field__", {BoundType::Temporal(), BoundType::Int64()});
+                    if (!func) {
+                        error("Temporal field accessor not registered");
+                        return std::nullopt;
+                    }
+                    auto fc = std::make_unique<BoundFunctionCall>();
+                    fc->func_def = func;
+                    fc->args.push_back(std::move(*obj));
+                    fc->args.push_back(BoundLiteral(static_cast<int64_t>(field)));
+                    fc->return_type = temporalFieldReturnsString(field) ? BoundType::String() : BoundType::Int64();
+                    return BoundExpression(std::move(fc));
                 }
 
                 error("Property access on non-vertex/edge/map type: " + obj_type.toString());

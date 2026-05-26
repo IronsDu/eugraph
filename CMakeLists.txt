@@ -163,6 +163,7 @@ target_link_libraries(eugraph_metadata PUBLIC
 # ==================== Query Engine (Logical Plan + Physical Plan + Executor) ====================
 
 add_library(eugraph_query_engine STATIC
+    src/common/types/temporal_value.cpp
     src/query/catalog/catalog.cpp
     src/query/function/batch_ops.cpp
     src/query/function/function_registry.cpp
