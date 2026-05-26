@@ -8,11 +8,11 @@ namespace binder {
 namespace {
 
 /// Bind inline properties for a multi-label CREATE node.
-/// Returns (label_properties, pending_props).
+/// Returns (label_properties, pending_props). Sets error_out on ambiguous property names.
 std::pair<std::vector<std::pair<LabelId, std::vector<std::pair<uint16_t, BoundExpression>>>>,
           std::vector<std::pair<std::string, BoundExpression>>>
 bindCreateNodeProperties(const cypher::NodePattern& node, const std::vector<LabelId>& label_ids,
-                         const catalog::Catalog& catalog, Binder& binder) {
+                         const catalog::Catalog& catalog, Binder& binder, std::string* error_out) {
     std::vector<std::pair<LabelId, std::vector<std::pair<uint16_t, BoundExpression>>>> label_properties;
     std::vector<std::pair<std::string, BoundExpression>> pending_props;
 
@@ -25,25 +25,37 @@ bindCreateNodeProperties(const cypher::NodePattern& node, const std::vector<Labe
         return {std::move(label_properties), std::move(pending_props)};
 
     for (const auto& [prop_name, prop_expr] : node.properties->entries) {
+        // Count how many specified labels define this property (without binding yet).
+        LabelId matched_lid = INVALID_LABEL_ID;
+        int match_count = 0;
+        for (const auto& [lid, props_vec] : label_properties) {
+            if (catalog.lookupProperty(lid, prop_name)) {
+                if (match_count == 0)
+                    matched_lid = lid;
+                match_count++;
+            }
+        }
+
+        if (match_count > 1) {
+            if (error_out && error_out->empty())
+                *error_out = "Ambiguous property '" + prop_name + "' found in multiple labels. Use ::Label to specify.";
+            continue;
+        }
+
         auto bound_val = binder.bindExpression(prop_expr);
         if (!bound_val)
             continue;
 
-        // Look up this property name across all specified labels
-        bool found = false;
-        for (auto& [lid, props_vec] : label_properties) {
-            auto* pd = catalog.lookupProperty(lid, prop_name);
-            if (pd) {
-                props_vec.emplace_back(pd->id, std::move(*bound_val));
-                found = true;
+        if (match_count == 1) {
+            for (auto& [lid, props_vec] : label_properties) {
+                if (lid == matched_lid) {
+                    auto* pd = catalog.lookupProperty(lid, prop_name);
+                    props_vec.emplace_back(pd->id, std::move(*bound_val));
+                    break;
+                }
             }
-        }
-
-        if (!found) {
-            // Re-bind (original was moved)
-            auto rebound = binder.bindExpression(prop_expr);
-            if (rebound)
-                pending_props.emplace_back(prop_name, std::move(*rebound));
+        } else {
+            pending_props.emplace_back(prop_name, std::move(*bound_val));
         }
     }
 
@@ -83,7 +95,13 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
             create_node->label_ids = start_labels;
         }
 
-        auto [label_props, pending] = bindCreateNodeProperties(element.node, create_node->label_ids, catalog_, *this);
+        std::string prop_error;
+        auto [label_props, pending] =
+            bindCreateNodeProperties(element.node, create_node->label_ids, catalog_, *this, &prop_error);
+        if (!prop_error.empty()) {
+            error(prop_error);
+            return std::nullopt;
+        }
         create_node->label_properties = std::move(label_props);
         create_node->pending_props = std::move(pending);
 
@@ -157,8 +175,13 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
                     create_dst->label_ids = dst_labels;
                 }
 
+                std::string dst_prop_error;
                 auto [dst_label_props, dst_pending] =
-                    bindCreateNodeProperties(node_pat, create_dst->label_ids, catalog_, *this);
+                    bindCreateNodeProperties(node_pat, create_dst->label_ids, catalog_, *this, &dst_prop_error);
+                if (!dst_prop_error.empty()) {
+                    error(dst_prop_error);
+                    return std::nullopt;
+                }
                 create_dst->label_properties = std::move(dst_label_props);
                 create_dst->pending_props = std::move(dst_pending);
 

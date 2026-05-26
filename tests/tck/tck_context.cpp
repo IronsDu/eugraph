@@ -22,12 +22,12 @@ namespace ast = cypher;
 
 bool hasUnsupportedExpr(const ast::Expression& expr);
 
-bool hasUnsupportedPattern(const ast::PatternPart& pp) {
+bool hasUnsupportedPattern(const ast::PatternPart& pp, bool is_create = false) {
     // Check path pattern: node + chain
     const ast::PatternElement& el = pp.element;
 
-    // Check start node: multi-label?
-    if (el.node.labels.size() > 1) {
+    // Check start node: multi-label? (allowed in CREATE)
+    if (!is_create && el.node.labels.size() > 1) {
         spdlog::info("[TCK] skipping: multi-label node pattern");
         return true;
     }
@@ -40,8 +40,8 @@ bool hasUnsupportedPattern(const ast::PatternPart& pp) {
 
     // Check each chain step: (rel, node)
     for (const auto& [rel, node] : el.chain) {
-        // Multi-label node?
-        if (node.labels.size() > 1) {
+        // Multi-label node? (allowed in CREATE)
+        if (!is_create && node.labels.size() > 1) {
             spdlog::info("[TCK] skipping: multi-label node pattern");
             return true;
         }
@@ -189,7 +189,7 @@ bool hasUnsupportedClause(const ast::Clause& clause) {
                 return false;
             } else if constexpr (std::is_same_v<Inner, ast::CreateClause>) {
                 for (const auto& pp : ptr->patterns) {
-                    if (hasUnsupportedPattern(pp))
+                    if (hasUnsupportedPattern(pp, /*is_create=*/true))
                         return true;
                 }
                 return false;

@@ -2032,10 +2032,11 @@ TEST_F(QueryExecutorMultiLabelTest, NoPropertyLabel) {
     EXPECT_EQ(vv.id, 1);
 }
 
-TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelRejected) {
-    // CREATE (n:Person:Employee {name: 'Bob'}) should fail
+TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelAmbiguousProperty) {
+    // name exists on both Person and Employee — ambiguous, binder must reject
     auto result = execSync(*executor_, "CREATE (n:Person:Employee {name: 'Bob'})");
     EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("Ambiguous"), std::string::npos) << result.error;
 }
 
 TEST_F(QueryExecutorMultiLabelTest, LabelCastPropertyConvenienceFallback) {
@@ -4347,11 +4348,87 @@ TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelMixedProperties) {
 }
 
 // --- CREATE: multi-label CREATE not yet supported ---
-TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelNotSupported) {
-    // Multi-label CREATE (e.g. n:Person:Employee) is not yet supported by the binder.
-    // Verify it returns a clear error.
-    auto r = execSync(*executor_, "CREATE (n:Person:Employee {name: 'Alice'})");
-    EXPECT_FALSE(r.error.empty());
+TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelWithLabelSpecificProps) {
+    // Multi-label CREATE with properties unique to each label (age=Person, salary=Employee)
+    auto result = execSync(*executor_, "CREATE (n:Person:Employee {age: 30, salary: 50000})");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    auto r = execSync(*executor_, "MATCH (n) RETURN n.age, n.salary");
+    ASSERT_TRUE(r.error.empty()) << r.error;
+    ASSERT_EQ(r.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(r.rows[0][0]), 30);
+    EXPECT_EQ(std::get<int64_t>(r.rows[0][1]), 50000);
+}
+
+// --- CREATE: multi-label with __anon__ fallback for unknown properties ---
+TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelWithAnonFallback) {
+    // age=Person, salary=Employee, nickname=not in any label → __anon__
+    auto r1 = execSync(*executor_, "CREATE (n:Person:Employee {age: 35, salary: 80000, nickname: 'Nick'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Label-specific properties via typed access
+    auto r2 = execSync(*executor_, "MATCH (n) RETURN n::Person.age, n::Employee.salary");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 35);
+    EXPECT_EQ(std::get<int64_t>(r2.rows[0][1]), 80000);
+
+    // __anon__ property via dynamic resolution
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN n.nickname");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "Nick");
+}
+
+// --- CREATE: multi-label with label having zero properties (VIP) ---
+TEST_F(QueryExecutorMultiLabelTest, CreateMultiLabelWithEmptyLabelVip) {
+    // VIP has no properties; salary=Employee; tag=not in any label → __anon__
+    auto r1 = execSync(*executor_, "CREATE (n:VIP:Employee {salary: 70000, tag: 'vip-tag'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Employee property via typed access
+    auto r2 = execSync(*executor_, "MATCH (n) RETURN n::Employee.salary");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 70000);
+
+    // __anon__ property
+    auto r3 = execSync(*executor_, "MATCH (n) RETURN n.tag");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1);
+    EXPECT_EQ(std::get<std::string>(r3.rows[0][0]), "vip-tag");
+}
+
+// --- MATCH then CREATE: MATCH a node, then CREATE a multi-label node in the same query ---
+TEST_F(QueryExecutorMultiLabelTest, MatchThenCreateMultiLabel) {
+    // Setup: create a Person node to MATCH against
+    auto r0 = execSync(*executor_, "CREATE (a:Person {name: 'Alice'})");
+    ASSERT_TRUE(r0.error.empty()) << r0.error;
+
+    // MATCH the Person, then CREATE a multi-label Person:Employee node
+    auto r1 = execSync(*executor_, "MATCH (a:Person) CREATE (b:Person:Employee {age: 40, salary: 90000})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Verify the newly created multi-label node has expected properties
+    auto r2 = execSync(*executor_, "MATCH (b:Person) RETURN b.age");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 2); // Alice (from r0) + new multi-label node
+    bool has_age_40 = false;
+    for (const auto& row : r2.rows) {
+        if (!isNull(row[0]) && std::get<int64_t>(row[0]) == 40)
+            has_age_40 = true;
+    }
+    EXPECT_TRUE(has_age_40);
+
+    // Also verify multi-label node via typed access
+    auto r3 = execSync(*executor_, "MATCH (b:Person) RETURN b::Employee.salary");
+    ASSERT_TRUE(r3.error.empty()) << r3.error;
+    bool has_salary_90000 = false;
+    for (const auto& row : r3.rows) {
+        if (!isNull(row[0]) && std::get<int64_t>(row[0]) == 90000)
+            has_salary_90000 = true;
+    }
+    EXPECT_TRUE(has_salary_90000);
 }
 
 // --- REMOVE convenience mode: property not in any label → no error ---
