@@ -364,6 +364,14 @@ REMOVE r.prop                     -- 移除边属性
 | `nodes(path)` | 返回路径中的顶点列表 |
 | `relationships(path)` | 返回路径中的边列表 |
 | `length(path)` | 返回路径长度（边数） |
+| `datetime(map\|string)` | 构造带时区的日期时间（string） |
+| `date(map\|string)` | 构造日期（string） |
+| `time(map\|string)` | 构造带时区的时间（string） |
+| `localdatetime(map\|string)` | 构造本地日期时间（string） |
+| `localtime(map\|string)` | 构造本地时间（string） |
+| `duration(map\|string)` | 构造 ISO 8601 时间段（string） |
+
+**限制**：时间日期构造函数返回 STRING 类型。成员访问器（`.year`、`.month` 等）、比较运算、算术运算尚未实现（Phase 2）。
 
 ---
 
