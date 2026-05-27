@@ -1,9 +1,9 @@
 # TCK 测试结果分类报告
 
-**日期**: 2026-05-27 (更新)
-**分支**: feature/temporal-phase2
+**日期**: 2026-05-28 (更新)
+**分支**: feature/temporal-phase3
 **总计**: 3897 场景, 16006 步骤
-**运行耗时**: 10 分 59 秒
+**运行耗时**: 10 分 22 秒
 **检测方式**: Parser AST 遍历
 
 ---
@@ -12,37 +12,62 @@
 
 | 状态 | 数量 | 说明 |
 |------|------|------|
-| 步骤通过 | 10659 / 16006 | 66.6% |
-| 步骤跳过 | 2416 | 前置步骤失败 |
+| 步骤通过 | 11411 / 16006 | 71.3% |
+| 步骤跳过 | 2040 | 前置步骤失败 |
 | 未定义步骤 | 71 | 缺少 step 定义 |
-| 步骤失败 | 2860 | 断言失败或查询错误 |
-| 场景通过 | ~966 | ~24.8% |
+| 步骤失败 | 2484 | 断言失败或查询错误 |
+| 场景通过 | ~1342 | ~34.5% |
 
 ---
 
-## 分类 1: 时间日期构造函数 — ✅ Phase 1 已实现
+## 分类 1: 时间日期构造函数 — ✅ Phase 2 已实现
 
-实现了 6 个构造函数族（`datetime`, `date`, `time`, `localtime`, `localdatetime`, `duration`），支持 MAP<STRING, ANY>、STRING 和 0-arg 调用。返回 STRING 类型（ISO 8601 格式）。
+实现了 6 个构造函数族（`datetime`, `date`, `time`, `localtime`, `localdatetime`, `duration`），支持 MAP<STRING, ANY>、STRING 和 0-arg 调用。
 
-Temporal features 步骤通过数从 0 提升至 2042。剩余失败为 Phase 2 范围（比较、算术、truncate 等）。
+### 构造函数
 
 | 函数 | 状态 |
 |------|------|
-| `datetime()` / `date()` / `time()` | ✅ 已实现（MAP 形式；STRING 形式返回 epoch） |
-| `localtime()` / `localdatetime()` | ✅ 已实现（MAP 形式；STRING 形式返回 epoch） |
-| `duration()` | ✅ 已实现（MAP 形式；STRING 形式返回零时长） |
-| `.year` / `.month` 等成员访问器 | ✅ 已实现（Binder 阶段枚举化） |
-| 相等比较 (`=`, `<>`) | ✅ 已实现（泛型 Value::operator==） |
-| 有序比较 (`<`, `>`, `<=`, `>=`) | ✅ 已实现（同 kind 比较；不同 kind 返回 NULL） |
-| 算术运算 (`+`, `-`, `*`, `/`) | ✅ 已实现（temporal±duration, temporal-temporal, duration±*/） |
-| `truncate()` / `duration.between()` | Phase 2 |
+| `datetime()` / `date()` / `time()` | ✅ 已实现（MAP + STRING + 0-arg） |
+| `localtime()` / `localdatetime()` | ✅ 已实现（MAP + STRING + 0-arg） |
+| `duration()` | ✅ 已实现（MAP + STRING + 0-arg，含分数值） |
+
+### 成员访问器
+
+| 功能 | 状态 |
+|------|------|
+| `.year` / `.month` / `.day` 等 Date 字段 | ✅ 已实现（Binder 阶段枚举化） |
+| `.hour` / `.minute` / `.second` 等 Time 字段 | ✅ 已实现 |
+| `.timezone` / `.offset` 等时区字段 | ✅ 已实现 |
+| Duration 字段 (`.years`, `.months`, `.days` 等) | ✅ 已实现 |
+
+### 比较与算术
+
+| 功能 | 状态 |
+|------|------|
+| 相等比较 (`=`, `<>`) | ✅ 已实现（泛型 Value::operator==，同 kind） |
+| 有序比较 (`<`, `>`, `<=`, `>=`) | ✅ 已实现（逐字段比较避免溢出） |
+| 算术运算 (`+`, `-`) | ✅ 已实现（temporal±duration, temporal-temporal, duration±duration） |
+| 乘除运算 (`*`, `/`) | ✅ 已实现（duration ×/÷ number） |
+| ORDER BY 排序 | ✅ 已实现（sort_physical_op 支持 TemporalValue） |
+
+### Phase 3 新增
+
+| 功能 | 状态 | TCK 通过率 |
+|------|------|-----------|
+| `truncate()` | ✅ 已实现（全部 15 种精度 + fields map overlay + dayOfWeek/timezone 字段） | 253/322 (78.6%) |
+| `duration.between()` | ✅ 已实现（日历感知月份计算 + days→seconds 折叠） | 12/131 (9.2%) |
+| `duration.inMonths()` | ✅ 已实现 | — |
+| Datetime 格式化优化 | ✅ 秒/纳秒为 0 时省略 `:SS` | — |
+| toString 支持 TemporalValue | ✅ 已实现 | — |
 
 ### 已知限制
 
-- **STRING 形式构造函数**：`date('2024-01-15')` 等字符串参数形式尚未实现解析，当前返回 epoch 默认值（`1970-01-01`）。目前只有 MAP 形式（如 `date({year: 2024, month: 1, day: 15})`）能正确构造指定时间值。
-- **DOUBLE 截断**：`duration({months: 1}) * 3.5` 中 DOUBLE 参数会被截断为 `int64_t`（即 `*3`），不支持浮点乘除法。
+- **PropertyValue 不支持 TemporalValue**：Temporal 值作为属性存储时被序列化为 STRING（ISO 8601），读回后丢失类型信息。导致属性往返场景中的成员访问（`v.date.year`）、算术（`x + d.dur`）、比较等返回 null。需将 `TemporalValue` 加入 `PropertyValue` variant 并更新 ValueCodec/Thrift 层。
+- **STRING 解析紧凑格式**：`date('2015W302')`、`date('2015202')`、`localtime('214032.142')` 等无分隔符紧凑格式尚未实现解析。
+- **DOUBLE 截断**：`duration * 3.5` 中 DOUBLE 因子被截断为 `int64_t`（`mulDuration` 仅接受 int64_t）。
 - **跨 kind 比较**：`date < duration` 等不同 TemporalKind 的比较返回 NULL（符合 Cypher 语义）。
-- **`temporal - temporal` 结果**：`datetime - datetime` 等产生的 DURATION 仅包含天和亚天分量（`months=0`），不通过日历反推月份。
+- **`temporal - temporal` 结果**：仅 `duration.between()` 计算月份分量；`subtractTemporals()` 仅含天和亚天分量（`months=0`），不通过日历反推月份。
 
 ---
 
@@ -155,7 +180,8 @@ Temporal features 步骤通过数从 0 提升至 2042。剩余失败为 Phase 2 
 | 优先级 | 分类 | 影响场景数 | 修复路径 |
 |--------|------|-----------|---------|
 | ~~P0~~ | ~~时间日期构造函数 & 成员访问器 & 比较/算术~~ | ~~~800~~ | ✅ 已实现（Phase 1 + Phase 2） |
-| **P0** | `truncate()` / `duration.between()` / STRING 解析 | ~500 | Phase 2 收尾 |
+| ~~P0~~ | ~~`truncate()` / `duration.between()` / STRING 解析~~ | ~~~500~~ | ✅ 已实现（Phase 3） |
+| **P1** | Temporal 属性往返类型保留 | ~52 | PropertyValue 加入 TemporalValue |
 | **P1** | MERGE | ~80 | MERGE 子句实现 |
 | **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
 | **P2** | 布尔类型检查 | ~48 | 完善逻辑运算符的类型推断 |
@@ -166,6 +192,9 @@ Temporal features 步骤通过数从 0 提升至 2042。剩余失败为 Phase 2 
 
 ---
 
-## 已知限制
+## 已知限制（通用）
 
 - **`properties(Edge)` + 普通 Expand**: `(a)-[r:TYPE]->(b)` 中 `ExpandPhysicalOp` 不加载边属性，`properties(r)` 返回空 map。变长路径的边属性加载已支持。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
+- **PropertyValue 不支持 TemporalValue**：Temporal 值作为属性存储后类型丢失（见分类 1 已知限制）。
+- **紧凑 STRING 格式**：部分无分隔符的 temporal 字符串格式未实现解析（见分类 1 已知限制）。
+- **DOUBLE 截断**：duration 乘除运算中 double 因子被截断为 int64_t（见分类 1 已知限制）。
