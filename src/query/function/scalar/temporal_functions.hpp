@@ -968,6 +968,362 @@ inline void temporalAccessorBatchFn(const std::vector<const Column*>& args, Colu
         result.setValue(i, temporalAccessorImpl(tv_col.getValue(i), field));
 }
 
+// ==================== truncate ====================
+
+namespace {
+
+int64_t truncateToUnit(int64_t value, const std::string& unit) {
+    if (unit == "millennium")
+        return (value / 1000) * 1000;
+    if (unit == "century")
+        return (value / 100) * 100;
+    if (unit == "decade")
+        return (value / 10) * 10;
+    if (unit == "year" || unit == "quarter" || unit == "month" || unit == "week" || unit == "day" || unit == "hour" ||
+        unit == "minute" || unit == "second" || unit == "millisecond" || unit == "microsecond" || unit == "nanosecond")
+        return value; // field-level truncation handled by zeroing sub-fields
+    return value;
+}
+
+TemporalValue temporalTruncate(const TemporalValue& tv, const std::string& unit, const MapValue* fields) {
+    TemporalValue result = tv;
+
+    bool isDateTime =
+        (tv.kind == TemporalKind::DATE || tv.kind == TemporalKind::LOCAL_DATETIME || tv.kind == TemporalKind::DATETIME);
+    bool isTime = (tv.kind != TemporalKind::DATE);
+
+    // Mapping: which fields get truncated at each unit level
+    // "millennium" → zero everything below millennium
+    // "century" → zero below century
+    // etc.
+
+    bool trunc_month = false, trunc_day = false;
+    bool trunc_hour = false, trunc_min = false, trunc_sec = false, trunc_nanos = false;
+
+    if (unit == "millennium") {
+        result.year = truncateToUnit(result.year, "millennium");
+        trunc_month = trunc_day = true;
+        trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "century") {
+        result.year = truncateToUnit(result.year, "century");
+        trunc_month = trunc_day = true;
+        trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "decade") {
+        result.year = truncateToUnit(result.year, "decade");
+        trunc_month = trunc_day = true;
+        trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "year") {
+        trunc_month = trunc_day = true;
+        trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "weekYear") {
+        // Truncate to first day of ISO week-year (Monday of ISO week 1)
+        int64_t wy = isoWeekYear(result.year, result.month, result.day);
+        isoWeekToDate(wy, 1, 1, result.year, result.month, result.day);
+        trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "quarter") {
+        result.month = ((result.month - 1) / 3) * 3 + 1;
+        trunc_day = true;
+        trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "month") {
+        trunc_day = true;
+        trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "week") {
+        // Truncate to Monday of current week
+        int64_t days = daysFromCivil(result.year, result.month, result.day);
+        int64_t dow = ((days % 7) + 10) % 7 + 1; // 1=Mon
+        days -= (dow - 1);
+        civilFromDays(days, result.year, result.month, result.day);
+        trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "day") {
+        trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "hour") {
+        trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "minute") {
+        trunc_sec = trunc_nanos = true;
+    } else if (unit == "second") {
+        trunc_nanos = true;
+    } else if (unit == "millisecond") {
+        result.nanos = (result.nanos / 1'000'000) * 1'000'000;
+    } else if (unit == "microsecond") {
+        result.nanos = (result.nanos / 1'000) * 1'000;
+    }
+    // "nanosecond" — no truncation needed
+
+    if (isDateTime && trunc_month)
+        result.month = 1;
+    if (isDateTime && trunc_day)
+        result.day = 1;
+    if (isTime && trunc_hour)
+        result.hour = 0;
+    if (isTime && trunc_min)
+        result.minute = 0;
+    if (isTime && trunc_sec)
+        result.second = 0;
+    if (isTime && trunc_nanos)
+        result.nanos = 0;
+
+    // Apply fields from map (overlay)
+    if (fields) {
+        int64_t day_of_week_override = 0; // 1=Mon..7=Sun, 0=not set
+        int64_t tz_override = 0;
+        bool has_tz = false;
+        std::string tz_name_override;
+
+        for (const auto& [k, vs] : fields->entries) {
+            if (std::holds_alternative<std::monostate>(vs.value))
+                continue;
+            int64_t val = 0;
+            std::string str_val;
+            if (std::holds_alternative<int64_t>(vs.value))
+                val = std::get<int64_t>(vs.value);
+            else if (std::holds_alternative<double>(vs.value))
+                val = static_cast<int64_t>(std::get<double>(vs.value));
+            else if (std::holds_alternative<std::string>(vs.value)) {
+                str_val = std::get<std::string>(vs.value);
+                val = 0;
+            } else
+                continue;
+
+            if (k == "year" && isDateTime)
+                result.year = val;
+            else if (k == "month" && isDateTime)
+                result.month = val;
+            else if (k == "day" && isDateTime)
+                result.day = val;
+            else if (k == "hour" && isTime)
+                result.hour = val;
+            else if (k == "minute" && isTime)
+                result.minute = val;
+            else if (k == "second" && isTime)
+                result.second = val;
+            else if (k == "nanosecond" && isTime)
+                result.nanos = val;
+            else if (k == "millisecond" && isTime)
+                result.nanos = val * 1'000'000;
+            else if (k == "microsecond" && isTime)
+                result.nanos = val * 1'000;
+            else if (k == "dayOfWeek" && isDateTime)
+                day_of_week_override = val;
+            else if (k == "timezone") {
+                if (!str_val.empty()) {
+                    if (str_val.find('/') != std::string::npos)
+                        tz_name_override = str_val;
+                    else
+                        tz_override = parseTzOffset(str_val);
+                    has_tz = true;
+                }
+            }
+        }
+
+        if (day_of_week_override > 0 && isDateTime) {
+            // Set day to the given day of the current week (1=Mon..7=Sun)
+            int64_t days = daysFromCivil(result.year, result.month, result.day);
+            int64_t current_dow = ((days % 7) + 10) % 7 + 1; // 1=Mon
+            days += (day_of_week_override - current_dow);
+            civilFromDays(days, result.year, result.month, result.day);
+        }
+
+        if (has_tz) {
+            if (!tz_name_override.empty())
+                result.tz_name = tz_name_override;
+            result.tz_offset_min = static_cast<int32_t>(tz_override);
+        }
+    }
+
+    return result;
+}
+
+} // namespace
+
+inline Value temporalTruncateImpl(const Value& temporal_val, const std::string& unit, const Value& fields_val,
+                                  TemporalKind target_kind) {
+    if (!std::holds_alternative<TemporalValue>(temporal_val))
+        return Value{};
+    auto tv = std::get<TemporalValue>(temporal_val);
+    const MapValue* fields = nullptr;
+    if (std::holds_alternative<MapValue>(fields_val))
+        fields = &std::get<MapValue>(fields_val);
+    tv = temporalTruncate(tv, unit, fields);
+    tv.kind = target_kind;
+    return Value{tv};
+}
+
+template <TemporalKind TargetKind>
+inline Value temporalTruncateScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (args.size() < 2)
+        return Value{};
+    if (!std::holds_alternative<std::string>(args[0]))
+        return Value{};
+    std::string unit = std::get<std::string>(args[0]);
+    Value fields = (args.size() >= 3) ? args[2] : Value{};
+    return temporalTruncateImpl(args[1], unit, fields, TargetKind);
+}
+
+template <TemporalKind TargetKind>
+inline void temporalTruncateBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                                    const EvalContext&) {
+    if (args.size() < 2)
+        return;
+    const auto& unit_col = *args[0];
+    const auto& tv_col = *args[1];
+    std::string unit = std::get<std::string>(unit_col.getValue(0));
+    Value fields = (args.size() >= 3) ? args[2]->getValue(0) : Value{};
+    for (size_t i = 0; i < count; ++i)
+        result.setValue(i, temporalTruncateImpl(tv_col.getValue(i), unit, fields, TargetKind));
+}
+
+// ==================== duration.between ====================
+
+namespace {
+
+TemporalValue durationBetween(const TemporalValue& a, const TemporalValue& b) {
+    // Compute b - a using calendar-aware subtraction
+    // Returns DURATION with months, days, seconds, nanos
+    TemporalValue result{TemporalKind::DURATION};
+
+    bool a_is_date =
+        (a.kind == TemporalKind::DATE || a.kind == TemporalKind::LOCAL_DATETIME || a.kind == TemporalKind::DATETIME);
+    bool b_is_date =
+        (b.kind == TemporalKind::DATE || b.kind == TemporalKind::LOCAL_DATETIME || b.kind == TemporalKind::DATETIME);
+    bool a_is_time = (a.kind != TemporalKind::DATE);
+    bool b_is_time = (b.kind != TemporalKind::DATE);
+
+    // Convert both to UTC nanoseconds for the time/day component
+    int64_t a_days = a_is_date ? daysFromCivil(a.year, a.month, a.day) : 0;
+    int64_t b_days = b_is_date ? daysFromCivil(b.year, b.month, b.day) : 0;
+
+    int64_t a_day_ns = 0, b_day_ns = 0;
+    if (a_is_time) {
+        a_day_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos;
+        if (a.kind == TemporalKind::TIME || a.kind == TemporalKind::DATETIME)
+            a_day_ns -= static_cast<int64_t>(a.tz_offset_min) * 60'000'000'000LL;
+    }
+    if (b_is_time) {
+        b_day_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos;
+        if (b.kind == TemporalKind::TIME || b.kind == TemporalKind::DATETIME)
+            b_day_ns -= static_cast<int64_t>(b.tz_offset_min) * 60'000'000'000LL;
+    }
+
+    // Compute total difference in nanoseconds
+    int64_t a_total_ns = a_days * 86'400'000'000'000LL + a_day_ns;
+    int64_t b_total_ns = b_days * 86'400'000'000'000LL + b_day_ns;
+    int64_t diff_ns = b_total_ns - a_total_ns;
+
+    // For date-like to date-like: compute calendar months, then days, then time
+    if (a_is_date && b_is_date) {
+        int64_t months_diff = (b.year - a.year) * 12 + (b.month - a.month);
+        int64_t a_day = a.day;
+        int64_t b_day = b.day;
+        if (b_day < a_day) {
+            months_diff--;
+            int64_t prev_month = b.month - 1;
+            int64_t prev_year = b.year;
+            if (prev_month < 1) {
+                prev_month = 12;
+                prev_year--;
+            }
+            int64_t days_in_prev = daysInMonth(prev_year, prev_month);
+            int64_t remaining_days = (days_in_prev - a_day) + b_day;
+            result.dur_months = months_diff;
+            result.dur_days = remaining_days;
+        } else {
+            result.dur_months = months_diff;
+            result.dur_days = b_day - a_day;
+        }
+
+        // Compute time-of-day difference (b_time - a_time)
+        int64_t a_ns = 0, b_ns = 0;
+        if (a_is_time)
+            a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos;
+        if (b_is_time)
+            b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos;
+        int64_t time_diff = b_ns - a_ns;
+
+        // If months=0, fold days into seconds
+        if (result.dur_months == 0) {
+            time_diff += result.dur_days * 86'400'000'000'000LL;
+            result.dur_days = 0;
+        }
+
+        result.dur_seconds = time_diff / 1'000'000'000LL;
+        result.dur_nanos = time_diff % 1'000'000'000LL;
+        if (result.dur_nanos < 0) {
+            result.dur_nanos += 1'000'000'000LL;
+            result.dur_seconds -= 1;
+        }
+        return result;
+    }
+
+    // For time-only or mixed types: use pure nanosecond difference
+    result.dur_months = 0;
+    result.dur_days = 0;
+    result.dur_seconds = diff_ns / 1'000'000'000LL;
+    result.dur_nanos = diff_ns % 1'000'000'000LL;
+    if (result.dur_nanos < 0) {
+        result.dur_nanos += 1'000'000'000LL;
+        result.dur_seconds -= 1;
+    }
+
+    return result;
+}
+
+} // namespace
+
+inline Value durationBetweenScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (args.size() < 2)
+        return Value{};
+    if (!std::holds_alternative<TemporalValue>(args[0]) || !std::holds_alternative<TemporalValue>(args[1]))
+        return Value{};
+    return Value{durationBetween(std::get<TemporalValue>(args[0]), std::get<TemporalValue>(args[1]))};
+}
+
+inline void durationBetweenBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                                   const EvalContext&) {
+    if (args.size() < 2)
+        return;
+    const auto& col_a = *args[0];
+    const auto& col_b = *args[1];
+    for (size_t i = 0; i < count; ++i) {
+        Value a = col_a.getValue(i), b = col_b.getValue(i);
+        if (std::holds_alternative<TemporalValue>(a) && std::holds_alternative<TemporalValue>(b))
+            result.setValue(i, Value{durationBetween(std::get<TemporalValue>(a), std::get<TemporalValue>(b))});
+        else
+            result.setValue(i, Value{});
+    }
+}
+
+// duration.inMonths: normalize duration to months
+inline Value durationInMonthsScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (args.size() < 2)
+        return Value{};
+    if (!std::holds_alternative<TemporalValue>(args[0]) || !std::holds_alternative<TemporalValue>(args[1]))
+        return Value{};
+    auto dur = durationBetween(std::get<TemporalValue>(args[0]), std::get<TemporalValue>(args[1]));
+    // Normalize days to months
+    dur.dur_months += dur.dur_days / 30;
+    dur.dur_days = dur.dur_days % 30;
+    return Value{dur};
+}
+
+inline void durationInMonthsBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                                    const EvalContext&) {
+    if (args.size() < 2)
+        return;
+    const auto& col_a = *args[0];
+    const auto& col_b = *args[1];
+    for (size_t i = 0; i < count; ++i) {
+        Value a = col_a.getValue(i), b = col_b.getValue(i);
+        if (std::holds_alternative<TemporalValue>(a) && std::holds_alternative<TemporalValue>(b)) {
+            auto dur = durationBetween(std::get<TemporalValue>(a), std::get<TemporalValue>(b));
+            dur.dur_months += dur.dur_days / 30;
+            dur.dur_days = dur.dur_days % 30;
+            result.setValue(i, Value{dur});
+        } else {
+            result.setValue(i, Value{});
+        }
+    }
+}
+
 } // namespace scalar
 } // namespace function
 } // namespace eugraph

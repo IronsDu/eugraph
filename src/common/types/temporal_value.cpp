@@ -480,20 +480,34 @@ std::string temporalToString(const TemporalValue& tv) {
     case TemporalKind::DATE:
         return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day);
 
-    case TemporalKind::LOCAL_TIME:
-        return pad2(tv.hour) + ":" + pad2(tv.minute) + ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
-
-    case TemporalKind::TIME:
-        return pad2(tv.hour) + ":" + pad2(tv.minute) + ":" + pad2(tv.second) + fmtSubsecond(tv.nanos) +
-               fmtTimezone(tv.tz_offset_min, tv.tz_name);
-
-    case TemporalKind::LOCAL_DATETIME:
-        return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" + pad2(tv.hour) + ":" + pad2(tv.minute) +
-               ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
-
-    case TemporalKind::DATETIME:
-        return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" + pad2(tv.hour) + ":" + pad2(tv.minute) +
-               ":" + pad2(tv.second) + fmtSubsecond(tv.nanos) + fmtTimezone(tv.tz_offset_min, tv.tz_name);
+    case TemporalKind::LOCAL_TIME: {
+        std::string s = pad2(tv.hour) + ":" + pad2(tv.minute);
+        if (tv.second != 0 || tv.nanos != 0)
+            s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
+        return s;
+    }
+    case TemporalKind::TIME: {
+        std::string s = pad2(tv.hour) + ":" + pad2(tv.minute);
+        if (tv.second != 0 || tv.nanos != 0)
+            s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
+        s += fmtTimezone(tv.tz_offset_min, tv.tz_name);
+        return s;
+    }
+    case TemporalKind::LOCAL_DATETIME: {
+        std::string s =
+            pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" + pad2(tv.hour) + ":" + pad2(tv.minute);
+        if (tv.second != 0 || tv.nanos != 0)
+            s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
+        return s;
+    }
+    case TemporalKind::DATETIME: {
+        std::string s =
+            pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" + pad2(tv.hour) + ":" + pad2(tv.minute);
+        if (tv.second != 0 || tv.nanos != 0)
+            s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
+        s += fmtTimezone(tv.tz_offset_min, tv.tz_name);
+        return s;
+    }
 
     case TemporalKind::DURATION: {
         std::ostringstream oss;
