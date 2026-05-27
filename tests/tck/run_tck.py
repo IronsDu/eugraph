@@ -363,7 +363,7 @@ def generate_step_diff(baseline: dict, current: dict) -> str:
     # Always build a section with stats
     lines = ['### Step-Level Regression', '']
 
-    lines.append('#### Diagnostics', '')
+    lines.append('#### Diagnostics')
     lines.append(f'- {_status_summary("Baseline", baseline)}')
     lines.append(f'- {_status_summary("Current", current)}')
     lines.append(f'- Common keys: {len(common_keys)}, '
