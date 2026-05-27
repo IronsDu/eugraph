@@ -1,5 +1,6 @@
 #include "query/planner/binder.hpp"
 
+#include "common/types/temporal_value.hpp"
 #include "query/function/batch_ops.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_map.hpp"
@@ -283,6 +284,29 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     return BoundExpression(std::move(sub));
                 }
 
+                if (obj_type.kind == BoundTypeKind::TEMPORAL) {
+                    // Temporal member access: convert temporal.field to __temporal_field__(temporal, field_enum)
+                    auto field_opt = temporalFieldFromString(ptr->property);
+                    if (!field_opt) {
+                        error("Unknown temporal field: '" + ptr->property + "'");
+                        return std::nullopt;
+                    }
+                    auto field = *field_opt;
+
+                    auto* func =
+                        func_registry_.lookup("__temporal_field__", {BoundType::Temporal(), BoundType::Int64()});
+                    if (!func) {
+                        error("Temporal field accessor not registered");
+                        return std::nullopt;
+                    }
+                    auto fc = std::make_unique<BoundFunctionCall>();
+                    fc->func_def = func;
+                    fc->args.push_back(std::move(*obj));
+                    fc->args.push_back(BoundLiteral(static_cast<int64_t>(field)));
+                    fc->return_type = temporalFieldReturnsString(field) ? BoundType::String() : BoundType::Int64();
+                    return BoundExpression(std::move(fc));
+                }
+
                 error("Property access on non-vertex/edge/map type: " + obj_type.toString());
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
@@ -520,6 +544,9 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
         if (left_type.kind == BoundTypeKind::ANY || left_type.kind == BoundTypeKind::NULL_TYPE ||
             right_type.kind == BoundTypeKind::ANY || right_type.kind == BoundTypeKind::NULL_TYPE)
             return BoundType::Any();
+        // Temporal arithmetic: temporal + duration, duration + temporal, duration + duration
+        if (left_type.kind == BoundTypeKind::TEMPORAL && right_type.kind == BoundTypeKind::TEMPORAL)
+            return BoundType::Temporal();
         // Numeric arithmetic (fallthrough)
         if (left_type == BoundType::Int64() && right_type == BoundType::Int64())
             return BoundType::Int64();
@@ -534,6 +561,20 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
     case cypher::BinaryOperator::DIV:
     case cypher::BinaryOperator::MOD:
     case cypher::BinaryOperator::POW:
+        // Temporal subtraction: temporal - duration, temporal - temporal, duration - duration
+        if (op == cypher::BinaryOperator::SUB && left_type.kind == BoundTypeKind::TEMPORAL &&
+            right_type.kind == BoundTypeKind::TEMPORAL)
+            return BoundType::Temporal();
+        // Temporal * number  /  Temporal / number
+        if ((op == cypher::BinaryOperator::MUL || op == cypher::BinaryOperator::DIV) &&
+            left_type.kind == BoundTypeKind::TEMPORAL &&
+            (right_type.kind == BoundTypeKind::INT64 || right_type.kind == BoundTypeKind::DOUBLE))
+            return BoundType::Temporal();
+        // Number * temporal
+        if (op == cypher::BinaryOperator::MUL &&
+            (left_type.kind == BoundTypeKind::INT64 || left_type.kind == BoundTypeKind::DOUBLE) &&
+            right_type.kind == BoundTypeKind::TEMPORAL)
+            return BoundType::Temporal();
         // Arithmetic: INT64 or DOUBLE, with implicit conversion
         if (left_type == BoundType::Int64() && right_type == BoundType::Int64())
             return BoundType::Int64();

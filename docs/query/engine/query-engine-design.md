@@ -69,16 +69,19 @@ public:
 
 ```cpp
 enum class BoundTypeKind {
-    BOOL, INT64, DOUBLE, STRING, VERTEX, EDGE, PATH, LIST, ANY, NULL_TYPE
+    BOOL, INT64, DOUBLE, STRING, VERTEX, EDGE, PATH, LIST, MAP, TEMPORAL, ANY, NULL_TYPE
 };
 
 struct BoundType {
     BoundTypeKind kind;
-    std::unique_ptr<BoundType> element_type; // 仅 LIST 使用
+    std::unique_ptr<BoundType> element_type;   // 仅 LIST 使用
+    std::unique_ptr<BoundType> map_value_type; // 仅 MAP 使用
 
     static BoundType Bool(), Int64(), Double(), String();
     static BoundType Vertex(), Edge(), Path(), Any(), Null();
     static BoundType List(BoundType element);
+    static BoundType Map(BoundType key, BoundType val);
+    static BoundType Temporal();
 
     int implicitCastCost(const BoundType& target) const; // -1=不可转换, 0=精确匹配
 };
@@ -502,7 +505,7 @@ class PhysicalOperator {
 
 ```cpp
 using Value = variant<monostate, bool, int64_t, double, string,
-                      VertexValue, EdgeValue, PathValue, ListValue>;
+                      VertexValue, EdgeValue, PathValue, TemporalValue, ListValue, MapValue>;
 ```
 
 ### DataChunk / Column（见第六节）

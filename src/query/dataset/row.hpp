@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
+#include "common/types/temporal_value.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -67,7 +68,7 @@ struct ValueStorage;
 // VertexId and EdgeId are both uint64_t — use VertexValue/EdgeValue to distinguish,
 // or just use int64_t for IDs in the runtime Value.
 using Value = std::variant<std::monostate, bool, int64_t, double, std::string, VertexValue, EdgeValue, PathValue,
-                           ListValue, MapValue>;
+                           TemporalValue, ListValue, MapValue>;
 
 struct ValueStorage {
     Value value;

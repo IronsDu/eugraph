@@ -291,9 +291,26 @@ def generate_report(summary, skip_reasons: Counter, elapsed_s: float) -> str:
     return '\n'.join(lines)
 
 
+def _status_counts(data: dict) -> dict:
+    """Count steps by status."""
+    counts = {}
+    for info in data.values():
+        s = info['status']
+        counts[s] = counts.get(s, 0) + 1
+    return counts
+
+
+def _status_summary(title: str, data: dict) -> str:
+    """One-line status summary for a step results dict."""
+    counts = _status_counts(data)
+    parts = ', '.join(f'{k}={v}' for k, v in sorted(counts.items()))
+    return f'{title}: {len(data)} entries ({parts})'
+
+
 def parse_step_results(json_path: str) -> dict | None:
     """Parse step-level results JSON into {(scenario, step_index): {'step': step_text, 'status': status}}."""
     if not json_path or not os.path.isfile(json_path):
+        print(f"[run_tck] Step results file not found: {json_path}", file=sys.stderr, flush=True)
         return None
     try:
         with open(json_path) as f:
@@ -305,6 +322,7 @@ def parse_step_results(json_path: str) -> dict | None:
                 'step': entry.get('step', ''),
                 'status': entry.get('status', 'UNKNOWN'),
             }
+        print(f"[run_tck] Step results: {_status_summary(json_path, result)}", flush=True)
         return result
     except (json.JSONDecodeError, OSError) as e:
         print(f"[run_tck] Could not parse step results: {e}", file=sys.stderr, flush=True)
@@ -314,7 +332,8 @@ def parse_step_results(json_path: str) -> dict | None:
 def generate_step_diff(baseline: dict, current: dict) -> str:
     """Compare step-level results and generate regression markdown.
 
-    Returns steps that were PASSED in baseline but FAILED now.
+    Always produces a section with diagnostic stats. When regressions are
+    found, lists them with scenario + step detail.
     """
     if not baseline or not current:
         return ''
@@ -322,22 +341,61 @@ def generate_step_diff(baseline: dict, current: dict) -> str:
     regressions = []
     improvements = []
 
-    for key, b_info in baseline.items():
+    baseline_keys = set(baseline.keys())
+    current_keys = set(current.keys())
+    common_keys = baseline_keys & current_keys
+    only_baseline = baseline_keys - current_keys
+    only_current = current_keys - baseline_keys
+
+    for key in common_keys:
+        b_info = baseline[key]
+        c_info = current[key]
         scenario_name, step_idx = key
         step_text = b_info['step']
         b_status = b_info['status']
+        c_status = c_info['status']
 
-        if key in current:
-            c_status = current[key]['status']
-            if b_status == 'PASSED' and c_status != 'PASSED':
-                regressions.append((scenario_name, step_idx, step_text, b_status, c_status))
-            elif b_status != 'PASSED' and c_status == 'PASSED':
-                improvements.append((scenario_name, step_idx, step_text, b_status, c_status))
+        if b_status == 'PASSED' and c_status != 'PASSED':
+            regressions.append((scenario_name, step_idx, step_text, b_status, c_status))
+        elif b_status != 'PASSED' and c_status == 'PASSED':
+            improvements.append((scenario_name, step_idx, step_text, b_status, c_status))
 
-    if not regressions and not improvements:
-        return '\n### Step-Level Regression\n\nNo step-level regressions detected.\n'
-
+    # Always build a section with stats
     lines = ['### Step-Level Regression', '']
+
+    lines.append('#### Diagnostics')
+    lines.append(f'- {_status_summary("Baseline", baseline)}')
+    lines.append(f'- {_status_summary("Current", current)}')
+    lines.append(f'- Common keys: {len(common_keys)}, '
+                 f'only in baseline: {len(only_baseline)}, '
+                 f'only in current: {len(only_current)}')
+    lines.append('')
+
+    if only_baseline:
+        lines.append('<details>')
+        lines.append('<summary>Keys only in baseline (first 10)</summary>')
+        lines.append('')
+        for key in sorted(only_baseline)[:10]:
+            info = baseline[key]
+            lines.append(f'- `[{info["status"]}] [{key[1]}] {info["step"]}` — *{key[0][:100]}*')
+        if len(only_baseline) > 10:
+            lines.append(f'- ... and {len(only_baseline) - 10} more')
+        lines.append('')
+        lines.append('</details>')
+        lines.append('')
+
+    if only_current:
+        lines.append('<details>')
+        lines.append('<summary>Keys only in current (first 10)</summary>')
+        lines.append('')
+        for key in sorted(only_current)[:10]:
+            info = current[key]
+            lines.append(f'- `[{info["status"]}] [{key[1]}] {info["step"]}` — *{key[0][:100]}*')
+        if len(only_current) > 10:
+            lines.append(f'- ... and {len(only_current) - 10} more')
+        lines.append('')
+        lines.append('</details>')
+        lines.append('')
 
     if regressions:
         lines.append('> [!CAUTION]')
@@ -348,11 +406,14 @@ def generate_step_diff(baseline: dict, current: dict) -> str:
         lines.append('|----------|------|----------|---------|')
         max_show = 50
         for scenario, idx, step, b_status, c_status in regressions[:max_show]:
-            # Truncate long scenario names for readability
             short_scenario = scenario[:80] + '...' if len(scenario) > 80 else scenario
             lines.append(f'| {short_scenario} | [{idx}] {step} | {b_status} | {c_status} |')
         if len(regressions) > max_show:
             lines.append(f'| ... | ... and {len(regressions) - max_show} more | ... | ... |')
+        lines.append('')
+    else:
+        lines.append('> [!NOTE]')
+        lines.append('> **No regressions detected** in the overlapping keys.')
         lines.append('')
 
     if improvements:
@@ -491,16 +552,32 @@ def main():
             # Append step-level diff if available
             step_results_path = args.step_results_file or os.environ.get('TCK_STEP_RESULTS_PATH')
             step_baseline_path = args.step_baseline_file or os.environ.get('TCK_STEP_BASELINE_PATH')
+            print(f"[run_tck] Step results file arg/env: {step_results_path or '(not set)'}", flush=True)
+            print(f"[run_tck] Step baseline file arg/env: {step_baseline_path or '(not set)'}", flush=True)
             if step_results_path and os.path.isfile(step_results_path):
+                print(f"[run_tck] Step results file exists (size={os.path.getsize(step_results_path)})", flush=True)
                 current_steps = parse_step_results(step_results_path)
-                baseline_steps = parse_step_results(step_baseline_path) if step_baseline_path and os.path.isfile(step_baseline_path) else None
+                baseline_steps = None
+                if step_baseline_path:
+                    if os.path.isfile(step_baseline_path):
+                        print(f"[run_tck] Step baseline file exists (size={os.path.getsize(step_baseline_path)})", flush=True)
+                        baseline_steps = parse_step_results(step_baseline_path)
+                    else:
+                        print(f"[run_tck] Step baseline file NOT FOUND: {step_baseline_path}", flush=True)
+                else:
+                    print(f"[run_tck] No step baseline path provided", flush=True)
                 if current_steps and baseline_steps:
                     step_diff = generate_step_diff(baseline_steps, current_steps)
                     if step_diff:
                         report = report + '\n' + step_diff
                         print(f"[run_tck] Step-level comparison appended", flush=True)
                 elif current_steps:
-                    print(f"[run_tck] No step baseline file, skipping step comparison", flush=True)
+                    print(f"[run_tck] Skipping step comparison (baseline has no entries or missing)", flush=True)
+            else:
+                if step_results_path:
+                    print(f"[run_tck] Step results file NOT FOUND: {step_results_path}", flush=True)
+                else:
+                    print(f"[run_tck] No step results file path configured", flush=True)
 
             with open(args.report, 'w') as f:
                 f.write(report + '\n')

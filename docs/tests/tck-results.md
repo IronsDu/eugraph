@@ -1,7 +1,7 @@
 # TCK 测试结果分类报告
 
-**日期**: 2026-05-26 (更新)
-**分支**: feature/temporal-functions
+**日期**: 2026-05-27 (更新)
+**分支**: feature/temporal-phase2
 **总计**: 3897 场景, 16006 步骤
 **运行耗时**: 10 分 59 秒
 **检测方式**: Parser AST 遍历
@@ -24,16 +24,25 @@
 
 实现了 6 个构造函数族（`datetime`, `date`, `time`, `localtime`, `localdatetime`, `duration`），支持 MAP<STRING, ANY>、STRING 和 0-arg 调用。返回 STRING 类型（ISO 8601 格式）。
 
-Temporal features 步骤通过数从 0 提升至 2042。剩余失败为 Phase 2 范围（成员访问器、比较、算术）。
+Temporal features 步骤通过数从 0 提升至 2042。剩余失败为 Phase 2 范围（比较、算术、truncate 等）。
 
 | 函数 | 状态 |
 |------|------|
-| `datetime()` / `date()` / `time()` | ✅ 已实现 |
-| `localtime()` / `localdatetime()` | ✅ 已实现 |
-| `duration()` | ✅ 已实现 |
-| `.year` / `.month` 等成员访问器 | Phase 2 |
-| 比较运算符 / 算术运算 | Phase 2 |
+| `datetime()` / `date()` / `time()` | ✅ 已实现（MAP 形式；STRING 形式返回 epoch） |
+| `localtime()` / `localdatetime()` | ✅ 已实现（MAP 形式；STRING 形式返回 epoch） |
+| `duration()` | ✅ 已实现（MAP 形式；STRING 形式返回零时长） |
+| `.year` / `.month` 等成员访问器 | ✅ 已实现（Binder 阶段枚举化） |
+| 相等比较 (`=`, `<>`) | ✅ 已实现（泛型 Value::operator==） |
+| 有序比较 (`<`, `>`, `<=`, `>=`) | ✅ 已实现（同 kind 比较；不同 kind 返回 NULL） |
+| 算术运算 (`+`, `-`, `*`, `/`) | ✅ 已实现（temporal±duration, temporal-temporal, duration±*/） |
 | `truncate()` / `duration.between()` | Phase 2 |
+
+### 已知限制
+
+- **STRING 形式构造函数**：`date('2024-01-15')` 等字符串参数形式尚未实现解析，当前返回 epoch 默认值（`1970-01-01`）。目前只有 MAP 形式（如 `date({year: 2024, month: 1, day: 15})`）能正确构造指定时间值。
+- **DOUBLE 截断**：`duration({months: 1}) * 3.5` 中 DOUBLE 参数会被截断为 `int64_t`（即 `*3`），不支持浮点乘除法。
+- **跨 kind 比较**：`date < duration` 等不同 TemporalKind 的比较返回 NULL（符合 Cypher 语义）。
+- **`temporal - temporal` 结果**：`datetime - datetime` 等产生的 DURATION 仅包含天和亚天分量（`months=0`），不通过日历反推月份。
 
 ---
 
@@ -145,8 +154,8 @@ Temporal features 步骤通过数从 0 提升至 2042。剩余失败为 Phase 2 
 
 | 优先级 | 分类 | 影响场景数 | 修复路径 |
 |--------|------|-----------|---------|
-| ~~P0~~ | ~~时间日期构造函数~~ | ~~~800~~ | ✅ 已实现（Phase 1） |
-| **P0** | 时间日期成员访问器/比较/算术 | ~1000 | Phase 2：添加 TemporalValue 类型 |
+| ~~P0~~ | ~~时间日期构造函数 & 成员访问器 & 比较/算术~~ | ~~~800~~ | ✅ 已实现（Phase 1 + Phase 2） |
+| **P0** | `truncate()` / `duration.between()` / STRING 解析 | ~500 | Phase 2 收尾 |
 | **P1** | MERGE | ~80 | MERGE 子句实现 |
 | **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
 | **P2** | 布尔类型检查 | ~48 | 完善逻辑运算符的类型推断 |

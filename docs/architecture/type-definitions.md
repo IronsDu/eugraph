@@ -125,12 +125,14 @@ struct EdgeLabelDef {
 ## 运行时类型
 
 ```cpp
-// 查询执行中的值类型（src/query/executor/row.hpp）
+// 查询执行中的值类型（src/query/dataset/row.hpp）
 struct VertexValue { VertexId id; std::optional<LabelIdSet> labels; std::unordered_map<LabelId, Properties> properties; };
 struct EdgeValue { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; std::optional<Properties> properties; };
 struct PathValue { std::vector<ValueStorage> elements; };  // 交替序列: [顶点, 边, 顶点, ...]
 struct ListValue { std::vector<ValueStorage> elements; };
-using Value = variant<monostate, bool, int64_t, double, string, VertexValue, EdgeValue, PathValue, ListValue>;
+struct MapValue { std::vector<std::pair<ValueStorage, ValueStorage>> entries; };
+struct TemporalValue { TemporalKind kind; int64_t year, month, day, hour, minute, second, nanos; int32_t tz_offset_min; std::string tz_name; int64_t dur_months, dur_days, dur_seconds, dur_nanos; };
+using Value = variant<monostate, bool, int64_t, double, string, VertexValue, EdgeValue, PathValue, TemporalValue, ListValue, MapValue>;
 
 using Row = vector<Value>;         // 位置式行
 using Schema = vector<string>;     // 列名列表
