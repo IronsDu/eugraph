@@ -1,6 +1,7 @@
 #include "query/physical_plan/operator/create_node_physical_op.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
+#include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
 #include <spdlog/spdlog.h>
 
@@ -26,6 +27,8 @@ PropertyValue valueToPropertyValue(const Value& v) {
         return std::get<double>(v);
     if (std::holds_alternative<std::string>(v))
         return std::get<std::string>(v);
+    if (std::holds_alternative<TemporalValue>(v))
+        return temporalToString(std::get<TemporalValue>(v));
     return PropertyValue{};
 }
 } // namespace

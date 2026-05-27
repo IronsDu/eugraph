@@ -733,8 +733,25 @@ int64_t dayOfQuarter(int64_t year, int64_t month, int64_t day) {
 } // namespace
 
 inline Value temporalAccessorImpl(const Value& tv_val, TemporalField field) {
-    if (!std::holds_alternative<TemporalValue>(tv_val))
+    if (!std::holds_alternative<TemporalValue>(tv_val)) {
+        // Accept STRING: parse as temporal first (for property round-trip)
+        if (std::holds_alternative<std::string>(tv_val)) {
+            const auto& s = std::get<std::string>(tv_val);
+            TemporalValue tv = parseDateFromString(s);
+            if (tv.year == 1970 && tv.month == 1 && tv.day == 1) {
+                // Try datetime formats
+                tv = parseDatetimeStr(s, TemporalKind::LOCAL_DATETIME);
+                if (tv.year == 1970 && tv.month == 1 && tv.day == 1) {
+                    tv = parseDatetimeStr(s, TemporalKind::DATETIME);
+                    if (tv.year == 1970 && tv.month == 1 && tv.day == 1) {
+                        tv = parseTimeStr(s, TemporalKind::LOCAL_TIME);
+                    }
+                }
+            }
+            return temporalAccessorImpl(Value{tv}, field);
+        }
         return Value{};
+    }
     const auto& tv = std::get<TemporalValue>(tv_val);
 
     auto isDateLike = [](TemporalKind k) {

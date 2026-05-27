@@ -606,6 +606,28 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 {},
                                                 {},
                                                 {}});
+    // __temporal_field__(STRING, INT64) -> Any  (for property round-trip)
+    functions_["__temporal_field__"].push_back({"__temporal_field__",
+                                                {BoundType::String(), BoundType::Int64()},
+                                                BoundType::Any(),
+                                                false,
+                                                false,
+                                                scalar::temporalAccessorScalarFn,
+                                                scalar::temporalAccessorBatchFn,
+                                                {},
+                                                {},
+                                                {}});
+    // __temporal_field__(ANY, INT64) -> Any  (for dynamic property round-trip)
+    functions_["__temporal_field__"].push_back({"__temporal_field__",
+                                                {BoundType::Any(), BoundType::Int64()},
+                                                BoundType::Any(),
+                                                false,
+                                                false,
+                                                scalar::temporalAccessorScalarFn,
+                                                scalar::temporalAccessorBatchFn,
+                                                {},
+                                                {},
+                                                {}});
 
     // truncate(STRING, TEMPORAL) -> TEMPORAL  (2-arg)
     // truncate(STRING, TEMPORAL, ANY) -> TEMPORAL  (3-arg)

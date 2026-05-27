@@ -1,6 +1,7 @@
 #include "query/physical_plan/operator/set_physical_op.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
+#include "common/types/temporal_value.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
 #include <spdlog/spdlog.h>
 
@@ -20,6 +21,8 @@ PropertyValue valueToPropertyValue(const Value& v) {
         return PropertyValue(std::get<double>(v));
     if (std::holds_alternative<std::string>(v))
         return PropertyValue(std::get<std::string>(v));
+    if (std::holds_alternative<TemporalValue>(v))
+        return PropertyValue(temporalToString(std::get<TemporalValue>(v)));
     return PropertyValue{};
 }
 
