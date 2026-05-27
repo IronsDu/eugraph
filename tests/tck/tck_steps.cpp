@@ -12,10 +12,13 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
+
+#include <nlohmann/json.hpp>
 
 using namespace eugraph::tck;
 
@@ -32,6 +35,18 @@ std::atomic<int> gScenarioNum{0};
 std::vector<std::string> gPassedScenarios;
 std::vector<std::string> gFailedScenarios;
 std::vector<std::string> gSkippedScenarios;
+
+// Step-level tracking
+struct StepRecord {
+    std::string scenario_name;
+    int step_index;
+    std::string step_text;
+    std::string status; // "PASSED" or "FAILED"
+};
+std::vector<StepRecord> gStepRecords;
+std::string gCurrentStepText;
+std::vector<std::pair<std::string, std::string>> gPendingSteps; // (step_text, status)
+int gStepIndex = 0;
 
 void resetCtx() {
     gCtx = std::make_unique<TckContext>();
@@ -147,11 +162,39 @@ HOOK_AFTER_ALL() {
         }
     }
     std::cout << std::endl;
+
+    // Write step-level results to JSON
+    const char* stepResultsPath = std::getenv("TCK_STEP_RESULTS_PATH");
+    std::string path = stepResultsPath ? stepResultsPath : "tck-step-results.json";
+    try {
+        nlohmann::json j = nlohmann::json::array();
+        for (const auto& r : gStepRecords) {
+            nlohmann::json entry;
+            entry["scenario"] = r.scenario_name;
+            entry["index"] = r.step_index;
+            entry["step"] = r.step_text;
+            entry["status"] = r.status;
+            j.push_back(entry);
+        }
+        std::ofstream ofs(path);
+        ofs << j.dump() << "\n";
+        ofs.close();
+        std::cout << "[TCK] Step results written to " << path << " (" << gStepRecords.size() << " steps)\n";
+    } catch (const std::exception& e) {
+        std::cerr << "[TCK] Failed to write step results: " << e.what() << "\n";
+    }
 }
 
 HOOK_BEFORE_SCENARIO() {
     resetCtx();
+    gStepIndex = 0;
+    gPendingSteps.clear();
     spdlog::info("[TCK] === Scenario {} (graph: {}) ===", gScenarioNum.load(), gCtx->graphName);
+}
+
+HOOK_AFTER_STEP() {
+    gPendingSteps.push_back({gCurrentStepText, hasError ? "FAILED" : "PASSED"});
+    ++gStepIndex;
 }
 
 HOOK_AFTER_SCENARIO() {
@@ -170,6 +213,12 @@ HOOK_AFTER_SCENARIO() {
         gPassedScenarios.push_back(scenario_name);
     }
 
+    // Flush pending steps with scenario name
+    for (size_t i = 0; i < gPendingSteps.size(); ++i) {
+        gStepRecords.push_back({scenario_name, static_cast<int>(i), gPendingSteps[i].first, gPendingSteps[i].second});
+    }
+    gPendingSteps.clear();
+
     if (gCtx) {
         gCtx->dropGraph(gCtx->graphName);
     }
@@ -180,10 +229,12 @@ HOOK_AFTER_SCENARIO() {
 // -----------------------------------------------------------------------
 
 GIVEN("^an empty graph$") {
+    gCurrentStepText = "an empty graph";
     gCtx->createGraph(gCtx->graphName);
 }
 
 GIVEN("^any graph$") {
+    gCurrentStepText = "any graph";
     gCtx->createGraph(gCtx->graphName);
 }
 
@@ -192,6 +243,7 @@ GIVEN("^any graph$") {
 // -----------------------------------------------------------------------
 
 STEP("^having executed:$") {
+    gCurrentStepText = "having executed:";
     std::string q = getDocString(docString);
     if (skipIfUnsupported(q)) {
         GTEST_SKIP() << "Unsupported Cypher syntax";
@@ -206,6 +258,7 @@ STEP("^having executed:$") {
 // -----------------------------------------------------------------------
 
 STEP("^parameters are:$") {
+    gCurrentStepText = "parameters are:";
     if (!dataTable || dataTable->rows.empty()) {
         return;
     }
@@ -225,6 +278,7 @@ STEP("^parameters are:$") {
 // -----------------------------------------------------------------------
 
 WHEN("^executing query:$") {
+    gCurrentStepText = "executing query:";
     std::string q = getDocString(docString);
     if (skipIfUnsupported(q)) {
         GTEST_SKIP() << "Unsupported Cypher syntax";
@@ -247,6 +301,7 @@ WHEN("^executing query:$") {
 // -----------------------------------------------------------------------
 
 WHEN("^executing control query:$") {
+    gCurrentStepText = "executing control query:";
     std::string q = getDocString(docString);
     if (skipIfUnsupported(q)) {
         GTEST_SKIP() << "Unsupported Cypher syntax";
@@ -261,6 +316,7 @@ WHEN("^executing control query:$") {
 // -----------------------------------------------------------------------
 
 THEN("^the result should be empty$") {
+    gCurrentStepText = "the result should be empty";
     ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected empty result but got error: " << gCtx->lastErrorType;
     EXPECT_TRUE(gCtx->lastRows.empty()) << "Expected 0 rows, got " << gCtx->lastRows.size();
 }
@@ -270,6 +326,7 @@ THEN("^the result should be empty$") {
 // -----------------------------------------------------------------------
 
 THEN("^the result should be, in any order:$") {
+    gCurrentStepText = "the result should be, in any order:";
     ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected result but got error: " << gCtx->lastErrorType;
 
     if (dataTable->rows.empty()) {
@@ -310,6 +367,7 @@ THEN("^the result should be, in any order:$") {
 // -----------------------------------------------------------------------
 
 THEN("^the result should be, in order:$") {
+    gCurrentStepText = "the result should be, in order:";
     ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected result but got error: " << gCtx->lastErrorType;
 
     if (dataTable->rows.empty()) {
@@ -346,6 +404,7 @@ THEN("^the result should be, in order:$") {
 THEN(
     R"(^a (SyntaxError|SemanticError|TypeError|ArgumentError|ArithmeticError|EntityNotFound|PropertyNotFound|LabelNotFound|ConstraintVerificationFailed|ConstraintValidationFailed|ParameterMissing) should be raised at (compile time|runtime|any time): (.+)$)",
     (const std::string& expType, const std::string& expPhase, const std::string& expDetail)) {
+    gCurrentStepText = "an error should be raised at ...:";
     ASSERT_TRUE(gCtx->lastQueryHadError) << "Expected error " << expType << " but query succeeded";
     EXPECT_EQ(gCtx->lastErrorType, expType);
     if (expPhase != "any time") {
@@ -361,6 +420,7 @@ THEN(
 // -----------------------------------------------------------------------
 
 STEP("^the side effects should be:$") {
+    gCurrentStepText = "the side effects should be:";
     // Each row is | metric | value | (including first row)
     std::map<std::string, int64_t> expected;
     for (const auto& row : dataTable->rows) {
@@ -382,6 +442,7 @@ STEP("^the side effects should be:$") {
 // -----------------------------------------------------------------------
 
 STEP("^no side effects$") {
+    gCurrentStepText = "no side effects";
     SideEffects& se = gCtx->lastSideEffects;
     EXPECT_TRUE(se.isZero()) << "Expected no side effects but got: "
                              << "nodes=" << se.nodes << " rels=" << se.relationships << " labels=" << se.labels
@@ -393,6 +454,7 @@ STEP("^no side effects$") {
 // -----------------------------------------------------------------------
 
 THEN(R"(^the result should be \(ignoring element order for lists\):$)") {
+    gCurrentStepText = "the result should be (ignoring element order for lists):";
     ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected result but got error: " << gCtx->lastErrorType;
 
     if (dataTable->rows.empty()) {
@@ -438,6 +500,7 @@ THEN(R"(^the result should be \(ignoring element order for lists\):$)") {
 // -----------------------------------------------------------------------
 
 THEN(R"(^the result should be, in order \(ignoring element order for lists\):$)") {
+    gCurrentStepText = "the result should be, in order (ignoring element order for lists):";
     ASSERT_FALSE(gCtx->lastQueryHadError) << "Expected result but got error: " << gCtx->lastErrorType;
 
     if (dataTable->rows.empty()) {
