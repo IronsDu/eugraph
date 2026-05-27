@@ -4,6 +4,7 @@
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
 
+#include <cmath>
 #include <cstring>
 #include <ctime>
 #include <string>
@@ -18,20 +19,13 @@ namespace {
 
 void isoWeekToDate(int64_t iso_year, int64_t iso_week, int64_t iso_dow, int64_t& out_year, int64_t& out_month,
                    int64_t& out_day) {
-    struct tm tm_base = {};
-    tm_base.tm_year = static_cast<int>(iso_year - 1900);
-    tm_base.tm_mon = 0;
-    tm_base.tm_mday = 4;
-    tm_base.tm_isdst = -1;
-    time_t jan4 = timegm(&tm_base);
-    int jan4_wday = gmtime(&jan4)->tm_wday;
-    int jan4_mon = (jan4_wday + 6) % 7;
-    int64_t days = (iso_week - 1) * 7 + (iso_dow - 1) - jan4_mon;
-    time_t target = jan4 + static_cast<time_t>(days) * 86400;
-    struct tm* out = gmtime(&target);
-    out_year = out->tm_year + 1900;
-    out_month = out->tm_mon + 1;
-    out_day = out->tm_mday;
+    // ISO week date using pure calendar math (works for all years)
+    int64_t jan4 = daysFromCivil(iso_year, 1, 4);
+    // ISO weekday: 1970-01-01 was Thursday = ISO day 4
+    int64_t jan4_dow = ((jan4 % 7) + 10) % 7 + 1; // 1=Mon..7=Sun
+    int64_t week1_monday = jan4 - (jan4_dow - 1);
+    int64_t target = week1_monday + (iso_week - 1) * 7 + (iso_dow - 1);
+    civilFromDays(target, out_year, out_month, out_day);
 }
 
 void ordinalToDate(int64_t year, int64_t ordinal, int64_t& out_month, int64_t& out_day) {
@@ -57,15 +51,9 @@ void quarterToDate(int64_t year, int64_t quarter, int64_t day_of_quarter, int64_
 }
 
 int64_t dayOfWeekIso(int64_t year, int64_t month, int64_t day) {
-    // Returns 1=Monday to 7=Sunday using Zeller-like algorithm
-    struct tm tm_val = {};
-    tm_val.tm_year = static_cast<int>(year - 1900);
-    tm_val.tm_mon = static_cast<int>(month - 1);
-    tm_val.tm_mday = static_cast<int>(day);
-    tm_val.tm_isdst = -1;
-    time_t t = timegm(&tm_val);
-    int wday = gmtime(&t)->tm_wday; // 0=Sun
-    return (wday + 6) % 7 + 1;      // 1=Mon
+    // 1970-01-01 was Thursday = ISO day 4
+    int64_t days = daysFromCivil(year, month, day);
+    return ((days % 7) + 10) % 7 + 1; // 1=Mon..7=Sun
 }
 
 int64_t isoWeekNumber(int64_t year, int64_t month, int64_t day) {
@@ -161,21 +149,28 @@ int32_t parseTzOffset(const std::string& tz) {
         return 0;
     int sign = (tz[0] == '-') ? -1 : 1;
     size_t start = (tz[0] == '+' || tz[0] == '-') ? 1 : 0;
-    // Parse HH:MM or HHMM
-    int64_t hours = 0, minutes = 0;
-    size_t colon = tz.find(':', start);
-    if (colon != std::string::npos) {
-        hours = std::stoll(tz.substr(start, colon - start));
-        minutes = std::stoll(tz.substr(colon + 1));
+    // Parse HH:MM[:SS] or HHMM
+    int64_t hours = 0, minutes = 0, seconds = 0;
+    std::string rest = tz.substr(start);
+    size_t col1 = rest.find(':');
+    if (col1 != std::string::npos) {
+        hours = std::stoll(rest.substr(0, col1));
+        size_t col2 = rest.find(':', col1 + 1);
+        if (col2 != std::string::npos) {
+            minutes = std::stoll(rest.substr(col1 + 1, col2 - col1 - 1));
+            seconds = std::stoll(rest.substr(col2 + 1));
+        } else {
+            minutes = std::stoll(rest.substr(col1 + 1));
+        }
     } else {
-        size_t len = tz.size() - start;
+        size_t len = rest.size();
         if (len >= 2) {
-            hours = std::stoll(tz.substr(start, 2));
+            hours = std::stoll(rest.substr(0, 2));
             if (len >= 4)
-                minutes = std::stoll(tz.substr(start + 2, 2));
+                minutes = std::stoll(rest.substr(2, 2));
         }
     }
-    return static_cast<int32_t>(sign * (hours * 60 + minutes));
+    return static_cast<int32_t>(sign * (hours * 60 + minutes + seconds / 60));
 }
 
 void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_t& day) {
@@ -186,6 +181,19 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
     bool use_week = hasMapKey(mv, "week");
     bool use_ordinal = hasMapKey(mv, "ordinalDay");
     bool use_quarter = hasMapKey(mv, "quarter");
+
+    // If 'date' key is present, use its date as the base
+    if (hasMapKey(mv, "date")) {
+        for (const auto& [k, vs] : mv->entries) {
+            if (k == "date" && std::holds_alternative<TemporalValue>(vs.value)) {
+                const auto& base = std::get<TemporalValue>(vs.value);
+                year = base.year;
+                month = base.month;
+                day = base.day;
+                break;
+            }
+        }
+    }
 
     if (use_week) {
         int64_t wk = intFromMap(mv, "week", 1);
@@ -199,12 +207,220 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
         int64_t doq = intFromMap(mv, "dayOfQuarter", 1);
         quarterToDate(year, q, doq, month, day);
     } else {
+        bool has_year = hasMapKey(mv, "year");
         if (hasMapKey(mv, "month"))
             month = intFromMap(mv, "month", 1);
         if (hasMapKey(mv, "day"))
             day = intFromMap(mv, "day", 1);
-        normalizeDate(year, month, day);
+        if (has_year || hasMapKey(mv, "month") || hasMapKey(mv, "day"))
+            normalizeDate(year, month, day);
     }
+}
+
+// Fractional value extraction for duration
+double doubleFromMap(const MapValue* mv, const std::string& key, double def = 0.0) {
+    if (!mv)
+        return def;
+    for (const auto& [k, vs] : mv->entries) {
+        if (k != key || std::holds_alternative<std::monostate>(vs.value))
+            continue;
+        if (std::holds_alternative<double>(vs.value))
+            return std::get<double>(vs.value);
+        if (std::holds_alternative<int64_t>(vs.value))
+            return static_cast<double>(std::get<int64_t>(vs.value));
+    }
+    return def;
+}
+
+// String parsing for temporal values
+TemporalValue parseDateFromString(const std::string& s) {
+    TemporalValue tv{TemporalKind::DATE};
+    if (s.empty())
+        return tv;
+    if (s.size() >= 10 && s[4] == '-' && s[7] == '-') {
+        tv.year = std::stoll(s.substr(0, 4));
+        tv.month = std::stoll(s.substr(5, 2));
+        tv.day = std::stoll(s.substr(8));
+    } else if (s.size() == 8 && s.find('-') == std::string::npos && s.find('W') == std::string::npos) {
+        tv.year = std::stoll(s.substr(0, 4));
+        tv.month = std::stoll(s.substr(4, 2));
+        tv.day = std::stoll(s.substr(6, 2));
+    } else if (s.size() >= 7 && s[4] == '-' && s.rfind('-') == 4) {
+        tv.year = std::stoll(s.substr(0, 4));
+        tv.month = std::stoll(s.substr(5));
+        tv.day = 1;
+    } else if (s.size() == 6 && s.find('-') == std::string::npos) {
+        tv.year = std::stoll(s.substr(0, 4));
+        tv.month = std::stoll(s.substr(4, 2));
+        tv.day = 1;
+    } else if (s.find('W') != std::string::npos || s.find('w') != std::string::npos) {
+        size_t wpos = s.find('W');
+        if (wpos == std::string::npos)
+            wpos = s.find('w');
+        int64_t iso_year = std::stoll(s.substr(0, wpos));
+        size_t num_start = wpos + 1;
+        if (num_start < s.size() && s[num_start] == '-')
+            num_start++;
+        size_t num_end = num_start;
+        while (num_end < s.size() && s[num_end] >= '0' && s[num_end] <= '9')
+            num_end++;
+        int64_t iso_week = std::stoll(s.substr(num_start, num_end - num_start));
+        int64_t iso_dow = 1;
+        if (num_end < s.size() && (s[num_end] == '-' || (s[num_end] >= '0' && s[num_end] <= '9'))) {
+            if (s[num_end] == '-')
+                num_end++;
+            iso_dow = std::stoll(s.substr(num_end));
+        }
+        isoWeekToDate(iso_year, iso_week, iso_dow, tv.year, tv.month, tv.day);
+    }
+    return tv;
+}
+
+TemporalValue parseTimeStr(const std::string& s, TemporalKind kind) {
+    TemporalValue tv{kind};
+    if (s.empty())
+        return tv;
+    size_t pos = 0;
+    tv.hour = std::stoll(s.substr(pos, 2));
+    pos += 2;
+    if (pos < s.size() && s[pos] == ':')
+        pos++;
+    tv.minute = std::stoll(s.substr(pos, 2));
+    pos += 2;
+    if (pos < s.size() && s[pos] == ':') {
+        pos++;
+        tv.second = std::stoll(s.substr(pos, 2));
+        pos += 2;
+    }
+    if (pos < s.size() && s[pos] == '.') {
+        pos++;
+        size_t start = pos;
+        while (pos < s.size() && s[pos] >= '0' && s[pos] <= '9')
+            pos++;
+        std::string frac = s.substr(start, pos - start);
+        frac.resize(9, '0');
+        tv.nanos = std::stoll(frac);
+    }
+    if (kind == TemporalKind::TIME && pos < s.size()) {
+        std::string tz = s.substr(pos);
+        if (tz != "Z" && !tz.empty())
+            tv.tz_offset_min = parseTzOffset(tz);
+    }
+    return tv;
+}
+
+TemporalValue parseDatetimeStr(const std::string& s, TemporalKind kind) {
+    TemporalValue tv{kind};
+    if (s.empty())
+        return tv;
+    size_t pos = 0;
+    tv.year = std::stoll(s.substr(0, 4));
+    pos += 4;
+    if (pos < s.size() && s[pos] == '-')
+        pos++;
+    tv.month = std::stoll(s.substr(pos, 2));
+    pos += 2;
+    if (pos < s.size() && s[pos] == '-')
+        pos++;
+    tv.day = std::stoll(s.substr(pos, 2));
+    pos += 2;
+    if (pos < s.size() && (s[pos] == 'T' || s[pos] == 't' || s[pos] == ' '))
+        pos++;
+    tv.hour = std::stoll(s.substr(pos, 2));
+    pos += 2;
+    if (pos < s.size() && s[pos] == ':')
+        pos++;
+    tv.minute = std::stoll(s.substr(pos, 2));
+    pos += 2;
+    if (pos < s.size() && s[pos] == ':') {
+        pos++;
+        tv.second = std::stoll(s.substr(pos, 2));
+        pos += 2;
+    }
+    if (pos < s.size() && s[pos] == '.') {
+        pos++;
+        size_t start = pos;
+        while (pos < s.size() && s[pos] >= '0' && s[pos] <= '9')
+            pos++;
+        std::string frac = s.substr(start, pos - start);
+        frac.resize(9, '0');
+        tv.nanos = std::stoll(frac);
+    }
+    if (kind == TemporalKind::DATETIME && pos < s.size()) {
+        std::string tz = s.substr(pos);
+        if (tz != "Z" && !tz.empty())
+            tv.tz_offset_min = parseTzOffset(tz);
+    }
+    return tv;
+}
+
+TemporalValue parseDurationFromString(const std::string& s) {
+    TemporalValue tv{TemporalKind::DURATION};
+    if (s.empty() || s[0] != 'P')
+        return tv;
+    size_t pos = 1;
+    bool in_time = false;
+    while (pos < s.size()) {
+        if (s[pos] == 'T') {
+            in_time = true;
+            pos++;
+            continue;
+        }
+        size_t num_start = pos;
+        bool neg = (s[pos] == '-');
+        if (neg)
+            pos++;
+        while (pos < s.size() && ((s[pos] >= '0' && s[pos] <= '9') || s[pos] == '.'))
+            pos++;
+        double val = std::stod(s.substr(num_start, pos - num_start));
+        if (pos >= s.size())
+            break;
+        char unit = s[pos++];
+        int64_t int_part = static_cast<int64_t>(val);
+        double frac = val - int_part;
+        switch (unit) {
+        case 'Y':
+            tv.dur_months += int_part * 12;
+            break;
+        case 'M':
+            if (!in_time) {
+                tv.dur_months += int_part;
+            } else {
+                tv.dur_seconds += int_part * 60;
+                if (frac != 0)
+                    tv.dur_seconds += static_cast<int64_t>(frac * 60);
+            }
+            break;
+        case 'W':
+            tv.dur_days += int_part * 7;
+            break;
+        case 'D':
+            tv.dur_days += int_part;
+            if (frac != 0)
+                tv.dur_seconds += static_cast<int64_t>(frac * 86400);
+            break;
+        case 'H':
+            tv.dur_seconds += int_part * 3600;
+            if (frac != 0)
+                tv.dur_seconds += static_cast<int64_t>(frac * 3600);
+            break;
+        case 'S': {
+            tv.dur_seconds += int_part;
+            if (frac != 0) {
+                int64_t frac_ns = static_cast<int64_t>(frac * 1'000'000'000.0);
+                tv.dur_nanos += frac_ns;
+                if (tv.dur_nanos >= 1'000'000'000LL) {
+                    tv.dur_seconds += tv.dur_nanos / 1'000'000'000LL;
+                    tv.dur_nanos %= 1'000'000'000LL;
+                }
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    return tv;
 }
 
 } // anonymous namespace
@@ -223,7 +439,7 @@ inline Value dateImpl(const Value& arg) {
     }
 
     if (std::holds_alternative<std::string>(arg))
-        return Value{TemporalValue{TemporalKind::DATE}}; // basic: epoch default
+        return Value{parseDateFromString(std::get<std::string>(arg))};
 
     return Value{};
 }
@@ -262,7 +478,7 @@ inline Value localtimeImpl(const Value& arg) {
     }
 
     if (std::holds_alternative<std::string>(arg))
-        return Value{TemporalValue{TemporalKind::LOCAL_TIME}};
+        return Value{parseTimeStr(std::get<std::string>(arg), TemporalKind::LOCAL_TIME)};
 
     return Value{};
 }
@@ -303,7 +519,7 @@ inline Value timeImpl(const Value& arg) {
     }
 
     if (std::holds_alternative<std::string>(arg))
-        return Value{TemporalValue{TemporalKind::TIME}};
+        return Value{parseTimeStr(std::get<std::string>(arg), TemporalKind::TIME)};
 
     return Value{};
 }
@@ -343,7 +559,7 @@ inline Value localdatetimeImpl(const Value& arg) {
     }
 
     if (std::holds_alternative<std::string>(arg))
-        return Value{TemporalValue{TemporalKind::LOCAL_DATETIME}};
+        return Value{parseDatetimeStr(std::get<std::string>(arg), TemporalKind::LOCAL_DATETIME)};
 
     return Value{};
 }
@@ -386,7 +602,7 @@ inline Value datetimeImpl(const Value& arg) {
     }
 
     if (std::holds_alternative<std::string>(arg))
-        return Value{TemporalValue{TemporalKind::DATETIME}};
+        return Value{parseDatetimeStr(std::get<std::string>(arg), TemporalKind::DATETIME)};
 
     return Value{};
 }
@@ -417,15 +633,61 @@ inline Value durationImpl(const Value& arg) {
     if (auto* mv = asMap(arg)) {
         TemporalValue tv;
         tv.kind = TemporalKind::DURATION;
-        tv.dur_months = intFromMap(mv, "years") * 12 + intFromMap(mv, "months");
-        tv.dur_days = intFromMap(mv, "weeks") * 7 + intFromMap(mv, "days");
-        tv.dur_seconds = intFromMap(mv, "hours") * 3600 + intFromMap(mv, "minutes") * 60 + intFromMap(mv, "seconds");
-        tv.dur_nanos = extractNanosFromMap(mv);
+
+        double years = doubleFromMap(mv, "years");
+        double months = doubleFromMap(mv, "months");
+        double weeks = doubleFromMap(mv, "weeks");
+        double days = doubleFromMap(mv, "days");
+        double hours = doubleFromMap(mv, "hours");
+        double minutes = doubleFromMap(mv, "minutes");
+        double seconds = doubleFromMap(mv, "seconds");
+
+        double total_months = years * 12.0 + months;
+        double month_frac = total_months - std::floor(total_months);
+        tv.dur_months = static_cast<int64_t>(std::floor(total_months));
+        if (month_frac != 0.0)
+            days += month_frac * (365.2425 / 12.0);
+
+        double week_frac = weeks - std::floor(weeks);
+        tv.dur_days = static_cast<int64_t>(std::floor(weeks)) * 7;
+        if (week_frac != 0.0)
+            days += week_frac * 7.0;
+
+        double day_frac = days - std::floor(days);
+        tv.dur_days += static_cast<int64_t>(std::floor(days));
+        if (day_frac != 0.0)
+            hours += day_frac * 24.0;
+
+        double hour_frac = hours - std::floor(hours);
+        tv.dur_seconds = static_cast<int64_t>(std::floor(hours)) * 3600;
+        if (hour_frac != 0.0)
+            minutes += hour_frac * 60.0;
+
+        double min_frac = minutes - std::floor(minutes);
+        tv.dur_seconds += static_cast<int64_t>(std::floor(minutes)) * 60;
+        if (min_frac != 0.0)
+            seconds += min_frac * 60.0;
+
+        double sec_frac = seconds - std::floor(seconds);
+        tv.dur_seconds += static_cast<int64_t>(std::floor(seconds));
+        tv.dur_nanos = static_cast<int64_t>(sec_frac * 1'000'000'000.0);
+
+        tv.dur_nanos += extractNanosFromMap(mv);
+
+        if (tv.dur_nanos >= 1'000'000'000LL || tv.dur_nanos <= -1'000'000'000LL) {
+            tv.dur_seconds += tv.dur_nanos / 1'000'000'000LL;
+            tv.dur_nanos %= 1'000'000'000LL;
+        }
+        if (tv.dur_nanos < 0) {
+            tv.dur_nanos += 1'000'000'000LL;
+            tv.dur_seconds -= 1;
+        }
+
         return Value{tv};
     }
 
     if (std::holds_alternative<std::string>(arg))
-        return Value{TemporalValue{TemporalKind::DURATION}};
+        return Value{parseDurationFromString(std::get<std::string>(arg))};
 
     return Value{};
 }

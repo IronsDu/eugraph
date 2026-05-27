@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/types/temporal_value.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
@@ -115,6 +116,8 @@ inline Value toStringImpl(const Value& arg) {
     }
     if (std::holds_alternative<bool>(arg))
         return Value(std::get<bool>(arg) ? std::string("true") : std::string("false"));
+    if (std::holds_alternative<TemporalValue>(arg))
+        return Value(temporalToString(std::get<TemporalValue>(arg)));
     return Value{};
 }
 

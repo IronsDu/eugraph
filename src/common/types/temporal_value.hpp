@@ -100,6 +100,8 @@ int64_t temporalToComparable(const TemporalValue& tv);
 bool isLeapYear(int64_t year);
 int64_t daysInMonth(int64_t year, int64_t month);
 void normalizeDate(int64_t& year, int64_t& month, int64_t& day);
+int64_t daysFromCivil(int64_t y, int64_t m, int64_t d);
+void civilFromDays(int64_t days, int64_t& y, int64_t& m, int64_t& d);
 
 // Temporal arithmetic
 TemporalValue addDurationToTemporal(const TemporalValue& temporal, const TemporalValue& duration);

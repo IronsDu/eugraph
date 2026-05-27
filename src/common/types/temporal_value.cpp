@@ -299,8 +299,6 @@ TemporalValue divDuration(const TemporalValue& dur, int64_t divisor) {
     return result;
 }
 
-namespace {
-
 int64_t daysFromCivil(int64_t y, int64_t m, int64_t d) {
     // Convert year/month/day to days since 1970-01-01 (algorithm from Howard Hinnant)
     y -= (m <= 2);
@@ -310,6 +308,22 @@ int64_t daysFromCivil(int64_t y, int64_t m, int64_t d) {
     int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     return era * 146097 + doe - 719468;
 }
+
+void civilFromDays(int64_t z, int64_t& y, int64_t& m, int64_t& d) {
+    // Reverse of daysFromCivil: days since 1970-01-01 to year/month/day (Howard Hinnant)
+    z += 719468;
+    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    int64_t doe = z - era * 146097;
+    int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    int64_t mp = (5 * doy + 2) / 153;
+    d = doy - (153 * mp + 2) / 5 + 1;
+    m = mp + (mp < 10 ? 3 : -9);
+    y = yoe + era * 400;
+    y += (m <= 2 ? 1 : 0);
+}
+
+namespace {
 
 std::string pad4(int64_t v) {
     char buf[5];
@@ -332,9 +346,13 @@ std::string pad2(int64_t v) {
 std::string fmtSubsecond(int64_t nanos) {
     if (nanos == 0)
         return "";
-    while (nanos > 0 && nanos % 10 == 0)
-        nanos /= 10;
-    return "." + std::to_string(nanos);
+    // Pad to 9 digits with leading zeros, then strip trailing zeros
+    char buf[10];
+    snprintf(buf, sizeof(buf), "%09lld", static_cast<long long>(nanos));
+    std::string s(buf);
+    while (!s.empty() && s.back() == '0')
+        s.pop_back();
+    return "." + s;
 }
 
 std::string fmtTimezone(int32_t offset_min, const std::string& tz_name) {
@@ -428,36 +446,41 @@ std::string temporalToString(const TemporalValue& tv) {
     case TemporalKind::DURATION: {
         std::ostringstream oss;
         oss << "P";
-        if (tv.dur_months != 0)
-            oss << tv.dur_months << "M";
-        if (tv.dur_days != 0)
-            oss << tv.dur_days << "D";
-        bool has_t = false;
-        if (tv.dur_seconds != 0 || tv.dur_nanos != 0) {
-            if (!has_t) {
-                oss << "T";
-                has_t = true;
-            }
-            if (tv.dur_nanos != 0) {
-                // Format seconds with fractional nanoseconds
-                int64_t total_nanos = tv.dur_seconds * 1'000'000'000LL + tv.dur_nanos;
-                int64_t secs = total_nanos / 1'000'000'000LL;
-                int64_t nanos = total_nanos % 1'000'000'000LL;
-                if (nanos < 0) {
-                    secs -= 1;
-                    nanos += 1'000'000'000LL;
+        int64_t years = tv.dur_months / 12;
+        int64_t months = tv.dur_months % 12;
+        int64_t weeks = tv.dur_days / 7;
+        int64_t days = tv.dur_days % 7;
+        int64_t hours = tv.dur_seconds / 3600;
+        int64_t minutes = (tv.dur_seconds % 3600) / 60;
+        int64_t seconds = tv.dur_seconds % 60;
+
+        bool has_date = (years != 0 || months != 0 || weeks != 0 || days != 0);
+        bool has_time = (hours != 0 || minutes != 0 || seconds != 0 || tv.dur_nanos != 0);
+
+        if (years != 0)
+            oss << years << "Y";
+        if (months != 0)
+            oss << months << "M";
+        if (weeks != 0)
+            oss << weeks << "W";
+        if (days != 0)
+            oss << days << "D";
+
+        if (has_time) {
+            oss << "T";
+            if (hours != 0)
+                oss << hours << "H";
+            if (minutes != 0)
+                oss << minutes << "M";
+            if (seconds != 0 || tv.dur_nanos != 0) {
+                if (tv.dur_nanos != 0) {
+                    oss << seconds << fmtSubsecond(tv.dur_nanos) << "S";
+                } else {
+                    oss << seconds << "S";
                 }
-                oss << secs;
-                if (nanos != 0) {
-                    while (nanos > 0 && nanos % 10 == 0)
-                        nanos /= 10;
-                    oss << "." << nanos;
-                }
-                oss << "S";
-            } else {
-                oss << tv.dur_seconds << "S";
             }
         }
+
         std::string s = oss.str();
         if (s == "P")
             return "PT0S";

@@ -1,4 +1,5 @@
 #include "query/physical_plan/operator/sort_physical_op.hpp"
+#include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
 
@@ -74,6 +75,9 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
                     } else if constexpr (std::is_same_v<A, std::string> && std::is_same_v<B, std::string>) {
                         less = la < lb;
                         greater = la > lb;
+                    } else if constexpr (std::is_same_v<A, TemporalValue> && std::is_same_v<B, TemporalValue>) {
+                        less = temporalLess(la, lb);
+                        greater = temporalLess(lb, la);
                     }
                 },
                 va, vb);
