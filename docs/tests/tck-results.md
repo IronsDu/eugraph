@@ -63,11 +63,80 @@
 
 ### 已知限制
 
-- **PropertyValue 不支持 TemporalValue**：Temporal 值作为属性存储时被序列化为 STRING（ISO 8601），读回后丢失类型信息。导致属性往返场景中的成员访问（`v.date.year`）、算术（`x + d.dur`）、比较等返回 null。需将 `TemporalValue` 加入 `PropertyValue` variant 并更新 ValueCodec/Thrift 层。
-- **STRING 解析紧凑格式**：`date('2015W302')`、`date('2015202')`、`localtime('214032.142')` 等无分隔符紧凑格式尚未实现解析。
-- **DOUBLE 截断**：`duration * 3.5` 中 DOUBLE 因子被截断为 `int64_t`（`mulDuration` 仅接受 int64_t）。
-- **跨 kind 比较**：`date < duration` 等不同 TemporalKind 的比较返回 NULL（符合 Cypher 语义）。
-- **`temporal - temporal` 结果**：仅 `duration.between()` 计算月份分量；`subtractTemporals()` 仅含天和亚天分量（`months=0`），不通过日历反推月份。
+#### 1. PropertyValue 不支持 TemporalValue（影响 ~52 场景）
+
+Temporal 值作为属性存储时被序列化为 STRING（ISO 8601），读回后丢失类型信息，导致后续操作返回 null。
+
+**根因**: `PropertyValue` variant 不含 `TemporalValue`。`valueToPropertyValue()` 将 TemporalValue 序列化为 string，但 `evalPropertyRef()` 等读回时只能还原为 string。
+
+**修复路径**: 将 `TemporalValue` 加入 `PropertyValue` variant 并更新 `ValueCodec`/Thrift 层。
+
+**影响示例**:
+
+```sql
+-- 成员访问器返回 null（Temporal5: 0/7 通过）
+CREATE (:Val {date: date({year: 1984, month: 10, day: 11})})
+MATCH (v:Val) WITH v.date AS d
+RETURN d.year, d.month, d.day  -- 期望 1984, 10, 11  实际 null, null, null
+
+-- 算术运算返回 null（Temporal8: 0/27 通过）
+CREATE (:Duration {dur: duration({months: 12})})
+MATCH (d:Duration)
+WITH date({year: 1984, month: 10, day: 11}) AS x, d
+RETURN x + d.dur AS sum  -- 期望 '1985-10-11'  实际 null
+
+-- 比较运算返回 null（Temporal7: 0/18 通过）
+CREATE (:Val {d: date({year: 1984, month: 10, day: 11})})
+MATCH (v:Val) WITH v.d AS d
+RETURN d < date({year: 2000, month: 1, day: 1})  -- 期望 true  实际 null
+```
+
+#### 2. STRING 解析紧凑格式（影响 ~32 场景）
+
+部分无分隔符的 temporal 字符串格式尚未实现解析（Temporal2: 21/53 通过）。
+
+**根因**: `parseDateFromString()` / `parseTimeStr()` 仅处理带分隔符的标准 ISO 格式。
+
+**修复路径**: 扩展 `temporal_functions.hpp` 中的字符串解析函数。
+
+**影响示例**:
+
+```sql
+RETURN date('2015W302')     -- 期望 '2015-07-21'  实际 epoch 或错误
+RETURN date('2015-202')     -- 期望 '2015-07-21'  实际 epoch
+RETURN date('2015202')      -- 期望 '2015-07-21'  实际 epoch
+RETURN date('2015')         -- 期望 '2015-01-01'  实际 epoch
+RETURN localtime('214032.142')  -- 期望 '21:40:32.142'  实际 '21:40:00'
+```
+
+#### 3. DOUBLE 截断（影响少量场景）
+
+`duration` 乘除运算中 DOUBLE 因子被截断为 `int64_t`。
+
+**根因**: `temporalMulBatch()` 调用 `mulDuration(dur, int64_t)` 时 double 被 `static_cast<int64_t>` 截断。
+
+**修复路径**: 新增 `mulDuration(TemporalValue, double)` 重载。
+
+**影响示例**:
+
+```sql
+RETURN duration({months: 1}) * 3.5   -- 期望 P3M15D  实际 P3M（3.5 被截断为 3）
+RETURN duration({days: 14}) / 2.5   -- 期望 P5DT14H24M  实际 P7D（2.5 被截断为 2）
+```
+
+#### 4. 跨 kind 比较（符合语义，非 bug）
+
+`date < duration` 等不同 TemporalKind 的比较返回 NULL，符合 Cypher 语义。不需要修复。
+
+#### 5. `temporal - temporal` 月份分量（已部分修复）
+
+`duration.between()` 已实现日历反推月份。`subtractTemporals()` 仅含天和亚天分量（`months=0`）。仅影响直接使用 `-` 运算符的场景。
+
+```sql
+RETURN datetime('2015-07-21T12:00Z') - datetime('1984-10-11T00:00Z')
+-- duration.between: P30Y9M10DT12H  ✅
+-- subtractTemporals (via -): 仅含 days+seconds, months=0  ❌
+```
 
 ---
 
