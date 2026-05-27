@@ -420,7 +420,59 @@ int64_t temporalToComparable(const TemporalValue& tv) {
 bool temporalLess(const TemporalValue& a, const TemporalValue& b) {
     if (a.kind != b.kind)
         return false;
-    return temporalToComparable(a) < temporalToComparable(b);
+    switch (a.kind) {
+    case TemporalKind::DATE:
+        if (a.year != b.year)
+            return a.year < b.year;
+        if (a.month != b.month)
+            return a.month < b.month;
+        return a.day < b.day;
+    case TemporalKind::LOCAL_TIME:
+        if (a.hour != b.hour)
+            return a.hour < b.hour;
+        if (a.minute != b.minute)
+            return a.minute < b.minute;
+        if (a.second != b.second)
+            return a.second < b.second;
+        return a.nanos < b.nanos;
+    case TemporalKind::TIME: {
+        // Compare by UTC-adjusted nanoseconds (no date component, no overflow)
+        int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos -
+                       static_cast<int64_t>(a.tz_offset_min) * 60'000'000'000LL;
+        int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos -
+                       static_cast<int64_t>(b.tz_offset_min) * 60'000'000'000LL;
+        return a_ns < b_ns;
+    }
+    case TemporalKind::LOCAL_DATETIME:
+        if (a.year != b.year)
+            return a.year < b.year;
+        if (a.month != b.month)
+            return a.month < b.month;
+        if (a.day != b.day)
+            return a.day < b.day;
+        if (a.hour != b.hour)
+            return a.hour < b.hour;
+        if (a.minute != b.minute)
+            return a.minute < b.minute;
+        if (a.second != b.second)
+            return a.second < b.second;
+        return a.nanos < b.nanos;
+    case TemporalKind::DATETIME: {
+        // Compare by UTC: compare days first, then time-of-day (avoids overflow)
+        int64_t a_days = daysFromCivil(a.year, a.month, a.day);
+        int64_t b_days = daysFromCivil(b.year, b.month, b.day);
+        if (a_days != b_days)
+            return a_days < b_days;
+        int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos -
+                       static_cast<int64_t>(a.tz_offset_min) * 60'000'000'000LL;
+        int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos -
+                       static_cast<int64_t>(b.tz_offset_min) * 60'000'000'000LL;
+        return a_ns < b_ns;
+    }
+    case TemporalKind::DURATION:
+        return temporalToComparable(a) < temporalToComparable(b);
+    }
+    return false;
 }
 
 std::string temporalToString(const TemporalValue& tv) {
@@ -454,7 +506,6 @@ std::string temporalToString(const TemporalValue& tv) {
         int64_t minutes = (tv.dur_seconds % 3600) / 60;
         int64_t seconds = tv.dur_seconds % 60;
 
-        bool has_date = (years != 0 || months != 0 || weeks != 0 || days != 0);
         bool has_time = (hours != 0 || minutes != 0 || seconds != 0 || tv.dur_nanos != 0);
 
         if (years != 0)
