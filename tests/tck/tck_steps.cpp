@@ -47,6 +47,7 @@ std::vector<StepRecord> gStepRecords;
 std::string gCurrentStepText;
 std::vector<std::pair<std::string, std::string>> gPendingSteps; // (step_text, status)
 int gStepIndex = 0;
+bool gHadFailureBeforeStep = false;
 
 void resetCtx() {
     gCtx = std::make_unique<TckContext>();
@@ -192,8 +193,13 @@ HOOK_BEFORE_SCENARIO() {
     spdlog::info("[TCK] === Scenario {} (graph: {}) ===", gScenarioNum.load(), gCtx->graphName);
 }
 
+HOOK_BEFORE_STEP() {
+    gHadFailureBeforeStep = ::testing::Test::HasFailure();
+}
+
 HOOK_AFTER_STEP() {
-    gPendingSteps.push_back({gCurrentStepText, hasError ? "FAILED" : "PASSED"});
+    bool stepFailed = ::testing::Test::HasFailure() && !gHadFailureBeforeStep;
+    gPendingSteps.push_back({gCurrentStepText, stepFailed ? "FAILED" : "PASSED"});
     ++gStepIndex;
 }
 
