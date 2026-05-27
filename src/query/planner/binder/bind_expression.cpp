@@ -284,7 +284,8 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     return BoundExpression(std::move(sub));
                 }
 
-                if (obj_type.kind == BoundTypeKind::TEMPORAL) {
+                if (obj_type.kind == BoundTypeKind::TEMPORAL || obj_type.kind == BoundTypeKind::STRING ||
+                    obj_type.kind == BoundTypeKind::ANY) {
                     // Temporal member access: convert temporal.field to __temporal_field__(temporal, field_enum)
                     auto field_opt = temporalFieldFromString(ptr->property);
                     if (!field_opt) {
@@ -293,8 +294,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     }
                     auto field = *field_opt;
 
-                    auto* func =
-                        func_registry_.lookup("__temporal_field__", {BoundType::Temporal(), BoundType::Int64()});
+                    auto* func = func_registry_.lookup("__temporal_field__", {obj_type, BoundType::Int64()});
                     if (!func) {
                         error("Temporal field accessor not registered");
                         return std::nullopt;
