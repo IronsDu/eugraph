@@ -37,6 +37,30 @@ void EnumMetadata<::eugraph::thrift::PropertyType>::gen(ThriftMetadata& metadata
     enum_metadata.elements()->emplace(static_cast<int32_t>(EnumTraits::values[i]), EnumTraits::names[i]);
   }
 }
+void EnumMetadata<::eugraph::thrift::DateTimeKind>::gen(ThriftMetadata& metadata) {
+  auto res = metadata.enums()->emplace("eugraph.DateTimeKind", ::apache::thrift::metadata::ThriftEnum{});
+  if (!res.second) {
+    return;
+  }
+  ::apache::thrift::metadata::ThriftEnum& enum_metadata = res.first->second;
+  enum_metadata.name() = "eugraph.DateTimeKind";
+  using EnumTraits = TEnumTraits<::eugraph::thrift::DateTimeKind>;
+  for (std::size_t i = 0; i != EnumTraits::size; ++i) {
+    enum_metadata.elements()->emplace(static_cast<int32_t>(EnumTraits::values[i]), EnumTraits::names[i]);
+  }
+}
+void EnumMetadata<::eugraph::thrift::TimeKind>::gen(ThriftMetadata& metadata) {
+  auto res = metadata.enums()->emplace("eugraph.TimeKind", ::apache::thrift::metadata::ThriftEnum{});
+  if (!res.second) {
+    return;
+  }
+  ::apache::thrift::metadata::ThriftEnum& enum_metadata = res.first->second;
+  enum_metadata.name() = "eugraph.TimeKind";
+  using EnumTraits = TEnumTraits<::eugraph::thrift::TimeKind>;
+  for (std::size_t i = 0; i != EnumTraits::size; ++i) {
+    enum_metadata.elements()->emplace(static_cast<int32_t>(EnumTraits::values[i]), EnumTraits::names[i]);
+  }
+}
 
 const ::apache::thrift::metadata::ThriftStruct&
 StructMetadata<::eugraph::thrift::PropertyDefThrift>::gen(ThriftMetadata& metadata) {
@@ -62,6 +86,75 @@ StructMetadata<::eugraph::thrift::PropertyDefThrift>::gen(ThriftMetadata& metada
   return res.first->second;
 }
 const ::apache::thrift::metadata::ThriftStruct&
+StructMetadata<::eugraph::thrift::DateTimeValueThrift>::gen(ThriftMetadata& metadata) {
+  auto res = metadata.structs()->emplace("eugraph.DateTimeValueThrift", ::apache::thrift::metadata::ThriftStruct{});
+  if (!res.second) {
+    return res.first->second;
+  }
+  ::apache::thrift::metadata::ThriftStruct& eugraph_DateTimeValueThrift = res.first->second;
+  eugraph_DateTimeValueThrift.name() = "eugraph.DateTimeValueThrift";
+  eugraph_DateTimeValueThrift.is_union() = false;
+  static const auto* const
+  eugraph_DateTimeValueThrift_fields = new std::array<EncodedThriftField, 10>{ {
+    { 1, "kind", false, std::make_unique<Enum<::eugraph::thrift::DateTimeKind>>("eugraph.DateTimeKind"), std::vector<ThriftConstStruct>{ }},    { 2, "year", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "month", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 4, "day", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 5, "hour", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 6, "minute", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 7, "second", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 8, "nanos", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 9, "tz_offset_min", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I32_TYPE), std::vector<ThriftConstStruct>{ }},    { 10, "tz_name", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE), std::vector<ThriftConstStruct>{ }},  }};
+  for (const auto& f : *eugraph_DateTimeValueThrift_fields) {
+    ::apache::thrift::metadata::ThriftField field;
+    field.id() = f.id;
+    field.name() = f.name;
+    field.is_optional() = f.is_optional;
+    f.metadata_type_interface->writeAndGenType(*field.type(), metadata);
+    field.structured_annotations() = f.structured_annotations;
+    eugraph_DateTimeValueThrift.fields()->push_back(std::move(field));
+  }
+  return res.first->second;
+}
+const ::apache::thrift::metadata::ThriftStruct&
+StructMetadata<::eugraph::thrift::TimeValueThrift>::gen(ThriftMetadata& metadata) {
+  auto res = metadata.structs()->emplace("eugraph.TimeValueThrift", ::apache::thrift::metadata::ThriftStruct{});
+  if (!res.second) {
+    return res.first->second;
+  }
+  ::apache::thrift::metadata::ThriftStruct& eugraph_TimeValueThrift = res.first->second;
+  eugraph_TimeValueThrift.name() = "eugraph.TimeValueThrift";
+  eugraph_TimeValueThrift.is_union() = false;
+  static const auto* const
+  eugraph_TimeValueThrift_fields = new std::array<EncodedThriftField, 7>{ {
+    { 1, "kind", false, std::make_unique<Enum<::eugraph::thrift::TimeKind>>("eugraph.TimeKind"), std::vector<ThriftConstStruct>{ }},    { 2, "hour", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "minute", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 4, "second", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 5, "nanos", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 6, "tz_offset_min", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I32_TYPE), std::vector<ThriftConstStruct>{ }},    { 7, "tz_name", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE), std::vector<ThriftConstStruct>{ }},  }};
+  for (const auto& f : *eugraph_TimeValueThrift_fields) {
+    ::apache::thrift::metadata::ThriftField field;
+    field.id() = f.id;
+    field.name() = f.name;
+    field.is_optional() = f.is_optional;
+    f.metadata_type_interface->writeAndGenType(*field.type(), metadata);
+    field.structured_annotations() = f.structured_annotations;
+    eugraph_TimeValueThrift.fields()->push_back(std::move(field));
+  }
+  return res.first->second;
+}
+const ::apache::thrift::metadata::ThriftStruct&
+StructMetadata<::eugraph::thrift::DurationValueThrift>::gen(ThriftMetadata& metadata) {
+  auto res = metadata.structs()->emplace("eugraph.DurationValueThrift", ::apache::thrift::metadata::ThriftStruct{});
+  if (!res.second) {
+    return res.first->second;
+  }
+  ::apache::thrift::metadata::ThriftStruct& eugraph_DurationValueThrift = res.first->second;
+  eugraph_DurationValueThrift.name() = "eugraph.DurationValueThrift";
+  eugraph_DurationValueThrift.is_union() = false;
+  static const auto* const
+  eugraph_DurationValueThrift_fields = new std::array<EncodedThriftField, 4>{ {
+    { 1, "months", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "days", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "seconds", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 4, "nanos", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},  }};
+  for (const auto& f : *eugraph_DurationValueThrift_fields) {
+    ::apache::thrift::metadata::ThriftField field;
+    field.id() = f.id;
+    field.name() = f.name;
+    field.is_optional() = f.is_optional;
+    f.metadata_type_interface->writeAndGenType(*field.type(), metadata);
+    field.structured_annotations() = f.structured_annotations;
+    eugraph_DurationValueThrift.fields()->push_back(std::move(field));
+  }
+  return res.first->second;
+}
+const ::apache::thrift::metadata::ThriftStruct&
 StructMetadata<::eugraph::thrift::PropertyValueThrift>::gen(ThriftMetadata& metadata) {
   auto res = metadata.structs()->emplace("eugraph.PropertyValueThrift", ::apache::thrift::metadata::ThriftStruct{});
   if (!res.second) {
@@ -71,8 +164,8 @@ StructMetadata<::eugraph::thrift::PropertyValueThrift>::gen(ThriftMetadata& meta
   eugraph_PropertyValueThrift.name() = "eugraph.PropertyValueThrift";
   eugraph_PropertyValueThrift.is_union() = true;
   static const auto* const
-  eugraph_PropertyValueThrift_fields = new std::array<EncodedThriftField, 7>{ {
-    { 1, "bool_val", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_BOOL_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "int_val", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "double_val", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE), std::vector<ThriftConstStruct>{ }},    { 4, "string_val", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE), std::vector<ThriftConstStruct>{ }},    { 5, "int_array", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE)), std::vector<ThriftConstStruct>{ }},    { 6, "double_array", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE)), std::vector<ThriftConstStruct>{ }},    { 7, "string_array", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE)), std::vector<ThriftConstStruct>{ }},  }};
+  eugraph_PropertyValueThrift_fields = new std::array<EncodedThriftField, 10>{ {
+    { 1, "bool_val", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_BOOL_TYPE), std::vector<ThriftConstStruct>{ }},    { 2, "int_val", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE), std::vector<ThriftConstStruct>{ }},    { 3, "double_val", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE), std::vector<ThriftConstStruct>{ }},    { 4, "string_val", false, std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE), std::vector<ThriftConstStruct>{ }},    { 5, "int_array", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_I64_TYPE)), std::vector<ThriftConstStruct>{ }},    { 6, "double_array", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_DOUBLE_TYPE)), std::vector<ThriftConstStruct>{ }},    { 7, "string_array", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE)), std::vector<ThriftConstStruct>{ }},    { 8, "datetime_val", false, std::make_unique<Struct<::eugraph::thrift::DateTimeValueThrift>>("eugraph.DateTimeValueThrift"), std::vector<ThriftConstStruct>{ }},    { 9, "time_val", false, std::make_unique<Struct<::eugraph::thrift::TimeValueThrift>>("eugraph.TimeValueThrift"), std::vector<ThriftConstStruct>{ }},    { 10, "duration_val", false, std::make_unique<Struct<::eugraph::thrift::DurationValueThrift>>("eugraph.DurationValueThrift"), std::vector<ThriftConstStruct>{ }},  }};
   for (const auto& f : *eugraph_PropertyValueThrift_fields) {
     ::apache::thrift::metadata::ThriftField field;
     field.id() = f.id;

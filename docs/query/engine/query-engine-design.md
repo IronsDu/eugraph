@@ -505,7 +505,8 @@ class PhysicalOperator {
 
 ```cpp
 using Value = variant<monostate, bool, int64_t, double, string,
-                      VertexValue, EdgeValue, PathValue, TemporalValue, ListValue, MapValue>;
+                      VertexValue, EdgeValue, PathValue,
+                      DateTimeValue, TimeValue, DurationValue, ListValue, MapValue>;
 ```
 
 ### DataChunk / Column（见第六节）

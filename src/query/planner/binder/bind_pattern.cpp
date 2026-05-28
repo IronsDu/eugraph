@@ -82,6 +82,10 @@ BoundType Binder::propertyTypeToBoundType(PropertyType pt) {
         return BoundType::Double();
     case PropertyType::STRING:
         return BoundType::String();
+    case PropertyType::DATETIME:
+    case PropertyType::TIME:
+    case PropertyType::DURATION:
+        return BoundType::Temporal();
     case PropertyType::INT64_ARRAY:
     case PropertyType::DOUBLE_ARRAY:
     case PropertyType::STRING_ARRAY:

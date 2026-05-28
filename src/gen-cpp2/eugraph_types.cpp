@@ -30,6 +30,40 @@ bool TEnumTraits<::eugraph::thrift::PropertyType>::findValue(std::string_view na
 }} // apache::thrift
 
 
+namespace apache { namespace thrift {
+
+const std::string_view TEnumTraits<::eugraph::thrift::DateTimeKind>::__fbthrift_module_name_internal_do_not_use = kModuleName;
+folly::Range<::eugraph::thrift::DateTimeKind const*> const TEnumTraits<::eugraph::thrift::DateTimeKind>::values = folly::range(TEnumDataStorage<::eugraph::thrift::DateTimeKind>::values);
+folly::Range<std::string_view const*> const TEnumTraits<::eugraph::thrift::DateTimeKind>::names = folly::range(TEnumDataStorage<::eugraph::thrift::DateTimeKind>::names);
+
+bool TEnumTraits<::eugraph::thrift::DateTimeKind>::findName(type value, std::string_view* out) noexcept {
+  return ::apache::thrift::detail::st::enum_find_name(value, out);
+}
+
+bool TEnumTraits<::eugraph::thrift::DateTimeKind>::findValue(std::string_view name, type* out) noexcept {
+  return ::apache::thrift::detail::st::enum_find_value(name, out);
+}
+
+}} // apache::thrift
+
+
+namespace apache { namespace thrift {
+
+const std::string_view TEnumTraits<::eugraph::thrift::TimeKind>::__fbthrift_module_name_internal_do_not_use = kModuleName;
+folly::Range<::eugraph::thrift::TimeKind const*> const TEnumTraits<::eugraph::thrift::TimeKind>::values = folly::range(TEnumDataStorage<::eugraph::thrift::TimeKind>::values);
+folly::Range<std::string_view const*> const TEnumTraits<::eugraph::thrift::TimeKind>::names = folly::range(TEnumDataStorage<::eugraph::thrift::TimeKind>::names);
+
+bool TEnumTraits<::eugraph::thrift::TimeKind>::findName(type value, std::string_view* out) noexcept {
+  return ::apache::thrift::detail::st::enum_find_name(value, out);
+}
+
+bool TEnumTraits<::eugraph::thrift::TimeKind>::findValue(std::string_view name, type* out) noexcept {
+  return ::apache::thrift::detail::st::enum_find_value(name, out);
+}
+
+}} // apache::thrift
+
+
 namespace apache {
 namespace thrift {
 namespace detail {
@@ -165,6 +199,572 @@ namespace apache {
 namespace thrift {
 namespace detail {
 
+void TccStructTraits<::eugraph::thrift::DateTimeValueThrift>::translateFieldName(
+    std::string_view _fname,
+    int16_t& fid,
+    apache::thrift::protocol::TType& _ftype) noexcept {
+  using data = apache::thrift::TStructDataStorage<::eugraph::thrift::DateTimeValueThrift>;
+  static const st::translate_field_name_table table{
+      data::fields_size,
+      data::fields_names.data(),
+      data::fields_ids.data(),
+      data::fields_types.data()};
+  st::translate_field_name(_fname, fid, _ftype, table);
+}
+
+} // namespace detail
+} // namespace thrift
+} // namespace apache
+
+namespace eugraph::thrift {
+
+std::string_view DateTimeValueThrift::__fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord) {
+  if (ord == ::apache::thrift::FieldOrdinal{0}) { return {}; }
+  return apache::thrift::TStructDataStorage<DateTimeValueThrift>::fields_names[folly::to_underlying(ord) - 1];
+}
+std::string_view DateTimeValueThrift::__fbthrift_get_class_name() {
+  return apache::thrift::TStructDataStorage<DateTimeValueThrift>::name;
+}
+
+DateTimeValueThrift::DateTimeValueThrift(const DateTimeValueThrift&) = default;
+DateTimeValueThrift& DateTimeValueThrift::operator=(const DateTimeValueThrift&) = default;
+DateTimeValueThrift::DateTimeValueThrift() :
+    __fbthrift_field_kind(),
+    __fbthrift_field_year(),
+    __fbthrift_field_month(),
+    __fbthrift_field_day(),
+    __fbthrift_field_hour(),
+    __fbthrift_field_minute(),
+    __fbthrift_field_second(),
+    __fbthrift_field_nanos(),
+    __fbthrift_field_tz_offset_min() {
+}
+
+
+DateTimeValueThrift::~DateTimeValueThrift() {}
+
+DateTimeValueThrift::DateTimeValueThrift([[maybe_unused]] DateTimeValueThrift&& other) noexcept :
+    __fbthrift_field_kind(std::move(other.__fbthrift_field_kind)),
+    __fbthrift_field_year(std::move(other.__fbthrift_field_year)),
+    __fbthrift_field_month(std::move(other.__fbthrift_field_month)),
+    __fbthrift_field_day(std::move(other.__fbthrift_field_day)),
+    __fbthrift_field_hour(std::move(other.__fbthrift_field_hour)),
+    __fbthrift_field_minute(std::move(other.__fbthrift_field_minute)),
+    __fbthrift_field_second(std::move(other.__fbthrift_field_second)),
+    __fbthrift_field_nanos(std::move(other.__fbthrift_field_nanos)),
+    __fbthrift_field_tz_offset_min(std::move(other.__fbthrift_field_tz_offset_min)),
+    __fbthrift_field_tz_name(std::move(other.__fbthrift_field_tz_name)),
+    __isset(other.__isset) {
+}
+
+DateTimeValueThrift& DateTimeValueThrift::operator=([[maybe_unused]] DateTimeValueThrift&& other) noexcept {
+    this->__fbthrift_field_kind = std::move(other.__fbthrift_field_kind);
+    this->__fbthrift_field_year = std::move(other.__fbthrift_field_year);
+    this->__fbthrift_field_month = std::move(other.__fbthrift_field_month);
+    this->__fbthrift_field_day = std::move(other.__fbthrift_field_day);
+    this->__fbthrift_field_hour = std::move(other.__fbthrift_field_hour);
+    this->__fbthrift_field_minute = std::move(other.__fbthrift_field_minute);
+    this->__fbthrift_field_second = std::move(other.__fbthrift_field_second);
+    this->__fbthrift_field_nanos = std::move(other.__fbthrift_field_nanos);
+    this->__fbthrift_field_tz_offset_min = std::move(other.__fbthrift_field_tz_offset_min);
+    this->__fbthrift_field_tz_name = std::move(other.__fbthrift_field_tz_name);
+    __isset = other.__isset;
+    return *this;
+}
+
+
+DateTimeValueThrift::DateTimeValueThrift(apache::thrift::FragileConstructor, ::eugraph::thrift::DateTimeKind kind__arg, ::std::int64_t year__arg, ::std::int64_t month__arg, ::std::int64_t day__arg, ::std::int64_t hour__arg, ::std::int64_t minute__arg, ::std::int64_t second__arg, ::std::int64_t nanos__arg, ::std::int32_t tz_offset_min__arg, ::std::string tz_name__arg) :
+    __fbthrift_field_kind(std::move(kind__arg)),
+    __fbthrift_field_year(std::move(year__arg)),
+    __fbthrift_field_month(std::move(month__arg)),
+    __fbthrift_field_day(std::move(day__arg)),
+    __fbthrift_field_hour(std::move(hour__arg)),
+    __fbthrift_field_minute(std::move(minute__arg)),
+    __fbthrift_field_second(std::move(second__arg)),
+    __fbthrift_field_nanos(std::move(nanos__arg)),
+    __fbthrift_field_tz_offset_min(std::move(tz_offset_min__arg)),
+    __fbthrift_field_tz_name(std::move(tz_name__arg)) { 
+  __isset.set(folly::index_constant<0>(), true);
+  __isset.set(folly::index_constant<1>(), true);
+  __isset.set(folly::index_constant<2>(), true);
+  __isset.set(folly::index_constant<3>(), true);
+  __isset.set(folly::index_constant<4>(), true);
+  __isset.set(folly::index_constant<5>(), true);
+  __isset.set(folly::index_constant<6>(), true);
+  __isset.set(folly::index_constant<7>(), true);
+  __isset.set(folly::index_constant<8>(), true);
+  __isset.set(folly::index_constant<9>(), true);
+}
+
+
+void DateTimeValueThrift::__fbthrift_clear() {
+  // clear all fields
+  this->__fbthrift_field_kind = ::eugraph::thrift::DateTimeKind();
+  this->__fbthrift_field_year = ::std::int64_t();
+  this->__fbthrift_field_month = ::std::int64_t();
+  this->__fbthrift_field_day = ::std::int64_t();
+  this->__fbthrift_field_hour = ::std::int64_t();
+  this->__fbthrift_field_minute = ::std::int64_t();
+  this->__fbthrift_field_second = ::std::int64_t();
+  this->__fbthrift_field_nanos = ::std::int64_t();
+  this->__fbthrift_field_tz_offset_min = ::std::int32_t();
+  this->__fbthrift_field_tz_name = apache::thrift::StringTraits<::std::string>::fromStringLiteral("");
+  __isset = {};
+}
+
+void DateTimeValueThrift::__fbthrift_clear_terse_fields() {
+}
+
+bool DateTimeValueThrift::__fbthrift_is_empty() const {
+  return false;
+}
+
+bool DateTimeValueThrift::operator==([[maybe_unused]] const DateTimeValueThrift& rhs) const {
+  return ::apache::thrift::op::detail::StructEquality{}(*this, rhs);
+}
+
+bool DateTimeValueThrift::operator<([[maybe_unused]] const DateTimeValueThrift& rhs) const {
+  return ::apache::thrift::op::detail::StructLessThan{}(*this, rhs);
+}
+
+
+::eugraph::thrift::DateTimeKind DateTimeValueThrift::get_kind() const {
+  return __fbthrift_field_kind;
+}
+
+::eugraph::thrift::DateTimeKind& DateTimeValueThrift::set_kind(::eugraph::thrift::DateTimeKind kind_) {
+  kind_ref() = kind_;
+  return __fbthrift_field_kind;
+}
+
+::std::int64_t DateTimeValueThrift::get_year() const {
+  return __fbthrift_field_year;
+}
+
+::std::int64_t& DateTimeValueThrift::set_year(::std::int64_t year_) {
+  year_ref() = year_;
+  return __fbthrift_field_year;
+}
+
+::std::int64_t DateTimeValueThrift::get_month() const {
+  return __fbthrift_field_month;
+}
+
+::std::int64_t& DateTimeValueThrift::set_month(::std::int64_t month_) {
+  month_ref() = month_;
+  return __fbthrift_field_month;
+}
+
+::std::int64_t DateTimeValueThrift::get_day() const {
+  return __fbthrift_field_day;
+}
+
+::std::int64_t& DateTimeValueThrift::set_day(::std::int64_t day_) {
+  day_ref() = day_;
+  return __fbthrift_field_day;
+}
+
+::std::int64_t DateTimeValueThrift::get_hour() const {
+  return __fbthrift_field_hour;
+}
+
+::std::int64_t& DateTimeValueThrift::set_hour(::std::int64_t hour_) {
+  hour_ref() = hour_;
+  return __fbthrift_field_hour;
+}
+
+::std::int64_t DateTimeValueThrift::get_minute() const {
+  return __fbthrift_field_minute;
+}
+
+::std::int64_t& DateTimeValueThrift::set_minute(::std::int64_t minute_) {
+  minute_ref() = minute_;
+  return __fbthrift_field_minute;
+}
+
+::std::int64_t DateTimeValueThrift::get_second() const {
+  return __fbthrift_field_second;
+}
+
+::std::int64_t& DateTimeValueThrift::set_second(::std::int64_t second_) {
+  second_ref() = second_;
+  return __fbthrift_field_second;
+}
+
+::std::int64_t DateTimeValueThrift::get_nanos() const {
+  return __fbthrift_field_nanos;
+}
+
+::std::int64_t& DateTimeValueThrift::set_nanos(::std::int64_t nanos_) {
+  nanos_ref() = nanos_;
+  return __fbthrift_field_nanos;
+}
+
+::std::int32_t DateTimeValueThrift::get_tz_offset_min() const {
+  return __fbthrift_field_tz_offset_min;
+}
+
+::std::int32_t& DateTimeValueThrift::set_tz_offset_min(::std::int32_t tz_offset_min_) {
+  tz_offset_min_ref() = tz_offset_min_;
+  return __fbthrift_field_tz_offset_min;
+}
+
+void swap([[maybe_unused]] DateTimeValueThrift& a, [[maybe_unused]] DateTimeValueThrift& b) {
+  using ::std::swap;
+  swap(a.__fbthrift_field_kind, b.__fbthrift_field_kind);
+  swap(a.__fbthrift_field_year, b.__fbthrift_field_year);
+  swap(a.__fbthrift_field_month, b.__fbthrift_field_month);
+  swap(a.__fbthrift_field_day, b.__fbthrift_field_day);
+  swap(a.__fbthrift_field_hour, b.__fbthrift_field_hour);
+  swap(a.__fbthrift_field_minute, b.__fbthrift_field_minute);
+  swap(a.__fbthrift_field_second, b.__fbthrift_field_second);
+  swap(a.__fbthrift_field_nanos, b.__fbthrift_field_nanos);
+  swap(a.__fbthrift_field_tz_offset_min, b.__fbthrift_field_tz_offset_min);
+  swap(a.__fbthrift_field_tz_name, b.__fbthrift_field_tz_name);
+  swap(a.__isset, b.__isset);
+}
+
+#ifndef __FBTHRIFT_INSTANTIATE_COMPACT_BINARY_PROTOCOL_IN_SEPARATE_TU
+template void DateTimeValueThrift::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t DateTimeValueThrift::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t DateTimeValueThrift::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t DateTimeValueThrift::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+template void DateTimeValueThrift::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t DateTimeValueThrift::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t DateTimeValueThrift::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t DateTimeValueThrift::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+#endif
+
+
+} // namespace eugraph::thrift
+
+namespace apache {
+namespace thrift {
+namespace detail {
+
+void TccStructTraits<::eugraph::thrift::TimeValueThrift>::translateFieldName(
+    std::string_view _fname,
+    int16_t& fid,
+    apache::thrift::protocol::TType& _ftype) noexcept {
+  using data = apache::thrift::TStructDataStorage<::eugraph::thrift::TimeValueThrift>;
+  static const st::translate_field_name_table table{
+      data::fields_size,
+      data::fields_names.data(),
+      data::fields_ids.data(),
+      data::fields_types.data()};
+  st::translate_field_name(_fname, fid, _ftype, table);
+}
+
+} // namespace detail
+} // namespace thrift
+} // namespace apache
+
+namespace eugraph::thrift {
+
+std::string_view TimeValueThrift::__fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord) {
+  if (ord == ::apache::thrift::FieldOrdinal{0}) { return {}; }
+  return apache::thrift::TStructDataStorage<TimeValueThrift>::fields_names[folly::to_underlying(ord) - 1];
+}
+std::string_view TimeValueThrift::__fbthrift_get_class_name() {
+  return apache::thrift::TStructDataStorage<TimeValueThrift>::name;
+}
+
+TimeValueThrift::TimeValueThrift(const TimeValueThrift&) = default;
+TimeValueThrift& TimeValueThrift::operator=(const TimeValueThrift&) = default;
+TimeValueThrift::TimeValueThrift() :
+    __fbthrift_field_kind(),
+    __fbthrift_field_hour(),
+    __fbthrift_field_minute(),
+    __fbthrift_field_second(),
+    __fbthrift_field_nanos(),
+    __fbthrift_field_tz_offset_min() {
+}
+
+
+TimeValueThrift::~TimeValueThrift() {}
+
+TimeValueThrift::TimeValueThrift([[maybe_unused]] TimeValueThrift&& other) noexcept :
+    __fbthrift_field_kind(std::move(other.__fbthrift_field_kind)),
+    __fbthrift_field_hour(std::move(other.__fbthrift_field_hour)),
+    __fbthrift_field_minute(std::move(other.__fbthrift_field_minute)),
+    __fbthrift_field_second(std::move(other.__fbthrift_field_second)),
+    __fbthrift_field_nanos(std::move(other.__fbthrift_field_nanos)),
+    __fbthrift_field_tz_offset_min(std::move(other.__fbthrift_field_tz_offset_min)),
+    __fbthrift_field_tz_name(std::move(other.__fbthrift_field_tz_name)),
+    __isset(other.__isset) {
+}
+
+TimeValueThrift& TimeValueThrift::operator=([[maybe_unused]] TimeValueThrift&& other) noexcept {
+    this->__fbthrift_field_kind = std::move(other.__fbthrift_field_kind);
+    this->__fbthrift_field_hour = std::move(other.__fbthrift_field_hour);
+    this->__fbthrift_field_minute = std::move(other.__fbthrift_field_minute);
+    this->__fbthrift_field_second = std::move(other.__fbthrift_field_second);
+    this->__fbthrift_field_nanos = std::move(other.__fbthrift_field_nanos);
+    this->__fbthrift_field_tz_offset_min = std::move(other.__fbthrift_field_tz_offset_min);
+    this->__fbthrift_field_tz_name = std::move(other.__fbthrift_field_tz_name);
+    __isset = other.__isset;
+    return *this;
+}
+
+
+TimeValueThrift::TimeValueThrift(apache::thrift::FragileConstructor, ::eugraph::thrift::TimeKind kind__arg, ::std::int64_t hour__arg, ::std::int64_t minute__arg, ::std::int64_t second__arg, ::std::int64_t nanos__arg, ::std::int32_t tz_offset_min__arg, ::std::string tz_name__arg) :
+    __fbthrift_field_kind(std::move(kind__arg)),
+    __fbthrift_field_hour(std::move(hour__arg)),
+    __fbthrift_field_minute(std::move(minute__arg)),
+    __fbthrift_field_second(std::move(second__arg)),
+    __fbthrift_field_nanos(std::move(nanos__arg)),
+    __fbthrift_field_tz_offset_min(std::move(tz_offset_min__arg)),
+    __fbthrift_field_tz_name(std::move(tz_name__arg)) { 
+  __isset.set(folly::index_constant<0>(), true);
+  __isset.set(folly::index_constant<1>(), true);
+  __isset.set(folly::index_constant<2>(), true);
+  __isset.set(folly::index_constant<3>(), true);
+  __isset.set(folly::index_constant<4>(), true);
+  __isset.set(folly::index_constant<5>(), true);
+  __isset.set(folly::index_constant<6>(), true);
+}
+
+
+void TimeValueThrift::__fbthrift_clear() {
+  // clear all fields
+  this->__fbthrift_field_kind = ::eugraph::thrift::TimeKind();
+  this->__fbthrift_field_hour = ::std::int64_t();
+  this->__fbthrift_field_minute = ::std::int64_t();
+  this->__fbthrift_field_second = ::std::int64_t();
+  this->__fbthrift_field_nanos = ::std::int64_t();
+  this->__fbthrift_field_tz_offset_min = ::std::int32_t();
+  this->__fbthrift_field_tz_name = apache::thrift::StringTraits<::std::string>::fromStringLiteral("");
+  __isset = {};
+}
+
+void TimeValueThrift::__fbthrift_clear_terse_fields() {
+}
+
+bool TimeValueThrift::__fbthrift_is_empty() const {
+  return false;
+}
+
+bool TimeValueThrift::operator==([[maybe_unused]] const TimeValueThrift& rhs) const {
+  return ::apache::thrift::op::detail::StructEquality{}(*this, rhs);
+}
+
+bool TimeValueThrift::operator<([[maybe_unused]] const TimeValueThrift& rhs) const {
+  return ::apache::thrift::op::detail::StructLessThan{}(*this, rhs);
+}
+
+
+::eugraph::thrift::TimeKind TimeValueThrift::get_kind() const {
+  return __fbthrift_field_kind;
+}
+
+::eugraph::thrift::TimeKind& TimeValueThrift::set_kind(::eugraph::thrift::TimeKind kind_) {
+  kind_ref() = kind_;
+  return __fbthrift_field_kind;
+}
+
+::std::int64_t TimeValueThrift::get_hour() const {
+  return __fbthrift_field_hour;
+}
+
+::std::int64_t& TimeValueThrift::set_hour(::std::int64_t hour_) {
+  hour_ref() = hour_;
+  return __fbthrift_field_hour;
+}
+
+::std::int64_t TimeValueThrift::get_minute() const {
+  return __fbthrift_field_minute;
+}
+
+::std::int64_t& TimeValueThrift::set_minute(::std::int64_t minute_) {
+  minute_ref() = minute_;
+  return __fbthrift_field_minute;
+}
+
+::std::int64_t TimeValueThrift::get_second() const {
+  return __fbthrift_field_second;
+}
+
+::std::int64_t& TimeValueThrift::set_second(::std::int64_t second_) {
+  second_ref() = second_;
+  return __fbthrift_field_second;
+}
+
+::std::int64_t TimeValueThrift::get_nanos() const {
+  return __fbthrift_field_nanos;
+}
+
+::std::int64_t& TimeValueThrift::set_nanos(::std::int64_t nanos_) {
+  nanos_ref() = nanos_;
+  return __fbthrift_field_nanos;
+}
+
+::std::int32_t TimeValueThrift::get_tz_offset_min() const {
+  return __fbthrift_field_tz_offset_min;
+}
+
+::std::int32_t& TimeValueThrift::set_tz_offset_min(::std::int32_t tz_offset_min_) {
+  tz_offset_min_ref() = tz_offset_min_;
+  return __fbthrift_field_tz_offset_min;
+}
+
+void swap([[maybe_unused]] TimeValueThrift& a, [[maybe_unused]] TimeValueThrift& b) {
+  using ::std::swap;
+  swap(a.__fbthrift_field_kind, b.__fbthrift_field_kind);
+  swap(a.__fbthrift_field_hour, b.__fbthrift_field_hour);
+  swap(a.__fbthrift_field_minute, b.__fbthrift_field_minute);
+  swap(a.__fbthrift_field_second, b.__fbthrift_field_second);
+  swap(a.__fbthrift_field_nanos, b.__fbthrift_field_nanos);
+  swap(a.__fbthrift_field_tz_offset_min, b.__fbthrift_field_tz_offset_min);
+  swap(a.__fbthrift_field_tz_name, b.__fbthrift_field_tz_name);
+  swap(a.__isset, b.__isset);
+}
+
+#ifndef __FBTHRIFT_INSTANTIATE_COMPACT_BINARY_PROTOCOL_IN_SEPARATE_TU
+template void TimeValueThrift::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t TimeValueThrift::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t TimeValueThrift::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t TimeValueThrift::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+template void TimeValueThrift::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t TimeValueThrift::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t TimeValueThrift::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t TimeValueThrift::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+#endif
+
+
+} // namespace eugraph::thrift
+
+namespace apache {
+namespace thrift {
+namespace detail {
+
+void TccStructTraits<::eugraph::thrift::DurationValueThrift>::translateFieldName(
+    std::string_view _fname,
+    int16_t& fid,
+    apache::thrift::protocol::TType& _ftype) noexcept {
+  using data = apache::thrift::TStructDataStorage<::eugraph::thrift::DurationValueThrift>;
+  static const st::translate_field_name_table table{
+      data::fields_size,
+      data::fields_names.data(),
+      data::fields_ids.data(),
+      data::fields_types.data()};
+  st::translate_field_name(_fname, fid, _ftype, table);
+}
+
+} // namespace detail
+} // namespace thrift
+} // namespace apache
+
+namespace eugraph::thrift {
+
+std::string_view DurationValueThrift::__fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord) {
+  if (ord == ::apache::thrift::FieldOrdinal{0}) { return {}; }
+  return apache::thrift::TStructDataStorage<DurationValueThrift>::fields_names[folly::to_underlying(ord) - 1];
+}
+std::string_view DurationValueThrift::__fbthrift_get_class_name() {
+  return apache::thrift::TStructDataStorage<DurationValueThrift>::name;
+}
+
+
+DurationValueThrift::DurationValueThrift(apache::thrift::FragileConstructor, ::std::int64_t months__arg, ::std::int64_t days__arg, ::std::int64_t seconds__arg, ::std::int64_t nanos__arg) :
+    __fbthrift_field_months(std::move(months__arg)),
+    __fbthrift_field_days(std::move(days__arg)),
+    __fbthrift_field_seconds(std::move(seconds__arg)),
+    __fbthrift_field_nanos(std::move(nanos__arg)) { 
+  __isset.set(folly::index_constant<0>(), true);
+  __isset.set(folly::index_constant<1>(), true);
+  __isset.set(folly::index_constant<2>(), true);
+  __isset.set(folly::index_constant<3>(), true);
+}
+
+
+void DurationValueThrift::__fbthrift_clear() {
+  // clear all fields
+  this->__fbthrift_field_months = ::std::int64_t();
+  this->__fbthrift_field_days = ::std::int64_t();
+  this->__fbthrift_field_seconds = ::std::int64_t();
+  this->__fbthrift_field_nanos = ::std::int64_t();
+  __isset = {};
+}
+
+void DurationValueThrift::__fbthrift_clear_terse_fields() {
+}
+
+bool DurationValueThrift::__fbthrift_is_empty() const {
+  return false;
+}
+
+bool DurationValueThrift::operator==([[maybe_unused]] const DurationValueThrift& rhs) const {
+  return ::apache::thrift::op::detail::StructEquality{}(*this, rhs);
+}
+
+bool DurationValueThrift::operator<([[maybe_unused]] const DurationValueThrift& rhs) const {
+  return ::apache::thrift::op::detail::StructLessThan{}(*this, rhs);
+}
+
+
+::std::int64_t DurationValueThrift::get_months() const {
+  return __fbthrift_field_months;
+}
+
+::std::int64_t& DurationValueThrift::set_months(::std::int64_t months_) {
+  months_ref() = months_;
+  return __fbthrift_field_months;
+}
+
+::std::int64_t DurationValueThrift::get_days() const {
+  return __fbthrift_field_days;
+}
+
+::std::int64_t& DurationValueThrift::set_days(::std::int64_t days_) {
+  days_ref() = days_;
+  return __fbthrift_field_days;
+}
+
+::std::int64_t DurationValueThrift::get_seconds() const {
+  return __fbthrift_field_seconds;
+}
+
+::std::int64_t& DurationValueThrift::set_seconds(::std::int64_t seconds_) {
+  seconds_ref() = seconds_;
+  return __fbthrift_field_seconds;
+}
+
+::std::int64_t DurationValueThrift::get_nanos() const {
+  return __fbthrift_field_nanos;
+}
+
+::std::int64_t& DurationValueThrift::set_nanos(::std::int64_t nanos_) {
+  nanos_ref() = nanos_;
+  return __fbthrift_field_nanos;
+}
+
+void swap([[maybe_unused]] DurationValueThrift& a, [[maybe_unused]] DurationValueThrift& b) {
+  using ::std::swap;
+  swap(a.__fbthrift_field_months, b.__fbthrift_field_months);
+  swap(a.__fbthrift_field_days, b.__fbthrift_field_days);
+  swap(a.__fbthrift_field_seconds, b.__fbthrift_field_seconds);
+  swap(a.__fbthrift_field_nanos, b.__fbthrift_field_nanos);
+  swap(a.__isset, b.__isset);
+}
+
+#ifndef __FBTHRIFT_INSTANTIATE_COMPACT_BINARY_PROTOCOL_IN_SEPARATE_TU
+template void DurationValueThrift::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t DurationValueThrift::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t DurationValueThrift::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t DurationValueThrift::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+template void DurationValueThrift::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t DurationValueThrift::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t DurationValueThrift::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t DurationValueThrift::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+#endif
+
+
+} // namespace eugraph::thrift
+
+namespace apache {
+namespace thrift {
+namespace detail {
+
 void TccStructTraits<::eugraph::thrift::PropertyValueThrift>::translateFieldName(
     std::string_view _fname,
     int16_t& fid,
@@ -230,6 +830,15 @@ void PropertyValueThrift::__fbthrift_destruct() {
     case Type::string_array:
       ::std::destroy_at(::std::addressof(value_.string_array));
       break;
+    case Type::datetime_val:
+      ::std::destroy_at(::std::addressof(value_.datetime_val));
+      break;
+    case Type::time_val:
+      ::std::destroy_at(::std::addressof(value_.time_val));
+      break;
+    case Type::duration_val:
+      ::std::destroy_at(::std::addressof(value_.duration_val));
+      break;
     default:
       assert(false);
       break;
@@ -274,6 +883,15 @@ bool PropertyValueThrift::__fbthrift_is_empty() const {
       case Type::string_array:
         set_string_array(rhs.value_.string_array);
         break;
+      case Type::datetime_val:
+        set_datetime_val(rhs.value_.datetime_val);
+        break;
+      case Type::time_val:
+        set_time_val(rhs.value_.time_val);
+        break;
+      case Type::duration_val:
+        set_duration_val(rhs.value_.duration_val);
+        break;
       default:
         assert(false);
     }
@@ -305,6 +923,15 @@ bool PropertyValueThrift::__fbthrift_is_empty() const {
         break;
       case Type::string_array:
         set_string_array(rhs.value_.string_array);
+        break;
+      case Type::datetime_val:
+        set_datetime_val(rhs.value_.datetime_val);
+        break;
+      case Type::time_val:
+        set_time_val(rhs.value_.time_val);
+        break;
+      case Type::duration_val:
+        set_duration_val(rhs.value_.duration_val);
         break;
       default:
         __fbthrift_clear();
@@ -339,6 +966,24 @@ template uint32_t PropertyValueThrift::serializedSize<>(apache::thrift::CompactP
 template uint32_t PropertyValueThrift::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
 #endif
 
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        PropertyValueThrift,
+        ::apache::thrift::type_class::structure,
+        ::eugraph::thrift::DateTimeValueThrift>,
+    "inconsistent use of json option");
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        PropertyValueThrift,
+        ::apache::thrift::type_class::structure,
+        ::eugraph::thrift::TimeValueThrift>,
+    "inconsistent use of json option");
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        PropertyValueThrift,
+        ::apache::thrift::type_class::structure,
+        ::eugraph::thrift::DurationValueThrift>,
+    "inconsistent use of json option");
 
 } // namespace eugraph::thrift
 

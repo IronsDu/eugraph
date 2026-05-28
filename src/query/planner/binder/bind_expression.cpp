@@ -287,12 +287,25 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 if (obj_type.kind == BoundTypeKind::TEMPORAL || obj_type.kind == BoundTypeKind::STRING ||
                     obj_type.kind == BoundTypeKind::ANY) {
                     // Temporal member access: convert temporal.field to __temporal_field__(temporal, field_enum)
-                    auto field_opt = temporalFieldFromString(ptr->property);
-                    if (!field_opt) {
+                    // Try each field enum type to find a match
+                    int64_t field_int = -1;
+                    bool returns_string = false;
+
+                    if (auto dtf = dateTimeFieldFromString(ptr->property)) {
+                        field_int = static_cast<int64_t>(*dtf);
+                        returns_string = dateTimeFieldReturnsString(*dtf);
+                    } else if (auto tf = timeFieldFromString(ptr->property)) {
+                        field_int = static_cast<int64_t>(*tf);
+                        returns_string = timeFieldReturnsString(*tf);
+                    } else if (auto df = durationFieldFromString(ptr->property)) {
+                        field_int = static_cast<int64_t>(*df);
+                        returns_string = false;
+                    }
+
+                    if (field_int < 0) {
                         error("Unknown temporal field: '" + ptr->property + "'");
                         return std::nullopt;
                     }
-                    auto field = *field_opt;
 
                     auto* func = func_registry_.lookup("__temporal_field__", {obj_type, BoundType::Int64()});
                     if (!func) {
@@ -302,8 +315,8 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     auto fc = std::make_unique<BoundFunctionCall>();
                     fc->func_def = func;
                     fc->args.push_back(std::move(*obj));
-                    fc->args.push_back(BoundLiteral(static_cast<int64_t>(field)));
-                    fc->return_type = temporalFieldReturnsString(field) ? BoundType::String() : BoundType::Int64();
+                    fc->args.push_back(BoundLiteral(field_int));
+                    fc->return_type = returns_string ? BoundType::String() : BoundType::Int64();
                     return BoundExpression(std::move(fc));
                 }
 

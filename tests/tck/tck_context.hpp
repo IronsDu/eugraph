@@ -150,15 +150,6 @@ struct TckContext {
         return se;
     }
 
-    // ---------- Value formatting (TCK format) ----------
-
-    // Convert a thrift ResultValue to TCK format string
-    static std::string formatValue(const thrift::ResultValue& val);
-
-    // Convert JSON representations to TCK format
-    static std::string convertVertexJson(const std::string& json);
-    static std::string convertEdgeJson(const std::string& json);
-
     // ---------- Graph initialization ----------
 
     // Scan query text and pre-create any labels / edge types found

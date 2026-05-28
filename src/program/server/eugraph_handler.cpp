@@ -65,6 +65,12 @@ namespace server {
         return ::eugraph::PropertyType::DOUBLE_ARRAY;
     case thrift::PropertyType::STRING_ARRAY:
         return ::eugraph::PropertyType::STRING_ARRAY;
+    case thrift::PropertyType::DATETIME:
+        return ::eugraph::PropertyType::DATETIME;
+    case thrift::PropertyType::TIME:
+        return ::eugraph::PropertyType::TIME;
+    case thrift::PropertyType::DURATION:
+        return ::eugraph::PropertyType::DURATION;
     }
     return ::eugraph::PropertyType::STRING;
 }
@@ -73,6 +79,12 @@ thrift::PropertyType EuGraphHandler::fromPropertyType(::eugraph::PropertyType t)
     switch (t) {
     case ::eugraph::PropertyType::ANY:
         return thrift::PropertyType::STRING;
+    case ::eugraph::PropertyType::DATETIME:
+        return thrift::PropertyType::DATETIME;
+    case ::eugraph::PropertyType::TIME:
+        return thrift::PropertyType::TIME;
+    case ::eugraph::PropertyType::DURATION:
+        return thrift::PropertyType::DURATION;
     case ::eugraph::PropertyType::BOOL:
         return thrift::PropertyType::BOOL;
     case ::eugraph::PropertyType::INT64:
@@ -351,8 +363,12 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
             }
         }
         rv.set_path_json(oss.str());
-    } else if (std::holds_alternative<TemporalValue>(val)) {
-        rv.set_string_val(temporalToString(std::get<TemporalValue>(val)));
+    } else if (std::holds_alternative<DateTimeValue>(val)) {
+        rv.set_string_val(temporalToString(std::get<DateTimeValue>(val)));
+    } else if (std::holds_alternative<TimeValue>(val)) {
+        rv.set_string_val(temporalToString(std::get<TimeValue>(val)));
+    } else if (std::holds_alternative<DurationValue>(val)) {
+        rv.set_string_val(temporalToString(std::get<DurationValue>(val)));
     } else if (std::holds_alternative<ListValue>(val)) {
         auto& lv = std::get<ListValue>(val);
         std::ostringstream oss;
@@ -663,6 +679,59 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift::PropertyValueT
     case thrift::PropertyValueThrift::Type::string_array: {
         const auto& arr = v.get_string_array();
         return std::vector<std::string>(arr.begin(), arr.end());
+    }
+    case thrift::PropertyValueThrift::Type::datetime_val: {
+        const auto& dt = v.get_datetime_val();
+        DateTimeValue tv;
+        switch (*dt.kind()) {
+        case thrift::DateTimeKind::DATE:
+            tv.kind = DateTimeKind::DATE;
+            break;
+        case thrift::DateTimeKind::LOCAL_DATETIME:
+            tv.kind = DateTimeKind::LOCAL_DATETIME;
+            break;
+        case thrift::DateTimeKind::DATETIME_WITH_TZ:
+            tv.kind = DateTimeKind::DATETIME;
+            break;
+        }
+        tv.year = *dt.year();
+        tv.month = *dt.month();
+        tv.day = *dt.day();
+        tv.hour = *dt.hour();
+        tv.minute = *dt.minute();
+        tv.second = *dt.second();
+        tv.nanos = *dt.nanos();
+        tv.tz_offset_min = *dt.tz_offset_min();
+        tv.tz_name = *dt.tz_name();
+        return tv;
+    }
+    case thrift::PropertyValueThrift::Type::time_val: {
+        const auto& t = v.get_time_val();
+        TimeValue tv;
+        switch (*t.kind()) {
+        case thrift::TimeKind::LOCAL_TIME:
+            tv.kind = TimeKind::LOCAL_TIME;
+            break;
+        case thrift::TimeKind::TIME_WITH_TZ:
+            tv.kind = TimeKind::TIME;
+            break;
+        }
+        tv.hour = *t.hour();
+        tv.minute = *t.minute();
+        tv.second = *t.second();
+        tv.nanos = *t.nanos();
+        tv.tz_offset_min = *t.tz_offset_min();
+        tv.tz_name = *t.tz_name();
+        return tv;
+    }
+    case thrift::PropertyValueThrift::Type::duration_val: {
+        const auto& d = v.get_duration_val();
+        DurationValue dv;
+        dv.months = *d.months();
+        dv.days = *d.days();
+        dv.seconds = *d.seconds();
+        dv.nanos = *d.nanos();
+        return dv;
     }
     default:
         return std::monostate{};

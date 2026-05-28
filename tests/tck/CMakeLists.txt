@@ -144,6 +144,7 @@ target_include_directories(tck_steps_lib PUBLIC
 target_link_libraries(tck_steps_lib PUBLIC
     eugraph_shell_lib
     eugraph_thrift
+    eugraph_thrift_fmt
     Folly::folly
     spdlog::spdlog
 )

@@ -11,6 +11,9 @@
 // BEGIN forward_declare
 namespace eugraph::thrift {
 class PropertyDefThrift;
+class DateTimeValueThrift;
+class TimeValueThrift;
+class DurationValueThrift;
 class PropertyValueThrift;
 class LabelInfo;
 class EdgeLabelInfo;
@@ -28,5 +31,7 @@ class GraphInfo;
 // BEGIN forward_declare_enums
 namespace eugraph::thrift {
 enum class PropertyType;
+enum class DateTimeKind;
+enum class TimeKind;
 } // namespace eugraph::thrift
 // END forward_declare_enums

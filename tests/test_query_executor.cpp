@@ -4196,9 +4196,9 @@ TEST_F(QueryExecutorTest, TemporalDateAddDurationMonth) {
     auto result = execSync(*executor_, "RETURN date({year: 2024, month: 1, day: 15}) + duration({months: 1})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    EXPECT_TRUE(std::holds_alternative<TemporalValue>(result.rows[0][0]));
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DATE);
+    EXPECT_TRUE(std::holds_alternative<DateTimeValue>(result.rows[0][0]));
+    const auto& tv = std::get<DateTimeValue>(result.rows[0][0]);
+    EXPECT_EQ(tv.kind, DateTimeKind::DATE);
     EXPECT_EQ(tv.year, 2024);
     EXPECT_EQ(tv.month, 2);
     EXPECT_EQ(tv.day, 15);
@@ -4208,8 +4208,8 @@ TEST_F(QueryExecutorTest, TemporalDateAddDurationDays) {
     auto result = execSync(*executor_, "RETURN date({year: 2024, month: 1, day: 15}) + duration({days: 20})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DATE);
+    const auto& tv = std::get<DateTimeValue>(result.rows[0][0]);
+    EXPECT_EQ(tv.kind, DateTimeKind::DATE);
     EXPECT_EQ(tv.year, 2024);
     EXPECT_EQ(tv.month, 2);
     EXPECT_EQ(tv.day, 4);
@@ -4219,8 +4219,8 @@ TEST_F(QueryExecutorTest, TemporalDateAddDurationYearRollover) {
     auto result = execSync(*executor_, "RETURN date({year: 2024, month: 1, day: 1}) + duration({months: 13})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DATE);
+    const auto& tv = std::get<DateTimeValue>(result.rows[0][0]);
+    EXPECT_EQ(tv.kind, DateTimeKind::DATE);
     EXPECT_EQ(tv.year, 2025);
     EXPECT_EQ(tv.month, 2);
     EXPECT_EQ(tv.day, 1);
@@ -4230,8 +4230,8 @@ TEST_F(QueryExecutorTest, TemporalDateSubDuration) {
     auto result = execSync(*executor_, "RETURN date({year: 2024, month: 3, day: 15}) - duration({months: 2})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DATE);
+    const auto& tv = std::get<DateTimeValue>(result.rows[0][0]);
+    EXPECT_EQ(tv.kind, DateTimeKind::DATE);
     EXPECT_EQ(tv.year, 2024);
     EXPECT_EQ(tv.month, 1);
     EXPECT_EQ(tv.day, 15);
@@ -4242,47 +4242,42 @@ TEST_F(QueryExecutorTest, TemporalDateSubtractDates) {
         execSync(*executor_, "RETURN date({year: 2024, month: 6, day: 1}) - date({year: 2024, month: 1, day: 1})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    EXPECT_TRUE(std::holds_alternative<TemporalValue>(result.rows[0][0]));
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DURATION);
+    EXPECT_TRUE(std::holds_alternative<DurationValue>(result.rows[0][0]));
+    const auto& dur = std::get<DurationValue>(result.rows[0][0]);
     // 2024 is a leap year: Jan(31) + Feb(29) + Mar(31) + Apr(30) + May(31) = 152 days
-    EXPECT_EQ(tv.dur_days, 152);
+    EXPECT_EQ(dur.days, 152);
 }
 
 TEST_F(QueryExecutorTest, TemporalDurationAddDuration) {
     auto result = execSync(*executor_, "RETURN duration({hours: 2}) + duration({minutes: 30})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DURATION);
-    EXPECT_EQ(tv.dur_seconds, 9000); // 2.5 hours = 9000 seconds
+    const auto& dur = std::get<DurationValue>(result.rows[0][0]);
+    EXPECT_EQ(dur.seconds, 9000); // 2.5 hours = 9000 seconds
 }
 
 TEST_F(QueryExecutorTest, TemporalDurationMul) {
     auto result = execSync(*executor_, "RETURN duration({hours: 3}) * 2");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DURATION);
-    EXPECT_EQ(tv.dur_seconds, 21600); // 6 hours = 21600 seconds
+    const auto& dur = std::get<DurationValue>(result.rows[0][0]);
+    EXPECT_EQ(dur.seconds, 21600); // 6 hours = 21600 seconds
 }
 
 TEST_F(QueryExecutorTest, TemporalDurationMulCommutative) {
     auto result = execSync(*executor_, "RETURN 3 * duration({minutes: 10})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DURATION);
-    EXPECT_EQ(tv.dur_seconds, 1800); // 30 minutes = 1800 seconds
+    const auto& dur = std::get<DurationValue>(result.rows[0][0]);
+    EXPECT_EQ(dur.seconds, 1800); // 30 minutes = 1800 seconds
 }
 
 TEST_F(QueryExecutorTest, TemporalDurationDiv) {
     auto result = execSync(*executor_, "RETURN duration({months: 6}) / 2");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DURATION);
-    EXPECT_EQ(tv.dur_months, 3);
+    const auto& dur = std::get<DurationValue>(result.rows[0][0]);
+    EXPECT_EQ(dur.months, 3);
 }
 
 TEST_F(QueryExecutorTest, TemporalDatetimeAddDuration) {
@@ -4290,8 +4285,8 @@ TEST_F(QueryExecutorTest, TemporalDatetimeAddDuration) {
         execSync(*executor_, "RETURN datetime({year: 2024, month: 1, day: 15, hour: 12}) + duration({hours: 6})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DATETIME);
+    const auto& tv = std::get<DateTimeValue>(result.rows[0][0]);
+    EXPECT_EQ(tv.kind, DateTimeKind::DATETIME);
     EXPECT_EQ(tv.year, 2024);
     EXPECT_EQ(tv.month, 1);
     EXPECT_EQ(tv.day, 15);
@@ -4302,8 +4297,8 @@ TEST_F(QueryExecutorTest, TemporalNegativeDuration) {
     auto result = execSync(*executor_, "RETURN date({year: 2024, month: 1, day: 15}) + duration({days: -20})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DATE);
+    const auto& tv = std::get<DateTimeValue>(result.rows[0][0]);
+    EXPECT_EQ(tv.kind, DateTimeKind::DATE);
     EXPECT_EQ(tv.year, 2023);
     EXPECT_EQ(tv.month, 12);
     EXPECT_EQ(tv.day, 26);
@@ -4315,9 +4310,8 @@ TEST_F(QueryExecutorTest, TemporalDateSubDatesProducesDays) {
         execSync(*executor_, "RETURN date({year: 2024, month: 1, day: 1}) - date({year: 2023, month: 12, day: 31})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DURATION);
-    EXPECT_EQ(tv.dur_days, 1);
+    const auto& dur = std::get<DurationValue>(result.rows[0][0]);
+    EXPECT_EQ(dur.days, 1);
 }
 
 TEST_F(QueryExecutorTest, TemporalDateAddDurationViaConstructor) {
@@ -4325,8 +4319,8 @@ TEST_F(QueryExecutorTest, TemporalDateAddDurationViaConstructor) {
     auto result = execSync(*executor_, "RETURN date({year: 2024, month: 12, day: 31}) + duration({days: 1})");
     EXPECT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    const auto& tv = std::get<TemporalValue>(result.rows[0][0]);
-    EXPECT_EQ(tv.kind, TemporalKind::DATE);
+    const auto& tv = std::get<DateTimeValue>(result.rows[0][0]);
+    EXPECT_EQ(tv.kind, DateTimeKind::DATE);
     EXPECT_EQ(tv.year, 2025);
     EXPECT_EQ(tv.month, 1);
     EXPECT_EQ(tv.day, 1);

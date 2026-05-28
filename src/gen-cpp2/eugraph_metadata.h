@@ -26,7 +26,32 @@ class EnumMetadata<::eugraph::thrift::PropertyType> {
   static void gen(ThriftMetadata& metadata);
 };
 template <>
+class EnumMetadata<::eugraph::thrift::DateTimeKind> {
+ public:
+  static void gen(ThriftMetadata& metadata);
+};
+template <>
+class EnumMetadata<::eugraph::thrift::TimeKind> {
+ public:
+  static void gen(ThriftMetadata& metadata);
+};
+template <>
 class StructMetadata<::eugraph::thrift::PropertyDefThrift> {
+ public:
+  static const ::apache::thrift::metadata::ThriftStruct& gen(ThriftMetadata& metadata);
+};
+template <>
+class StructMetadata<::eugraph::thrift::DateTimeValueThrift> {
+ public:
+  static const ::apache::thrift::metadata::ThriftStruct& gen(ThriftMetadata& metadata);
+};
+template <>
+class StructMetadata<::eugraph::thrift::TimeValueThrift> {
+ public:
+  static const ::apache::thrift::metadata::ThriftStruct& gen(ThriftMetadata& metadata);
+};
+template <>
+class StructMetadata<::eugraph::thrift::DurationValueThrift> {
  public:
   static const ::apache::thrift::metadata::ThriftStruct& gen(ThriftMetadata& metadata);
 };

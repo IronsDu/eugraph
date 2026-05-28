@@ -75,7 +75,10 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
                     } else if constexpr (std::is_same_v<A, std::string> && std::is_same_v<B, std::string>) {
                         less = la < lb;
                         greater = la > lb;
-                    } else if constexpr (std::is_same_v<A, TemporalValue> && std::is_same_v<B, TemporalValue>) {
+                    } else if constexpr (std::is_same_v<A, DateTimeValue> && std::is_same_v<B, DateTimeValue>) {
+                        less = temporalLess(la, lb);
+                        greater = temporalLess(lb, la);
+                    } else if constexpr (std::is_same_v<A, TimeValue> && std::is_same_v<B, TimeValue>) {
                         less = temporalLess(la, lb);
                         greater = temporalLess(lb, la);
                     }

@@ -2,12 +2,12 @@
 #include "program/shell/rpc_client.hpp"
 
 #include "gen-cpp2/eugraph_types.h"
+#include "thrift_fmt/result_format.hpp"
 
 #include <linenoise.h>
 
 #include <spdlog/spdlog.h>
 
-#include <algorithm>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -22,32 +22,6 @@ namespace shell {
 using namespace eugraph::thrift;
 
 // ==================== Value formatting ====================
-
-std::string resultValueToString(const ResultValue& rv) {
-    switch (rv.getType()) {
-    case ResultValue::Type::__EMPTY__:
-        return "null";
-    case ResultValue::Type::bool_val:
-        return rv.get_bool_val() ? "true" : "false";
-    case ResultValue::Type::int_val:
-        return std::to_string(rv.get_int_val());
-    case ResultValue::Type::double_val:
-        return std::to_string(rv.get_double_val());
-    case ResultValue::Type::string_val:
-        return rv.get_string_val();
-    case ResultValue::Type::vertex_json:
-        return rv.get_vertex_json();
-    case ResultValue::Type::edge_json:
-        return rv.get_edge_json();
-    case ResultValue::Type::path_json:
-        return rv.get_path_json();
-    case ResultValue::Type::list_json:
-        return rv.get_list_json();
-    case ResultValue::Type::map_json:
-        return rv.get_map_json();
-    }
-    return "?";
-}
 
 std::string formatTable(const std::vector<std::string>& columns, const std::vector<std::vector<std::string>>& rows) {
     if (columns.empty()) {
@@ -101,26 +75,6 @@ std::string formatEdgeLabelCreated(const std::string& name, int id) {
     return "EdgeLabel created: " + name + " (id=" + std::to_string(id) + ")\n";
 }
 
-std::string propertyTypeToString(thrift::PropertyType t) {
-    switch (t) {
-    case thrift::PropertyType::BOOL:
-        return "BOOL";
-    case thrift::PropertyType::INT64:
-        return "INT64";
-    case thrift::PropertyType::DOUBLE:
-        return "DOUBLE";
-    case thrift::PropertyType::STRING:
-        return "STRING";
-    case thrift::PropertyType::INT64_ARRAY:
-        return "INT64_ARRAY";
-    case thrift::PropertyType::DOUBLE_ARRAY:
-        return "DOUBLE_ARRAY";
-    case thrift::PropertyType::STRING_ARRAY:
-        return "STRING_ARRAY";
-    }
-    return "UNKNOWN";
-}
-
 std::string formatPropertyList(const std::vector<PropertyDefThrift>& props) {
     if (props.empty())
         return "(none)";
@@ -128,7 +82,7 @@ std::string formatPropertyList(const std::vector<PropertyDefThrift>& props) {
     for (size_t i = 0; i < props.size(); ++i) {
         if (i > 0)
             result += ", ";
-        result += props[i].name().value() + ":" + propertyTypeToString(props[i].type().value());
+        result += props[i].name().value() + ":" + thrift_fmt::propertyTypeToString(props[i].type().value());
     }
     return result;
 }
@@ -203,18 +157,6 @@ bool isCompleteCypher(const std::string& input) {
 
 // ==================== Property type parsing ====================
 
-thrift::PropertyType parsePropertyType(const std::string& type_str) {
-    std::string upper = type_str;
-    std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-    if (upper == "BOOL")
-        return thrift::PropertyType::BOOL;
-    if (upper == "INT64" || upper == "INT" || upper == "INTEGER")
-        return thrift::PropertyType::INT64;
-    if (upper == "DOUBLE" || upper == "FLOAT")
-        return thrift::PropertyType::DOUBLE;
-    return thrift::PropertyType::STRING;
-}
-
 std::vector<PropertyDefThrift> parsePropertyDefs(const std::string& args) {
     std::vector<PropertyDefThrift> props;
     std::istringstream iss(args);
@@ -224,7 +166,7 @@ std::vector<PropertyDefThrift> parsePropertyDefs(const std::string& args) {
         PropertyDefThrift def;
         if (colon_pos != std::string::npos) {
             def.name() = token.substr(0, colon_pos);
-            def.type() = parsePropertyType(token.substr(colon_pos + 1));
+            def.type() = thrift_fmt::parsePropertyType(token.substr(colon_pos + 1));
         } else {
             def.name() = token;
             def.type() = thrift::PropertyType::STRING;
@@ -459,7 +401,7 @@ static void runRpcRepl(const ShellConfig& config) {
                                 for (const auto& row : *batch->rows()) {
                                     std::vector<std::string> cells;
                                     for (const auto& val : *row.values()) {
-                                        cells.push_back(resultValueToString(val));
+                                        cells.push_back(thrift_fmt::formatResultValue(val));
                                     }
                                     all_rows.push_back(std::move(cells));
                                     ++total_rows;

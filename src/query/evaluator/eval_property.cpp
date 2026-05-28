@@ -12,9 +12,26 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
     if (!obj.column)
         return;
 
+    auto pvToValue = [](const PropertyValue& pv) -> Value {
+        if (std::holds_alternative<bool>(pv))
+            return Value(std::get<bool>(pv));
+        if (std::holds_alternative<int64_t>(pv))
+            return Value(std::get<int64_t>(pv));
+        if (std::holds_alternative<double>(pv))
+            return Value(std::get<double>(pv));
+        if (std::holds_alternative<std::string>(pv))
+            return Value(std::get<std::string>(pv));
+        if (std::holds_alternative<DateTimeValue>(pv))
+            return Value(std::get<DateTimeValue>(pv));
+        if (std::holds_alternative<TimeValue>(pv))
+            return Value(std::get<TimeValue>(pv));
+        if (std::holds_alternative<DurationValue>(pv))
+            return Value(std::get<DurationValue>(pv));
+        return Value{};
+    };
+
     for (size_t i = 0; i < count; ++i) {
         Value ov = obj.column->getValue(i);
-
         Value r;
         if (std::holds_alternative<VertexValue>(ov)) {
             const auto& vertex = std::get<VertexValue>(ov);
@@ -24,15 +41,7 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 if (lit != vertex.properties.end()) {
                     const auto& props = lit->second;
                     if (candidate.prop_id < props.size() && props[candidate.prop_id].has_value()) {
-                        const auto& pv = *props[candidate.prop_id];
-                        if (std::holds_alternative<bool>(pv))
-                            found.push_back(Value(std::get<bool>(pv)));
-                        else if (std::holds_alternative<int64_t>(pv))
-                            found.push_back(Value(std::get<int64_t>(pv)));
-                        else if (std::holds_alternative<double>(pv))
-                            found.push_back(Value(std::get<double>(pv)));
-                        else if (std::holds_alternative<std::string>(pv))
-                            found.push_back(Value(std::get<std::string>(pv)));
+                        found.push_back(pvToValue(*props[candidate.prop_id]));
                     }
                 }
             }
@@ -40,9 +49,8 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 r = std::move(found[0]);
             } else if (found.size() > 1) {
                 ListValue lv;
-                for (auto& v : found) {
+                for (auto& v : found)
                     lv.elements.push_back(ValueStorage{std::move(v)});
-                }
                 r = Value(std::move(lv));
             }
         } else if (std::holds_alternative<EdgeValue>(ov)) {
@@ -52,14 +60,7 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     if (candidate.prop_id < edge.properties->size()) {
                         const auto& pv = (*edge.properties)[candidate.prop_id];
                         if (pv.has_value()) {
-                            if (std::holds_alternative<bool>(*pv))
-                                r = Value(std::get<bool>(*pv));
-                            else if (std::holds_alternative<int64_t>(*pv))
-                                r = Value(std::get<int64_t>(*pv));
-                            else if (std::holds_alternative<double>(*pv))
-                                r = Value(std::get<double>(*pv));
-                            else if (std::holds_alternative<std::string>(*pv))
-                                r = Value(std::get<std::string>(*pv));
+                            r = pvToValue(*pv);
                             break;
                         }
                     }
@@ -75,6 +76,42 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
     auto obj = evaluateInternal(ref.object, input);
     if (!obj.column)
         return;
+
+    auto pvToValue = [](const PropertyValue& pv) -> Value {
+        if (std::holds_alternative<bool>(pv))
+            return Value(std::get<bool>(pv));
+        if (std::holds_alternative<int64_t>(pv))
+            return Value(std::get<int64_t>(pv));
+        if (std::holds_alternative<double>(pv))
+            return Value(std::get<double>(pv));
+        if (std::holds_alternative<std::string>(pv))
+            return Value(std::get<std::string>(pv));
+        if (std::holds_alternative<DateTimeValue>(pv))
+            return Value(std::get<DateTimeValue>(pv));
+        if (std::holds_alternative<TimeValue>(pv))
+            return Value(std::get<TimeValue>(pv));
+        if (std::holds_alternative<DurationValue>(pv))
+            return Value(std::get<DurationValue>(pv));
+        if (std::holds_alternative<std::vector<int64_t>>(pv)) {
+            ListValue lv;
+            for (auto v : std::get<std::vector<int64_t>>(pv))
+                lv.elements.push_back(ValueStorage{Value(v)});
+            return Value(std::move(lv));
+        }
+        if (std::holds_alternative<std::vector<double>>(pv)) {
+            ListValue lv;
+            for (auto v : std::get<std::vector<double>>(pv))
+                lv.elements.push_back(ValueStorage{Value(v)});
+            return Value(std::move(lv));
+        }
+        if (std::holds_alternative<std::vector<std::string>>(pv)) {
+            ListValue lv;
+            for (auto& s : std::get<std::vector<std::string>>(pv))
+                lv.elements.push_back(ValueStorage{Value(std::move(s))});
+            return Value(std::move(lv));
+        }
+        return Value{};
+    };
 
     for (size_t i = 0; i < count; ++i) {
         Value ov = obj.column->getValue(i);
@@ -96,32 +133,8 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     if (pd.name == ref.property) {
                         if (pd.id < props_vec.size()) {
                             const auto& pv = props_vec[pd.id];
-                            if (pv.has_value()) {
-                                if (std::holds_alternative<bool>(*pv))
-                                    r = Value(std::get<bool>(*pv));
-                                else if (std::holds_alternative<int64_t>(*pv))
-                                    r = Value(std::get<int64_t>(*pv));
-                                else if (std::holds_alternative<double>(*pv))
-                                    r = Value(std::get<double>(*pv));
-                                else if (std::holds_alternative<std::string>(*pv))
-                                    r = Value(std::get<std::string>(*pv));
-                                else if (std::holds_alternative<std::vector<int64_t>>(*pv)) {
-                                    ListValue lv;
-                                    for (auto v : std::get<std::vector<int64_t>>(*pv))
-                                        lv.elements.push_back(ValueStorage{Value(v)});
-                                    r = Value(std::move(lv));
-                                } else if (std::holds_alternative<std::vector<double>>(*pv)) {
-                                    ListValue lv;
-                                    for (auto v : std::get<std::vector<double>>(*pv))
-                                        lv.elements.push_back(ValueStorage{Value(v)});
-                                    r = Value(std::move(lv));
-                                } else if (std::holds_alternative<std::vector<std::string>>(*pv)) {
-                                    ListValue lv;
-                                    for (auto& s : std::get<std::vector<std::string>>(*pv))
-                                        lv.elements.push_back(ValueStorage{Value(std::move(s))});
-                                    r = Value(std::move(lv));
-                                }
-                            }
+                            if (pv.has_value())
+                                r = pvToValue(*pv);
                         }
                         goto found;
                     }

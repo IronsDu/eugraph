@@ -27,8 +27,12 @@ PropertyValue valueToPropertyValue(const Value& v) {
         return std::get<double>(v);
     if (std::holds_alternative<std::string>(v))
         return std::get<std::string>(v);
-    if (std::holds_alternative<TemporalValue>(v))
-        return temporalToString(std::get<TemporalValue>(v));
+    if (std::holds_alternative<DateTimeValue>(v))
+        return std::get<DateTimeValue>(v);
+    if (std::holds_alternative<TimeValue>(v))
+        return std::get<TimeValue>(v);
+    if (std::holds_alternative<DurationValue>(v))
+        return std::get<DurationValue>(v);
     return PropertyValue{};
 }
 } // namespace

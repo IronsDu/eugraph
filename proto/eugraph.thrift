@@ -10,12 +10,56 @@ enum PropertyType {
   INT64_ARRAY = 5,
   DOUBLE_ARRAY = 6,
   STRING_ARRAY = 7,
+  DATETIME = 8,
+  TIME = 9,
+  DURATION = 10,
 }
 
 struct PropertyDefThrift {
   1: string name
   2: PropertyType type
   3: bool is_required = false
+}
+
+enum DateTimeKind {
+  DATE = 1,
+  LOCAL_DATETIME = 2,
+  DATETIME_WITH_TZ = 3,
+}
+
+enum TimeKind {
+  LOCAL_TIME = 1,
+  TIME_WITH_TZ = 2,
+}
+
+struct DateTimeValueThrift {
+  1: DateTimeKind kind
+  2: i64 year
+  3: i64 month
+  4: i64 day
+  5: i64 hour
+  6: i64 minute
+  7: i64 second
+  8: i64 nanos
+  9: i32 tz_offset_min
+  10: string tz_name
+}
+
+struct TimeValueThrift {
+  1: TimeKind kind
+  2: i64 hour
+  3: i64 minute
+  4: i64 second
+  5: i64 nanos
+  6: i32 tz_offset_min
+  7: string tz_name
+}
+
+struct DurationValueThrift {
+  1: i64 months
+  2: i64 days
+  3: i64 seconds
+  4: i64 nanos
 }
 
 union PropertyValueThrift {
@@ -26,6 +70,9 @@ union PropertyValueThrift {
   5: list<i64> int_array
   6: list<double> double_array
   7: list<string> string_array
+  8: DateTimeValueThrift datetime_val
+  9: TimeValueThrift time_val
+  10: DurationValueThrift duration_val
 }
 
 struct LabelInfo {
@@ -116,4 +163,3 @@ service EuGraphService {
   BatchInsertVerticesResult batchInsertVertices(1: string label_name, 2: list<VertexRecord> records, 3: string graph_name)
   i32 batchInsertEdges(1: string edge_label_name, 2: list<EdgeRecord> records, 3: string graph_name)
 }
-
