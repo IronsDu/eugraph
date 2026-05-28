@@ -371,6 +371,13 @@ def generate_step_diff(baseline: dict, current: dict) -> str:
                  f'only in current: {len(only_current)}')
     lines.append('')
 
+    # Count PASSED entries that disappeared from current as regressions
+    missing_regressions = []
+    for key in sorted(only_baseline):
+        info = baseline[key]
+        if info['status'] == 'PASSED':
+            missing_regressions.append((key[0], key[1], info['step'], 'PASSED', 'MISSING'))
+
     if only_baseline:
         lines.append('<details>')
         lines.append('<summary>Keys only in baseline (first 10)</summary>')
@@ -383,6 +390,8 @@ def generate_step_diff(baseline: dict, current: dict) -> str:
         lines.append('')
         lines.append('</details>')
         lines.append('')
+
+    regressions.extend(missing_regressions)
 
     if only_current:
         lines.append('<details>')
