@@ -32,6 +32,12 @@ private:
             return BoundType::Double();
         if (std::holds_alternative<std::string>(v))
             return BoundType::String();
+        if (std::holds_alternative<DateTimeValue>(v))
+            return BoundType::DateTime();
+        if (std::holds_alternative<TimeValue>(v))
+            return BoundType::Time();
+        if (std::holds_alternative<DurationValue>(v))
+            return BoundType::Duration();
         if (std::holds_alternative<ListValue>(v))
             return BoundType::List(BoundType::Any());
         if (std::holds_alternative<MapValue>(v))

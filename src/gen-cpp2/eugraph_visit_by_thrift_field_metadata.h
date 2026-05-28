@@ -31,6 +31,81 @@ struct VisitByFieldId<::eugraph::thrift::PropertyDefThrift> {
 };
 
 template <>
+struct VisitByFieldId<::eugraph::thrift::DateTimeValueThrift> {
+  template <typename F, typename T>
+  void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
+    switch (fieldId) {
+    case 1:
+      return f(0, static_cast<T&&>(t).kind_ref());
+    case 2:
+      return f(1, static_cast<T&&>(t).year_ref());
+    case 3:
+      return f(2, static_cast<T&&>(t).month_ref());
+    case 4:
+      return f(3, static_cast<T&&>(t).day_ref());
+    case 5:
+      return f(4, static_cast<T&&>(t).hour_ref());
+    case 6:
+      return f(5, static_cast<T&&>(t).minute_ref());
+    case 7:
+      return f(6, static_cast<T&&>(t).second_ref());
+    case 8:
+      return f(7, static_cast<T&&>(t).nanos_ref());
+    case 9:
+      return f(8, static_cast<T&&>(t).tz_offset_min_ref());
+    case 10:
+      return f(9, static_cast<T&&>(t).tz_name_ref());
+    default:
+      throwInvalidThriftId(fieldId, "::eugraph::thrift::DateTimeValueThrift");
+    }
+  }
+};
+
+template <>
+struct VisitByFieldId<::eugraph::thrift::TimeValueThrift> {
+  template <typename F, typename T>
+  void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
+    switch (fieldId) {
+    case 1:
+      return f(0, static_cast<T&&>(t).kind_ref());
+    case 2:
+      return f(1, static_cast<T&&>(t).hour_ref());
+    case 3:
+      return f(2, static_cast<T&&>(t).minute_ref());
+    case 4:
+      return f(3, static_cast<T&&>(t).second_ref());
+    case 5:
+      return f(4, static_cast<T&&>(t).nanos_ref());
+    case 6:
+      return f(5, static_cast<T&&>(t).tz_offset_min_ref());
+    case 7:
+      return f(6, static_cast<T&&>(t).tz_name_ref());
+    default:
+      throwInvalidThriftId(fieldId, "::eugraph::thrift::TimeValueThrift");
+    }
+  }
+};
+
+template <>
+struct VisitByFieldId<::eugraph::thrift::DurationValueThrift> {
+  template <typename F, typename T>
+  void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
+    switch (fieldId) {
+    case 1:
+      return f(0, static_cast<T&&>(t).months_ref());
+    case 2:
+      return f(1, static_cast<T&&>(t).days_ref());
+    case 3:
+      return f(2, static_cast<T&&>(t).seconds_ref());
+    case 4:
+      return f(3, static_cast<T&&>(t).nanos_ref());
+    default:
+      throwInvalidThriftId(fieldId, "::eugraph::thrift::DurationValueThrift");
+    }
+  }
+};
+
+template <>
 struct VisitByFieldId<::eugraph::thrift::PropertyValueThrift> {
   template <typename F, typename T>
   void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
@@ -49,6 +124,12 @@ struct VisitByFieldId<::eugraph::thrift::PropertyValueThrift> {
       return f(5, static_cast<T&&>(t).double_array_ref());
     case 7:
       return f(6, static_cast<T&&>(t).string_array_ref());
+    case 8:
+      return f(7, static_cast<T&&>(t).datetime_val_ref());
+    case 9:
+      return f(8, static_cast<T&&>(t).time_val_ref());
+    case 10:
+      return f(9, static_cast<T&&>(t).duration_val_ref());
     default:
       throwInvalidThriftId(fieldId, "::eugraph::thrift::PropertyValueThrift");
     }

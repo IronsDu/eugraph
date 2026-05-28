@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/types/temporal_value.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <set>
@@ -35,8 +37,9 @@ using GraphTxnHandle = void*;
 static constexpr GraphTxnHandle INVALID_GRAPH_TXN = nullptr;
 
 // ==================== Property Value Type ====================
-using PropertyValue = std::variant<std::monostate, bool, int64_t, double, std::string, std::vector<int64_t>,
-                                   std::vector<double>, std::vector<std::string>>;
+using PropertyValue =
+    std::variant<std::monostate, bool, int64_t, double, std::string, std::vector<int64_t>, std::vector<double>,
+                 std::vector<std::string>, DateTimeValue, TimeValue, DurationValue>;
 
 // Properties indexed by prop_id
 using Properties = std::vector<std::optional<PropertyValue>>;
@@ -73,8 +76,36 @@ enum class PropertyType {
     INT64_ARRAY,
     DOUBLE_ARRAY,
     STRING_ARRAY,
+    DATETIME,
+    TIME,
+    DURATION,
     ANY
 };
+
+// ==================== Temporal Property Type Mapping ====================
+
+inline PropertyType temporalKindToPropertyType(DateTimeKind kind) {
+    switch (kind) {
+    case DateTimeKind::DATE:
+    case DateTimeKind::LOCAL_DATETIME:
+    case DateTimeKind::DATETIME:
+        return PropertyType::DATETIME;
+    }
+    return PropertyType::ANY;
+}
+
+inline PropertyType temporalKindToPropertyType(TimeKind kind) {
+    switch (kind) {
+    case TimeKind::LOCAL_TIME:
+    case TimeKind::TIME:
+        return PropertyType::TIME;
+    }
+    return PropertyType::ANY;
+}
+
+inline PropertyType temporalKindToPropertyType(const DurationValue&) {
+    return PropertyType::DURATION;
+}
 
 // Internal label name for unlabeled nodes (never user-visible)
 constexpr std::string_view kAnonLabelName = "__anon__";

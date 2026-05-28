@@ -272,6 +272,20 @@ target_link_libraries(eugraph_thrift PUBLIC
     Folly::folly
 )
 
+# ==================== Thrift formatting (shared by shell & TCK) ====================
+
+add_library(eugraph_thrift_fmt STATIC
+    src/thrift_fmt/result_format.cpp
+)
+
+target_include_directories(eugraph_thrift_fmt PUBLIC
+    "${PROJECT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(eugraph_thrift_fmt PUBLIC
+    eugraph_thrift
+)
+
 # ==================== Shell (REPL) ====================
 
 add_library(eugraph_shell_lib STATIC
@@ -291,6 +305,7 @@ target_link_libraries(eugraph_shell_lib PUBLIC
     eugraph_query_engine
     eugraph_metadata
     eugraph_thrift
+    eugraph_thrift_fmt
     Folly::folly
     Folly::folly_deps
     spdlog::spdlog

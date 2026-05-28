@@ -1,11 +1,15 @@
 #include "query/function/batch_ops.hpp"
 
 #include "common/types/temporal_value.hpp"
-#include "query/function/scalar/temporal_functions.hpp"
-
-#include <cmath>
 
 namespace eugraph {
+
+namespace {
+bool isTemporalType(binder::BoundTypeKind k) {
+    return k == binder::BoundTypeKind::DATETIME || k == binder::BoundTypeKind::TIME ||
+           k == binder::BoundTypeKind::DURATION;
+}
+} // namespace
 namespace function {
 namespace {
 
@@ -411,52 +415,44 @@ void isNotNullBatch(const Column& operand, Column& result, size_t count) {
     }
 }
 
-// ==================== Temporal helper ====================
+// ==================== Temporal helpers ====================
 
-namespace {
+/// Check if a temporal Value is non-trivial (has at least one non-zero field).
+bool isValidDateTime(const DateTimeValue& dt) {
+    return dt.year != 1970 || dt.month != 1 || dt.day != 1 || dt.hour != 0 || dt.minute != 0 || dt.second != 0 ||
+           dt.nanos != 0;
+}
 
-using eugraph::function::scalar::parseDateFromString;
-using eugraph::function::scalar::parseDatetimeStr;
-using eugraph::function::scalar::parseDurationFromString;
-using eugraph::function::scalar::parseTimeStr;
+bool isValidTime(const TimeValue& t) {
+    return t.hour != 0 || t.minute != 0 || t.second != 0 || t.nanos != 0;
+}
 
-TemporalValue valueToTemporal(const Value& v) {
-    if (std::holds_alternative<TemporalValue>(v))
-        return std::get<TemporalValue>(v);
-    if (std::holds_alternative<std::string>(v)) {
-        const auto& s = std::get<std::string>(v);
-        TemporalValue tv = parseDateFromString(s);
-        if (tv.year != 1970 || tv.month != 1 || tv.day != 1)
-            return tv;
-        tv = parseDatetimeStr(s, TemporalKind::DATETIME);
-        if (tv.year != 1970 || tv.month != 1 || tv.day != 1)
-            return tv;
-        tv = parseDatetimeStr(s, TemporalKind::LOCAL_DATETIME);
-        if (tv.year != 1970 || tv.month != 1 || tv.day != 1)
-            return tv;
-        tv = parseTimeStr(s, TemporalKind::TIME);
-        if (tv.hour != 0 || tv.minute != 0)
-            return tv;
-        tv = parseTimeStr(s, TemporalKind::LOCAL_TIME);
-        if (tv.hour != 0 || tv.minute != 0)
-            return tv;
-        tv = parseDurationFromString(s);
-        if (tv.dur_months != 0 || tv.dur_days != 0 || tv.dur_seconds != 0 || tv.dur_nanos != 0)
-            return tv;
+/// Try to extract a DateTimeValue from a Value. Returns true if successful.
+bool tryGetDateTime(const Value& v, DateTimeValue& out) {
+    if (std::holds_alternative<DateTimeValue>(v)) {
+        out = std::get<DateTimeValue>(v);
+        return true;
     }
-    return TemporalValue{TemporalKind::DATE};
+    return false;
 }
 
-bool isValidTemporal(const TemporalValue& tv) {
-    if (tv.kind == TemporalKind::DURATION)
-        return tv.dur_months != 0 || tv.dur_days != 0 || tv.dur_seconds != 0 || tv.dur_nanos != 0;
-    if (tv.kind == TemporalKind::LOCAL_TIME || tv.kind == TemporalKind::TIME)
-        return tv.hour != 0 || tv.minute != 0 || tv.second != 0 || tv.nanos != 0;
-    return tv.year != 1970 || tv.month != 1 || tv.day != 1 || tv.hour != 0 || tv.minute != 0 || tv.second != 0 ||
-           tv.nanos != 0;
+/// Try to extract a TimeValue from a Value. Returns true if successful.
+bool tryGetTime(const Value& v, TimeValue& out) {
+    if (std::holds_alternative<TimeValue>(v)) {
+        out = std::get<TimeValue>(v);
+        return true;
+    }
+    return false;
 }
 
-} // namespace
+/// Try to extract a DurationValue from a Value. Returns true if successful.
+bool tryGetDuration(const Value& v, DurationValue& out) {
+    if (std::holds_alternative<DurationValue>(v)) {
+        out = std::get<DurationValue>(v);
+        return true;
+    }
+    return false;
+}
 
 // ==================== Temporal comparison batch functions ====================
 
@@ -464,16 +460,38 @@ void temporalLtBatch(const Column& left, const Column& right, Column& result, si
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        auto a = valueToTemporal(lv);
-        auto b = valueToTemporal(rv);
-        if (isValidTemporal(a) && isValidTemporal(b)) {
-            if (a.kind == b.kind)
-                result.setValue(i, Value(temporalLess(a, b)));
-            else
-                result.setNull(i);
-        } else {
-            result.setNull(i);
+
+        // DateTimeValue vs DateTimeValue
+        DateTimeValue dt_a, dt_b;
+        if (tryGetDateTime(lv, dt_a) && tryGetDateTime(rv, dt_b)) {
+            if (isValidDateTime(dt_a) && isValidDateTime(dt_b)) {
+                result.setValue(i, Value(temporalLess(dt_a, dt_b)));
+                continue;
+            }
         }
+
+        // TimeValue vs TimeValue
+        TimeValue t_a, t_b;
+        if (tryGetTime(lv, t_a) && tryGetTime(rv, t_b)) {
+            if (isValidTime(t_a) && isValidTime(t_b)) {
+                result.setValue(i, Value(temporalLess(t_a, t_b)));
+                continue;
+            }
+        }
+
+        // DurationValue vs DurationValue: compare by normalized representation
+        DurationValue d_a, d_b;
+        if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
+            // Duration comparison: total nanoseconds approximation
+            int64_t total_a = d_a.months * 30LL * 86400LL * 1000000000LL + d_a.days * 86400LL * 1000000000LL +
+                              d_a.seconds * 1000000000LL + d_a.nanos;
+            int64_t total_b = d_b.months * 30LL * 86400LL * 1000000000LL + d_b.days * 86400LL * 1000000000LL +
+                              d_b.seconds * 1000000000LL + d_b.nanos;
+            result.setValue(i, Value(total_a < total_b));
+            continue;
+        }
+
+        result.setNull(i);
     }
 }
 
@@ -481,16 +499,34 @@ void temporalGtBatch(const Column& left, const Column& right, Column& result, si
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        auto a = valueToTemporal(lv);
-        auto b = valueToTemporal(rv);
-        if (isValidTemporal(a) && isValidTemporal(b)) {
-            if (a.kind == b.kind)
-                result.setValue(i, Value(temporalLess(b, a)));
-            else
-                result.setNull(i);
-        } else {
-            result.setNull(i);
+
+        DateTimeValue dt_a, dt_b;
+        if (tryGetDateTime(lv, dt_a) && tryGetDateTime(rv, dt_b)) {
+            if (isValidDateTime(dt_a) && isValidDateTime(dt_b)) {
+                result.setValue(i, Value(temporalLess(dt_b, dt_a)));
+                continue;
+            }
         }
+
+        TimeValue t_a, t_b;
+        if (tryGetTime(lv, t_a) && tryGetTime(rv, t_b)) {
+            if (isValidTime(t_a) && isValidTime(t_b)) {
+                result.setValue(i, Value(temporalLess(t_b, t_a)));
+                continue;
+            }
+        }
+
+        DurationValue d_a, d_b;
+        if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
+            int64_t total_a = d_a.months * 30LL * 86400LL * 1000000000LL + d_a.days * 86400LL * 1000000000LL +
+                              d_a.seconds * 1000000000LL + d_a.nanos;
+            int64_t total_b = d_b.months * 30LL * 86400LL * 1000000000LL + d_b.days * 86400LL * 1000000000LL +
+                              d_b.seconds * 1000000000LL + d_b.nanos;
+            result.setValue(i, Value(total_a > total_b));
+            continue;
+        }
+
+        result.setNull(i);
     }
 }
 
@@ -498,16 +534,34 @@ void temporalLteBatch(const Column& left, const Column& right, Column& result, s
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        auto a = valueToTemporal(lv);
-        auto b = valueToTemporal(rv);
-        if (isValidTemporal(a) && isValidTemporal(b)) {
-            if (a.kind == b.kind)
-                result.setValue(i, Value(!temporalLess(b, a)));
-            else
-                result.setNull(i);
-        } else {
-            result.setNull(i);
+
+        DateTimeValue dt_a, dt_b;
+        if (tryGetDateTime(lv, dt_a) && tryGetDateTime(rv, dt_b)) {
+            if (isValidDateTime(dt_a) && isValidDateTime(dt_b)) {
+                result.setValue(i, Value(!temporalLess(dt_b, dt_a)));
+                continue;
+            }
         }
+
+        TimeValue t_a, t_b;
+        if (tryGetTime(lv, t_a) && tryGetTime(rv, t_b)) {
+            if (isValidTime(t_a) && isValidTime(t_b)) {
+                result.setValue(i, Value(!temporalLess(t_b, t_a)));
+                continue;
+            }
+        }
+
+        DurationValue d_a, d_b;
+        if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
+            int64_t total_a = d_a.months * 30LL * 86400LL * 1000000000LL + d_a.days * 86400LL * 1000000000LL +
+                              d_a.seconds * 1000000000LL + d_a.nanos;
+            int64_t total_b = d_b.months * 30LL * 86400LL * 1000000000LL + d_b.days * 86400LL * 1000000000LL +
+                              d_b.seconds * 1000000000LL + d_b.nanos;
+            result.setValue(i, Value(total_a <= total_b));
+            continue;
+        }
+
+        result.setNull(i);
     }
 }
 
@@ -515,16 +569,34 @@ void temporalGteBatch(const Column& left, const Column& right, Column& result, s
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        auto a = valueToTemporal(lv);
-        auto b = valueToTemporal(rv);
-        if (isValidTemporal(a) && isValidTemporal(b)) {
-            if (a.kind == b.kind)
-                result.setValue(i, Value(!temporalLess(a, b)));
-            else
-                result.setNull(i);
-        } else {
-            result.setNull(i);
+
+        DateTimeValue dt_a, dt_b;
+        if (tryGetDateTime(lv, dt_a) && tryGetDateTime(rv, dt_b)) {
+            if (isValidDateTime(dt_a) && isValidDateTime(dt_b)) {
+                result.setValue(i, Value(!temporalLess(dt_a, dt_b)));
+                continue;
+            }
         }
+
+        TimeValue t_a, t_b;
+        if (tryGetTime(lv, t_a) && tryGetTime(rv, t_b)) {
+            if (isValidTime(t_a) && isValidTime(t_b)) {
+                result.setValue(i, Value(!temporalLess(t_a, t_b)));
+                continue;
+            }
+        }
+
+        DurationValue d_a, d_b;
+        if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
+            int64_t total_a = d_a.months * 30LL * 86400LL * 1000000000LL + d_a.days * 86400LL * 1000000000LL +
+                              d_a.seconds * 1000000000LL + d_a.nanos;
+            int64_t total_b = d_b.months * 30LL * 86400LL * 1000000000LL + d_b.days * 86400LL * 1000000000LL +
+                              d_b.seconds * 1000000000LL + d_b.nanos;
+            result.setValue(i, Value(total_a >= total_b));
+            continue;
+        }
+
+        result.setNull(i);
     }
 }
 
@@ -534,22 +606,46 @@ void temporalAddBatch(const Column& left, const Column& right, Column& result, s
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        auto a = valueToTemporal(lv);
-        auto b = valueToTemporal(rv);
-        if (!isValidTemporal(a) || !isValidTemporal(b)) {
-            result.setNull(i);
+
+        bool left_is_duration = std::holds_alternative<DurationValue>(lv);
+        bool right_is_duration = std::holds_alternative<DurationValue>(rv);
+        bool left_is_datetime = std::holds_alternative<DateTimeValue>(lv);
+        bool right_is_datetime = std::holds_alternative<DateTimeValue>(rv);
+        bool left_is_time = std::holds_alternative<TimeValue>(lv);
+        bool right_is_time = std::holds_alternative<TimeValue>(rv);
+
+        // Duration + Duration
+        if (left_is_duration && right_is_duration) {
+            result.setValue(i, Value(addDurations(std::get<DurationValue>(lv), std::get<DurationValue>(rv))));
             continue;
         }
-        bool la = (a.kind == TemporalKind::DURATION);
-        bool lb = (b.kind == TemporalKind::DURATION);
-        if (la && lb)
-            result.setValue(i, Value(addDurations(a, b)));
-        else if (!la && lb)
-            result.setValue(i, Value(addDurationToTemporal(a, b)));
-        else if (la && !lb)
-            result.setValue(i, Value(addDurationToTemporal(b, a)));
-        else
-            result.setNull(i);
+
+        // DateTime + Duration
+        if (left_is_datetime && right_is_duration) {
+            result.setValue(i, Value(addDuration(std::get<DateTimeValue>(lv), std::get<DurationValue>(rv))));
+            continue;
+        }
+
+        // Duration + DateTime
+        if (left_is_duration && right_is_datetime) {
+            result.setValue(i, Value(addDuration(std::get<DateTimeValue>(rv), std::get<DurationValue>(lv))));
+            continue;
+        }
+
+        // Time + Duration
+        if (left_is_time && right_is_duration) {
+            result.setValue(i, Value(addDuration(std::get<TimeValue>(lv), std::get<DurationValue>(rv))));
+            continue;
+        }
+
+        // Duration + Time
+        if (left_is_duration && right_is_time) {
+            result.setValue(i, Value(addDuration(std::get<TimeValue>(rv), std::get<DurationValue>(lv))));
+            continue;
+        }
+
+        // Non-duration + non-duration or mismatched types: null
+        result.setNull(i);
     }
 }
 
@@ -557,22 +653,45 @@ void temporalSubBatch(const Column& left, const Column& right, Column& result, s
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        auto a = valueToTemporal(lv);
-        auto b = valueToTemporal(rv);
-        if (!isValidTemporal(a) || !isValidTemporal(b)) {
-            result.setNull(i);
+
+        bool left_is_duration = std::holds_alternative<DurationValue>(lv);
+        bool right_is_duration = std::holds_alternative<DurationValue>(rv);
+        bool left_is_datetime = std::holds_alternative<DateTimeValue>(lv);
+        bool right_is_datetime = std::holds_alternative<DateTimeValue>(rv);
+        bool left_is_time = std::holds_alternative<TimeValue>(lv);
+        bool right_is_time = std::holds_alternative<TimeValue>(rv);
+
+        // Duration - Duration
+        if (left_is_duration && right_is_duration) {
+            result.setValue(i, Value(subDurations(std::get<DurationValue>(lv), std::get<DurationValue>(rv))));
             continue;
         }
-        bool la = (a.kind == TemporalKind::DURATION);
-        bool lb = (b.kind == TemporalKind::DURATION);
-        if (la && lb)
-            result.setValue(i, Value(subDurations(a, b)));
-        else if (!la && lb)
-            result.setValue(i, Value(subDurationFromTemporal(a, b)));
-        else if (!la && !lb && a.kind == b.kind)
-            result.setValue(i, Value(subtractTemporals(a, b)));
-        else
-            result.setNull(i);
+
+        // DateTime - Duration
+        if (left_is_datetime && right_is_duration) {
+            result.setValue(i, Value(subDuration(std::get<DateTimeValue>(lv), std::get<DurationValue>(rv))));
+            continue;
+        }
+
+        // Time - Duration
+        if (left_is_time && right_is_duration) {
+            result.setValue(i, Value(subDuration(std::get<TimeValue>(lv), std::get<DurationValue>(rv))));
+            continue;
+        }
+
+        // DateTime - DateTime
+        if (left_is_datetime && right_is_datetime) {
+            result.setValue(i, Value(subtractDateTimes(std::get<DateTimeValue>(lv), std::get<DateTimeValue>(rv))));
+            continue;
+        }
+
+        // Time - Time
+        if (left_is_time && right_is_time) {
+            result.setValue(i, Value(subtractTimes(std::get<TimeValue>(lv), std::get<TimeValue>(rv))));
+            continue;
+        }
+
+        result.setNull(i);
     }
 }
 
@@ -580,41 +699,50 @@ void temporalMulBatch(const Column& left, const Column& right, Column& result, s
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        TemporalValue dur;
-        int64_t factor = 0;
         bool got = false;
-        // Try temporal * number
-        auto tv = valueToTemporal(lv);
-        if (isValidTemporal(tv)) {
+        bool use_double = false;
+        double dbl_factor = 0;
+        int64_t int_factor = 0;
+
+        // Try Duration * number
+        if (std::holds_alternative<DurationValue>(lv)) {
             if (std::holds_alternative<int64_t>(rv)) {
-                dur = tv;
-                factor = std::get<int64_t>(rv);
+                int_factor = std::get<int64_t>(rv);
                 got = true;
             } else if (std::holds_alternative<double>(rv)) {
-                dur = tv;
-                factor = static_cast<int64_t>(std::get<double>(rv));
+                dbl_factor = std::get<double>(rv);
+                use_double = true;
                 got = true;
             }
-        }
-        // Try number * temporal
-        if (!got) {
-            tv = valueToTemporal(rv);
-            if (isValidTemporal(tv)) {
-                if (std::holds_alternative<int64_t>(lv)) {
-                    dur = tv;
-                    factor = std::get<int64_t>(lv);
-                    got = true;
-                } else if (std::holds_alternative<double>(lv)) {
-                    dur = tv;
-                    factor = static_cast<int64_t>(std::get<double>(lv));
-                    got = true;
-                }
+            if (got) {
+                if (use_double)
+                    result.setValue(i, Value(mulDuration(std::get<DurationValue>(lv), dbl_factor)));
+                else
+                    result.setValue(i, Value(mulDuration(std::get<DurationValue>(lv), int_factor)));
+                continue;
             }
         }
-        if (got && dur.kind == TemporalKind::DURATION)
-            result.setValue(i, Value(mulDuration(dur, factor)));
-        else
-            result.setNull(i);
+
+        // Try number * Duration
+        if (std::holds_alternative<DurationValue>(rv)) {
+            if (std::holds_alternative<int64_t>(lv)) {
+                int_factor = std::get<int64_t>(lv);
+                got = true;
+            } else if (std::holds_alternative<double>(lv)) {
+                dbl_factor = std::get<double>(lv);
+                use_double = true;
+                got = true;
+            }
+            if (got) {
+                if (use_double)
+                    result.setValue(i, Value(mulDuration(std::get<DurationValue>(rv), dbl_factor)));
+                else
+                    result.setValue(i, Value(mulDuration(std::get<DurationValue>(rv), int_factor)));
+                continue;
+            }
+        }
+
+        result.setNull(i);
     }
 }
 
@@ -622,28 +750,28 @@ void temporalDivBatch(const Column& left, const Column& right, Column& result, s
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        auto dur = valueToTemporal(lv);
-        if (!isValidTemporal(dur)) {
+
+        if (!std::holds_alternative<DurationValue>(lv)) {
             result.setNull(i);
             continue;
         }
-        if (dur.kind != TemporalKind::DURATION) {
+        const auto& dur = std::get<DurationValue>(lv);
+
+        if (std::holds_alternative<int64_t>(rv)) {
+            int64_t divisor = std::get<int64_t>(rv);
+            if (divisor != 0)
+                result.setValue(i, Value(divDuration(dur, divisor)));
+            else
+                result.setNull(i);
+        } else if (std::holds_alternative<double>(rv)) {
+            double divisor = std::get<double>(rv);
+            if (divisor != 0.0)
+                result.setValue(i, Value(divDuration(dur, divisor)));
+            else
+                result.setNull(i);
+        } else {
             result.setNull(i);
-            continue;
         }
-        int64_t divisor = 0;
-        if (std::holds_alternative<int64_t>(rv))
-            divisor = std::get<int64_t>(rv);
-        else if (std::holds_alternative<double>(rv))
-            divisor = static_cast<int64_t>(std::get<double>(rv));
-        else {
-            result.setNull(i);
-            continue;
-        }
-        if (divisor != 0)
-            result.setValue(i, Value(divDuration(dur, divisor)));
-        else
-            result.setNull(i);
     }
 }
 
@@ -670,7 +798,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
     if (op == BO::XOR)
         return boolXorBatch;
 
-    // IN — scalar IN list → bool
+    // IN — scalar IN list -> bool
     if (op == BO::IN)
         return inBatch;
 
@@ -747,8 +875,8 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
     }
 
     // Temporal: accept ANY as temporal (for property round-trip)
-    bool left_temporal = (left_type == BTK::TEMPORAL || left_type == BTK::ANY);
-    bool right_temporal = (right_type == BTK::TEMPORAL || right_type == BTK::ANY);
+    bool left_temporal = (isTemporalType(left_type) || left_type == BTK::ANY);
+    bool right_temporal = (isTemporalType(right_type) || right_type == BTK::ANY);
 
     // Temporal-specific: TEMPORAL + TEMPORAL (or ANY variants)
     if (left_temporal && right_temporal) {
@@ -771,7 +899,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
     }
 
     // Temporal * number  /  Temporal / number  (accept ANY as temporal)
-    if ((left_type == BTK::TEMPORAL || left_type == BTK::ANY) &&
+    if ((isTemporalType(left_type) || left_type == BTK::ANY) &&
         (right_type == BTK::INT64 || right_type == BTK::DOUBLE)) {
         switch (op) {
         case BO::MUL:
@@ -785,7 +913,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
 
     // number * Temporal  (commutative MUL, accept ANY as temporal)
     if ((left_type == BTK::INT64 || left_type == BTK::DOUBLE) &&
-        (right_type == BTK::TEMPORAL || right_type == BTK::ANY)) {
+        (isTemporalType(right_type) || right_type == BTK::ANY)) {
         switch (op) {
         case BO::MUL:
             return temporalMulBatch;

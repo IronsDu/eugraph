@@ -13,6 +13,21 @@ template uint32_t PropertyDefThrift::write<>(apache::thrift::BinaryProtocolWrite
 template uint32_t PropertyDefThrift::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
 template uint32_t PropertyDefThrift::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
 
+template void DateTimeValueThrift::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t DateTimeValueThrift::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t DateTimeValueThrift::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t DateTimeValueThrift::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+
+template void TimeValueThrift::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t TimeValueThrift::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t TimeValueThrift::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t TimeValueThrift::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+
+template void DurationValueThrift::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t DurationValueThrift::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t DurationValueThrift::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t DurationValueThrift::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+
 template void PropertyValueThrift::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
 template uint32_t PropertyValueThrift::write<>(apache::thrift::BinaryProtocolWriter*) const;
 template uint32_t PropertyValueThrift::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;

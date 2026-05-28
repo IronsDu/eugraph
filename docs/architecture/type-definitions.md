@@ -31,10 +31,12 @@ constexpr GraphTxnHandle INVALID_GRAPH_TXN = nullptr;
 
 ```cpp
 using PropertyValue = variant<monostate, bool, int64_t, double, string,
-                              vector<int64_t>, vector<double>, vector<string>>;
+                              vector<int64_t>, vector<double>, vector<string>,
+                              DateTimeValue, TimeValue, DurationValue>;
 using Properties = vector<optional<PropertyValue>>;  // 按 prop_id 索引的稀疏数组
 
-enum class PropertyType { BOOL, INT64, DOUBLE, STRING, INT64_ARRAY, DOUBLE_ARRAY, STRING_ARRAY };
+enum class PropertyType { BOOL, INT64, DOUBLE, STRING, INT64_ARRAY, DOUBLE_ARRAY, STRING_ARRAY,
+                          DATETIME, TIME, DURATION, ANY };
 
 struct PropertyDef {
     uint16_t id = 0;
@@ -131,8 +133,17 @@ struct EdgeValue { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; std
 struct PathValue { std::vector<ValueStorage> elements; };  // 交替序列: [顶点, 边, 顶点, ...]
 struct ListValue { std::vector<ValueStorage> elements; };
 struct MapValue { std::vector<std::pair<ValueStorage, ValueStorage>> entries; };
-struct TemporalValue { TemporalKind kind; int64_t year, month, day, hour, minute, second, nanos; int32_t tz_offset_min; std::string tz_name; int64_t dur_months, dur_days, dur_seconds, dur_nanos; };
-using Value = variant<monostate, bool, int64_t, double, string, VertexValue, EdgeValue, PathValue, TemporalValue, ListValue, MapValue>;
+
+// 时间类型（三种独立类型，取代旧的统一 TemporalValue）
+// 源码：src/common/types/temporal_value.hpp
+enum class DateTimeKind : uint8_t { DATE, LOCAL_DATETIME, DATETIME };
+enum class TimeKind : uint8_t { LOCAL_TIME, TIME };
+struct DateTimeValue { DateTimeKind kind; int64_t year, month, day, hour, minute, second, nanos; int32_t tz_offset_min; std::string tz_name; };
+struct TimeValue { TimeKind kind; int64_t hour, minute, second, nanos; int32_t tz_offset_min; std::string tz_name; };
+struct DurationValue { int64_t months, days, seconds, nanos; };
+
+using Value = variant<monostate, bool, int64_t, double, string, VertexValue, EdgeValue, PathValue,
+                      DateTimeValue, TimeValue, DurationValue, ListValue, MapValue>;
 
 using Row = vector<Value>;         // 位置式行
 using Schema = vector<string>;     // 列名列表

@@ -34,6 +34,12 @@ struct VisitUnion<::eugraph::thrift::PropertyValueThrift> {
       return f(5, *static_cast<T&&>(t).double_array_ref());
     case Union::Type::string_array:
       return f(6, *static_cast<T&&>(t).string_array_ref());
+    case Union::Type::datetime_val:
+      return f(7, *static_cast<T&&>(t).datetime_val_ref());
+    case Union::Type::time_val:
+      return f(8, *static_cast<T&&>(t).time_val_ref());
+    case Union::Type::duration_val:
+      return f(9, *static_cast<T&&>(t).duration_val_ref());
     case Union::Type::__EMPTY__:
       return decltype(f(0, *static_cast<T&&>(t).bool_val_ref()))();
     }

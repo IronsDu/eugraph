@@ -1,10 +1,17 @@
 # TCK 测试结果分类报告
 
 **日期**: 2026-05-28 (更新)
-**分支**: feature/temporal-phase3
+**分支**: fix/temporal-tck-limitations
 **总计**: 3897 场景, 16006 步骤
 **运行耗时**: 10 分 22 秒
 **检测方式**: Parser AST 遍历
+
+### 时间维度 TCK 专项
+
+| 指标 | 修复前 | 修复后 |
+|------|--------|--------|
+| Temporal 场景通过 | 443/1004 (44.1%) | 543/1004 (54.1%) |
+| Temporal 步骤通过 | 2928/4086 (71.7%) | 3128/4086 (76.6%) |
 
 ---
 
@@ -49,94 +56,63 @@
 | 有序比较 (`<`, `>`, `<=`, `>=`) | ✅ 已实现（逐字段比较避免溢出） |
 | 算术运算 (`+`, `-`) | ✅ 已实现（temporal±duration, temporal-temporal, duration±duration） |
 | 乘除运算 (`*`, `/`) | ✅ 已实现（duration ×/÷ number） |
-| ORDER BY 排序 | ✅ 已实现（sort_physical_op 支持 TemporalValue） |
+| ORDER BY 排序 | ✅ 已实现（sort_physical_op 支持 DateTimeValue/TimeValue/DurationValue） |
 
 ### Phase 3 新增
 
 | 功能 | 状态 | TCK 通过率 |
 |------|------|-----------|
-| `truncate()` | ✅ 已实现（全部 15 种精度 + fields map overlay + dayOfWeek/timezone 字段） | 253/322 (78.6%) |
-| `duration.between()` | ✅ 已实现（日历感知月份计算 + days→seconds 折叠） | 12/131 (9.2%) |
-| `duration.inMonths()` | ✅ 已实现 | — |
+| `truncate()` | ✅ 已实现（全部 15 种精度 + fields map overlay + dayOfWeek/timezone 字段） | 263/322 (81.7%) |
+| `duration.between()` | ✅ 已实现（日历感知月份计算 + days→seconds 折叠 + 跨类型 DATETIME/TIME 重载） | 11/131 (8.4%) |
+| `duration.inMonths()` | ✅ 已实现（含跨类型重载） | — |
+| `duration.inSeconds()` / `duration.inDays()` | ✅ 已实现（含跨类型重载） | — |
+| `datetime.fromepoch()` / `datetime.fromepochmillis()` | ✅ 已实现 | — |
+| No-arg 事务/语句/实时钟函数 | ✅ 已实现（date/localtime/time/localdatetime/datetime × transaction/statement/realtime） | — |
+| 跨类型构造函数（如 `date(datetime_value)`） | ✅ 已实现 | — |
+| 截断函数跨类型输入（如 `time.truncate('day', localdatetime(...))`） | ✅ 已实现 | — |
+| 截断 fields map 精度保留 | ✅ 已修复（nanosecond/microsecond/millisecond 字段覆盖不再清零高位） | — |
 | Datetime 格式化优化 | ✅ 秒/纳秒为 0 时省略 `:SS` | — |
-| toString 支持 TemporalValue | ✅ 已实现 | — |
+| toString 支持 DateTimeValue/TimeValue/DurationValue | ✅ 已实现 | — |
 
 ### 已知限制
 
-#### 1. PropertyValue 不支持 TemporalValue（影响 ~52 场景）
+#### 1. ~~PropertyValue 不支持 TemporalValue~~ — ✅ 已修复
 
-Temporal 值作为属性存储时被序列化为 STRING（ISO 8601），读回后丢失类型信息，导致后续操作返回 null。
+TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `DurationValue`），作为 `PropertyValue` variant 的成员，`ValueCodec` 和 Thrift 层均已更新。属性存储后类型信息完整保留。
 
-**根因**: `PropertyValue` variant 不含 `TemporalValue`。`valueToPropertyValue()` 将 TemporalValue 序列化为 string，但 `evalPropertyRef()` 等读回时只能还原为 string。
+#### 2. ~~STRING 解析紧凑格式~~ — ✅ 已修复
 
-**修复路径**: 将 `TemporalValue` 加入 `PropertyValue` variant 并更新 `ValueCodec`/Thrift 层。
+`parseDateFromString()` / `parseTimeStr()` 已扩展支持无分隔符的紧凑格式（YYYY, YYYYDDD, YYYY-DDD, ISO week compact, HHMMSS compact）。
 
-**影响示例**:
+#### 3. ~~DOUBLE 截断~~ — ✅ 已修复
 
-```sql
--- 成员访问器返回 null（Temporal5: 0/7 通过）
-CREATE (:Val {date: date({year: 1984, month: 10, day: 11})})
-MATCH (v:Val) WITH v.date AS d
-RETURN d.year, d.month, d.day  -- 期望 1984, 10, 11  实际 null, null, null
-
--- 算术运算返回 null（Temporal8: 0/27 通过）
-CREATE (:Duration {dur: duration({months: 12})})
-MATCH (d:Duration)
-WITH date({year: 1984, month: 10, day: 11}) AS x, d
-RETURN x + d.dur AS sum  -- 期望 '1985-10-11'  实际 null
-
--- 比较运算返回 null（Temporal7: 0/18 通过）
-CREATE (:Val {d: date({year: 1984, month: 10, day: 11})})
-MATCH (v:Val) WITH v.d AS d
-RETURN d < date({year: 2000, month: 1, day: 1})  -- 期望 true  实际 null
-```
-
-#### 2. STRING 解析紧凑格式（影响 ~32 场景）
-
-部分无分隔符的 temporal 字符串格式尚未实现解析（Temporal2: 21/53 通过）。
-
-**根因**: `parseDateFromString()` / `parseTimeStr()` 仅处理带分隔符的标准 ISO 格式。
-
-**修复路径**: 扩展 `temporal_functions.hpp` 中的字符串解析函数。
-
-**影响示例**:
-
-```sql
-RETURN date('2015W302')     -- 期望 '2015-07-21'  实际 epoch 或错误
-RETURN date('2015-202')     -- 期望 '2015-07-21'  实际 epoch
-RETURN date('2015202')      -- 期望 '2015-07-21'  实际 epoch
-RETURN date('2015')         -- 期望 '2015-01-01'  实际 epoch
-RETURN localtime('214032.142')  -- 期望 '21:40:32.142'  实际 '21:40:00'
-```
-
-#### 3. DOUBLE 截断（影响少量场景）
-
-`duration` 乘除运算中 DOUBLE 因子被截断为 `int64_t`。
-
-**根因**: `temporalMulBatch()` 调用 `mulDuration(dur, int64_t)` 时 double 被 `static_cast<int64_t>` 截断。
-
-**修复路径**: 新增 `mulDuration(TemporalValue, double)` 重载。
-
-**影响示例**:
-
-```sql
-RETURN duration({months: 1}) * 3.5   -- 期望 P3M15D  实际 P3M（3.5 被截断为 3）
-RETURN duration({days: 14}) / 2.5   -- 期望 P5DT14H24M  实际 P7D（2.5 被截断为 2）
-```
+`mulDuration()` / `divDuration()` 已新增 `double` 重载，不再截断为 `int64_t`。
 
 #### 4. 跨 kind 比较（符合语义，非 bug）
 
-`date < duration` 等不同 TemporalKind 的比较返回 NULL，符合 Cypher 语义。不需要修复。
+`date < duration` 等不同时间类别的比较返回 NULL，符合 Cypher 语义。不需要修复。
 
-#### 5. `temporal - temporal` 月份分量（已部分修复）
+#### 5. ~~`temporal - temporal` 月份分量~~ — ✅ 已修复
 
-`duration.between()` 已实现日历反推月份。`subtractTemporals()` 仅含天和亚天分量（`months=0`）。仅影响直接使用 `-` 运算符的场景。
+`subtractDateTimes()` 现已实现日历感知的月份计算，与 `duration.between()` 结果一致。
 
-```sql
-RETURN datetime('2015-07-21T12:00Z') - datetime('1984-10-11T00:00Z')
--- duration.between: P30Y9M10DT12H  ✅
--- subtractTemporals (via -): 仅含 days+seconds, months=0  ❌
-```
+#### 6. 时区命名支持（已知限制，~30 用例）
+
+`tz_offset_min` 仅存储数值偏移量（分钟）。命名时区如 `'Europe/Stockholm'` 无法解析为正确偏移量，需引入 IANA 时区数据库映射。
+
+**影响范围**：Temporal3 [3][10] 等场景中约 30 个用例。
+
+#### 7. 时区秒精度（已知限制，~48 用例）
+
+`tz_offset_min` 为 `int32_t`，仅存储分钟级别偏移。形如 `+02:05:59` 的时区偏移（含秒）会被截断。需将 `tz_offset_min` 改为秒级存储，涉及解析、比较、序列化、格式化约 10 处改动。
+
+**影响范围**：Temporal1 [13] 等场景中约 48 个用例。
+
+#### 8. 时间属性存取往返（已知限制，~40 用例）
+
+时间值通过 `CREATE` 存入属性后，`MATCH` 读出再访问字段（如 `d.year`）返回 null。需排查 KV 编解码 → `PropertyType` 推断 → Binder 类型解析链路中的类型信息丢失。
+
+**影响范围**：Temporal5 全部 7 个 + Temporal4 部分约 33 个用例。
 
 ---
 
@@ -250,7 +226,7 @@ RETURN datetime('2015-07-21T12:00Z') - datetime('1984-10-11T00:00Z')
 |--------|------|-----------|---------|
 | ~~P0~~ | ~~时间日期构造函数 & 成员访问器 & 比较/算术~~ | ~~~800~~ | ✅ 已实现（Phase 1 + Phase 2） |
 | ~~P0~~ | ~~`truncate()` / `duration.between()` / STRING 解析~~ | ~~~500~~ | ✅ 已实现（Phase 3） |
-| **P1** | Temporal 属性往返类型保留 | ~52 | PropertyValue 加入 TemporalValue |
+| **P1** | ~~Temporal 属性往返类型保留~~ | ~~~52~~ | ✅ 已修复（拆分为 DateTimeValue/TimeValue/DurationValue） |
 | **P1** | MERGE | ~80 | MERGE 子句实现 |
 | **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
 | **P2** | 布尔类型检查 | ~48 | 完善逻辑运算符的类型推断 |
@@ -264,6 +240,6 @@ RETURN datetime('2015-07-21T12:00Z') - datetime('1984-10-11T00:00Z')
 ## 已知限制（通用）
 
 - **`properties(Edge)` + 普通 Expand**: `(a)-[r:TYPE]->(b)` 中 `ExpandPhysicalOp` 不加载边属性，`properties(r)` 返回空 map。变长路径的边属性加载已支持。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
-- **PropertyValue 不支持 TemporalValue**：Temporal 值作为属性存储后类型丢失（见分类 1 已知限制）。
-- **紧凑 STRING 格式**：部分无分隔符的 temporal 字符串格式未实现解析（见分类 1 已知限制）。
-- **DOUBLE 截断**：duration 乘除运算中 double 因子被截断为 int64_t（见分类 1 已知限制）。
+- ~~**PropertyValue 不支持 TemporalValue**~~：✅ 已修复，TemporalValue 拆分为 DateTimeValue/TimeValue/DurationValue 三种类型。
+- ~~**紧凑 STRING 格式**~~：✅ 已修复，无分隔符格式已实现。
+- ~~**DOUBLE 截断**~~：✅ 已修复，mul/div Duration 支持 double 因子。

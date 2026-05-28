@@ -161,6 +161,12 @@ inline Value propertyValueToRuntimeValue(const PropertyValue& pv) {
                 for (auto elem : v)
                     lv.elements.push_back(ValueStorage{Value(std::move(elem))});
                 return Value(std::move(lv));
+            } else if constexpr (std::is_same_v<T, DateTimeValue>) {
+                return Value(v);
+            } else if constexpr (std::is_same_v<T, TimeValue>) {
+                return Value(v);
+            } else if constexpr (std::is_same_v<T, DurationValue>) {
+                return Value(v);
             }
         },
         pv);

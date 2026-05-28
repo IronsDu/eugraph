@@ -27,6 +27,12 @@ static PropertyValue valueToPropertyValue(const Value& v) {
         return std::get<double>(v);
     if (std::holds_alternative<std::string>(v))
         return std::get<std::string>(v);
+    if (std::holds_alternative<DateTimeValue>(v))
+        return std::get<DateTimeValue>(v);
+    if (std::holds_alternative<TimeValue>(v))
+        return std::get<TimeValue>(v);
+    if (std::holds_alternative<DurationValue>(v))
+        return std::get<DurationValue>(v);
     return PropertyValue{};
 }
 
@@ -650,6 +656,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                     pt = PropertyType::DOUBLE;
                                 else if (std::holds_alternative<std::string>(lit.value))
                                     pt = PropertyType::STRING;
+                                else if (std::holds_alternative<DateTimeValue>(lit.value))
+                                    pt = PropertyType::DATETIME;
+                                else if (std::holds_alternative<TimeValue>(lit.value))
+                                    pt = PropertyType::TIME;
+                                else if (std::holds_alternative<DurationValue>(lit.value))
+                                    pt = PropertyType::DURATION;
                             }
                             pending_prop_defs.emplace_back(name, pt);
                         }
@@ -696,6 +708,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                 pt = PropertyType::INT64;
                             else if (std::holds_alternative<double>(lit.value))
                                 pt = PropertyType::DOUBLE;
+                            else if (std::holds_alternative<DateTimeValue>(lit.value))
+                                pt = PropertyType::DATETIME;
+                            else if (std::holds_alternative<TimeValue>(lit.value))
+                                pt = PropertyType::TIME;
+                            else if (std::holds_alternative<DurationValue>(lit.value))
+                                pt = PropertyType::DURATION;
                         }
                         pending_prop_defs.emplace_back(name, pt);
                     }

@@ -2,8 +2,8 @@
 
 #include "query/parser/ast.hpp"
 #include "query/parser/cypher_parser.hpp"
+#include "thrift_fmt/result_format.hpp"
 
-#include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -361,7 +361,7 @@ void TckContext::executeQuery(const std::string& query) {
                 for (const auto& row : *batch->rows()) {
                     std::vector<std::string> tckRow;
                     for (const auto& val : *row.values()) {
-                        tckRow.push_back(formatValue(val));
+                        tckRow.push_back(thrift_fmt::formatResultValue(val));
                     }
                     lastRows.push_back(std::move(tckRow));
                 }
@@ -527,148 +527,6 @@ GraphSnapshot TckContext::takeSnapshot() {
     snap.propertyCount = vprop_count + eprop_count;
 
     return snap;
-}
-
-// ---------- Value formatting (TCK format) ----------
-
-std::string TckContext::formatValue(const thrift::ResultValue& val) {
-    switch (val.getType()) {
-    case thrift::ResultValue::Type::bool_val:
-        return val.get_bool_val() ? "true" : "false";
-
-    case thrift::ResultValue::Type::int_val:
-        return std::to_string(val.get_int_val());
-
-    case thrift::ResultValue::Type::double_val: {
-        double d = val.get_double_val();
-        std::ostringstream oss;
-        oss << d;
-        return oss.str();
-    }
-
-    case thrift::ResultValue::Type::string_val:
-        return "'" + val.get_string_val() + "'";
-
-    case thrift::ResultValue::Type::vertex_json:
-        return convertVertexJson(val.get_vertex_json());
-
-    case thrift::ResultValue::Type::edge_json:
-        return convertEdgeJson(val.get_edge_json());
-
-    case thrift::ResultValue::Type::path_json:
-        return val.get_path_json(); // Server already formats path
-
-    case thrift::ResultValue::Type::list_json:
-        return val.get_list_json(); // JSON array format
-
-    case thrift::ResultValue::Type::map_json:
-        return val.get_map_json(); // JSON object format
-
-    default:
-        return "null";
-    }
-}
-
-// Convert vertex JSON {"id":1,"label":"Person","name":"Alice"} → (:Person {name: 'Alice'})
-std::string TckContext::convertVertexJson(const std::string& json) {
-    if (json.empty())
-        return "()";
-    try {
-        auto j = nlohmann::json::parse(json);
-        std::ostringstream oss;
-        oss << "(";
-        if (j.contains("label") && j["label"].is_string()) {
-            oss << ":" << j["label"].get<std::string>();
-        }
-        // Collect properties (all keys except id and label)
-        std::vector<std::pair<std::string, std::string>> props;
-        for (auto& [key, value] : j.items()) {
-            if (key == "id" || key == "label")
-                continue;
-            std::string formattedVal;
-            if (value.is_string()) {
-                formattedVal = "'" + value.get<std::string>() + "'";
-            } else if (value.is_number_integer()) {
-                formattedVal = std::to_string(value.get<int64_t>());
-            } else if (value.is_number_float()) {
-                std::ostringstream dss;
-                dss << value.get<double>();
-                formattedVal = dss.str();
-            } else if (value.is_boolean()) {
-                formattedVal = value.get<bool>() ? "true" : "false";
-            } else if (value.is_null()) {
-                formattedVal = "null";
-            } else if (value.is_array()) {
-                formattedVal = value.dump();
-            } else {
-                formattedVal = value.dump();
-            }
-            props.emplace_back(key, formattedVal);
-        }
-        if (!props.empty()) {
-            oss << " {";
-            for (size_t i = 0; i < props.size(); ++i) {
-                if (i > 0)
-                    oss << ", ";
-                oss << props[i].first << ": " << props[i].second;
-            }
-            oss << "}";
-        }
-        oss << ")";
-        return oss.str();
-    } catch (...) {
-        return "()";
-    }
-}
-
-// Convert edge JSON {"id":1,"src":1,"dst":2,"label":"KNOWS"} → [:KNOWS]
-std::string TckContext::convertEdgeJson(const std::string& json) {
-    if (json.empty())
-        return "[]";
-    try {
-        auto j = nlohmann::json::parse(json);
-        std::ostringstream oss;
-        oss << "[";
-        if (j.contains("label") && j["label"].is_string()) {
-            oss << ":" << j["label"].get<std::string>();
-        }
-        // Properties
-        std::vector<std::pair<std::string, std::string>> props;
-        for (auto& [key, value] : j.items()) {
-            if (key == "id" || key == "src" || key == "dst" || key == "label")
-                continue;
-            std::string formattedVal;
-            if (value.is_string()) {
-                formattedVal = "'" + value.get<std::string>() + "'";
-            } else if (value.is_number_integer()) {
-                formattedVal = std::to_string(value.get<int64_t>());
-            } else if (value.is_number_float()) {
-                std::ostringstream dss;
-                dss << value.get<double>();
-                formattedVal = dss.str();
-            } else if (value.is_boolean()) {
-                formattedVal = value.get<bool>() ? "true" : "false";
-            } else if (value.is_null()) {
-                formattedVal = "null";
-            } else {
-                formattedVal = value.dump();
-            }
-            props.emplace_back(key, formattedVal);
-        }
-        if (!props.empty()) {
-            oss << " {";
-            for (size_t i = 0; i < props.size(); ++i) {
-                if (i > 0)
-                    oss << ", ";
-                oss << props[i].first << ": " << props[i].second;
-            }
-            oss << "}";
-        }
-        oss << "]";
-        return oss.str();
-    } catch (...) {
-        return "[]";
-    }
 }
 
 // ---------- Type inference from query text ----------

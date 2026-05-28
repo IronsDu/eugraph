@@ -14,6 +14,27 @@ namespace ident {
 struct name;
 struct type;
 struct is_required;
+struct kind;
+struct year;
+struct month;
+struct day;
+struct hour;
+struct minute;
+struct second;
+struct nanos;
+struct tz_offset_min;
+struct tz_name;
+struct kind;
+struct hour;
+struct minute;
+struct second;
+struct nanos;
+struct tz_offset_min;
+struct tz_name;
+struct months;
+struct days;
+struct seconds;
+struct nanos;
 struct bool_val;
 struct int_val;
 struct double_val;
@@ -21,6 +42,9 @@ struct string_val;
 struct int_array;
 struct double_array;
 struct string_array;
+struct datetime_val;
+struct time_val;
+struct duration_val;
 struct id;
 struct name;
 struct properties;
@@ -63,6 +87,90 @@ APACHE_THRIFT_DEFINE_ACCESSOR(type);
 #define APACHE_THRIFT_ACCESSOR_is_required
 APACHE_THRIFT_DEFINE_ACCESSOR(is_required);
 #endif
+#ifndef APACHE_THRIFT_ACCESSOR_kind
+#define APACHE_THRIFT_ACCESSOR_kind
+APACHE_THRIFT_DEFINE_ACCESSOR(kind);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_year
+#define APACHE_THRIFT_ACCESSOR_year
+APACHE_THRIFT_DEFINE_ACCESSOR(year);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_month
+#define APACHE_THRIFT_ACCESSOR_month
+APACHE_THRIFT_DEFINE_ACCESSOR(month);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_day
+#define APACHE_THRIFT_ACCESSOR_day
+APACHE_THRIFT_DEFINE_ACCESSOR(day);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_hour
+#define APACHE_THRIFT_ACCESSOR_hour
+APACHE_THRIFT_DEFINE_ACCESSOR(hour);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_minute
+#define APACHE_THRIFT_ACCESSOR_minute
+APACHE_THRIFT_DEFINE_ACCESSOR(minute);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_second
+#define APACHE_THRIFT_ACCESSOR_second
+APACHE_THRIFT_DEFINE_ACCESSOR(second);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_nanos
+#define APACHE_THRIFT_ACCESSOR_nanos
+APACHE_THRIFT_DEFINE_ACCESSOR(nanos);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_tz_offset_min
+#define APACHE_THRIFT_ACCESSOR_tz_offset_min
+APACHE_THRIFT_DEFINE_ACCESSOR(tz_offset_min);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_tz_name
+#define APACHE_THRIFT_ACCESSOR_tz_name
+APACHE_THRIFT_DEFINE_ACCESSOR(tz_name);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_kind
+#define APACHE_THRIFT_ACCESSOR_kind
+APACHE_THRIFT_DEFINE_ACCESSOR(kind);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_hour
+#define APACHE_THRIFT_ACCESSOR_hour
+APACHE_THRIFT_DEFINE_ACCESSOR(hour);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_minute
+#define APACHE_THRIFT_ACCESSOR_minute
+APACHE_THRIFT_DEFINE_ACCESSOR(minute);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_second
+#define APACHE_THRIFT_ACCESSOR_second
+APACHE_THRIFT_DEFINE_ACCESSOR(second);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_nanos
+#define APACHE_THRIFT_ACCESSOR_nanos
+APACHE_THRIFT_DEFINE_ACCESSOR(nanos);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_tz_offset_min
+#define APACHE_THRIFT_ACCESSOR_tz_offset_min
+APACHE_THRIFT_DEFINE_ACCESSOR(tz_offset_min);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_tz_name
+#define APACHE_THRIFT_ACCESSOR_tz_name
+APACHE_THRIFT_DEFINE_ACCESSOR(tz_name);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_months
+#define APACHE_THRIFT_ACCESSOR_months
+APACHE_THRIFT_DEFINE_ACCESSOR(months);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_days
+#define APACHE_THRIFT_ACCESSOR_days
+APACHE_THRIFT_DEFINE_ACCESSOR(days);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_seconds
+#define APACHE_THRIFT_ACCESSOR_seconds
+APACHE_THRIFT_DEFINE_ACCESSOR(seconds);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_nanos
+#define APACHE_THRIFT_ACCESSOR_nanos
+APACHE_THRIFT_DEFINE_ACCESSOR(nanos);
+#endif
 #ifndef APACHE_THRIFT_ACCESSOR_bool_val
 #define APACHE_THRIFT_ACCESSOR_bool_val
 APACHE_THRIFT_DEFINE_ACCESSOR(bool_val);
@@ -90,6 +198,18 @@ APACHE_THRIFT_DEFINE_ACCESSOR(double_array);
 #ifndef APACHE_THRIFT_ACCESSOR_string_array
 #define APACHE_THRIFT_ACCESSOR_string_array
 APACHE_THRIFT_DEFINE_ACCESSOR(string_array);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_datetime_val
+#define APACHE_THRIFT_ACCESSOR_datetime_val
+APACHE_THRIFT_DEFINE_ACCESSOR(datetime_val);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_time_val
+#define APACHE_THRIFT_ACCESSOR_time_val
+APACHE_THRIFT_DEFINE_ACCESSOR(time_val);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_duration_val
+#define APACHE_THRIFT_ACCESSOR_duration_val
+APACHE_THRIFT_DEFINE_ACCESSOR(duration_val);
 #endif
 #ifndef APACHE_THRIFT_ACCESSOR_id
 #define APACHE_THRIFT_ACCESSOR_id
@@ -218,19 +338,39 @@ enum class PropertyType {
   INT64_ARRAY = 5,
   DOUBLE_ARRAY = 6,
   STRING_ARRAY = 7,
+  DATETIME = 8,
+  TIME = 9,
+  DURATION = 10,
+};
+
+/** Glean {"file": "proto/eugraph.thrift", "name": "DateTimeKind", "kind": "enum" } */
+enum class DateTimeKind {
+  DATE = 1,
+  LOCAL_DATETIME = 2,
+  DATETIME_WITH_TZ = 3,
+};
+
+/** Glean {"file": "proto/eugraph.thrift", "name": "TimeKind", "kind": "enum" } */
+enum class TimeKind {
+  LOCAL_TIME = 1,
+  TIME_WITH_TZ = 2,
 };
 
 } // namespace eugraph::thrift
 
 template<> struct std::hash<::eugraph::thrift::PropertyType> :
   ::apache::thrift::detail::enum_hash<::eugraph::thrift::PropertyType> {};
+template<> struct std::hash<::eugraph::thrift::DateTimeKind> :
+  ::apache::thrift::detail::enum_hash<::eugraph::thrift::DateTimeKind> {};
+template<> struct std::hash<::eugraph::thrift::TimeKind> :
+  ::apache::thrift::detail::enum_hash<::eugraph::thrift::TimeKind> {};
 
 namespace apache::thrift {
 
 template <> struct TEnumTraits<::eugraph::thrift::PropertyType> {
   using type = ::eugraph::thrift::PropertyType;
 
-  static constexpr std::size_t const size = 7;
+  static constexpr std::size_t const size = 10;
   static folly::Range<type const*> const values;
   static folly::Range<std::string_view const*> const names;
   static const std::string_view __fbthrift_module_name_internal_do_not_use;
@@ -252,7 +392,63 @@ template <> struct TEnumTraits<::eugraph::thrift::PropertyType> {
     return ret.data();
   }
   static constexpr type min() { return type::BOOL; }
-  static constexpr type max() { return type::STRING_ARRAY; }
+  static constexpr type max() { return type::DURATION; }
+};
+
+template <> struct TEnumTraits<::eugraph::thrift::DateTimeKind> {
+  using type = ::eugraph::thrift::DateTimeKind;
+
+  static constexpr std::size_t const size = 3;
+  static folly::Range<type const*> const values;
+  static folly::Range<std::string_view const*> const names;
+  static const std::string_view __fbthrift_module_name_internal_do_not_use;
+
+  static bool findName(type value, std::string_view* out) noexcept;
+  static bool findValue(std::string_view name, type* out) noexcept;
+
+  FOLLY_ERASE static std::string_view typeName() noexcept {
+    return "DateTimeKind";
+  }
+
+  FOLLY_ERASE static constexpr std::string_view moduleName() noexcept {
+    return "eugraph";
+  }
+
+  static char const* findName(type value) noexcept {
+    std::string_view ret;
+    (void)findName(value, &ret);
+    return ret.data();
+  }
+  static constexpr type min() { return type::DATE; }
+  static constexpr type max() { return type::DATETIME_WITH_TZ; }
+};
+
+template <> struct TEnumTraits<::eugraph::thrift::TimeKind> {
+  using type = ::eugraph::thrift::TimeKind;
+
+  static constexpr std::size_t const size = 2;
+  static folly::Range<type const*> const values;
+  static folly::Range<std::string_view const*> const names;
+  static const std::string_view __fbthrift_module_name_internal_do_not_use;
+
+  static bool findName(type value, std::string_view* out) noexcept;
+  static bool findValue(std::string_view name, type* out) noexcept;
+
+  FOLLY_ERASE static std::string_view typeName() noexcept {
+    return "TimeKind";
+  }
+
+  FOLLY_ERASE static constexpr std::string_view moduleName() noexcept {
+    return "eugraph";
+  }
+
+  static char const* findName(type value) noexcept {
+    std::string_view ret;
+    (void)findName(value, &ret);
+    return ret.data();
+  }
+  static constexpr type min() { return type::LOCAL_TIME; }
+  static constexpr type max() { return type::TIME_WITH_TZ; }
 };
 
 } // namespace apache::thrift
@@ -260,6 +456,9 @@ template <> struct TEnumTraits<::eugraph::thrift::PropertyType> {
 // BEGIN forward_declare
 namespace eugraph::thrift {
 class PropertyDefThrift;
+class DateTimeValueThrift;
+class TimeValueThrift;
+class DurationValueThrift;
 class PropertyValueThrift;
 class LabelInfo;
 class EdgeLabelInfo;
@@ -531,8 +730,587 @@ unsigned long PropertyDefThrift::read(Protocol_* iprot) {
 }
 
 
-/** Glean {"file": "proto/eugraph.thrift", "name": "PropertyValueThrift", "kind": "union" } */
-class PropertyValueThrift final  {
+/** Glean {"file": "proto/eugraph.thrift", "name": "DateTimeValueThrift", "kind": "struct" } */
+class DateTimeValueThrift final  {
+ private:
+  friend struct ::apache::thrift::detail::st::struct_private_access;
+  template<class> friend struct ::apache::thrift::detail::invoke_reffer;
+
+  //  used by a static_assert in the corresponding source
+  static constexpr bool __fbthrift_cpp2_gen_json = false;
+  static constexpr bool __fbthrift_cpp2_is_runtime_annotation = false;
+  static std::string_view __fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord);
+  static std::string_view __fbthrift_get_class_name();
+  template <class ...>
+  FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
+    return "eugraph";
+  }
+  static constexpr std::size_t __fbthrift_num_fields = 10;
+
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3,4,5,6,7,8,9,10};
+
+  using __fbthrift_reflection_idents = folly::tag_t<
+    ::apache::thrift::ident::kind,
+    ::apache::thrift::ident::year,
+    ::apache::thrift::ident::month,
+    ::apache::thrift::ident::day,
+    ::apache::thrift::ident::hour,
+    ::apache::thrift::ident::minute,
+    ::apache::thrift::ident::second,
+    ::apache::thrift::ident::nanos,
+    ::apache::thrift::ident::tz_offset_min,
+    ::apache::thrift::ident::tz_name
+  >;
+
+  using __fbthrift_reflection_type_tags = folly::tag_t<
+    ::apache::thrift::type::enum_t<::eugraph::thrift::DateTimeKind>,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i32_t,
+    ::apache::thrift::type::string_t
+  >;
+  void __fbthrift_clear();
+  void __fbthrift_clear_terse_fields();
+  bool __fbthrift_is_empty() const;
+
+ public:
+  using __fbthrift_cpp2_type = DateTimeValueThrift;
+  static constexpr bool __fbthrift_cpp2_is_union =
+    false;
+  static constexpr bool __fbthrift_cpp2_uses_op_encode =
+    false;
+
+
+ public:
+
+  DateTimeValueThrift();
+
+  // FragileConstructor for use in initialization lists only.
+  [[deprecated("This constructor is deprecated")]]
+  DateTimeValueThrift(apache::thrift::FragileConstructor, ::eugraph::thrift::DateTimeKind kind__arg, ::std::int64_t year__arg, ::std::int64_t month__arg, ::std::int64_t day__arg, ::std::int64_t hour__arg, ::std::int64_t minute__arg, ::std::int64_t second__arg, ::std::int64_t nanos__arg, ::std::int32_t tz_offset_min__arg, ::std::string tz_name__arg);
+
+  DateTimeValueThrift(DateTimeValueThrift&&) noexcept;
+
+  DateTimeValueThrift(const DateTimeValueThrift& src);
+
+
+  DateTimeValueThrift& operator=(DateTimeValueThrift&&) noexcept;
+  DateTimeValueThrift& operator=(const DateTimeValueThrift& src);
+
+  ~DateTimeValueThrift();
+
+ private:
+  ::eugraph::thrift::DateTimeKind __fbthrift_field_kind;
+ private:
+  ::std::int64_t __fbthrift_field_year;
+ private:
+  ::std::int64_t __fbthrift_field_month;
+ private:
+  ::std::int64_t __fbthrift_field_day;
+ private:
+  ::std::int64_t __fbthrift_field_hour;
+ private:
+  ::std::int64_t __fbthrift_field_minute;
+ private:
+  ::std::int64_t __fbthrift_field_second;
+ private:
+  ::std::int64_t __fbthrift_field_nanos;
+ private:
+  ::std::int32_t __fbthrift_field_tz_offset_min;
+ private:
+  ::std::string __fbthrift_field_tz_name;
+ private:
+  apache::thrift::detail::isset_bitset<10, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+
+ public:
+
+  bool operator==(const DateTimeValueThrift&) const;
+  bool operator<(const DateTimeValueThrift&) const;
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::DateTimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> kind_ref() const& {
+    return {this->__fbthrift_field_kind, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::DateTimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> kind_ref() & {
+    return {this->__fbthrift_field_kind, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::DateTimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> kind_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_kind), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::DateTimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> kind() const& {
+    return {this->__fbthrift_field_kind, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::DateTimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> kind() & {
+    return {this->__fbthrift_field_kind, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::DateTimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> kind() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_kind), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "year" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> year_ref() const& {
+    return {this->__fbthrift_field_year, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "year" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> year_ref() & {
+    return {this->__fbthrift_field_year, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "year" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> year_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_year), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "year" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> year() const& {
+    return {this->__fbthrift_field_year, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "year" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> year() & {
+    return {this->__fbthrift_field_year, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "year" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> year() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_year), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "month" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> month_ref() const& {
+    return {this->__fbthrift_field_month, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "month" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> month_ref() & {
+    return {this->__fbthrift_field_month, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "month" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> month_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_month), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "month" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> month() const& {
+    return {this->__fbthrift_field_month, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "month" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> month() & {
+    return {this->__fbthrift_field_month, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "month" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> month() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_month), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "day" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> day_ref() const& {
+    return {this->__fbthrift_field_day, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "day" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> day_ref() & {
+    return {this->__fbthrift_field_day, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "day" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> day_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_day), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "day" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> day() const& {
+    return {this->__fbthrift_field_day, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "day" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> day() & {
+    return {this->__fbthrift_field_day, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "day" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> day() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_day), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> hour_ref() const& {
+    return {this->__fbthrift_field_hour, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> hour_ref() & {
+    return {this->__fbthrift_field_hour, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> hour_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_hour), __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> hour() const& {
+    return {this->__fbthrift_field_hour, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> hour() & {
+    return {this->__fbthrift_field_hour, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> hour() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_hour), __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> minute_ref() const& {
+    return {this->__fbthrift_field_minute, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> minute_ref() & {
+    return {this->__fbthrift_field_minute, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> minute_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_minute), __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> minute() const& {
+    return {this->__fbthrift_field_minute, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> minute() & {
+    return {this->__fbthrift_field_minute, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> minute() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_minute), __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> second_ref() const& {
+    return {this->__fbthrift_field_second, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> second_ref() & {
+    return {this->__fbthrift_field_second, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> second_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_second), __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> second() const& {
+    return {this->__fbthrift_field_second, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> second() & {
+    return {this->__fbthrift_field_second, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> second() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_second), __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> nanos_ref() const& {
+    return {this->__fbthrift_field_nanos, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> nanos_ref() & {
+    return {this->__fbthrift_field_nanos, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> nanos_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_nanos), __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> nanos() const& {
+    return {this->__fbthrift_field_nanos, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> nanos() & {
+    return {this->__fbthrift_field_nanos, __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> nanos() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_nanos), __isset.at(7), __isset.bit(7)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> tz_offset_min_ref() const& {
+    return {this->__fbthrift_field_tz_offset_min, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> tz_offset_min_ref() & {
+    return {this->__fbthrift_field_tz_offset_min, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> tz_offset_min_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_tz_offset_min), __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> tz_offset_min() const& {
+    return {this->__fbthrift_field_tz_offset_min, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> tz_offset_min() & {
+    return {this->__fbthrift_field_tz_offset_min, __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> tz_offset_min() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_tz_offset_min), __isset.at(8), __isset.bit(8)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> tz_name_ref() const& {
+    return {this->__fbthrift_field_tz_name, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> tz_name_ref() & {
+    return {this->__fbthrift_field_tz_name, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> tz_name_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_tz_name), __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> tz_name() const& {
+    return {this->__fbthrift_field_tz_name, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> tz_name() & {
+    return {this->__fbthrift_field_tz_name, __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> tz_name() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_tz_name), __isset.at(9), __isset.bit(9)};
+  }
+
+  /** Glean { "field": "kind" } */
+  [[deprecated("Use `FOO.kind().value()` instead of `FOO.get_kind()`")]]
+  ::eugraph::thrift::DateTimeKind get_kind() const;
+
+  /** Glean { "field": "kind" } */
+  [[deprecated("Use `FOO.kind() = BAR` instead of `FOO.set_kind(BAR)`")]]
+  ::eugraph::thrift::DateTimeKind& set_kind(::eugraph::thrift::DateTimeKind kind_);
+
+  /** Glean { "field": "year" } */
+  [[deprecated("Use `FOO.year().value()` instead of `FOO.get_year()`")]]
+  ::std::int64_t get_year() const;
+
+  /** Glean { "field": "year" } */
+  [[deprecated("Use `FOO.year() = BAR` instead of `FOO.set_year(BAR)`")]]
+  ::std::int64_t& set_year(::std::int64_t year_);
+
+  /** Glean { "field": "month" } */
+  [[deprecated("Use `FOO.month().value()` instead of `FOO.get_month()`")]]
+  ::std::int64_t get_month() const;
+
+  /** Glean { "field": "month" } */
+  [[deprecated("Use `FOO.month() = BAR` instead of `FOO.set_month(BAR)`")]]
+  ::std::int64_t& set_month(::std::int64_t month_);
+
+  /** Glean { "field": "day" } */
+  [[deprecated("Use `FOO.day().value()` instead of `FOO.get_day()`")]]
+  ::std::int64_t get_day() const;
+
+  /** Glean { "field": "day" } */
+  [[deprecated("Use `FOO.day() = BAR` instead of `FOO.set_day(BAR)`")]]
+  ::std::int64_t& set_day(::std::int64_t day_);
+
+  /** Glean { "field": "hour" } */
+  [[deprecated("Use `FOO.hour().value()` instead of `FOO.get_hour()`")]]
+  ::std::int64_t get_hour() const;
+
+  /** Glean { "field": "hour" } */
+  [[deprecated("Use `FOO.hour() = BAR` instead of `FOO.set_hour(BAR)`")]]
+  ::std::int64_t& set_hour(::std::int64_t hour_);
+
+  /** Glean { "field": "minute" } */
+  [[deprecated("Use `FOO.minute().value()` instead of `FOO.get_minute()`")]]
+  ::std::int64_t get_minute() const;
+
+  /** Glean { "field": "minute" } */
+  [[deprecated("Use `FOO.minute() = BAR` instead of `FOO.set_minute(BAR)`")]]
+  ::std::int64_t& set_minute(::std::int64_t minute_);
+
+  /** Glean { "field": "second" } */
+  [[deprecated("Use `FOO.second().value()` instead of `FOO.get_second()`")]]
+  ::std::int64_t get_second() const;
+
+  /** Glean { "field": "second" } */
+  [[deprecated("Use `FOO.second() = BAR` instead of `FOO.set_second(BAR)`")]]
+  ::std::int64_t& set_second(::std::int64_t second_);
+
+  /** Glean { "field": "nanos" } */
+  [[deprecated("Use `FOO.nanos().value()` instead of `FOO.get_nanos()`")]]
+  ::std::int64_t get_nanos() const;
+
+  /** Glean { "field": "nanos" } */
+  [[deprecated("Use `FOO.nanos() = BAR` instead of `FOO.set_nanos(BAR)`")]]
+  ::std::int64_t& set_nanos(::std::int64_t nanos_);
+
+  /** Glean { "field": "tz_offset_min" } */
+  [[deprecated("Use `FOO.tz_offset_min().value()` instead of `FOO.get_tz_offset_min()`")]]
+  ::std::int32_t get_tz_offset_min() const;
+
+  /** Glean { "field": "tz_offset_min" } */
+  [[deprecated("Use `FOO.tz_offset_min() = BAR` instead of `FOO.set_tz_offset_min(BAR)`")]]
+  ::std::int32_t& set_tz_offset_min(::std::int32_t tz_offset_min_);
+
+  /** Glean { "field": "tz_name" } */
+  [[deprecated("Use `FOO.tz_name().value()` instead of `FOO.get_tz_name()`")]]
+  const ::std::string& get_tz_name() const& {
+    return __fbthrift_field_tz_name;
+  }
+
+  /** Glean { "field": "tz_name" } */
+  [[deprecated("Use `FOO.tz_name().value()` instead of `FOO.get_tz_name()`")]]
+  ::std::string get_tz_name() && {
+    return static_cast<::std::string&&>(__fbthrift_field_tz_name);
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename T_DateTimeValueThrift_tz_name_struct_setter = ::std::string>
+  [[deprecated("Use `FOO.tz_name() = BAR` instead of `FOO.set_tz_name(BAR)`")]]
+  ::std::string& set_tz_name(T_DateTimeValueThrift_tz_name_struct_setter&& tz_name_) {
+    tz_name_ref() = std::forward<T_DateTimeValueThrift_tz_name_struct_setter>(tz_name_);
+    return __fbthrift_field_tz_name;
+  }
+
+  template <class Protocol_>
+  unsigned long read(Protocol_* iprot);
+  template <class Protocol_>
+  uint32_t serializedSize(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t serializedSizeZC(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t write(Protocol_* prot_) const;
+
+ private:
+  template <class Protocol_>
+  void readNoXfer(Protocol_* iprot);
+
+  friend class ::apache::thrift::Cpp2Ops<DateTimeValueThrift>;
+  friend void swap(DateTimeValueThrift& a, DateTimeValueThrift& b);
+};
+
+template <class Protocol_>
+unsigned long DateTimeValueThrift::read(Protocol_* iprot) {
+  auto _xferStart = iprot->getCursorPosition();
+  readNoXfer(iprot);
+  return iprot->getCursorPosition() - _xferStart;
+}
+
+
+/** Glean {"file": "proto/eugraph.thrift", "name": "TimeValueThrift", "kind": "struct" } */
+class TimeValueThrift final  {
  private:
   friend struct ::apache::thrift::detail::st::struct_private_access;
   template<class> friend struct ::apache::thrift::detail::invoke_reffer;
@@ -551,13 +1329,732 @@ class PropertyValueThrift final  {
   static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3,4,5,6,7};
 
   using __fbthrift_reflection_idents = folly::tag_t<
+    ::apache::thrift::ident::kind,
+    ::apache::thrift::ident::hour,
+    ::apache::thrift::ident::minute,
+    ::apache::thrift::ident::second,
+    ::apache::thrift::ident::nanos,
+    ::apache::thrift::ident::tz_offset_min,
+    ::apache::thrift::ident::tz_name
+  >;
+
+  using __fbthrift_reflection_type_tags = folly::tag_t<
+    ::apache::thrift::type::enum_t<::eugraph::thrift::TimeKind>,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i32_t,
+    ::apache::thrift::type::string_t
+  >;
+  void __fbthrift_clear();
+  void __fbthrift_clear_terse_fields();
+  bool __fbthrift_is_empty() const;
+
+ public:
+  using __fbthrift_cpp2_type = TimeValueThrift;
+  static constexpr bool __fbthrift_cpp2_is_union =
+    false;
+  static constexpr bool __fbthrift_cpp2_uses_op_encode =
+    false;
+
+
+ public:
+
+  TimeValueThrift();
+
+  // FragileConstructor for use in initialization lists only.
+  [[deprecated("This constructor is deprecated")]]
+  TimeValueThrift(apache::thrift::FragileConstructor, ::eugraph::thrift::TimeKind kind__arg, ::std::int64_t hour__arg, ::std::int64_t minute__arg, ::std::int64_t second__arg, ::std::int64_t nanos__arg, ::std::int32_t tz_offset_min__arg, ::std::string tz_name__arg);
+
+  TimeValueThrift(TimeValueThrift&&) noexcept;
+
+  TimeValueThrift(const TimeValueThrift& src);
+
+
+  TimeValueThrift& operator=(TimeValueThrift&&) noexcept;
+  TimeValueThrift& operator=(const TimeValueThrift& src);
+
+  ~TimeValueThrift();
+
+ private:
+  ::eugraph::thrift::TimeKind __fbthrift_field_kind;
+ private:
+  ::std::int64_t __fbthrift_field_hour;
+ private:
+  ::std::int64_t __fbthrift_field_minute;
+ private:
+  ::std::int64_t __fbthrift_field_second;
+ private:
+  ::std::int64_t __fbthrift_field_nanos;
+ private:
+  ::std::int32_t __fbthrift_field_tz_offset_min;
+ private:
+  ::std::string __fbthrift_field_tz_name;
+ private:
+  apache::thrift::detail::isset_bitset<7, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+
+ public:
+
+  bool operator==(const TimeValueThrift&) const;
+  bool operator<(const TimeValueThrift&) const;
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::TimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> kind_ref() const& {
+    return {this->__fbthrift_field_kind, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::TimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> kind_ref() & {
+    return {this->__fbthrift_field_kind, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::TimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> kind_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_kind), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::TimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> kind() const& {
+    return {this->__fbthrift_field_kind, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::TimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> kind() & {
+    return {this->__fbthrift_field_kind, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "kind" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift::TimeKind>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> kind() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_kind), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> hour_ref() const& {
+    return {this->__fbthrift_field_hour, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> hour_ref() & {
+    return {this->__fbthrift_field_hour, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> hour_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_hour), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> hour() const& {
+    return {this->__fbthrift_field_hour, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> hour() & {
+    return {this->__fbthrift_field_hour, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "hour" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> hour() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_hour), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> minute_ref() const& {
+    return {this->__fbthrift_field_minute, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> minute_ref() & {
+    return {this->__fbthrift_field_minute, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> minute_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_minute), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> minute() const& {
+    return {this->__fbthrift_field_minute, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> minute() & {
+    return {this->__fbthrift_field_minute, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "minute" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> minute() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_minute), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> second_ref() const& {
+    return {this->__fbthrift_field_second, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> second_ref() & {
+    return {this->__fbthrift_field_second, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> second_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_second), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> second() const& {
+    return {this->__fbthrift_field_second, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> second() & {
+    return {this->__fbthrift_field_second, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "second" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> second() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_second), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> nanos_ref() const& {
+    return {this->__fbthrift_field_nanos, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> nanos_ref() & {
+    return {this->__fbthrift_field_nanos, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> nanos_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_nanos), __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> nanos() const& {
+    return {this->__fbthrift_field_nanos, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> nanos() & {
+    return {this->__fbthrift_field_nanos, __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> nanos() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_nanos), __isset.at(4), __isset.bit(4)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> tz_offset_min_ref() const& {
+    return {this->__fbthrift_field_tz_offset_min, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> tz_offset_min_ref() & {
+    return {this->__fbthrift_field_tz_offset_min, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> tz_offset_min_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_tz_offset_min), __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> tz_offset_min() const& {
+    return {this->__fbthrift_field_tz_offset_min, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> tz_offset_min() & {
+    return {this->__fbthrift_field_tz_offset_min, __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "tz_offset_min" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> tz_offset_min() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_tz_offset_min), __isset.at(5), __isset.bit(5)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> tz_name_ref() const& {
+    return {this->__fbthrift_field_tz_name, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> tz_name_ref() & {
+    return {this->__fbthrift_field_tz_name, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> tz_name_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_tz_name), __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> tz_name() const& {
+    return {this->__fbthrift_field_tz_name, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> tz_name() & {
+    return {this->__fbthrift_field_tz_name, __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> tz_name() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_tz_name), __isset.at(6), __isset.bit(6)};
+  }
+
+  /** Glean { "field": "kind" } */
+  [[deprecated("Use `FOO.kind().value()` instead of `FOO.get_kind()`")]]
+  ::eugraph::thrift::TimeKind get_kind() const;
+
+  /** Glean { "field": "kind" } */
+  [[deprecated("Use `FOO.kind() = BAR` instead of `FOO.set_kind(BAR)`")]]
+  ::eugraph::thrift::TimeKind& set_kind(::eugraph::thrift::TimeKind kind_);
+
+  /** Glean { "field": "hour" } */
+  [[deprecated("Use `FOO.hour().value()` instead of `FOO.get_hour()`")]]
+  ::std::int64_t get_hour() const;
+
+  /** Glean { "field": "hour" } */
+  [[deprecated("Use `FOO.hour() = BAR` instead of `FOO.set_hour(BAR)`")]]
+  ::std::int64_t& set_hour(::std::int64_t hour_);
+
+  /** Glean { "field": "minute" } */
+  [[deprecated("Use `FOO.minute().value()` instead of `FOO.get_minute()`")]]
+  ::std::int64_t get_minute() const;
+
+  /** Glean { "field": "minute" } */
+  [[deprecated("Use `FOO.minute() = BAR` instead of `FOO.set_minute(BAR)`")]]
+  ::std::int64_t& set_minute(::std::int64_t minute_);
+
+  /** Glean { "field": "second" } */
+  [[deprecated("Use `FOO.second().value()` instead of `FOO.get_second()`")]]
+  ::std::int64_t get_second() const;
+
+  /** Glean { "field": "second" } */
+  [[deprecated("Use `FOO.second() = BAR` instead of `FOO.set_second(BAR)`")]]
+  ::std::int64_t& set_second(::std::int64_t second_);
+
+  /** Glean { "field": "nanos" } */
+  [[deprecated("Use `FOO.nanos().value()` instead of `FOO.get_nanos()`")]]
+  ::std::int64_t get_nanos() const;
+
+  /** Glean { "field": "nanos" } */
+  [[deprecated("Use `FOO.nanos() = BAR` instead of `FOO.set_nanos(BAR)`")]]
+  ::std::int64_t& set_nanos(::std::int64_t nanos_);
+
+  /** Glean { "field": "tz_offset_min" } */
+  [[deprecated("Use `FOO.tz_offset_min().value()` instead of `FOO.get_tz_offset_min()`")]]
+  ::std::int32_t get_tz_offset_min() const;
+
+  /** Glean { "field": "tz_offset_min" } */
+  [[deprecated("Use `FOO.tz_offset_min() = BAR` instead of `FOO.set_tz_offset_min(BAR)`")]]
+  ::std::int32_t& set_tz_offset_min(::std::int32_t tz_offset_min_);
+
+  /** Glean { "field": "tz_name" } */
+  [[deprecated("Use `FOO.tz_name().value()` instead of `FOO.get_tz_name()`")]]
+  const ::std::string& get_tz_name() const& {
+    return __fbthrift_field_tz_name;
+  }
+
+  /** Glean { "field": "tz_name" } */
+  [[deprecated("Use `FOO.tz_name().value()` instead of `FOO.get_tz_name()`")]]
+  ::std::string get_tz_name() && {
+    return static_cast<::std::string&&>(__fbthrift_field_tz_name);
+  }
+
+  /** Glean { "field": "tz_name" } */
+  template <typename T_TimeValueThrift_tz_name_struct_setter = ::std::string>
+  [[deprecated("Use `FOO.tz_name() = BAR` instead of `FOO.set_tz_name(BAR)`")]]
+  ::std::string& set_tz_name(T_TimeValueThrift_tz_name_struct_setter&& tz_name_) {
+    tz_name_ref() = std::forward<T_TimeValueThrift_tz_name_struct_setter>(tz_name_);
+    return __fbthrift_field_tz_name;
+  }
+
+  template <class Protocol_>
+  unsigned long read(Protocol_* iprot);
+  template <class Protocol_>
+  uint32_t serializedSize(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t serializedSizeZC(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t write(Protocol_* prot_) const;
+
+ private:
+  template <class Protocol_>
+  void readNoXfer(Protocol_* iprot);
+
+  friend class ::apache::thrift::Cpp2Ops<TimeValueThrift>;
+  friend void swap(TimeValueThrift& a, TimeValueThrift& b);
+};
+
+template <class Protocol_>
+unsigned long TimeValueThrift::read(Protocol_* iprot) {
+  auto _xferStart = iprot->getCursorPosition();
+  readNoXfer(iprot);
+  return iprot->getCursorPosition() - _xferStart;
+}
+
+
+/** Glean {"file": "proto/eugraph.thrift", "name": "DurationValueThrift", "kind": "struct" } */
+class DurationValueThrift final  {
+ private:
+  friend struct ::apache::thrift::detail::st::struct_private_access;
+  template<class> friend struct ::apache::thrift::detail::invoke_reffer;
+
+  //  used by a static_assert in the corresponding source
+  static constexpr bool __fbthrift_cpp2_gen_json = false;
+  static constexpr bool __fbthrift_cpp2_is_runtime_annotation = false;
+  static std::string_view __fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord);
+  static std::string_view __fbthrift_get_class_name();
+  template <class ...>
+  FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
+    return "eugraph";
+  }
+  static constexpr std::size_t __fbthrift_num_fields = 4;
+
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3,4};
+
+  using __fbthrift_reflection_idents = folly::tag_t<
+    ::apache::thrift::ident::months,
+    ::apache::thrift::ident::days,
+    ::apache::thrift::ident::seconds,
+    ::apache::thrift::ident::nanos
+  >;
+
+  using __fbthrift_reflection_type_tags = folly::tag_t<
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::i64_t
+  >;
+  void __fbthrift_clear();
+  void __fbthrift_clear_terse_fields();
+  bool __fbthrift_is_empty() const;
+
+ public:
+  using __fbthrift_cpp2_type = DurationValueThrift;
+  static constexpr bool __fbthrift_cpp2_is_union =
+    false;
+  static constexpr bool __fbthrift_cpp2_uses_op_encode =
+    false;
+
+
+ public:
+
+  DurationValueThrift() :
+      __fbthrift_field_months(),
+      __fbthrift_field_days(),
+      __fbthrift_field_seconds(),
+      __fbthrift_field_nanos() {
+  }
+  // FragileConstructor for use in initialization lists only.
+  [[deprecated("This constructor is deprecated")]]
+  DurationValueThrift(apache::thrift::FragileConstructor, ::std::int64_t months__arg, ::std::int64_t days__arg, ::std::int64_t seconds__arg, ::std::int64_t nanos__arg);
+
+  DurationValueThrift(DurationValueThrift&&) = default;
+
+  DurationValueThrift(const DurationValueThrift&) = default;
+
+
+  DurationValueThrift& operator=(DurationValueThrift&&) = default;
+
+  DurationValueThrift& operator=(const DurationValueThrift&) = default;
+ private:
+  ::std::int64_t __fbthrift_field_months;
+ private:
+  ::std::int64_t __fbthrift_field_days;
+ private:
+  ::std::int64_t __fbthrift_field_seconds;
+ private:
+  ::std::int64_t __fbthrift_field_nanos;
+ private:
+  apache::thrift::detail::isset_bitset<4, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+
+ public:
+
+  bool operator==(const DurationValueThrift&) const;
+  bool operator<(const DurationValueThrift&) const;
+
+  /** Glean { "field": "months" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> months_ref() const& {
+    return {this->__fbthrift_field_months, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "months" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> months_ref() & {
+    return {this->__fbthrift_field_months, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "months" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> months_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_months), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "months" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> months() const& {
+    return {this->__fbthrift_field_months, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "months" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> months() & {
+    return {this->__fbthrift_field_months, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "months" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> months() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_months), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "days" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> days_ref() const& {
+    return {this->__fbthrift_field_days, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "days" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> days_ref() & {
+    return {this->__fbthrift_field_days, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "days" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> days_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_days), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "days" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> days() const& {
+    return {this->__fbthrift_field_days, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "days" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> days() & {
+    return {this->__fbthrift_field_days, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "days" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> days() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_days), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "seconds" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> seconds_ref() const& {
+    return {this->__fbthrift_field_seconds, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "seconds" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> seconds_ref() & {
+    return {this->__fbthrift_field_seconds, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "seconds" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> seconds_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_seconds), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "seconds" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> seconds() const& {
+    return {this->__fbthrift_field_seconds, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "seconds" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> seconds() & {
+    return {this->__fbthrift_field_seconds, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "seconds" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> seconds() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_seconds), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> nanos_ref() const& {
+    return {this->__fbthrift_field_nanos, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> nanos_ref() & {
+    return {this->__fbthrift_field_nanos, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> nanos_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_nanos), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> nanos() const& {
+    return {this->__fbthrift_field_nanos, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> nanos() & {
+    return {this->__fbthrift_field_nanos, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "nanos" } */
+  template <typename..., typename fbthrift_T = ::std::int64_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> nanos() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_nanos), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "months" } */
+  [[deprecated("Use `FOO.months().value()` instead of `FOO.get_months()`")]]
+  ::std::int64_t get_months() const;
+
+  /** Glean { "field": "months" } */
+  [[deprecated("Use `FOO.months() = BAR` instead of `FOO.set_months(BAR)`")]]
+  ::std::int64_t& set_months(::std::int64_t months_);
+
+  /** Glean { "field": "days" } */
+  [[deprecated("Use `FOO.days().value()` instead of `FOO.get_days()`")]]
+  ::std::int64_t get_days() const;
+
+  /** Glean { "field": "days" } */
+  [[deprecated("Use `FOO.days() = BAR` instead of `FOO.set_days(BAR)`")]]
+  ::std::int64_t& set_days(::std::int64_t days_);
+
+  /** Glean { "field": "seconds" } */
+  [[deprecated("Use `FOO.seconds().value()` instead of `FOO.get_seconds()`")]]
+  ::std::int64_t get_seconds() const;
+
+  /** Glean { "field": "seconds" } */
+  [[deprecated("Use `FOO.seconds() = BAR` instead of `FOO.set_seconds(BAR)`")]]
+  ::std::int64_t& set_seconds(::std::int64_t seconds_);
+
+  /** Glean { "field": "nanos" } */
+  [[deprecated("Use `FOO.nanos().value()` instead of `FOO.get_nanos()`")]]
+  ::std::int64_t get_nanos() const;
+
+  /** Glean { "field": "nanos" } */
+  [[deprecated("Use `FOO.nanos() = BAR` instead of `FOO.set_nanos(BAR)`")]]
+  ::std::int64_t& set_nanos(::std::int64_t nanos_);
+
+  template <class Protocol_>
+  unsigned long read(Protocol_* iprot);
+  template <class Protocol_>
+  uint32_t serializedSize(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t serializedSizeZC(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t write(Protocol_* prot_) const;
+
+ private:
+  template <class Protocol_>
+  void readNoXfer(Protocol_* iprot);
+
+  friend class ::apache::thrift::Cpp2Ops<DurationValueThrift>;
+  friend void swap(DurationValueThrift& a, DurationValueThrift& b);
+};
+
+template <class Protocol_>
+unsigned long DurationValueThrift::read(Protocol_* iprot) {
+  auto _xferStart = iprot->getCursorPosition();
+  readNoXfer(iprot);
+  return iprot->getCursorPosition() - _xferStart;
+}
+
+
+/** Glean {"file": "proto/eugraph.thrift", "name": "PropertyValueThrift", "kind": "union" } */
+class PropertyValueThrift final  {
+ private:
+  friend struct ::apache::thrift::detail::st::struct_private_access;
+  template<class> friend struct ::apache::thrift::detail::invoke_reffer;
+
+  //  used by a static_assert in the corresponding source
+  static constexpr bool __fbthrift_cpp2_gen_json = false;
+  static constexpr bool __fbthrift_cpp2_is_runtime_annotation = false;
+  static std::string_view __fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord);
+  static std::string_view __fbthrift_get_class_name();
+  template <class ...>
+  FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
+    return "eugraph";
+  }
+  static constexpr std::size_t __fbthrift_num_fields = 10;
+
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3,4,5,6,7,8,9,10};
+
+  using __fbthrift_reflection_idents = folly::tag_t<
     ::apache::thrift::ident::bool_val,
     ::apache::thrift::ident::int_val,
     ::apache::thrift::ident::double_val,
     ::apache::thrift::ident::string_val,
     ::apache::thrift::ident::int_array,
     ::apache::thrift::ident::double_array,
-    ::apache::thrift::ident::string_array
+    ::apache::thrift::ident::string_array,
+    ::apache::thrift::ident::datetime_val,
+    ::apache::thrift::ident::time_val,
+    ::apache::thrift::ident::duration_val
   >;
 
   using __fbthrift_reflection_type_tags = folly::tag_t<
@@ -567,7 +2064,10 @@ class PropertyValueThrift final  {
     ::apache::thrift::type::string_t,
     ::apache::thrift::type::list<::apache::thrift::type::i64_t>,
     ::apache::thrift::type::list<::apache::thrift::type::double_t>,
-    ::apache::thrift::type::list<::apache::thrift::type::string_t>
+    ::apache::thrift::type::list<::apache::thrift::type::string_t>,
+    ::apache::thrift::type::struct_t<::eugraph::thrift::DateTimeValueThrift>,
+    ::apache::thrift::type::struct_t<::eugraph::thrift::TimeValueThrift>,
+    ::apache::thrift::type::struct_t<::eugraph::thrift::DurationValueThrift>
   >;
   void __fbthrift_clear();
   void __fbthrift_destruct();
@@ -591,6 +2091,9 @@ class PropertyValueThrift final  {
     int_array = 5,
     double_array = 6,
     string_array = 7,
+    datetime_val = 8,
+    time_val = 9,
+    duration_val = 10,
   } ;
 
   PropertyValueThrift()
@@ -637,6 +2140,21 @@ class PropertyValueThrift final  {
       case Type::string_array:
       {
         set_string_array(std::move(rhs.value_.string_array));
+        break;
+      }
+      case Type::datetime_val:
+      {
+        set_datetime_val(std::move(rhs.value_.datetime_val));
+        break;
+      }
+      case Type::time_val:
+      {
+        set_time_val(std::move(rhs.value_.time_val));
+        break;
+      }
+      case Type::duration_val:
+      {
+        set_duration_val(std::move(rhs.value_.duration_val));
         break;
       }
       default:
@@ -693,6 +2211,21 @@ class PropertyValueThrift final  {
         set_string_array(std::move(rhs.value_.string_array));
         break;
       }
+      case Type::datetime_val:
+      {
+        set_datetime_val(std::move(rhs.value_.datetime_val));
+        break;
+      }
+      case Type::time_val:
+      {
+        set_time_val(std::move(rhs.value_.time_val));
+        break;
+      }
+      case Type::duration_val:
+      {
+        set_duration_val(std::move(rhs.value_.duration_val));
+        break;
+      }
       default:
       {
         assert(false);
@@ -715,6 +2248,9 @@ class PropertyValueThrift final  {
     ::std::vector<::std::int64_t> int_array;
     ::std::vector<double> double_array;
     ::std::vector<::std::string> string_array;
+    ::eugraph::thrift::DateTimeValueThrift datetime_val;
+    ::eugraph::thrift::TimeValueThrift time_val;
+    ::eugraph::thrift::DurationValueThrift duration_val;
 
     storage_type() {}
     ~storage_type() {}
@@ -880,6 +2416,96 @@ class PropertyValueThrift final  {
     return value_.string_array;
   }
 
+  /** Glean { "field": "datetime_val" } */
+  template <typename... A, std::enable_if_t<!sizeof...(A), int> = 0>
+  ::eugraph::thrift::DateTimeValueThrift& set_datetime_val(::eugraph::thrift::DateTimeValueThrift const &t) {
+    using T0 = ::eugraph::thrift::DateTimeValueThrift;
+    using T = folly::type_t<T0, A...>;
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::datetime_val);
+    ::new (std::addressof(value_.datetime_val)) T(t);
+    return value_.datetime_val;
+  }
+
+  /** Glean { "field": "datetime_val" } */
+  template <typename... A, std::enable_if_t<!sizeof...(A), int> = 0>
+  ::eugraph::thrift::DateTimeValueThrift& set_datetime_val(::eugraph::thrift::DateTimeValueThrift&& t) {
+    using T0 = ::eugraph::thrift::DateTimeValueThrift;
+    using T = folly::type_t<T0, A...>;
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::datetime_val);
+    ::new (std::addressof(value_.datetime_val)) T(std::move(t));
+    return value_.datetime_val;
+  }
+
+  /** Glean { "field": "datetime_val" } */
+  template<typename... T, typename = ::apache::thrift::safe_overload_t<::eugraph::thrift::DateTimeValueThrift, T...>> ::eugraph::thrift::DateTimeValueThrift& set_datetime_val(T&&... t) {
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::datetime_val);
+    ::new (std::addressof(value_.datetime_val)) ::eugraph::thrift::DateTimeValueThrift(std::forward<T>(t)...);
+    return value_.datetime_val;
+  }
+
+  /** Glean { "field": "time_val" } */
+  template <typename... A, std::enable_if_t<!sizeof...(A), int> = 0>
+  ::eugraph::thrift::TimeValueThrift& set_time_val(::eugraph::thrift::TimeValueThrift const &t) {
+    using T0 = ::eugraph::thrift::TimeValueThrift;
+    using T = folly::type_t<T0, A...>;
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::time_val);
+    ::new (std::addressof(value_.time_val)) T(t);
+    return value_.time_val;
+  }
+
+  /** Glean { "field": "time_val" } */
+  template <typename... A, std::enable_if_t<!sizeof...(A), int> = 0>
+  ::eugraph::thrift::TimeValueThrift& set_time_val(::eugraph::thrift::TimeValueThrift&& t) {
+    using T0 = ::eugraph::thrift::TimeValueThrift;
+    using T = folly::type_t<T0, A...>;
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::time_val);
+    ::new (std::addressof(value_.time_val)) T(std::move(t));
+    return value_.time_val;
+  }
+
+  /** Glean { "field": "time_val" } */
+  template<typename... T, typename = ::apache::thrift::safe_overload_t<::eugraph::thrift::TimeValueThrift, T...>> ::eugraph::thrift::TimeValueThrift& set_time_val(T&&... t) {
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::time_val);
+    ::new (std::addressof(value_.time_val)) ::eugraph::thrift::TimeValueThrift(std::forward<T>(t)...);
+    return value_.time_val;
+  }
+
+  /** Glean { "field": "duration_val" } */
+  template <typename... A, std::enable_if_t<!sizeof...(A), int> = 0>
+  ::eugraph::thrift::DurationValueThrift& set_duration_val(::eugraph::thrift::DurationValueThrift const &t) {
+    using T0 = ::eugraph::thrift::DurationValueThrift;
+    using T = folly::type_t<T0, A...>;
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::duration_val);
+    ::new (std::addressof(value_.duration_val)) T(t);
+    return value_.duration_val;
+  }
+
+  /** Glean { "field": "duration_val" } */
+  template <typename... A, std::enable_if_t<!sizeof...(A), int> = 0>
+  ::eugraph::thrift::DurationValueThrift& set_duration_val(::eugraph::thrift::DurationValueThrift&& t) {
+    using T0 = ::eugraph::thrift::DurationValueThrift;
+    using T = folly::type_t<T0, A...>;
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::duration_val);
+    ::new (std::addressof(value_.duration_val)) T(std::move(t));
+    return value_.duration_val;
+  }
+
+  /** Glean { "field": "duration_val" } */
+  template<typename... T, typename = ::apache::thrift::safe_overload_t<::eugraph::thrift::DurationValueThrift, T...>> ::eugraph::thrift::DurationValueThrift& set_duration_val(T&&... t) {
+    __fbthrift_clear();
+    type_ = folly::to_underlying(Type::duration_val);
+    ::new (std::addressof(value_.duration_val)) ::eugraph::thrift::DurationValueThrift(std::forward<T>(t)...);
+    return value_.duration_val;
+  }
+
   /** Glean { "field": "bool_val" } */
   bool const& get_bool_val() const {
     if (getType() != Type::bool_val) {
@@ -936,6 +2562,30 @@ class PropertyValueThrift final  {
     return value_.string_array;
   }
 
+  /** Glean { "field": "datetime_val" } */
+  ::eugraph::thrift::DateTimeValueThrift const& get_datetime_val() const {
+    if (getType() != Type::datetime_val) {
+      ::apache::thrift::detail::throw_on_bad_union_field_access();
+    }
+    return value_.datetime_val;
+  }
+
+  /** Glean { "field": "time_val" } */
+  ::eugraph::thrift::TimeValueThrift const& get_time_val() const {
+    if (getType() != Type::time_val) {
+      ::apache::thrift::detail::throw_on_bad_union_field_access();
+    }
+    return value_.time_val;
+  }
+
+  /** Glean { "field": "duration_val" } */
+  ::eugraph::thrift::DurationValueThrift const& get_duration_val() const {
+    if (getType() != Type::duration_val) {
+      ::apache::thrift::detail::throw_on_bad_union_field_access();
+    }
+    return value_.duration_val;
+  }
+
   bool& mutable_bool_val() {
     assert(getType() == Type::bool_val);
     return value_.bool_val;
@@ -969,6 +2619,21 @@ class PropertyValueThrift final  {
   ::std::vector<::std::string>& mutable_string_array() {
     assert(getType() == Type::string_array);
     return value_.string_array;
+  }
+
+  ::eugraph::thrift::DateTimeValueThrift& mutable_datetime_val() {
+    assert(getType() == Type::datetime_val);
+    return value_.datetime_val;
+  }
+
+  ::eugraph::thrift::TimeValueThrift& mutable_time_val() {
+    assert(getType() == Type::time_val);
+    return value_.time_val;
+  }
+
+  ::eugraph::thrift::DurationValueThrift& mutable_duration_val() {
+    assert(getType() == Type::duration_val);
+    return value_.duration_val;
   }
 
   template <typename..., typename T = bool>
@@ -1011,6 +2676,24 @@ class PropertyValueThrift final  {
   T move_string_array() {
     assert(getType() == Type::string_array);
     return std::move(value_.string_array);
+  }
+
+  template <typename..., typename T = ::eugraph::thrift::DateTimeValueThrift>
+  T move_datetime_val() {
+    assert(getType() == Type::datetime_val);
+    return std::move(value_.datetime_val);
+  }
+
+  template <typename..., typename T = ::eugraph::thrift::TimeValueThrift>
+  T move_time_val() {
+    assert(getType() == Type::time_val);
+    return std::move(value_.time_val);
+  }
+
+  template <typename..., typename T = ::eugraph::thrift::DurationValueThrift>
+  T move_duration_val() {
+    assert(getType() == Type::duration_val);
+    return std::move(value_.duration_val);
   }
 
   /** Glean { "field": "bool_val" } */
@@ -1173,6 +2856,75 @@ class PropertyValueThrift final  {
   template <typename..., typename T = ::std::vector<::std::string>>
   FOLLY_ERASE ::apache::thrift::union_field_ref<T&&> string_array_ref() && {
     return {std::move(value_.string_array), type_, folly::to_underlying(Type::string_array), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+  /** Glean { "field": "datetime_val" } */
+  template <typename..., typename T = ::eugraph::thrift::DateTimeValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<const T&> datetime_val_ref() const& {
+    return {value_.datetime_val, type_, folly::to_underlying(Type::datetime_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "datetime_val" } */
+  template <typename..., typename T = ::eugraph::thrift::DateTimeValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<const T&&> datetime_val_ref() const&& {
+    return {std::move(value_.datetime_val), type_, folly::to_underlying(Type::datetime_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "datetime_val" } */
+  template <typename..., typename T = ::eugraph::thrift::DateTimeValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<T&> datetime_val_ref() & {
+    return {value_.datetime_val, type_, folly::to_underlying(Type::datetime_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "datetime_val" } */
+  template <typename..., typename T = ::eugraph::thrift::DateTimeValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<T&&> datetime_val_ref() && {
+    return {std::move(value_.datetime_val), type_, folly::to_underlying(Type::datetime_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+  /** Glean { "field": "time_val" } */
+  template <typename..., typename T = ::eugraph::thrift::TimeValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<const T&> time_val_ref() const& {
+    return {value_.time_val, type_, folly::to_underlying(Type::time_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "time_val" } */
+  template <typename..., typename T = ::eugraph::thrift::TimeValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<const T&&> time_val_ref() const&& {
+    return {std::move(value_.time_val), type_, folly::to_underlying(Type::time_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "time_val" } */
+  template <typename..., typename T = ::eugraph::thrift::TimeValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<T&> time_val_ref() & {
+    return {value_.time_val, type_, folly::to_underlying(Type::time_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "time_val" } */
+  template <typename..., typename T = ::eugraph::thrift::TimeValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<T&&> time_val_ref() && {
+    return {std::move(value_.time_val), type_, folly::to_underlying(Type::time_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+  /** Glean { "field": "duration_val" } */
+  template <typename..., typename T = ::eugraph::thrift::DurationValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<const T&> duration_val_ref() const& {
+    return {value_.duration_val, type_, folly::to_underlying(Type::duration_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "duration_val" } */
+  template <typename..., typename T = ::eugraph::thrift::DurationValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<const T&&> duration_val_ref() const&& {
+    return {std::move(value_.duration_val), type_, folly::to_underlying(Type::duration_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "duration_val" } */
+  template <typename..., typename T = ::eugraph::thrift::DurationValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<T&> duration_val_ref() & {
+    return {value_.duration_val, type_, folly::to_underlying(Type::duration_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
+  }
+
+  /** Glean { "field": "duration_val" } */
+  template <typename..., typename T = ::eugraph::thrift::DurationValueThrift>
+  FOLLY_ERASE ::apache::thrift::union_field_ref<T&&> duration_val_ref() && {
+    return {std::move(value_.duration_val), type_, folly::to_underlying(Type::duration_val), this, ::apache::thrift::detail::union_field_ref_owner_vtable_for<decltype(*this)>};
   }
   Type getType() const { return static_cast<Type>(type_); }
 
@@ -3858,7 +5610,7 @@ template <> struct TEnumDataStorage<::eugraph::thrift::PropertyValueThrift::Type
 template <> struct TEnumTraits<::eugraph::thrift::PropertyValueThrift::Type> {
   using type = ::eugraph::thrift::PropertyValueThrift::Type;
 
-  static constexpr std::size_t const size = 7;
+  static constexpr std::size_t const size = 10;
   static folly::Range<type const*> const values;
   static folly::Range<std::string_view const*> const names;
 
@@ -3895,67 +5647,92 @@ template <> struct TEnumTraits<::eugraph::thrift::ResultValue::Type> {
 namespace apache::thrift::detail {
 template <> struct TSchemaAssociation<::eugraph::thrift::PropertyDefThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\x34\x6c\x51\x97\xaa\x6d\x6f\x66\x8d\xfb\xbb\x4e\x15\x89\xb5\x37", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\x38\x66\xfe\x13\x8d\xe1\xd9\x88\xb9\x23\x2f\x15\x44\x9b\x61\x50", 16};
+};
+template <> struct TSchemaAssociation<::eugraph::thrift::DateTimeValueThrift, false> {
+  static ::folly::Range<const ::std::string_view*>(*bundle)();
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\xf2\x69\x89\xaf\x86\x3b\x8e\x4c\x26\xc1\x8a\x5b\xcd\x87\x9c\x66", 16};
+};
+template <> struct TSchemaAssociation<::eugraph::thrift::TimeValueThrift, false> {
+  static ::folly::Range<const ::std::string_view*>(*bundle)();
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\xa3\x16\x0e\xdb\x46\x18\x85\x4e\x4b\xf5\x01\x14\x5b\x99\xf7\x81", 16};
+};
+template <> struct TSchemaAssociation<::eugraph::thrift::DurationValueThrift, false> {
+  static ::folly::Range<const ::std::string_view*>(*bundle)();
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\x37\xb9\xde\x96\x78\xd5\x42\xc3\x27\x25\x1e\x86\x9e\x72\xf6\xa2", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::PropertyValueThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\x67\xac\x16\x45\x80\xa1\xa6\xce\xe3\x7a\x4c\x6f\x6a\x77\x20\x91", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\xc2\x7e\xc4\xd7\x88\xe9\xfd\xf4\xab\x2b\x48\xd1\x2b\xbb\x30\x09", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::LabelInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\x9a\xe9\x00\x4b\x6d\x49\xcf\x24\x97\x6b\x7c\x88\x8b\x86\x65\x67", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\xb4\x08\x06\x2a\x08\xfc\x76\xc7\x71\x4f\xe3\x79\x1c\x6c\x78\x2b", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::EdgeLabelInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\xdb\x19\x09\x91\xed\xd0\xe0\xac\x72\x78\xe9\x0e\x95\x34\x22\x0a", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\x11\x79\x4b\xf4\xd0\x5d\x36\x27\x8c\x42\xbe\xe8\x31\x2f\xd7\xec", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::VertexRecord, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\x7c\x80\x3e\x3a\xee\xc2\xd6\x8a\xf2\x05\x07\x3a\x6d\xd5\xa4\x88", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\x2a\x14\x11\x93\xb7\x29\xbd\x86\x4d\x10\x35\x8c\xe9\xb0\xf7\xb3", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::EdgeRecord, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\x9d\x57\xd0\x54\x04\x3e\xea\x09\x21\x9a\x43\x24\xb9\xfd\x41\x06", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\x05\x9f\x53\x21\x40\x08\x7a\xcf\xfd\x6f\x23\xfe\xa1\x99\x4b\x0f", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::BatchInsertVerticesResult, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\x87\xdf\xbd\x6a\xe3\x1f\x63\x4e\x7b\x48\xf5\x1d\x9b\x1c\x59\x39", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\x07\x28\x58\x25\xb1\x1f\x43\x33\xb5\xc3\xbf\xb3\x0d\xf0\x4d\x7e", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::ResultValue, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\xd7\x2b\x4f\xf8\x34\x37\x42\xd8\xfd\x2d\x44\xf7\x18\xf2\x12\xc8", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\x0f\xbd\x41\x7a\x44\x63\xea\x28\x3a\x3a\xe2\x6f\xf1\x46\xdb\x06", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::ResultRow, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\x2a\x4e\x5c\xd8\xb2\x52\x01\x5c\xce\x68\x38\x81\x8c\xfb\x76\x83", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\xf0\x90\x11\x96\x9c\x1b\x0d\x4d\xda\x76\xd7\x44\x89\x2f\x91\xd7", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::QueryStreamMeta, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\xea\x27\x2c\xe7\xeb\x24\x65\x68\xa5\x3f\x81\x51\x33\x4e\x15\xd4", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\xee\xa8\x06\x0b\xa0\xab\x2a\x07\x41\xbe\x9d\xdd\x1e\x54\xb7\x05", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::ResultRowBatch, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\xc6\x9e\x85\x48\xff\x77\x4c\xd4\x4e\xe9\x52\xc8\xcc\x0a\x61\x1b", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\xf2\x31\x40\xc2\xd9\x8d\xca\xfc\xda\x16\x7a\x07\x39\x2f\x06\x7c", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::GraphInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\xdf\x5e\x37\x75\x21\x6c\xc4\xc2\xa1\xad\x07\xd4\x6b\x59\x21\x7d", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\xd0\x92\x99\xcc\xf3\x21\x05\xab\x49\xd3\x2a\x35\x71\x5b\x4e\x41", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift::PropertyType, true> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 6698273926583368423;
-  static constexpr ::std::string_view definitionKey = {"\x95\xd7\xd5\xc7\xa1\x33\x61\x28\xe6\x94\xb7\x81\xbd\x18\xda\xea", 16};
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\xad\x76\x18\x6d\x54\x5c\xa2\x0f\xe1\x37\xf4\xd8\x33\x9c\x19\x21", 16};
+};
+template <> struct TSchemaAssociation<::eugraph::thrift::DateTimeKind, true> {
+  static ::folly::Range<const ::std::string_view*>(*bundle)();
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\x35\x77\x4c\x9d\xc5\x85\xe1\xca\x06\xd6\x71\x94\x36\x9d\xeb\x21", 16};
+};
+template <> struct TSchemaAssociation<::eugraph::thrift::TimeKind, true> {
+  static ::folly::Range<const ::std::string_view*>(*bundle)();
+  static constexpr int64_t programId = -2725703114021583009;
+  static constexpr ::std::string_view definitionKey = {"\xd5\xb2\x69\xba\x61\x72\xdc\x90\x12\xfc\x30\x8e\xcd\xcc\xe3\x90", 16};
 };
 } // namespace apache::thrift::detail

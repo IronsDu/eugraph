@@ -1,104 +1,135 @@
 #include "common/types/temporal_value.hpp"
 
+#include <cmath>
 #include <sstream>
 
 namespace eugraph {
 
-std::optional<TemporalField> temporalFieldFromString(const std::string& s) {
+// ==================== Field name lookup ====================
+
+std::optional<DateTimeField> dateTimeFieldFromString(const std::string& s) {
     if (s == "year")
-        return TemporalField::YEAR;
+        return DateTimeField::YEAR;
     if (s == "quarter")
-        return TemporalField::QUARTER;
+        return DateTimeField::QUARTER;
     if (s == "month")
-        return TemporalField::MONTH;
+        return DateTimeField::MONTH;
     if (s == "day")
-        return TemporalField::DAY;
+        return DateTimeField::DAY;
     if (s == "weekYear")
-        return TemporalField::WEEK_YEAR;
+        return DateTimeField::WEEK_YEAR;
     if (s == "week")
-        return TemporalField::WEEK;
+        return DateTimeField::WEEK;
     if (s == "ordinalDay")
-        return TemporalField::ORDINAL_DAY;
+        return DateTimeField::ORDINAL_DAY;
     if (s == "weekDay")
-        return TemporalField::WEEK_DAY;
+        return DateTimeField::WEEK_DAY;
     if (s == "dayOfQuarter")
-        return TemporalField::DAY_OF_QUARTER;
+        return DateTimeField::DAY_OF_QUARTER;
     if (s == "hour")
-        return TemporalField::HOUR;
+        return DateTimeField::HOUR;
     if (s == "minute")
-        return TemporalField::MINUTE;
+        return DateTimeField::MINUTE;
     if (s == "second")
-        return TemporalField::SECOND;
+        return DateTimeField::SECOND;
     if (s == "nanosecond")
-        return TemporalField::NANOSECOND;
+        return DateTimeField::NANOSECOND;
     if (s == "millisecond")
-        return TemporalField::MILLISECOND;
+        return DateTimeField::MILLISECOND;
     if (s == "microsecond")
-        return TemporalField::MICROSECOND;
+        return DateTimeField::MICROSECOND;
     if (s == "timezone")
-        return TemporalField::TIMEZONE;
+        return DateTimeField::TIMEZONE;
     if (s == "offset")
-        return TemporalField::OFFSET;
+        return DateTimeField::OFFSET;
     if (s == "offsetMinutes")
-        return TemporalField::OFFSET_MINUTES;
+        return DateTimeField::OFFSET_MINUTES;
     if (s == "offsetSeconds")
-        return TemporalField::OFFSET_SECONDS;
+        return DateTimeField::OFFSET_SECONDS;
     if (s == "epochSeconds")
-        return TemporalField::EPOCH_SECONDS;
+        return DateTimeField::EPOCH_SECONDS;
     if (s == "epochMillis")
-        return TemporalField::EPOCH_MILLIS;
-    if (s == "years")
-        return TemporalField::YEARS;
-    if (s == "quarters")
-        return TemporalField::QUARTERS;
-    if (s == "months")
-        return TemporalField::MONTHS;
-    if (s == "monthsOfYear")
-        return TemporalField::MONTHS_OF_YEAR;
-    if (s == "monthsOfQuarter")
-        return TemporalField::MONTHS_OF_QUARTER;
-    if (s == "quartersOfYear")
-        return TemporalField::QUARTERS_OF_YEAR;
-    if (s == "weeks")
-        return TemporalField::WEEKS;
-    if (s == "days")
-        return TemporalField::DAYS;
-    if (s == "daysOfWeek")
-        return TemporalField::DAYS_OF_WEEK;
-    if (s == "hours")
-        return TemporalField::HOURS;
-    if (s == "minutes")
-        return TemporalField::MINUTES;
-    if (s == "seconds")
-        return TemporalField::SECONDS;
-    if (s == "milliseconds")
-        return TemporalField::MILLISECONDS;
-    if (s == "microseconds")
-        return TemporalField::MICROSECONDS;
-    if (s == "nanoseconds")
-        return TemporalField::NANOSECONDS;
-    if (s == "minutesOfHour")
-        return TemporalField::MINUTES_OF_HOUR;
-    if (s == "secondsOfMinute")
-        return TemporalField::SECONDS_OF_MINUTE;
-    if (s == "millisecondsOfSecond")
-        return TemporalField::MILLISECONDS_OF_SECOND;
-    if (s == "microsecondsOfSecond")
-        return TemporalField::MICROSECONDS_OF_SECOND;
-    if (s == "nanosecondsOfSecond")
-        return TemporalField::NANOSECONDS_OF_SECOND;
+        return DateTimeField::EPOCH_MILLIS;
     return std::nullopt;
 }
 
-bool temporalFieldReturnsString(TemporalField f) {
-    switch (f) {
-    case TemporalField::TIMEZONE:
-    case TemporalField::OFFSET:
-        return true;
-    default:
-        return false;
-    }
+std::optional<TimeField> timeFieldFromString(const std::string& s) {
+    if (s == "hour")
+        return TimeField::HOUR;
+    if (s == "minute")
+        return TimeField::MINUTE;
+    if (s == "second")
+        return TimeField::SECOND;
+    if (s == "nanosecond")
+        return TimeField::NANOSECOND;
+    if (s == "millisecond")
+        return TimeField::MILLISECOND;
+    if (s == "microsecond")
+        return TimeField::MICROSECOND;
+    if (s == "timezone")
+        return TimeField::TIMEZONE;
+    if (s == "offset")
+        return TimeField::OFFSET;
+    if (s == "offsetMinutes")
+        return TimeField::OFFSET_MINUTES;
+    if (s == "offsetSeconds")
+        return TimeField::OFFSET_SECONDS;
+    return std::nullopt;
 }
+
+std::optional<DurationField> durationFieldFromString(const std::string& s) {
+    if (s == "years")
+        return DurationField::YEARS;
+    if (s == "quarters")
+        return DurationField::QUARTERS;
+    if (s == "months")
+        return DurationField::MONTHS;
+    if (s == "monthsOfYear")
+        return DurationField::MONTHS_OF_YEAR;
+    if (s == "monthsOfQuarter")
+        return DurationField::MONTHS_OF_QUARTER;
+    if (s == "quartersOfYear")
+        return DurationField::QUARTERS_OF_YEAR;
+    if (s == "weeks")
+        return DurationField::WEEKS;
+    if (s == "days")
+        return DurationField::DAYS;
+    if (s == "daysOfWeek")
+        return DurationField::DAYS_OF_WEEK;
+    if (s == "hours")
+        return DurationField::HOURS;
+    if (s == "minutes")
+        return DurationField::MINUTES;
+    if (s == "seconds")
+        return DurationField::SECONDS;
+    if (s == "milliseconds")
+        return DurationField::MILLISECONDS;
+    if (s == "microseconds")
+        return DurationField::MICROSECONDS;
+    if (s == "nanoseconds")
+        return DurationField::NANOSECONDS;
+    if (s == "minutesOfHour")
+        return DurationField::MINUTES_OF_HOUR;
+    if (s == "secondsOfMinute")
+        return DurationField::SECONDS_OF_MINUTE;
+    if (s == "millisecondsOfSecond")
+        return DurationField::MILLISECONDS_OF_SECOND;
+    if (s == "microsecondsOfSecond")
+        return DurationField::MICROSECONDS_OF_SECOND;
+    if (s == "nanosecondsOfSecond")
+        return DurationField::NANOSECONDS_OF_SECOND;
+    return std::nullopt;
+}
+
+bool dateTimeFieldReturnsString(DateTimeField f) {
+    return f == DateTimeField::TIMEZONE || f == DateTimeField::OFFSET;
+}
+
+bool timeFieldReturnsString(TimeField f) {
+    return f == TimeField::TIMEZONE || f == TimeField::OFFSET;
+}
+
+// ==================== Calendar helpers ====================
 
 bool isLeapYear(int64_t year) {
     return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
@@ -140,167 +171,7 @@ void normalizeDate(int64_t& year, int64_t& month, int64_t& day) {
     }
 }
 
-TemporalValue addDurationToTemporal(const TemporalValue& temporal, const TemporalValue& duration) {
-    if (duration.kind != TemporalKind::DURATION)
-        return temporal;
-
-    TemporalValue result = temporal;
-
-    bool hasDate = (result.kind == TemporalKind::DATE || result.kind == TemporalKind::DATETIME ||
-                    result.kind == TemporalKind::LOCAL_DATETIME);
-    bool hasTime = (result.kind != TemporalKind::DATE);
-
-    if (hasDate) {
-        result.month += duration.dur_months;
-        result.day += duration.dur_days;
-        normalizeDate(result.year, result.month, result.day);
-    }
-
-    if (hasTime) {
-        int64_t total_nanos = duration.dur_seconds * 1'000'000'000LL + duration.dur_nanos;
-        int64_t add_seconds = total_nanos / 1'000'000'000LL;
-        int64_t add_nanos = total_nanos % 1'000'000'000LL;
-        if (add_nanos < 0) {
-            add_nanos += 1'000'000'000LL;
-            add_seconds -= 1;
-        }
-
-        result.nanos += add_nanos;
-        result.second += add_seconds;
-        result.second += result.nanos / 1'000'000'000LL;
-        result.nanos %= 1'000'000'000LL;
-        result.minute += result.second / 60;
-        result.second %= 60;
-        result.hour += result.minute / 60;
-        result.minute %= 60;
-
-        if (hasDate) {
-            int64_t extra_days = result.hour / 24;
-            if (result.hour < 0)
-                extra_days = (result.hour - 23) / 24;
-            result.hour -= extra_days * 24;
-            result.day += extra_days;
-            normalizeDate(result.year, result.month, result.day);
-        }
-
-        if (result.nanos < 0) {
-            result.nanos += 1'000'000'000LL;
-            result.second -= 1;
-        }
-        if (result.second < 0) {
-            int64_t borrow_min = (-result.second + 59) / 60;
-            result.second += borrow_min * 60;
-            result.minute -= borrow_min;
-        }
-        if (result.minute < 0) {
-            int64_t borrow_hour = (-result.minute + 59) / 60;
-            result.minute += borrow_hour * 60;
-            result.hour -= borrow_hour;
-        }
-        if (result.hour < 0 && hasDate) {
-            int64_t borrow_day = (-result.hour + 23) / 24;
-            result.hour += borrow_day * 24;
-            result.day -= borrow_day;
-            normalizeDate(result.year, result.month, result.day);
-        }
-    }
-
-    return result;
-}
-
-TemporalValue subDurationFromTemporal(const TemporalValue& temporal, const TemporalValue& duration) {
-    TemporalValue neg = duration;
-    neg.dur_months = -neg.dur_months;
-    neg.dur_days = -neg.dur_days;
-    neg.dur_seconds = -neg.dur_seconds;
-    neg.dur_nanos = -neg.dur_nanos;
-    return addDurationToTemporal(temporal, neg);
-}
-
-TemporalValue subtractTemporals(const TemporalValue& a, const TemporalValue& b) {
-    if (a.kind != b.kind || a.kind == TemporalKind::DURATION)
-        return TemporalValue{TemporalKind::DURATION};
-
-    int64_t a_ns = temporalToComparable(a);
-    int64_t b_ns = temporalToComparable(b);
-    int64_t diff_ns = a_ns - b_ns;
-
-    TemporalValue result;
-    result.kind = TemporalKind::DURATION;
-    result.dur_months = 0;
-    int64_t ns_per_day = 86'400'000'000'000LL;
-    result.dur_days = diff_ns / ns_per_day;
-    int64_t remaining_ns = diff_ns % ns_per_day;
-    result.dur_seconds = remaining_ns / 1'000'000'000LL;
-    result.dur_nanos = remaining_ns % 1'000'000'000LL;
-    if (result.dur_nanos < 0) {
-        result.dur_nanos += 1'000'000'000LL;
-        result.dur_seconds -= 1;
-    }
-    return result;
-}
-
-TemporalValue addDurations(const TemporalValue& a, const TemporalValue& b) {
-    TemporalValue result;
-    result.kind = TemporalKind::DURATION;
-    result.dur_months = a.dur_months + b.dur_months;
-    result.dur_days = a.dur_days + b.dur_days;
-    int64_t total_a = a.dur_seconds * 1'000'000'000LL + a.dur_nanos;
-    int64_t total_b = b.dur_seconds * 1'000'000'000LL + b.dur_nanos;
-    int64_t total = total_a + total_b;
-    result.dur_seconds = total / 1'000'000'000LL;
-    result.dur_nanos = total % 1'000'000'000LL;
-    if (result.dur_nanos < 0) {
-        result.dur_nanos += 1'000'000'000LL;
-        result.dur_seconds -= 1;
-    }
-    return result;
-}
-
-TemporalValue subDurations(const TemporalValue& a, const TemporalValue& b) {
-    TemporalValue neg_b = b;
-    neg_b.dur_months = -neg_b.dur_months;
-    neg_b.dur_days = -neg_b.dur_days;
-    neg_b.dur_seconds = -neg_b.dur_seconds;
-    neg_b.dur_nanos = -neg_b.dur_nanos;
-    return addDurations(a, neg_b);
-}
-
-TemporalValue mulDuration(const TemporalValue& dur, int64_t factor) {
-    TemporalValue result;
-    result.kind = TemporalKind::DURATION;
-    result.dur_months = dur.dur_months * factor;
-    result.dur_days = dur.dur_days * factor;
-    int64_t total = (dur.dur_seconds * 1'000'000'000LL + dur.dur_nanos) * factor;
-    result.dur_seconds = total / 1'000'000'000LL;
-    result.dur_nanos = total % 1'000'000'000LL;
-    if (result.dur_nanos < 0) {
-        result.dur_nanos += 1'000'000'000LL;
-        result.dur_seconds -= 1;
-    }
-    return result;
-}
-
-TemporalValue divDuration(const TemporalValue& dur, int64_t divisor) {
-    if (divisor == 0)
-        return TemporalValue{TemporalKind::DURATION};
-    TemporalValue result;
-    result.kind = TemporalKind::DURATION;
-    result.dur_months = dur.dur_months / divisor;
-    result.dur_days = dur.dur_days / divisor;
-    int64_t total = dur.dur_seconds * 1'000'000'000LL + dur.dur_nanos;
-    total /= divisor;
-    result.dur_seconds = total / 1'000'000'000LL;
-    result.dur_nanos = total % 1'000'000'000LL;
-    if (result.dur_nanos < 0) {
-        result.dur_nanos += 1'000'000'000LL;
-        result.dur_seconds -= 1;
-    }
-    return result;
-}
-
 int64_t daysFromCivil(int64_t y, int64_t m, int64_t d) {
-    // Convert year/month/day to days since 1970-01-01 (algorithm from Howard Hinnant)
     y -= (m <= 2);
     int64_t era = (y >= 0 ? y : y - 399) / 400;
     int64_t yoe = static_cast<int64_t>(y - era * 400);
@@ -310,7 +181,6 @@ int64_t daysFromCivil(int64_t y, int64_t m, int64_t d) {
 }
 
 void civilFromDays(int64_t z, int64_t& y, int64_t& m, int64_t& d) {
-    // Reverse of daysFromCivil: days since 1970-01-01 to year/month/day (Howard Hinnant)
     z += 719468;
     int64_t era = (z >= 0 ? z : z - 146096) / 146097;
     int64_t doe = z - era * 146097;
@@ -322,6 +192,433 @@ void civilFromDays(int64_t z, int64_t& y, int64_t& m, int64_t& d) {
     y = yoe + era * 400;
     y += (m <= 2 ? 1 : 0);
 }
+
+// ==================== Equality ====================
+
+bool DateTimeValue::operator==(const DateTimeValue& o) const {
+    if (kind != o.kind)
+        return false;
+    switch (kind) {
+    case DateTimeKind::DATE:
+        return year == o.year && month == o.month && day == o.day;
+    case DateTimeKind::LOCAL_DATETIME:
+        return year == o.year && month == o.month && day == o.day && hour == o.hour && minute == o.minute &&
+               second == o.second && nanos == o.nanos;
+    case DateTimeKind::DATETIME:
+        return year == o.year && month == o.month && day == o.day && hour == o.hour && minute == o.minute &&
+               second == o.second && nanos == o.nanos && tz_offset_min == o.tz_offset_min && tz_name == o.tz_name;
+    default:
+        return false;
+    }
+}
+
+bool TimeValue::operator==(const TimeValue& o) const {
+    if (kind != o.kind)
+        return false;
+    switch (kind) {
+    case TimeKind::LOCAL_TIME:
+        return hour == o.hour && minute == o.minute && second == o.second && nanos == o.nanos;
+    case TimeKind::TIME:
+        return hour == o.hour && minute == o.minute && second == o.second && nanos == o.nanos &&
+               tz_offset_min == o.tz_offset_min && tz_name == o.tz_name;
+    default:
+        return false;
+    }
+}
+
+bool DurationValue::operator==(const DurationValue& o) const {
+    return months == o.months && days == o.days && seconds == o.seconds && nanos == o.nanos;
+}
+
+// ==================== Comparable ====================
+
+int64_t temporalToComparable(const DateTimeValue& tv) {
+    int64_t days = daysFromCivil(tv.year, tv.month, tv.day);
+    int64_t day_ns = ((tv.hour * 3600 + tv.minute * 60 + tv.second) * 1'000'000'000LL) + tv.nanos;
+    if (tv.kind == DateTimeKind::DATETIME)
+        day_ns -= static_cast<int64_t>(tv.tz_offset_min) * 60'000'000'000LL;
+    return days * 86'400'000'000'000LL + day_ns;
+}
+
+int64_t temporalToComparable(const TimeValue& tv) {
+    int64_t day_ns = ((tv.hour * 3600 + tv.minute * 60 + tv.second) * 1'000'000'000LL) + tv.nanos;
+    if (tv.kind == TimeKind::TIME)
+        day_ns -= static_cast<int64_t>(tv.tz_offset_min) * 60'000'000'000LL;
+    return day_ns;
+}
+
+// ==================== Ordering ====================
+
+bool temporalLess(const DateTimeValue& a, const DateTimeValue& b) {
+    if (a.kind != b.kind)
+        return false;
+    switch (a.kind) {
+    case DateTimeKind::DATE:
+        if (a.year != b.year)
+            return a.year < b.year;
+        if (a.month != b.month)
+            return a.month < b.month;
+        return a.day < b.day;
+    case DateTimeKind::LOCAL_DATETIME:
+        if (a.year != b.year)
+            return a.year < b.year;
+        if (a.month != b.month)
+            return a.month < b.month;
+        if (a.day != b.day)
+            return a.day < b.day;
+        if (a.hour != b.hour)
+            return a.hour < b.hour;
+        if (a.minute != b.minute)
+            return a.minute < b.minute;
+        if (a.second != b.second)
+            return a.second < b.second;
+        return a.nanos < b.nanos;
+    case DateTimeKind::DATETIME: {
+        int64_t a_days = daysFromCivil(a.year, a.month, a.day);
+        int64_t b_days = daysFromCivil(b.year, b.month, b.day);
+        if (a_days != b_days)
+            return a_days < b_days;
+        int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos -
+                       static_cast<int64_t>(a.tz_offset_min) * 60'000'000'000LL;
+        int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos -
+                       static_cast<int64_t>(b.tz_offset_min) * 60'000'000'000LL;
+        return a_ns < b_ns;
+    }
+    default:
+        return false;
+    }
+}
+
+bool temporalLess(const TimeValue& a, const TimeValue& b) {
+    if (a.kind != b.kind)
+        return false;
+    int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos;
+    int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos;
+    if (a.kind == TimeKind::TIME) {
+        a_ns -= static_cast<int64_t>(a.tz_offset_min) * 60'000'000'000LL;
+        b_ns -= static_cast<int64_t>(b.tz_offset_min) * 60'000'000'000LL;
+    }
+    return a_ns < b_ns;
+}
+
+// ==================== Arithmetic: DateTime +/- Duration ====================
+
+DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& duration) {
+    DateTimeValue result = temporal;
+    result.month += duration.months;
+    result.day += duration.days;
+    normalizeDate(result.year, result.month, result.day);
+
+    int64_t total_nanos = duration.seconds * 1'000'000'000LL + duration.nanos;
+    int64_t add_seconds = total_nanos / 1'000'000'000LL;
+    int64_t add_nanos = total_nanos % 1'000'000'000LL;
+    if (add_nanos < 0) {
+        add_nanos += 1'000'000'000LL;
+        add_seconds -= 1;
+    }
+
+    result.nanos += add_nanos;
+    result.second += add_seconds;
+    result.second += result.nanos / 1'000'000'000LL;
+    result.nanos %= 1'000'000'000LL;
+    result.minute += result.second / 60;
+    result.second %= 60;
+    result.hour += result.minute / 60;
+    result.minute %= 60;
+
+    int64_t extra_days = result.hour / 24;
+    if (result.hour < 0)
+        extra_days = (result.hour - 23) / 24;
+    result.hour -= extra_days * 24;
+    result.day += extra_days;
+    normalizeDate(result.year, result.month, result.day);
+
+    if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.second -= 1;
+    }
+    if (result.second < 0) {
+        int64_t bm = (-result.second + 59) / 60;
+        result.second += bm * 60;
+        result.minute -= bm;
+    }
+    if (result.minute < 0) {
+        int64_t bh = (-result.minute + 59) / 60;
+        result.minute += bh * 60;
+        result.hour -= bh;
+    }
+    if (result.hour < 0) {
+        int64_t bd = (-result.hour + 23) / 24;
+        result.hour += bd * 24;
+        result.day -= bd;
+        normalizeDate(result.year, result.month, result.day);
+    }
+
+    return result;
+}
+
+TimeValue addDuration(const TimeValue& temporal, const DurationValue& duration) {
+    TimeValue result = temporal;
+
+    int64_t total_nanos = duration.seconds * 1'000'000'000LL + duration.nanos;
+    int64_t add_seconds = total_nanos / 1'000'000'000LL;
+    int64_t add_nanos = total_nanos % 1'000'000'000LL;
+    if (add_nanos < 0) {
+        add_nanos += 1'000'000'000LL;
+        add_seconds -= 1;
+    }
+
+    result.nanos += add_nanos;
+    result.second += add_seconds;
+    result.second += result.nanos / 1'000'000'000LL;
+    result.nanos %= 1'000'000'000LL;
+    result.minute += result.second / 60;
+    result.second %= 60;
+    result.hour += result.minute / 60;
+    result.minute %= 60;
+    result.hour %= 24;
+    if (result.hour < 0)
+        result.hour += 24;
+
+    if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.second -= 1;
+    }
+    if (result.second < 0) {
+        int64_t bm = (-result.second + 59) / 60;
+        result.second += bm * 60;
+        result.minute -= bm;
+    }
+    if (result.minute < 0) {
+        int64_t bh = (-result.minute + 59) / 60;
+        result.minute += bh * 60;
+        result.hour -= bh;
+    }
+
+    return result;
+}
+
+DateTimeValue subDuration(const DateTimeValue& temporal, const DurationValue& duration) {
+    DurationValue neg;
+    neg.months = -duration.months;
+    neg.days = -duration.days;
+    neg.seconds = -duration.seconds;
+    neg.nanos = -duration.nanos;
+    return addDuration(temporal, neg);
+}
+
+TimeValue subDuration(const TimeValue& temporal, const DurationValue& duration) {
+    DurationValue neg;
+    neg.months = -duration.months;
+    neg.days = -duration.days;
+    neg.seconds = -duration.seconds;
+    neg.nanos = -duration.nanos;
+    return addDuration(temporal, neg);
+}
+
+// ==================== Arithmetic: Temporal - Temporal ====================
+
+DurationValue subtractDateTimes(const DateTimeValue& a, const DateTimeValue& b) {
+    DurationValue result;
+    int64_t a_ns = temporalToComparable(a);
+    int64_t b_ns = temporalToComparable(b);
+    int64_t diff_ns = a_ns - b_ns;
+    int64_t ns_per_day = 86'400'000'000'000LL;
+    result.days = diff_ns / ns_per_day;
+    int64_t remaining_ns = diff_ns % ns_per_day;
+    result.seconds = remaining_ns / 1'000'000'000LL;
+    result.nanos = remaining_ns % 1'000'000'000LL;
+    if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.seconds -= 1;
+    }
+    return result;
+}
+
+DurationValue subtractTimes(const TimeValue& a, const TimeValue& b) {
+    DurationValue result;
+    int64_t a_ns = temporalToComparable(a);
+    int64_t b_ns = temporalToComparable(b);
+    int64_t diff_ns = a_ns - b_ns;
+    result.seconds = diff_ns / 1'000'000'000LL;
+    result.nanos = diff_ns % 1'000'000'000LL;
+    if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.seconds -= 1;
+    }
+    return result;
+}
+
+// ==================== Arithmetic: Duration +/- Duration ====================
+
+DurationValue addDurations(const DurationValue& a, const DurationValue& b) {
+    DurationValue result;
+    result.months = a.months + b.months;
+    result.days = a.days + b.days;
+    int64_t total_a = a.seconds * 1'000'000'000LL + a.nanos;
+    int64_t total_b = b.seconds * 1'000'000'000LL + b.nanos;
+    int64_t total = total_a + total_b;
+    result.seconds = total / 1'000'000'000LL;
+    result.nanos = total % 1'000'000'000LL;
+    if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.seconds -= 1;
+    }
+    return result;
+}
+
+DurationValue subDurations(const DurationValue& a, const DurationValue& b) {
+    DurationValue neg_b;
+    neg_b.months = -b.months;
+    neg_b.days = -b.days;
+    neg_b.seconds = -b.seconds;
+    neg_b.nanos = -b.nanos;
+    return addDurations(a, neg_b);
+}
+
+DurationValue mulDuration(const DurationValue& dur, int64_t factor) {
+    DurationValue result;
+    result.months = dur.months * factor;
+    result.days = dur.days * factor;
+    int64_t total = (dur.seconds * 1'000'000'000LL + dur.nanos) * factor;
+    result.seconds = total / 1'000'000'000LL;
+    result.nanos = total % 1'000'000'000LL;
+    if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.seconds -= 1;
+    }
+    return result;
+}
+
+DurationValue divDuration(const DurationValue& dur, int64_t divisor) {
+    if (divisor == 0)
+        return DurationValue{};
+    DurationValue result;
+    result.months = dur.months / divisor;
+    result.days = dur.days / divisor;
+    int64_t total = dur.seconds * 1'000'000'000LL + dur.nanos;
+    total /= divisor;
+    result.seconds = total / 1'000'000'000LL;
+    result.nanos = total % 1'000'000'000LL;
+    if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.seconds -= 1;
+    }
+    return result;
+}
+
+DurationValue mulDuration(const DurationValue& dur, double factor) {
+    DurationValue result;
+    double m = static_cast<double>(dur.months) * factor;
+    result.months = static_cast<int64_t>(std::trunc(m));
+    double frac_m = m - static_cast<double>(result.months);
+
+    double d = static_cast<double>(dur.days) * factor + frac_m * 30.0;
+    result.days = static_cast<int64_t>(std::trunc(d));
+    double frac_d = d - static_cast<double>(result.days);
+
+    double total_secs =
+        (static_cast<double>(dur.seconds) + static_cast<double>(dur.nanos) / 1e9) * factor + frac_d * 86400.0;
+    result.seconds = static_cast<int64_t>(std::trunc(total_secs));
+    double frac_s = total_secs - static_cast<double>(result.seconds);
+    result.nanos = static_cast<int64_t>(std::round(frac_s * 1e9));
+
+    if (result.nanos >= 1'000'000'000LL) {
+        result.seconds += result.nanos / 1'000'000'000LL;
+        result.nanos %= 1'000'000'000LL;
+    }
+    if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.seconds -= 1;
+    }
+    return result;
+}
+
+DurationValue divDuration(const DurationValue& dur, double divisor) {
+    if (divisor == 0.0)
+        return DurationValue{};
+    return mulDuration(dur, 1.0 / divisor);
+}
+
+// ==================== Duration between ====================
+
+DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b) {
+    DurationValue result;
+
+    int64_t months_diff = (b.year - a.year) * 12 + (b.month - a.month);
+    if (b.day < a.day) {
+        months_diff--;
+        int64_t prev_month = b.month - 1;
+        int64_t prev_year = b.year;
+        if (prev_month < 1) {
+            prev_month = 12;
+            prev_year--;
+        }
+        int64_t days_in_prev = daysInMonth(prev_year, prev_month);
+        result.months = months_diff;
+        result.days = (days_in_prev - a.day) + b.day;
+    } else {
+        result.months = months_diff;
+        result.days = b.day - a.day;
+    }
+
+    int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos;
+    int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos;
+    int64_t time_diff = b_ns - a_ns;
+
+    if (result.months == 0) {
+        time_diff += result.days * 86'400'000'000'000LL;
+        result.days = 0;
+    }
+
+    result.seconds = time_diff / 1'000'000'000LL;
+    result.nanos = time_diff % 1'000'000'000LL;
+    if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.seconds -= 1;
+    }
+    return result;
+}
+
+DurationValue durationBetween(const TimeValue& a, const TimeValue& b) {
+    return subtractTimes(a, b);
+}
+
+// ==================== Epoch conversion ====================
+
+DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos) {
+    DateTimeValue result;
+    result.kind = DateTimeKind::DATETIME;
+
+    // Convert to total nanoseconds since epoch
+    constexpr int64_t NANOS_PER_DAY = 86'400'000'000'000LL;
+    constexpr int64_t NANOS_PER_SEC = 1'000'000'000LL;
+
+    int64_t total_nanos = seconds * NANOS_PER_SEC + nanos;
+
+    // Split into days and day-nanos
+    int64_t days = total_nanos / NANOS_PER_DAY;
+    int64_t day_ns = total_nanos % NANOS_PER_DAY;
+    if (day_ns < 0) {
+        day_ns += NANOS_PER_DAY;
+        days--;
+    }
+
+    // Convert days since epoch to year/month/day
+    civilFromDays(days, result.year, result.month, result.day);
+
+    // Convert day_ns to hour/minute/second/nanos (UTC, no offset)
+    int64_t sec_of_day = day_ns / NANOS_PER_SEC;
+    result.nanos = day_ns % NANOS_PER_SEC;
+    result.second = sec_of_day % 60;
+    sec_of_day /= 60;
+    result.minute = sec_of_day % 60;
+    result.hour = sec_of_day / 60;
+
+    return result;
+}
+
+// ==================== String formatting ====================
 
 namespace {
 
@@ -346,7 +643,6 @@ std::string pad2(int64_t v) {
 std::string fmtSubsecond(int64_t nanos) {
     if (nanos == 0)
         return "";
-    // Pad to 9 digits with leading zeros, then strip trailing zeros
     char buf[10];
     snprintf(buf, sizeof(buf), "%09lld", static_cast<long long>(nanos));
     std::string s(buf);
@@ -367,140 +663,18 @@ std::string fmtTimezone(int32_t offset_min, const std::string& tz_name) {
 
 } // anonymous namespace
 
-bool TemporalValue::operator==(const TemporalValue& o) const {
-    if (kind != o.kind)
-        return false;
-    switch (kind) {
-    case TemporalKind::DATE:
-        return year == o.year && month == o.month && day == o.day;
-    case TemporalKind::LOCAL_TIME:
-        return hour == o.hour && minute == o.minute && second == o.second && nanos == o.nanos;
-    case TemporalKind::TIME:
-        return hour == o.hour && minute == o.minute && second == o.second && nanos == o.nanos &&
-               tz_offset_min == o.tz_offset_min && tz_name == o.tz_name;
-    case TemporalKind::LOCAL_DATETIME:
-        return year == o.year && month == o.month && day == o.day && hour == o.hour && minute == o.minute &&
-               second == o.second && nanos == o.nanos;
-    case TemporalKind::DATETIME:
-        return year == o.year && month == o.month && day == o.day && hour == o.hour && minute == o.minute &&
-               second == o.second && nanos == o.nanos && tz_offset_min == o.tz_offset_min && tz_name == o.tz_name;
-    case TemporalKind::DURATION:
-        return dur_months == o.dur_months && dur_days == o.dur_days && dur_seconds == o.dur_seconds &&
-               dur_nanos == o.dur_nanos;
-    }
-    return false;
-}
-
-int64_t temporalToComparable(const TemporalValue& tv) {
+std::string temporalToString(const DateTimeValue& tv) {
     switch (tv.kind) {
-    case TemporalKind::DATE:
-    case TemporalKind::LOCAL_DATETIME: {
-        int64_t days = daysFromCivil(tv.year, tv.month, tv.day);
-        int64_t day_ns = ((tv.hour * 3600 + tv.minute * 60 + tv.second) * 1'000'000'000LL) + tv.nanos;
-        return days * 86'400'000'000'000LL + day_ns;
-    }
-    case TemporalKind::TIME:
-    case TemporalKind::DATETIME: {
-        int64_t days = daysFromCivil(tv.year, tv.month, tv.day);
-        int64_t day_ns = ((tv.hour * 3600 + tv.minute * 60 + tv.second) * 1'000'000'000LL) + tv.nanos;
-        // Adjust by timezone offset to get UTC
-        int64_t utc_day_ns = day_ns - static_cast<int64_t>(tv.tz_offset_min) * 60'000'000'000LL;
-        return days * 86'400'000'000'000LL + utc_day_ns;
-    }
-    case TemporalKind::LOCAL_TIME:
-        return ((tv.hour * 3600 + tv.minute * 60 + tv.second) * 1'000'000'000LL) + tv.nanos;
-    case TemporalKind::DURATION:
-        // Normalize to nanoseconds (approximate: 30 days/month)
-        return ((tv.dur_months * 30 + tv.dur_days) * 86'400'000'000'000LL) + tv.dur_seconds * 1'000'000'000LL +
-               tv.dur_nanos;
-    }
-    return 0;
-}
-
-bool temporalLess(const TemporalValue& a, const TemporalValue& b) {
-    if (a.kind != b.kind)
-        return false;
-    switch (a.kind) {
-    case TemporalKind::DATE:
-        if (a.year != b.year)
-            return a.year < b.year;
-        if (a.month != b.month)
-            return a.month < b.month;
-        return a.day < b.day;
-    case TemporalKind::LOCAL_TIME:
-        if (a.hour != b.hour)
-            return a.hour < b.hour;
-        if (a.minute != b.minute)
-            return a.minute < b.minute;
-        if (a.second != b.second)
-            return a.second < b.second;
-        return a.nanos < b.nanos;
-    case TemporalKind::TIME: {
-        // Compare by UTC-adjusted nanoseconds (no date component, no overflow)
-        int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos -
-                       static_cast<int64_t>(a.tz_offset_min) * 60'000'000'000LL;
-        int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos -
-                       static_cast<int64_t>(b.tz_offset_min) * 60'000'000'000LL;
-        return a_ns < b_ns;
-    }
-    case TemporalKind::LOCAL_DATETIME:
-        if (a.year != b.year)
-            return a.year < b.year;
-        if (a.month != b.month)
-            return a.month < b.month;
-        if (a.day != b.day)
-            return a.day < b.day;
-        if (a.hour != b.hour)
-            return a.hour < b.hour;
-        if (a.minute != b.minute)
-            return a.minute < b.minute;
-        if (a.second != b.second)
-            return a.second < b.second;
-        return a.nanos < b.nanos;
-    case TemporalKind::DATETIME: {
-        // Compare by UTC: compare days first, then time-of-day (avoids overflow)
-        int64_t a_days = daysFromCivil(a.year, a.month, a.day);
-        int64_t b_days = daysFromCivil(b.year, b.month, b.day);
-        if (a_days != b_days)
-            return a_days < b_days;
-        int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos -
-                       static_cast<int64_t>(a.tz_offset_min) * 60'000'000'000LL;
-        int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos -
-                       static_cast<int64_t>(b.tz_offset_min) * 60'000'000'000LL;
-        return a_ns < b_ns;
-    }
-    case TemporalKind::DURATION:
-        return temporalToComparable(a) < temporalToComparable(b);
-    }
-    return false;
-}
-
-std::string temporalToString(const TemporalValue& tv) {
-    switch (tv.kind) {
-    case TemporalKind::DATE:
+    case DateTimeKind::DATE:
         return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day);
-
-    case TemporalKind::LOCAL_TIME: {
-        std::string s = pad2(tv.hour) + ":" + pad2(tv.minute);
-        if (tv.second != 0 || tv.nanos != 0)
-            s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
-        return s;
-    }
-    case TemporalKind::TIME: {
-        std::string s = pad2(tv.hour) + ":" + pad2(tv.minute);
-        if (tv.second != 0 || tv.nanos != 0)
-            s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
-        s += fmtTimezone(tv.tz_offset_min, tv.tz_name);
-        return s;
-    }
-    case TemporalKind::LOCAL_DATETIME: {
+    case DateTimeKind::LOCAL_DATETIME: {
         std::string s =
             pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" + pad2(tv.hour) + ":" + pad2(tv.minute);
         if (tv.second != 0 || tv.nanos != 0)
             s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
         return s;
     }
-    case TemporalKind::DATETIME: {
+    case DateTimeKind::DATETIME: {
         std::string s =
             pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" + pad2(tv.hour) + ":" + pad2(tv.minute);
         if (tv.second != 0 || tv.nanos != 0)
@@ -508,51 +682,56 @@ std::string temporalToString(const TemporalValue& tv) {
         s += fmtTimezone(tv.tz_offset_min, tv.tz_name);
         return s;
     }
+    default:
+        return "";
+    }
+}
 
-    case TemporalKind::DURATION: {
-        std::ostringstream oss;
-        oss << "P";
-        int64_t years = tv.dur_months / 12;
-        int64_t months = tv.dur_months % 12;
-        int64_t weeks = tv.dur_days / 7;
-        int64_t days = tv.dur_days % 7;
-        int64_t hours = tv.dur_seconds / 3600;
-        int64_t minutes = (tv.dur_seconds % 3600) / 60;
-        int64_t seconds = tv.dur_seconds % 60;
+std::string temporalToString(const TimeValue& tv) {
+    std::string s = pad2(tv.hour) + ":" + pad2(tv.minute);
+    if (tv.second != 0 || tv.nanos != 0)
+        s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
+    if (tv.kind == TimeKind::TIME)
+        s += fmtTimezone(tv.tz_offset_min, tv.tz_name);
+    return s;
+}
 
-        bool has_time = (hours != 0 || minutes != 0 || seconds != 0 || tv.dur_nanos != 0);
-
-        if (years != 0)
-            oss << years << "Y";
-        if (months != 0)
-            oss << months << "M";
-        if (weeks != 0)
-            oss << weeks << "W";
-        if (days != 0)
-            oss << days << "D";
-
-        if (has_time) {
-            oss << "T";
-            if (hours != 0)
-                oss << hours << "H";
-            if (minutes != 0)
-                oss << minutes << "M";
-            if (seconds != 0 || tv.dur_nanos != 0) {
-                if (tv.dur_nanos != 0) {
-                    oss << seconds << fmtSubsecond(tv.dur_nanos) << "S";
-                } else {
-                    oss << seconds << "S";
-                }
-            }
+std::string temporalToString(const DurationValue& tv) {
+    std::ostringstream oss;
+    oss << "P";
+    int64_t years = tv.months / 12;
+    int64_t months = tv.months % 12;
+    int64_t weeks = tv.days / 7;
+    int64_t days = tv.days % 7;
+    int64_t hours = tv.seconds / 3600;
+    int64_t minutes = (tv.seconds % 3600) / 60;
+    int64_t seconds = tv.seconds % 60;
+    bool has_time = (hours != 0 || minutes != 0 || seconds != 0 || tv.nanos != 0);
+    if (years != 0)
+        oss << years << "Y";
+    if (months != 0)
+        oss << months << "M";
+    if (weeks != 0)
+        oss << weeks << "W";
+    if (days != 0)
+        oss << days << "D";
+    if (has_time) {
+        oss << "T";
+        if (hours != 0)
+            oss << hours << "H";
+        if (minutes != 0)
+            oss << minutes << "M";
+        if (seconds != 0 || tv.nanos != 0) {
+            if (tv.nanos != 0)
+                oss << seconds << fmtSubsecond(tv.nanos) << "S";
+            else
+                oss << seconds << "S";
         }
-
-        std::string s = oss.str();
-        if (s == "P")
-            return "PT0S";
-        return s;
     }
-    }
-    return "";
+    std::string s = oss.str();
+    if (s == "P")
+        return "PT0S";
+    return s;
 }
 
 } // namespace eugraph

@@ -34,17 +34,67 @@ THRIFT_DATA_MEMBER const std::array<int, 3> TStructDataStorage<::eugraph::thrift
   2,
 }};
 
-THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift::PropertyValueThrift>::name = "PropertyValueThrift";
-THRIFT_DATA_MEMBER const std::array<std::string_view, 7> TStructDataStorage<::eugraph::thrift::PropertyValueThrift>::fields_names = { {
-  "bool_val"sv,
-  "int_val"sv,
-  "double_val"sv,
-  "string_val"sv,
-  "int_array"sv,
-  "double_array"sv,
-  "string_array"sv,
+THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift::DateTimeValueThrift>::name = "DateTimeValueThrift";
+THRIFT_DATA_MEMBER const std::array<std::string_view, 10> TStructDataStorage<::eugraph::thrift::DateTimeValueThrift>::fields_names = { {
+  "kind"sv,
+  "year"sv,
+  "month"sv,
+  "day"sv,
+  "hour"sv,
+  "minute"sv,
+  "second"sv,
+  "nanos"sv,
+  "tz_offset_min"sv,
+  "tz_name"sv,
 }};
-THRIFT_DATA_MEMBER const std::array<int16_t, 7> TStructDataStorage<::eugraph::thrift::PropertyValueThrift>::fields_ids = { {
+THRIFT_DATA_MEMBER const std::array<int16_t, 10> TStructDataStorage<::eugraph::thrift::DateTimeValueThrift>::fields_ids = { {
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+}};
+THRIFT_DATA_MEMBER const std::array<protocol::TType, 10> TStructDataStorage<::eugraph::thrift::DateTimeValueThrift>::fields_types = { {
+  TType::T_I32,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I32,
+  TType::T_STRING,
+}};
+THRIFT_DATA_MEMBER const std::array<int, 10> TStructDataStorage<::eugraph::thrift::DateTimeValueThrift>::isset_indexes = { {
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+}};
+
+THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift::TimeValueThrift>::name = "TimeValueThrift";
+THRIFT_DATA_MEMBER const std::array<std::string_view, 7> TStructDataStorage<::eugraph::thrift::TimeValueThrift>::fields_names = { {
+  "kind"sv,
+  "hour"sv,
+  "minute"sv,
+  "second"sv,
+  "nanos"sv,
+  "tz_offset_min"sv,
+  "tz_name"sv,
+}};
+THRIFT_DATA_MEMBER const std::array<int16_t, 7> TStructDataStorage<::eugraph::thrift::TimeValueThrift>::fields_ids = { {
   1,
   2,
   3,
@@ -53,16 +103,16 @@ THRIFT_DATA_MEMBER const std::array<int16_t, 7> TStructDataStorage<::eugraph::th
   6,
   7,
 }};
-THRIFT_DATA_MEMBER const std::array<protocol::TType, 7> TStructDataStorage<::eugraph::thrift::PropertyValueThrift>::fields_types = { {
-  TType::T_BOOL,
+THRIFT_DATA_MEMBER const std::array<protocol::TType, 7> TStructDataStorage<::eugraph::thrift::TimeValueThrift>::fields_types = { {
+  TType::T_I32,
   TType::T_I64,
-  TType::T_DOUBLE,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I32,
   TType::T_STRING,
-  TType::T_LIST,
-  TType::T_LIST,
-  TType::T_LIST,
 }};
-THRIFT_DATA_MEMBER const std::array<int, 7> TStructDataStorage<::eugraph::thrift::PropertyValueThrift>::isset_indexes = { {
+THRIFT_DATA_MEMBER const std::array<int, 7> TStructDataStorage<::eugraph::thrift::TimeValueThrift>::isset_indexes = { {
   0,
   1,
   2,
@@ -70,6 +120,82 @@ THRIFT_DATA_MEMBER const std::array<int, 7> TStructDataStorage<::eugraph::thrift
   4,
   5,
   6,
+}};
+
+THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift::DurationValueThrift>::name = "DurationValueThrift";
+THRIFT_DATA_MEMBER const std::array<std::string_view, 4> TStructDataStorage<::eugraph::thrift::DurationValueThrift>::fields_names = { {
+  "months"sv,
+  "days"sv,
+  "seconds"sv,
+  "nanos"sv,
+}};
+THRIFT_DATA_MEMBER const std::array<int16_t, 4> TStructDataStorage<::eugraph::thrift::DurationValueThrift>::fields_ids = { {
+  1,
+  2,
+  3,
+  4,
+}};
+THRIFT_DATA_MEMBER const std::array<protocol::TType, 4> TStructDataStorage<::eugraph::thrift::DurationValueThrift>::fields_types = { {
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+  TType::T_I64,
+}};
+THRIFT_DATA_MEMBER const std::array<int, 4> TStructDataStorage<::eugraph::thrift::DurationValueThrift>::isset_indexes = { {
+  0,
+  1,
+  2,
+  3,
+}};
+
+THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift::PropertyValueThrift>::name = "PropertyValueThrift";
+THRIFT_DATA_MEMBER const std::array<std::string_view, 10> TStructDataStorage<::eugraph::thrift::PropertyValueThrift>::fields_names = { {
+  "bool_val"sv,
+  "int_val"sv,
+  "double_val"sv,
+  "string_val"sv,
+  "int_array"sv,
+  "double_array"sv,
+  "string_array"sv,
+  "datetime_val"sv,
+  "time_val"sv,
+  "duration_val"sv,
+}};
+THRIFT_DATA_MEMBER const std::array<int16_t, 10> TStructDataStorage<::eugraph::thrift::PropertyValueThrift>::fields_ids = { {
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+}};
+THRIFT_DATA_MEMBER const std::array<protocol::TType, 10> TStructDataStorage<::eugraph::thrift::PropertyValueThrift>::fields_types = { {
+  TType::T_BOOL,
+  TType::T_I64,
+  TType::T_DOUBLE,
+  TType::T_STRING,
+  TType::T_LIST,
+  TType::T_LIST,
+  TType::T_LIST,
+  TType::T_STRUCT,
+  TType::T_STRUCT,
+  TType::T_STRUCT,
+}};
+THRIFT_DATA_MEMBER const std::array<int, 10> TStructDataStorage<::eugraph::thrift::PropertyValueThrift>::isset_indexes = { {
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
 }};
 
 THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift::LabelInfo>::name = "LabelInfo";
@@ -289,6 +415,15 @@ namespace detail {
 ::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift::PropertyDefThrift, false>::bundle)() =
     nullptr;
 
+::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift::DateTimeValueThrift, false>::bundle)() =
+    nullptr;
+
+::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift::TimeValueThrift, false>::bundle)() =
+    nullptr;
+
+::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift::DurationValueThrift, false>::bundle)() =
+    nullptr;
+
 ::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift::PropertyValueThrift, false>::bundle)() =
     nullptr;
 
@@ -323,6 +458,12 @@ namespace detail {
     nullptr;
 
 ::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift::PropertyType, true>::bundle)() =
+    nullptr;
+
+::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift::DateTimeKind, true>::bundle)() =
+    nullptr;
+
+::folly::Range<const ::std::string_view*>(*TSchemaAssociation<::eugraph::thrift::TimeKind, true>::bundle)() =
     nullptr;
 
 } // namespace detail

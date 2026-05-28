@@ -13,6 +13,21 @@ template uint32_t PropertyDefThrift::write<>(apache::thrift::CompactProtocolWrit
 template uint32_t PropertyDefThrift::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
 template uint32_t PropertyDefThrift::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
 
+template void DateTimeValueThrift::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t DateTimeValueThrift::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t DateTimeValueThrift::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t DateTimeValueThrift::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+
+template void TimeValueThrift::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t TimeValueThrift::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t TimeValueThrift::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t TimeValueThrift::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+
+template void DurationValueThrift::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t DurationValueThrift::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t DurationValueThrift::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t DurationValueThrift::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+
 template void PropertyValueThrift::readNoXfer<>(apache::thrift::CompactProtocolReader*);
 template uint32_t PropertyValueThrift::write<>(apache::thrift::CompactProtocolWriter*) const;
 template uint32_t PropertyValueThrift::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;

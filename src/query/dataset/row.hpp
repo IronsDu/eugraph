@@ -68,7 +68,7 @@ struct ValueStorage;
 // VertexId and EdgeId are both uint64_t — use VertexValue/EdgeValue to distinguish,
 // or just use int64_t for IDs in the runtime Value.
 using Value = std::variant<std::monostate, bool, int64_t, double, std::string, VertexValue, EdgeValue, PathValue,
-                           TemporalValue, ListValue, MapValue>;
+                           DateTimeValue, TimeValue, DurationValue, ListValue, MapValue>;
 
 struct ValueStorage {
     Value value;

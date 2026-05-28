@@ -6,16 +6,18 @@
 
 namespace eugraph {
 
-enum class TemporalKind : uint8_t {
+enum class DateTimeKind : uint8_t {
     DATE,
-    TIME,
-    DATETIME,
-    LOCAL_TIME,
     LOCAL_DATETIME,
-    DURATION
+    DATETIME
 };
 
-enum class TemporalField : uint8_t {
+enum class TimeKind : uint8_t {
+    LOCAL_TIME,
+    TIME
+};
+
+enum class DateTimeField : uint8_t {
     // Date fields
     YEAR,
     QUARTER,
@@ -26,22 +28,38 @@ enum class TemporalField : uint8_t {
     ORDINAL_DAY,
     WEEK_DAY,
     DAY_OF_QUARTER,
-    // Time fields
+    // Time fields (applicable to LOCAL_DATETIME / DATETIME)
     HOUR,
     MINUTE,
     SECOND,
     NANOSECOND,
     MILLISECOND,
     MICROSECOND,
-    // Timezone fields
+    // Timezone fields (only DATETIME)
     TIMEZONE,
     OFFSET,
     OFFSET_MINUTES,
     OFFSET_SECONDS,
-    // Epoch fields
+    // Epoch fields (only DATETIME)
     EPOCH_SECONDS,
     EPOCH_MILLIS,
-    // Duration fields
+};
+
+enum class TimeField : uint8_t {
+    HOUR,
+    MINUTE,
+    SECOND,
+    NANOSECOND,
+    MILLISECOND,
+    MICROSECOND,
+    // Timezone fields (only TIME)
+    TIMEZONE,
+    OFFSET,
+    OFFSET_MINUTES,
+    OFFSET_SECONDS,
+};
+
+enum class DurationField : uint8_t {
     YEARS,
     QUARTERS,
     MONTHS,
@@ -64,52 +82,94 @@ enum class TemporalField : uint8_t {
     NANOSECONDS_OF_SECOND,
 };
 
-std::optional<TemporalField> temporalFieldFromString(const std::string& s);
+std::optional<DateTimeField> dateTimeFieldFromString(const std::string& s);
+std::optional<TimeField> timeFieldFromString(const std::string& s);
+std::optional<DurationField> durationFieldFromString(const std::string& s);
 
-// Returns true if the field returns a String type; otherwise Int64.
-bool temporalFieldReturnsString(TemporalField f);
+bool dateTimeFieldReturnsString(DateTimeField f);
+bool timeFieldReturnsString(TimeField f);
 
-struct TemporalValue {
-    TemporalKind kind = TemporalKind::DATE;
-    // Date / datetime fields
+// ==================== Date/DateTime type ====================
+
+struct DateTimeValue {
+    DateTimeKind kind = DateTimeKind::DATE;
     int64_t year = 1970;
     int64_t month = 1;
     int64_t day = 1;
-    // Time fields
     int64_t hour = 0;
     int64_t minute = 0;
     int64_t second = 0;
-    int64_t nanos = 0;         // subsecond precision (0-999999999)
-    int32_t tz_offset_min = 0; // timezone offset in minutes (0 for local / UTC)
-    std::string tz_name = {};  // zone name like "Europe/Stockholm" (empty for non-zoned)
+    int64_t nanos = 0;
+    int32_t tz_offset_min = 0;
+    std::string tz_name;
 
-    // Duration-specific fields
-    int64_t dur_months = 0;
-    int64_t dur_days = 0;
-    int64_t dur_seconds = 0;
-    int64_t dur_nanos = 0;
-
-    bool operator==(const TemporalValue& o) const;
+    bool operator==(const DateTimeValue& o) const;
 };
 
-bool temporalLess(const TemporalValue& a, const TemporalValue& b);
-std::string temporalToString(const TemporalValue& tv);
-int64_t temporalToComparable(const TemporalValue& tv);
+// ==================== Time type ====================
 
-// Calendar helpers
+struct TimeValue {
+    TimeKind kind = TimeKind::LOCAL_TIME;
+    int64_t hour = 0;
+    int64_t minute = 0;
+    int64_t second = 0;
+    int64_t nanos = 0;
+    int32_t tz_offset_min = 0;
+    std::string tz_name;
+
+    bool operator==(const TimeValue& o) const;
+};
+
+// ==================== Duration type ====================
+
+struct DurationValue {
+    int64_t months = 0;
+    int64_t days = 0;
+    int64_t seconds = 0;
+    int64_t nanos = 0;
+
+    bool operator==(const DurationValue& o) const;
+};
+
+// ==================== String / comparison helpers ====================
+
+std::string temporalToString(const DateTimeValue& tv);
+std::string temporalToString(const TimeValue& tv);
+std::string temporalToString(const DurationValue& tv);
+
+int64_t temporalToComparable(const DateTimeValue& tv);
+int64_t temporalToComparable(const TimeValue& tv);
+
+bool temporalLess(const DateTimeValue& a, const DateTimeValue& b);
+bool temporalLess(const TimeValue& a, const TimeValue& b);
+
+// ==================== Calendar helpers ====================
+
 bool isLeapYear(int64_t year);
 int64_t daysInMonth(int64_t year, int64_t month);
 void normalizeDate(int64_t& year, int64_t& month, int64_t& day);
 int64_t daysFromCivil(int64_t y, int64_t m, int64_t d);
 void civilFromDays(int64_t days, int64_t& y, int64_t& m, int64_t& d);
 
-// Temporal arithmetic
-TemporalValue addDurationToTemporal(const TemporalValue& temporal, const TemporalValue& duration);
-TemporalValue subDurationFromTemporal(const TemporalValue& temporal, const TemporalValue& duration);
-TemporalValue subtractTemporals(const TemporalValue& a, const TemporalValue& b);
-TemporalValue addDurations(const TemporalValue& a, const TemporalValue& b);
-TemporalValue subDurations(const TemporalValue& a, const TemporalValue& b);
-TemporalValue mulDuration(const TemporalValue& dur, int64_t factor);
-TemporalValue divDuration(const TemporalValue& dur, int64_t divisor);
+// ==================== Temporal arithmetic ====================
+
+DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& duration);
+TimeValue addDuration(const TimeValue& temporal, const DurationValue& duration);
+DateTimeValue subDuration(const DateTimeValue& temporal, const DurationValue& duration);
+TimeValue subDuration(const TimeValue& temporal, const DurationValue& duration);
+
+DurationValue subtractDateTimes(const DateTimeValue& a, const DateTimeValue& b);
+DurationValue subtractTimes(const TimeValue& a, const TimeValue& b);
+DurationValue addDurations(const DurationValue& a, const DurationValue& b);
+DurationValue subDurations(const DurationValue& a, const DurationValue& b);
+DurationValue mulDuration(const DurationValue& dur, int64_t factor);
+DurationValue divDuration(const DurationValue& dur, int64_t divisor);
+DurationValue mulDuration(const DurationValue& dur, double factor);
+DurationValue divDuration(const DurationValue& dur, double divisor);
+
+DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b);
+DurationValue durationBetween(const TimeValue& a, const TimeValue& b);
+
+DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos);
 
 } // namespace eugraph

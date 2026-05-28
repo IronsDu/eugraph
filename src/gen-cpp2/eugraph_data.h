@@ -14,7 +14,7 @@ namespace apache { namespace thrift {
 
 template <> struct TEnumDataStorage<::eugraph::thrift::PropertyType> {
   using type = ::eugraph::thrift::PropertyType;
-  static constexpr const std::size_t size = 7;
+  static constexpr const std::size_t size = 10;
   static constexpr std::array<type, size> values = { {
       type::BOOL,
       type::INT64,
@@ -23,6 +23,9 @@ template <> struct TEnumDataStorage<::eugraph::thrift::PropertyType> {
       type::INT64_ARRAY,
       type::DOUBLE_ARRAY,
       type::STRING_ARRAY,
+      type::DATETIME,
+      type::TIME,
+      type::DURATION,
   }};
   static constexpr std::array<std::string_view, size> names = { {
       "BOOL"sv,
@@ -32,12 +35,43 @@ template <> struct TEnumDataStorage<::eugraph::thrift::PropertyType> {
       "INT64_ARRAY"sv,
       "DOUBLE_ARRAY"sv,
       "STRING_ARRAY"sv,
+      "DATETIME"sv,
+      "TIME"sv,
+      "DURATION"sv,
+  }};
+};
+
+template <> struct TEnumDataStorage<::eugraph::thrift::DateTimeKind> {
+  using type = ::eugraph::thrift::DateTimeKind;
+  static constexpr const std::size_t size = 3;
+  static constexpr std::array<type, size> values = { {
+      type::DATE,
+      type::LOCAL_DATETIME,
+      type::DATETIME_WITH_TZ,
+  }};
+  static constexpr std::array<std::string_view, size> names = { {
+      "DATE"sv,
+      "LOCAL_DATETIME"sv,
+      "DATETIME_WITH_TZ"sv,
+  }};
+};
+
+template <> struct TEnumDataStorage<::eugraph::thrift::TimeKind> {
+  using type = ::eugraph::thrift::TimeKind;
+  static constexpr const std::size_t size = 2;
+  static constexpr std::array<type, size> values = { {
+      type::LOCAL_TIME,
+      type::TIME_WITH_TZ,
+  }};
+  static constexpr std::array<std::string_view, size> names = { {
+      "LOCAL_TIME"sv,
+      "TIME_WITH_TZ"sv,
   }};
 };
 
 template <> struct TEnumDataStorage<::eugraph::thrift::PropertyValueThrift::Type> {
   using type = ::eugraph::thrift::PropertyValueThrift::Type;
-  static constexpr const std::size_t size = 7;
+  static constexpr const std::size_t size = 10;
   static constexpr std::array<type, size> values = { {
       type::bool_val,
       type::int_val,
@@ -46,6 +80,9 @@ template <> struct TEnumDataStorage<::eugraph::thrift::PropertyValueThrift::Type
       type::int_array,
       type::double_array,
       type::string_array,
+      type::datetime_val,
+      type::time_val,
+      type::duration_val,
   }};
   static constexpr std::array<std::string_view, size> names = { {
       "bool_val"sv,
@@ -55,6 +92,9 @@ template <> struct TEnumDataStorage<::eugraph::thrift::PropertyValueThrift::Type
       "int_array"sv,
       "double_array"sv,
       "string_array"sv,
+      "datetime_val"sv,
+      "time_val"sv,
+      "duration_val"sv,
   }};
 };
 
@@ -100,8 +140,53 @@ template <> struct TStructDataStorage<::eugraph::thrift::PropertyDefThrift> {
   static const std::array<int, fields_size> isset_indexes;
 };
 
-template <> struct TStructDataStorage<::eugraph::thrift::PropertyValueThrift> {
+template <> struct TStructDataStorage<::eugraph::thrift::DateTimeValueThrift> {
+  static constexpr const std::size_t fields_size = 10;
+  static const std::string_view name;
+  static const std::array<std::string_view, fields_size> fields_names;
+  static const std::array<int16_t, fields_size> fields_ids;
+  static const std::array<protocol::TType, fields_size> fields_types;
+
+ private:
+  // The following fields describe internal storage metadata, and are private to
+  // prevent user logic from accessing them, but they can be inspected by
+  // debuggers.
+  // -1 if the field has no isset.
+  static const std::array<int, fields_size> isset_indexes;
+};
+
+template <> struct TStructDataStorage<::eugraph::thrift::TimeValueThrift> {
   static constexpr const std::size_t fields_size = 7;
+  static const std::string_view name;
+  static const std::array<std::string_view, fields_size> fields_names;
+  static const std::array<int16_t, fields_size> fields_ids;
+  static const std::array<protocol::TType, fields_size> fields_types;
+
+ private:
+  // The following fields describe internal storage metadata, and are private to
+  // prevent user logic from accessing them, but they can be inspected by
+  // debuggers.
+  // -1 if the field has no isset.
+  static const std::array<int, fields_size> isset_indexes;
+};
+
+template <> struct TStructDataStorage<::eugraph::thrift::DurationValueThrift> {
+  static constexpr const std::size_t fields_size = 4;
+  static const std::string_view name;
+  static const std::array<std::string_view, fields_size> fields_names;
+  static const std::array<int16_t, fields_size> fields_ids;
+  static const std::array<protocol::TType, fields_size> fields_types;
+
+ private:
+  // The following fields describe internal storage metadata, and are private to
+  // prevent user logic from accessing them, but they can be inspected by
+  // debuggers.
+  // -1 if the field has no isset.
+  static const std::array<int, fields_size> isset_indexes;
+};
+
+template <> struct TStructDataStorage<::eugraph::thrift::PropertyValueThrift> {
+  static constexpr const std::size_t fields_size = 10;
   static const std::string_view name;
   static const std::array<std::string_view, fields_size> fields_names;
   static const std::array<int16_t, fields_size> fields_ids;

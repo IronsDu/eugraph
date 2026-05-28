@@ -124,7 +124,9 @@ struct ColumnBuffer {
         case binder::BoundTypeKind::MAP:
             map_data.resize(n);
             break;
-        case binder::BoundTypeKind::TEMPORAL:
+        case binder::BoundTypeKind::DATETIME:
+        case binder::BoundTypeKind::TIME:
+        case binder::BoundTypeKind::DURATION:
         case binder::BoundTypeKind::ANY:
         case binder::BoundTypeKind::NULL_TYPE:
             any_data.resize(n);
@@ -171,7 +173,9 @@ struct ColumnBuffer {
             return Value(list_data[i]);
         case binder::BoundTypeKind::MAP:
             return Value(map_data[i]);
-        case binder::BoundTypeKind::TEMPORAL:
+        case binder::BoundTypeKind::DATETIME:
+        case binder::BoundTypeKind::TIME:
+        case binder::BoundTypeKind::DURATION:
         case binder::BoundTypeKind::ANY:
         case binder::BoundTypeKind::NULL_TYPE:
             return i < any_data.size() ? any_data[i] : Value{};
@@ -226,7 +230,9 @@ struct ColumnBuffer {
             if (std::holds_alternative<MapValue>(val))
                 map_data[i] = std::get<MapValue>(val);
             break;
-        case binder::BoundTypeKind::TEMPORAL:
+        case binder::BoundTypeKind::DATETIME:
+        case binder::BoundTypeKind::TIME:
+        case binder::BoundTypeKind::DURATION:
         case binder::BoundTypeKind::ANY:
         case binder::BoundTypeKind::NULL_TYPE:
             if (i < any_data.size())

@@ -116,8 +116,12 @@ inline Value toStringImpl(const Value& arg) {
     }
     if (std::holds_alternative<bool>(arg))
         return Value(std::get<bool>(arg) ? std::string("true") : std::string("false"));
-    if (std::holds_alternative<TemporalValue>(arg))
-        return Value(temporalToString(std::get<TemporalValue>(arg)));
+    if (std::holds_alternative<DateTimeValue>(arg))
+        return Value(temporalToString(std::get<DateTimeValue>(arg)));
+    if (std::holds_alternative<TimeValue>(arg))
+        return Value(temporalToString(std::get<TimeValue>(arg)));
+    if (std::holds_alternative<DurationValue>(arg))
+        return Value(temporalToString(std::get<DurationValue>(arg)));
     return Value{};
 }
 

@@ -18,7 +18,9 @@ enum class BoundTypeKind : uint8_t {
     PATH,
     LIST,      // List<T>
     MAP,       // Map<K, V>
-    TEMPORAL,  // 时间日期类型 (date, time, datetime, localtime, localdatetime, duration)
+    DATETIME,  // date, datetime, localdatetime
+    TIME,      // time, localtime
+    DURATION,  // duration
     ANY,       // 多标签弱类型访问，运行时类型不确定
     NULL_TYPE, // 字面量 NULL
 };
@@ -81,7 +83,16 @@ struct BoundType {
         return {BoundTypeKind::NULL_TYPE, nullptr};
     }
     static BoundType Temporal() {
-        return {BoundTypeKind::TEMPORAL, nullptr};
+        return {BoundTypeKind::DATETIME, nullptr};
+    }
+    static BoundType DateTime() {
+        return {BoundTypeKind::DATETIME, nullptr};
+    }
+    static BoundType Time() {
+        return {BoundTypeKind::TIME, nullptr};
+    }
+    static BoundType Duration() {
+        return {BoundTypeKind::DURATION, nullptr};
     }
     static BoundType List(BoundType elem) {
         return {BoundTypeKind::LIST, std::make_unique<BoundType>(std::move(elem))};
@@ -137,8 +148,12 @@ struct BoundType {
                    (map_value_type ? map_value_type->toString() : "?") + ">";
         case BoundTypeKind::ANY:
             return "ANY";
-        case BoundTypeKind::TEMPORAL:
-            return "TEMPORAL";
+        case BoundTypeKind::DATETIME:
+            return "DATETIME";
+        case BoundTypeKind::TIME:
+            return "TIME";
+        case BoundTypeKind::DURATION:
+            return "DURATION";
         case BoundTypeKind::NULL_TYPE:
             return "NULL";
         }

@@ -24,6 +24,48 @@ struct ForEachField<::eugraph::thrift::PropertyDefThrift> {
 };
 
 template <>
+struct ForEachField<::eugraph::thrift::DateTimeValueThrift> {
+  template <typename F, typename... T>
+  void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
+    f(0, static_cast<T&&>(t).kind_ref()...);
+    f(1, static_cast<T&&>(t).year_ref()...);
+    f(2, static_cast<T&&>(t).month_ref()...);
+    f(3, static_cast<T&&>(t).day_ref()...);
+    f(4, static_cast<T&&>(t).hour_ref()...);
+    f(5, static_cast<T&&>(t).minute_ref()...);
+    f(6, static_cast<T&&>(t).second_ref()...);
+    f(7, static_cast<T&&>(t).nanos_ref()...);
+    f(8, static_cast<T&&>(t).tz_offset_min_ref()...);
+    f(9, static_cast<T&&>(t).tz_name_ref()...);
+  }
+};
+
+template <>
+struct ForEachField<::eugraph::thrift::TimeValueThrift> {
+  template <typename F, typename... T>
+  void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
+    f(0, static_cast<T&&>(t).kind_ref()...);
+    f(1, static_cast<T&&>(t).hour_ref()...);
+    f(2, static_cast<T&&>(t).minute_ref()...);
+    f(3, static_cast<T&&>(t).second_ref()...);
+    f(4, static_cast<T&&>(t).nanos_ref()...);
+    f(5, static_cast<T&&>(t).tz_offset_min_ref()...);
+    f(6, static_cast<T&&>(t).tz_name_ref()...);
+  }
+};
+
+template <>
+struct ForEachField<::eugraph::thrift::DurationValueThrift> {
+  template <typename F, typename... T>
+  void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
+    f(0, static_cast<T&&>(t).months_ref()...);
+    f(1, static_cast<T&&>(t).days_ref()...);
+    f(2, static_cast<T&&>(t).seconds_ref()...);
+    f(3, static_cast<T&&>(t).nanos_ref()...);
+  }
+};
+
+template <>
 struct ForEachField<::eugraph::thrift::PropertyValueThrift> {
   template <typename F, typename... T>
   void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
@@ -34,6 +76,9 @@ struct ForEachField<::eugraph::thrift::PropertyValueThrift> {
     f(4, static_cast<T&&>(t).int_array_ref()...);
     f(5, static_cast<T&&>(t).double_array_ref()...);
     f(6, static_cast<T&&>(t).string_array_ref()...);
+    f(7, static_cast<T&&>(t).datetime_val_ref()...);
+    f(8, static_cast<T&&>(t).time_val_ref()...);
+    f(9, static_cast<T&&>(t).duration_val_ref()...);
   }
 };
 
