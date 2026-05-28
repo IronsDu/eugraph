@@ -206,7 +206,7 @@ bool DateTimeValue::operator==(const DateTimeValue& o) const {
                second == o.second && nanos == o.nanos;
     case DateTimeKind::DATETIME:
         return year == o.year && month == o.month && day == o.day && hour == o.hour && minute == o.minute &&
-               second == o.second && nanos == o.nanos && tz_offset_min == o.tz_offset_min && tz_name == o.tz_name;
+               second == o.second && nanos == o.nanos && tz_offset_sec == o.tz_offset_sec && tz_name == o.tz_name;
     default:
         return false;
     }
@@ -220,7 +220,7 @@ bool TimeValue::operator==(const TimeValue& o) const {
         return hour == o.hour && minute == o.minute && second == o.second && nanos == o.nanos;
     case TimeKind::TIME:
         return hour == o.hour && minute == o.minute && second == o.second && nanos == o.nanos &&
-               tz_offset_min == o.tz_offset_min && tz_name == o.tz_name;
+               tz_offset_sec == o.tz_offset_sec && tz_name == o.tz_name;
     default:
         return false;
     }
@@ -236,14 +236,14 @@ int64_t temporalToComparable(const DateTimeValue& tv) {
     int64_t days = daysFromCivil(tv.year, tv.month, tv.day);
     int64_t day_ns = ((tv.hour * 3600 + tv.minute * 60 + tv.second) * 1'000'000'000LL) + tv.nanos;
     if (tv.kind == DateTimeKind::DATETIME)
-        day_ns -= static_cast<int64_t>(tv.tz_offset_min) * 60'000'000'000LL;
+        day_ns -= static_cast<int64_t>(tv.tz_offset_sec) * 1'000'000'000LL;
     return days * 86'400'000'000'000LL + day_ns;
 }
 
 int64_t temporalToComparable(const TimeValue& tv) {
     int64_t day_ns = ((tv.hour * 3600 + tv.minute * 60 + tv.second) * 1'000'000'000LL) + tv.nanos;
     if (tv.kind == TimeKind::TIME)
-        day_ns -= static_cast<int64_t>(tv.tz_offset_min) * 60'000'000'000LL;
+        day_ns -= static_cast<int64_t>(tv.tz_offset_sec) * 1'000'000'000LL;
     return day_ns;
 }
 
@@ -279,9 +279,9 @@ bool temporalLess(const DateTimeValue& a, const DateTimeValue& b) {
         if (a_days != b_days)
             return a_days < b_days;
         int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos -
-                       static_cast<int64_t>(a.tz_offset_min) * 60'000'000'000LL;
+                       static_cast<int64_t>(a.tz_offset_sec) * 1'000'000'000LL;
         int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos -
-                       static_cast<int64_t>(b.tz_offset_min) * 60'000'000'000LL;
+                       static_cast<int64_t>(b.tz_offset_sec) * 1'000'000'000LL;
         return a_ns < b_ns;
     }
     default:
@@ -295,8 +295,8 @@ bool temporalLess(const TimeValue& a, const TimeValue& b) {
     int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos;
     int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos;
     if (a.kind == TimeKind::TIME) {
-        a_ns -= static_cast<int64_t>(a.tz_offset_min) * 60'000'000'000LL;
-        b_ns -= static_cast<int64_t>(b.tz_offset_min) * 60'000'000'000LL;
+        a_ns -= static_cast<int64_t>(a.tz_offset_sec) * 1'000'000'000LL;
+        b_ns -= static_cast<int64_t>(b.tz_offset_sec) * 1'000'000'000LL;
     }
     return a_ns < b_ns;
 }
@@ -651,14 +651,20 @@ std::string fmtSubsecond(int64_t nanos) {
     return "." + s;
 }
 
-std::string fmtTimezone(int32_t offset_min, const std::string& tz_name) {
+std::string fmtTimezone(int32_t offset_sec, const std::string& tz_name) {
     if (!tz_name.empty())
         return "+00:00[" + tz_name + "]";
-    if (offset_min == 0)
+    if (offset_sec == 0)
         return "Z";
-    int32_t abs_min = offset_min < 0 ? -offset_min : offset_min;
-    std::string sign = offset_min >= 0 ? "+" : "-";
-    return sign + pad2(abs_min / 60) + ":" + pad2(abs_min % 60);
+    int32_t abs_s = offset_sec < 0 ? -offset_sec : offset_sec;
+    int32_t hours = abs_s / 3600;
+    int32_t minutes = (abs_s % 3600) / 60;
+    int32_t seconds = abs_s % 60;
+    std::string sign = offset_sec >= 0 ? "+" : "-";
+    std::string result = sign + pad2(hours) + ":" + pad2(minutes);
+    if (seconds != 0)
+        result += ":" + pad2(seconds);
+    return result;
 }
 
 } // anonymous namespace
@@ -679,7 +685,7 @@ std::string temporalToString(const DateTimeValue& tv) {
             pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" + pad2(tv.hour) + ":" + pad2(tv.minute);
         if (tv.second != 0 || tv.nanos != 0)
             s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
-        s += fmtTimezone(tv.tz_offset_min, tv.tz_name);
+        s += fmtTimezone(tv.tz_offset_sec, tv.tz_name);
         return s;
     }
     default:
@@ -692,7 +698,7 @@ std::string temporalToString(const TimeValue& tv) {
     if (tv.second != 0 || tv.nanos != 0)
         s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
     if (tv.kind == TimeKind::TIME)
-        s += fmtTimezone(tv.tz_offset_min, tv.tz_name);
+        s += fmtTimezone(tv.tz_offset_sec, tv.tz_name);
     return s;
 }
 

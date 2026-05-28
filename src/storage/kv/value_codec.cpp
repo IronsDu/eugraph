@@ -103,7 +103,7 @@ std::string ValueCodec::encode(const PropertyValue& value) {
                 appendU64(result, static_cast<uint64_t>(arg.minute));
                 appendU64(result, static_cast<uint64_t>(arg.second));
                 appendU64(result, static_cast<uint64_t>(arg.nanos));
-                appendU32(result, static_cast<uint32_t>(arg.tz_offset_min));
+                appendU32(result, static_cast<uint32_t>(arg.tz_offset_sec));
                 appendU16(result, static_cast<uint16_t>(arg.tz_name.size()));
                 result.append(arg.tz_name);
             } else if constexpr (std::is_same_v<T, TimeValue>) {
@@ -113,7 +113,7 @@ std::string ValueCodec::encode(const PropertyValue& value) {
                 appendU64(result, static_cast<uint64_t>(arg.minute));
                 appendU64(result, static_cast<uint64_t>(arg.second));
                 appendU64(result, static_cast<uint64_t>(arg.nanos));
-                appendU32(result, static_cast<uint32_t>(arg.tz_offset_min));
+                appendU32(result, static_cast<uint32_t>(arg.tz_offset_sec));
                 appendU16(result, static_cast<uint16_t>(arg.tz_name.size()));
                 result.append(arg.tz_name);
             } else if constexpr (std::is_same_v<T, DurationValue>) {
@@ -198,7 +198,7 @@ PropertyValue ValueCodec::decode(std::string_view data) {
         tv.minute = static_cast<int64_t>(readU64(data, off));
         tv.second = static_cast<int64_t>(readU64(data, off));
         tv.nanos = static_cast<int64_t>(readU64(data, off));
-        tv.tz_offset_min = static_cast<int32_t>(readU32(data, off));
+        tv.tz_offset_sec = static_cast<int32_t>(readU32(data, off));
         uint16_t tz_len = readU16(data, off);
         tv.tz_name = std::string(data.substr(off, tz_len));
         return tv;
@@ -211,7 +211,7 @@ PropertyValue ValueCodec::decode(std::string_view data) {
         tv.minute = static_cast<int64_t>(readU64(data, off));
         tv.second = static_cast<int64_t>(readU64(data, off));
         tv.nanos = static_cast<int64_t>(readU64(data, off));
-        tv.tz_offset_min = static_cast<int32_t>(readU32(data, off));
+        tv.tz_offset_sec = static_cast<int32_t>(readU32(data, off));
         uint16_t tz_len = readU16(data, off);
         tv.tz_name = std::string(data.substr(off, tz_len));
         return tv;

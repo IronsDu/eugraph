@@ -100,7 +100,7 @@ struct DateTimeValue {
     int64_t minute = 0;
     int64_t second = 0;
     int64_t nanos = 0;
-    int32_t tz_offset_min = 0;
+    int32_t tz_offset_sec = 0;
     std::string tz_name;
 
     bool operator==(const DateTimeValue& o) const;
@@ -114,7 +114,7 @@ struct TimeValue {
     int64_t minute = 0;
     int64_t second = 0;
     int64_t nanos = 0;
-    int32_t tz_offset_min = 0;
+    int32_t tz_offset_sec = 0;
     std::string tz_name;
 
     bool operator==(const TimeValue& o) const;

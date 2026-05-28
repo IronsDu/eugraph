@@ -701,7 +701,7 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift::PropertyValueT
         tv.minute = *dt.minute();
         tv.second = *dt.second();
         tv.nanos = *dt.nanos();
-        tv.tz_offset_min = *dt.tz_offset_min();
+        tv.tz_offset_sec = *dt.tz_offset_min() * 60;
         tv.tz_name = *dt.tz_name();
         return tv;
     }
@@ -720,7 +720,7 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift::PropertyValueT
         tv.minute = *t.minute();
         tv.second = *t.second();
         tv.nanos = *t.nanos();
-        tv.tz_offset_min = *t.tz_offset_min();
+        tv.tz_offset_sec = *t.tz_offset_min() * 60;
         tv.tz_name = *t.tz_name();
         return tv;
     }
