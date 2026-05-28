@@ -631,34 +631,36 @@ void FunctionRegistry::registerScalarBuiltins() {
 
     // truncate(STRING, DATETIME) -> DateTime  (2-arg)
     // truncate(STRING, DATETIME, ANY) -> DateTime  (3-arg)
-    functions_["date.truncate"].push_back({"date.truncate",
-                                           {BoundType::String(), BoundType::DateTime()},
-                                           BoundType::DateTime(),
-                                           false,
-                                           false,
-                                           scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATE)>,
-                                           scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATE)>,
-                                           {},
-                                           {},
-                                           {}});
-    functions_["date.truncate"].push_back({"date.truncate",
-                                           {BoundType::String(), BoundType::DateTime(), BoundType::Any()},
-                                           BoundType::DateTime(),
-                                           false,
-                                           false,
-                                           scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATE)>,
-                                           scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATE)>,
-                                           {},
-                                           {},
-                                           {}});
+    functions_["date.truncate"].push_back(
+        {"date.truncate",
+         {BoundType::String(), BoundType::DateTime()},
+         BoundType::DateTime(),
+         false,
+         false,
+         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATE), false>,
+         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATE), false>,
+         {},
+         {},
+         {}});
+    functions_["date.truncate"].push_back(
+        {"date.truncate",
+         {BoundType::String(), BoundType::DateTime(), BoundType::Any()},
+         BoundType::DateTime(),
+         false,
+         false,
+         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATE), false>,
+         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATE), false>,
+         {},
+         {},
+         {}});
     functions_["datetime.truncate"].push_back(
         {"datetime.truncate",
          {BoundType::String(), BoundType::DateTime()},
          BoundType::DateTime(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATETIME)>,
-         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATETIME)>,
+         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATETIME), false>,
+         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATETIME), false>,
          {},
          {},
          {}});
@@ -668,50 +670,50 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::DateTime(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATETIME)>,
-         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATETIME)>,
+         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATETIME), false>,
+         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATETIME), false>,
          {},
          {},
          {}});
     functions_["time.truncate"].push_back({"time.truncate",
-                                           {BoundType::String(), BoundType::Time()},
+                                           {BoundType::String(), BoundType::Any()},
                                            BoundType::Time(),
                                            false,
                                            false,
-                                           scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::TIME)>,
-                                           scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::TIME)>,
+                                           scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::TIME), true>,
+                                           scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::TIME), true>,
                                            {},
                                            {},
                                            {}});
     functions_["time.truncate"].push_back({"time.truncate",
-                                           {BoundType::String(), BoundType::Time(), BoundType::Any()},
+                                           {BoundType::String(), BoundType::Any(), BoundType::Any()},
                                            BoundType::Time(),
                                            false,
                                            false,
-                                           scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::TIME)>,
-                                           scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::TIME)>,
+                                           scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::TIME), true>,
+                                           scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::TIME), true>,
                                            {},
                                            {},
                                            {}});
     functions_["localtime.truncate"].push_back(
         {"localtime.truncate",
-         {BoundType::String(), BoundType::Time()},
+         {BoundType::String(), BoundType::Any()},
          BoundType::Time(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME)>,
-         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME)>,
+         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME), true>,
+         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME), true>,
          {},
          {},
          {}});
     functions_["localtime.truncate"].push_back(
         {"localtime.truncate",
-         {BoundType::String(), BoundType::Time(), BoundType::Any()},
+         {BoundType::String(), BoundType::Any(), BoundType::Any()},
          BoundType::Time(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME)>,
-         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME)>,
+         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME), true>,
+         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME), true>,
          {},
          {},
          {}});
@@ -721,8 +723,8 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::DateTime(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME)>,
-         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME)>,
+         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME), false>,
+         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME), false>,
          {},
          {},
          {}});
@@ -732,8 +734,8 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::DateTime(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME)>,
-         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME)>,
+         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME), false>,
+         scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME), false>,
          {},
          {},
          {}});
@@ -741,6 +743,39 @@ void FunctionRegistry::registerScalarBuiltins() {
     // duration.between(DATETIME, DATETIME) -> Duration
     functions_["duration.between"].push_back({"duration.between",
                                               {BoundType::DateTime(), BoundType::DateTime()},
+                                              BoundType::Duration(),
+                                              false,
+                                              false,
+                                              scalar::durationBetweenScalarFn,
+                                              scalar::durationBetweenBatchFn,
+                                              {},
+                                              {},
+                                              {}});
+    // duration.between(TIME, TIME) -> Duration
+    functions_["duration.between"].push_back({"duration.between",
+                                              {BoundType::Time(), BoundType::Time()},
+                                              BoundType::Duration(),
+                                              false,
+                                              false,
+                                              scalar::durationBetweenScalarFn,
+                                              scalar::durationBetweenBatchFn,
+                                              {},
+                                              {},
+                                              {}});
+    // duration.between(DATETIME, TIME) -> Duration
+    functions_["duration.between"].push_back({"duration.between",
+                                              {BoundType::DateTime(), BoundType::Time()},
+                                              BoundType::Duration(),
+                                              false,
+                                              false,
+                                              scalar::durationBetweenScalarFn,
+                                              scalar::durationBetweenBatchFn,
+                                              {},
+                                              {},
+                                              {}});
+    // duration.between(TIME, DATETIME) -> Duration
+    functions_["duration.between"].push_back({"duration.between",
+                                              {BoundType::Time(), BoundType::DateTime()},
                                               BoundType::Duration(),
                                               false,
                                               false,
@@ -761,6 +796,185 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                {},
                                                {},
                                                {}});
+    // duration.inMonths(TIME, TIME) -> Duration
+    functions_["duration.inMonths"].push_back({"duration.inMonths",
+                                               {BoundType::Time(), BoundType::Time()},
+                                               BoundType::Duration(),
+                                               false,
+                                               false,
+                                               scalar::durationInMonthsScalarFn,
+                                               scalar::durationInMonthsBatchFn,
+                                               {},
+                                               {},
+                                               {}});
+    // duration.inMonths(DATETIME, TIME) -> Duration
+    functions_["duration.inMonths"].push_back({"duration.inMonths",
+                                               {BoundType::DateTime(), BoundType::Time()},
+                                               BoundType::Duration(),
+                                               false,
+                                               false,
+                                               scalar::durationInMonthsScalarFn,
+                                               scalar::durationInMonthsBatchFn,
+                                               {},
+                                               {},
+                                               {}});
+    // duration.inMonths(TIME, DATETIME) -> Duration
+    functions_["duration.inMonths"].push_back({"duration.inMonths",
+                                               {BoundType::Time(), BoundType::DateTime()},
+                                               BoundType::Duration(),
+                                               false,
+                                               false,
+                                               scalar::durationInMonthsScalarFn,
+                                               scalar::durationInMonthsBatchFn,
+                                               {},
+                                               {},
+                                               {}});
+
+    // duration.inSeconds(DATETIME, DATETIME) -> Double
+    functions_["duration.inSeconds"].push_back({"duration.inSeconds",
+                                                {BoundType::DateTime(), BoundType::DateTime()},
+                                                BoundType::Double(),
+                                                false,
+                                                false,
+                                                scalar::durationInSecondsScalarFn,
+                                                scalar::durationInSecondsBatchFn,
+                                                {},
+                                                {},
+                                                {}});
+    // duration.inSeconds(TIME, TIME) -> Double
+    functions_["duration.inSeconds"].push_back({"duration.inSeconds",
+                                                {BoundType::Time(), BoundType::Time()},
+                                                BoundType::Double(),
+                                                false,
+                                                false,
+                                                scalar::durationInSecondsScalarFn,
+                                                scalar::durationInSecondsBatchFn,
+                                                {},
+                                                {},
+                                                {}});
+    // duration.inSeconds(DATETIME, TIME) -> Double
+    functions_["duration.inSeconds"].push_back({"duration.inSeconds",
+                                                {BoundType::DateTime(), BoundType::Time()},
+                                                BoundType::Double(),
+                                                false,
+                                                false,
+                                                scalar::durationInSecondsScalarFn,
+                                                scalar::durationInSecondsBatchFn,
+                                                {},
+                                                {},
+                                                {}});
+    // duration.inSeconds(TIME, DATETIME) -> Double
+    functions_["duration.inSeconds"].push_back({"duration.inSeconds",
+                                                {BoundType::Time(), BoundType::DateTime()},
+                                                BoundType::Double(),
+                                                false,
+                                                false,
+                                                scalar::durationInSecondsScalarFn,
+                                                scalar::durationInSecondsBatchFn,
+                                                {},
+                                                {},
+                                                {}});
+
+    // duration.inDays(DATETIME, DATETIME) -> Double
+    functions_["duration.inDays"].push_back({"duration.inDays",
+                                             {BoundType::DateTime(), BoundType::DateTime()},
+                                             BoundType::Double(),
+                                             false,
+                                             false,
+                                             scalar::durationInDaysScalarFn,
+                                             scalar::durationInDaysBatchFn,
+                                             {},
+                                             {},
+                                             {}});
+    // duration.inDays(TIME, TIME) -> Double
+    functions_["duration.inDays"].push_back({"duration.inDays",
+                                             {BoundType::Time(), BoundType::Time()},
+                                             BoundType::Double(),
+                                             false,
+                                             false,
+                                             scalar::durationInDaysScalarFn,
+                                             scalar::durationInDaysBatchFn,
+                                             {},
+                                             {},
+                                             {}});
+    // duration.inDays(DATETIME, TIME) -> Double
+    functions_["duration.inDays"].push_back({"duration.inDays",
+                                             {BoundType::DateTime(), BoundType::Time()},
+                                             BoundType::Double(),
+                                             false,
+                                             false,
+                                             scalar::durationInDaysScalarFn,
+                                             scalar::durationInDaysBatchFn,
+                                             {},
+                                             {},
+                                             {}});
+    // duration.inDays(TIME, DATETIME) -> Double
+    functions_["duration.inDays"].push_back({"duration.inDays",
+                                             {BoundType::Time(), BoundType::DateTime()},
+                                             BoundType::Double(),
+                                             false,
+                                             false,
+                                             scalar::durationInDaysScalarFn,
+                                             scalar::durationInDaysBatchFn,
+                                             {},
+                                             {},
+                                             {}});
+
+    // datetime.fromepoch(INT64) -> DateTime
+    functions_["datetime.fromepoch"].push_back({"datetime.fromepoch",
+                                                {BoundType::Int64()},
+                                                BoundType::DateTime(),
+                                                false,
+                                                false,
+                                                scalar::datetimeFromEpochScalarFn,
+                                                scalar::datetimeFromEpochBatchFn,
+                                                {},
+                                                {},
+                                                {}});
+    // datetime.fromepoch(INT64, INT64) -> DateTime
+    functions_["datetime.fromepoch"].push_back({"datetime.fromepoch",
+                                                {BoundType::Int64(), BoundType::Int64()},
+                                                BoundType::DateTime(),
+                                                false,
+                                                false,
+                                                scalar::datetimeFromEpochScalarFn,
+                                                scalar::datetimeFromEpochBatchFn,
+                                                {},
+                                                {},
+                                                {}});
+
+    // datetime.fromepochmillis(INT64) -> DateTime
+    functions_["datetime.fromepochmillis"].push_back({"datetime.fromepochmillis",
+                                                      {BoundType::Int64()},
+                                                      BoundType::DateTime(),
+                                                      false,
+                                                      false,
+                                                      scalar::datetimeFromEpochMillisScalarFn,
+                                                      scalar::datetimeFromEpochMillisBatchFn,
+                                                      {},
+                                                      {},
+                                                      {}});
+
+    // No-arg temporal accessor functions
+    auto regNoArg = [this](const std::string& name, BoundType return_type, auto scalarFn, bool is_aggregate = false) {
+        functions_[name].push_back({name, {}, return_type, is_aggregate, false, scalarFn, {}, {}, {}, {}});
+    };
+
+    regNoArg("date.transaction", BoundType::DateTime(), scalar::dateTransactionScalarFn);
+    regNoArg("date.statement", BoundType::DateTime(), scalar::dateStatementScalarFn);
+    regNoArg("date.realtime", BoundType::DateTime(), scalar::dateRealtimeScalarFn);
+    regNoArg("localtime.transaction", BoundType::Time(), scalar::localtimeTransactionScalarFn);
+    regNoArg("localtime.statement", BoundType::Time(), scalar::localtimeStatementScalarFn);
+    regNoArg("localtime.realtime", BoundType::Time(), scalar::localtimeRealtimeScalarFn);
+    regNoArg("time.transaction", BoundType::Time(), scalar::timeTransactionScalarFn);
+    regNoArg("time.statement", BoundType::Time(), scalar::timeStatementScalarFn);
+    regNoArg("time.realtime", BoundType::Time(), scalar::timeRealtimeScalarFn);
+    regNoArg("localdatetime.transaction", BoundType::DateTime(), scalar::localdatetimeTransactionScalarFn);
+    regNoArg("localdatetime.statement", BoundType::DateTime(), scalar::localdatetimeStatementScalarFn);
+    regNoArg("localdatetime.realtime", BoundType::DateTime(), scalar::localdatetimeRealtimeScalarFn);
+    regNoArg("datetime.transaction", BoundType::DateTime(), scalar::datetimeTransactionScalarFn);
+    regNoArg("datetime.statement", BoundType::DateTime(), scalar::datetimeStatementScalarFn);
+    regNoArg("datetime.realtime", BoundType::DateTime(), scalar::datetimeRealtimeScalarFn);
 }
 
 void FunctionRegistry::registerAggregateBuiltins() {

@@ -584,6 +584,40 @@ DurationValue durationBetween(const TimeValue& a, const TimeValue& b) {
     return subtractTimes(a, b);
 }
 
+// ==================== Epoch conversion ====================
+
+DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos) {
+    DateTimeValue result;
+    result.kind = DateTimeKind::DATETIME;
+
+    // Convert to total nanoseconds since epoch
+    constexpr int64_t NANOS_PER_DAY = 86'400'000'000'000LL;
+    constexpr int64_t NANOS_PER_SEC = 1'000'000'000LL;
+
+    int64_t total_nanos = seconds * NANOS_PER_SEC + nanos;
+
+    // Split into days and day-nanos
+    int64_t days = total_nanos / NANOS_PER_DAY;
+    int64_t day_ns = total_nanos % NANOS_PER_DAY;
+    if (day_ns < 0) {
+        day_ns += NANOS_PER_DAY;
+        days--;
+    }
+
+    // Convert days since epoch to year/month/day
+    civilFromDays(days, result.year, result.month, result.day);
+
+    // Convert day_ns to hour/minute/second/nanos (UTC, no offset)
+    int64_t sec_of_day = day_ns / NANOS_PER_SEC;
+    result.nanos = day_ns % NANOS_PER_SEC;
+    result.second = sec_of_day % 60;
+    sec_of_day /= 60;
+    result.minute = sec_of_day % 60;
+    result.hour = sec_of_day / 60;
+
+    return result;
+}
+
 // ==================== String formatting ====================
 
 namespace {

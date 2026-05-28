@@ -1,10 +1,17 @@
 # TCK 测试结果分类报告
 
 **日期**: 2026-05-28 (更新)
-**分支**: feature/temporal-phase3
+**分支**: fix/temporal-tck-limitations
 **总计**: 3897 场景, 16006 步骤
 **运行耗时**: 10 分 22 秒
 **检测方式**: Parser AST 遍历
+
+### 时间维度 TCK 专项
+
+| 指标 | 修复前 | 修复后 |
+|------|--------|--------|
+| Temporal 场景通过 | 443/1004 (44.1%) | 543/1004 (54.1%) |
+| Temporal 步骤通过 | 2928/4086 (71.7%) | 3128/4086 (76.6%) |
 
 ---
 
@@ -55,9 +62,15 @@
 
 | 功能 | 状态 | TCK 通过率 |
 |------|------|-----------|
-| `truncate()` | ✅ 已实现（全部 15 种精度 + fields map overlay + dayOfWeek/timezone 字段） | 253/322 (78.6%) |
-| `duration.between()` | ✅ 已实现（日历感知月份计算 + days→seconds 折叠） | 12/131 (9.2%) |
-| `duration.inMonths()` | ✅ 已实现 | — |
+| `truncate()` | ✅ 已实现（全部 15 种精度 + fields map overlay + dayOfWeek/timezone 字段） | 263/322 (81.7%) |
+| `duration.between()` | ✅ 已实现（日历感知月份计算 + days→seconds 折叠 + 跨类型 DATETIME/TIME 重载） | 11/131 (8.4%) |
+| `duration.inMonths()` | ✅ 已实现（含跨类型重载） | — |
+| `duration.inSeconds()` / `duration.inDays()` | ✅ 已实现（含跨类型重载） | — |
+| `datetime.fromepoch()` / `datetime.fromepochmillis()` | ✅ 已实现 | — |
+| No-arg 事务/语句/实时钟函数 | ✅ 已实现（date/localtime/time/localdatetime/datetime × transaction/statement/realtime） | — |
+| 跨类型构造函数（如 `date(datetime_value)`） | ✅ 已实现 | — |
+| 截断函数跨类型输入（如 `time.truncate('day', localdatetime(...))`） | ✅ 已实现 | — |
+| 截断 fields map 精度保留 | ✅ 已修复（nanosecond/microsecond/millisecond 字段覆盖不再清零高位） | — |
 | Datetime 格式化优化 | ✅ 秒/纳秒为 0 时省略 `:SS` | — |
 | toString 支持 DateTimeValue/TimeValue/DurationValue | ✅ 已实现 | — |
 
@@ -82,6 +95,24 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 #### 5. ~~`temporal - temporal` 月份分量~~ — ✅ 已修复
 
 `subtractDateTimes()` 现已实现日历感知的月份计算，与 `duration.between()` 结果一致。
+
+#### 6. 时区命名支持（已知限制，~30 用例）
+
+`tz_offset_min` 仅存储数值偏移量（分钟）。命名时区如 `'Europe/Stockholm'` 无法解析为正确偏移量，需引入 IANA 时区数据库映射。
+
+**影响范围**：Temporal3 [3][10] 等场景中约 30 个用例。
+
+#### 7. 时区秒精度（已知限制，~48 用例）
+
+`tz_offset_min` 为 `int32_t`，仅存储分钟级别偏移。形如 `+02:05:59` 的时区偏移（含秒）会被截断。需将 `tz_offset_min` 改为秒级存储，涉及解析、比较、序列化、格式化约 10 处改动。
+
+**影响范围**：Temporal1 [13] 等场景中约 48 个用例。
+
+#### 8. 时间属性存取往返（已知限制，~40 用例）
+
+时间值通过 `CREATE` 存入属性后，`MATCH` 读出再访问字段（如 `d.year`）返回 null。需排查 KV 编解码 → `PropertyType` 推断 → Binder 类型解析链路中的类型信息丢失。
+
+**影响范围**：Temporal5 全部 7 个 + Temporal4 部分约 33 个用例。
 
 ---
 

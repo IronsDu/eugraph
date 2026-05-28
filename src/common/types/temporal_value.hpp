@@ -170,4 +170,6 @@ DurationValue divDuration(const DurationValue& dur, double divisor);
 DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b);
 DurationValue durationBetween(const TimeValue& a, const TimeValue& b);
 
+DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos);
+
 } // namespace eugraph
