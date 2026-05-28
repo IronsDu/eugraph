@@ -730,7 +730,16 @@ inline Value localdatetimeImpl(const Value& arg) {
         for (const auto& [k, vs] : mv->entries) {
             if ((k == "datetime" || k == "date") && !std::holds_alternative<std::monostate>(vs.value)) {
                 if (std::holds_alternative<DateTimeValue>(vs.value)) {
-                    tv = std::get<DateTimeValue>(vs.value);
+                    const auto& base = std::get<DateTimeValue>(vs.value);
+                    tv.year = base.year;
+                    tv.month = base.month;
+                    tv.day = base.day;
+                    if (k == "datetime") {
+                        tv.hour = base.hour;
+                        tv.minute = base.minute;
+                        tv.second = base.second;
+                        tv.nanos = base.nanos;
+                    }
                 } else if (std::holds_alternative<TimeValue>(vs.value)) {
                     const auto& timv = std::get<TimeValue>(vs.value);
                     tv.hour = timv.hour;
@@ -803,7 +812,18 @@ inline Value datetimeImpl(const Value& arg) {
         for (const auto& [k, vs] : mv->entries) {
             if ((k == "datetime" || k == "date") && !std::holds_alternative<std::monostate>(vs.value)) {
                 if (std::holds_alternative<DateTimeValue>(vs.value)) {
-                    tv = std::get<DateTimeValue>(vs.value);
+                    const auto& base = std::get<DateTimeValue>(vs.value);
+                    tv.year = base.year;
+                    tv.month = base.month;
+                    tv.day = base.day;
+                    if (k == "datetime") {
+                        tv.hour = base.hour;
+                        tv.minute = base.minute;
+                        tv.second = base.second;
+                        tv.nanos = base.nanos;
+                        tv.tz_offset_min = base.tz_offset_min;
+                        tv.tz_name = base.tz_name;
+                    }
                 } else if (std::holds_alternative<TimeValue>(vs.value)) {
                     const auto& timv = std::get<TimeValue>(vs.value);
                     tv.hour = timv.hour;
