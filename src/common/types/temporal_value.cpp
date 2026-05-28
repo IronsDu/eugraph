@@ -419,7 +419,20 @@ TimeValue subDuration(const TimeValue& temporal, const DurationValue& duration) 
 // ==================== Arithmetic: Temporal - Temporal ====================
 
 DurationValue subtractDateTimes(const DateTimeValue& a, const DateTimeValue& b) {
-    return durationBetween(a, b);
+    DurationValue result;
+    int64_t a_ns = temporalToComparable(a);
+    int64_t b_ns = temporalToComparable(b);
+    int64_t diff_ns = a_ns - b_ns;
+    int64_t ns_per_day = 86'400'000'000'000LL;
+    result.days = diff_ns / ns_per_day;
+    int64_t remaining_ns = diff_ns % ns_per_day;
+    result.seconds = remaining_ns / 1'000'000'000LL;
+    result.nanos = remaining_ns % 1'000'000'000LL;
+    if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.seconds -= 1;
+    }
+    return result;
 }
 
 DurationValue subtractTimes(const TimeValue& a, const TimeValue& b) {

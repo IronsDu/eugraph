@@ -234,7 +234,7 @@ double doubleFromMap(const MapValue* mv, const std::string& key, double def = 0.
 
 // String parsing for temporal values
 DateTimeValue parseDateFromString(const std::string& s) {
-    DateTimeValue tv{.kind = DateTimeKind::DATE};
+    DateTimeValue tv;
     if (s.empty())
         return tv;
 
@@ -353,7 +353,8 @@ TimeValue parseTimeStr(const std::string& s, TimeKind kind) {
 }
 
 DateTimeValue parseDatetimeStr(const std::string& s, DateTimeKind kind) {
-    DateTimeValue tv{.kind = kind};
+    DateTimeValue tv;
+    tv.kind = kind;
     if (s.empty())
         return tv;
     size_t pos = 0;
@@ -475,7 +476,7 @@ inline Value dateImpl(const Value& arg) {
         return Value{};
 
     if (auto* mv = asMap(arg)) {
-        DateTimeValue tv{.kind = DateTimeKind::DATE};
+        DateTimeValue tv;
         extractDateFields(mv, tv.year, tv.month, tv.day);
         return Value{tv};
     }
@@ -487,15 +488,20 @@ inline Value dateImpl(const Value& arg) {
 }
 
 inline Value dateScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty())
-        return Value{DateTimeValue{.kind = DateTimeKind::DATE}};
+    if (args.empty()) {
+        DateTimeValue tv;
+        tv.kind = DateTimeKind::DATE;
+        return Value{tv};
+    }
     return dateImpl(args[0]);
 }
 
 inline void dateBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty()) {
+        DateTimeValue tv;
+        tv.kind = DateTimeKind::DATE;
         for (size_t i = 0; i < count; ++i)
-            result.setValue(i, Value{DateTimeValue{.kind = DateTimeKind::DATE}});
+            result.setValue(i, Value{tv});
         return;
     }
     const auto& col = *args[0];
@@ -600,7 +606,8 @@ inline Value localdatetimeImpl(const Value& arg) {
         return Value{};
 
     if (auto* mv = asMap(arg)) {
-        DateTimeValue tv{.kind = DateTimeKind::LOCAL_DATETIME};
+        DateTimeValue tv;
+        tv.kind = DateTimeKind::LOCAL_DATETIME;
         extractDateFields(mv, tv.year, tv.month, tv.day);
         tv.hour = intFromMap(mv, "hour");
         tv.minute = intFromMap(mv, "minute");
@@ -616,16 +623,21 @@ inline Value localdatetimeImpl(const Value& arg) {
 }
 
 inline Value localdatetimeScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty())
-        return Value{DateTimeValue{.kind = DateTimeKind::LOCAL_DATETIME}};
+    if (args.empty()) {
+        DateTimeValue tv;
+        tv.kind = DateTimeKind::LOCAL_DATETIME;
+        return Value{tv};
+    }
     return localdatetimeImpl(args[0]);
 }
 
 inline void localdatetimeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                                  const EvalContext&) {
     if (args.empty()) {
+        DateTimeValue tv;
+        tv.kind = DateTimeKind::LOCAL_DATETIME;
         for (size_t i = 0; i < count; ++i)
-            result.setValue(i, Value{DateTimeValue{.kind = DateTimeKind::LOCAL_DATETIME}});
+            result.setValue(i, Value{tv});
         return;
     }
     const auto& col = *args[0];
@@ -640,7 +652,8 @@ inline Value datetimeImpl(const Value& arg) {
         return Value{};
 
     if (auto* mv = asMap(arg)) {
-        DateTimeValue tv{.kind = DateTimeKind::DATETIME};
+        DateTimeValue tv;
+        tv.kind = DateTimeKind::DATETIME;
         extractDateFields(mv, tv.year, tv.month, tv.day);
         tv.hour = intFromMap(mv, "hour");
         tv.minute = intFromMap(mv, "minute");
@@ -658,15 +671,20 @@ inline Value datetimeImpl(const Value& arg) {
 }
 
 inline Value datetimeScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty())
-        return Value{DateTimeValue{.kind = DateTimeKind::DATETIME}};
+    if (args.empty()) {
+        DateTimeValue tv;
+        tv.kind = DateTimeKind::DATETIME;
+        return Value{tv};
+    }
     return datetimeImpl(args[0]);
 }
 
 inline void datetimeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty()) {
+        DateTimeValue tv;
+        tv.kind = DateTimeKind::DATETIME;
         for (size_t i = 0; i < count; ++i)
-            result.setValue(i, Value{DateTimeValue{.kind = DateTimeKind::DATETIME}});
+            result.setValue(i, Value{tv});
         return;
     }
     const auto& col = *args[0];

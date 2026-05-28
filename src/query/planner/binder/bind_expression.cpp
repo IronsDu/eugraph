@@ -527,6 +527,9 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
     case cypher::BinaryOperator::LTE:
     case cypher::BinaryOperator::GTE:
         // Comparison: operands must be compatible
+        // Temporal types can be compared across kinds (returns null at runtime for mismatches)
+        if (isTemporalType(left_type.kind) && isTemporalType(right_type.kind))
+            return BoundType::Bool();
         if (left_type.canCastTo(right_type) || right_type.canCastTo(left_type))
             return BoundType::Bool();
         error_msg = "Cannot compare " + left_type.toString() + " with " + right_type.toString();
