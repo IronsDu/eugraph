@@ -69,7 +69,8 @@ public:
 
 ```cpp
 enum class BoundTypeKind {
-    BOOL, INT64, DOUBLE, STRING, VERTEX, EDGE, PATH, LIST, MAP, TEMPORAL, ANY, NULL_TYPE
+    BOOL, INT64, DOUBLE, STRING, VERTEX, EDGE, PATH, LIST, MAP,
+    DATETIME, TIME, DURATION, ANY, NULL_TYPE
 };
 
 struct BoundType {
@@ -81,7 +82,7 @@ struct BoundType {
     static BoundType Vertex(), Edge(), Path(), Any(), Null();
     static BoundType List(BoundType element);
     static BoundType Map(BoundType key, BoundType val);
-    static BoundType Temporal();
+    static BoundType DateTime(), Time(), Duration();
 
     int implicitCastCost(const BoundType& target) const; // -1=不可转换, 0=精确匹配
 };

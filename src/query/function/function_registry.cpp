@@ -418,13 +418,13 @@ void FunctionRegistry::registerScalarBuiltins() {
 
     // --- Temporal constructors ---
 
-    // date() -> Temporal (0-arg: epoch 1970-01-01)
+    // date() -> DateTime (0-arg: epoch 1970-01-01)
     functions_["date"].push_back(
-        {"date", {}, BoundType::Temporal(), false, true, scalar::dateScalarFn, scalar::dateBatchFn, {}, {}, {}});
-    // date(MAP<STRING, ANY>) -> Temporal
+        {"date", {}, BoundType::DateTime(), false, true, scalar::dateScalarFn, scalar::dateBatchFn, {}, {}, {}});
+    // date(MAP<STRING, ANY>) -> DateTime
     functions_["date"].push_back({"date",
                                   {BoundType::Map(BoundType::String(), BoundType::Any())},
-                                  BoundType::Temporal(),
+                                  BoundType::DateTime(),
                                   false,
                                   false,
                                   scalar::dateScalarFn,
@@ -432,10 +432,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   {},
                                   {},
                                   {}});
-    // date(STRING) -> Temporal
+    // date(STRING) -> DateTime
     functions_["date"].push_back({"date",
                                   {BoundType::String()},
-                                  BoundType::Temporal(),
+                                  BoundType::DateTime(),
                                   false,
                                   false,
                                   scalar::dateScalarFn,
@@ -444,10 +444,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   {},
                                   {}});
 
-    // localtime() -> Temporal (0-arg: epoch 00:00:00)
+    // localtime() -> Time (0-arg: epoch 00:00:00)
     functions_["localtime"].push_back({"localtime",
                                        {},
-                                       BoundType::Temporal(),
+                                       BoundType::Time(),
                                        false,
                                        true,
                                        scalar::localtimeScalarFn,
@@ -455,10 +455,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                        {},
                                        {},
                                        {}});
-    // localtime(MAP<STRING, ANY>) -> Temporal
+    // localtime(MAP<STRING, ANY>) -> Time
     functions_["localtime"].push_back({"localtime",
                                        {BoundType::Map(BoundType::String(), BoundType::Any())},
-                                       BoundType::Temporal(),
+                                       BoundType::Time(),
                                        false,
                                        false,
                                        scalar::localtimeScalarFn,
@@ -466,10 +466,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                        {},
                                        {},
                                        {}});
-    // localtime(STRING) -> Temporal
+    // localtime(STRING) -> Time
     functions_["localtime"].push_back({"localtime",
                                        {BoundType::String()},
-                                       BoundType::Temporal(),
+                                       BoundType::Time(),
                                        false,
                                        false,
                                        scalar::localtimeScalarFn,
@@ -478,13 +478,13 @@ void FunctionRegistry::registerScalarBuiltins() {
                                        {},
                                        {}});
 
-    // time() -> Temporal (0-arg: epoch 00:00:00Z)
+    // time() -> Time (0-arg: epoch 00:00:00Z)
     functions_["time"].push_back(
-        {"time", {}, BoundType::Temporal(), false, true, scalar::timeScalarFn, scalar::timeBatchFn, {}, {}, {}});
-    // time(MAP<STRING, ANY>) -> Temporal
+        {"time", {}, BoundType::Time(), false, true, scalar::timeScalarFn, scalar::timeBatchFn, {}, {}, {}});
+    // time(MAP<STRING, ANY>) -> Time
     functions_["time"].push_back({"time",
                                   {BoundType::Map(BoundType::String(), BoundType::Any())},
-                                  BoundType::Temporal(),
+                                  BoundType::Time(),
                                   false,
                                   false,
                                   scalar::timeScalarFn,
@@ -492,10 +492,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   {},
                                   {},
                                   {}});
-    // time(STRING) -> Temporal
+    // time(STRING) -> Time
     functions_["time"].push_back({"time",
                                   {BoundType::String()},
-                                  BoundType::Temporal(),
+                                  BoundType::Time(),
                                   false,
                                   false,
                                   scalar::timeScalarFn,
@@ -504,10 +504,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   {},
                                   {}});
 
-    // localdatetime() -> Temporal (0-arg: epoch 1970-01-01T00:00:00)
+    // localdatetime() -> DateTime (0-arg: epoch 1970-01-01T00:00:00)
     functions_["localdatetime"].push_back({"localdatetime",
                                            {},
-                                           BoundType::Temporal(),
+                                           BoundType::DateTime(),
                                            false,
                                            true,
                                            scalar::localdatetimeScalarFn,
@@ -515,10 +515,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            {},
                                            {},
                                            {}});
-    // localdatetime(MAP<STRING, ANY>) -> Temporal
+    // localdatetime(MAP<STRING, ANY>) -> DateTime
     functions_["localdatetime"].push_back({"localdatetime",
                                            {BoundType::Map(BoundType::String(), BoundType::Any())},
-                                           BoundType::Temporal(),
+                                           BoundType::DateTime(),
                                            false,
                                            false,
                                            scalar::localdatetimeScalarFn,
@@ -526,10 +526,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            {},
                                            {},
                                            {}});
-    // localdatetime(STRING) -> Temporal
+    // localdatetime(STRING) -> DateTime
     functions_["localdatetime"].push_back({"localdatetime",
                                            {BoundType::String()},
-                                           BoundType::Temporal(),
+                                           BoundType::DateTime(),
                                            false,
                                            false,
                                            scalar::localdatetimeScalarFn,
@@ -538,10 +538,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            {},
                                            {}});
 
-    // datetime() -> Temporal (0-arg: epoch 1970-01-01T00:00:00Z)
+    // datetime() -> DateTime (0-arg: epoch 1970-01-01T00:00:00Z)
     functions_["datetime"].push_back({"datetime",
                                       {},
-                                      BoundType::Temporal(),
+                                      BoundType::DateTime(),
                                       false,
                                       true,
                                       scalar::datetimeScalarFn,
@@ -549,10 +549,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                       {},
                                       {},
                                       {}});
-    // datetime(MAP<STRING, ANY>) -> Temporal
+    // datetime(MAP<STRING, ANY>) -> DateTime
     functions_["datetime"].push_back({"datetime",
                                       {BoundType::Map(BoundType::String(), BoundType::Any())},
-                                      BoundType::Temporal(),
+                                      BoundType::DateTime(),
                                       false,
                                       false,
                                       scalar::datetimeScalarFn,
@@ -560,10 +560,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                       {},
                                       {},
                                       {}});
-    // datetime(STRING) -> Temporal
+    // datetime(STRING) -> DateTime
     functions_["datetime"].push_back({"datetime",
                                       {BoundType::String()},
-                                      BoundType::Temporal(),
+                                      BoundType::DateTime(),
                                       false,
                                       false,
                                       scalar::datetimeScalarFn,
@@ -572,10 +572,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                       {},
                                       {}});
 
-    // duration(MAP<STRING, ANY>) -> Temporal
+    // duration(MAP<STRING, ANY>) -> Duration
     functions_["duration"].push_back({"duration",
                                       {BoundType::Map(BoundType::String(), BoundType::Any())},
-                                      BoundType::Temporal(),
+                                      BoundType::Duration(),
                                       false,
                                       false,
                                       scalar::durationScalarFn,
@@ -583,10 +583,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                       {},
                                       {},
                                       {}});
-    // duration(STRING) -> Temporal
+    // duration(STRING) -> Duration
     functions_["duration"].push_back({"duration",
                                       {BoundType::String()},
-                                      BoundType::Temporal(),
+                                      BoundType::Duration(),
                                       false,
                                       false,
                                       scalar::durationScalarFn,
@@ -595,9 +595,9 @@ void FunctionRegistry::registerScalarBuiltins() {
                                       {},
                                       {}});
 
-    // __temporal_field__(TEMPORAL, INT64) -> Any
+    // __temporal_field__(ANY, INT64) -> Any
     functions_["__temporal_field__"].push_back({"__temporal_field__",
-                                                {BoundType::Temporal(), BoundType::Int64()},
+                                                {BoundType::Any(), BoundType::Int64()},
                                                 BoundType::Any(),
                                                 false,
                                                 false,
@@ -629,11 +629,11 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 {},
                                                 {}});
 
-    // truncate(STRING, TEMPORAL) -> TEMPORAL  (2-arg)
-    // truncate(STRING, TEMPORAL, ANY) -> TEMPORAL  (3-arg)
+    // truncate(STRING, DATETIME) -> DateTime  (2-arg)
+    // truncate(STRING, DATETIME, ANY) -> DateTime  (3-arg)
     functions_["date.truncate"].push_back({"date.truncate",
-                                           {BoundType::String(), BoundType::Temporal()},
-                                           BoundType::Temporal(),
+                                           {BoundType::String(), BoundType::DateTime()},
+                                           BoundType::DateTime(),
                                            false,
                                            false,
                                            scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATE)>,
@@ -642,8 +642,8 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            {},
                                            {}});
     functions_["date.truncate"].push_back({"date.truncate",
-                                           {BoundType::String(), BoundType::Temporal(), BoundType::Any()},
-                                           BoundType::Temporal(),
+                                           {BoundType::String(), BoundType::DateTime(), BoundType::Any()},
+                                           BoundType::DateTime(),
                                            false,
                                            false,
                                            scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATE)>,
@@ -653,8 +653,8 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            {}});
     functions_["datetime.truncate"].push_back(
         {"datetime.truncate",
-         {BoundType::String(), BoundType::Temporal()},
-         BoundType::Temporal(),
+         {BoundType::String(), BoundType::DateTime()},
+         BoundType::DateTime(),
          false,
          false,
          scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATETIME)>,
@@ -664,8 +664,8 @@ void FunctionRegistry::registerScalarBuiltins() {
          {}});
     functions_["datetime.truncate"].push_back(
         {"datetime.truncate",
-         {BoundType::String(), BoundType::Temporal(), BoundType::Any()},
-         BoundType::Temporal(),
+         {BoundType::String(), BoundType::DateTime(), BoundType::Any()},
+         BoundType::DateTime(),
          false,
          false,
          scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATETIME)>,
@@ -674,8 +674,8 @@ void FunctionRegistry::registerScalarBuiltins() {
          {},
          {}});
     functions_["time.truncate"].push_back({"time.truncate",
-                                           {BoundType::String(), BoundType::Temporal()},
-                                           BoundType::Temporal(),
+                                           {BoundType::String(), BoundType::Time()},
+                                           BoundType::Time(),
                                            false,
                                            false,
                                            scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::TIME)>,
@@ -684,8 +684,8 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            {},
                                            {}});
     functions_["time.truncate"].push_back({"time.truncate",
-                                           {BoundType::String(), BoundType::Temporal(), BoundType::Any()},
-                                           BoundType::Temporal(),
+                                           {BoundType::String(), BoundType::Time(), BoundType::Any()},
+                                           BoundType::Time(),
                                            false,
                                            false,
                                            scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::TIME)>,
@@ -695,8 +695,8 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            {}});
     functions_["localtime.truncate"].push_back(
         {"localtime.truncate",
-         {BoundType::String(), BoundType::Temporal()},
-         BoundType::Temporal(),
+         {BoundType::String(), BoundType::Time()},
+         BoundType::Time(),
          false,
          false,
          scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME)>,
@@ -706,8 +706,8 @@ void FunctionRegistry::registerScalarBuiltins() {
          {}});
     functions_["localtime.truncate"].push_back(
         {"localtime.truncate",
-         {BoundType::String(), BoundType::Temporal(), BoundType::Any()},
-         BoundType::Temporal(),
+         {BoundType::String(), BoundType::Time(), BoundType::Any()},
+         BoundType::Time(),
          false,
          false,
          scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME)>,
@@ -717,8 +717,8 @@ void FunctionRegistry::registerScalarBuiltins() {
          {}});
     functions_["localdatetime.truncate"].push_back(
         {"localdatetime.truncate",
-         {BoundType::String(), BoundType::Temporal()},
-         BoundType::Temporal(),
+         {BoundType::String(), BoundType::DateTime()},
+         BoundType::DateTime(),
          false,
          false,
          scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME)>,
@@ -728,8 +728,8 @@ void FunctionRegistry::registerScalarBuiltins() {
          {}});
     functions_["localdatetime.truncate"].push_back(
         {"localdatetime.truncate",
-         {BoundType::String(), BoundType::Temporal(), BoundType::Any()},
-         BoundType::Temporal(),
+         {BoundType::String(), BoundType::DateTime(), BoundType::Any()},
+         BoundType::DateTime(),
          false,
          false,
          scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME)>,
@@ -738,10 +738,10 @@ void FunctionRegistry::registerScalarBuiltins() {
          {},
          {}});
 
-    // duration.between(TEMPORAL, TEMPORAL) -> TEMPORAL
+    // duration.between(DATETIME, DATETIME) -> Duration
     functions_["duration.between"].push_back({"duration.between",
-                                              {BoundType::Temporal(), BoundType::Temporal()},
-                                              BoundType::Temporal(),
+                                              {BoundType::DateTime(), BoundType::DateTime()},
+                                              BoundType::Duration(),
                                               false,
                                               false,
                                               scalar::durationBetweenScalarFn,
@@ -750,10 +750,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                               {},
                                               {}});
 
-    // duration.inMonths(TEMPORAL, TEMPORAL) -> TEMPORAL
+    // duration.inMonths(DATETIME, DATETIME) -> Duration
     functions_["duration.inMonths"].push_back({"duration.inMonths",
-                                               {BoundType::Temporal(), BoundType::Temporal()},
-                                               BoundType::Temporal(),
+                                               {BoundType::DateTime(), BoundType::DateTime()},
+                                               BoundType::Duration(),
                                                false,
                                                false,
                                                scalar::durationInMonthsScalarFn,

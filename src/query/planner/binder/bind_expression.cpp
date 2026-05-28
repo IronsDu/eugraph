@@ -10,6 +10,12 @@
 namespace eugraph {
 namespace binder {
 
+namespace {
+bool isTemporalType(BoundTypeKind k) {
+    return k == BoundTypeKind::DATETIME || k == BoundTypeKind::TIME || k == BoundTypeKind::DURATION;
+}
+} // namespace
+
 // ==================== Expression Binding ====================
 
 std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& expr) {
@@ -284,8 +290,9 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     return BoundExpression(std::move(sub));
                 }
 
-                if (obj_type.kind == BoundTypeKind::TEMPORAL || obj_type.kind == BoundTypeKind::STRING ||
-                    obj_type.kind == BoundTypeKind::ANY) {
+                if ((obj_type.kind == BoundTypeKind::DATETIME || obj_type.kind == BoundTypeKind::TIME ||
+                     obj_type.kind == BoundTypeKind::DURATION) ||
+                    obj_type.kind == BoundTypeKind::STRING || obj_type.kind == BoundTypeKind::ANY) {
                     // Temporal member access: convert temporal.field to __temporal_field__(temporal, field_enum)
                     // Try each field enum type to find a match
                     int64_t field_int = -1;
@@ -557,9 +564,20 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
         if (left_type.kind == BoundTypeKind::ANY || left_type.kind == BoundTypeKind::NULL_TYPE ||
             right_type.kind == BoundTypeKind::ANY || right_type.kind == BoundTypeKind::NULL_TYPE)
             return BoundType::Any();
-        // Temporal arithmetic: temporal + duration, duration + temporal, duration + duration
-        if (left_type.kind == BoundTypeKind::TEMPORAL && right_type.kind == BoundTypeKind::TEMPORAL)
-            return BoundType::Temporal();
+        // Temporal arithmetic: datetime+duration→datetime, time+duration→time, duration+duration→duration
+        if (isTemporalType(left_type.kind) && isTemporalType(right_type.kind)) {
+            if (left_type.kind == BoundTypeKind::DATETIME && right_type.kind == BoundTypeKind::DURATION)
+                return BoundType::DateTime();
+            if (left_type.kind == BoundTypeKind::DURATION && right_type.kind == BoundTypeKind::DATETIME)
+                return BoundType::DateTime();
+            if (left_type.kind == BoundTypeKind::TIME && right_type.kind == BoundTypeKind::DURATION)
+                return BoundType::Time();
+            if (left_type.kind == BoundTypeKind::DURATION && right_type.kind == BoundTypeKind::TIME)
+                return BoundType::Time();
+            if (left_type.kind == BoundTypeKind::DURATION && right_type.kind == BoundTypeKind::DURATION)
+                return BoundType::Duration();
+            return BoundType::Any();
+        }
         // Numeric arithmetic (fallthrough)
         if (left_type == BoundType::Int64() && right_type == BoundType::Int64())
             return BoundType::Int64();
@@ -574,20 +592,31 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
     case cypher::BinaryOperator::DIV:
     case cypher::BinaryOperator::MOD:
     case cypher::BinaryOperator::POW:
-        // Temporal subtraction: temporal - duration, temporal - temporal, duration - duration
-        if (op == cypher::BinaryOperator::SUB && left_type.kind == BoundTypeKind::TEMPORAL &&
-            right_type.kind == BoundTypeKind::TEMPORAL)
-            return BoundType::Temporal();
-        // Temporal * number  /  Temporal / number
+        // Temporal subtraction: datetime-datetime→duration, time-time→duration,
+        // datetime-duration→datetime, time-duration→time, duration-duration→duration
+        if (op == cypher::BinaryOperator::SUB && isTemporalType(left_type.kind) && isTemporalType(right_type.kind)) {
+            if (left_type.kind == BoundTypeKind::DATETIME && right_type.kind == BoundTypeKind::DATETIME)
+                return BoundType::Duration();
+            if (left_type.kind == BoundTypeKind::TIME && right_type.kind == BoundTypeKind::TIME)
+                return BoundType::Duration();
+            if (left_type.kind == BoundTypeKind::DATETIME && right_type.kind == BoundTypeKind::DURATION)
+                return BoundType::DateTime();
+            if (left_type.kind == BoundTypeKind::TIME && right_type.kind == BoundTypeKind::DURATION)
+                return BoundType::Time();
+            if (left_type.kind == BoundTypeKind::DURATION && right_type.kind == BoundTypeKind::DURATION)
+                return BoundType::Duration();
+            return BoundType::Any();
+        }
+        // Duration * number / Duration / number
         if ((op == cypher::BinaryOperator::MUL || op == cypher::BinaryOperator::DIV) &&
-            left_type.kind == BoundTypeKind::TEMPORAL &&
+            left_type.kind == BoundTypeKind::DURATION &&
             (right_type.kind == BoundTypeKind::INT64 || right_type.kind == BoundTypeKind::DOUBLE))
-            return BoundType::Temporal();
-        // Number * temporal
+            return BoundType::Duration();
+        // Number * duration
         if (op == cypher::BinaryOperator::MUL &&
             (left_type.kind == BoundTypeKind::INT64 || left_type.kind == BoundTypeKind::DOUBLE) &&
-            right_type.kind == BoundTypeKind::TEMPORAL)
-            return BoundType::Temporal();
+            right_type.kind == BoundTypeKind::DURATION)
+            return BoundType::Duration();
         // Arithmetic: INT64 or DOUBLE, with implicit conversion
         if (left_type == BoundType::Int64() && right_type == BoundType::Int64())
             return BoundType::Int64();

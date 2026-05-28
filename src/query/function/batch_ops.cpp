@@ -3,6 +3,13 @@
 #include "common/types/temporal_value.hpp"
 
 namespace eugraph {
+
+namespace {
+bool isTemporalType(binder::BoundTypeKind k) {
+    return k == binder::BoundTypeKind::DATETIME || k == binder::BoundTypeKind::TIME ||
+           k == binder::BoundTypeKind::DURATION;
+}
+} // namespace
 namespace function {
 namespace {
 
@@ -868,8 +875,8 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
     }
 
     // Temporal: accept ANY as temporal (for property round-trip)
-    bool left_temporal = (left_type == BTK::TEMPORAL || left_type == BTK::ANY);
-    bool right_temporal = (right_type == BTK::TEMPORAL || right_type == BTK::ANY);
+    bool left_temporal = (isTemporalType(left_type) || left_type == BTK::ANY);
+    bool right_temporal = (isTemporalType(right_type) || right_type == BTK::ANY);
 
     // Temporal-specific: TEMPORAL + TEMPORAL (or ANY variants)
     if (left_temporal && right_temporal) {
@@ -892,7 +899,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
     }
 
     // Temporal * number  /  Temporal / number  (accept ANY as temporal)
-    if ((left_type == BTK::TEMPORAL || left_type == BTK::ANY) &&
+    if ((isTemporalType(left_type) || left_type == BTK::ANY) &&
         (right_type == BTK::INT64 || right_type == BTK::DOUBLE)) {
         switch (op) {
         case BO::MUL:
@@ -906,7 +913,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
 
     // number * Temporal  (commutative MUL, accept ANY as temporal)
     if ((left_type == BTK::INT64 || left_type == BTK::DOUBLE) &&
-        (right_type == BTK::TEMPORAL || right_type == BTK::ANY)) {
+        (isTemporalType(right_type) || right_type == BTK::ANY)) {
         switch (op) {
         case BO::MUL:
             return temporalMulBatch;
