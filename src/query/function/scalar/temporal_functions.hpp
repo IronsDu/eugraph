@@ -171,7 +171,7 @@ int32_t parseTzOffset(const std::string& tz) {
                 minutes = std::stoll(rest.substr(2, 2));
         }
     }
-    return static_cast<int32_t>(sign * (hours * 60 + minutes + seconds / 60));
+    return static_cast<int32_t>(sign * (hours * 3600 + minutes * 60 + seconds));
 }
 
 void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_t& day) {
@@ -376,7 +376,7 @@ TimeValue parseTimeStr(const std::string& s, TimeKind kind) {
     if (kind == TimeKind::TIME && pos < s.size()) {
         std::string tz = s.substr(pos);
         if (tz != "Z" && !tz.empty())
-            tv.tz_offset_min = parseTzOffset(tz);
+            tv.tz_offset_sec = parseTzOffset(tz);
     }
     return tv;
 }
@@ -422,7 +422,7 @@ DateTimeValue parseDatetimeStr(const std::string& s, DateTimeKind kind) {
     if (kind == DateTimeKind::DATETIME && pos < s.size()) {
         std::string tz = s.substr(pos);
         if (tz != "Z" && !tz.empty())
-            tv.tz_offset_min = parseTzOffset(tz);
+            tv.tz_offset_sec = parseTzOffset(tz);
     }
     return tv;
 }
@@ -648,7 +648,7 @@ inline Value timeImpl(const Value& arg) {
                     tv.minute = dtv.minute;
                     tv.second = dtv.second;
                     tv.nanos = dtv.nanos;
-                    tv.tz_offset_min = dtv.tz_offset_min;
+                    tv.tz_offset_sec = dtv.tz_offset_sec;
                     tv.tz_name = dtv.tz_name;
                 }
                 has_base = true;
@@ -665,7 +665,7 @@ inline Value timeImpl(const Value& arg) {
             tv.nanos = extractNanosFromMap(mv);
         if (!has_base || hasMapKey(mv, "timezone")) {
             std::string tz = strFromMap(mv, "timezone");
-            tv.tz_offset_min = parseTzOffset(tz);
+            tv.tz_offset_sec = parseTzOffset(tz);
         }
         return Value{tv};
     }
@@ -687,7 +687,7 @@ inline Value timeImpl(const Value& arg) {
         tv.minute = dtv.minute;
         tv.second = dtv.second;
         tv.nanos = dtv.nanos;
-        tv.tz_offset_min = dtv.tz_offset_min;
+        tv.tz_offset_sec = dtv.tz_offset_sec;
         tv.tz_name = dtv.tz_name;
         return Value{tv};
     }
@@ -821,7 +821,7 @@ inline Value datetimeImpl(const Value& arg) {
                         tv.minute = base.minute;
                         tv.second = base.second;
                         tv.nanos = base.nanos;
-                        tv.tz_offset_min = base.tz_offset_min;
+                        tv.tz_offset_sec = base.tz_offset_sec;
                         tv.tz_name = base.tz_name;
                     }
                 } else if (std::holds_alternative<TimeValue>(vs.value)) {
@@ -830,7 +830,7 @@ inline Value datetimeImpl(const Value& arg) {
                     tv.minute = timv.minute;
                     tv.second = timv.second;
                     tv.nanos = timv.nanos;
-                    tv.tz_offset_min = timv.tz_offset_min;
+                    tv.tz_offset_sec = timv.tz_offset_sec;
                     tv.tz_name = timv.tz_name;
                 }
                 has_base = true;
@@ -849,7 +849,7 @@ inline Value datetimeImpl(const Value& arg) {
             tv.nanos = extractNanosFromMap(mv);
         if (!has_base || hasMapKey(mv, "timezone")) {
             std::string tz = strFromMap(mv, "timezone");
-            tv.tz_offset_min = parseTzOffset(tz);
+            tv.tz_offset_sec = parseTzOffset(tz);
         }
         return Value{tv};
     }
@@ -1055,40 +1055,50 @@ inline Value temporalAccessorImpl(const Value& tv_val, int64_t field_raw) {
             return Value{tv.nanos / 1'000LL};
 
         // Timezone accessors (only for zoned DATETIME)
-        case DateTimeField::TIMEZONE:
+        case DateTimeField::TIMEZONE: {
             if (!isZoned(k))
                 return Value{};
             if (!tv.tz_name.empty())
                 return Value{tv.tz_name};
-            if (tv.tz_offset_min == 0)
+            if (tv.tz_offset_sec == 0)
                 return Value{std::string("Z")};
-            {
-                int32_t abs_m = tv.tz_offset_min < 0 ? -tv.tz_offset_min : tv.tz_offset_min;
-                char buf[14];
-                snprintf(buf, sizeof(buf), "%c%02d:%02d", tv.tz_offset_min >= 0 ? '+' : '-',
-                         static_cast<int>(abs_m / 60), static_cast<int>(abs_m % 60));
-                return Value{std::string(buf)};
-            }
-        case DateTimeField::OFFSET:
+            int32_t abs_s = tv.tz_offset_sec < 0 ? -tv.tz_offset_sec : tv.tz_offset_sec;
+            int32_t h = abs_s / 3600;
+            int32_t m = (abs_s % 3600) / 60;
+            int32_t s = abs_s % 60;
+            char sign = tv.tz_offset_sec >= 0 ? '+' : '-';
+            char buf[20];
+            if (s != 0)
+                snprintf(buf, sizeof(buf), "%c%02d:%02d:%02d", sign, h, m, s);
+            else
+                snprintf(buf, sizeof(buf), "%c%02d:%02d", sign, h, m);
+            return Value{std::string(buf)};
+        }
+        case DateTimeField::OFFSET: {
             if (!isZoned(k))
                 return Value{};
-            if (tv.tz_offset_min == 0)
+            if (tv.tz_offset_sec == 0)
                 return Value{std::string("+00:00")};
-            {
-                int32_t abs_m = tv.tz_offset_min < 0 ? -tv.tz_offset_min : tv.tz_offset_min;
-                char buf[14];
-                snprintf(buf, sizeof(buf), "%c%02d:%02d", tv.tz_offset_min >= 0 ? '+' : '-',
-                         static_cast<int>(abs_m / 60), static_cast<int>(abs_m % 60));
-                return Value{std::string(buf)};
-            }
+            int32_t abs_s = tv.tz_offset_sec < 0 ? -tv.tz_offset_sec : tv.tz_offset_sec;
+            int32_t h = abs_s / 3600;
+            int32_t m = (abs_s % 3600) / 60;
+            int32_t s = abs_s % 60;
+            char sign = tv.tz_offset_sec >= 0 ? '+' : '-';
+            char buf[20];
+            if (s != 0)
+                snprintf(buf, sizeof(buf), "%c%02d:%02d:%02d", sign, h, m, s);
+            else
+                snprintf(buf, sizeof(buf), "%c%02d:%02d", sign, h, m);
+            return Value{std::string(buf)};
+        }
         case DateTimeField::OFFSET_MINUTES:
             if (!isZoned(k))
                 return Value{};
-            return Value{int64_t(tv.tz_offset_min)};
+            return Value{int64_t(tv.tz_offset_sec) / 60};
         case DateTimeField::OFFSET_SECONDS:
             if (!isZoned(k))
                 return Value{};
-            return Value{int64_t(tv.tz_offset_min) * 60};
+            return Value{int64_t(tv.tz_offset_sec)};
 
         // Epoch accessors (only for zoned DATETIME)
         case DateTimeField::EPOCH_SECONDS:
@@ -1128,40 +1138,50 @@ inline Value temporalAccessorImpl(const Value& tv_val, int64_t field_raw) {
             return Value{tv.nanos / 1'000LL};
 
         // Timezone accessors
-        case TimeField::TIMEZONE:
+        case TimeField::TIMEZONE: {
             if (!isZoned(k))
                 return Value{};
             if (!tv.tz_name.empty())
                 return Value{tv.tz_name};
-            if (tv.tz_offset_min == 0)
+            if (tv.tz_offset_sec == 0)
                 return Value{std::string("Z")};
-            {
-                int32_t abs_m = tv.tz_offset_min < 0 ? -tv.tz_offset_min : tv.tz_offset_min;
-                char buf[14];
-                snprintf(buf, sizeof(buf), "%c%02d:%02d", tv.tz_offset_min >= 0 ? '+' : '-',
-                         static_cast<int>(abs_m / 60), static_cast<int>(abs_m % 60));
-                return Value{std::string(buf)};
-            }
-        case TimeField::OFFSET:
+            int32_t abs_s = tv.tz_offset_sec < 0 ? -tv.tz_offset_sec : tv.tz_offset_sec;
+            int32_t h = abs_s / 3600;
+            int32_t m = (abs_s % 3600) / 60;
+            int32_t s = abs_s % 60;
+            char sign = tv.tz_offset_sec >= 0 ? '+' : '-';
+            char buf[20];
+            if (s != 0)
+                snprintf(buf, sizeof(buf), "%c%02d:%02d:%02d", sign, h, m, s);
+            else
+                snprintf(buf, sizeof(buf), "%c%02d:%02d", sign, h, m);
+            return Value{std::string(buf)};
+        }
+        case TimeField::OFFSET: {
             if (!isZoned(k))
                 return Value{};
-            if (tv.tz_offset_min == 0)
+            if (tv.tz_offset_sec == 0)
                 return Value{std::string("+00:00")};
-            {
-                int32_t abs_m = tv.tz_offset_min < 0 ? -tv.tz_offset_min : tv.tz_offset_min;
-                char buf[14];
-                snprintf(buf, sizeof(buf), "%c%02d:%02d", tv.tz_offset_min >= 0 ? '+' : '-',
-                         static_cast<int>(abs_m / 60), static_cast<int>(abs_m % 60));
-                return Value{std::string(buf)};
-            }
+            int32_t abs_s = tv.tz_offset_sec < 0 ? -tv.tz_offset_sec : tv.tz_offset_sec;
+            int32_t h = abs_s / 3600;
+            int32_t m = (abs_s % 3600) / 60;
+            int32_t s = abs_s % 60;
+            char sign = tv.tz_offset_sec >= 0 ? '+' : '-';
+            char buf[20];
+            if (s != 0)
+                snprintf(buf, sizeof(buf), "%c%02d:%02d:%02d", sign, h, m, s);
+            else
+                snprintf(buf, sizeof(buf), "%c%02d:%02d", sign, h, m);
+            return Value{std::string(buf)};
+        }
         case TimeField::OFFSET_MINUTES:
             if (!isZoned(k))
                 return Value{};
-            return Value{int64_t(tv.tz_offset_min)};
+            return Value{int64_t(tv.tz_offset_sec) / 60};
         case TimeField::OFFSET_SECONDS:
             if (!isZoned(k))
                 return Value{};
-            return Value{int64_t(tv.tz_offset_min) * 60};
+            return Value{int64_t(tv.tz_offset_sec)};
 
         default:
             return Value{};
@@ -1421,7 +1441,7 @@ DateTimeValue temporalTruncate(const DateTimeValue& tv, const std::string& unit,
         if (has_tz) {
             if (!tz_name_override.empty())
                 result.tz_name = tz_name_override;
-            result.tz_offset_min = tz_override;
+            result.tz_offset_sec = tz_override;
         }
     }
 
@@ -1501,7 +1521,7 @@ TimeValue temporalTruncateTime(const TimeValue& tv, const std::string& unit, con
         if (has_tz) {
             if (!tz_name_override.empty())
                 result.tz_name = tz_name_override;
-            result.tz_offset_min = tz_override;
+            result.tz_offset_sec = tz_override;
         }
     }
 
@@ -1552,7 +1572,7 @@ inline Value temporalTruncateScalarFn(const std::vector<Value>& args, const Eval
             tv.minute = dtv.minute;
             tv.second = dtv.second;
             tv.nanos = dtv.nanos;
-            tv.tz_offset_min = dtv.tz_offset_min;
+            tv.tz_offset_sec = dtv.tz_offset_sec;
             tv.tz_name = dtv.tz_name;
             temporal_val = Value{tv};
         }
@@ -1581,7 +1601,7 @@ inline void temporalTruncateBatchFn(const std::vector<const Column*>& args, Colu
                 tv.minute = dtv.minute;
                 tv.second = dtv.second;
                 tv.nanos = dtv.nanos;
-                tv.tz_offset_min = dtv.tz_offset_min;
+                tv.tz_offset_sec = dtv.tz_offset_sec;
                 tv.tz_name = dtv.tz_name;
                 temporal_val = Value{tv};
             }
