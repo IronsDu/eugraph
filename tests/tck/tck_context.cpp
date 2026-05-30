@@ -84,10 +84,7 @@ bool hasUnsupportedExpr(const ast::Expression& expr) {
             using T = std::decay_t<decltype(ptr)>;
             using Inner = typename T::element_type;
 
-            if constexpr (std::is_same_v<Inner, ast::CaseExpr>) {
-                spdlog::info("[TCK] skipping: CASE expression");
-                return true;
-            } else if constexpr (std::is_same_v<Inner, ast::ExistsExpr>) {
+            if constexpr (std::is_same_v<Inner, ast::ExistsExpr>) {
                 // EXISTS subquery is now partially supported (simple form only).
                 // Full form (EXISTS { MATCH ... RETURN ... }) and nested EXISTS
                 // may still fail in binding.
