@@ -1,7 +1,7 @@
 # TCK 测试结果分类报告
 
-**日期**: 2026-05-30 (更新)
-**分支**: fix/boolean-type-check
+**日期**: 2026-05-31 (更新)
+**分支**: feature/union-clause
 **总计**: 3897 场景, 16006 步骤
 **运行耗时**: ~11 分
 **检测方式**: Parser AST 遍历 + Binder 类型检查 + 运行时断言
@@ -125,7 +125,6 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | 子句 | 跳过次数 | 优先级 | 说明 |
 |------|---------|--------|------|
 | MERGE | 80 | P1 | 合并创建，需要条件扫描+创建逻辑 |
-| UNION | 12 | P2 | 查询结果合并 |
 | CALL / standalone CALL | 2 | P3 | 存储过程调用 |
 
 ### 2.2 不支持的语法模式
@@ -218,6 +217,7 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | properties(Vertex/Edge) | 属性 map 函数 |
 | coalesce / trim / ltrim / rtrim / split / replace / substring / left / right | 字符串函数 |
 | range / toInteger / toFloat / toString / head / last / reverse / size | 标量函数 |
+| UNION / UNION ALL | 查询合并（去重/不去重），列名校验，混用检测 |
 | 顶点序列化格式 (id + label + props) | TCK 期望格式 |
 
 ---

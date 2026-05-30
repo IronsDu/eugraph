@@ -211,6 +211,36 @@ RETURN duplicate
 - `range()` 函数尚未注册（`UNWIND range(1, 3) AS x` 会报错）
 - `RETURN *` 尚未实现变量展开（配合 UNWIND 时无法返回全部变量）
 
+### UNION / UNION ALL — 查询合并
+
+UNION 子句将两个以上的查询结果合并为一个结果集。
+
+```cypher
+-- UNION（去重）
+RETURN 1 AS x
+UNION
+RETURN 2 AS x
+
+-- UNION ALL（保留重复行）
+RETURN 1 AS x
+UNION ALL
+RETURN 2 AS x
+
+-- 多 UNION 链
+RETURN 2 AS x
+UNION
+RETURN 1 AS x
+UNION
+RETURN 2 AS x
+```
+
+**语义**：
+- `UNION` 对合并结果去重（通过 DistinctPhysicalOp 实现）
+- `UNION ALL` 保留两部分的所有行，不做去重
+- 同一查询中不能混合 `UNION` 和 `UNION ALL`（编译时报 `InvalidClauseComposition`）
+- 所有子查询必须返回相同数量的列，且列名必须一致（编译时报 `DifferentColumnsInUnion`）
+- 每个 UNION 子查询使用独立的 BindContext，变量作用域互不干扰
+
 ### RETURN — 返回
 
 ```cypher
@@ -314,7 +344,6 @@ REMOVE r.prop                     -- 移除边属性
 |-----------|------|
 | `MERGE` | 条件创建（含 ON CREATE/MATCH SET） |
 | `CALL` | 过程调用/子查询 |
-| `UNION` / `UNION ALL` | 查询合并 |
 | `CASE WHEN THEN ELSE END` | 条件表达式 |
 | `[x IN list WHERE pred \| proj]` | 列表推导 |
 | `ALL/ANY/NONE/SINGLE(...)` | 量词谓词（已实现，见 WHERE 子句） |

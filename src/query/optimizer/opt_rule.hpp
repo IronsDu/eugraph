@@ -33,7 +33,8 @@ enum class OptNodeType {
     BinaryJoin,       // 19
     LeftJoin,         // 20
     SemiJoin,         // 21
-    Unwind            // 22
+    Unwind,           // 22
+    Union             // 23
 };
 
 // Convert BoundLogicalOperator variant index to OptNodeType.

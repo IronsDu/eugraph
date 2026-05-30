@@ -316,6 +316,7 @@ struct SelectionVector {
 | `BoundPathBuildOp` | `bound_path_build_op.hpp` | 组装路径变量 | 嵌入 `BoundLogicalOperator child` |
 | `BoundUnwindOp` | `bound_unwind_op.hpp` | 列表展开为行（UNWIND） | 嵌入 `BoundLogicalOperator child` |
 | `BoundBinaryJoinOp` | `bound_binary_join_op.hpp` | 二元 Join（Cross/Inner/Left） | 嵌入 `BoundLogicalOperator left` + `right` |
+| `BoundUnionOp` | `bound_union_op.hpp` | 查询合并（UNION / UNION ALL）。`all` 字段区分去重/不去重模式 | 嵌入 `BoundLogicalOperator left` + `right` |
 
 > **开发注意：新增 Variant 类型的检查清单**
 >
@@ -358,6 +359,7 @@ struct SelectionVector {
 | `REMOVE n:Label` / `REMOVE n.prop` | `RemoveOp` |
 | `DELETE n` / `DETACH DELETE n` | `DeleteOp` |
 | `UNWIND expr AS var` | `UnwindOp` |
+| `UNION / UNION ALL` | `BoundUnionOp`（`all` 字段区分去重/不去重；UNION 时物理计划额外附加 `DistinctPhysicalOp`） |
 
 ---
 
@@ -400,6 +402,7 @@ class PhysicalOperator {
 | `DeletePhysicalOp` | `IAsyncGraphDataStore&`, targets, detach | child 原样 yield，detach 时先扫描并删除邻边 |
 | `PathBuildPhysicalOp` | 路径变量名, 元素列名列表 | 复制 child 列 + 新建 PATH FLAT 列 |
 | `CrossProductPhysicalOp` | 左/右 child PhysicalOperator, 左/右 Schema | 嵌套循环笛卡尔积：左输入 DICTIONARY + 右输入 DICTIONARY |
+| `UnionPhysicalOp` | `bool all`, 左/右 child PhysicalOperator | 顺序 yield 左子算子所有 chunk，再 yield 右子算子所有 chunk。UNION（`all=false`）时由 planner 在外层包裹 `DistinctPhysicalOp` 去重 |
 
 ### 各算子执行逻辑
 
