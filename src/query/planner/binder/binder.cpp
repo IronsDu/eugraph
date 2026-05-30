@@ -172,13 +172,13 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
         // Apply projection pushdown: fill label_prop_ids on scan/expand operators
         applyProjectionPushdown(plan.root);
 
-        // Use return_columns if available (from RETURN clause), otherwise fall back to all symbols
         if (!ctx_.return_columns.empty()) {
             plan.output_schema = std::move(ctx_.return_columns);
         } else {
-            for (const auto& [name, col_info] : ctx_.symbols) {
-                plan.output_schema.push_back(col_info);
-            }
+            // No RETURN clause: wrap root in an empty BoundProjectOp → 0 output columns
+            auto proj = std::make_unique<BoundProjectOp>();
+            proj->child = std::move(plan.root);
+            plan.root = std::move(proj);
         }
         return true;
     }

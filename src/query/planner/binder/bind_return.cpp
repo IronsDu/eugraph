@@ -202,9 +202,13 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
     proj->child = std::move(child);
 
     // Register RETURN aliases so ORDER BY can reference them.
-    // Column index = projection output position.
+    // Build alias → original expression map for ORDER BY resolution.
+    // (Sort is placed before projection, so aliases need to be resolved
+    // to the original expression, not the projected column index.)
+    std::unordered_map<std::string, size_t> alias_to_proj_idx;
     for (size_t i = 0; i < proj->items.size(); ++i) {
         const auto& proj_item = proj->items[i];
+        alias_to_proj_idx[proj_item.alias] = i;
         if (ctx_.symbols.find(proj_item.alias) == ctx_.symbols.end()) {
             ColumnInfo info;
             info.name = proj_item.alias;
@@ -220,23 +224,46 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         ctx_.return_columns.push_back(std::move(out_info));
     }
 
-    BoundLogicalOperator current = std::move(proj);
+    // Build child pipeline: sort before projection so ORDER BY can reference
+    // original columns (e.g., r.id where r is an EdgeValue from MATCH).
+    BoundLogicalOperator child_op = std::move(proj->child);
 
     // ORDER BY
     if (ret.order_by) {
         auto sort = std::make_unique<BoundSortOp>();
         for (const auto& si : ret.order_by->items) {
-            auto bound_key = bindExpression(si.expr);
-            if (!bound_key)
-                continue;
-            BoundSortOp::SortItem sort_item;
-            sort_item.expr = std::move(*bound_key);
-            sort_item.direction = si.direction;
-            sort->items.push_back(std::move(sort_item));
+            // If the ORDER BY expression is a simple variable that matches a
+            // RETURN alias, re-bind the original RETURN expression.
+            auto* var = std::get_if<std::unique_ptr<cypher::Variable>>(&si.expr);
+            if (var && *var && alias_to_proj_idx.count((*var)->name)) {
+                size_t idx = alias_to_proj_idx[(*var)->name];
+                // Re-bind the original expression from the RETURN item.
+                // This works because the child columns are still available
+                // (sort is before projection).
+                auto bound_key = bindExpression(ret.items[idx].expr);
+                if (bound_key) {
+                    BoundSortOp::SortItem sort_item;
+                    sort_item.expr = std::move(*bound_key);
+                    sort_item.direction = si.direction;
+                    sort->items.push_back(std::move(sort_item));
+                }
+            } else {
+                auto bound_key = bindExpression(si.expr);
+                if (!bound_key)
+                    continue;
+                BoundSortOp::SortItem sort_item;
+                sort_item.expr = std::move(*bound_key);
+                sort_item.direction = si.direction;
+                sort->items.push_back(std::move(sort_item));
+            }
         }
-        sort->child = std::move(current);
-        current = std::move(sort);
+        sort->child = std::move(child_op);
+        child_op = std::move(sort);
     }
+
+    // Projection after sort
+    proj->child = std::move(child_op);
+    BoundLogicalOperator current = std::move(proj);
 
     // SKIP, LIMIT, DISTINCT
     if (ret.skip) {

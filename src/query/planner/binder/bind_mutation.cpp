@@ -79,62 +79,69 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
         uint32_t start_col;
         std::vector<LabelId> start_labels;
         std::vector<uint16_t> start_prop_ids;
-        if (!bindNodePattern(element.node, start_var, start_col, start_labels, start_prop_ids))
+        bool start_exists = element.node.variable.has_value() && ctx_.lookup(*element.node.variable) != nullptr;
+        if (!bindNodePattern(element.node, start_var, start_col, start_labels, start_prop_ids, start_exists))
             return std::nullopt;
+
+        if (start_exists) {
+            // Variable already bound (e.g. from MATCH) — don't create a new node,
+            // just pass through the existing child data.
+            if (pi == 0 && child) {
+                current = std::move(*child);
+            }
+            // If pi > 0, current is already set from previous pattern
+        } else {
+            auto create_node = std::make_unique<BoundCreateNodeOp>();
+            create_node->variable = start_var;
+            if (start_labels.empty()) {
+                create_node->label_ids.push_back(catalog_.getAnonLabelId());
+            } else {
+                create_node->label_ids = start_labels;
+            }
+
+            std::string prop_error;
+            auto [label_props, pending] =
+                bindCreateNodeProperties(element.node, create_node->label_ids, catalog_, *this, &prop_error);
+            if (!prop_error.empty()) {
+                error(prop_error);
+                return std::nullopt;
+            }
+            create_node->label_properties = std::move(label_props);
+            create_node->pending_props = std::move(pending);
+
+            if (pi == 0 && child) {
+                create_node->child = std::move(*child);
+            } else if (pi > 0 && current) {
+                create_node->child = std::move(*current);
+            }
+            current = std::move(create_node);
+        }
 
         // Mark as CREATE variable so property resolution uses source_labels
         auto* sym = ctx_.lookup(start_var);
         if (sym)
             ctx_.symbols[start_var].is_create_variable = true;
-
-        auto create_node = std::make_unique<BoundCreateNodeOp>();
-        create_node->variable = start_var;
-        if (start_labels.empty()) {
-            create_node->label_ids.push_back(catalog_.getAnonLabelId());
-        } else {
-            create_node->label_ids = start_labels;
-        }
-
-        std::string prop_error;
-        auto [label_props, pending] =
-            bindCreateNodeProperties(element.node, create_node->label_ids, catalog_, *this, &prop_error);
-        if (!prop_error.empty()) {
-            error(prop_error);
-            return std::nullopt;
-        }
-        create_node->label_properties = std::move(label_props);
-        create_node->pending_props = std::move(pending);
-
-        // Chain: first pattern connects to preceding clause (MATCH/WITH),
-        // subsequent patterns connect to the previous pattern's output.
-        if (pi == 0 && child) {
-            create_node->child = std::move(*child);
-        } else if (pi > 0 && current) {
-            create_node->child = std::move(*current);
-        }
-        BoundLogicalOperator node_op = std::move(create_node);
-
-        // Create edges in chain
-        current = std::move(node_op);
         for (const auto& [rel_pat, node_pat] : element.chain) {
             if (!current)
                 break;
 
-            // Bind relationship (CREATE context: allow unknown edge types)
+            // Bind target node FIRST so column indices match physical plan order:
+            // (start_node, dst_node, edge) — the edge column is always appended last.
+            std::string dst_var;
+            uint32_t dst_col;
+            std::vector<LabelId> dst_labels;
+            std::vector<uint16_t> dst_prop_ids;
+            bool dst_exists = node_pat.variable.has_value() && ctx_.lookup(*node_pat.variable) != nullptr;
+            if (!bindNodePattern(node_pat, dst_var, dst_col, dst_labels, dst_prop_ids, dst_exists))
+                return std::nullopt;
+
+            // Bind relationship AFTER dst node (CREATE context: allow unknown edge types)
             std::string edge_var;
             uint32_t edge_col;
             std::vector<EdgeLabelId> edge_label_ids;
             std::vector<uint16_t> edge_prop_ids;
             if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids,
                                          /*for_create=*/true))
-                return std::nullopt;
-
-            // Bind target node
-            std::string dst_var;
-            uint32_t dst_col;
-            std::vector<LabelId> dst_labels;
-            std::vector<uint16_t> dst_prop_ids;
-            if (!bindNodePattern(node_pat, dst_var, dst_col, dst_labels, dst_prop_ids))
                 return std::nullopt;
 
             // Create edge
@@ -164,6 +171,9 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
 
             if (dst_var == start_var) {
                 // Self-loop: reuse the existing start node, don't create a duplicate.
+                create_edge->child = std::move(*current);
+            } else if (dst_exists) {
+                // Variable already bound — don't create a new node.
                 create_edge->child = std::move(*current);
             } else {
                 // Create target node

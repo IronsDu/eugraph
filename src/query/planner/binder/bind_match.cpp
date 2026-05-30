@@ -111,6 +111,10 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         const auto& pp = match.patterns[pi];
         const auto& element = pp.element;
 
+        // For patterns after the first, join with previous via cross product
+        std::optional<BoundLogicalOperator> previous = std::move(current);
+        current = std::nullopt;
+
         // Only the first pattern in a correlated MATCH reuses the parent.
         bool correlated = (pi == 0) && parent.has_value();
 
@@ -460,6 +464,15 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 ctx_.symbols[path_build->path_variable] = makeColumnInfo(path_build->path_variable, BoundType::Path());
                 current = std::move(path_build);
             }
+        }
+
+        // For patterns after the first, join with previous via cross product
+        if (pi > 0 && previous && current) {
+            auto join = std::make_unique<BoundBinaryJoinOp>();
+            join->join_type = JoinType::Cross;
+            join->left = std::move(*previous);
+            join->right = std::move(*current);
+            current = std::move(join);
         }
     }
 
