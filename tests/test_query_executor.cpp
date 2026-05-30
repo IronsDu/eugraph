@@ -266,8 +266,9 @@ TEST_F(QueryExecutorTest, ExpandNeighbors) {
 // ==================== Create Tests ====================
 
 TEST_F(QueryExecutorTest, CreateNode) {
-    auto rows = execSync(*executor_, "CREATE (n:Person)").rows;
-    EXPECT_EQ(rows.size(), 1);
+    auto result = execSync(*executor_, "CREATE (n:Person)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0);
 
     auto txn = sync_data_->beginTransaction();
     auto cursor = sync_data_->createVertexScanCursor(txn, PERSON_LABEL);
@@ -701,8 +702,8 @@ TEST_F(QueryExecutorTest, PathLength) {
 TEST_F(QueryExecutorTest, CreateNodeReturnsId) {
     auto result = execSync(*executor_, "CREATE (n:Person)");
     ASSERT_TRUE(result.error.empty()) << result.error;
-    // No RETURN clause → 0 columns (TCK semantics)
-    ASSERT_EQ(result.rows[0].size(), 0u);
+    // No RETURN clause → 0 rows, 0 columns (TCK semantics)
+    EXPECT_EQ(result.rows.size(), 0u);
 
     // Verify node was created via MATCH
     auto scan = execSync(*executor_, "MATCH (n:Person) RETURN n");
@@ -746,11 +747,13 @@ TEST_F(QueryExecutorTest, CreateNodeVerifyInStore) {
 }
 
 TEST_F(QueryExecutorTest, CreateNodeDifferentLabels) {
-    auto r1 = execSync(*executor_, "CREATE (n:Person)").rows;
-    auto r2 = execSync(*executor_, "CREATE (n:City)").rows;
+    auto r1 = execSync(*executor_, "CREATE (n:Person)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    EXPECT_EQ(r1.rows.size(), 0u);
 
-    ASSERT_EQ(r1.size(), 1);
-    ASSERT_EQ(r2.size(), 1);
+    auto r2 = execSync(*executor_, "CREATE (n:City)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    EXPECT_EQ(r2.rows.size(), 0u);
 
     auto person_rows = execSync(*executor_, "MATCH (n:Person) RETURN n").rows;
     EXPECT_EQ(person_rows.size(), 1);
@@ -764,8 +767,8 @@ TEST_F(QueryExecutorTest, CreateNodeDifferentLabels) {
 TEST_F(QueryExecutorTest, CreateEdgeReturnsId) {
     auto result = execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person)");
     ASSERT_TRUE(result.error.empty()) << result.error;
-    // No RETURN clause → 0 columns (TCK semantics)
-    ASSERT_EQ(result.rows[0].size(), 0u);
+    // No RETURN clause → 0 rows, 0 columns (TCK semantics)
+    EXPECT_EQ(result.rows.size(), 0u);
 
     // Verify edge was created via MATCH
     auto expand = execSync(*executor_, "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN r");
@@ -2111,7 +2114,8 @@ TEST_F(QueryExecutorMultiLabelTest, StreamingSetLabelSurvivesPlanContextLifetime
         co_return count;
     };
     size_t row_count = blockingWait(consumeStream());
-    EXPECT_GT(row_count, 0);
+    // No RETURN clause → 0 rows (TCK semantics)
+    EXPECT_EQ(row_count, 0u);
 
     // Verify the label was actually set
     auto result = execSync(*executor_, "MATCH (n:Employee) RETURN n");
@@ -2352,7 +2356,7 @@ TEST_F(QueryExecutorTest, CreateEdgeViolatesUniqueEdgeIndex) {
     // First edge should succeed
     auto r1 = execSync(executor, "CREATE (a:Person)-[:REVIEWED {since: 2020}]->(b:Person)");
     EXPECT_TRUE(r1.error.empty()) << r1.error;
-    ASSERT_EQ(r1.rows.size(), 1u);
+    EXPECT_EQ(r1.rows.size(), 0u);
 
     // Second edge with same 'since' value should be rejected by unique constraint
     auto r2 = execSync(executor, "CREATE (a:Person)-[:REVIEWED {since: 2020}]->(b:Person)");
@@ -4873,9 +4877,8 @@ TEST_F(QueryExecutorTest, CreateNodePreservesChildColumns) {
     // MATCH + CREATE: should create one City per matched Person (2)
     auto result = execSync(*executor_, "MATCH (a:Person) CREATE (b:City)");
     ASSERT_TRUE(result.error.empty()) << result.error;
-    // No RETURN → 0 columns but correct row count
-    EXPECT_EQ(result.rows.size(), 2);
-    EXPECT_EQ(result.rows[0].size(), 0u);
+    // No RETURN → 0 rows (TCK semantics); side effects verified via MATCH below
+    EXPECT_EQ(result.rows.size(), 0u);
 
     auto cities = execSync(*executor_, "MATCH (c:City) RETURN c");
     EXPECT_EQ(cities.rows.size(), 2);
@@ -4917,10 +4920,10 @@ TEST_F(QueryExecutorTest, MatchCreatePerRowCreation) {
     for (int i = 0; i < 3; ++i)
         execSync(*executor_, "CREATE (n:Person)");
 
-    // MATCH + CREATE City → one city per person
+    // MATCH + CREATE City → one city per person (no RETURN → 0 rows, verify via MATCH)
     auto r = execSync(*executor_, "MATCH (p:Person) CREATE (c:City)");
     ASSERT_TRUE(r.error.empty()) << r.error;
-    EXPECT_EQ(r.rows.size(), 3);
+    EXPECT_EQ(r.rows.size(), 0u);
 
     auto cities = execSync(*executor_, "MATCH (c:City) RETURN c");
     EXPECT_EQ(cities.rows.size(), 3);
@@ -4933,8 +4936,8 @@ TEST_F(QueryExecutorTest, MatchCreateEdgePerRow) {
 
     auto r = execSync(*executor_, "MATCH (a:Person), (b:Person) CREATE (a)-[:KNOWS]->(b)");
     ASSERT_TRUE(r.error.empty()) << r.error;
-    // 2 persons × 2 persons = 4 edges (cartesian product)
-    EXPECT_EQ(r.rows.size(), 4);
+    // No RETURN → 0 rows; side effects verified via MATCH below
+    EXPECT_EQ(r.rows.size(), 0u);
 
     auto edges = execSync(*executor_, "MATCH ()-[e:KNOWS]->() RETURN e");
     EXPECT_EQ(edges.rows.size(), 4);
@@ -5026,10 +5029,10 @@ TEST_F(QueryExecutorMultiLabelTest, MatchCreateMultiLabelPerRow) {
     execSync(*executor_, "CREATE (n:Person {name: 'A', age: 20})");
     execSync(*executor_, "CREATE (n:Person {name: 'B', age: 25})");
 
-    // MATCH Person, CREATE Employee:VIP
+    // MATCH Person, CREATE Employee:VIP (no RETURN → 0 rows, verify via MATCH below)
     auto r = execSync(*executor_, "MATCH (p:Person) CREATE (e:Employee:VIP {salary: 100})");
     ASSERT_TRUE(r.error.empty()) << r.error;
-    EXPECT_EQ(r.rows.size(), 2);
+    EXPECT_EQ(r.rows.size(), 0u);
 
     auto employees = execSync(*executor_, "MATCH (n:Employee) RETURN n");
     EXPECT_EQ(employees.rows.size(), 2);
@@ -5121,11 +5124,13 @@ TEST_F(QueryExecutorTest, MatchFilterCreatePerRow) {
     // Only match first 2 via LIMIT
     auto r = execSync(*executor_, "MATCH (p:Person) CREATE (c:City)");
     ASSERT_TRUE(r.error.empty()) << r.error;
-    EXPECT_EQ(r.rows.size(), 4); // 4 persons → 4 cities
+    // No RETURN → 0 rows; 4 cities verified via MATCH below
+    EXPECT_EQ(r.rows.size(), 0u);
 
     auto limited = execSync(*executor_, "MATCH (p:Person) WITH p LIMIT 2 CREATE (c:City)");
     ASSERT_TRUE(limited.error.empty()) << limited.error;
-    EXPECT_EQ(limited.rows.size(), 2);
+    // No RETURN → 0 rows; 2 additional cities verified via MATCH below
+    EXPECT_EQ(limited.rows.size(), 0u);
 }
 
 // --- Edge creation preserves child columns ---

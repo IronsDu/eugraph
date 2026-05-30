@@ -16,6 +16,12 @@ std::string ProjectPhysicalOp::toString() const {
 folly::coro::AsyncGenerator<DataChunk> ProjectPhysicalOp::executeChunk() {
     auto child_gen = child_->executeChunk();
 
+    // Empty projection (no RETURN): drain child for side effects, produce 0 rows
+    if (items_.empty()) {
+        while (auto chunk = co_await child_gen.next()) {}
+        co_return;
+    }
+
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
 

@@ -8,6 +8,79 @@ namespace binder {
 // ==================== RETURN Binding ====================
 
 std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClause& ret, BoundLogicalOperator child) {
+    // Handle RETURN *: build projection items from all variables in scope
+    // We cannot modify the const ret, so we build the projection inline
+    // and then fall through to the normal bindReturn logic.
+    // Instead, we build the items vector here and use it directly.
+    if (ret.return_all && ret.items.empty()) {
+        // Build a simple projection over all symbols
+        auto proj = std::make_unique<BoundProjectOp>();
+        for (const auto& [name, col_info] : ctx_.symbols) {
+            auto bound_expr =
+                std::make_optional<BoundExpression>(BoundColumnRef(col_info.column_index, col_info.type, name));
+            BoundProjectOp::ProjectItem proj_item;
+            proj_item.expr = std::move(*bound_expr);
+            proj_item.alias = name;
+            proj_item.result_type = getBoundExprType(proj_item.expr);
+            proj->items.push_back(std::move(proj_item));
+
+            ColumnInfo out_info;
+            out_info.name = name;
+            out_info.type = proj_item.result_type;
+            out_info.column_index = static_cast<uint32_t>(proj->items.size() - 1);
+            ctx_.return_columns.push_back(std::move(out_info));
+        }
+        proj->child = std::move(child);
+
+        BoundLogicalOperator current = std::move(proj);
+
+        // ORDER BY
+        if (ret.order_by) {
+            auto sort = std::make_unique<BoundSortOp>();
+            for (const auto& si : ret.order_by->items) {
+                auto bound_key = bindExpression(si.expr);
+                if (!bound_key)
+                    continue;
+                BoundSortOp::SortItem sort_item;
+                sort_item.expr = std::move(*bound_key);
+                sort_item.direction = si.direction;
+                sort->items.push_back(std::move(sort_item));
+            }
+            sort->child = std::move(current);
+            current = std::move(sort);
+        }
+        if (ret.skip) {
+            auto bound_skip = bindExpression(*ret.skip);
+            if (bound_skip && std::holds_alternative<BoundLiteral>(*bound_skip)) {
+                auto& lit = std::get<BoundLiteral>(*bound_skip);
+                if (std::holds_alternative<int64_t>(lit.value)) {
+                    auto skip = std::make_unique<BoundSkipOp>();
+                    skip->count = std::get<int64_t>(lit.value);
+                    skip->child = std::move(current);
+                    current = std::move(skip);
+                }
+            }
+        }
+        if (ret.limit) {
+            auto bound_limit = bindExpression(*ret.limit);
+            if (bound_limit && std::holds_alternative<BoundLiteral>(*bound_limit)) {
+                auto& lit = std::get<BoundLiteral>(*bound_limit);
+                if (std::holds_alternative<int64_t>(lit.value)) {
+                    auto limit = std::make_unique<BoundLimitOp>();
+                    limit->count = std::get<int64_t>(lit.value);
+                    limit->child = std::move(current);
+                    current = std::move(limit);
+                }
+            }
+        }
+        if (ret.distinct) {
+            auto distinct = std::make_unique<BoundDistinctOp>();
+            distinct->child = std::move(current);
+            current = std::move(distinct);
+        }
+        return current;
+    }
+
     // Check for aggregate functions in return items
     bool has_aggregate = false;
     for (const auto& item : ret.items) {
