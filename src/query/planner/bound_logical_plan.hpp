@@ -21,6 +21,7 @@
 #include "query/planner/logical_plan/operator/bound_set_op.hpp"
 #include "query/planner/logical_plan/operator/bound_skip_op.hpp"
 #include "query/planner/logical_plan/operator/bound_sort_op.hpp"
+#include "query/planner/logical_plan/operator/bound_union_op.hpp"
 #include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 

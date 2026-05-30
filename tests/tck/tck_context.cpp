@@ -258,12 +258,6 @@ bool hasUnsupportedFeature(const ast::Statement& stmt) {
             if constexpr (std::is_same_v<Inner, ast::RegularQuery>) {
                 const auto& rq = *ptr;
 
-                // UNION?
-                if (!rq.unions.empty()) {
-                    spdlog::info("[TCK] skipping: UNION");
-                    return true;
-                }
-
                 // Walk clauses
                 for (const auto& c : rq.first.clauses) {
                     if (hasUnsupportedClause(c))
@@ -383,7 +377,9 @@ void TckContext::executeQuery(const std::string& query) {
         if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
             errMsg.find("parse") != std::string::npos || errMsg.find("UndefinedVariable") != std::string::npos ||
             errMsg.find("VariableAlreadyBound") != std::string::npos ||
-            errMsg.find("InvalidArgumentType") != std::string::npos) {
+            errMsg.find("InvalidArgumentType") != std::string::npos ||
+            errMsg.find("DifferentColumnsInUnion") != std::string::npos ||
+            errMsg.find("InvalidClauseComposition") != std::string::npos) {
             lastErrorType = "SyntaxError";
             lastErrorPhase = "compile time";
         } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
@@ -405,6 +401,10 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "UndefinedVariable";
         } else if (errMsg.find("VariableAlreadyBound") != std::string::npos) {
             lastErrorDetail = "VariableAlreadyBound";
+        } else if (errMsg.find("DifferentColumnsInUnion") != std::string::npos) {
+            lastErrorDetail = "DifferentColumnsInUnion";
+        } else if (errMsg.find("InvalidClauseComposition") != std::string::npos) {
+            lastErrorDetail = "InvalidClauseComposition";
         } else if (errMsg.find("InvalidArgumentType") != std::string::npos) {
             lastErrorDetail = "InvalidArgumentType";
         } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {

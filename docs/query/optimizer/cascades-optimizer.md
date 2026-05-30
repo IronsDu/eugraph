@@ -142,7 +142,8 @@ public:
 enum class OptNodeType {
     Scan, LabelScan, Expand, Filter, Project, Aggregate,
     Sort, Skip, Limit, Distinct, CreateNode, CreateEdge,
-    Set, Remove, PathBuild
+    Set, Remove, PathBuild, Unwind, BinaryJoin, LeftJoin,
+    SemiJoin, Union
 };
 
 struct PatternNode {

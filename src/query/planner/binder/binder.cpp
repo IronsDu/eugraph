@@ -50,11 +50,69 @@ std::optional<BoundStatement> Binder::bind(const cypher::Statement& stmt) {
 }
 
 bool Binder::bindRegularQuery(const cypher::RegularQuery& query, BoundStatement& result) {
-    if (!query.unions.empty()) {
-        error("UNION not yet supported");
+    // Bind the first query
+    BoundLogicalPlan first_plan;
+    if (!bindSingleQuery(query.first, first_plan))
         return false;
+
+    if (query.unions.empty()) {
+        result.plan = std::move(first_plan);
+        return true;
     }
-    return bindSingleQuery(query.first, result.plan);
+
+    // All UNION clauses in a query must be consistently UNION or UNION ALL
+    bool first_all = query.unions.front().first.all;
+    for (const auto& [ucl, sq] : query.unions) {
+        if (ucl.all != first_all) {
+            error("InvalidClauseComposition: Cannot mix UNION and UNION ALL in the same query");
+            return false;
+        }
+    }
+
+    // Bind each UNION sub-query and chain them
+    BoundLogicalOperator current = std::move(first_plan.root);
+    std::vector<ColumnInfo> first_schema = std::move(first_plan.output_schema);
+
+    for (const auto& [ucl, sq] : query.unions) {
+        // Create a fresh BindContext for each UNION sub-query
+        BindContext union_ctx;
+        BindContext saved_ctx = std::move(ctx_);
+        ctx_ = std::move(union_ctx);
+
+        BoundLogicalPlan sub_plan;
+        bool ok = bindSingleQuery(sq, sub_plan);
+
+        // Restore the original context (UNION sub-queries don't share scope)
+        ctx_ = std::move(saved_ctx);
+
+        if (!ok)
+            return false;
+
+        if (sub_plan.output_schema.size() != first_schema.size()) {
+            error(
+                "DifferentColumnsInUnion: All sub queries in a UNION must have the same number of columns (expected " +
+                std::to_string(first_schema.size()) + ", got " + std::to_string(sub_plan.output_schema.size()) + ")");
+            return false;
+        }
+        for (size_t ci = 0; ci < first_schema.size(); ++ci) {
+            if (sub_plan.output_schema[ci].name != first_schema[ci].name) {
+                error(
+                    "DifferentColumnsInUnion: All sub queries in a UNION must have the same column names (expected '" +
+                    first_schema[ci].name + "', got '" + sub_plan.output_schema[ci].name + "')");
+                return false;
+            }
+        }
+
+        auto union_op = std::make_unique<BoundUnionOp>();
+        union_op->all = ucl.all;
+        union_op->left = std::move(current);
+        union_op->right = std::move(sub_plan.root);
+        current = BoundLogicalOperator(std::move(union_op));
+    }
+
+    result.plan.root = std::move(current);
+    result.plan.output_schema = std::move(first_schema);
+    return true;
 }
 
 bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan& plan) {
