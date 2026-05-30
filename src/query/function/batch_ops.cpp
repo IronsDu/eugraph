@@ -17,13 +17,21 @@ namespace {
 
 void genericEqBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        result.setValue(i, Value(left.getValue(i) == right.getValue(i)));
+        if (left.isNull(i) || right.isNull(i)) {
+            result.setNull(i);
+        } else {
+            result.setValue(i, Value(left.getValue(i) == right.getValue(i)));
+        }
     }
 }
 
 void genericNeqBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        result.setValue(i, Value(!(left.getValue(i) == right.getValue(i))));
+        if (left.isNull(i) || right.isNull(i)) {
+            result.setNull(i);
+        } else {
+            result.setValue(i, Value(!(left.getValue(i) == right.getValue(i))));
+        }
     }
 }
 
