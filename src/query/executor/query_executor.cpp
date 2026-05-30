@@ -151,13 +151,9 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .edge_label_name_to_id = ctx->edge_label_name_to_id,
         .label_defs = ctx->label_defs,
         .edge_label_defs = ctx->edge_label_defs,
-        .variable_vertex_ids = {},
-        .variable_edge_ids = {},
         .eval_ctx = {},
     };
 
-    plan_ctx.next_vertex_id = co_await async_meta_.nextVertexId();
-    plan_ctx.next_edge_id = co_await async_meta_.nextEdgeId();
     plan_ctx.eval_ctx.catalog = ctx->catalog.get();
     plan_ctx.eval_ctx.label_defs = &ctx->label_defs;
 

@@ -329,6 +329,12 @@ struct SelectionVector {
 
 **符号表**：`Binder` 通过 `BindContext` 维护变量→列索引映射，MATCH 中每个变量分配列索引（在 `BoundScanOp::column_index` / `BoundLabelScanOp::column_index` 等字段中）。表达式中的变量引用在 Binder 阶段为 `BoundVariableRef`（变量名），经 `ColumnResolver` 解析为 `BoundColumnRef`（列索引）。
 
+**无 RETURN 子句时的输出**：当查询不含 `RETURN` 时（如 `CREATE`、`SET`、`DELETE` 等纯写操作），Binder 在逻辑计划根部追加空 `BoundProjectOp`（投影表达式数组为空）。物理计划顶层为空 `ProjectPhysicalOp`，产出 0 列 DataChunk，但仍遍历 child 触发副作用。这符合 TCK 语义——写操作不输出数据。
+
+**RETURN + ORDER BY 管线顺序**：`ORDER BY` 在 `ProjectOp` 之前执行（物理管线：child → Sort → Project）。这样 ORDER BY 表达式可以引用原始 child 列（如 `r.id`，其中 `r` 是 EdgeValue）。当 ORDER BY 引用 RETURN 别名（如 `RETURN id(n) AS x ORDER BY x`）时，Binder 将别名替换为原始 RETURN 表达式重新绑定。
+
+**CREATE 列索引顺序**：在 `bindCreate` 中，dst node 在 edge 之前绑定，使列索引顺序为 (start_node, dst_node, edge)，与物理执行管线一致（CreateNode → CreateNode → CreateEdge，edge 列始终追加在最后）。
+
 ### Cypher 子句映射
 
 | Cypher 子句 | 逻辑算子 |
@@ -342,12 +348,12 @@ struct SelectionVector {
 | `WHERE pred` | `FilterOp` |
 | `RETURN items` | `ProjectOp`（无聚合）/ `AggregateOp`（有聚合） |
 | `RETURN expr`（无 MATCH） | `SingletonOp` + `ProjectOp` |
-| `RETURN ... ORDER BY` | `SortOp` |
+| `RETURN ... ORDER BY` | `SortOp`（在 `ProjectOp` 之前执行，可引用原始列） |
 | `RETURN ... SKIP N` | `SkipOp` |
 | `RETURN ... LIMIT N` | `LimitOp` |
 | `RETURN DISTINCT ...` | `DistinctOp` |
-| `CREATE (n:Label)` | `CreateNodeOp` |
-| `CREATE (a)-[r:TYPE]->(b)` | `CreateEdgeOp` |
+| `CREATE (n:Label)` | `CreateNodeOp`（无 `RETURN` 时输出 0 列） |
+| `CREATE (a)-[r:TYPE]->(b)` | `CreateEdgeOp`（同上） |
 | `SET n:Label` / `SET n.prop = val` | `SetOp` |
 | `REMOVE n:Label` / `REMOVE n.prop` | `RemoveOp` |
 | `DELETE n` / `DETACH DELETE n` | `DeleteOp` |
@@ -385,8 +391,8 @@ class PhysicalOperator {
 | `SkipPhysicalOp` | `int64_t skip` | DICTIONARY 调整 selection |
 | `DistinctOp` | — | DICTIONARY hash set 去重 |
 | `LimitPhysicalOp` | `int64_t limit` | DICTIONARY 截断 selection |
-| `CreateNodePhysicalOp` | `IAsyncGraphDataStore&`, `IAsyncGraphMetaStore&`, `VertexId`, `pending_props` | drain child → `__anon__` 走轻量 prop_id 分配 → 写入 → 单行 FLAT |
-| `CreateEdgePhysicalOp` | `IAsyncGraphDataStore&`, `EdgeId`, `pending_props` | drain child → 解析 `pending_props`（按属性名匹配 pid）→ 写入边 → 单行 FLAT |
+| `CreateNodePhysicalOp` | `IAsyncGraphDataStore&`, `IAsyncGraphMetaStore&`, `pending_props` | 逐行创建：child 每行触发一次创建，动态 VID（`meta_.nextVertexId()`），`__anon__` 轻量 prop_id 分配，输出 = child 列 + 新顶点列 |
+| `CreateEdgePhysicalOp` | `IAsyncGraphDataStore&`, `IAsyncGraphMetaStore&`, `src_col_idx_`/`dst_col_idx_` | 逐行创建：child 每行触发一次创建，动态 EID（`meta_.nextEdgeId()`），src/dst VID 从 DataChunk 列解析，输出 = child 列 + 新边列 |
 | `CreateEdgeLabelPhysicalOp` | `IAsyncGraphMetaStore&`, `IAsyncGraphDataStore&`, 标签名, 属性名列表, 共享的 `name_to_id`/`defs` 映射 | 运行时创建边类型：写元数据 → 创建 WT 数据表 → 重载定义同步本地映射 → 透传子算子输出 |
 | `AlterEdgeLabelPhysicalOp` | `IAsyncGraphMetaStore&`, 标签名, 新属性名列表, 共享的 `defs` 映射 | 运行时为已有边类型添加缺失的属性列 → 重载定义 → 透传子算子输出 |
 | `SetPhysicalOp` | `IAsyncGraphDataStore&`, `IAsyncGraphMetaStore&`, items（含 `strong_mode`, `resolved_label_id`, `resolved_prop_id`） | 便捷模式：运行时推断目标标签；强模式：直接写入指定标签 |
@@ -417,7 +423,9 @@ class PhysicalOperator {
 
 **Skip/Limit**：DICTIONARY selection 调整，不物理拷贝数据。
 
-**CreateNode/CreateEdge**：通过 `co_await store_.insertVertex/insertEdge` 异步写入。写入前检查唯一约束，写入后维护索引条目。
+**CreateNode/CreateEdge**：通过 `co_await store_.insertVertex/insertEdge` 异步写入。逐行创建：child 返回的每一行触发一次创建操作。动态 ID 分配：所有 VertexId 通过 `meta_.nextVertexId()`、EdgeId 通过 `meta_.nextEdgeId()` 运行时分配，不再 planner 预分配。child 列保留：输出 DataChunk = child 列 + 新创建的实体列（VertexValue/EdgeValue）。写入前检查唯一约束，写入后维护索引条目。
+
+**CreateNode __anon__ 路径**：顶点属性不在任何标签 schema 中时（`pending_props`），通过 `meta_.getOrCreateAnonPropId()` 轻量路径回退到 `__anon__` 标签，不再需要 `AlterVertexLabelPhysicalOp`。首次执行时自动创建 `__anon__` 标签（若不存在）并注册属性。
 
 **CreateEdgeLabel / AlterEdgeLabel（运行时 DDL）**：当 binder 检测到 CREATE 语句引用了不存在的边类型或属性时，不会在绑定阶段修改数据库（binder 只检测并标记），而是在物理计划中插入 `CreateEdgeLabelPhysicalOp` 或 `AlterEdgeLabelPhysicalOp`。这两个算子先完成元数据变更和 WT 数据表创建，再执行子算子的实际边写入操作。`CreateEdgePhysicalOp` 执行时通过 `pending_props` 按属性名解析 pid（因为 pid 在 DDL 算子执行后才分配）。
 
@@ -425,14 +433,14 @@ class PhysicalOperator {
 
 `src/query/physical_plan/physical_planner.hpp`
 
-唯一入口为 `planBound(BoundLogicalPlan&, IAsyncGraphDataStore&, IAsyncGraphMetaStore&, PlanContext&)`。`PlanContext` 携带 label/edge_label 映射和 ID 分配器。每个算子的 `planBoundOperator()` 返回 `output_schema` + `output_types`。
+唯一入口为 `planBound(BoundLogicalPlan&, IAsyncGraphDataStore&, IAsyncGraphMetaStore&, PlanContext&)`。`PlanContext` 携带 label/edge_label 映射（不再包含 ID 分配器，所有 VertexId/EdgeId 由运行时动态分配）。每个算子的 `planBoundOperator()` 返回 `output_schema` + `output_types`。
 
 **运行时 DDL 自动插入**：处理 `BoundCreateEdgeOp` 时，planBound 根据 `label_name` 和 `pending_props` 字段决定是否插入额外的物理算子：
 - `label_name` 有值（边类型不存在）→ 插入 `CreateEdgeLabelPhysicalOp`（携带属性名列表），一次性创建边类型及其属性
 - `label_id` 有值但 `pending_props` 非空（边类型存在但缺少属性）→ 插入 `AlterEdgeLabelPhysicalOp`，为已有边类型添加属性列
 - 插入的 DDL 算子先于 `CreateEdgePhysicalOp` 执行，确保边写入时 schema 已就绪
 
-**`__anon__` 标签跳过 ALTER**：处理 `BoundCreateNodeOp` 时，如果目标标签是 `__anon__`，不再插入 `AlterVertexLabelPhysicalOp`。`__anon__` 的属性通过 `getOrCreateAnonPropId()` 轻量分配 prop_id（并发安全、异步持久化），由 `CreateNodePhysicalOp` 内部直接调用。非 `__anon__` 标签仍通过 `AlterVertexLabelPhysicalOp` 注册属性。
+**`__anon__` 标签跳过 ALTER**：处理 `BoundCreateNodeOp` 时，不再插入 `AlterVertexLabelPhysicalOp`（该算子已删除）。所有顶点的 `pending_props` 通过 `CreateNodePhysicalOp` 内部的 `getOrCreateAnonPropId()` 轻量分配 prop_id，自动回退到 `__anon__` 标签。边属性的 ALTER 仍通过 `AlterEdgeLabelPhysicalOp` 处理。
 
 **SET/REMOVE 双模式**：planBound 直接传递 binder 的 `strong_mode`、`resolved_label_id`、`resolved_prop_id`、`prop_name` 到物理算子。强模式使用已解析的 ID 精确操作；便捷模式在运行时根据节点实际标签推断目标。
 
@@ -460,7 +468,7 @@ class PhysicalOperator {
 | `BoundColumnRef` | 零拷贝引用 `input.columns[column_index]` |
 | `BoundBinaryOp` | 递归求值左右操作数，通过 `BinaryBatchFn` 类型特化函数指针批量处理整列 |
 | `BoundUnaryOp` | 递归求值操作数，通过 `UnaryBatchFn` 类型特化函数指针批量处理整列 |
-| `BoundPropertyRef` | 从 VertexValue/EdgeValue 列提取指定 prop_id |
+| `BoundPropertyRef` | 从 VertexValue/EdgeValue 列提取指定 prop_id。EdgeValue 结构字段（`id`、`src_id`、`dst_id`、`label_id`）通过 `property_name` 字段识别，直接返回 int64_t |
 | `BoundDynamicPropertyRef` | 遍历 VertexValue 所有标签的属性定义，按名字符串匹配（用于未注册属性和 `__anon__` 兜底） |
 | `BoundFunctionCall` | 调用 `func_def->batch_scalar_fn(args, result, count)` 批量处理 |
 | `BoundLabelCast` | 递归求值内部表达式 |

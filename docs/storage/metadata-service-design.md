@@ -138,7 +138,7 @@ M|next_ids              → {next_vertex_id:u64}{next_edge_id:u64}{next_label_id
 
 ### getOrCreateAnonPropId（`__anon__` 轻量属性分配）
 
-用于 `__anon__` 标签的动态属性名 → prop_id 映射，替代重型 `AlterVertexLabelPhysicalOp` 路径：
+用于 `__anon__` 标签的动态属性名 → prop_id 映射，替代已删除的 `AlterVertexLabelPhysicalOp` 路径：
 
 1. 锁 mutex，检查内存缓存 `anon_prop_cache_` → 命中直接返回
 2. 查找 `schema_.labels` 中 `__anon__` 的 `LabelDef`，搜索已有属性

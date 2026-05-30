@@ -20,6 +20,10 @@ namespace binder {
 /// candidate with a definite type.
 struct BoundPropertyRef {
     /// The object whose property is being accessed.
+    /// The property name (used for structural field access like r.id, n.labels).
+    std::string property_name;
+
+    /// The object whose property is being accessed.
     BoundExpression object;
 
     /// Information about a resolved property candidate.

@@ -55,7 +55,18 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             }
         } else if (std::holds_alternative<EdgeValue>(ov)) {
             const auto& edge = std::get<EdgeValue>(ov);
-            if (edge.properties.has_value()) {
+            // Structural fields (r.id, r.src_id, r.dst_id, r.label_id)
+            if (ref.candidates.empty() && !ref.property_name.empty()) {
+                if (ref.property_name == "id") {
+                    r = Value(static_cast<int64_t>(edge.id));
+                } else if (ref.property_name == "src_id") {
+                    r = Value(static_cast<int64_t>(edge.src_id));
+                } else if (ref.property_name == "dst_id") {
+                    r = Value(static_cast<int64_t>(edge.dst_id));
+                } else if (ref.property_name == "label_id") {
+                    r = Value(static_cast<int64_t>(edge.label_id));
+                }
+            } else if (edge.properties.has_value()) {
                 for (const auto& candidate : ref.candidates) {
                     if (candidate.prop_id < edge.properties->size()) {
                         const auto& pv = (*edge.properties)[candidate.prop_id];

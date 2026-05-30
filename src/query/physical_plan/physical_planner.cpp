@@ -1,6 +1,5 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "common/types/graph_types.hpp"
-#include "query/physical_plan/operator/alter_vertex_label_physical_op.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/delete_physical_op.hpp"
@@ -34,6 +33,29 @@ static PropertyValue valueToPropertyValue(const Value& v) {
     if (std::holds_alternative<DurationValue>(v))
         return std::get<DurationValue>(v);
     return PropertyValue{};
+}
+
+/// Infer PropertyType from a BoundExpression's result type.
+static PropertyType boundExprToPropertyType(const binder::BoundExpression& expr) {
+    const auto& bt = binder::getBoundExprType(expr);
+    switch (bt.kind) {
+    case binder::BoundTypeKind::BOOL:
+        return PropertyType::BOOL;
+    case binder::BoundTypeKind::INT64:
+        return PropertyType::INT64;
+    case binder::BoundTypeKind::DOUBLE:
+        return PropertyType::DOUBLE;
+    case binder::BoundTypeKind::STRING:
+        return PropertyType::STRING;
+    case binder::BoundTypeKind::DATETIME:
+        return PropertyType::DATETIME;
+    case binder::BoundTypeKind::TIME:
+        return PropertyType::TIME;
+    case binder::BoundTypeKind::DURATION:
+        return PropertyType::DURATION;
+    default:
+        return PropertyType::ANY;
+    }
 }
 
 // ==================== Bound Plan Index Scan Optimization ====================
@@ -611,120 +633,65 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         std::vector<binder::BoundType>(output_types), std::move(child_op));
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundCreateNodeOp>) {
-                    VertexId vid = ctx.next_vertex_id++;
-                    ctx.variable_vertex_ids[v.variable] = vid;
-
                     std::vector<LabelId> label_ids = v.label_ids;
-                    std::vector<std::pair<LabelId, Properties>> label_props;
-
+                    // Pass BoundExpressions to the operator for runtime evaluation.
+                    std::vector<std::pair<LabelId, std::vector<std::pair<uint16_t, binder::BoundExpression>>>>
+                        label_prop_exprs;
                     for (auto& [lid, props_vec] : v.label_properties) {
-                        Properties props;
+                        std::vector<std::pair<uint16_t, binder::BoundExpression>> exprs;
                         for (auto& [pid, expr] : props_vec) {
-                            if (std::holds_alternative<binder::BoundLiteral>(expr)) {
-                                auto& lit = std::get<binder::BoundLiteral>(expr);
-                                if (!isNull(lit.value)) {
-                                    if (props.size() <= pid)
-                                        props.resize(pid + 1);
-                                    props[pid] = valueToPropertyValue(lit.value);
-                                }
-                            }
+                            exprs.emplace_back(pid, std::move(expr));
                         }
-                        label_props.emplace_back(lid, std::move(props));
+                        label_prop_exprs.emplace_back(lid, std::move(exprs));
                     }
 
                     std::unique_ptr<PhysicalOperator> child;
+                    Schema child_schema;
+                    std::vector<binder::BoundType> child_types;
                     if (v.child) {
                         auto child_result = planBoundOperator(*v.child, store, meta, ctx, input_schema, input_types);
                         if (std::holds_alternative<std::string>(child_result))
                             return std::get<std::string>(child_result);
-                        child = finalizePlanResult(std::move(std::get<PlanOperatorResult>(child_result)));
+                        auto cr = extractChildResult(std::move(child_result));
+                        child = std::move(cr.op);
+                        child_schema = std::move(cr.output_schema);
+                        child_types = std::move(cr.output_types);
                     }
 
-                    // Insert AlterVertexLabelPhysicalOp for each non-anon label with pending_props
-                    if (!v.pending_props.empty()) {
-                        // Collect pending prop type info once
-                        std::vector<std::pair<std::string, PropertyType>> pending_prop_defs;
-                        for (const auto& [name, expr] : v.pending_props) {
-                            PropertyType pt = PropertyType::ANY;
-                            if (std::holds_alternative<binder::BoundLiteral>(expr)) {
-                                auto& lit = std::get<binder::BoundLiteral>(expr);
-                                if (std::holds_alternative<bool>(lit.value))
-                                    pt = PropertyType::BOOL;
-                                else if (std::holds_alternative<int64_t>(lit.value))
-                                    pt = PropertyType::INT64;
-                                else if (std::holds_alternative<double>(lit.value))
-                                    pt = PropertyType::DOUBLE;
-                                else if (std::holds_alternative<std::string>(lit.value))
-                                    pt = PropertyType::STRING;
-                                else if (std::holds_alternative<DateTimeValue>(lit.value))
-                                    pt = PropertyType::DATETIME;
-                                else if (std::holds_alternative<TimeValue>(lit.value))
-                                    pt = PropertyType::TIME;
-                                else if (std::holds_alternative<DurationValue>(lit.value))
-                                    pt = PropertyType::DURATION;
-                            }
-                            pending_prop_defs.emplace_back(name, pt);
-                        }
-
-                        // Chain AlterVertexLabelPhysicalOp for each non-anon label
-                        for (auto lid : v.label_ids) {
-                            auto def_it = ctx.label_defs.find(lid);
-                            if (def_it == ctx.label_defs.end())
-                                continue;
-                            if (def_it->second.name == kAnonLabelName)
-                                continue;
-                            auto alter = std::make_unique<AlterVertexLabelPhysicalOp>(
-                                def_it->second.name, pending_prop_defs, meta, ctx.label_defs, std::move(child));
-                            child = std::move(alter);
-                        }
-                    }
+                    // No AlterVertexLabelPhysicalOp — pending_props go to __anon__ via CreateNodePhysicalOp
 
                     auto result = std::make_unique<CreateNodePhysicalOp>(
-                        v.variable, std::move(label_ids), std::move(label_props), store, meta, vid, std::move(child),
+                        v.variable, std::move(label_ids), std::move(label_prop_exprs), store, meta, std::move(child),
                         ctx.label_defs, std::move(v.pending_props));
-                    Schema node_schema;
-                    if (!v.variable.empty())
+                    result->setEvalContext(ctx.eval_ctx);
+                    // Output schema: child columns + vertex column
+                    Schema node_schema = child_schema;
+                    std::vector<binder::BoundType> output_types = child_types;
+                    if (!v.variable.empty()) {
                         node_schema.push_back(v.variable);
-                    return PlanOperatorResult{std::move(result), std::move(node_schema), {binder::BoundType::Vertex()}};
+                        output_types.push_back(binder::BoundType::Vertex());
+                    }
+                    return PlanOperatorResult{std::move(result), std::move(node_schema), std::move(output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundCreateEdgeOp>) {
-                    EdgeId eid = ctx.next_edge_id++;
-                    ctx.variable_edge_ids[v.variable] = eid;
-
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto child_cr = extractChildResult(std::move(child_result));
                     auto child_op = std::move(child_cr.op);
+                    auto child_schema = std::move(child_cr.output_schema);
+                    auto child_types = std::move(child_cr.output_types);
 
                     // Extract property (name, type) from pending_props for schema registration
                     std::vector<std::pair<std::string, PropertyType>> pending_prop_defs;
                     for (const auto& [name, expr] : v.pending_props) {
-                        PropertyType pt = PropertyType::STRING;
-                        if (std::holds_alternative<binder::BoundLiteral>(expr)) {
-                            auto& lit = std::get<binder::BoundLiteral>(expr);
-                            if (std::holds_alternative<bool>(lit.value))
-                                pt = PropertyType::BOOL;
-                            else if (std::holds_alternative<int64_t>(lit.value))
-                                pt = PropertyType::INT64;
-                            else if (std::holds_alternative<double>(lit.value))
-                                pt = PropertyType::DOUBLE;
-                            else if (std::holds_alternative<DateTimeValue>(lit.value))
-                                pt = PropertyType::DATETIME;
-                            else if (std::holds_alternative<TimeValue>(lit.value))
-                                pt = PropertyType::TIME;
-                            else if (std::holds_alternative<DurationValue>(lit.value))
-                                pt = PropertyType::DURATION;
-                        }
-                        pending_prop_defs.emplace_back(name, pt);
+                        pending_prop_defs.emplace_back(name, boundExprToPropertyType(expr));
                     }
 
                     if (v.label_name.has_value()) {
-                        // Edge type doesn't exist: create it (with properties if any)
                         child_op = std::make_unique<CreateEdgeLabelPhysicalOp>(
                             *v.label_name, std::move(pending_prop_defs), meta, store, ctx.edge_label_name_to_id,
                             ctx.edge_label_defs, std::move(child_op));
                     } else if (v.label_id.has_value() && !v.pending_props.empty()) {
-                        // Edge type exists but has new properties: alter it
                         auto def_it = ctx.edge_label_defs.find(*v.label_id);
                         if (def_it != ctx.edge_label_defs.end()) {
                             child_op = std::make_unique<AlterEdgeLabelPhysicalOp>(
@@ -733,33 +700,34 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         }
                     }
 
-                    VertexId src_id = 0, dst_id = 0;
-                    auto sit = ctx.variable_vertex_ids.find(v.src_variable);
-                    if (sit != ctx.variable_vertex_ids.end())
-                        src_id = sit->second;
-                    auto dit = ctx.variable_vertex_ids.find(v.dst_variable);
-                    if (dit != ctx.variable_vertex_ids.end())
-                        dst_id = dit->second;
+                    // Find src/dst column indices from child schema
+                    size_t src_col = SIZE_MAX, dst_col = SIZE_MAX;
+                    for (size_t i = 0; i < child_schema.size(); ++i) {
+                        if (child_schema[i] == v.src_variable)
+                            src_col = i;
+                        if (child_schema[i] == v.dst_variable)
+                            dst_col = i;
+                    }
 
-                    Properties props;
+                    // Pass BoundExpressions for runtime evaluation.
+                    std::vector<std::pair<uint16_t, binder::BoundExpression>> prop_exprs;
                     for (auto& [pid, expr] : v.properties) {
-                        if (std::holds_alternative<binder::BoundLiteral>(expr)) {
-                            auto& lit = std::get<binder::BoundLiteral>(expr);
-                            if (!isNull(lit.value)) {
-                                if (props.size() <= pid)
-                                    props.resize(pid + 1);
-                                props[pid] = valueToPropertyValue(lit.value);
-                            }
-                        }
+                        prop_exprs.emplace_back(pid, std::move(expr));
                     }
 
                     auto result = std::make_unique<CreateEdgePhysicalOp>(
-                        v.variable, src_id, dst_id, v.label_id, eid, std::move(props), store, ctx.edge_label_defs,
-                        v.label_name, ctx.edge_label_name_to_id, std::move(v.pending_props), std::move(child_op));
-                    Schema edge_schema;
-                    if (!v.variable.empty())
+                        v.variable, src_col, dst_col, v.label_id, std::move(prop_exprs), store, meta,
+                        ctx.edge_label_defs, v.label_name, ctx.edge_label_name_to_id, std::move(v.pending_props),
+                        std::move(child_op));
+                    result->setEvalContext(ctx.eval_ctx);
+                    // Output schema: child columns + edge column
+                    Schema edge_schema = child_schema;
+                    std::vector<binder::BoundType> edge_types = child_types;
+                    if (!v.variable.empty()) {
                         edge_schema.push_back(v.variable);
-                    return PlanOperatorResult{std::move(result), std::move(edge_schema), {binder::BoundType::Edge()}};
+                        edge_types.push_back(binder::BoundType::Edge());
+                    }
+                    return PlanOperatorResult{std::move(result), std::move(edge_schema), std::move(edge_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSetOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))

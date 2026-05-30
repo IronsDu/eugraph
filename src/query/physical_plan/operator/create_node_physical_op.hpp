@@ -19,14 +19,16 @@ namespace compute {
 
 class CreateNodePhysicalOp : public PhysicalOperator {
 public:
+    using PropExprs = std::vector<std::pair<uint16_t, binder::BoundExpression>>;
+
     CreateNodePhysicalOp(std::string variable, std::vector<LabelId> label_ids,
-                         std::vector<std::pair<LabelId, Properties>> label_props, IAsyncGraphDataStore& store,
-                         IAsyncGraphMetaStore& meta, VertexId assigned_vid, std::unique_ptr<PhysicalOperator> child,
+                         std::vector<std::pair<LabelId, PropExprs>> label_prop_exprs, IAsyncGraphDataStore& store,
+                         IAsyncGraphMetaStore& meta, std::unique_ptr<PhysicalOperator> child,
                          std::unordered_map<LabelId, LabelDef>& label_defs,
                          std::vector<std::pair<std::string, binder::BoundExpression>> pending_props = {})
-        : variable_(std::move(variable)), label_ids_(std::move(label_ids)), label_props_(std::move(label_props)),
-          store_(store), meta_(meta), assigned_vid_(assigned_vid), child_(std::move(child)), label_defs_(label_defs),
-          pending_props_(std::move(pending_props)) {}
+        : variable_(std::move(variable)), label_ids_(std::move(label_ids)),
+          label_prop_exprs_(std::move(label_prop_exprs)), store_(store), meta_(meta), child_(std::move(child)),
+          label_defs_(label_defs), pending_props_(std::move(pending_props)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
@@ -42,13 +44,15 @@ public:
 private:
     std::string variable_;
     std::vector<LabelId> label_ids_;
-    std::vector<std::pair<LabelId, Properties>> label_props_;
+    std::vector<std::pair<LabelId, PropExprs>> label_prop_exprs_;
     IAsyncGraphDataStore& store_;
     IAsyncGraphMetaStore& meta_;
-    VertexId assigned_vid_;
     std::unique_ptr<PhysicalOperator> child_;
     std::unordered_map<LabelId, LabelDef>& label_defs_;
     std::vector<std::pair<std::string, binder::BoundExpression>> pending_props_;
+
+    bool anon_registered_ = false;
+    std::vector<std::tuple<LabelId, uint16_t, binder::BoundExpression>> resolved_pending_;
 };
 
 } // namespace compute

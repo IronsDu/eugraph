@@ -71,7 +71,7 @@ CREATE (n:User:Employee {name: 'Alice'})
 
 - **统一存储格式**：所有标签（包括 `__anon__`）都使用 `prop_id` KV 存储，不引入第二种存储形态
 - **边保持强模式**：边必须有预定义的 EdgeLabel，属性按 `prop_id` 存储。不引入边的弱模式
-- **`AlterVertexLabelPhysicalOp` 保留用于非 `__anon__` 标签**：强模式标签的运行时加列需求仍通过此算子支持
+- **`AlterVertexLabelPhysicalOp` 已删除**：所有顶点 pending_props 统一走 `__anon__` 轻量路径，不再需要顶点 DDL 算子。边的 `AlterEdgeLabelPhysicalOp` 保留。
 
 ## 2. `__anon__` 弱模式：轻量级动态属性管理
 
@@ -92,7 +92,7 @@ CREATE (n:User:Employee {name: 'Alice'})
 
 - 使用并发安全的 map（如 `concurrent_hash_map` 或带锁的 `unordered_map`）管理 `__anon__` 的属性名 → `prop_id` 映射
 - 首次遇到新属性名时，分配新的 `prop_id`（递增），写入映射，并异步持久化到元数据
-- 不需要在 DML 事务中执行完整的 ALTER 流程（无需 `AlterVertexLabelPhysicalOp`）
+- 不需要在 DML 事务中执行完整的 ALTER 流程（无需 `AlterVertexLabelPhysicalOp`，该算子已删除）
 - 实际的属性存储仍然使用 `vprop_{__anon_id}` 表的 `{vertex_id}{prop_id}` 格式
 
 ### 2.3 读写路径
@@ -698,8 +698,8 @@ CREATE INDEX FOR (n:User) ON (n.name)
 
 | 变更 | 文件 | 说明 |
 |------|------|------|
-| 移除 `__anon__` 的 ALTER | `src/query/physical_plan/physical_planner.cpp` | 当 label 为 `__anon__` 时不插入 `AlterVertexLabelPhysicalOp`，改为运行时轻量分配 `prop_id` |
-| `__anon__` 属性写入 | `src/query/physical_plan/operator/create_node_physical_op.cpp` | `__anon__` 节点写入属性时，通过并发映射获取/分配 `prop_id`，仍按 `{vertex_id}{prop_id}` 写入 |
+| 移除 `__anon__` 的 ALTER | `src/query/physical_plan/physical_planner.cpp` | `AlterVertexLabelPhysicalOp` 已删除。所有顶点 pending_props 统一通过 `CreateNodePhysicalOp` 内部 `getOrCreateAnonPropId()` 轻量分配 `prop_id` |
+| `__anon__` 属性写入 | `src/query/physical_plan/operator/create_node_physical_op.cpp` | 逐行创建：`__anon__` 及所有标签的 pending_props 在首次执行时通过 `getOrCreateAnonPropId()` 分配 prop_id，运行时动态 VID |
 | `__anon__` SET/REMOVE | `src/query/physical_plan/operator/set_physical_op.cpp` | 对 `__anon__` 属性的 SET/REMOVE 操作通过并发映射获取 `prop_id` |
 
 ### 11.4 查询引擎 — 属性求值
@@ -710,7 +710,7 @@ CREATE INDEX FOR (n:User) ON (n.name)
 
 ## 12. 与旧方案对比：AlterVertexLabelPhysicalOp 的问题
 
-旧方案中，所有不在标签 schema 中的属性（包括 `__anon__` 节点的所有属性）都通过 `AlterVertexLabelPhysicalOp` 处理。该算子在 `CreateNodePhysicalOp` 之前执行，将未知属性动态添加到 `LabelDef` 的 `PropertyDef` 列表中。
+旧方案中，所有不在标签 schema 中的属性（包括 `__anon__` 节点的所有属性）都通过 `AlterVertexLabelPhysicalOp` 处理。该算子已在重构中删除，所有顶点 pending_props 改走 `__anon__` 轻量路径。以下为历史问题记录，供参考。
 
 ### 12.1 ALTER 的适用场景
 

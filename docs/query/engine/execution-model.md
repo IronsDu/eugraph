@@ -108,14 +108,14 @@ AsyncGenerator<RowBatch>
 | Expand | 嵌套循环：对每行输入扫描邻居边 | scanEdges（支持按类型过滤） |
 | VarLenExpand | DFS + 显式栈 + 边唯一性回溯，逐源顶点多跳展开 | scanEdges × hop_depth（支持按类型过滤） |
 | Filter | 纯计算，无 IO | 无 |
-| Project | 纯计算，无 IO | 无 |
-| Sort | **阻断**：全量物化后 `std::sort` | 无 |
+| Project | 纯计算，无 IO | 无。无 RETURN 时空 ProjectOp 输出 0 列 |
+| Sort | **阻断**：全量物化后 `std::sort`。在 Project 之前执行，可引用原始列 | 无 |
 | Aggregate | **阻断**：按 group key 哈希聚合 | 无 |
 | Distinct | 流式：`unordered_set<Row>` 去重 | 无 |
 | Skip | 跳过前 N 行后透传 | 无 |
 | Limit | 计数到 limit 后 `co_return` | 无 |
-| CreateNode | 写入顶点 + 维护索引条目 | insertVertex + insertIndexEntry |
-| CreateEdge | 写入边 | insertEdge |
+| CreateNode | 逐行创建：child 每行触发一次创建，动态 VID，`__anon__` 轻量属性注册，输出 = child 列 + 新顶点列 | insertVertex + insertIndexEntry + nextVertexId + getOrCreateAnonPropId |
+| CreateEdge | 逐行创建：child 每行触发一次创建，动态 EID，src/dst VID 从 DataChunk 解析，输出 = child 列 + 新边列 | insertEdge + nextEdgeId |
 
 ---
 

@@ -271,12 +271,18 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 }
 
                 if (obj_type.kind == BoundTypeKind::EDGE) {
-                    // Edge property: try to look up across all edge labels
-                    LabelIdSet all_edge_labels;
-                    // For now, collect from catalog
                     auto prop_ref = std::make_unique<BoundPropertyRef>();
                     prop_ref->object = std::move(*obj);
-                    prop_ref->result_type = BoundType::Any(); // Weak for now
+                    prop_ref->property_name = ptr->property;
+
+                    // Structural fields of EdgeValue
+                    if (ptr->property == "id" || ptr->property == "src_id" || ptr->property == "dst_id") {
+                        prop_ref->result_type = BoundType::Int64();
+                    } else if (ptr->property == "label_id") {
+                        prop_ref->result_type = BoundType::Int64();
+                    } else {
+                        prop_ref->result_type = BoundType::Any();
+                    }
                     return BoundExpression(std::move(prop_ref));
                 }
 

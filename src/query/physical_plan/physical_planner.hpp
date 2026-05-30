@@ -23,10 +23,6 @@ struct PlanContext {
     std::unordered_map<std::string, EdgeLabelId>& edge_label_name_to_id;
     std::unordered_map<LabelId, LabelDef>& label_defs;
     std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs;
-    std::unordered_map<std::string, VertexId> variable_vertex_ids; // for CREATE: assigned IDs
-    std::unordered_map<std::string, EdgeId> variable_edge_ids;     // for CREATE: assigned IDs
-    VertexId next_vertex_id = 1;
-    EdgeId next_edge_id = 1;
     function::EvalContext eval_ctx;
 };
 
