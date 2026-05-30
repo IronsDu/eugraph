@@ -17,9 +17,13 @@ void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
         for (size_t i = 0; i < count; ++i) {
             Value lv = left.column->getValue(i);
             Value rv = right.column->getValue(i);
-            bool lb = std::holds_alternative<bool>(lv) && std::get<bool>(lv);
-            bool rb = std::holds_alternative<bool>(rv) && std::get<bool>(rv);
-            result.setValue(i, Value(lb != rb));
+            auto lb = std::get_if<bool>(&lv);
+            auto rb = std::get_if<bool>(&rv);
+            if (!lb || !rb) {
+                result.setNull(i);
+            } else {
+                result.setValue(i, Value(*lb != *rb));
+            }
         }
         return;
     }

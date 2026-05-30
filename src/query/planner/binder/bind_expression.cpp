@@ -549,7 +549,7 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
         };
         if (ok(left_type) && ok(right_type))
             return BoundType::Bool();
-        error_msg = "Logical operators require boolean operands";
+        error_msg = "InvalidArgumentType: Logical operators require boolean operands";
         return BoundType::Any();
     }
 
@@ -680,7 +680,7 @@ BoundType Binder::inferUnaryOpType(cypher::UnaryOperator op, const BoundType& op
         if (operand_type.kind == BoundTypeKind::BOOL || operand_type.kind == BoundTypeKind::NULL_TYPE ||
             operand_type.kind == BoundTypeKind::ANY)
             return BoundType::Bool();
-        error_msg = "NOT requires boolean operand, got " + operand_type.toString();
+        error_msg = "InvalidArgumentType: NOT requires boolean operand, got " + operand_type.toString();
         return BoundType::Any();
 
     case cypher::UnaryOperator::NEGATE:
