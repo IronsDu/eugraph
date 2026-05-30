@@ -213,8 +213,10 @@ HOOK_BEFORE_STEP() {
 HOOK_AFTER_STEP() {
     bool stepFailed = gCcrStepHadFailure;
     bool stepSkipped = gCcrStepWasSkipped;
-    if (stepFailed) gScenarioHadFailure = true;
-    if (stepSkipped) gScenarioWasSkipped = true;
+    if (stepFailed)
+        gScenarioHadFailure = true;
+    if (stepSkipped)
+        gScenarioWasSkipped = true;
     const char* status = stepFailed ? "FAILED" : (stepSkipped ? "SKIPPED" : "PASSED");
     gPendingSteps.push_back({gCurrentStepText, status});
     ++gStepIndex;
