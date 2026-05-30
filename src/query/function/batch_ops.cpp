@@ -17,33 +17,64 @@ namespace {
 
 void genericEqBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        result.setValue(i, Value(left.getValue(i) == right.getValue(i)));
+        if (left.isNull(i) || right.isNull(i)) {
+            result.setNull(i);
+        } else {
+            result.setValue(i, Value(left.getValue(i) == right.getValue(i)));
+        }
     }
 }
 
 void genericNeqBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        result.setValue(i, Value(!(left.getValue(i) == right.getValue(i))));
+        if (left.isNull(i) || right.isNull(i)) {
+            result.setNull(i);
+        } else {
+            result.setValue(i, Value(!(left.getValue(i) == right.getValue(i))));
+        }
     }
 }
 
-void boolAndBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        bool lb = std::holds_alternative<bool>(lv) ? std::get<bool>(lv) : false;
-        bool rb = std::holds_alternative<bool>(rv) ? std::get<bool>(rv) : false;
-        result.setValue(i, Value(lb && rb));
+static void boolAndNullSafe(size_t i, const Column& left, const Column& right, Column& result) {
+    Value lv = left.getValue(i);
+    Value rv = right.getValue(i);
+    auto lb = std::get_if<bool>(&lv);
+    auto rb = std::get_if<bool>(&rv);
+    // false AND anything => false
+    if ((lb && !*lb) || (rb && !*rb)) {
+        result.setValue(i, Value(false));
+        return;
     }
+    // true AND null => null; null AND anything => null
+    if (!lb || !rb) {
+        result.setNull(i);
+        return;
+    }
+    result.setValue(i, Value(true));
+}
+
+void boolAndBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i)
+        boolAndNullSafe(i, left, right, result);
 }
 
 void boolOrBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        bool lb = std::holds_alternative<bool>(lv) ? std::get<bool>(lv) : false;
-        bool rb = std::holds_alternative<bool>(rv) ? std::get<bool>(rv) : false;
-        result.setValue(i, Value(lb || rb));
+        auto lb = std::get_if<bool>(&lv);
+        auto rb = std::get_if<bool>(&rv);
+        // true OR anything => true
+        if ((lb && *lb) || (rb && *rb)) {
+            result.setValue(i, Value(true));
+            continue;
+        }
+        // false OR null => null; null OR anything => null
+        if (!lb || !rb) {
+            result.setNull(i);
+            continue;
+        }
+        result.setValue(i, Value(false));
     }
 }
 
@@ -51,9 +82,14 @@ void boolXorBatch(const Column& left, const Column& right, Column& result, size_
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        bool lb = std::holds_alternative<bool>(lv) ? std::get<bool>(lv) : false;
-        bool rb = std::holds_alternative<bool>(rv) ? std::get<bool>(rv) : false;
-        result.setValue(i, Value(lb ^ rb));
+        auto lb = std::get_if<bool>(&lv);
+        auto rb = std::get_if<bool>(&rv);
+        // null XOR anything => null
+        if (!lb || !rb) {
+            result.setNull(i);
+            continue;
+        }
+        result.setValue(i, Value(*lb != *rb));
     }
 }
 

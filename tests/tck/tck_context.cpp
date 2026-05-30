@@ -97,9 +97,6 @@ bool hasUnsupportedExpr(const ast::Expression& expr) {
                 case ast::BinaryOperator::IN:
                     spdlog::info("[TCK] skipping: IN");
                     return true;
-                case ast::BinaryOperator::XOR:
-                    spdlog::info("[TCK] skipping: XOR");
-                    return true;
                 default:
                     break;
                 }
@@ -388,7 +385,8 @@ void TckContext::executeQuery(const std::string& query) {
         // Classify error by message content
         if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
             errMsg.find("parse") != std::string::npos || errMsg.find("UndefinedVariable") != std::string::npos ||
-            errMsg.find("VariableAlreadyBound") != std::string::npos) {
+            errMsg.find("VariableAlreadyBound") != std::string::npos ||
+            errMsg.find("InvalidArgumentType") != std::string::npos) {
             lastErrorType = "SyntaxError";
             lastErrorPhase = "compile time";
         } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
@@ -410,6 +408,8 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "UndefinedVariable";
         } else if (errMsg.find("VariableAlreadyBound") != std::string::npos) {
             lastErrorDetail = "VariableAlreadyBound";
+        } else if (errMsg.find("InvalidArgumentType") != std::string::npos) {
+            lastErrorDetail = "InvalidArgumentType";
         } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
             lastErrorDetail = "InvalidArgumentType";
         } else if (errMsg.find("InvalidInput") != std::string::npos) {

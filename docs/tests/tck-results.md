@@ -1,10 +1,10 @@
 # TCK 测试结果分类报告
 
-**日期**: 2026-05-28 (更新)
-**分支**: fix/temporal-tck-limitations
+**日期**: 2026-05-30 (更新)
+**分支**: fix/boolean-type-check
 **总计**: 3897 场景, 16006 步骤
-**运行耗时**: 10 分 22 秒
-**检测方式**: Parser AST 遍历
+**运行耗时**: ~11 分
+**检测方式**: Parser AST 遍历 + Binder 类型检查 + 运行时断言
 
 ### 时间维度 TCK 专项
 
@@ -199,6 +199,8 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 
 | 特性 | 说明 |
 |------|------|
+| AND / OR / XOR / NOT 类型检查 | Binder 阶段检查操作数类型，非布尔时报 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播 |
+| XOR 表达式 | `a XOR b` 语法解析、类型检查、求值完整支持，Boolean TCK 通过率 86% |
 | UNWIND | 列表展开为行 |
 | DELETE / DETACH DELETE | 删除顶点/边，支持 DETACH 级联删除 |
 | OPTIONAL MATCH | 左连接语义 |
@@ -229,9 +231,11 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | **P1** | ~~Temporal 属性往返类型保留~~ | ~~~52~~ | ✅ 已修复（拆分为 DateTimeValue/TimeValue/DurationValue） |
 | **P1** | MERGE | ~80 | MERGE 子句实现 |
 | **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
-| **P2** | 布尔类型检查 | ~48 | 完善逻辑运算符的类型推断 |
+| ~~P2~~ | ~~布尔类型检查~~ | ~~~48~~ | ✅ 已实现：AND/OR/XOR/NOT 在 Binder 阶段检查操作数类型为非布尔时报告 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播；XOR 从 AST skip 列表移除 |
 | **P2** | 结果不匹配 | ~956 | 逐一分析（NULL 语义、排序、精度） |
 | **P3** | Parser 限制 | ~250 | Parser 增强 |
+| **P3** | Boolean null 传播 | ~12 | UNWIND + NULL 变量在复合布尔表达式中的传播问题 |
+| **P3** | NOT 非布尔字面量 | ~9 | `NOT []` / `NOT {}` 等个别字面量被 AST skip 拦截 |
 | **P3** | 缺失步骤定义 | 71 | 补实现步骤（远期） |
 | **P3** | 多标签节点 | 25 | 多标签创建/匹配 |
 
