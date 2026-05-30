@@ -516,6 +516,8 @@ def main():
     env = os.environ.copy()
     env["EUGRAPH_HOST"] = args.host
     env["EUGRAPH_PORT"] = str(args.port)
+    if args.step_results_file:
+        env["TCK_STEP_RESULTS_PATH"] = args.step_results_file
 
     print(f"[run_tck] Running: {' '.join(tck_cmd)}", flush=True)
     sys.stdout.flush()

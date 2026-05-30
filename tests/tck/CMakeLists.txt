@@ -17,21 +17,25 @@ file(MAKE_DIRECTORY "${CUKE_STAGE}/include/gherkin")
 file(MAKE_DIRECTORY "${CUKE_STAGE}/include/messages")
 file(MAKE_DIRECTORY "${CUKE_STAGE}/lib")
 
+# Write patch script to avoid CMake semicolon-escaping issues in PATCH_COMMAND
+set(CCR_PATCH_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/patch_ccr.sh")
+file(WRITE "${CCR_PATCH_SCRIPT}" "\
+#!/bin/bash
+set -e
+SRC=\"$1\"
+sed -i 's|add_compile_options(-fsanitize=address -fsanitize=undefined)|# PATCHED: sanitizers removed|' \"$SRC/CMakeLists.txt\"
+sed -i 's|add_link_options(-fsanitize=address -fsanitize=undefined)|# PATCHED: sanitizers removed|' \"$SRC/CMakeLists.txt\"
+sed -i 's|add_subdirectory(compatibility)|# PATCHED: skip compatibility tests|' \"$SRC/CMakeLists.txt\"
+sed -i 's|const auto currentTestCaseStartedId = idGenerator->next_id();|&\\n        testCaseContext.InsertAt<std::string>(\"scenario.name\", pickle.name);\\n        testCaseContext.InsertAt<std::string>(\"scenario.uri\", pickle.uri);|' \"$SRC/cucumber_cpp/library/runtime/TestCaseRunner.cpp\"
+")
+
 # PATCH_COMMAND removes sanitizer flags that cause ABI incompatibility with vcpkg
 ExternalProject_Add(ccr_ext
     GIT_REPOSITORY https://github.com/philips-software/amp-cucumber-cpp-runner.git
     GIT_TAG v4.0.1
     GIT_SUBMODULES_RECURSE ON
     SOURCE_SUBDIR ""  # build from project root
-    PATCH_COMMAND sed -i
-        "s|add_compile_options(-fsanitize=address -fsanitize=undefined)|# PATCHED: sanitizers removed|"
-        <SOURCE_DIR>/CMakeLists.txt &&
-        sed -i
-        "s|add_link_options(-fsanitize=address -fsanitize=undefined)|# PATCHED: sanitizers removed|"
-        <SOURCE_DIR>/CMakeLists.txt &&
-        sed -i
-        "s|add_subdirectory(compatibility)|# PATCHED: skip compatibility tests|"
-        <SOURCE_DIR>/CMakeLists.txt
+    PATCH_COMMAND bash "${CCR_PATCH_SCRIPT}" <SOURCE_DIR>
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
         -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
