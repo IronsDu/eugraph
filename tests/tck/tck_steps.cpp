@@ -206,9 +206,8 @@ HOOK_AFTER_STEP() {
 HOOK_AFTER_SCENARIO() {
     // Determine scenario name for reporting
     std::string scenario_name = "#" + std::to_string(gScenarioNum.load());
-    const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
-    if (test_info) {
-        scenario_name = test_info->name();
+    if (context.Contains("scenario.name")) {
+        scenario_name = context.Get<std::string>("scenario.name");
     }
 
     if (::testing::Test::IsSkipped()) {
