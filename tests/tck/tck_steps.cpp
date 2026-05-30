@@ -23,6 +23,13 @@
 using namespace eugraph::tck;
 
 // -----------------------------------------------------------------------
+// Flags set by CucumberResultReporter in ccr_ext Body.cpp (global scope)
+// -----------------------------------------------------------------------
+
+extern bool gCcrStepHadFailure;
+extern bool gCcrStepWasSkipped;
+
+// -----------------------------------------------------------------------
 // Global state
 // -----------------------------------------------------------------------
 
@@ -36,18 +43,21 @@ std::vector<std::string> gPassedScenarios;
 std::vector<std::string> gFailedScenarios;
 std::vector<std::string> gSkippedScenarios;
 
+// Per-scenario accumulation of step results
+bool gScenarioHadFailure = false;
+bool gScenarioWasSkipped = false;
+
 // Step-level tracking
 struct StepRecord {
     std::string scenario_name;
     int step_index;
     std::string step_text;
-    std::string status; // "PASSED" or "FAILED"
+    std::string status; // "PASSED", "FAILED", or "SKIPPED"
 };
 std::vector<StepRecord> gStepRecords;
 std::string gCurrentStepText;
 std::vector<std::pair<std::string, std::string>> gPendingSteps; // (step_text, status)
 int gStepIndex = 0;
-bool gHadFailureBeforeStep = false;
 
 void resetCtx() {
     gCtx = std::make_unique<TckContext>();
@@ -190,16 +200,25 @@ HOOK_BEFORE_SCENARIO() {
     resetCtx();
     gStepIndex = 0;
     gPendingSteps.clear();
+    gScenarioHadFailure = false;
+    gScenarioWasSkipped = false;
     spdlog::info("[TCK] === Scenario {} (graph: {}) ===", gScenarioNum.load(), gCtx->graphName);
 }
 
 HOOK_BEFORE_STEP() {
-    gHadFailureBeforeStep = ::testing::Test::HasFailure();
+    gCcrStepHadFailure = false;
+    gCcrStepWasSkipped = false;
 }
 
 HOOK_AFTER_STEP() {
-    bool stepFailed = ::testing::Test::HasFailure() && !gHadFailureBeforeStep;
-    gPendingSteps.push_back({gCurrentStepText, stepFailed ? "FAILED" : "PASSED"});
+    bool stepFailed = gCcrStepHadFailure;
+    bool stepSkipped = gCcrStepWasSkipped;
+    if (stepFailed)
+        gScenarioHadFailure = true;
+    if (stepSkipped)
+        gScenarioWasSkipped = true;
+    const char* status = stepFailed ? "FAILED" : (stepSkipped ? "SKIPPED" : "PASSED");
+    gPendingSteps.push_back({gCurrentStepText, status});
     ++gStepIndex;
 }
 
@@ -210,9 +229,9 @@ HOOK_AFTER_SCENARIO() {
         scenario_name = context.Get<std::string>("scenario.name");
     }
 
-    if (::testing::Test::IsSkipped()) {
+    if (gScenarioWasSkipped) {
         gSkippedScenarios.push_back(scenario_name);
-    } else if (::testing::Test::HasFailure()) {
+    } else if (gScenarioHadFailure) {
         gFailedScenarios.push_back(scenario_name);
     } else {
         gPassedScenarios.push_back(scenario_name);

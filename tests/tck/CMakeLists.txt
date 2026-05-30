@@ -27,6 +27,10 @@ sed -i 's|add_compile_options(-fsanitize=address -fsanitize=undefined)|# PATCHED
 sed -i 's|add_link_options(-fsanitize=address -fsanitize=undefined)|# PATCHED: sanitizers removed|' \"$SRC/CMakeLists.txt\"
 sed -i 's|add_subdirectory(compatibility)|# PATCHED: skip compatibility tests|' \"$SRC/CMakeLists.txt\"
 sed -i 's|const auto currentTestCaseStartedId = idGenerator->next_id();|&\\n        testCaseContext.InsertAt<std::string>(\"scenario.name\", pickle.name);\\n        testCaseContext.InsertAt<std::string>(\"scenario.uri\", pickle.uri);|' \"$SRC/cucumber_cpp/library/runtime/TestCaseRunner.cpp\"
+# Patch Body.cpp: add global flags for step failure/skip detection
+sed -i 's|^namespace cucumber_cpp::library::util$|bool gCcrStepHadFailure = false;\\nbool gCcrStepWasSkipped = false;\\n\\nnamespace cucumber_cpp::library::util|' \"$SRC/cucumber_cpp/library/util/Body.cpp\"
+sed -i 's|testStepResult.status = util::TestStepResultStatus::FAILED;|&\\n                    gCcrStepHadFailure = true;|' \"$SRC/cucumber_cpp/library/util/Body.cpp\"
+sed -i 's|if (testPartResult.fatally_failed())|if (testPartResult.skipped())\\n                    gCcrStepWasSkipped = true;\\n\\n                &|' \"$SRC/cucumber_cpp/library/util/Body.cpp\"
 ")
 
 # PATCH_COMMAND removes sanitizer flags that cause ABI incompatibility with vcpkg
