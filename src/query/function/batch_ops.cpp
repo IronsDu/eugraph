@@ -67,12 +67,12 @@ void boolOrBatch(const Column& left, const Column& right, Column& result, size_t
         // true OR anything => true
         if ((lb && *lb) || (rb && *rb)) {
             result.setValue(i, Value(true));
-            return;
+            continue;
         }
         // false OR null => null; null OR anything => null
         if (!lb || !rb) {
             result.setNull(i);
-            return;
+            continue;
         }
         result.setValue(i, Value(false));
     }
@@ -87,7 +87,7 @@ void boolXorBatch(const Column& left, const Column& right, Column& result, size_
         // null XOR anything => null
         if (!lb || !rb) {
             result.setNull(i);
-            return;
+            continue;
         }
         result.setValue(i, Value(*lb != *rb));
     }
