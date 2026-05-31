@@ -23,10 +23,9 @@ namespace ast = cypher;
 bool hasUnsupportedExpr(const ast::Expression& expr);
 
 bool hasUnsupportedPattern(const ast::PatternPart& pp, bool is_create = false) {
+    (void)is_create; // multi-label now supported in both CREATE and MATCH
     // Check path pattern: node + chain
     const ast::PatternElement& el = pp.element;
-
-    // Multi-label nodes are now supported in both CREATE and MATCH
     if (el.node.properties.has_value()) {
         for (const auto& [k, v] : el.node.properties->entries) {
             if (hasUnsupportedExpr(v))
