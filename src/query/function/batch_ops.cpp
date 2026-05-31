@@ -1,7 +1,6 @@
 #include "query/function/batch_ops.hpp"
 
 #include "common/types/temporal_value.hpp"
-#include "query/dataset/row.hpp"
 
 namespace eugraph {
 
@@ -13,33 +12,6 @@ bool isTemporalType(binder::BoundTypeKind k) {
 } // namespace
 namespace function {
 namespace {
-
-// Cypher truthiness: null → null, false/0/""/[]/{} → false, everything else → true.
-std::optional<bool> truthinessToBool(const Value& v) {
-    if (std::holds_alternative<std::monostate>(v))
-        return std::nullopt;
-    if (std::holds_alternative<bool>(v))
-        return std::get<bool>(v);
-    if (std::holds_alternative<int64_t>(v))
-        return std::get<int64_t>(v) != 0;
-    if (std::holds_alternative<double>(v))
-        return std::get<double>(v) != 0.0;
-    if (std::holds_alternative<std::string>(v))
-        return !std::get<std::string>(v).empty();
-    if (std::holds_alternative<ListValue>(v))
-        return !std::get<ListValue>(v).elements.empty();
-    if (std::holds_alternative<MapValue>(v))
-        return !std::get<MapValue>(v).entries.empty();
-    if (std::holds_alternative<DateTimeValue>(v))
-        return true;
-    if (std::holds_alternative<TimeValue>(v))
-        return true;
-    if (std::holds_alternative<DurationValue>(v)) {
-        auto& d = std::get<DurationValue>(v);
-        return d.months != 0 || d.days != 0 || d.seconds != 0 || d.nanos != 0;
-    }
-    return true; // VertexValue, EdgeValue, PathValue — non-null = truthy
-}
 
 // ==================== Generic (type-agnostic) binary batch functions ====================
 
@@ -64,15 +36,17 @@ void genericNeqBatch(const Column& left, const Column& right, Column& result, si
 }
 
 static void boolAndNullSafe(size_t i, const Column& left, const Column& right, Column& result) {
-    auto tl = truthinessToBool(left.getValue(i));
-    auto tr = truthinessToBool(right.getValue(i));
+    Value lv = left.getValue(i);
+    Value rv = right.getValue(i);
+    auto lb = std::get_if<bool>(&lv);
+    auto rb = std::get_if<bool>(&rv);
     // false AND anything => false
-    if ((tl.has_value() && !*tl) || (tr.has_value() && !*tr)) {
+    if ((lb && !*lb) || (rb && !*rb)) {
         result.setValue(i, Value(false));
         return;
     }
-    // null AND anything => null
-    if (!tl.has_value() || !tr.has_value()) {
+    // true AND null => null; null AND anything => null
+    if (!lb || !rb) {
         result.setNull(i);
         return;
     }
@@ -86,15 +60,17 @@ void boolAndBatch(const Column& left, const Column& right, Column& result, size_
 
 void boolOrBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        auto tl = truthinessToBool(left.getValue(i));
-        auto tr = truthinessToBool(right.getValue(i));
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        auto lb = std::get_if<bool>(&lv);
+        auto rb = std::get_if<bool>(&rv);
         // true OR anything => true
-        if ((tl.has_value() && *tl) || (tr.has_value() && *tr)) {
+        if ((lb && *lb) || (rb && *rb)) {
             result.setValue(i, Value(true));
             continue;
         }
         // false OR null => null; null OR anything => null
-        if (!tl.has_value() || !tr.has_value()) {
+        if (!lb || !rb) {
             result.setNull(i);
             continue;
         }
@@ -104,13 +80,16 @@ void boolOrBatch(const Column& left, const Column& right, Column& result, size_t
 
 void boolXorBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        auto tl = truthinessToBool(left.getValue(i));
-        auto tr = truthinessToBool(right.getValue(i));
-        if (!tl.has_value() || !tr.has_value()) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        auto lb = std::get_if<bool>(&lv);
+        auto rb = std::get_if<bool>(&rv);
+        // null XOR anything => null
+        if (!lb || !rb) {
             result.setNull(i);
             continue;
         }
-        result.setValue(i, Value(*tl != *tr));
+        result.setValue(i, Value(*lb != *rb));
     }
 }
 
@@ -432,9 +411,9 @@ void stringContainsBatch(const Column& left, const Column& right, Column& result
 
 void boolNotBatch(const Column& operand, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        auto tv = truthinessToBool(operand.getValue(i));
-        if (tv.has_value())
-            result.setValue(i, Value(!*tv));
+        Value ov = operand.getValue(i);
+        if (std::holds_alternative<bool>(ov))
+            result.setValue(i, Value(!std::get<bool>(ov)));
         else
             result.setNull(i);
     }

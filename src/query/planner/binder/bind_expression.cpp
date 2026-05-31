@@ -543,9 +543,15 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
 
     case cypher::BinaryOperator::AND:
     case cypher::BinaryOperator::OR:
-    case cypher::BinaryOperator::XOR:
-        // Cypher truthiness: any non-null value can be used as boolean
-        return BoundType::Bool();
+    case cypher::BinaryOperator::XOR: {
+        auto ok = [](const BoundType& t) {
+            return t.kind == BoundTypeKind::BOOL || t.kind == BoundTypeKind::NULL_TYPE || t.kind == BoundTypeKind::ANY;
+        };
+        if (ok(left_type) && ok(right_type))
+            return BoundType::Bool();
+        error_msg = "InvalidArgumentType: Logical operators require boolean operands";
+        return BoundType::Any();
+    }
 
     case cypher::BinaryOperator::ADD: {
         // String concatenation
@@ -671,8 +677,11 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
 BoundType Binder::inferUnaryOpType(cypher::UnaryOperator op, const BoundType& operand_type, std::string& error_msg) {
     switch (op) {
     case cypher::UnaryOperator::NOT:
-        // Cypher truthiness: any non-null value can be negated
-        return BoundType::Bool();
+        if (operand_type.kind == BoundTypeKind::BOOL || operand_type.kind == BoundTypeKind::NULL_TYPE ||
+            operand_type.kind == BoundTypeKind::ANY)
+            return BoundType::Bool();
+        error_msg = "InvalidArgumentType: NOT requires boolean operand, got " + operand_type.toString();
+        return BoundType::Any();
 
     case cypher::UnaryOperator::NEGATE:
         if (operand_type.kind == BoundTypeKind::INT64)

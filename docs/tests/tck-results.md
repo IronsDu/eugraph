@@ -223,7 +223,6 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | 时间属性类型保留 | `CREATE` 时从 BoundExpression 推断 PropertyType（DATETIME/TIME/DURATION） |
 | PropertyValue 时间数组类型 | variant 添加 `vector<DateTimeValue/TimeValue/DurationValue>` + ValueCodec 编解码 |
 | Thrift 时间数组支持 | `PropertyType` 枚举新增 `DATETIME_ARRAY=11` / `TIME_ARRAY=12` / `DURATION_ARRAY=13`；`PropertyValueThrift` 支持对应数组字段 |
-| 逻辑运算符 truthiness | AND/OR/XOR/NOT 接受任意类型操作数，通过 Cypher truthiness 规则转换，正确处理 null 传播 |
 | 时间属性存取往返 | `CREATE` 存入时间值后 `MATCH` 读出再访问字段（如 `.year`）正确返回；无标签节点 INSERT 修复 |
 | INVALID_LABEL_ID 防御 | Binder 不将 INVALID_LABEL_ID 加入 label_ids；物理算子和存储层增加防御检查 |
 | 顶点序列化格式 (id + label + props) | TCK 期望格式 |
@@ -244,8 +243,8 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | ~~P2~~ | ~~布尔类型检查~~ | ~~~48~~ | ✅ 已实现：AND/OR/XOR/NOT 在 Binder 阶段检查操作数类型为非布尔时报告 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播；XOR 从 AST skip 列表移除 |
 | **P2** | 结果不匹配 | ~956 | 逐一分析（NULL 语义、排序、精度） |
 | **P3** | Parser 限制 | ~250 | Parser 增强 |
-| ~~P3~~ | ~~Boolean null 传播~~ | ~~~12~~ | ✅ 已修复：逻辑运算符（AND/OR/XOR/NOT）接受任意类型操作数，通过 truthiness 规则转换，null 正确传播 |
-| ~~P3~~ | ~~NOT 非布尔字面量~~ | ~~~9~~ | ✅ 已修复：`NOT []` / `NOT {}` 等非布尔操作数通过 truthiness 转换后正确处理 |
+| **P3** | Boolean null 传播 | ~12 | UNWIND + NULL 变量在复合布尔表达式中的传播问题 |
+| **P3** | NOT 非布尔字面量 | ~9 | `NOT []` / `NOT {}` 等个别字面量被 AST skip 拦截 |
 | **P3** | 缺失步骤定义 | 71 | 补实现步骤（远期） |
 | **P3** | 多标签节点 | 25 | 多标签创建/匹配 |
 
