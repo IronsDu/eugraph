@@ -5224,3 +5224,192 @@ TEST_F(QueryExecutorTest, ExplainCreateEdge) {
     }
     std::cout << plan_text << std::endl;
 }
+
+// ==================== Unlabeled Node Roundtrip Tests ====================
+
+TEST_F(QueryExecutorTest, UnlabeledNodeCreateAndMatchAllNodes) {
+    // Basic test: CREATE unlabeled node, MATCH (n) with all-node scan
+    auto r1 = execSync(*executor_, "CREATE ({x: 42})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Check EXPLAIN to see what physical plan is generated
+    auto r_explain = execSync(*executor_, "EXPLAIN MATCH (n) RETURN n");
+    ASSERT_TRUE(r_explain.error.empty()) << r_explain.error;
+    for (const auto& row : r_explain.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0])) {
+            std::cout << "PLAN: " << std::get<std::string>(row[0]) << std::endl;
+        }
+    }
+
+    // Just MATCH (n) without property access
+    auto r2 = execSync(*executor_, "MATCH (n) RETURN n");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u) << "MATCH (n) should find 1 unlabeled node, got " << r2.rows.size();
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodeCreateAndMatchReturnProp) {
+    // CREATE unlabeled node, then MATCH (n) RETURN n.prop
+    auto r1 = execSync(*executor_, "CREATE ({x: 42})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n) RETURN n.x");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u) << "Expected 1 row, got " << r2.rows.size();
+    EXPECT_TRUE(std::holds_alternative<int64_t>(r2.rows[0][0]))
+        << "Expected int64, got variant " << r2.rows[0][0].index();
+    EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 42);
+}
+
+TEST_F(QueryExecutorTest, UnlabeledNodeCreateAndMatchLabeled) {
+    // CREATE unlabeled node, MATCH with label should NOT find it
+    auto r1 = execSync(*executor_, "CREATE ({x: 42})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n.x");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 0u) << "Labeled match should not find unlabeled node";
+}
+
+// ==================== Temporal Property Roundtrip Tests ====================
+
+TEST_F(QueryExecutorTest, TemporalPropertyRoundtripUnlabeledNode) {
+    // CREATE a node with datetime property (goes to __anon__)
+    auto r1 = execSync(*executor_, "CREATE ({dt: datetime('2024-06-15T12:00:00')})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Read back the property directly
+    auto r2 = execSync(*executor_, "MATCH (n) RETURN n.dt");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    // n.dt should be a DateTimeValue
+    EXPECT_TRUE(std::holds_alternative<DateTimeValue>(r2.rows[0][0]))
+        << "Expected DateTimeValue, got variant index " << r2.rows[0][0].index();
+    if (std::holds_alternative<DateTimeValue>(r2.rows[0][0])) {
+        auto& tv = std::get<DateTimeValue>(r2.rows[0][0]);
+        EXPECT_EQ(tv.year, 2024);
+        EXPECT_EQ(tv.month, 6);
+        EXPECT_EQ(tv.day, 15);
+    }
+}
+
+TEST_F(QueryExecutorTest, TemporalPropertyRoundtripFieldAccess) {
+    // CREATE a node with datetime property
+    auto r1 = execSync(*executor_, "CREATE ({d: datetime('2024-06-15T12:00:00')})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Access .year field
+    auto r2 = execSync(*executor_, "MATCH (n) RETURN n.d.year");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<int64_t>(r2.rows[0][0]))
+        << "Expected int64_t for year, got variant index " << r2.rows[0][0].index();
+    if (std::holds_alternative<int64_t>(r2.rows[0][0])) {
+        EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 2024);
+    }
+}
+
+TEST_F(QueryExecutorTest, TemporalPropertyRoundtripLabeledNode) {
+    // CREATE a labeled node with datetime property
+    auto r1 = execSync(*executor_, "CREATE (n:Person {dt: datetime('2024-06-15T12:00:00')})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Read back with label
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n.dt");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<DateTimeValue>(r2.rows[0][0]))
+        << "Expected DateTimeValue, got variant index " << r2.rows[0][0].index();
+}
+
+TEST_F(QueryExecutorTest, TemporalPropertyRoundtripLabeledFieldAccess) {
+    // CREATE a labeled node with datetime property
+    auto r1 = execSync(*executor_, "CREATE (n:Person {d: datetime('2024-06-15T12:00:00')})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // Access .year on labeled node
+    auto r2 = execSync(*executor_, "MATCH (n:Person) RETURN n.d.year");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<int64_t>(r2.rows[0][0]))
+        << "Expected int64_t for year, got variant index " << r2.rows[0][0].index();
+    if (std::holds_alternative<int64_t>(r2.rows[0][0])) {
+        EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 2024);
+    }
+}
+
+// ==================== NOT with non-boolean literals ====================
+
+TEST_F(QueryExecutorTest, NotWithEmptyList) {
+    auto result = execSync(*executor_, "RETURN NOT []");
+    EXPECT_FALSE(result.error.empty()) << "NOT [] should raise an error";
+    EXPECT_NE(result.error.find("InvalidArgumentType"), std::string::npos)
+        << "Expected InvalidArgumentType, got: " << result.error;
+}
+
+TEST_F(QueryExecutorTest, NotWithEmptyMap) {
+    auto result = execSync(*executor_, "RETURN NOT {}");
+    EXPECT_FALSE(result.error.empty()) << "NOT {} should raise an error";
+}
+
+TEST_F(QueryExecutorTest, NotWithIntLiteral) {
+    auto result = execSync(*executor_, "RETURN NOT 42");
+    EXPECT_FALSE(result.error.empty()) << "NOT 42 should raise an error";
+}
+
+TEST_F(QueryExecutorTest, NotWithStringLiteral) {
+    auto result = execSync(*executor_, "RETURN NOT 'hello'");
+    EXPECT_FALSE(result.error.empty()) << "NOT 'hello' should raise an error";
+}
+
+// ==================== Boolean null propagation ====================
+
+TEST_F(QueryExecutorTest, NullAndFalseIsFalse) {
+    // null AND false → false (not null)
+    auto result = execSync(*executor_, "RETURN null AND false");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[0][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[0][0]), false);
+}
+
+TEST_F(QueryExecutorTest, NullOrTrueIsTrue) {
+    // null OR true → true (not null)
+    auto result = execSync(*executor_, "RETURN null OR true");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[0][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[0][0]), true);
+}
+
+TEST_F(QueryExecutorTest, NullAndTrueIsNull) {
+    // null AND true → null
+    auto result = execSync(*executor_, "RETURN null AND true");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[0][0]))
+        << "null AND true should be null, got variant " << result.rows[0][0].index();
+}
+
+TEST_F(QueryExecutorTest, UnwindNullWithBooleanExpr) {
+    // UNWIND [null, false] AS x RETURN x AND true
+    auto result = execSync(*executor_, "UNWIND [null, false] AS x RETURN x AND true");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    // First row: null AND true → null
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[0][0]));
+    // Second row: false AND true → false
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[1][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[1][0]), false);
+}
+
+TEST_F(QueryExecutorTest, UnwindNullWithBooleanOr) {
+    // UNWIND [null, true] AS x RETURN x OR false
+    auto result = execSync(*executor_, "UNWIND [null, true] AS x RETURN x OR false");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    // First row: null OR false → null
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[0][0]));
+    // Second row: true OR false → true
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[1][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[1][0]), true);
+}

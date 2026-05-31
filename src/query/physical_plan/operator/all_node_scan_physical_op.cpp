@@ -10,6 +10,8 @@ namespace compute {
 folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
     std::unordered_map<VertexId, VertexValue> vertex_map;
     for (const auto& [name, label_id] : label_map_) {
+        if (label_id == INVALID_LABEL_ID)
+            continue;
         auto gen = store_.scanVerticesByLabel(label_id);
         while (auto batch = co_await gen.next()) {
             for (VertexId vid : *batch) {

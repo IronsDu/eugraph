@@ -168,6 +168,12 @@ std::string propertyTypeToString(thrift::PropertyType t) {
         return "TIME";
     case thrift::PropertyType::DURATION:
         return "DURATION";
+    case thrift::PropertyType::DATETIME_ARRAY:
+        return "DATETIME_ARRAY";
+    case thrift::PropertyType::TIME_ARRAY:
+        return "TIME_ARRAY";
+    case thrift::PropertyType::DURATION_ARRAY:
+        return "DURATION_ARRAY";
     }
     return "UNKNOWN";
 }

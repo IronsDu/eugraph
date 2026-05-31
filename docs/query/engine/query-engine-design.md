@@ -547,7 +547,7 @@ using Schema = vector<string>;   // 列名列表
 - **PropertyValue variant 索引依赖**：时间数组类型追加在 variant 末尾（索引 11-13），以保持向后兼容（`MetadataCodec::encodePropertyValue` 使用 `value.index()` 作为序列化标签）。向 variant 中间插入新类型会破坏已有数据的可读性。长期应改为显式标签编码。
 - **MetadataCodec 时间数组编码缺失**：`encodePropertyValue` 的 `std::visit` 未处理时间数组变体类型——会写入索引标签但无数据载荷（静默丢失）。该路径仅用于 DDL 默认属性值，运行时数据走 `ValueCodec`。
 - **valueToPropertyValue 列表转换假设同构**：通过首个元素类型判断整个列表类型，混合类型列表（如 `[1, 'a']`）静默返回空 PropertyValue。
-- **Thrift PropertyType 未扩展时间数组**：`thrift::PropertyType` 枚举尚无 `DATETIME_ARRAY` / `TIME_ARRAY` / `DURATION_ARRAY`，`fromPropertyType` 暂映射为 `STRING`。需同步更新 `proto/eugraph.thrift` 并重新生成代码。
+- ~~**Thrift PropertyType 未扩展时间数组**~~：✅ 已修复。`thrift::PropertyType` 新增 `DATETIME_ARRAY=11` / `TIME_ARRAY=12` / `DURATION_ARRAY=13`；`PropertyValueThrift` 新增对应数组字段；`propertyTypeToThrift` / `thriftToPropertyValue` 完整支持转换。
 
 ### 待实现
 

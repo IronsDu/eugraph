@@ -173,6 +173,8 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
         std::vector<std::pair<LabelId, Properties>> result;
 
         for (auto lid : label_ids_) {
+            if (lid == INVALID_LABEL_ID)
+                continue;
             Properties props;
 
             for (const auto& [expr_lid, exprs] : label_prop_exprs_) {

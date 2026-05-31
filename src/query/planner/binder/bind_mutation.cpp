@@ -94,7 +94,9 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
             auto create_node = std::make_unique<BoundCreateNodeOp>();
             create_node->variable = start_var;
             if (start_labels.empty()) {
-                create_node->label_ids.push_back(catalog_.getAnonLabelId());
+                auto anon_id = catalog_.getAnonLabelId();
+                if (anon_id != INVALID_LABEL_ID)
+                    create_node->label_ids.push_back(anon_id);
             } else {
                 create_node->label_ids = start_labels;
             }
@@ -180,7 +182,9 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
                 auto create_dst = std::make_unique<BoundCreateNodeOp>();
                 create_dst->variable = dst_var;
                 if (dst_labels.empty()) {
-                    create_dst->label_ids.push_back(catalog_.getAnonLabelId());
+                    auto anon_id = catalog_.getAnonLabelId();
+                    if (anon_id != INVALID_LABEL_ID)
+                        create_dst->label_ids.push_back(anon_id);
                 } else {
                     create_dst->label_ids = dst_labels;
                 }
