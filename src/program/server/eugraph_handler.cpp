@@ -71,6 +71,12 @@ namespace server {
         return ::eugraph::PropertyType::TIME;
     case thrift::PropertyType::DURATION:
         return ::eugraph::PropertyType::DURATION;
+    case thrift::PropertyType::DATETIME_ARRAY:
+        return ::eugraph::PropertyType::DATETIME_ARRAY;
+    case thrift::PropertyType::TIME_ARRAY:
+        return ::eugraph::PropertyType::TIME_ARRAY;
+    case thrift::PropertyType::DURATION_ARRAY:
+        return ::eugraph::PropertyType::DURATION_ARRAY;
     }
     return ::eugraph::PropertyType::STRING;
 }
