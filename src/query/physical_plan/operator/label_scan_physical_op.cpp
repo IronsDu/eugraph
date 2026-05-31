@@ -6,32 +6,46 @@ namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> LabelScanPhysicalOp::executeChunk() {
-    auto gen = store_.scanVerticesByLabel(label_id_);
+    // Scan the first label's forward index; filter remaining labels at runtime.
+    LabelId scan_label = label_ids_[0];
+    auto gen = store_.scanVerticesByLabel(scan_label);
     while (auto batch = co_await gen.next()) {
         DataChunk chunk;
         chunk.setSchema(output_types_);
         chunk.reserve(batch->size());
 
         for (VertexId vid : *batch) {
-            auto labels = co_await store_.getVertexLabels(vid);
-            if (anon_label_id_ != INVALID_LABEL_ID) {
-                labels.erase(anon_label_id_);
-            }
-            VertexValue vv;
-            vv.id = vid;
-            vv.labels = labels;
-            for (LabelId lid : labels) {
-                auto it = label_prop_ids_.find(lid);
-                if (it == label_prop_ids_.end())
-                    continue;
-                if (it->second.empty())
-                    continue;
-                auto props = co_await store_.getVertexProperties(vid, lid, it->second);
-                if (props) {
-                    vv.properties[lid] = std::move(*props);
+            auto vlabels = co_await store_.getVertexLabels(vid);
+            if (anon_label_id_ != INVALID_LABEL_ID)
+                vlabels.erase(anon_label_id_);
+
+            // Multi-label filter: vertex must have ALL specified labels
+            bool has_all = true;
+            for (LabelId lid : label_ids_) {
+                if (!vlabels.contains(lid)) {
+                    has_all = false;
+                    break;
                 }
             }
-            // Load __anon__ label properties (hidden from vv.labels but accessible via property access)
+            if (!has_all)
+                continue;
+
+            VertexValue vv;
+            vv.id = vid;
+            vv.labels = vlabels;
+
+            // Load properties from all vertex labels (not just scan labels) —
+            // a vertex may have additional labels with properties that the query needs.
+            for (LabelId lid : vlabels) {
+                auto it = label_prop_ids_.find(lid);
+                if (it == label_prop_ids_.end() || it->second.empty())
+                    continue;
+                auto props = co_await store_.getVertexProperties(vid, lid, it->second);
+                if (props)
+                    vv.properties[lid] = std::move(*props);
+            }
+
+            // Load __anon__ label properties
             if (anon_label_id_ != INVALID_LABEL_ID) {
                 auto anon_def_it = label_defs_.find(anon_label_id_);
                 if (anon_def_it != label_defs_.end() && !anon_def_it->second.properties.empty()) {
@@ -43,11 +57,11 @@ folly::coro::AsyncGenerator<DataChunk> LabelScanPhysicalOp::executeChunk() {
                         vv.properties[anon_label_id_] = std::move(*anon_props);
                 }
             }
+
             chunk.appendRow({Value(std::move(vv))});
         }
-        if (chunk.count > 0) {
+        if (chunk.count > 0)
             co_yield std::move(chunk);
-        }
     }
 }
 

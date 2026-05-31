@@ -13,8 +13,8 @@ namespace binder {
 struct BoundLabelScanOp {
     std::string variable;
     uint32_t column_index;
-    LabelId label_id;
-    std::string label_name;
+    std::vector<LabelId> label_ids;
+    std::vector<std::string> label_names;
     std::unordered_map<LabelId, std::vector<uint16_t>> label_prop_ids;
 };
 

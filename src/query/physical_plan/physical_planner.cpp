@@ -384,7 +384,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_schema.push_back(val.variable);
                     output_types.push_back(binder::BoundType::Vertex());
                 }
-                auto result = std::make_unique<LabelScanPhysicalOp>(val.variable, val.label_id,
+                auto result = std::make_unique<LabelScanPhysicalOp>(val.variable, val.label_ids,
                                                                     std::vector<binder::BoundType>(output_types), store,
                                                                     ctx.label_defs, anon_id, val.label_prop_ids);
                 return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
@@ -460,15 +460,18 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // ── Index scan optimization: Filter(LabelScan) → IndexScan ──
                     if (std::holds_alternative<binder::BoundLabelScanOp>(v.child)) {
                         auto& scan_op = std::get<binder::BoundLabelScanOp>(v.child);
-                        auto def_it = ctx.label_defs.find(scan_op.label_id);
-                        if (def_it != ctx.label_defs.end()) {
-                            std::vector<const binder::BoundBinaryOp*> conditions;
-                            collectBoundConditions(v.predicate, conditions);
-                            if (!conditions.empty()) {
-                                auto idx_result = tryBoundIndexScan(scan_op, conditions, scan_op.label_id,
-                                                                    def_it->second, store, ctx);
-                                if (idx_result.has_value())
-                                    return std::move(idx_result.value());
+                        // Index scan only when single label (multi-label requires runtime intersection)
+                        if (scan_op.label_ids.size() == 1) {
+                            auto def_it = ctx.label_defs.find(scan_op.label_ids[0]);
+                            if (def_it != ctx.label_defs.end()) {
+                                std::vector<const binder::BoundBinaryOp*> conditions;
+                                collectBoundConditions(v.predicate, conditions);
+                                if (!conditions.empty()) {
+                                    auto idx_result = tryBoundIndexScan(scan_op, conditions, scan_op.label_ids[0],
+                                                                        def_it->second, store, ctx);
+                                    if (idx_result.has_value())
+                                        return std::move(idx_result.value());
+                                }
                             }
                         }
                     }

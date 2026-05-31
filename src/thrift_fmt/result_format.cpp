@@ -15,12 +15,15 @@ std::string convertVertexJson(const std::string& json) {
         auto j = nlohmann::json::parse(json);
         std::ostringstream oss;
         oss << "(";
-        if (j.contains("label") && j["label"].is_string()) {
+        if (j.contains("labels") && j["labels"].is_array()) {
+            for (const auto& l : j["labels"])
+                oss << ":" << l.get<std::string>();
+        } else if (j.contains("label") && j["label"].is_string()) {
             oss << ":" << j["label"].get<std::string>();
         }
         std::vector<std::pair<std::string, std::string>> props;
         for (auto& [key, value] : j.items()) {
-            if (key == "id" || key == "label")
+            if (key == "id" || key == "label" || key == "labels")
                 continue;
             std::string formattedVal;
             if (value.is_string()) {
@@ -65,7 +68,10 @@ std::string convertEdgeJson(const std::string& json) {
         auto j = nlohmann::json::parse(json);
         std::ostringstream oss;
         oss << "[";
-        if (j.contains("label") && j["label"].is_string()) {
+        if (j.contains("labels") && j["labels"].is_array()) {
+            for (const auto& l : j["labels"])
+                oss << ":" << l.get<std::string>();
+        } else if (j.contains("label") && j["label"].is_string()) {
             oss << ":" << j["label"].get<std::string>();
         }
         std::vector<std::pair<std::string, std::string>> props;
