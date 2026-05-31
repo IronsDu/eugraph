@@ -1,7 +1,7 @@
 # TCK 测试结果分类报告
 
 **日期**: 2026-05-31 (更新)
-**分支**: fix/temporal-tck-issues
+**分支**: fix/tck-remaining-defects
 **总计**: 3897 场景, 16006 步骤
 **运行耗时**: ~11 分
 **检测方式**: Parser AST 遍历 + Binder 类型检查 + 运行时断言
@@ -102,17 +102,15 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 
 **影响范围**：Temporal3 [3][10] 等场景中约 30 个用例。
 
-#### 7. 时区秒精度（已知限制，~48 用例）
+#### 7. ~~时区秒精度~~ — ✅ 已修复（commit a1597ec）
 
-`tz_offset_min` 为 `int32_t`，仅存储分钟级别偏移。形如 `+02:05:59` 的时区偏移（含秒）会被截断。需将 `tz_offset_min` 改为秒级存储，涉及解析、比较、序列化、格式化约 10 处改动。
+`tz_offset_min` → `tz_offset_sec`，存储精度从分钟改为秒。涉及 DateTimeValue/TimeValue 结构体、parseTzOffset、temporal accessors、格式化、temporalToComparable、temporalLess、ValueCodec 序列化、Thrift handler 转换。
 
-**影响范围**：Temporal1 [13] 等场景中约 48 个用例。
+#### 8. ~~时间属性存取往返~~ — ✅ 已修复
 
-#### 8. 时间属性存取往返（已知限制，~40 用例）
+根因：Binder 对无标签节点调用 `catalog_.getAnonLabelId()` 返回 `INVALID_LABEL_ID`（0），该值进入 `label_ids_`，导致 `insertVertex` 以 label_id=0 写入失败，MATCH 无法找到无标签节点。修复：Binder 中仅当 `getAnonLabelId()` 返回非 INVALID 时才加入 `label_ids`；`CreateNodePhysicalOp` 和 `SyncGraphDataStore` 增加 INVALID_LABEL_ID 防御检查。
 
-时间值通过 `CREATE` 存入属性后，`MATCH` 读出再访问字段（如 `d.year`）返回 null。需排查 KV 编解码 → `PropertyType` 推断 → Binder 类型解析链路中的类型信息丢失。
-
-**影响范围**：Temporal5 全部 7 个 + Temporal4 部分约 33 个用例。
+**影响范围**：Temporal5 全部 7 个 + Temporal4 部分约 33 个用例（共 ~40）。
 
 ---
 
@@ -223,7 +221,11 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | durationBetween 时区修正 | `datetime` 带时区偏移时正确计算时间差 |
 | week 构造函数 weekYear | `date({weekYear:..., week:..., dayOfWeek:...})` |
 | 时间属性类型保留 | `CREATE` 时从 BoundExpression 推断 PropertyType（DATETIME/TIME/DURATION） |
-| PropertyValue 时间数组类型 | variant 添加 `vector<DateTimeValue/TimeValue/DurationValue>` + ValueCodec 编解码（Thrift 枚举待扩展） |
+| PropertyValue 时间数组类型 | variant 添加 `vector<DateTimeValue/TimeValue/DurationValue>` + ValueCodec 编解码 |
+| Thrift 时间数组支持 | `PropertyType` 枚举新增 `DATETIME_ARRAY=11` / `TIME_ARRAY=12` / `DURATION_ARRAY=13`；`PropertyValueThrift` 支持对应数组字段 |
+| 逻辑运算符 truthiness | AND/OR/XOR/NOT 接受任意类型操作数，通过 Cypher truthiness 规则转换，正确处理 null 传播 |
+| 时间属性存取往返 | `CREATE` 存入时间值后 `MATCH` 读出再访问字段（如 `.year`）正确返回；无标签节点 INSERT 修复 |
+| INVALID_LABEL_ID 防御 | Binder 不将 INVALID_LABEL_ID 加入 label_ids；物理算子和存储层增加防御检查 |
 | 顶点序列化格式 (id + label + props) | TCK 期望格式 |
 
 ---
@@ -234,14 +236,16 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 |--------|------|-----------|---------|
 | ~~P0~~ | ~~时间日期构造函数 & 成员访问器 & 比较/算术~~ | ~~~800~~ | ✅ 已实现（Phase 1 + Phase 2） |
 | ~~P0~~ | ~~`truncate()` / `duration.between()` / STRING 解析~~ | ~~~500~~ | ✅ 已实现（Phase 3） |
-| **P1** | ~~Temporal 属性往返类型保留~~ | ~~~52~~ | ✅ 已修复（拆分为 DateTimeValue/TimeValue/DurationValue） |
+| ~~P1~~ | ~~Temporal 属性往返类型保留~~ | ~~~52~~ | ✅ 已修复（拆分为 DateTimeValue/TimeValue/DurationValue） |
+| ~~P2~~ | ~~时间属性存取往返~~ | ~~~40~~ | ✅ 已修复：Binder catalog_.getAnonLabelId() 返回 INVALID_LABEL_ID 导致无标签节点写失败 |
+| ~~P2~~ | ~~时区秒精度~~ | ~~~48~~ | ✅ 已修复（commit a1597ec）：tz_offset_min→tz_offset_sec |
 | **P1** | MERGE | ~80 | MERGE 子句实现 |
 | **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
 | ~~P2~~ | ~~布尔类型检查~~ | ~~~48~~ | ✅ 已实现：AND/OR/XOR/NOT 在 Binder 阶段检查操作数类型为非布尔时报告 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播；XOR 从 AST skip 列表移除 |
 | **P2** | 结果不匹配 | ~956 | 逐一分析（NULL 语义、排序、精度） |
 | **P3** | Parser 限制 | ~250 | Parser 增强 |
-| **P3** | Boolean null 传播 | ~12 | UNWIND + NULL 变量在复合布尔表达式中的传播问题 |
-| **P3** | NOT 非布尔字面量 | ~9 | `NOT []` / `NOT {}` 等个别字面量被 AST skip 拦截 |
+| ~~P3~~ | ~~Boolean null 传播~~ | ~~~12~~ | ✅ 已修复：逻辑运算符（AND/OR/XOR/NOT）接受任意类型操作数，通过 truthiness 规则转换，null 正确传播 |
+| ~~P3~~ | ~~NOT 非布尔字面量~~ | ~~~9~~ | ✅ 已修复：`NOT []` / `NOT {}` 等非布尔操作数通过 truthiness 转换后正确处理 |
 | **P3** | 缺失步骤定义 | 71 | 补实现步骤（远期） |
 | **P3** | 多标签节点 | 25 | 多标签创建/匹配 |
 
@@ -250,7 +254,7 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 ## 已知限制（通用）
 
 - **数组属性存储不完整**：`CREATE ({prop: [1,2,3]})` 中列表属性未被正确写入（各类型均受影响，含时间数组）。时间数组的编解码基础设施已就位，剩余问题在 `CreateNodePhysicalOp` / `SetPhysicalOp` 的 evaluator→PropertyValue 转换管道。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
-- **Thrift PropertyType 未扩展时间数组**：`thrift::PropertyType` 枚举尚无 `DATETIME_ARRAY` / `TIME_ARRAY` / `DURATION_ARRAY`，`fromPropertyType` 暂映射为 `STRING`。需同步更新 `proto/eugraph.thrift` 并重新生成代码。
+- ~~**Thrift PropertyType 未扩展时间数组**~~：✅ 已修复。`proto/eugraph.thrift` `PropertyType` 枚举新增 `DATETIME_ARRAY=11` / `TIME_ARRAY=12` / `DURATION_ARRAY=13`；`PropertyValueThrift` union 新增对应数组字段；handler 的 `propertyTypeToThrift` 和 `thriftToPropertyValue` 完整支持时间数组转换。
 - **`properties(Edge)` + 普通 Expand**: `(a)-[r:TYPE]->(b)` 中 `ExpandPhysicalOp` 不加载边属性，`properties(r)` 返回空 map。变长路径的边属性加载已支持。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
 - ~~**PropertyValue 不支持 TemporalValue**~~：✅ 已修复，TemporalValue 拆分为 DateTimeValue/TimeValue/DurationValue 三种类型。
 - ~~**紧凑 STRING 格式**~~：✅ 已修复，无分隔符格式已实现。

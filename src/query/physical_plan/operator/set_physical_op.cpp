@@ -238,7 +238,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             co_await store_.putVertexProperty(vid, matches[0].first, matches[0].second, pv);
                         } else if (matches.empty()) {
                             if (anon_label_id_ != INVALID_LABEL_ID) {
-                                uint16_t anon_pid = co_await meta_.getOrCreateAnonPropId(key, PropertyType::ANY);
+                                uint16_t anon_pid =
+                                    co_await meta_.getOrCreateAnonPropId(key, propertyValueToPropertyType(pv));
                                 co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, pv);
                             }
                         } else {

@@ -265,6 +265,8 @@ bool SyncGraphDataStore::insertVertex(GraphTxnHandle txn, VertexId vid,
         return false;
 
     for (const auto& [label_id, props] : label_props) {
+        if (label_id == INVALID_LABEL_ID)
+            continue;
         auto lr_key = KeyCodec::encodeLabelReverseKey(vid, label_id);
         if (!tablePut(session, TABLE_LABEL_REVERSE, lr_key, {}))
             return false;
@@ -631,6 +633,8 @@ uint64_t SyncGraphDataStore::countDegree(GraphTxnHandle txn, VertexId vid, Direc
 
 std::unique_ptr<ISyncGraphDataStore::IVertexScanCursor> SyncGraphDataStore::createVertexScanCursor(GraphTxnHandle txn,
                                                                                                    LabelId label_id) {
+    if (label_id == INVALID_LABEL_ID)
+        return nullptr;
     auto session = getSession(txn);
     if (!session)
         return nullptr;

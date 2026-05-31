@@ -13,6 +13,9 @@ enum PropertyType {
   DATETIME = 8,
   TIME = 9,
   DURATION = 10,
+  DATETIME_ARRAY = 11,
+  TIME_ARRAY = 12,
+  DURATION_ARRAY = 13,
 }
 
 struct PropertyDefThrift {
@@ -73,6 +76,9 @@ union PropertyValueThrift {
   8: DateTimeValueThrift datetime_val
   9: TimeValueThrift time_val
   10: DurationValueThrift duration_val
+  11: list<DateTimeValueThrift> datetime_array
+  12: list<TimeValueThrift> time_array
+  13: list<DurationValueThrift> duration_array
 }
 
 struct LabelInfo {
