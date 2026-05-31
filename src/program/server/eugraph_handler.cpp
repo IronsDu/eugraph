@@ -292,14 +292,20 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         std::ostringstream oss;
         oss << "{\"id\":" << v.id;
 
-        if (v.labels.has_value()) {
+        if (v.labels.has_value() && !v.labels->empty()) {
+            // Output all labels for multi-label node support
+            oss << ",\"labels\":[";
+            bool first = true;
             for (LabelId lid : *v.labels) {
                 auto it = label_defs.find(lid);
                 if (it == label_defs.end())
                     continue;
-                oss << ",\"label\":\"" << it->second.name << '"';
-                break;
+                if (!first)
+                    oss << ',';
+                oss << '"' << it->second.name << '"';
+                first = false;
             }
+            oss << ']';
             for (LabelId lid : *v.labels) {
                 auto it = label_defs.find(lid);
                 if (it == label_defs.end())
