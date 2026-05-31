@@ -5402,6 +5402,85 @@ TEST_F(QueryExecutorTest, UnwindNullWithBooleanExpr) {
     EXPECT_EQ(std::get<bool>(result.rows[1][0]), false);
 }
 
+// ==================== Multi-Label Node Tests ====================
+
+TEST_F(QueryExecutorTest, MultiLabelCreateAndMatch) {
+    // Create labels A, B, C
+    auto la = blockingWait(async_meta_->createLabel("A"));
+    auto lb = blockingWait(async_meta_->createLabel("B"));
+    auto lc = blockingWait(async_meta_->createLabel("C"));
+    blockingWait(async_data_->createLabel(la));
+    blockingWait(async_data_->createLabel(lb));
+    blockingWait(async_data_->createLabel(lc));
+    // Recreate executor to pick up new labels
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    // Create nodes with multiple labels
+    auto r1 = execSync(*executor_, "CREATE (:A:B:C), (:A:B), (:A:C), (:B:C), (:A), (:B), (:C)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // MATCH (n:A:B) should return only nodes with both A and B
+    auto r2 = execSync(*executor_, "MATCH (n:A:B) RETURN n");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    // (:A:B:C) and (:A:B) both have A and B
+    ASSERT_EQ(r2.rows.size(), 2u) << "Expected 2 nodes with both A and B";
+}
+
+TEST_F(QueryExecutorTest, MultiLabelMatchWithProperty) {
+    auto la = blockingWait(async_meta_->createLabel("A"));
+    auto lb = blockingWait(async_meta_->createLabel("B"));
+    blockingWait(async_data_->createLabel(la));
+    blockingWait(async_data_->createLabel(lb));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    auto r1 =
+        execSync(*executor_, "CREATE (:A:B {name: 'ab'}), (:A:B {name: 'ab2'}), (:A {name: 'a'}), (:B {name: 'b'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    // MATCH with multi-label and property filter
+    auto r2 = execSync(*executor_, "MATCH (n:A:B {name: 'ab'}) RETURN n.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::string>(r2.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(r2.rows[0][0]), "ab");
+}
+
+TEST_F(QueryExecutorTest, MultiLabelMatchSingleLabelSubset) {
+    auto la = blockingWait(async_meta_->createLabel("A"));
+    auto lb = blockingWait(async_meta_->createLabel("B"));
+    blockingWait(async_data_->createLabel(la));
+    blockingWait(async_data_->createLabel(lb));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    // (:A) should NOT be matched by MATCH (n:A:B)
+    auto r1 = execSync(*executor_, "CREATE (:A), (:B), (:A:B)");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:A:B) RETURN n");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u) << "Only (:A:B) should be returned";
+}
+
+TEST_F(QueryExecutorTest, MultiLabelMatchNonexistentLabel) {
+    auto result = execSync(*executor_, "MATCH (n:Person:Nonexistent) RETURN n");
+    EXPECT_FALSE(result.error.empty()) << "Should report label not found";
+}
+
+TEST_F(QueryExecutorTest, MultiLabelCreateWithExpand) {
+    auto la = blockingWait(async_meta_->createLabel("A"));
+    auto lb = blockingWait(async_meta_->createLabel("B"));
+    blockingWait(async_data_->createLabel(la));
+    blockingWait(async_data_->createLabel(lb));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    auto r1 = execSync(*executor_, "CREATE (:A:B {name: 'ab'})-[:KNOWS]->(:B {name: 'b'})");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:A:B)-[:KNOWS]->(m:B) RETURN n.name, m.name");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+}
+
 TEST_F(QueryExecutorTest, UnwindNullWithBooleanOr) {
     // UNWIND [null, true] AS x RETURN x OR false
     auto result = execSync(*executor_, "UNWIND [null, true] AS x RETURN x OR false");

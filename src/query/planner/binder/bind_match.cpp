@@ -153,8 +153,8 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             BoundLabelScanOp scan;
             scan.variable = start_var;
             scan.column_index = start_col;
-            scan.label_id = start_labels[0];
-            scan.label_name = element.node.labels[0];
+            scan.label_ids = start_labels;
+            scan.label_names = element.node.labels;
             current = scan;
         } else {
             BoundScanOp scan;

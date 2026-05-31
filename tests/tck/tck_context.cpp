@@ -26,11 +26,7 @@ bool hasUnsupportedPattern(const ast::PatternPart& pp, bool is_create = false) {
     // Check path pattern: node + chain
     const ast::PatternElement& el = pp.element;
 
-    // Check start node: multi-label? (allowed in CREATE)
-    if (!is_create && el.node.labels.size() > 1) {
-        spdlog::info("[TCK] skipping: multi-label node pattern");
-        return true;
-    }
+    // Multi-label nodes are now supported in both CREATE and MATCH
     if (el.node.properties.has_value()) {
         for (const auto& [k, v] : el.node.properties->entries) {
             if (hasUnsupportedExpr(v))
@@ -40,11 +36,7 @@ bool hasUnsupportedPattern(const ast::PatternPart& pp, bool is_create = false) {
 
     // Check each chain step: (rel, node)
     for (const auto& [rel, node] : el.chain) {
-        // Multi-label node? (allowed in CREATE)
-        if (!is_create && node.labels.size() > 1) {
-            spdlog::info("[TCK] skipping: multi-label node pattern");
-            return true;
-        }
+        // Multi-label nodes are now supported in both CREATE and MATCH
         // Relationship type alternation? [:A|B]
         if (rel.rel_types.size() > 1) {
             spdlog::info("[TCK] skipping: relationship type alternation");
