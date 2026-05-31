@@ -243,8 +243,8 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | ~~P2~~ | ~~布尔类型检查~~ | ~~~48~~ | ✅ 已实现：AND/OR/XOR/NOT 在 Binder 阶段检查操作数类型为非布尔时报告 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播；XOR 从 AST skip 列表移除 |
 | **P2** | 结果不匹配 | ~956 | 逐一分析（NULL 语义、排序、精度） |
 | **P3** | Parser 限制 | ~250 | Parser 增强 |
-| **P3** | Boolean null 传播 | ~12 | UNWIND + NULL 变量在复合布尔表达式中的传播问题 |
-| **P3** | NOT 非布尔字面量 | ~9 | `NOT []` / `NOT {}` 等个别字面量被 AST skip 拦截 |
+| ~~P3~~ | ~~Boolean null 传播~~ | ~~~12~~ | ✅ 非缺陷：`null AND false→false`、`null OR true→true` 等 null 传播规则已正确实现（含 UNWIND 场景） |
+| ~~P3~~ | ~~NOT 非布尔字面量~~ | ~~~9~~ | ✅ 非缺陷：Parser 正确解析 `NOT []` / `NOT {}`，AST skip 不拦截，Binder 正确报 `InvalidArgumentType`（openCypher 规范要求报错） |
 | **P3** | 缺失步骤定义 | 71 | 补实现步骤（远期） |
 | **P3** | 多标签节点 | 25 | 多标签创建/匹配 |
 

@@ -5336,3 +5336,80 @@ TEST_F(QueryExecutorTest, TemporalPropertyRoundtripLabeledFieldAccess) {
         EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 2024);
     }
 }
+
+// ==================== NOT with non-boolean literals ====================
+
+TEST_F(QueryExecutorTest, NotWithEmptyList) {
+    auto result = execSync(*executor_, "RETURN NOT []");
+    EXPECT_FALSE(result.error.empty()) << "NOT [] should raise an error";
+    EXPECT_NE(result.error.find("InvalidArgumentType"), std::string::npos)
+        << "Expected InvalidArgumentType, got: " << result.error;
+}
+
+TEST_F(QueryExecutorTest, NotWithEmptyMap) {
+    auto result = execSync(*executor_, "RETURN NOT {}");
+    EXPECT_FALSE(result.error.empty()) << "NOT {} should raise an error";
+}
+
+TEST_F(QueryExecutorTest, NotWithIntLiteral) {
+    auto result = execSync(*executor_, "RETURN NOT 42");
+    EXPECT_FALSE(result.error.empty()) << "NOT 42 should raise an error";
+}
+
+TEST_F(QueryExecutorTest, NotWithStringLiteral) {
+    auto result = execSync(*executor_, "RETURN NOT 'hello'");
+    EXPECT_FALSE(result.error.empty()) << "NOT 'hello' should raise an error";
+}
+
+// ==================== Boolean null propagation ====================
+
+TEST_F(QueryExecutorTest, NullAndFalseIsFalse) {
+    // null AND false → false (not null)
+    auto result = execSync(*executor_, "RETURN null AND false");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[0][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[0][0]), false);
+}
+
+TEST_F(QueryExecutorTest, NullOrTrueIsTrue) {
+    // null OR true → true (not null)
+    auto result = execSync(*executor_, "RETURN null OR true");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[0][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[0][0]), true);
+}
+
+TEST_F(QueryExecutorTest, NullAndTrueIsNull) {
+    // null AND true → null
+    auto result = execSync(*executor_, "RETURN null AND true");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[0][0]))
+        << "null AND true should be null, got variant " << result.rows[0][0].index();
+}
+
+TEST_F(QueryExecutorTest, UnwindNullWithBooleanExpr) {
+    // UNWIND [null, false] AS x RETURN x AND true
+    auto result = execSync(*executor_, "UNWIND [null, false] AS x RETURN x AND true");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    // First row: null AND true → null
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[0][0]));
+    // Second row: false AND true → false
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[1][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[1][0]), false);
+}
+
+TEST_F(QueryExecutorTest, UnwindNullWithBooleanOr) {
+    // UNWIND [null, true] AS x RETURN x OR false
+    auto result = execSync(*executor_, "UNWIND [null, true] AS x RETURN x OR false");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    // First row: null OR false → null
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[0][0]));
+    // Second row: true OR false → true
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[1][0]));
+    EXPECT_EQ(std::get<bool>(result.rows[1][0]), true);
+}
