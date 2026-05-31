@@ -456,6 +456,22 @@ inline std::string expressionToString(const Expression& expr) {
                 if (std::holds_alternative<bool>(ptr->value))
                     return std::get<bool>(ptr->value) ? "true" : "false";
                 return "null";
+            } else if constexpr (std::is_same_v<OpType, BinaryOp>) {
+                static const char* binOpNames[] = {"+",        "-",  "*",   "/",  "%",   "^",           "=",
+                                                   "<>",       "<",  ">",   "<=", ">=",  "STARTS WITH", "ENDS WITH",
+                                                   "CONTAINS", "IN", "AND", "OR", "XOR", "||"};
+                const char* opStr = static_cast<size_t>(ptr->op) < sizeof(binOpNames) / sizeof(binOpNames[0])
+                                        ? binOpNames[static_cast<size_t>(ptr->op)]
+                                        : "?";
+                return expressionToString(ptr->left) + " " + opStr + " " + expressionToString(ptr->right);
+            } else if constexpr (std::is_same_v<OpType, UnaryOp>) {
+                static const char* unaryOpNames[] = {"NOT ", "-", "+", "IS NULL", "IS NOT NULL"};
+                const char* opStr = static_cast<size_t>(ptr->op) < sizeof(unaryOpNames) / sizeof(unaryOpNames[0])
+                                        ? unaryOpNames[static_cast<size_t>(ptr->op)]
+                                        : "?";
+                if (ptr->op == UnaryOperator::IS_NULL || ptr->op == UnaryOperator::IS_NOT_NULL)
+                    return expressionToString(ptr->operand) + " " + opStr;
+                return opStr + expressionToString(ptr->operand);
             } else if constexpr (std::is_same_v<OpType, FunctionCall>) {
                 std::string r = ptr->name + "(";
                 for (size_t i = 0; i < ptr->args.size(); i++) {

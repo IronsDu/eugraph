@@ -39,7 +39,8 @@ static constexpr GraphTxnHandle INVALID_GRAPH_TXN = nullptr;
 // ==================== Property Value Type ====================
 using PropertyValue =
     std::variant<std::monostate, bool, int64_t, double, std::string, std::vector<int64_t>, std::vector<double>,
-                 std::vector<std::string>, DateTimeValue, TimeValue, DurationValue>;
+                 std::vector<std::string>, DateTimeValue, TimeValue, DurationValue, std::vector<DateTimeValue>,
+                 std::vector<TimeValue>, std::vector<DurationValue>>;
 
 // Properties indexed by prop_id
 using Properties = std::vector<std::optional<PropertyValue>>;
@@ -79,6 +80,9 @@ enum class PropertyType {
     DATETIME,
     TIME,
     DURATION,
+    DATETIME_ARRAY,
+    TIME_ARRAY,
+    DURATION_ARRAY,
     ANY
 };
 
@@ -105,6 +109,36 @@ inline PropertyType temporalKindToPropertyType(TimeKind kind) {
 
 inline PropertyType temporalKindToPropertyType(const DurationValue&) {
     return PropertyType::DURATION;
+}
+
+inline PropertyType propertyValueToPropertyType(const PropertyValue& pv) {
+    if (std::holds_alternative<bool>(pv))
+        return PropertyType::BOOL;
+    if (std::holds_alternative<int64_t>(pv))
+        return PropertyType::INT64;
+    if (std::holds_alternative<double>(pv))
+        return PropertyType::DOUBLE;
+    if (std::holds_alternative<std::string>(pv))
+        return PropertyType::STRING;
+    if (std::holds_alternative<DateTimeValue>(pv))
+        return PropertyType::DATETIME;
+    if (std::holds_alternative<TimeValue>(pv))
+        return PropertyType::TIME;
+    if (std::holds_alternative<DurationValue>(pv))
+        return PropertyType::DURATION;
+    if (std::holds_alternative<std::vector<int64_t>>(pv))
+        return PropertyType::INT64_ARRAY;
+    if (std::holds_alternative<std::vector<double>>(pv))
+        return PropertyType::DOUBLE_ARRAY;
+    if (std::holds_alternative<std::vector<std::string>>(pv))
+        return PropertyType::STRING_ARRAY;
+    if (std::holds_alternative<std::vector<DateTimeValue>>(pv))
+        return PropertyType::DATETIME_ARRAY;
+    if (std::holds_alternative<std::vector<TimeValue>>(pv))
+        return PropertyType::TIME_ARRAY;
+    if (std::holds_alternative<std::vector<DurationValue>>(pv))
+        return PropertyType::DURATION_ARRAY;
+    return PropertyType::ANY;
 }
 
 // Internal label name for unlabeled nodes (never user-visible)

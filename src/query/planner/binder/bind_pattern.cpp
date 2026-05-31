@@ -92,6 +92,12 @@ BoundType Binder::propertyTypeToBoundType(PropertyType pt) {
     case PropertyType::DOUBLE_ARRAY:
     case PropertyType::STRING_ARRAY:
         return BoundType::List(BoundType::Any()); // Simplified
+    case PropertyType::DATETIME_ARRAY:
+        return BoundType::List(BoundType::DateTime());
+    case PropertyType::TIME_ARRAY:
+        return BoundType::List(BoundType::Time());
+    case PropertyType::DURATION_ARRAY:
+        return BoundType::List(BoundType::Duration());
     default:
         return BoundType::Any();
     }

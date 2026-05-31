@@ -167,6 +167,21 @@ inline Value propertyValueToRuntimeValue(const PropertyValue& pv) {
                 return Value(v);
             } else if constexpr (std::is_same_v<T, DurationValue>) {
                 return Value(v);
+            } else if constexpr (std::is_same_v<T, std::vector<DateTimeValue>>) {
+                ListValue lv;
+                for (const auto& elem : v)
+                    lv.elements.push_back(ValueStorage{Value(elem)});
+                return Value(std::move(lv));
+            } else if constexpr (std::is_same_v<T, std::vector<TimeValue>>) {
+                ListValue lv;
+                for (const auto& elem : v)
+                    lv.elements.push_back(ValueStorage{Value(elem)});
+                return Value(std::move(lv));
+            } else if constexpr (std::is_same_v<T, std::vector<DurationValue>>) {
+                ListValue lv;
+                for (const auto& elem : v)
+                    lv.elements.push_back(ValueStorage{Value(elem)});
+                return Value(std::move(lv));
             }
         },
         pv);

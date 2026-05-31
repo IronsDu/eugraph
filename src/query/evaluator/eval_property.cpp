@@ -121,6 +121,24 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 lv.elements.push_back(ValueStorage{Value(std::move(s))});
             return Value(std::move(lv));
         }
+        if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
+            ListValue lv;
+            for (const auto& v : std::get<std::vector<DateTimeValue>>(pv))
+                lv.elements.push_back(ValueStorage{Value(v)});
+            return Value(std::move(lv));
+        }
+        if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
+            ListValue lv;
+            for (const auto& v : std::get<std::vector<TimeValue>>(pv))
+                lv.elements.push_back(ValueStorage{Value(v)});
+            return Value(std::move(lv));
+        }
+        if (std::holds_alternative<std::vector<DurationValue>>(pv)) {
+            ListValue lv;
+            for (const auto& v : std::get<std::vector<DurationValue>>(pv))
+                lv.elements.push_back(ValueStorage{Value(v)});
+            return Value(std::move(lv));
+        }
         return Value{};
     };
 
