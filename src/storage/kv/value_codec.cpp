@@ -93,6 +93,44 @@ std::string ValueCodec::encode(const PropertyValue& value) {
                     appendU32(result, static_cast<uint32_t>(s.size()));
                     result.append(s);
                 }
+            } else if constexpr (std::is_same_v<T, std::vector<DateTimeValue>>) {
+                result.push_back(static_cast<char>(TAG_DATETIME_ARRAY));
+                appendU32(result, static_cast<uint32_t>(arg.size()));
+                for (const auto& tv : arg) {
+                    result.push_back(static_cast<uint8_t>(tv.kind));
+                    appendU64(result, static_cast<uint64_t>(tv.year));
+                    appendU64(result, static_cast<uint64_t>(tv.month));
+                    appendU64(result, static_cast<uint64_t>(tv.day));
+                    appendU64(result, static_cast<uint64_t>(tv.hour));
+                    appendU64(result, static_cast<uint64_t>(tv.minute));
+                    appendU64(result, static_cast<uint64_t>(tv.second));
+                    appendU64(result, static_cast<uint64_t>(tv.nanos));
+                    appendU32(result, static_cast<uint32_t>(tv.tz_offset_sec));
+                    appendU16(result, static_cast<uint16_t>(tv.tz_name.size()));
+                    result.append(tv.tz_name);
+                }
+            } else if constexpr (std::is_same_v<T, std::vector<TimeValue>>) {
+                result.push_back(static_cast<char>(TAG_TIME_ARRAY));
+                appendU32(result, static_cast<uint32_t>(arg.size()));
+                for (const auto& tv : arg) {
+                    result.push_back(static_cast<uint8_t>(tv.kind));
+                    appendU64(result, static_cast<uint64_t>(tv.hour));
+                    appendU64(result, static_cast<uint64_t>(tv.minute));
+                    appendU64(result, static_cast<uint64_t>(tv.second));
+                    appendU64(result, static_cast<uint64_t>(tv.nanos));
+                    appendU32(result, static_cast<uint32_t>(tv.tz_offset_sec));
+                    appendU16(result, static_cast<uint16_t>(tv.tz_name.size()));
+                    result.append(tv.tz_name);
+                }
+            } else if constexpr (std::is_same_v<T, std::vector<DurationValue>>) {
+                result.push_back(static_cast<char>(TAG_DURATION_ARRAY));
+                appendU32(result, static_cast<uint32_t>(arg.size()));
+                for (const auto& dv : arg) {
+                    appendU64(result, static_cast<uint64_t>(dv.months));
+                    appendU64(result, static_cast<uint64_t>(dv.days));
+                    appendU64(result, static_cast<uint64_t>(dv.seconds));
+                    appendU64(result, static_cast<uint64_t>(dv.nanos));
+                }
             } else if constexpr (std::is_same_v<T, DateTimeValue>) {
                 result.push_back(static_cast<char>(TAG_DATETIME));
                 result.push_back(static_cast<uint8_t>(arg.kind));
@@ -224,6 +262,55 @@ PropertyValue ValueCodec::decode(std::string_view data) {
         tv.seconds = static_cast<int64_t>(readU64(data, off));
         tv.nanos = static_cast<int64_t>(readU64(data, off));
         return tv;
+    }
+
+    case TAG_DATETIME_ARRAY: {
+        uint32_t count = readU32(data, off);
+        std::vector<DateTimeValue> arr(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            arr[i].kind = static_cast<DateTimeKind>(static_cast<uint8_t>(data[off++]));
+            arr[i].year = static_cast<int64_t>(readU64(data, off));
+            arr[i].month = static_cast<int64_t>(readU64(data, off));
+            arr[i].day = static_cast<int64_t>(readU64(data, off));
+            arr[i].hour = static_cast<int64_t>(readU64(data, off));
+            arr[i].minute = static_cast<int64_t>(readU64(data, off));
+            arr[i].second = static_cast<int64_t>(readU64(data, off));
+            arr[i].nanos = static_cast<int64_t>(readU64(data, off));
+            arr[i].tz_offset_sec = static_cast<int32_t>(readU32(data, off));
+            uint16_t tz_len = readU16(data, off);
+            arr[i].tz_name = std::string(data.substr(off, tz_len));
+            off += tz_len;
+        }
+        return arr;
+    }
+
+    case TAG_TIME_ARRAY: {
+        uint32_t count = readU32(data, off);
+        std::vector<TimeValue> arr(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            arr[i].kind = static_cast<TimeKind>(static_cast<uint8_t>(data[off++]));
+            arr[i].hour = static_cast<int64_t>(readU64(data, off));
+            arr[i].minute = static_cast<int64_t>(readU64(data, off));
+            arr[i].second = static_cast<int64_t>(readU64(data, off));
+            arr[i].nanos = static_cast<int64_t>(readU64(data, off));
+            arr[i].tz_offset_sec = static_cast<int32_t>(readU32(data, off));
+            uint16_t tz_len = readU16(data, off);
+            arr[i].tz_name = std::string(data.substr(off, tz_len));
+            off += tz_len;
+        }
+        return arr;
+    }
+
+    case TAG_DURATION_ARRAY: {
+        uint32_t count = readU32(data, off);
+        std::vector<DurationValue> arr(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            arr[i].months = static_cast<int64_t>(readU64(data, off));
+            arr[i].days = static_cast<int64_t>(readU64(data, off));
+            arr[i].seconds = static_cast<int64_t>(readU64(data, off));
+            arr[i].nanos = static_cast<int64_t>(readU64(data, off));
+        }
+        return arr;
     }
 
     default:

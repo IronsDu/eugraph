@@ -207,6 +207,7 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
     bool use_week = hasMapKey(mv, "week");
     bool use_ordinal = hasMapKey(mv, "ordinalDay");
     bool use_quarter = hasMapKey(mv, "quarter");
+    bool has_week_year = hasMapKey(mv, "weekYear");
 
     if (use_week) {
         int64_t wk = intFromMap(mv, "week", 1);
@@ -220,7 +221,12 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
         } else {
             dow = 1; // default Monday
         }
-        isoWeekToDate(year, wk, dow, year, month, day);
+        // weekYear overrides the calendar year for ISO week date calculation
+        // Explicit 'year' key takes precedence over 'weekYear' per Cypher spec
+        int64_t iso_year = year;
+        if (!explicit_year && has_week_year)
+            iso_year = intFromMap(mv, "weekYear", 1970);
+        isoWeekToDate(iso_year, wk, dow, year, month, day);
     } else if (use_ordinal) {
         int64_t ord = intFromMap(mv, "ordinalDay", 1);
         ordinalToDate(year, ord, month, day);
@@ -1453,7 +1459,9 @@ TimeValue temporalTruncateTime(const TimeValue& tv, const std::string& unit, con
 
     bool trunc_hour = false, trunc_min = false, trunc_sec = false, trunc_nanos = false;
 
-    if (unit == "hour") {
+    if (unit == "day") {
+        trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
+    } else if (unit == "hour") {
         trunc_min = trunc_sec = trunc_nanos = true;
     } else if (unit == "minute") {
         trunc_sec = trunc_nanos = true;
@@ -1702,8 +1710,13 @@ inline Value durationInMonthsScalarFn(const std::vector<Value>& args, const Eval
 
     if (std::holds_alternative<DateTimeValue>(args[0]) && std::holds_alternative<DateTimeValue>(args[1])) {
         auto dur = durationBetween(std::get<DateTimeValue>(args[0]), std::get<DateTimeValue>(args[1]));
-        dur.months += dur.days / 30;
-        dur.days = dur.days % 30;
+        // Normalize days and seconds into months: duration.inMonths returns months only
+        int64_t total_days = dur.days;
+        total_days += dur.seconds / 86400;
+        dur.months += total_days / 30;
+        dur.days = 0;
+        dur.seconds = 0;
+        dur.nanos = 0;
         return Value{dur};
     }
 
@@ -1746,8 +1759,13 @@ inline void durationInMonthsBatchFn(const std::vector<const Column*>& args, Colu
         Value a = col_a.getValue(i), b = col_b.getValue(i);
         if (std::holds_alternative<DateTimeValue>(a) && std::holds_alternative<DateTimeValue>(b)) {
             auto dur = durationBetween(std::get<DateTimeValue>(a), std::get<DateTimeValue>(b));
-            dur.months += dur.days / 30;
-            dur.days = dur.days % 30;
+            // Normalize days and seconds into months: duration.inMonths returns months only
+            int64_t total_days = dur.days;
+            total_days += dur.seconds / 86400;
+            dur.months += total_days / 30;
+            dur.days = 0;
+            dur.seconds = 0;
+            dur.nanos = 0;
             result.setValue(i, Value{dur});
         } else {
             auto toTime = [](const Value& v) -> std::optional<TimeValue> {

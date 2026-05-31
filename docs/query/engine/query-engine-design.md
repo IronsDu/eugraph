@@ -543,6 +543,11 @@ using Schema = vector<string>;   // 列名列表
 - **WITH 后 MATCH 独立变量（已支持）**：`MATCH ... WITH ... MATCH (newVar) RETURN ...` 通过 `BoundBinaryJoinOp`（JoinType::Cross）+ `CrossProductPhysicalOp` 实现笛卡尔积语义。右孩子可以是任意算子链（Scan → Filter → Expand）。
 - **WITH 后 MATCH 混合模式（部分支持）**：`MATCH (x:X), (a)-->(b)` 中同时包含独立扫描和关联扩展的模式暂不支持。
 - **WITH 作为首个子句（已支持）**：`WITH 1 AS x RETURN x` 通过 `BoundSingletonOp` 提供单行空数据源。
+- **数组属性存储不完整**：`CREATE ({prop: [1,2,3]})` 或 `SET n.prop = [...]` 中，列表值经 evaluator 求值后未能正确转换写入 `PropertyValue`（影响所有数组类型：int64/double/string/temporal）。单值属性（标量+时间类型）存储正确。根因在 `valueToPropertyValue` 的 ListValue→PropertyValue 转换链中，`CreateNodePhysicalOp` / `SetPhysicalOp` 执行管道的列类型传递存在问题。时间数组的编解码基础设施（ValueCodec TAG 0x0B-0x0D、PropertyValue variant 扩展）已就位。
+- **PropertyValue variant 索引依赖**：时间数组类型追加在 variant 末尾（索引 11-13），以保持向后兼容（`MetadataCodec::encodePropertyValue` 使用 `value.index()` 作为序列化标签）。向 variant 中间插入新类型会破坏已有数据的可读性。长期应改为显式标签编码。
+- **MetadataCodec 时间数组编码缺失**：`encodePropertyValue` 的 `std::visit` 未处理时间数组变体类型——会写入索引标签但无数据载荷（静默丢失）。该路径仅用于 DDL 默认属性值，运行时数据走 `ValueCodec`。
+- **valueToPropertyValue 列表转换假设同构**：通过首个元素类型判断整个列表类型，混合类型列表（如 `[1, 'a']`）静默返回空 PropertyValue。
+- **Thrift PropertyType 未扩展时间数组**：`thrift::PropertyType` 枚举尚无 `DATETIME_ARRAY` / `TIME_ARRAY` / `DURATION_ARRAY`，`fromPropertyType` 暂映射为 `STRING`。需同步更新 `proto/eugraph.thrift` 并重新生成代码。
 
 ### 待实现
 

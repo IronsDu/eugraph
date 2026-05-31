@@ -30,6 +30,55 @@ eugraph::PropertyValue valueToPropertyValue(const eugraph::Value& v) {
         return std::get<eugraph::TimeValue>(v);
     if (std::holds_alternative<eugraph::DurationValue>(v))
         return std::get<eugraph::DurationValue>(v);
+    if (std::holds_alternative<eugraph::ListValue>(v)) {
+        const auto& lv = std::get<eugraph::ListValue>(v);
+        if (lv.elements.empty())
+            return eugraph::PropertyValue{};
+        const auto& first = lv.elements[0].value;
+        if (std::holds_alternative<int64_t>(first)) {
+            std::vector<int64_t> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<int64_t>(e.value))
+                    arr.push_back(std::get<int64_t>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        } else if (std::holds_alternative<double>(first)) {
+            std::vector<double> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<double>(e.value))
+                    arr.push_back(std::get<double>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        } else if (std::holds_alternative<std::string>(first)) {
+            std::vector<std::string> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<std::string>(e.value))
+                    arr.push_back(std::get<std::string>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        } else if (std::holds_alternative<eugraph::DateTimeValue>(first)) {
+            std::vector<eugraph::DateTimeValue> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<eugraph::DateTimeValue>(e.value))
+                    arr.push_back(std::get<eugraph::DateTimeValue>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        } else if (std::holds_alternative<eugraph::TimeValue>(first)) {
+            std::vector<eugraph::TimeValue> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<eugraph::TimeValue>(e.value))
+                    arr.push_back(std::get<eugraph::TimeValue>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        } else if (std::holds_alternative<eugraph::DurationValue>(first)) {
+            std::vector<eugraph::DurationValue> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<eugraph::DurationValue>(e.value))
+                    arr.push_back(std::get<eugraph::DurationValue>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        }
+    }
     return eugraph::PropertyValue{};
 }
 

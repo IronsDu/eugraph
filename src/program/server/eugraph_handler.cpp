@@ -99,6 +99,10 @@ thrift::PropertyType EuGraphHandler::fromPropertyType(::eugraph::PropertyType t)
         return thrift::PropertyType::DOUBLE_ARRAY;
     case ::eugraph::PropertyType::STRING_ARRAY:
         return thrift::PropertyType::STRING_ARRAY;
+    case ::eugraph::PropertyType::DATETIME_ARRAY:
+    case ::eugraph::PropertyType::TIME_ARRAY:
+    case ::eugraph::PropertyType::DURATION_ARRAY:
+        return thrift::PropertyType::STRING; // Thrift not yet extended for temporal arrays
     }
     return thrift::PropertyType::STRING;
 }
@@ -214,6 +218,42 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
             if (!first)
                 oss << ',';
             oss << '"' << s << '"';
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<DateTimeValue>(pv)) {
+        oss << '"' << temporalToString(std::get<DateTimeValue>(pv)) << '"';
+    } else if (std::holds_alternative<TimeValue>(pv)) {
+        oss << '"' << temporalToString(std::get<TimeValue>(pv)) << '"';
+    } else if (std::holds_alternative<DurationValue>(pv)) {
+        oss << '"' << temporalToString(std::get<DurationValue>(pv)) << '"';
+    } else if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<DateTimeValue>>(pv)) {
+            if (!first)
+                oss << ',';
+            oss << '"' << temporalToString(x) << '"';
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<TimeValue>>(pv)) {
+            if (!first)
+                oss << ',';
+            oss << '"' << temporalToString(x) << '"';
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<DurationValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<DurationValue>>(pv)) {
+            if (!first)
+                oss << ',';
+            oss << '"' << temporalToString(x) << '"';
             first = false;
         }
         oss << ']';

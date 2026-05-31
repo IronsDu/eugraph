@@ -24,6 +24,9 @@ namespace eugraph {
 //   0x08: DateTimeValue          - 1 byte kind + all date/time fields as fixed-width BE
 //   0x09: TimeValue              - 1 byte kind + time fields as fixed-width BE
 //   0x0A: DurationValue          - 4 × int64 fields as fixed-width BE
+//   0x0B: vector<DateTimeValue>  - 4 bytes count + N*DateTimeValue(no tag)
+//   0x0C: vector<TimeValue>      - 4 bytes count + N*TimeValue(no tag)
+//   0x0D: vector<DurationValue>  - 4 bytes count + N*DurationValue(no tag)
 
 class ValueCodec {
 public:
@@ -52,6 +55,9 @@ private:
     static constexpr uint8_t TAG_DATETIME = 0x08;
     static constexpr uint8_t TAG_TIME = 0x09;
     static constexpr uint8_t TAG_DURATION = 0x0A;
+    static constexpr uint8_t TAG_DATETIME_ARRAY = 0x0B;
+    static constexpr uint8_t TAG_TIME_ARRAY = 0x0C;
+    static constexpr uint8_t TAG_DURATION_ARRAY = 0x0D;
 };
 
 } // namespace eugraph

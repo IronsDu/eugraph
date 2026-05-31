@@ -564,6 +564,10 @@ DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b) {
 
     int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos;
     int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos;
+    if (a.kind == DateTimeKind::DATETIME)
+        a_ns -= static_cast<int64_t>(a.tz_offset_sec) * 1'000'000'000LL;
+    if (b.kind == DateTimeKind::DATETIME)
+        b_ns -= static_cast<int64_t>(b.tz_offset_sec) * 1'000'000'000LL;
     int64_t time_diff = b_ns - a_ns;
 
     if (result.months == 0) {

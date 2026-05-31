@@ -1,7 +1,7 @@
 # TCK 测试结果分类报告
 
 **日期**: 2026-05-31 (更新)
-**分支**: feature/union-clause
+**分支**: fix/temporal-tck-issues
 **总计**: 3897 场景, 16006 步骤
 **运行耗时**: ~11 分
 **检测方式**: Parser AST 遍历 + Binder 类型检查 + 运行时断言
@@ -10,8 +10,8 @@
 
 | 指标 | 修复前 | 修复后 |
 |------|--------|--------|
-| Temporal 场景通过 | 443/1004 (44.1%) | 543/1004 (54.1%) |
-| Temporal 步骤通过 | 2928/4086 (71.7%) | 3128/4086 (76.6%) |
+| Temporal 场景通过 | 543/1004 (54.1%) | 582/1004 (58.0%) |
+| Temporal 步骤通过 | 3128/4086 (76.6%) | 3206/4086 (78.5%) |
 
 ---
 
@@ -19,11 +19,11 @@
 
 | 状态 | 数量 | 说明 |
 |------|------|------|
-| 步骤通过 | 11411 / 16006 | 71.3% |
-| 步骤跳过 | 2040 | 前置步骤失败 |
+| 步骤通过 | 11833 / 16006 | 73.9% |
+| 步骤跳过 | 1832 | 前置步骤失败 |
 | 未定义步骤 | 71 | 缺少 step 定义 |
-| 步骤失败 | 2484 | 断言失败或查询错误 |
-| 场景通过 | ~1342 | ~34.5% |
+| 步骤失败 | 2270 | 断言失败或查询错误 |
+| 场景通过 | ~1556 | ~39.9% |
 
 ---
 
@@ -218,6 +218,12 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | coalesce / trim / ltrim / rtrim / split / replace / substring / left / right | 字符串函数 |
 | range / toInteger / toFloat / toString / head / last / reverse / size | 标量函数 |
 | UNION / UNION ALL | 查询合并（去重/不去重），列名校验，混用检测 |
+| BinaryOp/UnaryOp 表达式列名 | `x > d` 等比较表达式正确输出列名（不再为 `?`） |
+| 时间 truncate 'day' 精度 | `time.truncate('day', ...)` / `localtime.truncate('day', ...)` |
+| durationBetween 时区修正 | `datetime` 带时区偏移时正确计算时间差 |
+| week 构造函数 weekYear | `date({weekYear:..., week:..., dayOfWeek:...})` |
+| 时间属性类型保留 | `CREATE` 时从 BoundExpression 推断 PropertyType（DATETIME/TIME/DURATION） |
+| PropertyValue 时间数组类型 | variant 添加 `vector<DateTimeValue/TimeValue/DurationValue>` + ValueCodec 编解码（Thrift 枚举待扩展） |
 | 顶点序列化格式 (id + label + props) | TCK 期望格式 |
 
 ---
@@ -243,7 +249,10 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 
 ## 已知限制（通用）
 
+- **数组属性存储不完整**：`CREATE ({prop: [1,2,3]})` 中列表属性未被正确写入（各类型均受影响，含时间数组）。时间数组的编解码基础设施已就位，剩余问题在 `CreateNodePhysicalOp` / `SetPhysicalOp` 的 evaluator→PropertyValue 转换管道。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
+- **Thrift PropertyType 未扩展时间数组**：`thrift::PropertyType` 枚举尚无 `DATETIME_ARRAY` / `TIME_ARRAY` / `DURATION_ARRAY`，`fromPropertyType` 暂映射为 `STRING`。需同步更新 `proto/eugraph.thrift` 并重新生成代码。
 - **`properties(Edge)` + 普通 Expand**: `(a)-[r:TYPE]->(b)` 中 `ExpandPhysicalOp` 不加载边属性，`properties(r)` 返回空 map。变长路径的边属性加载已支持。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
 - ~~**PropertyValue 不支持 TemporalValue**~~：✅ 已修复，TemporalValue 拆分为 DateTimeValue/TimeValue/DurationValue 三种类型。
 - ~~**紧凑 STRING 格式**~~：✅ 已修复，无分隔符格式已实现。
 - ~~**DOUBLE 截断**~~：✅ 已修复，mul/div Duration 支持 double 因子。
+- **命名时区不支持**：`datetime('2017-...T23:00+02:00[Europe/Stockholm]')` 中命名时区仅存储名称，不解析为实际偏移量（DST 感知）。需引入 IANA 时区数据库。

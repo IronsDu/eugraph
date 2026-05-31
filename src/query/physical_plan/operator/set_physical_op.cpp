@@ -27,6 +27,55 @@ PropertyValue valueToPropertyValue(const Value& v) {
         return PropertyValue(std::get<TimeValue>(v));
     if (std::holds_alternative<DurationValue>(v))
         return PropertyValue(std::get<DurationValue>(v));
+    if (std::holds_alternative<ListValue>(v)) {
+        const auto& lv = std::get<ListValue>(v);
+        if (lv.elements.empty())
+            return PropertyValue{};
+        const auto& first = lv.elements[0].value;
+        if (std::holds_alternative<int64_t>(first)) {
+            std::vector<int64_t> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<int64_t>(e.value))
+                    arr.push_back(std::get<int64_t>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        } else if (std::holds_alternative<double>(first)) {
+            std::vector<double> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<double>(e.value))
+                    arr.push_back(std::get<double>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        } else if (std::holds_alternative<std::string>(first)) {
+            std::vector<std::string> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<std::string>(e.value))
+                    arr.push_back(std::get<std::string>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        } else if (std::holds_alternative<DateTimeValue>(first)) {
+            std::vector<DateTimeValue> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<DateTimeValue>(e.value))
+                    arr.push_back(std::get<DateTimeValue>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        } else if (std::holds_alternative<TimeValue>(first)) {
+            std::vector<TimeValue> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<TimeValue>(e.value))
+                    arr.push_back(std::get<TimeValue>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        } else if (std::holds_alternative<DurationValue>(first)) {
+            std::vector<DurationValue> arr;
+            for (const auto& e : lv.elements)
+                if (std::holds_alternative<DurationValue>(e.value))
+                    arr.push_back(std::get<DurationValue>(e.value));
+            if (arr.size() == lv.elements.size())
+                return arr;
+        }
+    }
     return PropertyValue{};
 }
 
@@ -114,8 +163,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         } else if (matches.empty()) {
                             // No match in actual labels: write to __anon__ via lightweight allocation
                             if (anon_label_id_ != INVALID_LABEL_ID) {
-                                uint16_t anon_pid =
-                                    co_await meta_.getOrCreateAnonPropId(item.prop_name, PropertyType::ANY);
+                                uint16_t anon_pid = co_await meta_.getOrCreateAnonPropId(
+                                    item.prop_name, propertyValueToPropertyType(pv));
                                 co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, pv);
                             }
                         } else {
