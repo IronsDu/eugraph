@@ -23,7 +23,7 @@ std::string convertVertexJson(const std::string& json) {
         }
         std::vector<std::pair<std::string, std::string>> props;
         for (auto& [key, value] : j.items()) {
-            if (key == "id" || key == "label")
+            if (key == "id" || key == "label" || key == "labels")
                 continue;
             std::string formattedVal;
             if (value.is_string()) {
