@@ -93,7 +93,7 @@ TEST_F(VertexSerializationTest, IncludesLabelName) {
     ASSERT_EQ(result.getType(), thrift::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
-    EXPECT_NE(json.find("\"label\":\"User\""), std::string::npos) << "JSON should contain label name, got: " << json;
+    EXPECT_NE(json.find("\"labels\":[\"User\"]"), std::string::npos) << "JSON should contain label name, got: " << json;
 }
 
 TEST_F(VertexSerializationTest, SerializesProperties) {
