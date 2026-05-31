@@ -1,4 +1,4 @@
-# TCK 测试结果分类报告
+#TCK 测试结果分类报告
 
 **日期**: 2026-05-31 (更新)
 **分支**: fix/tck-remaining-defects
@@ -244,18 +244,35 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | **P2** | 结果不匹配 | ~956 | 逐一分析（NULL 语义、排序、精度） |
 | **P3** | Parser 限制 | ~250 | Parser 增强 |
 | ~~P3~~ | ~~Boolean null 传播~~ | ~~~12~~ | ✅ 非缺陷：`null AND false→false`、`null OR true→true` 等 null 传播规则已正确实现（含 UNWIND 场景） |
-| ~~P3~~ | ~~NOT 非布尔字面量~~ | ~~~9~~ | ✅ 非缺陷：Parser 正确解析 `NOT []` / `NOT {}`，AST skip 不拦截，Binder 正确报 `InvalidArgumentType`（openCypher 规范要求报错） |
-| **P3** | 缺失步骤定义 | 71 | 补实现步骤（远期） |
-| **P3** | 多标签节点 | 25 | 多标签创建/匹配 |
+| ~~P3~~ | ~~NOT 非布尔字面量~~ | ~~~9~~ | ✅ 非缺陷：Parser 正确解析 `NOT []` / `NOT {}
+`，AST skip 不拦截，Binder 正确报 `InvalidArgumentType`（openCypher 规范要求报错） | | **P3** | 缺失步骤定义 | 71 |
+    补实现步骤（远期） | | ~~P3 ~~| ~~多标签节点 ~~|
+    ~~~25 ~~| ✅ 已实现：`MATCH(n:A : B)` 扫描首标签 + getVertexLabels 运行时过滤其余标签 |
 
----
+    -- -
 
-## 已知限制（通用）
+        ##已知限制（通用）
 
-- **数组属性存储不完整**：`CREATE ({prop: [1,2,3]})` 中列表属性未被正确写入（各类型均受影响，含时间数组）。时间数组的编解码基础设施已就位，剩余问题在 `CreateNodePhysicalOp` / `SetPhysicalOp` 的 evaluator→PropertyValue 转换管道。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
-- ~~**Thrift PropertyType 未扩展时间数组**~~：✅ 已修复。`proto/eugraph.thrift` `PropertyType` 枚举新增 `DATETIME_ARRAY=11` / `TIME_ARRAY=12` / `DURATION_ARRAY=13`；`PropertyValueThrift` union 新增对应数组字段；handler 的 `propertyTypeToThrift` 和 `thriftToPropertyValue` 完整支持时间数组转换。
-- **`properties(Edge)` + 普通 Expand**: `(a)-[r:TYPE]->(b)` 中 `ExpandPhysicalOp` 不加载边属性，`properties(r)` 返回空 map。变长路径的边属性加载已支持。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
-- ~~**PropertyValue 不支持 TemporalValue**~~：✅ 已修复，TemporalValue 拆分为 DateTimeValue/TimeValue/DurationValue 三种类型。
-- ~~**紧凑 STRING 格式**~~：✅ 已修复，无分隔符格式已实现。
-- ~~**DOUBLE 截断**~~：✅ 已修复，mul/div Duration 支持 double 因子。
-- **命名时区不支持**：`datetime('2017-...T23:00+02:00[Europe/Stockholm]')` 中命名时区仅存储名称，不解析为实际偏移量（DST 感知）。需引入 IANA 时区数据库。
+        -
+        **数组属性存储不完整**：`CREATE({
+            prop : [ 1, 2, 3 ]
+        })` 中列表属性未被正确写入（各类型均受影响，含时间数组）。时间数组的编解码基础设施已就位，剩余问题在 `CreateNodePhysicalOp` / `SetPhysicalOp` 的
+            evaluator→PropertyValue 转换管道。详见[query - engine - design.md](../ query / engine / query - engine -
+                                                                               design.md #十二已知限制与后续规划) -
+        ~~** Thrift PropertyType 未扩展时间数组** ~~：✅ 已修复。`proto
+            / eugraph.thrift` `PropertyType` 枚举新增 `DATETIME_ARRAY =
+    11` / `TIME_ARRAY =
+        12` / `DURATION_ARRAY =
+            13`；`PropertyValueThrift` union 新增对应数组字段；handler
+            的 `propertyTypeToThrift` 和 `thriftToPropertyValue` 完整支持时间数组转换。
+            - **`properties(Edge)` + 普通 Expand * * : `(a) -
+            [r:TYPE]->(b)` 中 `ExpandPhysicalOp` 不加载边属性，`properties(r)` 返回空
+            map。变长路径的边属性加载已支持。详见[query - engine - design.md](../ query / engine / query - engine -
+                                                                              design.md #十二已知限制与后续规划) -
+            ~~**PropertyValue 不支持 TemporalValue * *~~：✅ 已修复，TemporalValue 拆分为 DateTimeValue / TimeValue
+                / DurationValue 三种类型。
+            - ~~**紧凑 STRING 格式 * *~~：✅ 已修复，无分隔符格式已实现。 -
+            ~~**DOUBLE 截断 * *~~：✅ 已修复，mul / div Duration 支持 double 因子。 -
+            **命名时区不支持 *
+                *：`datetime('2017-...T23:00+02:00[Europe/Stockholm]')` 中命名时区仅存储名称，不解析为实际偏移量（DST
+                感知）。需引入 IANA 时区数据库。
