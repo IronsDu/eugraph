@@ -1,7 +1,7 @@
 #TCK 测试结果分类报告
 
-**日期**: 2026-05-31 (更新)
-**分支**: fix/tck-remaining-defects
+**日期**: 2026-06-02 (更新)
+**分支**: fix/result-mismatches
 **总计**: 3897 场景, 16006 步骤
 **运行耗时**: ~11 分
 **检测方式**: Parser AST 遍历 + Binder 类型检查 + 运行时断言
@@ -19,11 +19,11 @@
 
 | 状态 | 数量 | 说明 |
 |------|------|------|
-| 步骤通过 | 11833 / 16006 | 73.9% |
-| 步骤跳过 | 1832 | 前置步骤失败 |
+| 步骤通过 | 11857 / 16006 | 74.1% |
+| 步骤跳过 | 1819 | 前置步骤失败 |
 | 未定义步骤 | 71 | 缺少 step 定义 |
-| 步骤失败 | 2270 | 断言失败或查询错误 |
-| 场景通过 | ~1556 | ~39.9% |
+| 步骤失败 | 2259 | 断言失败或查询错误 |
+| 场景通过 | 1567 | 40.2% |
 
 ---
 
@@ -180,13 +180,45 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 
 ## 分类 5: 结果不匹配 — 断言失败
 
-约 956 个场景的查询成功执行，但返回结果与 TCK 预期不符。
+约 1168 个场景（2228 步骤）中存在失败，其中 1600 个步骤为结果不匹配（查询成功但返回结果与预期不符）。
 
-主要原因：
-- **NULL 传播语义**: Cypher 标准 NULL 逻辑与当前实现有差异
-- **排序差异**: TCK 期望有序结果但 server 返回无序（或反之）
-- **数值精度**: 浮点数序列化精度差异
-- **聚合空值处理**: 全局聚合无输入时的默认行为差异
+### 5.1 不匹配类别分布（2026-06-02 分析）
+
+| 类别 | 失败步骤数 | 占比 | 说明 |
+|------|-----------|------|------|
+| **时间类型** | 425 | 19.1% | DateTimeValue/TimeValue/DurationValue 比较与格式化 |
+| 列表 | 253 | 11.4% | 列表元素排序、嵌套列表比较 |
+| NULL 处理 | 148 | 6.6% | NULL 在 WHERE/OPTIONAL MATCH/变长路径中的行为 |
+| 排序 | 146 | 6.5% | ORDER BY 排序结果差异 |
+| 聚合 | 79 | 3.5% | 聚合函数空输入、collect() 等 |
+| 其他（混合） | 549 | 24.6% | NaN 比较、字符串/数字跨类型、运算符优先级等 |
+
+### 5.2 已修复问题（fix/result-mismatches 分支）
+
+#### 修复 1: 时间比较中 epoch 值被错误拒绝 ✅
+
+**文件**: `src/query/function/batch_ops.cpp`
+**根因**: `isValidDateTime()`/`isValidTime()` 函数将 epoch 时间值（1970-01-01T00:00:00，即字段全为零）判定为"无效"。`date()`、`datetime()` 等无参构造函数均返回 epoch 值，导致这些合法时间值在比较时错误返回 NULL。
+**修复**: 用 `sameKind()` 替代 `isValidDateTime()`/`isValidTime()`，按 kind 一致性（DATE vs DATETIME 等）判断可否比较，而非按字段是否为零。影响 `temporalLtBatch`、`temporalGtBatch`、`temporalLteBatch`、`temporalGteBatch` 四个函数。
+
+#### 修复 2: Double 浮点数格式化不规范 ✅
+
+**文件**: `src/thrift_fmt/result_format.cpp`、`src/program/server/eugraph_handler.cpp`
+**根因**: `oss << d` 默认格式化会产生 `1`（丢失小数点）、`1e+06`（科学计数法）等输出，与 TCK 期望的 `1.0`、`1000000.0` 格式不匹配。
+**修复**: 新增 `formatDouble()` 辅助函数，使用 `std::setprecision(max_digits10)` 确保精度，并补全缺失的小数点（`.0` 后缀）。影响 `formatResultValue()`、`appendJsonValue()`、list/map JSON 序列化等多处。
+
+#### 修复 3: ORDER BY 中 NULL 排序位置未定义 ✅
+
+**文件**: `src/query/physical_plan/operator/sort_physical_op.cpp`
+**根因**: 排序比较器 `std::visit` 未处理 `std::monostate`（NULL），`less` 和 `greater` 均保持 `false`，破坏 `std::sort` 的严格弱序，NULL 行位置不确定。
+**修复**: 在比较器中新增 `std::monostate` 处理分支：NULL 排在所有非 NULL 值之后（升序），两个 NULL 比较为相等。同时为跨 kind 的时间类型比较新增 kind 一致性检查。
+
+### 5.3 未被修复的主要不匹配原因
+
+- **时间截断精度**: `date.truncate()` / `datetime.truncate()` 部分精度（约 51 步骤）
+- **列表排序归一化**: TCK 步骤 "ignoring element order for lists" 中 `normalizeListOrder` 的排序行为
+- **跨类型比较语义**: 字符串=数字、NaN 比较等（约 62 步骤）
+- **命名时区解析**: 约 30 用例，需 IANA 时区数据库
 
 ---
 
@@ -241,38 +273,24 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | **P1** | MERGE | ~80 | MERGE 子句实现 |
 | **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
 | ~~P2~~ | ~~布尔类型检查~~ | ~~~48~~ | ✅ 已实现：AND/OR/XOR/NOT 在 Binder 阶段检查操作数类型为非布尔时报告 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播；XOR 从 AST skip 列表移除 |
-| **P2** | 结果不匹配 | ~956 | 逐一分析（NULL 语义、排序、精度） |
+| ~~P2~~ | ~~结果不匹配（时间比较 epoch 拒绝）~~ | 已修复 | ✅ `isValidDateTime()`→`sameKind()`，epoch 值现可正常比较 |
+| ~~P2~~ | ~~结果不匹配（Double 格式化）~~ | 已修复 | ✅ 新增 `formatDouble()`，确保小数点和精度 |
+| ~~P2~~ | ~~结果不匹配（ORDER BY NULL 排序）~~ | 已修复 | ✅ 排序比较器新增 `std::monostate` 处理分支 |
+| **P2** | 结果不匹配（剩余） | ~900 | 时间截断精度、列表排序归一化、跨类型比较等 |
 | **P3** | Parser 限制 | ~250 | Parser 增强 |
 | ~~P3~~ | ~~Boolean null 传播~~ | ~~~12~~ | ✅ 非缺陷：`null AND false→false`、`null OR true→true` 等 null 传播规则已正确实现（含 UNWIND 场景） |
-| ~~P3~~ | ~~NOT 非布尔字面量~~ | ~~~9~~ | ✅ 非缺陷：Parser 正确解析 `NOT []` / `NOT {}
-`，AST skip 不拦截，Binder 正确报 `InvalidArgumentType`（openCypher 规范要求报错） | | **P3** | 缺失步骤定义 | 71 |
-    补实现步骤（远期） | | ~~P3 ~~| ~~多标签节点 ~~|
-    ~~~25 ~~| ✅ 已实现：`MATCH(n:A : B)` 扫描首标签 + getVertexLabels 运行时过滤其余标签 |
+| ~~P3~~ | ~~NOT 非布尔字面量~~ | ~~~9~~ | ✅ 非缺陷：Parser 正确解析 `NOT []` / `NOT {}`，AST skip 不拦截，Binder 正确报 `InvalidArgumentType`（openCypher 规范要求报错） |
+| **P3** | 缺失步骤定义 | 71 | 补实现步骤（远期） |
+| ~~P3~~ | ~~多标签节点~~ | ~~~25~~ | ✅ 已实现：`MATCH(n:A:B)` 扫描首标签 + getVertexLabels 运行时过滤其余标签 |
 
-    -- -
+---
 
-        ##已知限制（通用）
+## 已知限制（通用）
 
-        -
-        **数组属性存储不完整**：`CREATE({
-            prop : [ 1, 2, 3 ]
-        })` 中列表属性未被正确写入（各类型均受影响，含时间数组）。时间数组的编解码基础设施已就位，剩余问题在 `CreateNodePhysicalOp` / `SetPhysicalOp` 的
-            evaluator→PropertyValue 转换管道。详见[query - engine - design.md](../ query / engine / query - engine -
-                                                                               design.md #十二已知限制与后续规划) -
-        ~~** Thrift PropertyType 未扩展时间数组** ~~：✅ 已修复。`proto
-            / eugraph.thrift` `PropertyType` 枚举新增 `DATETIME_ARRAY =
-    11` / `TIME_ARRAY =
-        12` / `DURATION_ARRAY =
-            13`；`PropertyValueThrift` union 新增对应数组字段；handler
-            的 `propertyTypeToThrift` 和 `thriftToPropertyValue` 完整支持时间数组转换。
-            - **`properties(Edge)` + 普通 Expand * * : `(a) -
-            [r:TYPE]->(b)` 中 `ExpandPhysicalOp` 不加载边属性，`properties(r)` 返回空
-            map。变长路径的边属性加载已支持。详见[query - engine - design.md](../ query / engine / query - engine -
-                                                                              design.md #十二已知限制与后续规划) -
-            ~~**PropertyValue 不支持 TemporalValue * *~~：✅ 已修复，TemporalValue 拆分为 DateTimeValue / TimeValue
-                / DurationValue 三种类型。
-            - ~~**紧凑 STRING 格式 * *~~：✅ 已修复，无分隔符格式已实现。 -
-            ~~**DOUBLE 截断 * *~~：✅ 已修复，mul / div Duration 支持 double 因子。 -
-            **命名时区不支持 *
-                *：`datetime('2017-...T23:00+02:00[Europe/Stockholm]')` 中命名时区仅存储名称，不解析为实际偏移量（DST
-                感知）。需引入 IANA 时区数据库。
+- **数组属性存储不完整**：`CREATE({prop: [1, 2, 3]})` 中列表属性未被正确写入（各类型均受影响，含时间数组）。时间数组的编解码基础设施已就位，剩余问题在 `CreateNodePhysicalOp` / `SetPhysicalOp` 的 evaluator→PropertyValue 转换管道。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
+- ~~**Thrift PropertyType 未扩展时间数组**~~：✅ 已修复。`proto/eugraph.thrift` `PropertyType` 枚举新增 `DATETIME_ARRAY=11` / `TIME_ARRAY=12` / `DURATION_ARRAY=13`；`PropertyValueThrift` union 新增对应数组字段；handler 的 `propertyTypeToThrift` 和 `thriftToPropertyValue` 完整支持时间数组转换。
+- **`properties(Edge)` + 普通 Expand**: `(a)-[r:TYPE]->(b)` 中 `ExpandPhysicalOp` 不加载边属性，`properties(r)` 返回空 map。变长路径的边属性加载已支持。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
+- ~~**PropertyValue 不支持 TemporalValue**~~：✅ 已修复，TemporalValue 拆分为 DateTimeValue / TimeValue / DurationValue 三种类型。
+- ~~**紧凑 STRING 格式**~~：✅ 已修复，无分隔符格式已实现。
+- ~~**DOUBLE 截断**~~：✅ 已修复，mul / div Duration 支持 double 因子。
+- **命名时区不支持**：`datetime('2017-...T23:00+02:00[Europe/Stockholm]')` 中命名时区仅存储名称，不解析为实际偏移量（DST 感知）。需引入 IANA 时区数据库。

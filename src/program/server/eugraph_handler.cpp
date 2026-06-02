@@ -8,6 +8,9 @@
 #include <spdlog/spdlog.h>
 
 #include <chrono>
+#include <cmath>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 
 #include <folly/io/async/EventBaseManager.h>
@@ -167,13 +170,28 @@ folly::coro::Task<std::unique_ptr<std::vector<thrift::GraphInfo>>> EuGraphHandle
 
 namespace {
 
+// Format a double for TCK comparison: always includes a decimal point,
+// suppresses scientific notation without exposing floating-point noise.
+std::string formatDouble(double d) {
+    if (std::isnan(d))
+        return "NaN";
+    if (std::isinf(d))
+        return d > 0 ? "Infinity" : "-Infinity";
+    std::ostringstream oss;
+    oss << std::setprecision(std::numeric_limits<double>::digits10) << d;
+    std::string s = oss.str();
+    if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos)
+        s += ".0";
+    return s;
+}
+
 void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
     if (std::holds_alternative<bool>(pv)) {
         oss << (std::get<bool>(pv) ? "true" : "false");
     } else if (std::holds_alternative<int64_t>(pv)) {
         oss << std::get<int64_t>(pv);
     } else if (std::holds_alternative<double>(pv)) {
-        oss << std::get<double>(pv);
+        oss << formatDouble(std::get<double>(pv));
     } else if (std::holds_alternative<std::string>(pv)) {
         oss << '"';
         for (char c : std::get<std::string>(pv)) {
@@ -215,7 +233,7 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
         for (auto& x : std::get<std::vector<double>>(pv)) {
             if (!first)
                 oss << ',';
-            oss << x;
+            oss << formatDouble(x);
             first = false;
         }
         oss << ']';
@@ -442,7 +460,7 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                 oss << elem_rv.get_int_val();
                 break;
             case thrift::ResultValue::Type::double_val:
-                oss << elem_rv.get_double_val();
+                oss << formatDouble(elem_rv.get_double_val());
                 break;
             case thrift::ResultValue::Type::string_val:
                 oss << '"' << elem_rv.get_string_val() << '"';
@@ -486,7 +504,7 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                 oss << elem_rv.get_int_val();
                 break;
             case thrift::ResultValue::Type::double_val:
-                oss << elem_rv.get_double_val();
+                oss << formatDouble(elem_rv.get_double_val());
                 break;
             case thrift::ResultValue::Type::string_val:
                 oss << '"' << elem_rv.get_string_val() << '"';

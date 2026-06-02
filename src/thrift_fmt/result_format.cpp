@@ -3,6 +3,9 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 
 namespace eugraph::thrift_fmt {
@@ -31,9 +34,19 @@ std::string convertVertexJson(const std::string& json) {
             } else if (value.is_number_integer()) {
                 formattedVal = std::to_string(value.get<int64_t>());
             } else if (value.is_number_float()) {
-                std::ostringstream dss;
-                dss << value.get<double>();
-                formattedVal = dss.str();
+                double dv = value.get<double>();
+                if (std::isnan(dv))
+                    formattedVal = "NaN";
+                else if (std::isinf(dv))
+                    formattedVal = dv > 0 ? "Infinity" : "-Infinity";
+                else {
+                    std::ostringstream dss;
+                    dss << std::setprecision(std::numeric_limits<double>::digits10) << dv;
+                    formattedVal = dss.str();
+                    if (formattedVal.find('.') == std::string::npos && formattedVal.find('e') == std::string::npos &&
+                        formattedVal.find('E') == std::string::npos)
+                        formattedVal += ".0";
+                }
             } else if (value.is_boolean()) {
                 formattedVal = value.get<bool>() ? "true" : "false";
             } else if (value.is_null()) {
@@ -84,9 +97,19 @@ std::string convertEdgeJson(const std::string& json) {
             } else if (value.is_number_integer()) {
                 formattedVal = std::to_string(value.get<int64_t>());
             } else if (value.is_number_float()) {
-                std::ostringstream dss;
-                dss << value.get<double>();
-                formattedVal = dss.str();
+                double dv = value.get<double>();
+                if (std::isnan(dv))
+                    formattedVal = "NaN";
+                else if (std::isinf(dv))
+                    formattedVal = dv > 0 ? "Infinity" : "-Infinity";
+                else {
+                    std::ostringstream dss;
+                    dss << std::setprecision(std::numeric_limits<double>::digits10) << dv;
+                    formattedVal = dss.str();
+                    if (formattedVal.find('.') == std::string::npos && formattedVal.find('e') == std::string::npos &&
+                        formattedVal.find('E') == std::string::npos)
+                        formattedVal += ".0";
+                }
             } else if (value.is_boolean()) {
                 formattedVal = value.get<bool>() ? "true" : "false";
             } else if (value.is_null()) {
@@ -124,9 +147,16 @@ std::string formatResultValue(const thrift::ResultValue& val) {
 
     case thrift::ResultValue::Type::double_val: {
         double d = val.get_double_val();
+        if (std::isnan(d))
+            return "NaN";
+        if (std::isinf(d))
+            return d > 0 ? "Infinity" : "-Infinity";
         std::ostringstream oss;
-        oss << d;
-        return oss.str();
+        oss << std::setprecision(std::numeric_limits<double>::digits10) << d;
+        std::string s = oss.str();
+        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos)
+            s += ".0";
+        return s;
     }
 
     case thrift::ResultValue::Type::string_val:

@@ -453,14 +453,14 @@ void isNotNullBatch(const Column& operand, Column& result, size_t count) {
 
 // ==================== Temporal helpers ====================
 
-/// Check if a temporal Value is non-trivial (has at least one non-zero field).
-bool isValidDateTime(const DateTimeValue& dt) {
-    return dt.year != 1970 || dt.month != 1 || dt.day != 1 || dt.hour != 0 || dt.minute != 0 || dt.second != 0 ||
-           dt.nanos != 0;
+/// Check if two DateTimeValues have the same kind (both DATE, both LOCAL_DATETIME, or both DATETIME).
+/// Cross-kind comparisons (e.g. DATE vs DATETIME) return NULL per openCypher semantics.
+bool sameKind(const DateTimeValue& a, const DateTimeValue& b) {
+    return a.kind == b.kind;
 }
 
-bool isValidTime(const TimeValue& t) {
-    return t.hour != 0 || t.minute != 0 || t.second != 0 || t.nanos != 0;
+bool sameKind(const TimeValue& a, const TimeValue& b) {
+    return a.kind == b.kind;
 }
 
 /// Try to extract a DateTimeValue from a Value. Returns true if successful.
@@ -500,19 +500,23 @@ void temporalLtBatch(const Column& left, const Column& right, Column& result, si
         // DateTimeValue vs DateTimeValue
         DateTimeValue dt_a, dt_b;
         if (tryGetDateTime(lv, dt_a) && tryGetDateTime(rv, dt_b)) {
-            if (isValidDateTime(dt_a) && isValidDateTime(dt_b)) {
+            if (sameKind(dt_a, dt_b)) {
                 result.setValue(i, Value(temporalLess(dt_a, dt_b)));
-                continue;
+            } else {
+                result.setNull(i);
             }
+            continue;
         }
 
         // TimeValue vs TimeValue
         TimeValue t_a, t_b;
         if (tryGetTime(lv, t_a) && tryGetTime(rv, t_b)) {
-            if (isValidTime(t_a) && isValidTime(t_b)) {
+            if (sameKind(t_a, t_b)) {
                 result.setValue(i, Value(temporalLess(t_a, t_b)));
-                continue;
+            } else {
+                result.setNull(i);
             }
+            continue;
         }
 
         // DurationValue vs DurationValue: compare by normalized representation
@@ -538,18 +542,22 @@ void temporalGtBatch(const Column& left, const Column& right, Column& result, si
 
         DateTimeValue dt_a, dt_b;
         if (tryGetDateTime(lv, dt_a) && tryGetDateTime(rv, dt_b)) {
-            if (isValidDateTime(dt_a) && isValidDateTime(dt_b)) {
+            if (sameKind(dt_a, dt_b)) {
                 result.setValue(i, Value(temporalLess(dt_b, dt_a)));
-                continue;
+            } else {
+                result.setNull(i);
             }
+            continue;
         }
 
         TimeValue t_a, t_b;
         if (tryGetTime(lv, t_a) && tryGetTime(rv, t_b)) {
-            if (isValidTime(t_a) && isValidTime(t_b)) {
+            if (sameKind(t_a, t_b)) {
                 result.setValue(i, Value(temporalLess(t_b, t_a)));
-                continue;
+            } else {
+                result.setNull(i);
             }
+            continue;
         }
 
         DurationValue d_a, d_b;
@@ -573,18 +581,22 @@ void temporalLteBatch(const Column& left, const Column& right, Column& result, s
 
         DateTimeValue dt_a, dt_b;
         if (tryGetDateTime(lv, dt_a) && tryGetDateTime(rv, dt_b)) {
-            if (isValidDateTime(dt_a) && isValidDateTime(dt_b)) {
+            if (sameKind(dt_a, dt_b)) {
                 result.setValue(i, Value(!temporalLess(dt_b, dt_a)));
-                continue;
+            } else {
+                result.setNull(i);
             }
+            continue;
         }
 
         TimeValue t_a, t_b;
         if (tryGetTime(lv, t_a) && tryGetTime(rv, t_b)) {
-            if (isValidTime(t_a) && isValidTime(t_b)) {
+            if (sameKind(t_a, t_b)) {
                 result.setValue(i, Value(!temporalLess(t_b, t_a)));
-                continue;
+            } else {
+                result.setNull(i);
             }
+            continue;
         }
 
         DurationValue d_a, d_b;
@@ -608,18 +620,22 @@ void temporalGteBatch(const Column& left, const Column& right, Column& result, s
 
         DateTimeValue dt_a, dt_b;
         if (tryGetDateTime(lv, dt_a) && tryGetDateTime(rv, dt_b)) {
-            if (isValidDateTime(dt_a) && isValidDateTime(dt_b)) {
+            if (sameKind(dt_a, dt_b)) {
                 result.setValue(i, Value(!temporalLess(dt_a, dt_b)));
-                continue;
+            } else {
+                result.setNull(i);
             }
+            continue;
         }
 
         TimeValue t_a, t_b;
         if (tryGetTime(lv, t_a) && tryGetTime(rv, t_b)) {
-            if (isValidTime(t_a) && isValidTime(t_b)) {
+            if (sameKind(t_a, t_b)) {
                 result.setValue(i, Value(!temporalLess(t_a, t_b)));
-                continue;
+            } else {
+                result.setNull(i);
             }
+            continue;
         }
 
         DurationValue d_a, d_b;

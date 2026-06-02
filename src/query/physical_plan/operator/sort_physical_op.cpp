@@ -68,19 +68,36 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
                 [&less, &greater](const auto& la, const auto& lb) {
                     using A = std::decay_t<decltype(la)>;
                     using B = std::decay_t<decltype(lb)>;
-                    if constexpr ((std::is_same_v<A, int64_t> && std::is_same_v<B, int64_t>) ||
-                                  (std::is_same_v<A, double> && std::is_same_v<B, double>)) {
+                    // NULL sorts after all non-NULL values (ascending).
+                    // When both are NULL they compare equal.
+                    if constexpr (std::is_same_v<A, std::monostate> || std::is_same_v<B, std::monostate>) {
+                        if constexpr (std::is_same_v<A, std::monostate> && std::is_same_v<B, std::monostate>) {
+                            less = false;
+                            greater = false;
+                        } else if constexpr (std::is_same_v<A, std::monostate>) {
+                            // la is NULL, lb is not → NULL > non-NULL → la > lb
+                            greater = true;
+                        } else {
+                            // lb is NULL → lb > la → la < lb
+                            less = true;
+                        }
+                    } else if constexpr ((std::is_same_v<A, int64_t> && std::is_same_v<B, int64_t>) ||
+                                         (std::is_same_v<A, double> && std::is_same_v<B, double>)) {
                         less = la < lb;
                         greater = la > lb;
                     } else if constexpr (std::is_same_v<A, std::string> && std::is_same_v<B, std::string>) {
                         less = la < lb;
                         greater = la > lb;
                     } else if constexpr (std::is_same_v<A, DateTimeValue> && std::is_same_v<B, DateTimeValue>) {
-                        less = temporalLess(la, lb);
-                        greater = temporalLess(lb, la);
+                        if (la.kind == lb.kind) {
+                            less = temporalLess(la, lb);
+                            greater = temporalLess(lb, la);
+                        }
                     } else if constexpr (std::is_same_v<A, TimeValue> && std::is_same_v<B, TimeValue>) {
-                        less = temporalLess(la, lb);
-                        greater = temporalLess(lb, la);
+                        if (la.kind == lb.kind) {
+                            less = temporalLess(la, lb);
+                            greater = temporalLess(lb, la);
+                        }
                     }
                 },
                 va, vb);
