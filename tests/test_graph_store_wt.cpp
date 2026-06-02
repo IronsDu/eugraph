@@ -240,6 +240,101 @@ TEST_F(WTGraphStoreTest, ScanOutEdges) {
     EXPECT_EQ(found.size(), 2u);
 }
 
+// Edge scan: verify both OUT and IN directions find the inserted edge
+TEST_F(WTGraphStoreTest, InsertEdgeThenScanBothDirections) {
+    EdgeLabelId label_id = 1;
+    VertexId src = 10, dst = 20;
+
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertEdge(txn, 300, src, dst, label_id, 0, Properties{}));
+    commit(txn);
+
+    // Scan OUT from src: should find edge to dst
+    {
+        std::vector<ISyncGraphDataStore::EdgeIndexEntry> found;
+        store_->scanEdges(INVALID_GRAPH_TXN, src, Direction::OUT, std::nullopt,
+                          [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                              found.push_back(e);
+                              return true;
+                          });
+        ASSERT_EQ(found.size(), 1u);
+        EXPECT_EQ(found[0].edge_id, 300u);
+        EXPECT_EQ(found[0].neighbor_id, dst);
+        EXPECT_EQ(found[0].edge_label_id, label_id);
+    }
+
+    // Scan IN from dst: should find edge from src
+    {
+        std::vector<ISyncGraphDataStore::EdgeIndexEntry> found;
+        store_->scanEdges(INVALID_GRAPH_TXN, dst, Direction::IN, std::nullopt,
+                          [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                              found.push_back(e);
+                              return true;
+                          });
+        ASSERT_EQ(found.size(), 1u);
+        EXPECT_EQ(found[0].edge_id, 300u);
+        EXPECT_EQ(found[0].neighbor_id, src);
+    }
+
+    // Scan OUT from dst: should find nothing (edge goes src→dst, not dst→src)
+    {
+        std::vector<ISyncGraphDataStore::EdgeIndexEntry> found;
+        store_->scanEdges(INVALID_GRAPH_TXN, dst, Direction::OUT, std::nullopt,
+                          [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                              found.push_back(e);
+                              return true;
+                          });
+        EXPECT_EQ(found.size(), 0u);
+    }
+}
+
+// Edge scan with label filter
+TEST_F(WTGraphStoreTest, ScanEdgesWithLabelFilter) {
+    EdgeLabelId label_a = 1;
+    EdgeLabelId label_b = 2;
+    VertexId src = 30;
+
+    auto txn = writeTxn();
+    ASSERT_TRUE(store_->insertEdge(txn, 400, src, 31, label_a, 0, Properties{}));
+    ASSERT_TRUE(store_->insertEdge(txn, 401, src, 32, label_b, 0, Properties{}));
+    commit(txn);
+
+    // Scan with label_a filter: should find only edge 400
+    {
+        std::vector<EdgeId> found;
+        store_->scanEdges(INVALID_GRAPH_TXN, src, Direction::OUT, label_a,
+                          [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                              found.push_back(e.edge_id);
+                              return true;
+                          });
+        ASSERT_EQ(found.size(), 1u);
+        EXPECT_EQ(found[0], 400u);
+    }
+
+    // Scan with label_b filter: should find only edge 401
+    {
+        std::vector<EdgeId> found;
+        store_->scanEdges(INVALID_GRAPH_TXN, src, Direction::OUT, label_b,
+                          [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                              found.push_back(e.edge_id);
+                              return true;
+                          });
+        ASSERT_EQ(found.size(), 1u);
+        EXPECT_EQ(found[0], 401u);
+    }
+
+    // Scan with no filter: should find both
+    {
+        std::vector<EdgeId> found;
+        store_->scanEdges(INVALID_GRAPH_TXN, src, Direction::OUT, std::nullopt,
+                          [&](const ISyncGraphDataStore::EdgeIndexEntry& e) {
+                              found.push_back(e.edge_id);
+                              return true;
+                          });
+        EXPECT_EQ(found.size(), 2u);
+    }
+}
+
 // ==================== Vertex Properties ====================
 
 TEST_F(WTGraphStoreTest, DeleteVertexWithLabels) {
