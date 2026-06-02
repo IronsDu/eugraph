@@ -805,7 +805,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
             // Step 4: Fetch properties and build output chunk (one row)
             // Must fetch AFTER SET items so ON CREATE/MATCH modifications are visible.
             auto buildVertexValue = [&](VertexId vid,
-                                         const std::vector<LabelId>& labels) -> folly::coro::Task<VertexValue> {
+                                        const std::vector<LabelId>& labels) -> folly::coro::Task<VertexValue> {
                 VertexValue vv;
                 vv.id = vid;
                 vv.labels = LabelIdSet(labels.begin(), labels.end());

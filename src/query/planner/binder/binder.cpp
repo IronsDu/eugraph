@@ -291,18 +291,14 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
                     using T = std::decay_t<decltype(e)>;
                     if constexpr (std::is_same_v<T, BoundColumnRef>) {
                         addAllPropertiesForVariable(e.name);
-                    } else if constexpr (std::is_same_v<T,
-                                                        std::unique_ptr<BoundBinaryOp>>) {
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryOp>>) {
                         collectVars(e->left);
                         collectVars(e->right);
-                    } else if constexpr (std::is_same_v<T,
-                                                        std::unique_ptr<BoundUnaryOp>>) {
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundUnaryOp>>) {
                         collectVars(e->operand);
-                    } else if constexpr (std::is_same_v<T,
-                                                        std::unique_ptr<BoundPropertyRef>>) {
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundPropertyRef>>) {
                         collectVars(e->object);
-                    } else if constexpr (std::is_same_v<T,
-                                                        std::unique_ptr<BoundLabelCast>>) {
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundLabelCast>>) {
                         collectVars(e->object);
                     }
                 },
