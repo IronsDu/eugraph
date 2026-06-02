@@ -171,6 +171,7 @@ add_library(eugraph_query_engine STATIC
     src/query/planner/binder/bind_match.cpp
     src/query/planner/binder/bind_return.cpp
     src/query/planner/binder/bind_mutation.cpp
+    src/query/planner/binder/bind_merge.cpp
     src/query/planner/binder/bind_expression.cpp
     src/query/planner/binder/bind_pattern.cpp
     src/query/planner/binder/bind_projection.cpp
@@ -212,6 +213,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/sort_physical_op.cpp
     src/query/physical_plan/operator/union_physical_op.cpp
     src/query/physical_plan/operator/unwind_physical_op.cpp
+    src/query/physical_plan/operator/merge_physical_op.cpp
     src/query/physical_plan/physical_operator_base.cpp
     src/query/physical_plan/physical_planner.cpp
     src/query/executor/query_executor.cpp

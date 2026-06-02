@@ -78,6 +78,8 @@ private:
     std::optional<BoundLogicalOperator> bindDelete(const cypher::DeleteClause& del, BoundLogicalOperator child);
     std::optional<BoundLogicalOperator> bindUnwind(const cypher::UnwindClause& unwind,
                                                    std::optional<BoundLogicalOperator> child);
+    std::optional<BoundLogicalOperator> bindMerge(const cypher::MergeClause& merge,
+                                                  std::optional<BoundLogicalOperator> child);
 
     // ── Expression binding helpers ──
     BoundType inferBinaryOpType(cypher::BinaryOperator op, const BoundType& left_type, const BoundType& right_type,

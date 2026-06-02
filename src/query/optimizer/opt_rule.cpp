@@ -30,7 +30,8 @@ OptNodeType nodeTypeFromVariantIndex(size_t index) {
         OptNodeType::LeftJoin,         // 20
         OptNodeType::SemiJoin,         // 21
         OptNodeType::Unwind,           // 22
-        OptNodeType::Union             // 23
+        OptNodeType::Union,            // 23
+        OptNodeType::Merge             // 24
     };
     return mapping[index];
 }

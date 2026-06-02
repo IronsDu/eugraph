@@ -90,6 +90,46 @@ bool ColumnResolver::resolveOperator(BoundLogicalOperator& op, const BindContext
                 return resolveOperator(val->left, ctx, errors) && resolveOperator(val->right, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundSemiJoinOp>>) {
                 return resolveOperator(val->left, ctx, errors) && resolveOperator(val->right, ctx, errors);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundMergeOp>>) {
+                for (auto& [pid, expr] : val->start_prop_filters) {
+                    if (!resolveExpression(expr, ctx, errors))
+                        return false;
+                }
+                for (auto& [name, expr] : val->start_pending_props) {
+                    if (!resolveExpression(expr, ctx, errors))
+                        return false;
+                }
+                if (val->has_relationship) {
+                    for (auto& [pid, expr] : val->edge_prop_filters) {
+                        if (!resolveExpression(expr, ctx, errors))
+                            return false;
+                    }
+                    for (auto& [name, expr] : val->edge_pending_props) {
+                        if (!resolveExpression(expr, ctx, errors))
+                            return false;
+                    }
+                    for (auto& [pid, expr] : val->end_prop_filters) {
+                        if (!resolveExpression(expr, ctx, errors))
+                            return false;
+                    }
+                    for (auto& [name, expr] : val->end_pending_props) {
+                        if (!resolveExpression(expr, ctx, errors))
+                            return false;
+                    }
+                }
+                for (auto& item : val->on_create_items) {
+                    if (item.value_expr) {
+                        if (!resolveExpression(*item.value_expr, ctx, errors))
+                            return false;
+                    }
+                }
+                for (auto& item : val->on_match_items) {
+                    if (item.value_expr) {
+                        if (!resolveExpression(*item.value_expr, ctx, errors))
+                            return false;
+                    }
+                }
+                return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundUnwindOp>>) {
                 if (!resolveExpression(val->list_expr, ctx, errors))
                     return false;

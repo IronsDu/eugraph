@@ -212,6 +212,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                     return bindDelete(*ptr, std::move(*current));
                 } else if constexpr (std::is_same_v<Elem, cypher::UnwindClause>) {
                     return bindUnwind(*ptr, std::move(current));
+                } else if constexpr (std::is_same_v<Elem, cypher::MergeClause>) {
+                    return bindMerge(*ptr, std::move(current));
                 } else {
                     error("Clause type not yet supported in binder");
                     return std::nullopt;

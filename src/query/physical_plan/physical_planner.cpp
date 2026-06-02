@@ -5,6 +5,7 @@
 #include "query/physical_plan/operator/delete_physical_op.hpp"
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
+#include "query/physical_plan/operator/merge_physical_op.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
 #include "query/physical_plan/operator/union_physical_op.hpp"
@@ -981,6 +982,87 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result =
                         std::make_unique<LeftJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), correlated,
                                                              std::move(left_corr_cols), std::move(rr.output_types));
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundMergeOp>) {
+                    auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = extractChildResult(std::move(child_result));
+                    auto child_op = std::move(cr.op);
+                    auto child_schema = std::move(cr.output_schema);
+                    auto output_types = std::move(cr.output_types);
+
+                    auto convertItems = [&](std::vector<binder::BoundSetOp::SetItem>& src) {
+                        std::vector<SetPhysicalOp::BoundSetItem> result;
+                        for (auto& si : src) {
+                            SetPhysicalOp::BoundSetItem bsi;
+                            switch (si.kind) {
+                            case binder::BoundSetOp::ItemKind::SET_PROPERTY:
+                                bsi.kind = cypher::SetItemKind::SET_PROPERTY;
+                                break;
+                            case binder::BoundSetOp::ItemKind::SET_PROPERTIES:
+                                bsi.kind = cypher::SetItemKind::SET_PROPERTIES;
+                                break;
+                            case binder::BoundSetOp::ItemKind::SET_LABELS:
+                                bsi.kind = cypher::SetItemKind::SET_LABELS;
+                                break;
+                            }
+                            bsi.var_name = si.target_variable;
+                            bsi.prop_name = si.prop_name;
+                            bsi.strong_mode = si.strong_mode;
+                            bsi.is_add_assign = si.is_add_assign;
+                            bsi.resolved_label_id = si.label_id;
+                            bsi.resolved_prop_id = si.prop_id;
+                            if (si.label_id) {
+                                for (auto& [name, id] : ctx.label_name_to_id) {
+                                    if (id == *si.label_id) {
+                                        bsi.label = name;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (si.value_expr)
+                                bsi.value = std::move(si.value_expr);
+                            result.push_back(std::move(bsi));
+                        }
+                        return result;
+                    };
+
+                    auto on_create = convertItems(v.on_create_items);
+                    auto on_match = convertItems(v.on_match_items);
+
+                    Schema output_schema = child_schema;
+
+                    if (!v.start_pre_bound) {
+                        output_schema.push_back(v.start_var);
+                        output_types.push_back(binder::BoundType::Vertex());
+                    }
+                    if (v.has_relationship) {
+                        if (!v.end_pre_bound) {
+                            output_schema.push_back(v.end_var);
+                            output_types.push_back(binder::BoundType::Vertex());
+                        }
+                        if (!v.edge_var.empty()) {
+                            output_schema.push_back(v.edge_var);
+                            output_types.push_back(binder::BoundType::Edge());
+                        }
+                        if (v.path_variable) {
+                            output_schema.push_back(*v.path_variable);
+                            output_types.push_back(binder::BoundType::Path());
+                        }
+                    }
+
+                    auto result = std::make_unique<MergePhysicalOp>(
+                        v.start_var, v.start_pre_bound, std::move(v.start_labels),
+                        std::move(v.start_prop_filters), std::move(v.start_pending_props),
+                        v.has_relationship, v.edge_var, v.edge_label_id, v.edge_label_name,
+                        v.direction, std::move(v.edge_prop_filters), std::move(v.edge_pending_props),
+                        v.end_var, v.end_pre_bound, std::move(v.end_labels),
+                        std::move(v.end_prop_filters), std::move(v.end_pending_props),
+                        v.path_variable, std::move(on_create), std::move(on_match),
+                        store, meta, ctx.label_defs, ctx.label_name_to_id,
+                        ctx.edge_label_defs, ctx.edge_label_name_to_id, std::move(child_op));
+                    result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else {
                     return std::string("Unknown bound logical operator type");
