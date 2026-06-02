@@ -207,6 +207,7 @@ bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Va
 folly::coro::Task<std::optional<VertexId>>
 MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
                                     const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
+                                    const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
                                     const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
     // Check created_vertices first
     for (auto vid : created_vertices_) {
@@ -270,7 +271,7 @@ MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
         }
     }
 
-    if (candidates.empty() && prop_filters.empty()) {
+    if (candidates.empty() && prop_filters.empty() && pending_props.empty()) {
         co_return std::nullopt;
     }
     if (candidates.empty()) {
@@ -278,7 +279,7 @@ MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
     }
 
     // If no property filters, return first candidate
-    if (prop_filters.empty()) {
+    if (prop_filters.empty() && pending_props.empty()) {
         co_return *candidates.begin();
     }
 
@@ -301,6 +302,55 @@ MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
             }
             if (!found_match) {
                 if (!std::holds_alternative<std::monostate>(expected)) {
+                    match = false;
+                    break;
+                }
+            }
+        }
+        // Check pending (name-based) properties
+        if (match && !pending_props.empty()) {
+            for (const auto& [prop_name, expr] : pending_props) {
+                Value expected = evaluateExpr(evaluator, expr, chunk, row_idx);
+                bool found_match = false;
+                // Check __anon__ and all labels for property by name
+                for (auto lid : labels) {
+                    if (lid == INVALID_LABEL_ID)
+                        continue;
+                    auto def_it = label_defs_.find(lid);
+                    if (def_it == label_defs_.end())
+                        continue;
+                    for (const auto& pd : def_it->second.properties) {
+                        if (pd.name == prop_name) {
+                            auto props = co_await store_.getVertexProperties(vid, lid);
+                            if (props && pd.id < props->size() && (*props)[pd.id].has_value()) {
+                                if (comparePropertyValue((*props)[pd.id].value(), expected)) {
+                                    found_match = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (found_match)
+                        break;
+                }
+                if (!found_match && anon_label_id_ != INVALID_LABEL_ID) {
+                    auto anon_props = co_await store_.getVertexProperties(vid, anon_label_id_);
+                    if (anon_props) {
+                        auto anon_it = label_defs_.find(anon_label_id_);
+                        if (anon_it != label_defs_.end()) {
+                            for (const auto& pd : anon_it->second.properties) {
+                                if (pd.name == prop_name && pd.id < anon_props->size() &&
+                                    (*anon_props)[pd.id].has_value()) {
+                                    if (comparePropertyValue((*anon_props)[pd.id].value(), expected)) {
+                                        found_match = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!found_match && !std::holds_alternative<std::monostate>(expected)) {
                     match = false;
                     break;
                 }
@@ -472,7 +522,11 @@ MergePhysicalOp::createEdge(VertexId src_vid, VertexId dst_vid,
         }
     }
 
-    co_await store_.insertEdge(eid, src_vid, dst_vid, effective_elid, 0, props);
+    bool ok = co_await store_.insertEdge(eid, src_vid, dst_vid, effective_elid, 0, props);
+    if (!ok) {
+        spdlog::warn("MergePhysicalOp: insertEdge failed for eid={} src={} dst={} label={}", eid, src_vid, dst_vid,
+                     effective_elid);
+    }
     created_edges_[{src_vid, dst_vid, effective_elid}] = eid;
     co_return std::make_tuple(eid, effective_elid);
 }
@@ -492,18 +546,26 @@ folly::coro::Task<void> MergePhysicalOp::executeSetItems(const std::vector<SetPh
             if (!item.value || std::holds_alternative<std::monostate>(val))
                 break;
             auto pv = valueToPropertyValue(val);
-            // Find target vertex
+            // Check if target is an edge variable
+            EdgeId target_eid = INVALID_EDGE_ID;
             VertexId target_vid = INVALID_VERTEX_ID;
             LabelIdSet target_labels;
             for (size_t c = 0; c < merged_chunk.numColumns(); ++c) {
                 const auto& cv = merged_chunk.getValue(c, 0);
-                if (std::holds_alternative<VertexValue>(cv)) {
+                if (std::holds_alternative<EdgeValue>(cv)) {
+                    target_eid = std::get<EdgeValue>(cv).id;
+                } else if (std::holds_alternative<VertexValue>(cv)) {
                     const auto& vv = std::get<VertexValue>(cv);
                     target_vid = vv.id;
                     if (vv.labels)
                         target_labels = *vv.labels;
-                    break;
                 }
+            }
+            // Edge property: use putEdgeProperty
+            if (target_eid != INVALID_EDGE_ID && item.resolved_prop_id) {
+                EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
+                co_await store_.putEdgeProperty(target_eid, elid, *item.resolved_prop_id, pv);
+                break;
             }
             if (target_vid == INVALID_VERTEX_ID)
                 break;
@@ -609,6 +671,12 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
     co_await ensureLabelTables(start_labels_);
     if (has_relationship_) {
         co_await ensureLabelTables(end_labels_);
+        // Resolve edge label by name if not already resolved by id
+        if (!edge_label_id_.has_value() && edge_label_name_.has_value()) {
+            auto it = edge_label_name_to_id_.find(*edge_label_name_);
+            if (it != edge_label_name_to_id_.end())
+                edge_label_id_ = it->second;
+        }
         if (edge_label_id_.has_value())
             co_await ensureEdgeLabelTable(*edge_label_id_);
     }
@@ -636,7 +704,8 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     }
                 }
             } else {
-                auto found = co_await findMatchingNode(start_labels_, start_prop_filters_, &*chunk, row, evaluator);
+                auto found = co_await findMatchingNode(start_labels_, start_prop_filters_, start_pending_props_,
+                                                         &*chunk, row, evaluator);
                 if (found) {
                     start_vid = *found;
                 } else {
@@ -665,7 +734,8 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     }
                 } else {
                     auto found =
-                        co_await findMatchingNode(end_labels_, end_prop_filters_, &*chunk, row, evaluator);
+                        co_await findMatchingNode(end_labels_, end_prop_filters_, end_pending_props_, &*chunk, row,
+                                                evaluator);
                     if (found) {
                         end_vid = *found;
                     } else {
@@ -770,6 +840,12 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 if (path_variable_.has_value()) {
                     Column col = Column::flat(binder::BoundTypeKind::PATH, 1);
                     PathValue pv;
+                    ValueStorage start_vs{Value(VertexValue{start_vid, {}, LabelIdSet(start_labels_.begin(),
+                                                                                     start_labels_.end())})};
+                    ValueStorage edge_vs{Value(EdgeValue{edge_id, start_vid, end_vid, edge_label, 0, std::nullopt})};
+                    ValueStorage end_vs{Value(VertexValue{end_vid, {}, LabelIdSet(end_labels_.begin(),
+                                                                                 end_labels_.end())})};
+                    pv.elements = {start_vs, edge_vs, end_vs};
                     col.setValue(0, Value(pv));
                     output.columns.push_back(std::move(col));
                 }

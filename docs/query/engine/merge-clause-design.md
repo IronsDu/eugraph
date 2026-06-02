@@ -237,3 +237,4 @@ for each DataChunk from child:
 
 - ✅ **端点自创建**：`MERGE (a:L1 {p:1})-[:R]->(b:L2 {p:2})` 在单次 MERGE 中创建整个模式（端点+关系）。已实现，自定义测试覆盖。
 - ✅ **多标签节点 MERGE**：`MERGE (n:L1:L2 {p:v})` 支持多标签匹配和创建。当前使用朴素 label scan + 属性过滤方式，性能优化（如复合标签索引扫描）留待后续。
+- **边扫描**：分支上 `MATCH ... CREATE` 边后，`ExpandPhysicalOp` 通过 `scanEdges` 扫描不到刚创建的边（`insertEdge` 未被调用，原因待查）。这是已有问题，非 MERGE 引入，但影响边 MERGE 的匹配阶段。

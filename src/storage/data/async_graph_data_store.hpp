@@ -610,6 +610,16 @@ public:
         co_return ok;
     }
 
+    folly::coro::Task<bool> putEdgeProperty(EdgeId eid, EdgeLabelId label_id, uint16_t prop_id,
+                                             const PropertyValue& value) override {
+        auto txn = txn_;
+        auto val = value;
+        auto ok = co_await io_.dispatch([this, txn, eid, label_id, prop_id, val = std::move(val)]() {
+            return store_.putEdgeProperty(txn, label_id, eid, prop_id, val);
+        });
+        co_return ok;
+    }
+
     // ==================== Batch Write ====================
 
     folly::coro::Task<void> batchInsertVertices(LabelId label_id, std::vector<BatchVertexEntry> entries) override {

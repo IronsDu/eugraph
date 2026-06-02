@@ -113,6 +113,7 @@ private:
 
     folly::coro::Task<std::optional<VertexId>> findMatchingNode(const std::vector<LabelId>& labels,
                                                                   const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
+                                                                  const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
                                                                   const DataChunk* chunk, size_t row_idx,
                                                                   VectorizedEvaluator& evaluator);
 
