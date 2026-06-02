@@ -71,7 +71,7 @@ public:
     virtual folly::coro::Task<bool> deleteVertexProperty(VertexId vid, LabelId label_id, uint16_t prop_id) = 0;
     virtual folly::coro::Task<bool> deleteEdgeProperty(EdgeId eid, EdgeLabelId label_id, uint16_t prop_id) = 0;
     virtual folly::coro::Task<bool> putEdgeProperty(EdgeId eid, EdgeLabelId label_id, uint16_t prop_id,
-                                                     const PropertyValue& value) = 0;
+                                                    const PropertyValue& value) = 0;
 
     // Vertex Label Write
     virtual folly::coro::Task<bool> addVertexLabel(VertexId vid, LabelId label_id) = 0;

@@ -118,7 +118,7 @@ bool bindMergeSetItem(const cypher::SetItem& item, BoundSetOp::SetItem& bound_it
 } // namespace
 
 std::optional<BoundLogicalOperator> Binder::bindMerge(const cypher::MergeClause& merge,
-                                                       std::optional<BoundLogicalOperator> child) {
+                                                      std::optional<BoundLogicalOperator> child) {
     const auto& pp = merge.pattern;
     const auto& element = pp.element;
 

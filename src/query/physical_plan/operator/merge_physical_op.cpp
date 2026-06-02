@@ -94,24 +94,24 @@ eugraph::Direction toStoreDir(eugraph::cypher::RelationshipDirection dir) {
 namespace eugraph {
 namespace compute {
 
-MergePhysicalOp::MergePhysicalOp(
-    std::string start_var, bool start_pre_bound, std::vector<LabelId> start_labels,
-    std::vector<std::pair<uint16_t, binder::BoundExpression>> start_prop_filters,
-    std::vector<std::pair<std::string, binder::BoundExpression>> start_pending_props, bool has_relationship,
-    std::string edge_var, std::optional<EdgeLabelId> edge_label_id, std::optional<std::string> edge_label_name,
-    cypher::RelationshipDirection direction,
-    std::vector<std::pair<uint16_t, binder::BoundExpression>> edge_prop_filters,
-    std::vector<std::pair<std::string, binder::BoundExpression>> edge_pending_props, std::string end_var,
-    bool end_pre_bound, std::vector<LabelId> end_labels,
-    std::vector<std::pair<uint16_t, binder::BoundExpression>> end_prop_filters,
-    std::vector<std::pair<std::string, binder::BoundExpression>> end_pending_props,
-    std::optional<std::string> path_variable, std::vector<SetPhysicalOp::BoundSetItem> on_create_items,
-    std::vector<SetPhysicalOp::BoundSetItem> on_match_items, IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta,
-    std::unordered_map<LabelId, LabelDef>& label_defs,
-    const std::unordered_map<std::string, LabelId>& label_name_to_id,
-    std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs,
-    const std::unordered_map<std::string, EdgeLabelId>& edge_label_name_to_id,
-    std::unique_ptr<PhysicalOperator> child)
+MergePhysicalOp::MergePhysicalOp(std::string start_var, bool start_pre_bound, std::vector<LabelId> start_labels,
+                                 std::vector<std::pair<uint16_t, binder::BoundExpression>> start_prop_filters,
+                                 std::vector<std::pair<std::string, binder::BoundExpression>> start_pending_props,
+                                 bool has_relationship, std::string edge_var, std::optional<EdgeLabelId> edge_label_id,
+                                 std::optional<std::string> edge_label_name, cypher::RelationshipDirection direction,
+                                 std::vector<std::pair<uint16_t, binder::BoundExpression>> edge_prop_filters,
+                                 std::vector<std::pair<std::string, binder::BoundExpression>> edge_pending_props,
+                                 std::string end_var, bool end_pre_bound, std::vector<LabelId> end_labels,
+                                 std::vector<std::pair<uint16_t, binder::BoundExpression>> end_prop_filters,
+                                 std::vector<std::pair<std::string, binder::BoundExpression>> end_pending_props,
+                                 std::optional<std::string> path_variable,
+                                 std::vector<SetPhysicalOp::BoundSetItem> on_create_items,
+                                 std::vector<SetPhysicalOp::BoundSetItem> on_match_items, IAsyncGraphDataStore& store,
+                                 IAsyncGraphMetaStore& meta, std::unordered_map<LabelId, LabelDef>& label_defs,
+                                 const std::unordered_map<std::string, LabelId>& label_name_to_id,
+                                 std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs,
+                                 const std::unordered_map<std::string, EdgeLabelId>& edge_label_name_to_id,
+                                 std::unique_ptr<PhysicalOperator> child)
     : start_var_(std::move(start_var)), start_pre_bound_(start_pre_bound), start_labels_(std::move(start_labels)),
       start_prop_filters_(std::move(start_prop_filters)), start_pending_props_(std::move(start_pending_props)),
       has_relationship_(has_relationship), edge_var_(std::move(edge_var)), edge_label_id_(edge_label_id),
@@ -167,11 +167,11 @@ folly::coro::Task<void> MergePhysicalOp::ensureEdgeLabelTable(EdgeLabelId elid) 
     co_await store_.createEdgeLabel(elid);
 }
 
-folly::coro::Task<void> MergePhysicalOp::registerPendingProps(
-    const std::vector<std::pair<std::string, binder::BoundExpression>>&,
-    const std::vector<std::pair<std::string, binder::BoundExpression>>&,
-    const std::vector<std::pair<std::string, binder::BoundExpression>>&,
-    const std::vector<std::pair<std::string, binder::BoundExpression>>&) {
+folly::coro::Task<void>
+MergePhysicalOp::registerPendingProps(const std::vector<std::pair<std::string, binder::BoundExpression>>&,
+                                      const std::vector<std::pair<std::string, binder::BoundExpression>>&,
+                                      const std::vector<std::pair<std::string, binder::BoundExpression>>&,
+                                      const std::vector<std::pair<std::string, binder::BoundExpression>>&) {
     if (anon_label_id_ == INVALID_LABEL_ID) {
         anon_label_id_ = co_await meta_.createLabel(std::string(kAnonLabelName), {});
         if (anon_label_id_ != INVALID_LABEL_ID) {
@@ -206,9 +206,9 @@ bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Va
 
 folly::coro::Task<std::optional<VertexId>>
 MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
-                                    const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
-                                    const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
-                                    const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
+                                  const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
+                                  const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
+                                  const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
     // Check created_vertices first
     for (auto vid : created_vertices_) {
         bool match = true;
@@ -365,9 +365,9 @@ MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
 
 folly::coro::Task<VertexId>
 MergePhysicalOp::createNode(const std::vector<LabelId>& labels,
-                              const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
-                              const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
-                              const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
+                            const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
+                            const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
+                            const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
     VertexId vid = co_await meta_.nextVertexId();
 
     // Build properties per label
@@ -418,8 +418,8 @@ MergePhysicalOp::createNode(const std::vector<LabelId>& labels,
 
 folly::coro::Task<std::optional<std::tuple<EdgeId, EdgeLabelId>>>
 MergePhysicalOp::findMatchingEdge(VertexId src_vid, VertexId dst_vid,
-                                    const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
-                                    const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
+                                  const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
+                                  const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
     EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
 
     // Check created_edges set first
@@ -484,9 +484,9 @@ MergePhysicalOp::findMatchingEdge(VertexId src_vid, VertexId dst_vid,
 
 folly::coro::Task<std::tuple<EdgeId, EdgeLabelId>>
 MergePhysicalOp::createEdge(VertexId src_vid, VertexId dst_vid,
-                              const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
-                              const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
-                              const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
+                            const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
+                            const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
+                            const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
     EdgeLabelId effective_elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
     if (effective_elid == INVALID_EDGE_LABEL_ID && edge_label_name_.has_value()) {
         auto it = edge_label_name_to_id_.find(*edge_label_name_);
@@ -532,9 +532,8 @@ MergePhysicalOp::createEdge(VertexId src_vid, VertexId dst_vid,
 }
 
 folly::coro::Task<void> MergePhysicalOp::executeSetItems(const std::vector<SetPhysicalOp::BoundSetItem>& items,
-                                                           const DataChunk*, size_t,
-                                                           const DataChunk& merged_chunk,
-                                                           VectorizedEvaluator& evaluator) {
+                                                         const DataChunk*, size_t, const DataChunk& merged_chunk,
+                                                         VectorizedEvaluator& evaluator) {
     for (const auto& item : items) {
         Value val;
         if (item.value) {
@@ -682,8 +681,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
     }
 
     // Phase 2: register pending properties with __anon__
-    co_await registerPendingProps(start_pending_props_, start_pending_props_, end_pending_props_,
-                                   edge_pending_props_);
+    co_await registerPendingProps(start_pending_props_, start_pending_props_, end_pending_props_, edge_pending_props_);
 
     // Phase 3: per-row processing — yield one chunk per row
     auto child_gen = child_->executeChunk();
@@ -705,7 +703,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 }
             } else {
                 auto found = co_await findMatchingNode(start_labels_, start_prop_filters_, start_pending_props_,
-                                                         &*chunk, row, evaluator);
+                                                       &*chunk, row, evaluator);
                 if (found) {
                     start_vid = *found;
                 } else {
@@ -733,9 +731,8 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                         }
                     }
                 } else {
-                    auto found =
-                        co_await findMatchingNode(end_labels_, end_prop_filters_, end_pending_props_, &*chunk, row,
-                                                evaluator);
+                    auto found = co_await findMatchingNode(end_labels_, end_prop_filters_, end_pending_props_, &*chunk,
+                                                           row, evaluator);
                     if (found) {
                         end_vid = *found;
                     } else {
@@ -750,9 +747,8 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 if (found_edge) {
                     std::tie(edge_id, edge_label) = *found_edge;
                 } else {
-                    std::tie(edge_id, edge_label) =
-                        co_await createEdge(start_vid, end_vid, edge_prop_filters_, edge_pending_props_, &*chunk, row,
-                                           evaluator);
+                    std::tie(edge_id, edge_label) = co_await createEdge(start_vid, end_vid, edge_prop_filters_,
+                                                                        edge_pending_props_, &*chunk, row, evaluator);
                     edge_created = true;
                 }
             }
@@ -840,11 +836,11 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 if (path_variable_.has_value()) {
                     Column col = Column::flat(binder::BoundTypeKind::PATH, 1);
                     PathValue pv;
-                    ValueStorage start_vs{Value(VertexValue{start_vid, {}, LabelIdSet(start_labels_.begin(),
-                                                                                     start_labels_.end())})};
+                    ValueStorage start_vs{
+                        Value(VertexValue{start_vid, {}, LabelIdSet(start_labels_.begin(), start_labels_.end())})};
                     ValueStorage edge_vs{Value(EdgeValue{edge_id, start_vid, end_vid, edge_label, 0, std::nullopt})};
-                    ValueStorage end_vs{Value(VertexValue{end_vid, {}, LabelIdSet(end_labels_.begin(),
-                                                                                 end_labels_.end())})};
+                    ValueStorage end_vs{
+                        Value(VertexValue{end_vid, {}, LabelIdSet(end_labels_.begin(), end_labels_.end())})};
                     pv.elements = {start_vs, edge_vs, end_vs};
                     col.setValue(0, Value(pv));
                     output.columns.push_back(std::move(col));

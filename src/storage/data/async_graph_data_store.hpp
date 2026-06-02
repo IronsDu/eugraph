@@ -611,7 +611,7 @@ public:
     }
 
     folly::coro::Task<bool> putEdgeProperty(EdgeId eid, EdgeLabelId label_id, uint16_t prop_id,
-                                             const PropertyValue& value) override {
+                                            const PropertyValue& value) override {
         auto txn = txn_;
         auto val = value;
         auto ok = co_await io_.dispatch([this, txn, eid, label_id, prop_id, val = std::move(val)]() {

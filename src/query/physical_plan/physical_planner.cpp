@@ -1053,15 +1053,13 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
 
                     auto result = std::make_unique<MergePhysicalOp>(
-                        v.start_var, v.start_pre_bound, std::move(v.start_labels),
-                        std::move(v.start_prop_filters), std::move(v.start_pending_props),
-                        v.has_relationship, v.edge_var, v.edge_label_id, v.edge_label_name,
-                        v.direction, std::move(v.edge_prop_filters), std::move(v.edge_pending_props),
-                        v.end_var, v.end_pre_bound, std::move(v.end_labels),
-                        std::move(v.end_prop_filters), std::move(v.end_pending_props),
-                        v.path_variable, std::move(on_create), std::move(on_match),
-                        store, meta, ctx.label_defs, ctx.label_name_to_id,
-                        ctx.edge_label_defs, ctx.edge_label_name_to_id, std::move(child_op));
+                        v.start_var, v.start_pre_bound, std::move(v.start_labels), std::move(v.start_prop_filters),
+                        std::move(v.start_pending_props), v.has_relationship, v.edge_var, v.edge_label_id,
+                        v.edge_label_name, v.direction, std::move(v.edge_prop_filters), std::move(v.edge_pending_props),
+                        v.end_var, v.end_pre_bound, std::move(v.end_labels), std::move(v.end_prop_filters),
+                        std::move(v.end_pending_props), v.path_variable, std::move(on_create), std::move(on_match),
+                        store, meta, ctx.label_defs, ctx.label_name_to_id, ctx.edge_label_defs,
+                        ctx.edge_label_name_to_id, std::move(child_op));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else {
