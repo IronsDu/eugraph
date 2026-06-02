@@ -171,14 +171,14 @@ folly::coro::Task<std::unique_ptr<std::vector<thrift::GraphInfo>>> EuGraphHandle
 namespace {
 
 // Format a double for TCK comparison: always includes a decimal point,
-// uses sufficient precision for round-trip, never uses scientific notation.
+// suppresses scientific notation without exposing floating-point noise.
 std::string formatDouble(double d) {
     if (std::isnan(d))
         return "NaN";
     if (std::isinf(d))
         return d > 0 ? "Infinity" : "-Infinity";
     std::ostringstream oss;
-    oss << std::setprecision(std::numeric_limits<double>::max_digits10) << d;
+    oss << std::setprecision(std::numeric_limits<double>::digits10) << d;
     std::string s = oss.str();
     if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos)
         s += ".0";

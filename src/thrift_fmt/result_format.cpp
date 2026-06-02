@@ -41,7 +41,7 @@ std::string convertVertexJson(const std::string& json) {
                     formattedVal = dv > 0 ? "Infinity" : "-Infinity";
                 else {
                     std::ostringstream dss;
-                    dss << std::setprecision(std::numeric_limits<double>::max_digits10) << dv;
+                    dss << std::setprecision(std::numeric_limits<double>::digits10) << dv;
                     formattedVal = dss.str();
                     if (formattedVal.find('.') == std::string::npos && formattedVal.find('e') == std::string::npos &&
                         formattedVal.find('E') == std::string::npos)
@@ -104,7 +104,7 @@ std::string convertEdgeJson(const std::string& json) {
                     formattedVal = dv > 0 ? "Infinity" : "-Infinity";
                 else {
                     std::ostringstream dss;
-                    dss << std::setprecision(std::numeric_limits<double>::max_digits10) << dv;
+                    dss << std::setprecision(std::numeric_limits<double>::digits10) << dv;
                     formattedVal = dss.str();
                     if (formattedVal.find('.') == std::string::npos && formattedVal.find('e') == std::string::npos &&
                         formattedVal.find('E') == std::string::npos)
@@ -152,7 +152,7 @@ std::string formatResultValue(const thrift::ResultValue& val) {
         if (std::isinf(d))
             return d > 0 ? "Infinity" : "-Infinity";
         std::ostringstream oss;
-        oss << std::setprecision(std::numeric_limits<double>::max_digits10) << d;
+        oss << std::setprecision(std::numeric_limits<double>::digits10) << d;
         std::string s = oss.str();
         if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos)
             s += ".0";
