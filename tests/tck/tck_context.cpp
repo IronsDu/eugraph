@@ -179,8 +179,23 @@ bool hasUnsupportedClause(const ast::Clause& clause) {
                 }
                 return false;
             } else if constexpr (std::is_same_v<Inner, ast::MergeClause>) {
-                spdlog::info("[TCK] skipping: MERGE");
-                return true;
+                // Check the merge pattern for unsupported features
+                if (hasUnsupportedPattern(ptr->pattern, /*is_create=*/true))
+                    return true;
+                // Check ON CREATE / ON MATCH SET items
+                for (const auto& si : ptr->on_create) {
+                    if (hasUnsupportedExpr(si.target))
+                        return true;
+                    if (si.value && hasUnsupportedExpr(*si.value))
+                        return true;
+                }
+                for (const auto& si : ptr->on_match) {
+                    if (hasUnsupportedExpr(si.target))
+                        return true;
+                    if (si.value && hasUnsupportedExpr(*si.value))
+                        return true;
+                }
+                return false;
             } else if constexpr (std::is_same_v<Inner, ast::CallClause>) {
                 spdlog::info("[TCK] skipping: CALL");
                 return true;
