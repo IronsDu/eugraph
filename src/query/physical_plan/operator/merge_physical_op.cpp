@@ -693,11 +693,13 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
 
             // Step 1: Find or create start node
             VertexId start_vid = INVALID_VERTEX_ID;
+            std::optional<VertexValue> start_pre_vv;
             if (start_pre_bound_) {
                 for (size_t c = 0; c < chunk->numColumns(); ++c) {
                     const auto& val = chunk->getValue(c, row);
                     if (std::holds_alternative<VertexValue>(val)) {
-                        start_vid = std::get<VertexValue>(val).id;
+                        start_pre_vv = std::get<VertexValue>(val);
+                        start_vid = start_pre_vv->id;
                         break;
                     }
                 }
@@ -715,6 +717,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
 
             // Step 2: Find or create end node and edge
             VertexId end_vid = INVALID_VERTEX_ID;
+            std::optional<VertexValue> end_pre_vv;
             EdgeId edge_id = INVALID_EDGE_ID;
             EdgeLabelId edge_label = INVALID_EDGE_LABEL_ID;
 
@@ -725,6 +728,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                         if (std::holds_alternative<VertexValue>(val)) {
                             VertexValue vv = std::get<VertexValue>(val);
                             if (vv.id != start_vid) {
+                                end_pre_vv = vv;
                                 end_vid = vv.id;
                                 break;
                             }
@@ -798,7 +802,41 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 co_await executeSetItems(on_match_items_, &*chunk, row, merged, evaluator);
             }
 
-            // Step 4: Build output chunk (one row)
+            // Step 4: Fetch properties and build output chunk (one row)
+            // Must fetch AFTER SET items so ON CREATE/MATCH modifications are visible.
+            auto buildVertexValue = [&](VertexId vid,
+                                         const std::vector<LabelId>& labels) -> folly::coro::Task<VertexValue> {
+                VertexValue vv;
+                vv.id = vid;
+                vv.labels = LabelIdSet(labels.begin(), labels.end());
+                for (auto lid : labels) {
+                    if (lid == INVALID_LABEL_ID)
+                        continue;
+                    auto props = co_await store_.getVertexProperties(vid, lid);
+                    if (props)
+                        vv.properties[lid] = std::move(*props);
+                }
+                if (anon_label_id_ != INVALID_LABEL_ID) {
+                    auto anon_props = co_await store_.getVertexProperties(vid, anon_label_id_);
+                    if (anon_props)
+                        vv.properties[anon_label_id_] = std::move(*anon_props);
+                }
+                co_return vv;
+            };
+
+            VertexValue start_vv;
+            if (start_pre_bound_ && start_pre_vv)
+                start_vv = *start_pre_vv;
+            else if (!start_pre_bound_)
+                start_vv = co_await buildVertexValue(start_vid, start_labels_);
+            VertexValue end_vv;
+            if (has_relationship_) {
+                if (end_pre_bound_ && end_pre_vv)
+                    end_vv = *end_pre_vv;
+                else if (!end_pre_bound_)
+                    end_vv = co_await buildVertexValue(end_vid, end_labels_);
+            }
+
             DataChunk output;
             output.count = 1;
             for (size_t c = 0; c < chunk->numColumns(); ++c) {
@@ -808,19 +846,13 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
             }
             if (!start_pre_bound_) {
                 Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
-                VertexValue vv;
-                vv.id = start_vid;
-                vv.labels = LabelIdSet(start_labels_.begin(), start_labels_.end());
-                col.setValue(0, Value(vv));
+                col.setValue(0, Value(start_vv));
                 output.columns.push_back(std::move(col));
             }
             if (has_relationship_) {
                 if (!end_pre_bound_) {
                     Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
-                    VertexValue vv;
-                    vv.id = end_vid;
-                    vv.labels = LabelIdSet(end_labels_.begin(), end_labels_.end());
-                    col.setValue(0, Value(vv));
+                    col.setValue(0, Value(end_vv));
                     output.columns.push_back(std::move(col));
                 }
                 {
@@ -836,11 +868,9 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 if (path_variable_.has_value()) {
                     Column col = Column::flat(binder::BoundTypeKind::PATH, 1);
                     PathValue pv;
-                    ValueStorage start_vs{
-                        Value(VertexValue{start_vid, {}, LabelIdSet(start_labels_.begin(), start_labels_.end())})};
+                    ValueStorage start_vs{Value(start_vv)};
                     ValueStorage edge_vs{Value(EdgeValue{edge_id, start_vid, end_vid, edge_label, 0, std::nullopt})};
-                    ValueStorage end_vs{
-                        Value(VertexValue{end_vid, {}, LabelIdSet(end_labels_.begin(), end_labels_.end())})};
+                    ValueStorage end_vs{Value(end_vv)};
                     pv.elements = {start_vs, edge_vs, end_vs};
                     col.setValue(0, Value(pv));
                     output.columns.push_back(std::move(col));
