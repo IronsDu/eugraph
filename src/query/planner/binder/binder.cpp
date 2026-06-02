@@ -309,7 +309,6 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
                 expr);
         };
         collectVars(*bound_pred);
-        spdlog::info("bindWhere: property_requirements count={}", ctx_.property_requirements.size());
     }
 
     auto filter = std::make_unique<BoundFilterOp>();
