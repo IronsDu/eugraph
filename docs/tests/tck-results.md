@@ -270,7 +270,7 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | ~~P1~~ | ~~Temporal 属性往返类型保留~~ | ~~~52~~ | ✅ 已修复（拆分为 DateTimeValue/TimeValue/DurationValue） |
 | ~~P2~~ | ~~时间属性存取往返~~ | ~~~40~~ | ✅ 已修复：Binder catalog_.getAnonLabelId() 返回 INVALID_LABEL_ID 导致无标签节点写失败 |
 | ~~P2~~ | ~~时区秒精度~~ | ~~~48~~ | ✅ 已修复（commit a1597ec）：tz_offset_min→tz_offset_sec |
-| **P1** | MERGE | ~80 | MERGE 子句实现 |
+| **P1** | MERGE | ~80 | MERGE 子句实现（36/75 TCK 通过，见下方 MERGE 专项） |
 | **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
 | ~~P2~~ | ~~布尔类型检查~~ | ~~~48~~ | ✅ 已实现：AND/OR/XOR/NOT 在 Binder 阶段检查操作数类型为非布尔时报告 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播；XOR 从 AST skip 列表移除 |
 | ~~P2~~ | ~~结果不匹配（时间比较 epoch 拒绝）~~ | 已修复 | ✅ `isValidDateTime()`→`sameKind()`，epoch 值现可正常比较 |
@@ -294,3 +294,48 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 - ~~**紧凑 STRING 格式**~~：✅ 已修复，无分隔符格式已实现。
 - ~~**DOUBLE 截断**~~：✅ 已修复，mul / div Duration 支持 double 因子。
 - **命名时区不支持**：`datetime('2017-...T23:00+02:00[Europe/Stockholm]')` 中命名时区仅存储名称，不解析为实际偏移量（DST 感知）。需引入 IANA 时区数据库。
+
+---
+
+## MERGE TCK 专项
+
+**日期**: 2026-06-04 (更新)
+**分支**: feature/merge-clause
+**总计**: 75 场景, **36 通过 / 39 失败**
+
+### 已修复项 (23 → 36)
+
+| 修复内容 | 影响场景 |
+|---------|---------|
+| 列表字符串格式化（双引号→单引号） | Merge1[2], Merge1[10], Merge2[1](部分), Merge3[2](部分) |
+| `registerPendingProps` 实际注册属性到 `__anon__` | Merge ON CREATE/MATCH SET 属性相关 |
+| 匿名节点创建存入 `__anon__` 表 | Merge1[1] |
+| Binder InvalidParameterUse 校验（节点/关系谓词） | Merge1[16], Merge5[27] |
+| Binder VariableAlreadyBound 校验（关系变量、带标签已绑定节点） | Merge5[22], Merge5[26] |
+| Parser `$param` 语法支持（`buildProperties` 处理 parameter） | Merge1[16], Merge5[27] |
+| Binder 首个错误后停止处理子句（防级联） | Merge1[16], Merge5[27] |
+| UndefinedVariable 错误消息含关键字 | Merge2[6], Merge3[5](部分) |
+| TCK 错误分类补充 MERGE 模式 | 多个错误验证场景 |
+
+### 剩余 MERGE 自身 bug
+
+| 编号 | 问题 | 说明 |
+|------|------|------|
+| Merge5[25] | NoSingleRelationshipType 未对 `[:A\|:B]` 触发 | 需检查 parser 是否正确捕获多类型 |
+| Merge2[1], Merge3[2] | ON CREATE/MATCH SET label 未追加 | SET label 覆盖而非追加已有标签 |
+| Merge1[4] | 属性值错误 | MERGE 后属性返回 42 而非 43 |
+| Merge1[17], Merge5[29] | MergeReadOwnWrites 运行时错误未实现 | `MERGE ({num: null})` 应报 SemanticError，需在物理算子检测 null 属性匹配 |
+| Merge6[3,4,6,7], Merge7[4,5], Merge8[1] | ON CREATE/MATCH SET 属性 side effects 不正确 | +properties 计数错误 |
+| Merge2[6], Merge3[5] | UndefinedVariable 在 ON CREATE/MATCH SET 中未触发 | 需进一步调试 SET item 绑定 |
+
+### 剩余非 MERGE bug（影响 MERGE TCK）
+
+| 类别 | 影响场景数 | 说明 |
+|------|-----------|------|
+| `count()` vs `count(*)` 列名 | ~12 | Binder 聚合函数别名问题 |
+| `+labels` side effects 计数方式 | ~6 | TCK 按标签类型计数，我们按实例计数 |
+| 路径绑定 (path variable) | 2 | 路径类型支持不完整 |
+| 无方向关系匹配 | 3 | 需扩展关系方向处理 |
+| 列表属性匹配 | 2 | 列表属性比较未实现 |
+| 删除不可见 | 3 | DELETE 后 MERGE 仍匹配已删除实体 |
+| UNWIND+MERGE 基数 | 3 | 每次迭代节点/边创建数量错误 |
