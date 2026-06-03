@@ -463,7 +463,7 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                 oss << formatDouble(elem_rv.get_double_val());
                 break;
             case thrift::ResultValue::Type::string_val:
-                oss << '"' << elem_rv.get_string_val() << '"';
+                oss << "'" << elem_rv.get_string_val() << "'";
                 break;
             case thrift::ResultValue::Type::vertex_json:
                 oss << elem_rv.get_vertex_json();

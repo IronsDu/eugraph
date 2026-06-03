@@ -50,6 +50,7 @@ ExternalProject_Add(ccr_ext
         -DCCR_BUILD_TESTS=OFF
         -DCMAKE_CXX_STANDARD=20
         "-DCMAKE_CXX_FLAGS=-Wno-error=deprecated-declarations"
+        -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON=${CMAKE_CURRENT_BINARY_DIR}/ccr_ext-override/nlohmann_json
     INSTALL_COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/copy_ccr_artifacts.sh"
         <SOURCE_DIR> <BINARY_DIR> "${CUKE_STAGE}"
     BUILD_BYPRODUCTS

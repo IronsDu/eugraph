@@ -168,10 +168,11 @@ folly::coro::Task<void> MergePhysicalOp::ensureEdgeLabelTable(EdgeLabelId elid) 
 }
 
 folly::coro::Task<void>
-MergePhysicalOp::registerPendingProps(const std::vector<std::pair<std::string, binder::BoundExpression>>&,
-                                      const std::vector<std::pair<std::string, binder::BoundExpression>>&,
-                                      const std::vector<std::pair<std::string, binder::BoundExpression>>&,
-                                      const std::vector<std::pair<std::string, binder::BoundExpression>>&) {
+MergePhysicalOp::registerPendingProps(const std::vector<std::pair<std::string, binder::BoundExpression>>& start_pending,
+                                      const std::vector<std::pair<std::string, binder::BoundExpression>>& end_pending,
+                                      const std::vector<std::pair<std::string, binder::BoundExpression>>& edge_pending,
+                                      const std::vector<SetPhysicalOp::BoundSetItem>& on_create_items,
+                                      const std::vector<SetPhysicalOp::BoundSetItem>& on_match_items) {
     if (anon_label_id_ == INVALID_LABEL_ID) {
         anon_label_id_ = co_await meta_.createLabel(std::string(kAnonLabelName), {});
         if (anon_label_id_ != INVALID_LABEL_ID) {
@@ -181,7 +182,36 @@ MergePhysicalOp::registerPendingProps(const std::vector<std::pair<std::string, b
                 label_defs_[anon_label_id_] = std::move(*def);
         }
     }
-    co_return;
+    if (anon_label_id_ == INVALID_LABEL_ID)
+        co_return;
+
+    // Collect all property names that need registration with __anon__
+    std::unordered_set<std::string> prop_names;
+    for (const auto& [name, _] : start_pending)
+        prop_names.insert(name);
+    for (const auto& [name, _] : end_pending)
+        prop_names.insert(name);
+    for (const auto& [name, _] : edge_pending)
+        prop_names.insert(name);
+
+    auto collectSetItemProps = [&](const std::vector<SetPhysicalOp::BoundSetItem>& items) {
+        for (const auto& item : items) {
+            if (item.kind == cypher::SetItemKind::SET_PROPERTY && !item.prop_name.empty())
+                prop_names.insert(item.prop_name);
+        }
+    };
+    collectSetItemProps(on_create_items);
+    collectSetItemProps(on_match_items);
+
+    // Register each property with __anon__ label
+    for (const auto& name : prop_names) {
+        co_await meta_.getOrCreateAnonPropId(name, PropertyType::ANY);
+    }
+
+    // Refresh the cached label definition
+    auto updated_def = co_await meta_.getLabelDefById(anon_label_id_);
+    if (updated_def)
+        label_defs_[anon_label_id_] = std::move(*updated_def);
 }
 
 bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Value& expected) {
@@ -240,8 +270,36 @@ MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
         }
     }
 
-    // If no labels, we can't scan
+    // If no labels, scan __anon__ table for anonymous nodes
     if (labels.empty()) {
+        if (anon_label_id_ == INVALID_LABEL_ID)
+            co_return std::nullopt;
+        auto gen = store_.scanVerticesByLabel(anon_label_id_);
+        while (auto batch = co_await gen.next()) {
+            for (auto vid : *batch) {
+                if (prop_filters.empty() && pending_props.empty())
+                    co_return vid;
+                // Check created_vertices set to avoid double-counting
+                if (created_vertices_.count(vid))
+                    continue;
+                // For anonymous nodes with properties, need full scan + filter
+                bool match = true;
+                for (const auto& [prop_id, expr] : prop_filters) {
+                    Value expected = evaluateExpr(evaluator, expr, chunk, row_idx);
+                    auto props = co_await store_.getVertexProperties(vid, anon_label_id_);
+                    if (props && prop_id < props->size() && (*props)[prop_id].has_value()) {
+                        if (!comparePropertyValue((*props)[prop_id].value(), expected))
+                            match = false;
+                    } else if (!std::holds_alternative<std::monostate>(expected)) {
+                        match = false;
+                    }
+                    if (!match)
+                        break;
+                }
+                if (match)
+                    co_return vid;
+            }
+        }
         co_return std::nullopt;
     }
 
@@ -409,6 +467,11 @@ MergePhysicalOp::createNode(const std::vector<LabelId>& labels,
             }
         }
         label_props.emplace_back(anon_label_id_, std::move(anon_props));
+    }
+
+    // Ensure the node is stored in at least one table (for nodes without labels or properties)
+    if (label_props.empty() && anon_label_id_ != INVALID_LABEL_ID) {
+        label_props.emplace_back(anon_label_id_, Properties{});
     }
 
     co_await store_.insertVertex(vid, label_props);
@@ -681,7 +744,8 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
     }
 
     // Phase 2: register pending properties with __anon__
-    co_await registerPendingProps(start_pending_props_, start_pending_props_, end_pending_props_, edge_pending_props_);
+    co_await registerPendingProps(start_pending_props_, end_pending_props_, edge_pending_props_, on_create_items_,
+                                  on_match_items_);
 
     // Phase 3: per-row processing — yield one chunk per row
     auto child_gen = child_->executeChunk();

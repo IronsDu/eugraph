@@ -223,6 +223,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
         if (errors_.empty()) {
             current = std::move(op);
+        } else {
+            break; // stop processing clauses after first binding error
         }
     }
 

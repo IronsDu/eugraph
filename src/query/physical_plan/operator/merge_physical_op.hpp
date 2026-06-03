@@ -140,10 +140,11 @@ private:
     folly::coro::Task<void> ensureLabelTables(const std::vector<LabelId>& labels);
     folly::coro::Task<void> ensureEdgeLabelTable(EdgeLabelId elid);
     folly::coro::Task<void>
-    registerPendingProps(const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
-                         const std::vector<std::pair<std::string, binder::BoundExpression>>& start_pending,
+    registerPendingProps(const std::vector<std::pair<std::string, binder::BoundExpression>>& start_pending,
                          const std::vector<std::pair<std::string, binder::BoundExpression>>& end_pending,
-                         const std::vector<std::pair<std::string, binder::BoundExpression>>& edge_pending);
+                         const std::vector<std::pair<std::string, binder::BoundExpression>>& edge_pending,
+                         const std::vector<SetPhysicalOp::BoundSetItem>& on_create_items,
+                         const std::vector<SetPhysicalOp::BoundSetItem>& on_match_items);
 
     bool comparePropertyValue(const PropertyValue& stored, const Value& expected);
 };

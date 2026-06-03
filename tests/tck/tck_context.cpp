@@ -385,13 +385,17 @@ void TckContext::executeQuery(const std::string& query) {
             errMsg.find("VariableAlreadyBound") != std::string::npos ||
             errMsg.find("InvalidArgumentType") != std::string::npos ||
             errMsg.find("DifferentColumnsInUnion") != std::string::npos ||
-            errMsg.find("InvalidClauseComposition") != std::string::npos) {
+            errMsg.find("InvalidClauseComposition") != std::string::npos ||
+            errMsg.find("NoSingleRelationshipType") != std::string::npos ||
+            errMsg.find("CreatingVarLength") != std::string::npos ||
+            errMsg.find("InvalidParameterUse") != std::string::npos) {
             lastErrorType = "SyntaxError";
             lastErrorPhase = "compile time";
         } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
             lastErrorType = "SyntaxError";
             lastErrorPhase = "compile time";
-        } else if (errMsg.find("SemanticError") != std::string::npos || errMsg.find("semantic") != std::string::npos) {
+        } else if (errMsg.find("SemanticError") != std::string::npos || errMsg.find("semantic") != std::string::npos ||
+                   errMsg.find("MergeReadOwnWrites") != std::string::npos) {
             lastErrorType = "SemanticError";
             lastErrorPhase = "compile time";
         } else if (errMsg.find("TypeError") != std::string::npos || errMsg.find("type") != std::string::npos) {
@@ -417,6 +421,14 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "InvalidArgumentType";
         } else if (errMsg.find("InvalidInput") != std::string::npos) {
             lastErrorDetail = "InvalidInput";
+        } else if (errMsg.find("NoSingleRelationshipType") != std::string::npos) {
+            lastErrorDetail = "NoSingleRelationshipType";
+        } else if (errMsg.find("CreatingVarLength") != std::string::npos) {
+            lastErrorDetail = "CreatingVarLength";
+        } else if (errMsg.find("InvalidParameterUse") != std::string::npos) {
+            lastErrorDetail = "InvalidParameterUse";
+        } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
+            lastErrorDetail = "MergeReadOwnWrites";
         } else {
             lastErrorDetail = errMsg;
         }
