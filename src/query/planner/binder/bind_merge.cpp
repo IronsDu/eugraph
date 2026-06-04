@@ -85,6 +85,12 @@ bool bindMergeSetItem(const cypher::SetItem& item, BoundSetOp::SetItem& bound_it
             return false;
         }
 
+        if (!binder.ctx_.lookup(var_name)) {
+            if (error_out && error_out->empty())
+                *error_out = "UndefinedVariable: " + var_name;
+            return false;
+        }
+
         bound_item.kind = BoundSetOp::ItemKind::SET_PROPERTY;
         bound_item.target_variable = var_name;
         bound_item.prop_name = prop_name;
@@ -129,6 +135,11 @@ bool bindMergeSetItem(const cypher::SetItem& item, BoundSetOp::SetItem& bound_it
                 }
             },
             item.target);
+        if (!bound_item.target_variable.empty() && !binder.ctx_.lookup(bound_item.target_variable)) {
+            if (error_out && error_out->empty())
+                *error_out = "UndefinedVariable: " + bound_item.target_variable;
+            return false;
+        }
         break;
     }
     case cypher::SetItemKind::SET_PROPERTIES: {
@@ -145,6 +156,11 @@ bool bindMergeSetItem(const cypher::SetItem& item, BoundSetOp::SetItem& bound_it
         if (bound_item.target_variable.empty()) {
             if (error_out && error_out->empty())
                 *error_out = "Cannot resolve SET target variable";
+            return false;
+        }
+        if (!binder.ctx_.lookup(bound_item.target_variable)) {
+            if (error_out && error_out->empty())
+                *error_out = "UndefinedVariable: " + bound_item.target_variable;
             return false;
         }
         if (item.value) {

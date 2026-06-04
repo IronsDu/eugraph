@@ -317,25 +317,69 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | UndefinedVariable 错误消息含关键字 | Merge2[6], Merge3[5](部分) |
 | TCK 错误分类补充 MERGE 模式 | 多个错误验证场景 |
 
-### 剩余 MERGE 自身 bug
+### 剩余 bug 按根因分组
 
-| 编号 | 问题 | 说明 |
-|------|------|------|
-| Merge5[25] | NoSingleRelationshipType 未对 `[:A\|:B]` 触发 | 需检查 parser 是否正确捕获多类型 |
-| Merge2[1], Merge3[2] | ON CREATE/MATCH SET label 未追加 | SET label 覆盖而非追加已有标签 |
-| Merge1[4] | 属性值错误 | MERGE 后属性返回 42 而非 43 |
-| Merge1[17], Merge5[29] | MergeReadOwnWrites 运行时错误未实现 | `MERGE ({num: null})` 应报 SemanticError，需在物理算子检测 null 属性匹配 |
-| Merge6[3,4,6,7], Merge7[4,5], Merge8[1] | ON CREATE/MATCH SET 属性 side effects 不正确 | +properties 计数错误 |
-| Merge2[6], Merge3[5] | UndefinedVariable 在 ON CREATE/MATCH SET 中未触发 | 需进一步调试 SET item 绑定 |
+#### Bug 1: findMatchingNode 不检查 pending_props（~15 场景）
 
-### 剩余非 MERGE bug（影响 MERGE TCK）
+**根因**: `created_vertices_` 循环和 `__anon__` 扫描只验证 `prop_filters`（已解析属性 ID），不验证 `pending_props`（按名称匹配）。当 MERGE 属性未通过标签解析时（匿名节点或新标签），匹配逻辑形同虚设。
 
-| 类别 | 影响场景数 | 说明 |
-|------|-----------|------|
-| `count()` vs `count(*)` 列名 | ~12 | Binder 聚合函数别名问题 |
-| `+labels` side effects 计数方式 | ~6 | TCK 按标签类型计数，我们按实例计数 |
-| 路径绑定 (path variable) | 2 | 路径类型支持不完整 |
-| 无方向关系匹配 | 3 | 需扩展关系方向处理 |
-| 列表属性匹配 | 2 | 列表属性比较未实现 |
-| 删除不可见 | 3 | DELETE 后 MERGE 仍匹配已删除实体 |
-| UNWIND+MERGE 基数 | 3 | 每次迭代节点/边创建数量错误 |
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
+
+**影响场景**: Merge1[4]（属性 42 匹配 43）、Merge1[9,11,12]（UNWIND 基数错误）、Merge9[1,2]
+
+#### Bug 2: executeSetItems 目标实体选择错误（~10 场景）
+
+**根因**: `executeSetItems()` 对 SET_LABELS/SET_PROPERTY/SET_PROPERTIES 遍历 merged_chunk 取第一个 Vertex/Edge，未使用 `item.var_name` 匹配正确变量。
+
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
+
+**影响场景**: Merge2[1], Merge3[2], Merge6[3], Merge7[4,5,6,7], Merge8[1]
+
+#### Bug 3: 输出 VertexValue 不含 SET_LABELS 追加的标签（~4 场景）
+
+**根因**: `buildVertexValue()` 使用 `start_labels_` 构造 `vv.labels`，不含 ON CREATE/MATCH SET_LABELS 追加的标签。
+
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
+
+**影响场景**: Merge2[1], Merge3[2]
+
+#### Bug 4: UndefinedVariable 未在 ON SET 中校验（3 场景）
+
+**根因**: `bindMergeSetItem()` 提取 `target_variable` 后未校验该变量是否在当前作用域定义。
+
+**文件**: `src/query/planner/binder/bind_merge.cpp`
+
+**影响场景**: Merge2[6], Merge3[5], Merge6[6]
+
+#### Bug 5: count(*) 列名（4 场景）
+
+**根因**: `expressionToString` 对零参数 count 函数调用可能未输出 `"count(*)"`。
+
+**文件**: `src/query/parser/ast.cpp` 或 `src/query/planner/binder/bind_return.cpp`
+
+**影响场景**: Merge5[1], Merge5[14], Merge9[1], Merge9[3]
+
+#### Bug 6: null 属性 MERGE 未报 SemanticError（2 场景）
+
+**根因**: `MERGE ({num: null})` 应在运行时报 `SemanticError: MergeReadOwnWrites`，当前无检测。
+
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
+
+**影响场景**: Merge1[17], Merge5[29]
+
+#### Bug 7: 删除节点对 MERGE 可见（3+ 场景）— 待修复
+
+**根因**: `findMatchingNode()` 扫描标签表不过滤已删除节点。
+
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp` + 存储层
+
+**影响场景**: Merge1[14], Merge5[20]
+
+### 功能缺失（不在本次修复范围）
+
+| 类别 | 影响场景 | 说明 |
+|------|---------|------|
+| 路径绑定 (path variable) | Merge1[13], Merge5[10] | 路径类型支持不完整 |
+| 无方向关系匹配 | Merge5[11], [12], [13] | 需扩展关系方向处理 |
+| 列表属性匹配 | Merge5[15], [21] | 列表属性比较未实现 |
+| 关系类型交替 `[:A\|:B]` | Merge5[25] | AST skip 阻止解析 |

@@ -134,8 +134,8 @@ private:
                const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator);
 
     folly::coro::Task<void> executeSetItems(const std::vector<SetPhysicalOp::BoundSetItem>& items,
-                                            const DataChunk* chunk, size_t row_idx, const DataChunk& merged_chunk,
-                                            VectorizedEvaluator& evaluator);
+                                            const DataChunk& merged_chunk, VectorizedEvaluator& evaluator,
+                                            VertexId start_vid, VertexId end_vid, EdgeId edge_id);
 
     folly::coro::Task<void> ensureLabelTables(const std::vector<LabelId>& labels);
     folly::coro::Task<void> ensureEdgeLabelTable(EdgeLabelId elid);
