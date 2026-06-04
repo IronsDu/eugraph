@@ -13,6 +13,35 @@
 #include <sstream>
 #include <unordered_set>
 
+namespace {
+void classifyError(const std::string& errMsg, std::string& errorType, std::string& errorPhase) {
+    if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
+        errMsg.find("parse") != std::string::npos || errMsg.find("UndefinedVariable") != std::string::npos ||
+        errMsg.find("VariableAlreadyBound") != std::string::npos ||
+        errMsg.find("InvalidArgumentType") != std::string::npos ||
+        errMsg.find("DifferentColumnsInUnion") != std::string::npos ||
+        errMsg.find("InvalidClauseComposition") != std::string::npos ||
+        errMsg.find("NoSingleRelationshipType") != std::string::npos ||
+        errMsg.find("CreatingVarLength") != std::string::npos ||
+        errMsg.find("InvalidParameterUse") != std::string::npos) {
+        errorType = "SyntaxError";
+        errorPhase = "compile time";
+    } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
+        errorType = "SyntaxError";
+        errorPhase = "compile time";
+    } else if (errMsg.find("SemanticError") != std::string::npos || errMsg.find("MergeReadOwnWrites") != std::string::npos) {
+        errorType = "SemanticError";
+        errorPhase = "runtime";
+    } else if (errMsg.find("TypeError") != std::string::npos) {
+        errorType = "TypeError";
+        errorPhase = "runtime";
+    } else {
+        errorType = "RuntimeError";
+        errorPhase = "runtime";
+    }
+}
+} // namespace
+
 namespace eugraph::tck {
 namespace {
 
@@ -37,7 +66,9 @@ bool hasUnsupportedPattern(const ast::PatternPart& pp, bool is_create = false) {
     for (const auto& [rel, node] : el.chain) {
         // Multi-label nodes are now supported in both CREATE and MATCH
         // Relationship type alternation? [:A|B]
-        if (rel.rel_types.size() > 1) {
+        // For MERGE/CREATE, let the server-side binder reject it (NoSingleRelationshipType).
+        // Only skip for MATCH where alternation is genuinely unsupported.
+        if (rel.rel_types.size() > 1 && !is_create) {
             spdlog::info("[TCK] skipping: relationship type alternation");
             return true;
         }
@@ -361,10 +392,19 @@ void TckContext::executeQuery(const std::string& query) {
                 }
             } else if (batch.hasException()) {
                 lastQueryHadError = true;
-                lastErrorType = "RuntimeError";
-                lastErrorPhase = "runtime";
-                lastErrorDetail = batch.exception().what().toStdString();
-                spdlog::info("[TCK] Stream error: {}", lastErrorDetail);
+                std::string errMsg = batch.exception().what().toStdString();
+                spdlog::info("[TCK] Stream error: {}", errMsg);
+                classifyError(errMsg, lastErrorType, lastErrorPhase);
+                // Extract error detail
+                if (errMsg.find("UndefinedVariable") != std::string::npos) {
+                    lastErrorDetail = "UndefinedVariable";
+                } else if (errMsg.find("VariableAlreadyBound") != std::string::npos) {
+                    lastErrorDetail = "VariableAlreadyBound";
+                } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
+                    lastErrorDetail = "MergeReadOwnWrites";
+                } else {
+                    lastErrorDetail = errMsg;
+                }
             }
         });
     } catch (const std::exception& e) {
@@ -380,31 +420,7 @@ void TckContext::executeQuery(const std::string& query) {
         lastQueryHadError = true;
 
         // Classify error by message content
-        if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
-            errMsg.find("parse") != std::string::npos || errMsg.find("UndefinedVariable") != std::string::npos ||
-            errMsg.find("VariableAlreadyBound") != std::string::npos ||
-            errMsg.find("InvalidArgumentType") != std::string::npos ||
-            errMsg.find("DifferentColumnsInUnion") != std::string::npos ||
-            errMsg.find("InvalidClauseComposition") != std::string::npos ||
-            errMsg.find("NoSingleRelationshipType") != std::string::npos ||
-            errMsg.find("CreatingVarLength") != std::string::npos ||
-            errMsg.find("InvalidParameterUse") != std::string::npos) {
-            lastErrorType = "SyntaxError";
-            lastErrorPhase = "compile time";
-        } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
-            lastErrorType = "SyntaxError";
-            lastErrorPhase = "compile time";
-        } else if (errMsg.find("SemanticError") != std::string::npos || errMsg.find("semantic") != std::string::npos ||
-                   errMsg.find("MergeReadOwnWrites") != std::string::npos) {
-            lastErrorType = "SemanticError";
-            lastErrorPhase = "compile time";
-        } else if (errMsg.find("TypeError") != std::string::npos || errMsg.find("type") != std::string::npos) {
-            lastErrorType = "TypeError";
-            lastErrorPhase = "runtime";
-        } else {
-            lastErrorType = "RuntimeError";
-            lastErrorPhase = "runtime";
-        }
+        classifyError(errMsg, lastErrorType, lastErrorPhase);
 
         // Extract error detail (the specific error name)
         if (errMsg.find("UndefinedVariable") != std::string::npos) {
@@ -479,6 +495,9 @@ GraphSnapshot TckContext::takeSnapshot() {
     } catch (...) {
         snap.edgeCount = 0;
     }
+    spdlog::info("[TCK] [{}] snapshot: nodes={} edges={} labels={} props={} nodeIds={} edgeIds={}",
+                 graphName, snap.nodeCount, snap.edgeCount, snap.labelCount, snap.propertyCount,
+                 snap.nodeIds.size(), snap.edgeIds.size());
 
     // Count label instances (total labels across all nodes)
     try {
@@ -540,6 +559,45 @@ GraphSnapshot TckContext::takeSnapshot() {
     }
 
     snap.propertyCount = vprop_count + eprop_count;
+
+    // Collect node IDs for add/remove detection
+    try {
+        auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN id(n)", graphName);
+        std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
+            if (batch.hasValue()) {
+                for (const auto& row : *batch->rows()) {
+                    if (row.values()->size() > 0) {
+                        const auto& v = (*row.values())[0];
+                        if (v.getType() == thrift::ResultValue::Type::int_val) {
+                            snap.nodeIds.insert(v.get_int_val());
+                        }
+                    }
+                }
+            }
+        });
+    } catch (...) {
+    }
+
+    // Collect edge IDs for add/remove detection
+    // Note: id(r) may not work for edges in all cases, so use count-based delta
+    // for edges while keeping ID-based tracking for nodes.
+    // edgeIds will be populated if id(r) works, otherwise left empty.
+    try {
+        auto [meta, stream] = rpc->executeCypher("MATCH ()-[r]->() RETURN id(r)", graphName);
+        std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
+            if (batch.hasValue()) {
+                for (const auto& row : *batch->rows()) {
+                    if (row.values()->size() > 0) {
+                        const auto& v = (*row.values())[0];
+                        if (v.getType() == thrift::ResultValue::Type::int_val) {
+                            snap.edgeIds.insert(v.get_int_val());
+                        }
+                    }
+                }
+            }
+        });
+    } catch (...) {
+    }
 
     return snap;
 }

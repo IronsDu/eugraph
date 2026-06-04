@@ -143,10 +143,44 @@ struct TckContext {
     // Compute side effects by comparing before/after snapshots
     SideEffects computeSideEffects(const GraphSnapshot& before, const GraphSnapshot& after) {
         SideEffects se;
-        se.nodes = after.nodeCount - before.nodeCount;
-        se.relationships = after.edgeCount - before.edgeCount;
-        se.labels = after.labelCount - before.labelCount;
-        se.properties = after.propertyCount - before.propertyCount;
+        // Nodes: use ID sets for accurate add/remove
+        for (auto id : after.nodeIds) {
+            if (!before.nodeIds.count(id))
+                se.nodes++;
+        }
+        for (auto id : before.nodeIds) {
+            if (!after.nodeIds.count(id))
+                se.removed_nodes++;
+        }
+        // Edges: prefer ID sets when available, fall back to count delta
+        bool hasEdgeIds = !before.edgeIds.empty() || !after.edgeIds.empty();
+        if (hasEdgeIds) {
+            for (auto id : after.edgeIds) {
+                if (!before.edgeIds.count(id))
+                    se.relationships++;
+            }
+            for (auto id : before.edgeIds) {
+                if (!after.edgeIds.count(id))
+                    se.removed_relationships++;
+            }
+        } else {
+            // Fallback: use net delta from counts
+            int64_t edge_delta = after.edgeCount - before.edgeCount;
+            if (edge_delta >= 0) {
+                se.relationships = edge_delta;
+            } else {
+                se.removed_relationships = -edge_delta;
+            }
+        }
+        // Labels: use net delta, clamped to non-negative (TCK counts distinct names, not instances)
+        se.labels = std::max<int64_t>(0, after.labelCount - before.labelCount);
+        // Properties: use net delta (no property-level ID tracking)
+        int64_t prop_delta = after.propertyCount - before.propertyCount;
+        if (prop_delta >= 0) {
+            se.properties = prop_delta;
+        } else {
+            se.removed_properties = -prop_delta;
+        }
         return se;
     }
 

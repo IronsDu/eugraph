@@ -1,4 +1,5 @@
 #include "query/physical_plan/operator/filter_physical_op.hpp"
+#include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace compute {
@@ -12,6 +13,10 @@ folly::coro::AsyncGenerator<DataChunk> FilterPhysicalOp::executeChunk() {
         VectorizedEvaluator evaluator(eval_ctx_);
         std::vector<bool> predicate(n);
         evaluator.evaluatePredicate(predicate_, *chunk, predicate);
+
+        int pass_count = 0;
+        for (auto p : predicate) if (p) pass_count++;
+        spdlog::info("[Filter] input_rows={} passed={}", n, pass_count);
 
         // Build filtered SelectionVector
         SelectionVector filtered;

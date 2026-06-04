@@ -19,6 +19,137 @@
 namespace eugraph {
 namespace compute {
 
+// ==================== Column Index Remapping for CrossProduct ====================
+// When a CrossProduct's right child uses global column indices (assigned by the
+// binder starting from 0 for the left child), those indices need to be shifted
+// so they're relative to the right child's own output (which starts at column 0).
+
+static void remapExprColumnIndices(binder::BoundExpression& expr, uint32_t offset) {
+    std::visit(
+        [&offset](auto& val) {
+            using T = std::decay_t<decltype(val)>;
+            if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
+                if (val.column_index >= offset)
+                    val.column_index -= offset;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
+                remapExprColumnIndices(val->left, offset);
+                remapExprColumnIndices(val->right, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
+                remapExprColumnIndices(val->operand, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
+                remapExprColumnIndices(val->object, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
+                remapExprColumnIndices(val->object, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                for (auto& arg : val->args)
+                    remapExprColumnIndices(arg, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
+                for (auto& elem : val->elements)
+                    remapExprColumnIndices(elem, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
+                remapExprColumnIndices(val->object, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
+                if (val->subject.has_value())
+                    remapExprColumnIndices(*val->subject, offset);
+                for (auto& [w, t] : val->when_thens) {
+                    remapExprColumnIndices(w, offset);
+                    remapExprColumnIndices(t, offset);
+                }
+                if (val->else_expr.has_value())
+                    remapExprColumnIndices(*val->else_expr, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
+                remapExprColumnIndices(val->list, offset);
+                remapExprColumnIndices(val->index, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
+                remapExprColumnIndices(val->list, offset);
+                if (val->from.has_value())
+                    remapExprColumnIndices(*val->from, offset);
+                if (val->to.has_value())
+                    remapExprColumnIndices(*val->to, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
+                for (auto& [k, v] : val->entries)
+                    remapExprColumnIndices(v, offset);
+            }
+        },
+        expr);
+}
+
+static void remapLogicalOpColumnIndices(binder::BoundLogicalOperator& op, uint32_t offset);
+
+static void remapChildOps(binder::BoundLogicalOperator& op, uint32_t offset) {
+    std::visit(
+        [&offset](auto& val) {
+            using T = std::decay_t<decltype(val)>;
+            if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
+                if (val.column_index >= offset)
+                    val.column_index -= offset;
+            } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
+                if (val.column_index >= offset)
+                    val.column_index -= offset;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                remapExprColumnIndices(val->predicate, offset);
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                for (auto& item : val->items)
+                    remapExprColumnIndices(item.expr, offset);
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                if (val->src_column_index >= offset)
+                    val->src_column_index -= offset;
+                if (val->edge_column_index >= offset)
+                    val->edge_column_index -= offset;
+                if (val->dst_column_index >= offset)
+                    val->dst_column_index -= offset;
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                for (auto& item : val->items)
+                    remapExprColumnIndices(item.expr, offset);
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
+                for (auto& expr : val->group_keys)
+                    remapExprColumnIndices(expr, offset);
+                for (auto& item : val->aggregates)
+                    remapExprColumnIndices(item.argument, offset);
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+                remapLogicalOpColumnIndices(val->left, offset);
+                remapLogicalOpColumnIndices(val->right, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
+                remapLogicalOpColumnIndices(val->left, offset);
+                remapLogicalOpColumnIndices(val->right, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
+                remapLogicalOpColumnIndices(val->left, offset);
+                remapLogicalOpColumnIndices(val->right, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+                remapExprColumnIndices(val->list_expr, offset);
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                if (val->src_column_index >= offset)
+                    val->src_column_index -= offset;
+                if (val->edge_column_index >= offset)
+                    val->edge_column_index -= offset;
+                if (val->dst_column_index >= offset)
+                    val->dst_column_index -= offset;
+                if (val->path_column_index >= offset)
+                    val->path_column_index -= offset;
+                remapLogicalOpColumnIndices(val->child, offset);
+            }
+        },
+        op);
+}
+
+static void remapLogicalOpColumnIndices(binder::BoundLogicalOperator& op, uint32_t offset) {
+    remapChildOps(op, offset);
+}
+
 // Convert a Value (runtime literal) to PropertyValue for storage.
 static PropertyValue valueToPropertyValue(const Value& v) {
     if (std::holds_alternative<bool>(v))
@@ -875,6 +1006,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(left_result))
                         return std::get<std::string>(left_result);
                     auto lr = extractChildResult(std::move(left_result));
+
+                    // Remap right child's column indices: the binder assigns
+                    // global indices (0 for left, N for right), but the right
+                    // child produces columns starting from 0 locally.
+                    auto right_col_offset = static_cast<uint32_t>(lr.output_schema.size());
+                    remapLogicalOpColumnIndices(v.right, right_col_offset);
 
                     Schema right_input_schema;
                     std::vector<binder::BoundType> right_input_types;

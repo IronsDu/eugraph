@@ -212,6 +212,32 @@ MergePhysicalOp::registerPendingProps(const std::vector<std::pair<std::string, b
     auto updated_def = co_await meta_.getLabelDefById(anon_label_id_);
     if (updated_def)
         label_defs_[anon_label_id_] = std::move(*updated_def);
+
+    // Register edge properties (inline pattern + ON CREATE/MATCH SET) with the edge label
+    if (has_relationship_ && edge_label_name_.has_value()) {
+        std::vector<std::pair<std::string, PropertyType>> edge_props_to_register;
+        // Inline MERGE pattern properties (e.g., MERGE (a)-[r:T {name: 'Lola'}]->(b))
+        for (const auto& [pname, _] : edge_pending)
+            edge_props_to_register.push_back({pname, PropertyType::ANY});
+        // ON CREATE / ON MATCH SET edge properties
+        auto collectEdgeProps = [&](const std::vector<SetPhysicalOp::BoundSetItem>& items) {
+            for (const auto& item : items) {
+                if (item.var_name == edge_var_ && !item.prop_name.empty())
+                    edge_props_to_register.push_back({item.prop_name, PropertyType::ANY});
+            }
+        };
+        collectEdgeProps(on_create_items);
+        collectEdgeProps(on_match_items);
+        if (!edge_props_to_register.empty()) {
+            co_await meta_.addEdgeLabelProperties(*edge_label_name_, edge_props_to_register);
+            // Refresh edge label definition cache
+            if (edge_label_id_.has_value()) {
+                auto edge_def = co_await meta_.getEdgeLabelDefById(*edge_label_id_);
+                if (edge_def)
+                    edge_label_defs_[*edge_label_id_] = std::move(*edge_def);
+            }
+        }
+    }
 }
 
 bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Value& expected) {
@@ -690,10 +716,40 @@ folly::coro::Task<void> MergePhysicalOp::executeSetItems(const std::vector<SetPh
                 break;
             auto pv = valueToPropertyValue(val);
             // Edge property
-            if (has_relationship_ && item.var_name == edge_var_ && edge_id != INVALID_EDGE_ID &&
-                item.resolved_prop_id) {
+            if (has_relationship_ && item.var_name == edge_var_ && edge_id != INVALID_EDGE_ID) {
                 EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
-                co_await store_.putEdgeProperty(edge_id, elid, *item.resolved_prop_id, pv);
+                if (item.resolved_prop_id) {
+                    co_await store_.putEdgeProperty(edge_id, elid, *item.resolved_prop_id, pv);
+                } else {
+                    // Resolve prop_id from edge label definition
+                    uint16_t pid = 0;
+                    bool found = false;
+                    auto it = edge_label_defs_.find(elid);
+                    if (it != edge_label_defs_.end()) {
+                        for (const auto& pd : it->second.properties) {
+                            if (pd.name == item.prop_name) {
+                                pid = pd.id;
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!found && edge_label_name_.has_value()) {
+                        // Dynamically register the property on the edge label
+                        co_await meta_.addEdgeLabelProperties(*edge_label_name_, {{item.prop_name, PropertyType::ANY}});
+                        auto updated = co_await meta_.getEdgeLabelDefById(elid);
+                        if (updated) {
+                            edge_label_defs_[elid] = std::move(*updated);
+                            for (const auto& pd : edge_label_defs_[elid].properties) {
+                                if (pd.name == item.prop_name) {
+                                    pid = pd.id;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    co_await store_.putEdgeProperty(edge_id, elid, pid, pv);
+                }
                 break;
             }
             // Vertex property
@@ -753,6 +809,28 @@ folly::coro::Task<void> MergePhysicalOp::executeSetItems(const std::vector<SetPh
         case cypher::SetItemKind::SET_PROPERTIES: {
             if (!item.value || std::holds_alternative<std::monostate>(val))
                 break;
+            // Edge target
+            if (has_relationship_ && item.var_name == edge_var_ && edge_id != INVALID_EDGE_ID &&
+                std::holds_alternative<MapValue>(val)) {
+                EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
+                const auto& mv = std::get<MapValue>(val);
+                auto it = edge_label_defs_.find(elid);
+                for (const auto& [k, vs] : mv.entries) {
+                    auto pv = valueToPropertyValue(vs.value);
+                    uint16_t pid = 0;
+                    if (it != edge_label_defs_.end()) {
+                        for (const auto& pd : it->second.properties) {
+                            if (pd.name == k) {
+                                pid = pd.id;
+                                break;
+                            }
+                        }
+                    }
+                    co_await store_.putEdgeProperty(edge_id, elid, pid, pv);
+                }
+                break;
+            }
+            // Vertex target
             VertexId vid = resolveVid(item.var_name);
             if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValue>(val)) {
                 const auto& mv = std::get<MapValue>(val);
@@ -791,8 +869,19 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
         // Resolve edge label by name if not already resolved by id
         if (!edge_label_id_.has_value() && edge_label_name_.has_value()) {
             auto it = edge_label_name_to_id_.find(*edge_label_name_);
-            if (it != edge_label_name_to_id_.end())
+            if (it != edge_label_name_to_id_.end()) {
                 edge_label_id_ = it->second;
+            } else {
+                // Edge label doesn't exist yet — create it
+                EdgeLabelId created_id = co_await meta_.createEdgeLabel(*edge_label_name_, {});
+                if (created_id != INVALID_EDGE_LABEL_ID) {
+                    edge_label_id_ = created_id;
+                    auto def = co_await meta_.getEdgeLabelDefById(created_id);
+                    if (def)
+                        edge_label_defs_[created_id] = std::move(*def);
+                    co_await store_.createEdgeLabel(created_id);
+                }
+            }
         }
         if (edge_label_id_.has_value())
             co_await ensureEdgeLabelTable(*edge_label_id_);
@@ -887,14 +976,18 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     }
                 }
 
+                spdlog::info("[MERGE] edge phase: start_vid={} end_vid={} edge_label_id_={}", start_vid, end_vid,
+                             edge_label_id_.value_or(INVALID_EDGE_LABEL_ID));
                 auto found_edge =
                     co_await findMatchingEdge(start_vid, end_vid, edge_prop_filters_, &*chunk, row, evaluator);
                 if (found_edge) {
                     std::tie(edge_id, edge_label) = *found_edge;
+                    spdlog::info("[MERGE] found existing edge: eid={} label={}", edge_id, edge_label);
                 } else {
                     std::tie(edge_id, edge_label) = co_await createEdge(start_vid, end_vid, edge_prop_filters_,
                                                                         edge_pending_props_, &*chunk, row, evaluator);
                     edge_created = true;
+                    spdlog::info("[MERGE] created edge: eid={} label={}", edge_id, edge_label);
                 }
             }
 
@@ -969,7 +1062,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 vv.id = vid;
                 vv.labels = LabelIdSet(labels.begin(), labels.end());
                 for (auto lid : extra_labels)
-                    vv.labels.insert(lid);
+                    vv.labels->insert(lid);
                 auto all_labels = labels;
                 for (auto lid : extra_labels)
                     all_labels.push_back(lid);

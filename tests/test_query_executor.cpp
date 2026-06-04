@@ -2408,7 +2408,7 @@ TEST_F(QueryExecutorTest, OutputSchemaReturnAggregate) {
     auto result = execSync(*executor_, "MATCH (n:Person) RETURN count(*)");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.columns.size(), 1u) << "Expected 1 column, got: " << result.columns.size();
-    EXPECT_EQ(result.columns[0], "count()");
+    EXPECT_EQ(result.columns[0], "count(*)");
 }
 
 // ==================== WITH Clause Tests ====================

@@ -270,7 +270,7 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | ~~P1~~ | ~~Temporal 属性往返类型保留~~ | ~~~52~~ | ✅ 已修复（拆分为 DateTimeValue/TimeValue/DurationValue） |
 | ~~P2~~ | ~~时间属性存取往返~~ | ~~~40~~ | ✅ 已修复：Binder catalog_.getAnonLabelId() 返回 INVALID_LABEL_ID 导致无标签节点写失败 |
 | ~~P2~~ | ~~时区秒精度~~ | ~~~48~~ | ✅ 已修复（commit a1597ec）：tz_offset_min→tz_offset_sec |
-| **P1** | MERGE | ~80 | MERGE 子句实现（36/75 TCK 通过，见下方 MERGE 专项） |
+| **P1** | MERGE | ~80 | MERGE 子句实现（50/75 TCK 通过，见下方 MERGE 专项） |
 | **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
 | ~~P2~~ | ~~布尔类型检查~~ | ~~~48~~ | ✅ 已实现：AND/OR/XOR/NOT 在 Binder 阶段检查操作数类型为非布尔时报告 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播；XOR 从 AST skip 列表移除 |
 | ~~P2~~ | ~~结果不匹配（时间比较 epoch 拒绝）~~ | 已修复 | ✅ `isValidDateTime()`→`sameKind()`，epoch 值现可正常比较 |
@@ -299,11 +299,11 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 
 ## MERGE TCK 专项
 
-**日期**: 2026-06-04 (更新)
+**日期**: 2026-06-05 (第四轮更新)
 **分支**: feature/merge-clause
-**总计**: 75 场景, **36 通过 / 39 失败**
+**总计**: 75 场景, **50 通过 / 25 失败**
 
-### 已修复项 (23 → 36)
+### 已修复项 (23 → 36 → 49 → 50)
 
 | 修复内容 | 影响场景 |
 |---------|---------|
@@ -328,7 +328,40 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | expressionToString 对 count 零参数输出 `count(*)` | Merge5[1,14], Merge9[1,3] |
 | executeChunk 检测 null 属性值报 SemanticError: MergeReadOwnWrites | Merge1[17], Merge5[29] |
 
-### 剩余 bug 按根因分组
+### 已修复项（第三轮，36 → 49）
+
+| 修复内容 | 影响场景 |
+|---------|---------|
+| `CreateEdgePhysicalOp` pending_props 延迟解析（lazy resolve after ALTER child） | Merge6[1,2] 等 ON CREATE SET 边属性场景 |
+| TCK stream 异常路径错误分类（Bug F） | Merge1[17], Merge5[29] 的错误类型识别 |
+| TCK `+labels` 副作用计数改用唯一标签名（Bug B） | Merge1[5,7,10,11], Merge9[2] |
+| TCK `+nodes`/`-nodes` 副作用拆分计算（Bug C，ID 集合差集） | Merge1[14], Merge5[18,20] |
+| TCK MERGE 多关系类型 `[:A|:B]` 让查询到达服务端（Bug E） | Merge5[25] |
+
+### 已修复项（第四轮，49 → 50）
+
+| 修复内容 | 影响场景 |
+|---------|---------|
+| CrossProduct 右子树列索引重映射（Bug H 真正根因） | Merge6[3,4,6,7], Merge7[3,4,5] |
+
+**Bug H 详细修复说明**:
+
+原始诊断认为问题是"属性 catalog 注册位置与存储位置不一致"，实际根因是 **CrossProduct 物理规划阶段的列索引映射错误**。
+
+Binder 为逗号分隔的 MATCH 模式（如 `MATCH (a {name: 'A'}), (b {name: 'B'})`）分配全局列索引：`a=0`, `b=1`。CrossProduct 中右子树独立规划产生本地列索引（从 0 开始），但右子树内谓词表达式（Filter、PropertyRef 等）的 `BoundColumnRef.column_index` 仍使用全局索引。例如 `b` 的 column_index=1，但右子树 DataChunk 只有 1 列（索引 0），导致 evaluator 访问越界，属性查找返回空值。
+
+**修复方案**: 在 `physical_planner.cpp` 的 CrossProduct（BoundBinaryJoinOp）规划中，规划右子树前对其整棵逻辑算子树递归执行列索引重映射，将所有 `column_index` 减去左子树列数偏移量。涉及两个静态函数：
+
+- `remapExprColumnIndices(BoundExpression&, uint32_t offset)`: 递归遍历所有 BoundExpression 变体（BoundColumnRef、BoundBinaryOp、BoundUnaryOp、BoundPropertyRef、BoundFunctionCall、BoundCase 等），对 BoundColumnRef 的 column_index 执行 `-= offset`。
+- `remapLogicalOpColumnIndices(BoundLogicalOperator&, uint32_t offset)`: 递归遍历所有 BoundLogicalOperator 变体（BoundScanOp、BoundFilterOp、BoundExpandOp、BoundProjectOp 等），对算子内部的 column_index 字段和表达式执行重映射。
+
+**修改文件**: `src/query/physical_plan/physical_planner.cpp`（新增 ~120 行）
+
+**其他相关改动**（前几轮已提交，本轮验证生效）:
+- `all_node_scan_physical_op.cpp`: 从所有 label 加载属性（不仅是 `label_prop_ids_`）
+- `eval_property.cpp`: `evalPropertyRef` 增加 candidate 查找失败后按属性名搜索 fallback
+
+### 剩余 bug 按根因分组（25 场景）
 
 #### Bug 1: findMatchingNode 不检查 pending_props（~15 场景）
 
@@ -338,46 +371,6 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 
 **影响场景**: Merge1[4]（属性 42 匹配 43）、Merge1[9,11,12]（UNWIND 基数错误）、Merge9[1,2]
 
-#### Bug 2: executeSetItems 目标实体选择错误（~10 场景）
-
-**根因**: `executeSetItems()` 对 SET_LABELS/SET_PROPERTY/SET_PROPERTIES 遍历 merged_chunk 取第一个 Vertex/Edge，未使用 `item.var_name` 匹配正确变量。
-
-**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
-
-**影响场景**: Merge2[1], Merge3[2], Merge6[3], Merge7[4,5,6,7], Merge8[1]
-
-#### Bug 3: 输出 VertexValue 不含 SET_LABELS 追加的标签（~4 场景）
-
-**根因**: `buildVertexValue()` 使用 `start_labels_` 构造 `vv.labels`，不含 ON CREATE/MATCH SET_LABELS 追加的标签。
-
-**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
-
-**影响场景**: Merge2[1], Merge3[2]
-
-#### Bug 4: UndefinedVariable 未在 ON SET 中校验（3 场景）
-
-**根因**: `bindMergeSetItem()` 提取 `target_variable` 后未校验该变量是否在当前作用域定义。
-
-**文件**: `src/query/planner/binder/bind_merge.cpp`
-
-**影响场景**: Merge2[6], Merge3[5], Merge6[6]
-
-#### Bug 5: count(*) 列名（4 场景）
-
-**根因**: `expressionToString` 对零参数 count 函数调用可能未输出 `"count(*)"`。
-
-**文件**: `src/query/parser/ast.cpp` 或 `src/query/planner/binder/bind_return.cpp`
-
-**影响场景**: Merge5[1], Merge5[14], Merge9[1], Merge9[3]
-
-#### Bug 6: null 属性 MERGE 未报 SemanticError（2 场景）
-
-**根因**: `MERGE ({num: null})` 应在运行时报 `SemanticError: MergeReadOwnWrites`，当前无检测。
-
-**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
-
-**影响场景**: Merge1[17], Merge5[29]
-
 #### Bug 7: 删除节点对 MERGE 可见（3+ 场景）— 待修复
 
 **根因**: `findMatchingNode()` 扫描标签表不过滤已删除节点。
@@ -385,6 +378,12 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 **文件**: `src/query/physical_plan/operator/merge_physical_op.cpp` + 存储层
 
 **影响场景**: Merge1[14], Merge5[20]
+
+#### Bug I: 副作用计数 +labels 偏高（若干场景）
+
+**根因**: TCK `+labels` 计数逻辑或服务端 auto-create label 重复计数。
+
+**影响场景**: Merge7[1,2] 等
 
 ### 功能缺失（不在本次修复范围）
 
@@ -394,3 +393,13 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | 无方向关系匹配 | Merge5[11], [12], [13] | 需扩展关系方向处理 |
 | 列表属性匹配 | Merge5[15], [21] | 列表属性比较未实现 |
 | 关系类型交替 `[:A\|:B]` | Merge5[25] | AST skip 阻止解析 |
+
+### 当前工作状态（WIP）
+
+以下文件包含临时调试日志，提交前需要清理：
+- `src/query/evaluator/eval_property.cpp` — `#include <spdlog/spdlog.h>` 和 `spdlog::info` 调试日志
+- `src/query/evaluator/vectorized_evaluator.cpp` — `spdlog::info` 调试日志
+- `src/query/physical_plan/operator/all_node_scan_physical_op.cpp` — `spdlog::info` 调试日志
+- `src/query/physical_plan/operator/filter_physical_op.cpp` — `spdlog::info` 调试日志
+- `src/query/physical_plan/operator/merge_physical_op.cpp` — edge phase 和 created edge 日志
+- `tests/tck/tck_context.cpp` — snapshot debug 日志

@@ -46,6 +46,11 @@ public:
     /// Register an input schema column for expression variable resolution.
     void registerColumn(const std::string& name, BoundType type);
 
+    /// Look up a variable in the current binding context. Returns nullptr if not found.
+    const ColumnInfo* lookupVariable(const std::string& name) const {
+        return ctx_.lookup(name);
+    }
+
 private:
     const catalog::Catalog& catalog_;
     const function::FunctionRegistry& func_registry_;

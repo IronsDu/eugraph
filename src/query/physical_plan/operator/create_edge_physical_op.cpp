@@ -83,18 +83,28 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
         }
     }
 
-    // Resolve pending_props_ by name → (pid, expr) after DDL operators ran
+    // Resolve pending_props_ lazily — must run AFTER child ALTER ops
+    // which may register new properties in edge_label_defs_.
     std::vector<std::pair<uint16_t, binder::BoundExpression>> resolved_pending;
-    for (auto& [prop_name, expr] : pending_props_) {
-        if (!edge_label_def)
-            continue;
-        for (const auto& pd : edge_label_def->properties) {
-            if (pd.name == prop_name) {
-                resolved_pending.emplace_back(pd.id, std::move(expr));
-                break;
+    bool pending_resolved = false;
+    auto resolvePendingProps = [&]() {
+        if (pending_resolved)
+            return;
+        pending_resolved = true;
+        // Re-fetch the def in case ALTER updated it
+        auto def_it = edge_label_defs_.find(effective_label_id);
+        const EdgeLabelDef* cur_def = (def_it != edge_label_defs_.end()) ? &def_it->second : nullptr;
+        for (auto& [prop_name, expr] : pending_props_) {
+            if (!cur_def)
+                continue;
+            for (const auto& pd : cur_def->properties) {
+                if (pd.name == prop_name) {
+                    resolved_pending.emplace_back(pd.id, std::move(expr));
+                    break;
+                }
             }
         }
-    }
+    };
 
     // Lambda: build Properties for a single row
     auto buildProps = [&](const DataChunk* chunk, size_t row_idx) -> Properties {
@@ -186,6 +196,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
     if (child_) {
         auto child_gen = child_->executeChunk();
         while (auto chunk = co_await child_gen.next()) {
+            resolvePendingProps();
             for (size_t row = 0; row < chunk->count; ++row) {
                 VertexId src = extractVidFromColumn(chunk->columns[src_col_idx_], row);
                 VertexId dst = extractVidFromColumn(chunk->columns[dst_col_idx_], row);
