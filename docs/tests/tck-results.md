@@ -317,6 +317,17 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | UndefinedVariable 错误消息含关键字 | Merge2[6], Merge3[5](部分) |
 | TCK 错误分类补充 MERGE 模式 | 多个错误验证场景 |
 
+### 已修复项（第二轮）
+
+| 修复内容 | 影响场景 |
+|---------|---------|
+| findMatchingNode 增加 pending_props 检查（created_vertices 和 __anon__ 路径） | Merge1[4,9,11,12], Merge9[1,2] |
+| executeSetItems 按 var_name 选择目标实体（不再取第一个 Vertex） | Merge2[1], Merge3[2], Merge6[3], Merge7[4-7], Merge8[1] |
+| 输出 VertexValue 包含 SET_LABELS 追加的标签 | Merge2[1], Merge3[2] |
+| bindMergeSetItem 校验 target_variable 存在于作用域 | Merge2[6], Merge3[5], Merge6[6] |
+| expressionToString 对 count 零参数输出 `count(*)` | Merge5[1,14], Merge9[1,3] |
+| executeChunk 检测 null 属性值报 SemanticError: MergeReadOwnWrites | Merge1[17], Merge5[29] |
+
 ### 剩余 bug 按根因分组
 
 #### Bug 1: findMatchingNode 不检查 pending_props（~15 场景）
