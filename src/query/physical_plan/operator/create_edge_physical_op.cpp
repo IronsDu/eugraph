@@ -64,47 +64,17 @@ namespace compute {
 folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
     VectorizedEvaluator evaluator(eval_ctx_);
 
-    // Resolve effective label_id
+    if (!child_)
+        co_return;
+
+    auto child_gen = child_->executeChunk();
+
+    // Deferred state — resolved only after the first child chunk, when child ops
+    // (e.g. CreateEdgeLabelPhysicalOp) have populated the shared name_to_id / defs maps.
     EdgeLabelId effective_label_id = INVALID_EDGE_LABEL_ID;
-    if (label_id_.has_value()) {
-        effective_label_id = *label_id_;
-    } else if (label_name_.has_value()) {
-        auto it = edge_label_name_to_id_.find(*label_name_);
-        if (it != edge_label_name_to_id_.end()) {
-            effective_label_id = it->second;
-        }
-    }
-
     const EdgeLabelDef* edge_label_def = nullptr;
-    if (effective_label_id != INVALID_EDGE_LABEL_ID) {
-        auto def_it = edge_label_defs_.find(effective_label_id);
-        if (def_it != edge_label_defs_.end()) {
-            edge_label_def = &def_it->second;
-        }
-    }
-
-    // Resolve pending_props_ lazily — must run AFTER child ALTER ops
-    // which may register new properties in edge_label_defs_.
     std::vector<std::pair<uint16_t, binder::BoundExpression>> resolved_pending;
-    bool pending_resolved = false;
-    auto resolvePendingProps = [&]() {
-        if (pending_resolved)
-            return;
-        pending_resolved = true;
-        // Re-fetch the def in case ALTER updated it
-        auto def_it = edge_label_defs_.find(effective_label_id);
-        const EdgeLabelDef* cur_def = (def_it != edge_label_defs_.end()) ? &def_it->second : nullptr;
-        for (auto& [prop_name, expr] : pending_props_) {
-            if (!cur_def)
-                continue;
-            for (const auto& pd : cur_def->properties) {
-                if (pd.name == prop_name) {
-                    resolved_pending.emplace_back(pd.id, std::move(expr));
-                    break;
-                }
-            }
-        }
-    };
+    bool state_resolved = false;
 
     // Lambda: build Properties for a single row
     auto buildProps = [&](const DataChunk* chunk, size_t row_idx) -> Properties {
@@ -192,41 +162,84 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
         co_return ok;
     };
 
-    // Per-row edge creation
-    if (child_) {
-        auto child_gen = child_->executeChunk();
-        while (auto chunk = co_await child_gen.next()) {
-            resolvePendingProps();
-            for (size_t row = 0; row < chunk->count; ++row) {
-                VertexId src = extractVidFromColumn(chunk->columns[src_col_idx_], row);
-                VertexId dst = extractVidFromColumn(chunk->columns[dst_col_idx_], row);
+    while (auto chunk = co_await child_gen.next()) {
+        // Resolve label id and properties AFTER child operators have run
+        // (CreateEdgeLabelPhysicalOp populates name_to_id and defs maps)
+        if (!state_resolved) {
+            state_resolved = true;
 
-                EdgeId eid = co_await meta_.nextEdgeId();
-                auto props = buildProps(&*chunk, row);
+            if (label_id_.has_value()) {
+                effective_label_id = *label_id_;
+            } else if (label_name_.has_value()) {
+                auto it = edge_label_name_to_id_.find(*label_name_);
+                if (it != edge_label_name_to_id_.end())
+                    effective_label_id = it->second;
+            }
+            if (effective_label_id != INVALID_EDGE_LABEL_ID) {
+                auto def_it = edge_label_defs_.find(effective_label_id);
+                if (def_it != edge_label_defs_.end())
+                    edge_label_def = &def_it->second;
+            }
 
-                bool ok = co_await insertEdge(eid, src, dst, props);
-                if (ok) {
-                    // Preserve child columns + append new edge column
-                    DataChunk output;
-                    for (size_t c = 0; c < chunk->numColumns(); ++c) {
-                        Column col = Column::flat(chunk->columns[c].type, 1);
-                        col.setValue(0, chunk->getValue(c, row));
-                        output.columns.push_back(std::move(col));
+            // Register pending edge properties with the edge label definition
+            if (!pending_props_.empty() && label_name_.has_value()) {
+                std::vector<std::pair<std::string, PropertyType>> props_to_register;
+                for (const auto& [pname, _] : pending_props_)
+                    props_to_register.push_back({pname, PropertyType::ANY});
+                co_await meta_.addEdgeLabelProperties(*label_name_, props_to_register);
+                if (effective_label_id != INVALID_EDGE_LABEL_ID) {
+                    auto updated_def = co_await meta_.getEdgeLabelDefById(effective_label_id);
+                    if (updated_def) {
+                        edge_label_defs_[effective_label_id] = std::move(*updated_def);
+                        edge_label_def = &edge_label_defs_[effective_label_id];
                     }
-
-                    EdgeValue ev;
-                    ev.id = eid;
-                    ev.src_id = src;
-                    ev.dst_id = dst;
-                    ev.label_id = effective_label_id;
-                    ev.seq = 0;
-
-                    Column edge_col = Column::flat(binder::BoundTypeKind::EDGE, 1);
-                    edge_col.setValue(0, Value(std::move(ev)));
-                    output.columns.push_back(std::move(edge_col));
-                    output.count = 1;
-                    co_yield std::move(output);
                 }
+            }
+
+            // Resolve pending property expressions to (prop_id, expr) pairs
+            auto def_it = edge_label_defs_.find(effective_label_id);
+            const EdgeLabelDef* cur_def = (def_it != edge_label_defs_.end()) ? &def_it->second : nullptr;
+            for (auto& [prop_name, expr] : pending_props_) {
+                if (!cur_def)
+                    continue;
+                for (const auto& pd : cur_def->properties) {
+                    if (pd.name == prop_name) {
+                        resolved_pending.emplace_back(pd.id, std::move(expr));
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (size_t row = 0; row < chunk->count; ++row) {
+            VertexId src = extractVidFromColumn(chunk->columns[src_col_idx_], row);
+            VertexId dst = extractVidFromColumn(chunk->columns[dst_col_idx_], row);
+
+            EdgeId eid = co_await meta_.nextEdgeId();
+            auto props = buildProps(&*chunk, row);
+
+            bool ok = co_await insertEdge(eid, src, dst, props);
+            if (ok) {
+                // Preserve child columns + append new edge column
+                DataChunk output;
+                for (size_t c = 0; c < chunk->numColumns(); ++c) {
+                    Column col = Column::flat(chunk->columns[c].type, 1);
+                    col.setValue(0, chunk->getValue(c, row));
+                    output.columns.push_back(std::move(col));
+                }
+
+                EdgeValue ev;
+                ev.id = eid;
+                ev.src_id = src;
+                ev.dst_id = dst;
+                ev.label_id = effective_label_id;
+                ev.seq = 0;
+
+                Column edge_col = Column::flat(binder::BoundTypeKind::EDGE, 1);
+                edge_col.setValue(0, Value(std::move(ev)));
+                output.columns.push_back(std::move(edge_col));
+                output.count = 1;
+                co_yield std::move(output);
             }
         }
     }

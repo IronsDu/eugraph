@@ -10,3 +10,5 @@ vcpkg_installed/
 *.d
 *.swp
 *~
+__pycache__/
+*.pyc

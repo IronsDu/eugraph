@@ -22,8 +22,8 @@ struct SideEffects {
     int64_t removed_labels = 0;
 
     bool isZero() const {
-        return nodes == 0 && relationships == 0 && properties == 0 && labels == 0 &&
-               removed_nodes == 0 && removed_relationships == 0 && removed_properties == 0 && removed_labels == 0;
+        return nodes == 0 && relationships == 0 && properties == 0 && labels == 0 && removed_nodes == 0 &&
+               removed_relationships == 0 && removed_properties == 0 && removed_labels == 0;
     }
 };
 

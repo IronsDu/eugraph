@@ -718,8 +718,7 @@ folly::coro::Task<void> MergePhysicalOp::executeSetItems(const std::vector<SetPh
 }
 
 folly::coro::Task<void> MergePhysicalOp::executeSetPropertyItem(const SetPhysicalOp::BoundSetItem& item,
-                                                                const Value& val,
-                                                                VertexId start_vid, VertexId end_vid,
+                                                                const Value& val, VertexId start_vid, VertexId end_vid,
                                                                 EdgeId edge_id) {
     if (!item.value || std::holds_alternative<std::monostate>(val))
         co_return;
@@ -761,8 +760,10 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertyItem(const SetPhysica
     }
     // Vertex property
     VertexId target_vid = INVALID_VERTEX_ID;
-    if (item.var_name == start_var_) target_vid = start_vid;
-    else if (has_relationship_ && item.var_name == end_var_) target_vid = end_vid;
+    if (item.var_name == start_var_)
+        target_vid = start_vid;
+    else if (has_relationship_ && item.var_name == end_var_)
+        target_vid = end_vid;
     if (target_vid == INVALID_VERTEX_ID)
         co_return;
 
@@ -813,16 +814,17 @@ folly::coro::Task<void> MergePhysicalOp::executeSetLabelsItem(const SetPhysicalO
     if (!item.resolved_label_id)
         co_return;
     VertexId vid = INVALID_VERTEX_ID;
-    if (item.var_name == start_var_) vid = start_vid;
-    else if (has_relationship_ && item.var_name == end_var_) vid = end_vid;
+    if (item.var_name == start_var_)
+        vid = start_vid;
+    else if (has_relationship_ && item.var_name == end_var_)
+        vid = end_vid;
     if (vid != INVALID_VERTEX_ID)
         co_await store_.addVertexLabel(vid, *item.resolved_label_id);
 }
 
 folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysicalOp::BoundSetItem& item,
-                                                                  const Value& val,
-                                                                  VertexId start_vid, VertexId end_vid,
-                                                                  EdgeId edge_id) {
+                                                                  const Value& val, VertexId start_vid,
+                                                                  VertexId end_vid, EdgeId edge_id) {
     if (!item.value || std::holds_alternative<std::monostate>(val))
         co_return;
     // Edge target
@@ -863,8 +865,10 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
     }
     // Vertex target
     VertexId vid = INVALID_VERTEX_ID;
-    if (item.var_name == start_var_) vid = start_vid;
-    else if (has_relationship_ && item.var_name == end_var_) vid = end_vid;
+    if (item.var_name == start_var_)
+        vid = start_vid;
+    else if (has_relationship_ && item.var_name == end_var_)
+        vid = end_vid;
     if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValue>(val)) {
         const auto& mv = std::get<MapValue>(val);
         for (const auto& [k, vs] : mv.entries) {
@@ -1064,7 +1068,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
 
             // Collect labels added by SET_LABELS items
             auto collectAddedLabels = [&](const std::vector<SetPhysicalOp::BoundSetItem>& set_items,
-                                         const std::string& var_name) -> std::vector<LabelId> {
+                                          const std::string& var_name) -> std::vector<LabelId> {
                 std::vector<LabelId> added;
                 for (const auto& item : set_items) {
                     if (item.kind == cypher::SetItemKind::SET_LABELS && item.var_name == var_name &&
@@ -1076,13 +1080,11 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
             };
             const auto& applied_items = any_created ? on_create_items_ : on_match_items_;
             auto start_added = collectAddedLabels(applied_items, start_var_);
-            auto end_added = has_relationship_ ? collectAddedLabels(applied_items, end_var_)
-                                               : std::vector<LabelId>();
+            auto end_added = has_relationship_ ? collectAddedLabels(applied_items, end_var_) : std::vector<LabelId>();
 
             // Step 4: Fetch properties and build output chunk (one row)
             // Must fetch AFTER SET items so ON CREATE/MATCH modifications are visible.
-            auto buildVertexValue = [&](VertexId vid,
-                                        const std::vector<LabelId>& labels,
+            auto buildVertexValue = [&](VertexId vid, const std::vector<LabelId>& labels,
                                         const std::vector<LabelId>& extra_labels) -> folly::coro::Task<VertexValue> {
                 VertexValue vv;
                 vv.id = vid;

@@ -222,8 +222,7 @@ std::optional<BoundLogicalOperator> Binder::bindMerge(const cypher::MergeClause&
         // VariableAlreadyBound for end node with new predicates (labels/properties)
         if (node_pat.variable && ctx_.lookup(*node_pat.variable)) {
             if (!node_pat.labels.empty() || node_pat.properties.has_value()) {
-                error("VariableAlreadyBound: variable '" + *node_pat.variable +
-                      "' is already defined in this scope");
+                error("VariableAlreadyBound: variable '" + *node_pat.variable + "' is already defined in this scope");
                 return std::nullopt;
             }
         }

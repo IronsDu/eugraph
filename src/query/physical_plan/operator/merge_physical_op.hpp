@@ -139,8 +139,8 @@ private:
 
     folly::coro::Task<void> executeSetPropertyItem(const SetPhysicalOp::BoundSetItem& item, const Value& val,
                                                    VertexId start_vid, VertexId end_vid, EdgeId edge_id);
-    folly::coro::Task<void> executeSetLabelsItem(const SetPhysicalOp::BoundSetItem& item,
-                                                 VertexId start_vid, VertexId end_vid);
+    folly::coro::Task<void> executeSetLabelsItem(const SetPhysicalOp::BoundSetItem& item, VertexId start_vid,
+                                                 VertexId end_vid);
     folly::coro::Task<void> executeSetPropertiesItem(const SetPhysicalOp::BoundSetItem& item, const Value& val,
                                                      VertexId start_vid, VertexId end_vid, EdgeId edge_id);
 

@@ -8,6 +8,16 @@ folly::coro::AsyncGenerator<DataChunk> LimitPhysicalOp::executeChunk() {
     auto child_gen = child_->executeChunk();
     int64_t remaining = limit_;
 
+    // LIMIT 0: consume all child data (triggering side-effect operators like
+    // DELETE / REMOVE) but yield nothing.  Cypher semantics require mutations
+    // to execute regardless of LIMIT 0 — LIMIT only affects the result set.
+    if (remaining == 0) {
+        while (auto chunk = co_await child_gen.next()) {
+            // discard — side effects already executed inside the child pipeline
+        }
+        co_return;
+    }
+
     while (remaining > 0) {
         auto chunk = co_await child_gen.next();
         if (!chunk.has_value())

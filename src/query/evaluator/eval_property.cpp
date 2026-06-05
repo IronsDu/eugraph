@@ -48,9 +48,8 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 }
             }
             spdlog::info("[evalPropRef] vid={} prop_name='{}' candidates={} found={} props_labels={}",
-                         std::holds_alternative<VertexValue>(ov) ? std::get<VertexValue>(ov).id : -1,
-                         ref.property_name, ref.candidates.size(), found.size(),
-                         vertex.properties.size());
+                         std::holds_alternative<VertexValue>(ov) ? std::get<VertexValue>(ov).id : -1, ref.property_name,
+                         ref.candidates.size(), found.size(), vertex.properties.size());
             // Fallback: a property may be registered on __anon__ in the
             // catalog but physically stored under the vertex's concrete
             // label.  Search all loaded labels by name.

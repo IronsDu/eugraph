@@ -73,8 +73,8 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 if (val.column_index < input.columns.size()) {
                     return {&input.columns[val.column_index], false};
                 }
-                spdlog::info("[evalDispatch] BoundColumnRef name='{}' idx={} but input has {} columns",
-                             val.name, val.column_index, input.columns.size());
+                spdlog::info("[evalDispatch] BoundColumnRef name='{}' idx={} but input has {} columns", val.name,
+                             val.column_index, input.columns.size());
                 auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {

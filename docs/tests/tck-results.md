@@ -270,7 +270,7 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | ~~P1~~ | ~~Temporal 属性往返类型保留~~ | ~~~52~~ | ✅ 已修复（拆分为 DateTimeValue/TimeValue/DurationValue） |
 | ~~P2~~ | ~~时间属性存取往返~~ | ~~~40~~ | ✅ 已修复：Binder catalog_.getAnonLabelId() 返回 INVALID_LABEL_ID 导致无标签节点写失败 |
 | ~~P2~~ | ~~时区秒精度~~ | ~~~48~~ | ✅ 已修复（commit a1597ec）：tz_offset_min→tz_offset_sec |
-| **P1** | MERGE | ~80 | MERGE 子句实现（50/75 TCK 通过，见下方 MERGE 专项） |
+| **P1** | MERGE | ~80 | MERGE 子句实现（55/75 TCK 通过，见下方 MERGE 专项） |
 | **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
 | ~~P2~~ | ~~布尔类型检查~~ | ~~~48~~ | ✅ 已实现：AND/OR/XOR/NOT 在 Binder 阶段检查操作数类型为非布尔时报告 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播；XOR 从 AST skip 列表移除 |
 | ~~P2~~ | ~~结果不匹配（时间比较 epoch 拒绝）~~ | 已修复 | ✅ `isValidDateTime()`→`sameKind()`，epoch 值现可正常比较 |
@@ -299,11 +299,11 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 
 ## MERGE TCK 专项
 
-**日期**: 2026-06-05 (第四轮更新)
+**日期**: 2026-06-05 (第五轮更新)
 **分支**: feature/merge-clause
-**总计**: 75 场景, **50 通过 / 25 失败**
+**总计**: 75 场景, **55 通过 / 20 失败**
 
-### 已修复项 (23 → 36 → 49 → 50)
+### 已修复项 (23 → 36 → 49 → 50 → 55)
 
 | 修复内容 | 影响场景 |
 |---------|---------|
@@ -361,29 +361,76 @@ Binder 为逗号分隔的 MATCH 模式（如 `MATCH (a {name: 'A'}), (b {name: '
 - `all_node_scan_physical_op.cpp`: 从所有 label 加载属性（不仅是 `label_prop_ids_`）
 - `eval_property.cpp`: `evalPropertyRef` 增加 candidate 查找失败后按属性名搜索 fallback
 
-### 剩余 bug 按根因分组（25 场景）
+### 已修复项（第五轮，50 → 55）
 
-#### Bug 1: findMatchingNode 不检查 pending_props（~15 场景）
+| 修复内容 | 影响场景 |
+|---------|---------|
+| `CreateEdgePhysicalOp` 延迟标签解析（deferred label resolution after child op runs） | Delete6[1-4,6-9] |
+| `CreateEdgeLabelPhysicalOp` 已有标签时调用 `addEdgeLabelProperties` | Delete6[8,9] 边属性注册 |
+| `LimitPhysicalOp` LIMIT 0 消费所有子数据触发副作用 | Remove3[15,16] |
+| TCK `+labels` distinct 标签名计数 | Merge1[2,5,7,8,10,11] |
+| `executeSetPropertiesItem` 边属性动态注册 | Merge6[7]（部分修复） |
+
+**CreateEdgePhysicalOp 延迟解析详细说明**:
+
+原始实现在 `executeChunk()` 开头立即解析 `label_id_`，但此时子算子 `CreateEdgeLabelPhysicalOp` 尚未执行，共享的 `name_to_id_` 和 `defs_` 映射为空，导致 `effective_label_id` 为 INVALID。
+
+修复方案：将标签 ID 解析、属性注册、pending 属性 ID 映射全部推迟到第一次 `child_gen.next()` 返回之后执行（此时子算子已填充共享映射）。涉及变量：
+- `effective_label_id`: 从 `name_to_id_` 解析
+- `edge_label_def`: 从 `defs_` 解析
+- `resolved_pending`: 从 `pending_props_` + `edge_label_def->properties` 解析
+
+**LimitPhysicalOp LIMIT 0 修复详细说明**:
+
+openCypher 语义要求 LIMIT 0 仍执行所有副作用（CREATE/DELETE/SET 等），仅结果集为空。原始实现 `remaining == 0` 时直接 `co_return`，跳过了整个子管道。修复为消费所有子数据但不 yield。
+
+### 剩余 bug 按根因分组（20 场景）
+
+#### Bug 1: findMatchingNode 不检查 pending_props（部分已修复）
 
 **根因**: `created_vertices_` 循环和 `__anon__` 扫描只验证 `prop_filters`（已解析属性 ID），不验证 `pending_props`（按名称匹配）。当 MERGE 属性未通过标签解析时（匿名节点或新标签），匹配逻辑形同虚设。
 
 **文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
 
-**影响场景**: Merge1[4]（属性 42 匹配 43）、Merge1[9,11,12]（UNWIND 基数错误）、Merge9[1,2]
+**影响场景**: Merge5[6,18]
 
-#### Bug 7: 删除节点对 MERGE 可见（3+ 场景）— 待修复
+#### Bug J: ON MATCH SET 边属性写入后 snapshot 不可见（7 场景）
 
-**根因**: `findMatchingNode()` 扫描标签表不过滤已删除节点。
+**现象**: Merge7[3]（`ON MATCH SET r.name = 'Lola'`）执行后，snapshot 查询 `MATCH ()-[r]->() RETURN sum(size(keys(r)))` 返回 0（期望 1）。
+
+**排查结论**:
+- ON CREATE 场景（Merge6[2]）snapshot 能正确返回 1，说明 `putEdgeProperty` 写入机制本身正常
+- `addEdgeLabelProperties` 在 `AsyncGraphMetaStore` 中正确实现（`SyncGraphMetaStore` 版本为 no-op，不影响 TCK 测试）
+- 属性已通过 `putEdgeProperty` 写入存储，但后续查询 `keys(r)` 依赖两个条件：(1) `ExpandPhysicalOp` 加载边属性填充 `ev.properties`，(2) `lookupEdgeLabel(ev.label_id)` 返回含属性名的定义
+- 可能原因：边属性写入后 edge label def 缓存未刷新，或 ON MATCH 分支中 `edge_id`/`elid` 传值有误
+
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
+
+**影响场景**: Merge7[3,4,5], Merge8[3,4,5], Merge9[1]
+
+#### Bug K: 控制查询 `r[key]` 动态属性访问（4 场景）
+
+**现象**: Merge6[3,4,6,7] 的控制查询 `MATCH ()-[r:TYPE]->() RETURN [key IN keys(r) | key + '->' + r[key]]` 失败。属性已正确写入（snapshot 能计数到），但 `r[key]` 动态属性访问可能不支持 edge。
+
+**文件**: `src/query/function/scalar/graph_functions.hpp` (`evalPropertyRef`)
+
+**影响场景**: Merge6[3,4,6,7]
+
+#### Bug L: findMatchingEdge 只返回首条（1 场景）
+
+**根因**: `findMatchingEdge` 扫描到第一条匹配边即返回，不验证所有属性约束。
+
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
+
+**影响场景**: Merge5[3]
+
+#### Bug M: findMatchingNode 匹配问题（3 场景）
+
+**根因**: `findMatchingNode()` 扫描标签表不过滤已删除节点，或 pending_props 检查不完整。
 
 **文件**: `src/query/physical_plan/operator/merge_physical_op.cpp` + 存储层
 
-**影响场景**: Merge1[14], Merge5[20]
-
-#### Bug I: 副作用计数 +labels 偏高（若干场景）
-
-**根因**: TCK `+labels` 计数逻辑或服务端 auto-create label 重复计数。
-
-**影响场景**: Merge7[1,2] 等
+**影响场景**: Merge1[9], Merge5[6,18]
 
 ### 功能缺失（不在本次修复范围）
 
@@ -393,58 +440,14 @@ Binder 为逗号分隔的 MATCH 模式（如 `MATCH (a {name: 'A'}), (b {name: '
 | 无方向关系匹配 | Merge5[11], [12], [13] | 需扩展关系方向处理 |
 | 列表属性匹配 | Merge5[15], [21] | 列表属性比较未实现 |
 | 关系类型交替 `[:A\|:B]` | Merge5[25] | AST skip 阻止解析 |
+| 删除节点对 MERGE 可见 | Merge1[14], Merge5[20] | 存储层已删除节点未被过滤 |
 
-### 当前工作状态（WIP）
-
-**日期**: 2026-06-05 (第六轮)
-
-#### 当前 TCK 测试状态
-
-- **55 passed / 20 failed / 75 total**（从 50/75 提升 5 个场景）
-
-#### 本轮已完成
-
-1. **+labels distinct 计数修复**（影响 5 个场景）
-   - **根因**: `GraphSnapshot.labelCount` 使用 `sum(size(labels(n)))` 统计标签实例总数，但 TCK 语义要求统计 distinct 标签名增量。
-   - **修复**: `GraphSnapshot` 移除 `labelCount`，新增 `unordered_set<string> labelNames`。`takeSnapshot()` 使用 `MATCH (n) RETURN labels(n)` 查询并解析 `list_json`（单引号格式）收集 distinct 标签名。`computeSideEffects()` 通过集合差集计算 `+labels`/`-labels`。
-   - **修改文件**: `tests/tck/tck_types.hpp`, `tests/tck/tck_context.hpp`, `tests/tck/tck_context.cpp`
-   - **影响场景**: Merge1[2,5,7,8,10,11] 中的 +labels 副作用计数
-
-2. **`executeSetPropertiesItem` 边属性动态注册**（部分修复）
-   - **根因**: `executeSetPropertiesItem` 处理 `SET r = a` 或 `SET r += {...}` 时，当属性未在 edge label 定义中注册时，`pid` 固定为 0，导致所有属性覆盖到同一位置。
-   - **修复**: 为每个 map entry 添加与 `executeSetPropertyItem` 相同的动态注册逻辑（`addEdgeLabelProperties` + 刷新缓存）。
-   - **修改文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
-   - **效果**: Merge6[7] 的副作用检查从失败变为通过（但控制查询仍有问题）
-
-3. **编译环境恢复**: 修复 `physical_planner.cpp` 损坏和目标文件损坏，重新编译通过。
-
-#### 正在排查
-
-**Bug J: ON MATCH SET 边属性写入后 snapshot 不可见**
-
-- **现象**: Merge7[3]（`ON MATCH SET r.name = 'Lola'`）执行后，snapshot 查询 `MATCH ()-[r]->() RETURN sum(size(keys(r)))` 返回 0（期望 1）。
-- **已确认**: Merge6[2]（`ON CREATE SET r.name = 'Lola'`）的 snapshot 能正确返回 1。说明 `putEdgeProperty` 写入机制本身正常。
-- **差异点**: ON CREATE 场景写入成功，ON MATCH 场景写入后不可见。可能原因：
-  - ON MATCH 分支中 `edge_id` 或 `elid` 传值有误
-  - `putEdgeProperty` 调用失败但无返回值检查
-  - 事务隔离问题（写入未提交）
-- **影响场景**: Merge7[3,4,5], Merge8[3,4,5], Merge9[1] — 约 7 个场景
-
-**Bug K: 控制查询 `r[key]` 动态属性访问**
-
-- Merge6[3,4,6,7] 的控制查询 `MATCH ()-[r:TYPE]->() RETURN [key IN keys(r) | key + '->' + r[key]]` 失败。
-- 属性已正确写入（Merge6[2,3] snapshot 能计数到），但 `r[key]` 动态属性访问可能不支持 edge。
-- 需确认 `evalPropertyRef` 是否支持 edge 的动态属性访问。
-
-#### 剩余 20 个失败场景分类
+### 剩余 20 个失败场景汇总
 
 | 根因 | 场景数 | 场景列表 |
 |------|--------|----------|
 | **Bug J: ON MATCH SET 边属性不可见** | 7 | Merge7[3,4,5], Merge8[3,4,5], Merge9[1] |
-| **Bug K: 控制查询 r[key]** | 4 | Merge6[3,4,6,7]（副作用已通过，控制查询失败） |
+| **Bug K: 控制查询 r[key]** | 4 | Merge6[3,4,6,7] |
 | **Bug L: findMatchingEdge 只返回首条** | 1 | Merge5[3] |
 | **Bug M: findMatchingNode 匹配问题** | 3 | Merge1[9], Merge5[6,18] |
-| **功能缺失: 路径/方向/列表/删除** | 5 | Merge1[13], Merge5[10,11,13,14,15,20,21] |
-
-#### 已有调试日志（提交前需要清理）
-- `src/query/physical_plan/operator/merge_physical_op.cpp` — `[MERGE] edge phase` 和 `[MERGE] created edge` / `found existing edge` 日志
+| **功能缺失: 路径/方向/列表/删除** | 5 | Merge1[13,14], Merge5[10,11,13,15,20,21] |

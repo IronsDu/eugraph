@@ -93,8 +93,8 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
             }
             props_desc += "] ";
         }
-        spdlog::info("[AllNodeScan] vid={} labels_count={} props={}", vid,
-                     vv.labels ? vv.labels->size() : 0, props_desc);
+        spdlog::info("[AllNodeScan] vid={} labels_count={} props={}", vid, vv.labels ? vv.labels->size() : 0,
+                     props_desc);
         chunk.appendRow({Value(std::move(vv))});
         if (chunk.count >= DataChunk::DEFAULT_CAPACITY) {
             co_yield std::move(chunk);

@@ -29,7 +29,8 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
     } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
         errorType = "SyntaxError";
         errorPhase = "compile time";
-    } else if (errMsg.find("SemanticError") != std::string::npos || errMsg.find("MergeReadOwnWrites") != std::string::npos) {
+    } else if (errMsg.find("SemanticError") != std::string::npos ||
+               errMsg.find("MergeReadOwnWrites") != std::string::npos) {
         errorType = "SemanticError";
         errorPhase = "runtime";
     } else if (errMsg.find("TypeError") != std::string::npos) {
@@ -495,9 +496,8 @@ GraphSnapshot TckContext::takeSnapshot() {
     } catch (...) {
         snap.edgeCount = 0;
     }
-    spdlog::info("[TCK] [{}] snapshot: nodes={} edges={} props={} nodeIds={} edgeIds={}",
-                 graphName, snap.nodeCount, snap.edgeCount, snap.propertyCount,
-                 snap.nodeIds.size(), snap.edgeIds.size());
+    spdlog::info("[TCK] [{}] snapshot: nodes={} edges={} props={} nodeIds={} edgeIds={}", graphName, snap.nodeCount,
+                 snap.edgeCount, snap.propertyCount, snap.nodeIds.size(), snap.edgeIds.size());
 
     // Collect distinct label names across all nodes
     // MATCH (n) RETURN labels(n) — each row has list_json like ['A', 'B']
@@ -525,8 +525,7 @@ GraphSnapshot TckContext::takeSnapshot() {
                 }
             }
         });
-    } catch (...) {
-    }
+    } catch (...) {}
     spdlog::info("[TCK] [{}] distinct labels: {}", graphName, snap.labelNames.size());
 
     // Count property instances: vertex properties
@@ -586,8 +585,7 @@ GraphSnapshot TckContext::takeSnapshot() {
                 }
             }
         });
-    } catch (...) {
-    }
+    } catch (...) {}
 
     // Collect edge IDs for add/remove detection
     // Note: id(r) may not work for edges in all cases, so use count-based delta
@@ -607,8 +605,7 @@ GraphSnapshot TckContext::takeSnapshot() {
                 }
             }
         });
-    } catch (...) {
-    }
+    } catch (...) {}
 
     return snap;
 }
