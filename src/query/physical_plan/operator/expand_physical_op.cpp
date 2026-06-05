@@ -168,6 +168,9 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     }
                 }
                 ev.src_id = sid;
+                auto edge_props = co_await store_.getEdgeProperties(edges[i].edge_label_id, edges[i].edge_id);
+                if (edge_props)
+                    ev.properties = std::move(*edge_props);
                 output.setValue(edge_col_idx, i, Value(std::move(ev)));
             }
         }

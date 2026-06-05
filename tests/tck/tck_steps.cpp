@@ -459,6 +459,10 @@ STEP("^the side effects should be:$") {
     EXPECT_EQ(se.relationships, expected.count("+relationships") ? expected["+relationships"] : 0);
     EXPECT_EQ(se.labels, expected.count("+labels") ? expected["+labels"] : 0);
     EXPECT_EQ(se.properties, expected.count("+properties") ? expected["+properties"] : 0);
+    EXPECT_EQ(se.removed_nodes, expected.count("-nodes") ? expected["-nodes"] : 0);
+    EXPECT_EQ(se.removed_relationships, expected.count("-relationships") ? expected["-relationships"] : 0);
+    EXPECT_EQ(se.removed_labels, expected.count("-labels") ? expected["-labels"] : 0);
+    EXPECT_EQ(se.removed_properties, expected.count("-properties") ? expected["-properties"] : 0);
 }
 
 // -----------------------------------------------------------------------

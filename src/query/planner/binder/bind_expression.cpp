@@ -46,7 +46,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
             } else if constexpr (std::is_same_v<Elem, cypher::Variable>) {
                 auto* col = ctx_.lookup(ptr->name);
                 if (!col) {
-                    error("Variable '" + ptr->name + "' not defined");
+                    error("UndefinedVariable: Variable '" + ptr->name + "' not defined");
                     return std::nullopt;
                 }
                 return BoundExpression(BoundColumnRef(col->column_index, col->type, ptr->name));

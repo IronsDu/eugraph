@@ -212,6 +212,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                     return bindDelete(*ptr, std::move(*current));
                 } else if constexpr (std::is_same_v<Elem, cypher::UnwindClause>) {
                     return bindUnwind(*ptr, std::move(current));
+                } else if constexpr (std::is_same_v<Elem, cypher::MergeClause>) {
+                    return bindMerge(*ptr, std::move(current));
                 } else {
                     error("Clause type not yet supported in binder");
                     return std::nullopt;
@@ -221,6 +223,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
         if (errors_.empty()) {
             current = std::move(op);
+        } else {
+            break; // stop processing clauses after first binding error
         }
     }
 
@@ -277,6 +281,33 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
     auto bound_pred = bindExpression(pred);
     if (!bound_pred)
         return std::nullopt;
+
+    // Collect property requirements from WHERE predicate so that
+    // scan operators fetch the properties needed for filter evaluation.
+    // Without this, filters after cross-joins fail when no RETURN
+    // clause triggers projection pushdown (e.g. MATCH+CREATE).
+    {
+        std::function<void(const BoundExpression&)> collectVars = [&](const BoundExpression& expr) {
+            std::visit(
+                [&](const auto& e) {
+                    using T = std::decay_t<decltype(e)>;
+                    if constexpr (std::is_same_v<T, BoundColumnRef>) {
+                        addAllPropertiesForVariable(e.name);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryOp>>) {
+                        collectVars(e->left);
+                        collectVars(e->right);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundUnaryOp>>) {
+                        collectVars(e->operand);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundPropertyRef>>) {
+                        collectVars(e->object);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundLabelCast>>) {
+                        collectVars(e->object);
+                    }
+                },
+                expr);
+        };
+        collectVars(*bound_pred);
+    }
 
     auto filter = std::make_unique<BoundFilterOp>();
     filter->predicate = std::move(*bound_pred);

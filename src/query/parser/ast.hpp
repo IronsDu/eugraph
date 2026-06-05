@@ -474,10 +474,14 @@ inline std::string expressionToString(const Expression& expr) {
                 return opStr + expressionToString(ptr->operand);
             } else if constexpr (std::is_same_v<OpType, FunctionCall>) {
                 std::string r = ptr->name + "(";
-                for (size_t i = 0; i < ptr->args.size(); i++) {
-                    if (i > 0)
-                        r += ", ";
-                    r += expressionToString(ptr->args[i]);
+                if (ptr->args.empty() && ptr->name == "count") {
+                    r += "*";
+                } else {
+                    for (size_t i = 0; i < ptr->args.size(); i++) {
+                        if (i > 0)
+                            r += ", ";
+                        r += expressionToString(ptr->args[i]);
+                    }
                 }
                 return r + ")";
             } else {

@@ -749,6 +749,11 @@ private:
     }
 
     std::optional<PropertiesMap> buildProperties(AP::PropertiesContext* ctx) {
+        if (ctx->parameter() && !ctx->mapLit()) {
+            PropertiesMap pm;
+            pm.entries.push_back({"$param", buildParameter(ctx->parameter())});
+            return pm;
+        }
         if (!ctx->mapLit())
             return std::nullopt;
         PropertiesMap pm;

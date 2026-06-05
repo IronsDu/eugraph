@@ -1,5 +1,7 @@
 #include "query/evaluator/vectorized_evaluator.hpp"
 
+#include <spdlog/spdlog.h>
+
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 
@@ -43,6 +45,37 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     if (candidate.prop_id < props.size() && props[candidate.prop_id].has_value()) {
                         found.push_back(pvToValue(*props[candidate.prop_id]));
                     }
+                }
+            }
+            spdlog::info("[evalPropRef] vid={} prop_name='{}' candidates={} found={} props_labels={}",
+                         std::holds_alternative<VertexValue>(ov) ? std::get<VertexValue>(ov).id : -1, ref.property_name,
+                         ref.candidates.size(), found.size(), vertex.properties.size());
+            // Fallback: a property may be registered on __anon__ in the
+            // catalog but physically stored under the vertex's concrete
+            // label.  Search all loaded labels by name.
+            if (found.empty() && !ref.property_name.empty()) {
+                for (const auto& [lid, props_vec] : vertex.properties) {
+                    const LabelDef* ldef = nullptr;
+                    if (eval_ctx_.label_defs) {
+                        auto it = eval_ctx_.label_defs->find(lid);
+                        if (it != eval_ctx_.label_defs->end())
+                            ldef = &it->second;
+                    }
+                    if (!ldef && eval_ctx_.catalog)
+                        ldef = eval_ctx_.catalog->lookupLabel(lid);
+                    if (!ldef)
+                        continue;
+                    for (const auto& pd : ldef->properties) {
+                        if (pd.name == ref.property_name && pd.id < props_vec.size()) {
+                            const auto& pv = props_vec[pd.id];
+                            if (pv.has_value()) {
+                                found.push_back(pvToValue(*pv));
+                                break;
+                            }
+                        }
+                    }
+                    if (!found.empty())
+                        break;
                 }
             }
             if (found.size() == 1) {

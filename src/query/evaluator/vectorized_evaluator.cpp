@@ -5,6 +5,7 @@
 #include "query/planner/bound_expression/bound_expression.hpp"
 
 #include <cmath>
+#include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace compute {
@@ -60,6 +61,10 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
             using T = std::decay_t<decltype(val)>;
             size_t count = input.numRows();
 
+            if constexpr (!std::is_same_v<T, binder::BoundLiteral> && !std::is_same_v<T, binder::BoundColumnRef>) {
+                spdlog::info("[evalDispatch] type={}", typeid(T).name());
+            }
+
             if constexpr (std::is_same_v<T, binder::BoundLiteral>) {
                 auto& col = acquireTempColumn(val.type.kind, count);
                 evalLiteral(val, col, count);
@@ -68,6 +73,8 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 if (val.column_index < input.columns.size()) {
                     return {&input.columns[val.column_index], false};
                 }
+                spdlog::info("[evalDispatch] BoundColumnRef name='{}' idx={} but input has {} columns", val.name,
+                             val.column_index, input.columns.size());
                 auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {

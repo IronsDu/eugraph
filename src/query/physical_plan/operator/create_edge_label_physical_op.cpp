@@ -17,9 +17,14 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgeLabelPhysicalOp::executeChunk()
 
     EdgeLabelId id = co_await meta_.createEdgeLabel(label_name_, property_defs);
 
-    // Also create the underlying WiredTiger data table
     if (id != INVALID_EDGE_LABEL_ID) {
+        // Newly created label — also create the underlying data table
         co_await store_.createEdgeLabel(id);
+    } else {
+        // Label already exists — register properties that aren't yet in the definition
+        if (!prop_defs_.empty()) {
+            co_await meta_.addEdgeLabelProperties(label_name_, prop_defs_);
+        }
     }
 
     // Reload the full def (with property IDs) from meta store to keep shared maps in sync

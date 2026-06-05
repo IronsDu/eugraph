@@ -30,6 +30,7 @@ struct BoundBinaryJoinOp;
 struct BoundLeftJoinOp;
 struct BoundSemiJoinOp;
 struct BoundUnwindOp;
+struct BoundMergeOp;
 struct BoundUnionOp;
 
 using BoundLogicalOperator =
@@ -41,7 +42,7 @@ using BoundLogicalOperator =
                  std::unique_ptr<BoundDeleteOp>, std::unique_ptr<BoundPathBuildOp>,
                  std::unique_ptr<BoundVarLenExpandOp>, std::unique_ptr<BoundBinaryJoinOp>,
                  std::unique_ptr<BoundLeftJoinOp>, std::unique_ptr<BoundSemiJoinOp>, std::unique_ptr<BoundUnwindOp>,
-                 std::unique_ptr<BoundUnionOp>>;
+                 std::unique_ptr<BoundUnionOp>, std::unique_ptr<BoundMergeOp>>;
 
 struct BoundLogicalPlan;
 

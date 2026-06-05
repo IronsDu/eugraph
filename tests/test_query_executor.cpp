@@ -2408,7 +2408,7 @@ TEST_F(QueryExecutorTest, OutputSchemaReturnAggregate) {
     auto result = execSync(*executor_, "MATCH (n:Person) RETURN count(*)");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.columns.size(), 1u) << "Expected 1 column, got: " << result.columns.size();
-    EXPECT_EQ(result.columns[0], "count()");
+    EXPECT_EQ(result.columns[0], "count(*)");
 }
 
 // ==================== WITH Clause Tests ====================
@@ -5491,4 +5491,104 @@ TEST_F(QueryExecutorTest, UnwindNullWithBooleanOr) {
     // Second row: true OR false → true
     EXPECT_TRUE(std::holds_alternative<bool>(result.rows[1][0]));
     EXPECT_EQ(std::get<bool>(result.rows[1][0]), true);
+}
+
+// ==================== MERGE Tests ====================
+
+// Node MERGE + RETURN: create label with property, verify RETURN accesses it
+TEST_F(QueryExecutorTest, MergeCreateNodeWithReturn) {
+    auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
+    blockingWait(async_data_->createLabel(lid));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    auto result = execSync(*executor_, "MERGE (n:M {name: 'Alice'}) RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    EXPECT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Alice");
+}
+
+// MERGE idempotency: re-MERGE matches existing, doesn't create duplicate
+TEST_F(QueryExecutorTest, MergeIdempotentReadOwnWrites) {
+    auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
+    blockingWait(async_data_->createLabel(lid));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    execSync(*executor_, "MERGE (n:M {name: 'Bob'})");
+    execSync(*executor_, "MERGE (n:M {name: 'Bob'})");
+    auto check = execSync(*executor_, "MATCH (n:M {name: 'Bob'}) RETURN count(*) AS c");
+    ASSERT_TRUE(check.error.empty()) << check.error;
+    ASSERT_EQ(check.rows.size(), 1);
+    EXPECT_EQ(std::get<int64_t>(check.rows[0][0]), 1);
+}
+
+// UNWIND + MERGE: read-own-writes across multiple input rows
+TEST_F(QueryExecutorTest, UnwindMergeReadOwnWrites) {
+    auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
+    blockingWait(async_data_->createLabel(lid));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    auto result = execSync(*executor_, "UNWIND [1, 1, 2] AS x MERGE (n:M {name: 'val'}) RETURN x");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3);
+}
+
+// MATCH+WHERE+CREATE edge: projection pushdown below CreateEdge
+TEST_F(QueryExecutorTest, MatchWhereCreateEdge) {
+    auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
+    blockingWait(async_data_->createLabel(lid));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    execSync(*executor_, "CREATE (:M {name: 'src'})");
+    execSync(*executor_, "CREATE (:M {name: 'dst'})");
+    auto before = execSync(*executor_, "MATCH ()-[r:KNOWS]->() RETURN count(*) AS c");
+    ASSERT_TRUE(before.error.empty()) << before.error;
+    int64_t cb = std::get<int64_t>(before.rows[0][0]);
+    execSync(*executor_, "MATCH (a:M), (b:M) WHERE a.name='src' AND b.name='dst' CREATE (a)-[:KNOWS]->(b)");
+    auto after = execSync(*executor_, "MATCH ()-[r:KNOWS]->() RETURN count(*) AS c");
+    ASSERT_TRUE(after.error.empty()) << after.error;
+    EXPECT_EQ(std::get<int64_t>(after.rows[0][0]), cb + 1);
+}
+
+// MERGE edge endpoint auto-creation with RETURN
+TEST_F(QueryExecutorTest, MergeEdgeEndpointAutoCreation) {
+    auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
+    blockingWait(async_data_->createLabel(lid));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    auto result = execSync(*executor_, "MERGE (a:M {name: 'Charlie'})-[:KNOWS]->(b:M {name: 'Diana'}) "
+                                       "RETURN a.name, b.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+}
+
+// MERGE with ON CREATE SET
+TEST_F(QueryExecutorTest, MergeOnCreateSet) {
+    auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
+    blockingWait(async_data_->createLabel(lid));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    auto result = execSync(*executor_, "MERGE (n:M {name: 'oncreate'}) ON CREATE SET n.name = 'Created' "
+                                       "RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+}
+
+// Error: variable-length MERGE should fail
+TEST_F(QueryExecutorTest, MergeVarLengthFails) {
+    auto result = execSync(*executor_, "MERGE (a)-[:KNOWS*1..3]->(b)");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("CreatingVarLength"), std::string::npos);
+}
+
+// Error: multiple relationship types in MERGE should fail
+TEST_F(QueryExecutorTest, MergeMultiRelTypeFails) {
+    auto result = execSync(*executor_, "MERGE (a)-[:KNOWS|LIVES_IN]->(b)");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("NoSingleRelationshipType"), std::string::npos);
+}
+
+// Error: node variable already bound in MERGE should fail
+TEST_F(QueryExecutorTest, MergeVariableAlreadyBoundFails) {
+    auto lid = blockingWait(async_meta_->createLabel("M", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
+    blockingWait(async_data_->createLabel(lid));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    execSync(*executor_, "CREATE (n:M {name: 'prebound'})");
+    auto result = execSync(*executor_, "MATCH (n:M {name: 'prebound'}) MERGE (n:M {name: 'other'})");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("VariableAlreadyBound"), std::string::npos);
 }

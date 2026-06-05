@@ -112,8 +112,14 @@ void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
                     applyProjectionPushdown(v.right);
                 } else if constexpr (std::is_same_v<Elem, BoundUnwindOp>) {
                     applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundCreateNodeOp>) {
+                    if (v.child)
+                        applyProjectionPushdown(*v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundCreateEdgeOp>) {
+                    applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundMergeOp>) {
+                    applyProjectionPushdown(v.child);
                 }
-                // BoundCreateNodeOp, BoundCreateEdgeOp: no child traversal needed
             }
         },
         op);

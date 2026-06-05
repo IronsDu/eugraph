@@ -270,7 +270,7 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 | ~~P1~~ | ~~Temporal 属性往返类型保留~~ | ~~~52~~ | ✅ 已修复（拆分为 DateTimeValue/TimeValue/DurationValue） |
 | ~~P2~~ | ~~时间属性存取往返~~ | ~~~40~~ | ✅ 已修复：Binder catalog_.getAnonLabelId() 返回 INVALID_LABEL_ID 导致无标签节点写失败 |
 | ~~P2~~ | ~~时区秒精度~~ | ~~~48~~ | ✅ 已修复（commit a1597ec）：tz_offset_min→tz_offset_sec |
-| **P1** | MERGE | ~80 | MERGE 子句实现 |
+| **P1** | MERGE | ~80 | MERGE 子句实现（55/75 TCK 通过，见下方 MERGE 专项） |
 | **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
 | ~~P2~~ | ~~布尔类型检查~~ | ~~~48~~ | ✅ 已实现：AND/OR/XOR/NOT 在 Binder 阶段检查操作数类型为非布尔时报告 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播；XOR 从 AST skip 列表移除 |
 | ~~P2~~ | ~~结果不匹配（时间比较 epoch 拒绝）~~ | 已修复 | ✅ `isValidDateTime()`→`sameKind()`，epoch 值现可正常比较 |
@@ -294,3 +294,160 @@ TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `Du
 - ~~**紧凑 STRING 格式**~~：✅ 已修复，无分隔符格式已实现。
 - ~~**DOUBLE 截断**~~：✅ 已修复，mul / div Duration 支持 double 因子。
 - **命名时区不支持**：`datetime('2017-...T23:00+02:00[Europe/Stockholm]')` 中命名时区仅存储名称，不解析为实际偏移量（DST 感知）。需引入 IANA 时区数据库。
+
+---
+
+## MERGE TCK 专项
+
+**日期**: 2026-06-05 (第五轮更新)
+**分支**: feature/merge-clause
+**总计**: 75 场景, **55 通过 / 20 失败**
+
+### 已修复项 (23 → 36 → 49 → 50 → 55)
+
+| 修复内容 | 影响场景 |
+|---------|---------|
+| 列表字符串格式化（双引号→单引号） | Merge1[2], Merge1[10], Merge2[1](部分), Merge3[2](部分) |
+| `registerPendingProps` 实际注册属性到 `__anon__` | Merge ON CREATE/MATCH SET 属性相关 |
+| 匿名节点创建存入 `__anon__` 表 | Merge1[1] |
+| Binder InvalidParameterUse 校验（节点/关系谓词） | Merge1[16], Merge5[27] |
+| Binder VariableAlreadyBound 校验（关系变量、带标签已绑定节点） | Merge5[22], Merge5[26] |
+| Parser `$param` 语法支持（`buildProperties` 处理 parameter） | Merge1[16], Merge5[27] |
+| Binder 首个错误后停止处理子句（防级联） | Merge1[16], Merge5[27] |
+| UndefinedVariable 错误消息含关键字 | Merge2[6], Merge3[5](部分) |
+| TCK 错误分类补充 MERGE 模式 | 多个错误验证场景 |
+
+### 已修复项（第二轮）
+
+| 修复内容 | 影响场景 |
+|---------|---------|
+| findMatchingNode 增加 pending_props 检查（created_vertices 和 __anon__ 路径） | Merge1[4,9,11,12], Merge9[1,2] |
+| executeSetItems 按 var_name 选择目标实体（不再取第一个 Vertex） | Merge2[1], Merge3[2], Merge6[3], Merge7[4-7], Merge8[1] |
+| 输出 VertexValue 包含 SET_LABELS 追加的标签 | Merge2[1], Merge3[2] |
+| bindMergeSetItem 校验 target_variable 存在于作用域 | Merge2[6], Merge3[5], Merge6[6] |
+| expressionToString 对 count 零参数输出 `count(*)` | Merge5[1,14], Merge9[1,3] |
+| executeChunk 检测 null 属性值报 SemanticError: MergeReadOwnWrites | Merge1[17], Merge5[29] |
+
+### 已修复项（第三轮，36 → 49）
+
+| 修复内容 | 影响场景 |
+|---------|---------|
+| `CreateEdgePhysicalOp` pending_props 延迟解析（lazy resolve after ALTER child） | Merge6[1,2] 等 ON CREATE SET 边属性场景 |
+| TCK stream 异常路径错误分类（Bug F） | Merge1[17], Merge5[29] 的错误类型识别 |
+| TCK `+labels` 副作用计数改用唯一标签名（Bug B） | Merge1[5,7,10,11], Merge9[2] |
+| TCK `+nodes`/`-nodes` 副作用拆分计算（Bug C，ID 集合差集） | Merge1[14], Merge5[18,20] |
+| TCK MERGE 多关系类型 `[:A|:B]` 让查询到达服务端（Bug E） | Merge5[25] |
+
+### 已修复项（第四轮，49 → 50）
+
+| 修复内容 | 影响场景 |
+|---------|---------|
+| CrossProduct 右子树列索引重映射（Bug H 真正根因） | Merge6[3,4,6,7], Merge7[3,4,5] |
+
+**Bug H 详细修复说明**:
+
+原始诊断认为问题是"属性 catalog 注册位置与存储位置不一致"，实际根因是 **CrossProduct 物理规划阶段的列索引映射错误**。
+
+Binder 为逗号分隔的 MATCH 模式（如 `MATCH (a {name: 'A'}), (b {name: 'B'})`）分配全局列索引：`a=0`, `b=1`。CrossProduct 中右子树独立规划产生本地列索引（从 0 开始），但右子树内谓词表达式（Filter、PropertyRef 等）的 `BoundColumnRef.column_index` 仍使用全局索引。例如 `b` 的 column_index=1，但右子树 DataChunk 只有 1 列（索引 0），导致 evaluator 访问越界，属性查找返回空值。
+
+**修复方案**: 在 `physical_planner.cpp` 的 CrossProduct（BoundBinaryJoinOp）规划中，规划右子树前对其整棵逻辑算子树递归执行列索引重映射，将所有 `column_index` 减去左子树列数偏移量。涉及两个静态函数：
+
+- `remapExprColumnIndices(BoundExpression&, uint32_t offset)`: 递归遍历所有 BoundExpression 变体（BoundColumnRef、BoundBinaryOp、BoundUnaryOp、BoundPropertyRef、BoundFunctionCall、BoundCase 等），对 BoundColumnRef 的 column_index 执行 `-= offset`。
+- `remapLogicalOpColumnIndices(BoundLogicalOperator&, uint32_t offset)`: 递归遍历所有 BoundLogicalOperator 变体（BoundScanOp、BoundFilterOp、BoundExpandOp、BoundProjectOp 等），对算子内部的 column_index 字段和表达式执行重映射。
+
+**修改文件**: `src/query/physical_plan/physical_planner.cpp`（新增 ~120 行）
+
+**其他相关改动**（前几轮已提交，本轮验证生效）:
+- `all_node_scan_physical_op.cpp`: 从所有 label 加载属性（不仅是 `label_prop_ids_`）
+- `eval_property.cpp`: `evalPropertyRef` 增加 candidate 查找失败后按属性名搜索 fallback
+
+### 已修复项（第五轮，50 → 55）
+
+| 修复内容 | 影响场景 |
+|---------|---------|
+| `CreateEdgePhysicalOp` 延迟标签解析（deferred label resolution after child op runs） | Delete6[1-4,6-9] |
+| `CreateEdgeLabelPhysicalOp` 已有标签时调用 `addEdgeLabelProperties` | Delete6[8,9] 边属性注册 |
+| `LimitPhysicalOp` LIMIT 0 消费所有子数据触发副作用 | Remove3[15,16] |
+| TCK `+labels` distinct 标签名计数 | Merge1[2,5,7,8,10,11] |
+| `executeSetPropertiesItem` 边属性动态注册 | Merge6[7]（部分修复） |
+
+**CreateEdgePhysicalOp 延迟解析详细说明**:
+
+原始实现在 `executeChunk()` 开头立即解析 `label_id_`，但此时子算子 `CreateEdgeLabelPhysicalOp` 尚未执行，共享的 `name_to_id_` 和 `defs_` 映射为空，导致 `effective_label_id` 为 INVALID。
+
+修复方案：将标签 ID 解析、属性注册、pending 属性 ID 映射全部推迟到第一次 `child_gen.next()` 返回之后执行（此时子算子已填充共享映射）。涉及变量：
+- `effective_label_id`: 从 `name_to_id_` 解析
+- `edge_label_def`: 从 `defs_` 解析
+- `resolved_pending`: 从 `pending_props_` + `edge_label_def->properties` 解析
+
+**LimitPhysicalOp LIMIT 0 修复详细说明**:
+
+openCypher 语义要求 LIMIT 0 仍执行所有副作用（CREATE/DELETE/SET 等），仅结果集为空。原始实现 `remaining == 0` 时直接 `co_return`，跳过了整个子管道。修复为消费所有子数据但不 yield。
+
+### 剩余 bug 按根因分组（20 场景）
+
+#### Bug 1: findMatchingNode 不检查 pending_props（部分已修复）
+
+**根因**: `created_vertices_` 循环和 `__anon__` 扫描只验证 `prop_filters`（已解析属性 ID），不验证 `pending_props`（按名称匹配）。当 MERGE 属性未通过标签解析时（匿名节点或新标签），匹配逻辑形同虚设。
+
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
+
+**影响场景**: Merge5[6,18]
+
+#### Bug J: ON MATCH SET 边属性写入后 snapshot 不可见（7 场景）
+
+**现象**: Merge7[3]（`ON MATCH SET r.name = 'Lola'`）执行后，snapshot 查询 `MATCH ()-[r]->() RETURN sum(size(keys(r)))` 返回 0（期望 1）。
+
+**排查结论**:
+- ON CREATE 场景（Merge6[2]）snapshot 能正确返回 1，说明 `putEdgeProperty` 写入机制本身正常
+- `addEdgeLabelProperties` 在 `AsyncGraphMetaStore` 中正确实现（`SyncGraphMetaStore` 版本为 no-op，不影响 TCK 测试）
+- 属性已通过 `putEdgeProperty` 写入存储，但后续查询 `keys(r)` 依赖两个条件：(1) `ExpandPhysicalOp` 加载边属性填充 `ev.properties`，(2) `lookupEdgeLabel(ev.label_id)` 返回含属性名的定义
+- 可能原因：边属性写入后 edge label def 缓存未刷新，或 ON MATCH 分支中 `edge_id`/`elid` 传值有误
+
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
+
+**影响场景**: Merge7[3,4,5], Merge8[3,4,5], Merge9[1]
+
+#### Bug K: 控制查询 `r[key]` 动态属性访问（4 场景）
+
+**现象**: Merge6[3,4,6,7] 的控制查询 `MATCH ()-[r:TYPE]->() RETURN [key IN keys(r) | key + '->' + r[key]]` 失败。属性已正确写入（snapshot 能计数到），但 `r[key]` 动态属性访问可能不支持 edge。
+
+**文件**: `src/query/function/scalar/graph_functions.hpp` (`evalPropertyRef`)
+
+**影响场景**: Merge6[3,4,6,7]
+
+#### Bug L: findMatchingEdge 只返回首条（1 场景）
+
+**根因**: `findMatchingEdge` 扫描到第一条匹配边即返回，不验证所有属性约束。
+
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
+
+**影响场景**: Merge5[3]
+
+#### Bug M: findMatchingNode 匹配问题（3 场景）
+
+**根因**: `findMatchingNode()` 扫描标签表不过滤已删除节点，或 pending_props 检查不完整。
+
+**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp` + 存储层
+
+**影响场景**: Merge1[9], Merge5[6,18]
+
+### 功能缺失（不在本次修复范围）
+
+| 类别 | 影响场景 | 说明 |
+|------|---------|------|
+| 路径绑定 (path variable) | Merge1[13], Merge5[10] | 路径类型支持不完整 |
+| 无方向关系匹配 | Merge5[11], [12], [13] | 需扩展关系方向处理 |
+| 列表属性匹配 | Merge5[15], [21] | 列表属性比较未实现 |
+| 关系类型交替 `[:A\|:B]` | Merge5[25] | AST skip 阻止解析 |
+| 删除节点对 MERGE 可见 | Merge1[14], Merge5[20] | 存储层已删除节点未被过滤 |
+
+### 剩余 20 个失败场景汇总
+
+| 根因 | 场景数 | 场景列表 |
+|------|--------|----------|
+| **Bug J: ON MATCH SET 边属性不可见** | 7 | Merge7[3,4,5], Merge8[3,4,5], Merge9[1] |
+| **Bug K: 控制查询 r[key]** | 4 | Merge6[3,4,6,7] |
+| **Bug L: findMatchingEdge 只返回首条** | 1 | Merge5[3] |
+| **Bug M: findMatchingNode 匹配问题** | 3 | Merge1[9], Merge5[6,18] |
+| **功能缺失: 路径/方向/列表/删除** | 5 | Merge1[13,14], Merge5[10,11,13,15,20,21] |
