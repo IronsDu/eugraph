@@ -396,10 +396,55 @@ Binder 为逗号分隔的 MATCH 模式（如 `MATCH (a {name: 'A'}), (b {name: '
 
 ### 当前工作状态（WIP）
 
-以下文件包含临时调试日志，提交前需要清理：
-- `src/query/evaluator/eval_property.cpp` — `#include <spdlog/spdlog.h>` 和 `spdlog::info` 调试日志
-- `src/query/evaluator/vectorized_evaluator.cpp` — `spdlog::info` 调试日志
-- `src/query/physical_plan/operator/all_node_scan_physical_op.cpp` — `spdlog::info` 调试日志
-- `src/query/physical_plan/operator/filter_physical_op.cpp` — `spdlog::info` 调试日志
-- `src/query/physical_plan/operator/merge_physical_op.cpp` — edge phase 和 created edge 日志
-- `tests/tck/tck_context.cpp` — snapshot debug 日志
+**日期**: 2026-06-05 (第六轮)
+
+#### 当前 TCK 测试状态
+
+- **55 passed / 20 failed / 75 total**（从 50/75 提升 5 个场景）
+
+#### 本轮已完成
+
+1. **+labels distinct 计数修复**（影响 5 个场景）
+   - **根因**: `GraphSnapshot.labelCount` 使用 `sum(size(labels(n)))` 统计标签实例总数，但 TCK 语义要求统计 distinct 标签名增量。
+   - **修复**: `GraphSnapshot` 移除 `labelCount`，新增 `unordered_set<string> labelNames`。`takeSnapshot()` 使用 `MATCH (n) RETURN labels(n)` 查询并解析 `list_json`（单引号格式）收集 distinct 标签名。`computeSideEffects()` 通过集合差集计算 `+labels`/`-labels`。
+   - **修改文件**: `tests/tck/tck_types.hpp`, `tests/tck/tck_context.hpp`, `tests/tck/tck_context.cpp`
+   - **影响场景**: Merge1[2,5,7,8,10,11] 中的 +labels 副作用计数
+
+2. **`executeSetPropertiesItem` 边属性动态注册**（部分修复）
+   - **根因**: `executeSetPropertiesItem` 处理 `SET r = a` 或 `SET r += {...}` 时，当属性未在 edge label 定义中注册时，`pid` 固定为 0，导致所有属性覆盖到同一位置。
+   - **修复**: 为每个 map entry 添加与 `executeSetPropertyItem` 相同的动态注册逻辑（`addEdgeLabelProperties` + 刷新缓存）。
+   - **修改文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
+   - **效果**: Merge6[7] 的副作用检查从失败变为通过（但控制查询仍有问题）
+
+3. **编译环境恢复**: 修复 `physical_planner.cpp` 损坏和目标文件损坏，重新编译通过。
+
+#### 正在排查
+
+**Bug J: ON MATCH SET 边属性写入后 snapshot 不可见**
+
+- **现象**: Merge7[3]（`ON MATCH SET r.name = 'Lola'`）执行后，snapshot 查询 `MATCH ()-[r]->() RETURN sum(size(keys(r)))` 返回 0（期望 1）。
+- **已确认**: Merge6[2]（`ON CREATE SET r.name = 'Lola'`）的 snapshot 能正确返回 1。说明 `putEdgeProperty` 写入机制本身正常。
+- **差异点**: ON CREATE 场景写入成功，ON MATCH 场景写入后不可见。可能原因：
+  - ON MATCH 分支中 `edge_id` 或 `elid` 传值有误
+  - `putEdgeProperty` 调用失败但无返回值检查
+  - 事务隔离问题（写入未提交）
+- **影响场景**: Merge7[3,4,5], Merge8[3,4,5], Merge9[1] — 约 7 个场景
+
+**Bug K: 控制查询 `r[key]` 动态属性访问**
+
+- Merge6[3,4,6,7] 的控制查询 `MATCH ()-[r:TYPE]->() RETURN [key IN keys(r) | key + '->' + r[key]]` 失败。
+- 属性已正确写入（Merge6[2,3] snapshot 能计数到），但 `r[key]` 动态属性访问可能不支持 edge。
+- 需确认 `evalPropertyRef` 是否支持 edge 的动态属性访问。
+
+#### 剩余 20 个失败场景分类
+
+| 根因 | 场景数 | 场景列表 |
+|------|--------|----------|
+| **Bug J: ON MATCH SET 边属性不可见** | 7 | Merge7[3,4,5], Merge8[3,4,5], Merge9[1] |
+| **Bug K: 控制查询 r[key]** | 4 | Merge6[3,4,6,7]（副作用已通过，控制查询失败） |
+| **Bug L: findMatchingEdge 只返回首条** | 1 | Merge5[3] |
+| **Bug M: findMatchingNode 匹配问题** | 3 | Merge1[9], Merge5[6,18] |
+| **功能缺失: 路径/方向/列表/删除** | 5 | Merge1[13], Merge5[10,11,13,14,15,20,21] |
+
+#### 已有调试日志（提交前需要清理）
+- `src/query/physical_plan/operator/merge_physical_op.cpp` — `[MERGE] edge phase` 和 `[MERGE] created edge` / `found existing edge` 日志

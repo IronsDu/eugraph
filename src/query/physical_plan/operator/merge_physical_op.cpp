@@ -696,165 +696,191 @@ MergePhysicalOp::createEdge(VertexId src_vid, VertexId dst_vid,
 folly::coro::Task<void> MergePhysicalOp::executeSetItems(const std::vector<SetPhysicalOp::BoundSetItem>& items,
                                                          const DataChunk& merged_chunk, VectorizedEvaluator& evaluator,
                                                          VertexId start_vid, VertexId end_vid, EdgeId edge_id) {
-    auto resolveVid = [&](const std::string& var_name) -> VertexId {
-        if (var_name == start_var_)
-            return start_vid;
-        if (has_relationship_ && var_name == end_var_)
-            return end_vid;
-        return INVALID_VERTEX_ID;
-    };
-
     for (const auto& item : items) {
         Value val;
         if (item.value) {
             val = evaluateExpr(evaluator, *item.value, &merged_chunk, 0);
         }
-
         switch (item.kind) {
-        case cypher::SetItemKind::SET_PROPERTY: {
-            if (!item.value || std::holds_alternative<std::monostate>(val))
-                break;
-            auto pv = valueToPropertyValue(val);
-            // Edge property
-            if (has_relationship_ && item.var_name == edge_var_ && edge_id != INVALID_EDGE_ID) {
-                EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
-                if (item.resolved_prop_id) {
-                    co_await store_.putEdgeProperty(edge_id, elid, *item.resolved_prop_id, pv);
-                } else {
-                    // Resolve prop_id from edge label definition
-                    uint16_t pid = 0;
-                    bool found = false;
-                    auto it = edge_label_defs_.find(elid);
-                    if (it != edge_label_defs_.end()) {
-                        for (const auto& pd : it->second.properties) {
-                            if (pd.name == item.prop_name) {
-                                pid = pd.id;
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!found && edge_label_name_.has_value()) {
-                        // Dynamically register the property on the edge label
-                        co_await meta_.addEdgeLabelProperties(*edge_label_name_, {{item.prop_name, PropertyType::ANY}});
-                        auto updated = co_await meta_.getEdgeLabelDefById(elid);
-                        if (updated) {
-                            edge_label_defs_[elid] = std::move(*updated);
-                            for (const auto& pd : edge_label_defs_[elid].properties) {
-                                if (pd.name == item.prop_name) {
-                                    pid = pd.id;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    co_await store_.putEdgeProperty(edge_id, elid, pid, pv);
-                }
-                break;
-            }
-            // Vertex property
-            VertexId target_vid = resolveVid(item.var_name);
-            if (target_vid == INVALID_VERTEX_ID)
-                break;
-
-            if (item.strong_mode && item.resolved_prop_id && item.resolved_label_id) {
-                co_await store_.putVertexProperty(target_vid, *item.resolved_label_id, *item.resolved_prop_id, pv);
-            } else {
-                // Resolve label at runtime from the vertex's known labels
-                auto& search_labels = (item.var_name == start_var_) ? start_labels_ : end_labels_;
-                LabelId resolved_lid = INVALID_LABEL_ID;
-                uint16_t resolved_pid = 0;
-                for (auto lid : search_labels) {
-                    if (lid == INVALID_LABEL_ID || lid == anon_label_id_)
-                        continue;
-                    auto def_it = label_defs_.find(lid);
-                    if (def_it != label_defs_.end()) {
-                        for (const auto& pd : def_it->second.properties) {
-                            if (pd.name == item.prop_name) {
-                                resolved_lid = lid;
-                                resolved_pid = pd.id;
-                                break;
-                            }
-                        }
-                    }
-                    if (resolved_lid != INVALID_LABEL_ID)
-                        break;
-                }
-                if (resolved_lid != INVALID_LABEL_ID) {
-                    co_await store_.putVertexProperty(target_vid, resolved_lid, resolved_pid, pv);
-                } else if (anon_label_id_ != INVALID_LABEL_ID) {
-                    uint16_t pid = 0;
-                    auto def_it = label_defs_.find(anon_label_id_);
-                    if (def_it != label_defs_.end()) {
-                        for (const auto& pd : def_it->second.properties) {
-                            if (pd.name == item.prop_name) {
-                                pid = pd.id;
-                                break;
-                            }
-                        }
-                    }
-                    co_await store_.putVertexProperty(target_vid, anon_label_id_, pid, pv);
-                }
-            }
+        case cypher::SetItemKind::SET_PROPERTY:
+            co_await executeSetPropertyItem(item, val, start_vid, end_vid, edge_id);
             break;
-        }
-        case cypher::SetItemKind::SET_LABELS: {
-            if (item.resolved_label_id) {
-                VertexId vid = resolveVid(item.var_name);
-                if (vid != INVALID_VERTEX_ID)
-                    co_await store_.addVertexLabel(vid, *item.resolved_label_id);
-            }
+        case cypher::SetItemKind::SET_LABELS:
+            co_await executeSetLabelsItem(item, start_vid, end_vid);
             break;
-        }
-        case cypher::SetItemKind::SET_PROPERTIES: {
-            if (!item.value || std::holds_alternative<std::monostate>(val))
-                break;
-            // Edge target
-            if (has_relationship_ && item.var_name == edge_var_ && edge_id != INVALID_EDGE_ID &&
-                std::holds_alternative<MapValue>(val)) {
-                EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
-                const auto& mv = std::get<MapValue>(val);
-                auto it = edge_label_defs_.find(elid);
-                for (const auto& [k, vs] : mv.entries) {
-                    auto pv = valueToPropertyValue(vs.value);
-                    uint16_t pid = 0;
-                    if (it != edge_label_defs_.end()) {
-                        for (const auto& pd : it->second.properties) {
-                            if (pd.name == k) {
-                                pid = pd.id;
-                                break;
-                            }
-                        }
-                    }
-                    co_await store_.putEdgeProperty(edge_id, elid, pid, pv);
-                }
-                break;
-            }
-            // Vertex target
-            VertexId vid = resolveVid(item.var_name);
-            if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValue>(val)) {
-                const auto& mv = std::get<MapValue>(val);
-                for (const auto& [k, vs] : mv.entries) {
-                    auto pv = valueToPropertyValue(vs.value);
-                    if (anon_label_id_ != INVALID_LABEL_ID) {
-                        uint16_t pid = 0;
-                        auto def_it = label_defs_.find(anon_label_id_);
-                        if (def_it != label_defs_.end()) {
-                            for (const auto& pd : def_it->second.properties) {
-                                if (pd.name == k) {
-                                    pid = pd.id;
-                                    break;
-                                }
-                            }
-                        }
-                        co_await store_.putVertexProperty(vid, anon_label_id_, pid, pv);
-                    }
-                }
-            }
+        case cypher::SetItemKind::SET_PROPERTIES:
+            co_await executeSetPropertiesItem(item, val, start_vid, end_vid, edge_id);
             break;
-        }
         default:
             break;
+        }
+    }
+}
+
+folly::coro::Task<void> MergePhysicalOp::executeSetPropertyItem(const SetPhysicalOp::BoundSetItem& item,
+                                                                const Value& val,
+                                                                VertexId start_vid, VertexId end_vid,
+                                                                EdgeId edge_id) {
+    if (!item.value || std::holds_alternative<std::monostate>(val))
+        co_return;
+    // Edge property
+    if (has_relationship_ && item.var_name == edge_var_ && edge_id != INVALID_EDGE_ID) {
+        EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
+        if (item.resolved_prop_id) {
+            co_await store_.putEdgeProperty(edge_id, elid, *item.resolved_prop_id, valueToPropertyValue(val));
+        } else {
+            uint16_t pid = 0;
+            bool found = false;
+            auto it = edge_label_defs_.find(elid);
+            if (it != edge_label_defs_.end()) {
+                for (const auto& pd : it->second.properties) {
+                    if (pd.name == item.prop_name) {
+                        pid = pd.id;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found && edge_label_name_.has_value()) {
+                std::vector<std::pair<std::string, PropertyType>> tmp_props{{item.prop_name, PropertyType::ANY}};
+                co_await meta_.addEdgeLabelProperties(*edge_label_name_, tmp_props);
+                auto updated = co_await meta_.getEdgeLabelDefById(elid);
+                if (updated) {
+                    edge_label_defs_[elid] = std::move(*updated);
+                    for (const auto& pd : edge_label_defs_[elid].properties) {
+                        if (pd.name == item.prop_name) {
+                            pid = pd.id;
+                            break;
+                        }
+                    }
+                }
+            }
+            co_await store_.putEdgeProperty(edge_id, elid, pid, valueToPropertyValue(val));
+        }
+        co_return;
+    }
+    // Vertex property
+    VertexId target_vid = INVALID_VERTEX_ID;
+    if (item.var_name == start_var_) target_vid = start_vid;
+    else if (has_relationship_ && item.var_name == end_var_) target_vid = end_vid;
+    if (target_vid == INVALID_VERTEX_ID)
+        co_return;
+
+    if (item.strong_mode && item.resolved_prop_id && item.resolved_label_id) {
+        co_await store_.putVertexProperty(target_vid, *item.resolved_label_id, *item.resolved_prop_id,
+                                          valueToPropertyValue(val));
+        co_return;
+    }
+
+    auto* search_labels = (item.var_name == start_var_) ? &start_labels_ : &end_labels_;
+    LabelId resolved_lid = INVALID_LABEL_ID;
+    uint16_t resolved_pid = 0;
+    for (auto lid : *search_labels) {
+        if (lid == INVALID_LABEL_ID || lid == anon_label_id_)
+            continue;
+        auto def_it = label_defs_.find(lid);
+        if (def_it != label_defs_.end()) {
+            for (const auto& pd : def_it->second.properties) {
+                if (pd.name == item.prop_name) {
+                    resolved_lid = lid;
+                    resolved_pid = pd.id;
+                    break;
+                }
+            }
+        }
+        if (resolved_lid != INVALID_LABEL_ID)
+            break;
+    }
+    if (resolved_lid != INVALID_LABEL_ID) {
+        co_await store_.putVertexProperty(target_vid, resolved_lid, resolved_pid, valueToPropertyValue(val));
+    } else if (anon_label_id_ != INVALID_LABEL_ID) {
+        uint16_t pid = 0;
+        auto def_it = label_defs_.find(anon_label_id_);
+        if (def_it != label_defs_.end()) {
+            for (const auto& pd : def_it->second.properties) {
+                if (pd.name == item.prop_name) {
+                    pid = pd.id;
+                    break;
+                }
+            }
+        }
+        co_await store_.putVertexProperty(target_vid, anon_label_id_, pid, valueToPropertyValue(val));
+    }
+}
+
+folly::coro::Task<void> MergePhysicalOp::executeSetLabelsItem(const SetPhysicalOp::BoundSetItem& item,
+                                                              VertexId start_vid, VertexId end_vid) {
+    if (!item.resolved_label_id)
+        co_return;
+    VertexId vid = INVALID_VERTEX_ID;
+    if (item.var_name == start_var_) vid = start_vid;
+    else if (has_relationship_ && item.var_name == end_var_) vid = end_vid;
+    if (vid != INVALID_VERTEX_ID)
+        co_await store_.addVertexLabel(vid, *item.resolved_label_id);
+}
+
+folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysicalOp::BoundSetItem& item,
+                                                                  const Value& val,
+                                                                  VertexId start_vid, VertexId end_vid,
+                                                                  EdgeId edge_id) {
+    if (!item.value || std::holds_alternative<std::monostate>(val))
+        co_return;
+    // Edge target
+    if (has_relationship_ && item.var_name == edge_var_ && edge_id != INVALID_EDGE_ID &&
+        std::holds_alternative<MapValue>(val)) {
+        EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
+        const auto& mv = std::get<MapValue>(val);
+        for (const auto& [k, vs] : mv.entries) {
+            uint16_t pid = 0;
+            bool found = false;
+            auto it = edge_label_defs_.find(elid);
+            if (it != edge_label_defs_.end()) {
+                for (const auto& pd : it->second.properties) {
+                    if (pd.name == k) {
+                        pid = pd.id;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found && edge_label_name_.has_value()) {
+                std::vector<std::pair<std::string, PropertyType>> tmp_props{{k, PropertyType::ANY}};
+                co_await meta_.addEdgeLabelProperties(*edge_label_name_, tmp_props);
+                auto updated = co_await meta_.getEdgeLabelDefById(elid);
+                if (updated) {
+                    edge_label_defs_[elid] = std::move(*updated);
+                    for (const auto& pd : edge_label_defs_[elid].properties) {
+                        if (pd.name == k) {
+                            pid = pd.id;
+                            break;
+                        }
+                    }
+                }
+            }
+            co_await store_.putEdgeProperty(edge_id, elid, pid, valueToPropertyValue(vs.value));
+        }
+        co_return;
+    }
+    // Vertex target
+    VertexId vid = INVALID_VERTEX_ID;
+    if (item.var_name == start_var_) vid = start_vid;
+    else if (has_relationship_ && item.var_name == end_var_) vid = end_vid;
+    if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValue>(val)) {
+        const auto& mv = std::get<MapValue>(val);
+        for (const auto& [k, vs] : mv.entries) {
+            if (anon_label_id_ != INVALID_LABEL_ID) {
+                uint16_t pid = 0;
+                auto def_it = label_defs_.find(anon_label_id_);
+                if (def_it != label_defs_.end()) {
+                    for (const auto& pd : def_it->second.properties) {
+                        if (pd.name == k) {
+                            pid = pd.id;
+                            break;
+                        }
+                    }
+                }
+                co_await store_.putVertexProperty(vid, anon_label_id_, pid, valueToPropertyValue(vs.value));
+            }
         }
     }
 }

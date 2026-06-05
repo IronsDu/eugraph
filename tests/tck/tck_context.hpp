@@ -172,8 +172,15 @@ struct TckContext {
                 se.removed_relationships = -edge_delta;
             }
         }
-        // Labels: use net delta, clamped to non-negative (TCK counts distinct names, not instances)
-        se.labels = std::max<int64_t>(0, after.labelCount - before.labelCount);
+        // Labels: count distinct label names added/removed (TCK semantics)
+        for (const auto& name : after.labelNames) {
+            if (!before.labelNames.count(name))
+                se.labels++;
+        }
+        for (const auto& name : before.labelNames) {
+            if (!after.labelNames.count(name))
+                se.removed_labels++;
+        }
         // Properties: use net delta (no property-level ID tracking)
         int64_t prop_delta = after.propertyCount - before.propertyCount;
         if (prop_delta >= 0) {

@@ -40,8 +40,9 @@ struct TckRow {
 struct GraphSnapshot {
     int64_t nodeCount = 0;
     int64_t edgeCount = 0;
-    int64_t labelCount = 0;
     int64_t propertyCount = 0;
+    // Distinct label names for correct +labels/-labels counting
+    std::unordered_set<std::string> labelNames;
     // ID sets for add/remove detection
     std::unordered_set<int64_t> nodeIds;
     std::unordered_set<int64_t> edgeIds;

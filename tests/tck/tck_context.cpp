@@ -495,28 +495,39 @@ GraphSnapshot TckContext::takeSnapshot() {
     } catch (...) {
         snap.edgeCount = 0;
     }
-    spdlog::info("[TCK] [{}] snapshot: nodes={} edges={} labels={} props={} nodeIds={} edgeIds={}",
-                 graphName, snap.nodeCount, snap.edgeCount, snap.labelCount, snap.propertyCount,
+    spdlog::info("[TCK] [{}] snapshot: nodes={} edges={} props={} nodeIds={} edgeIds={}",
+                 graphName, snap.nodeCount, snap.edgeCount, snap.propertyCount,
                  snap.nodeIds.size(), snap.edgeIds.size());
 
-    // Count label instances (total labels across all nodes)
+    // Collect distinct label names across all nodes
+    // MATCH (n) RETURN labels(n) — each row has list_json like ['A', 'B']
     try {
-        auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN sum(size(labels(n)))", graphName);
+        auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN labels(n)", graphName);
         std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
             if (batch.hasValue()) {
                 for (const auto& row : *batch->rows()) {
                     if (row.values()->size() > 0) {
                         const auto& v = (*row.values())[0];
-                        if (v.getType() == thrift::ResultValue::Type::int_val) {
-                            snap.labelCount = v.get_int_val();
+                        if (v.getType() == thrift::ResultValue::Type::list_json) {
+                            std::string json = v.get_list_json();
+                            // Format uses single quotes: ['A', 'B']
+                            for (size_t i = 0; i < json.size(); ++i) {
+                                if (json[i] == '\'') {
+                                    size_t start = ++i;
+                                    while (i < json.size() && json[i] != '\'')
+                                        ++i;
+                                    if (i < json.size())
+                                        snap.labelNames.insert(json.substr(start, i - start));
+                                }
+                            }
                         }
                     }
                 }
             }
         });
     } catch (...) {
-        snap.labelCount = 0;
     }
+    spdlog::info("[TCK] [{}] distinct labels: {}", graphName, snap.labelNames.size());
 
     // Count property instances: vertex properties
     int64_t vprop_count = 0;

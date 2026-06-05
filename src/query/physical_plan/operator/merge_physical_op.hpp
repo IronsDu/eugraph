@@ -137,6 +137,13 @@ private:
                                             const DataChunk& merged_chunk, VectorizedEvaluator& evaluator,
                                             VertexId start_vid, VertexId end_vid, EdgeId edge_id);
 
+    folly::coro::Task<void> executeSetPropertyItem(const SetPhysicalOp::BoundSetItem& item, const Value& val,
+                                                   VertexId start_vid, VertexId end_vid, EdgeId edge_id);
+    folly::coro::Task<void> executeSetLabelsItem(const SetPhysicalOp::BoundSetItem& item,
+                                                 VertexId start_vid, VertexId end_vid);
+    folly::coro::Task<void> executeSetPropertiesItem(const SetPhysicalOp::BoundSetItem& item, const Value& val,
+                                                     VertexId start_vid, VertexId end_vid, EdgeId edge_id);
+
     folly::coro::Task<void> ensureLabelTables(const std::vector<LabelId>& labels);
     folly::coro::Task<void> ensureEdgeLabelTable(EdgeLabelId elid);
     folly::coro::Task<void>
