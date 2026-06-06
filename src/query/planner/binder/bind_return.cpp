@@ -12,12 +12,12 @@ std::optional<int64_t> Binder::bindSkipLimit(const cypher::Expression& expr, con
     if (!bound)
         return std::nullopt;
     if (!std::holds_alternative<BoundLiteral>(*bound)) {
-        error(std::string("SemanticError: ") + clause_name + " must be an integer literal");
+        error(std::string("SemanticError: ") + clause_name + " must be a constant expression");
         return std::nullopt;
     }
     auto& lit = std::get<BoundLiteral>(*bound);
     if (!std::holds_alternative<int64_t>(lit.value)) {
-        error(std::string("SemanticError: ") + clause_name + " must be an integer literal");
+        error(std::string("SemanticError: ") + clause_name + " must be an integer");
         return std::nullopt;
     }
     auto val = std::get<int64_t>(lit.value);

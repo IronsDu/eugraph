@@ -403,6 +403,14 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "UndefinedVariable";
                 } else if (errMsg.find("VariableAlreadyBound") != std::string::npos) {
                     lastErrorDetail = "VariableAlreadyBound";
+                } else if (errMsg.find("must be a non-negative integer") != std::string::npos) {
+                    lastErrorDetail = "NegativeIntegerArgument";
+                } else if (errMsg.find("must be a constant expression") != std::string::npos) {
+                    lastErrorDetail = "NonConstantExpression";
+                } else if (errMsg.find("must be an integer") != std::string::npos) {
+                    lastErrorDetail = "InvalidArgumentType";
+                } else if (errMsg.find("Duplicate map key") != std::string::npos) {
+                    lastErrorDetail = "InvalidArgumentType";
                 } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
                     lastErrorDetail = "MergeReadOwnWrites";
                 } else {
@@ -446,6 +454,14 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "CreatingVarLength";
         } else if (errMsg.find("InvalidParameterUse") != std::string::npos) {
             lastErrorDetail = "InvalidParameterUse";
+        } else if (errMsg.find("must be a non-negative integer") != std::string::npos) {
+            lastErrorDetail = "NegativeIntegerArgument";
+        } else if (errMsg.find("must be a constant expression") != std::string::npos) {
+            lastErrorDetail = "NonConstantExpression";
+        } else if (errMsg.find("must be an integer") != std::string::npos) {
+            lastErrorDetail = "InvalidArgumentType";
+        } else if (errMsg.find("Duplicate map key") != std::string::npos) {
+            lastErrorDetail = "InvalidArgumentType";
         } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
             lastErrorDetail = "MergeReadOwnWrites";
         } else {

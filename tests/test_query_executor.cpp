@@ -5373,8 +5373,8 @@ TEST_F(QueryExecutorTest, SkipNegativeFails) {
 TEST_F(QueryExecutorTest, SkipFloatFails) {
     auto result = execSync(*executor_, "RETURN 1 AS x SKIP 1.5");
     EXPECT_FALSE(result.error.empty()) << "SKIP 1.5 should raise an error";
-    EXPECT_NE(result.error.find("integer literal"), std::string::npos)
-        << "Expected 'integer literal', got: " << result.error;
+    EXPECT_NE(result.error.find("must be an integer"), std::string::npos)
+        << "Expected 'must be an integer', got: " << result.error;
 }
 
 TEST_F(QueryExecutorTest, LimitNegativeFails) {
@@ -5387,8 +5387,8 @@ TEST_F(QueryExecutorTest, LimitNegativeFails) {
 TEST_F(QueryExecutorTest, LimitFloatFails) {
     auto result = execSync(*executor_, "RETURN 1 AS x LIMIT 2.5");
     EXPECT_FALSE(result.error.empty()) << "LIMIT 2.5 should raise an error";
-    EXPECT_NE(result.error.find("integer literal"), std::string::npos)
-        << "Expected 'integer literal', got: " << result.error;
+    EXPECT_NE(result.error.find("must be an integer"), std::string::npos)
+        << "Expected 'must be an integer', got: " << result.error;
 }
 
 TEST_F(QueryExecutorTest, SkipZeroSucceeds) {
