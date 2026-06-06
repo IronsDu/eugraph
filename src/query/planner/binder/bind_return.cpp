@@ -5,6 +5,29 @@
 namespace eugraph {
 namespace binder {
 
+// ==================== SKIP/LIMIT Helper ====================
+
+std::optional<int64_t> Binder::bindSkipLimit(const cypher::Expression& expr, const char* clause_name) {
+    auto bound = bindExpression(expr);
+    if (!bound)
+        return std::nullopt;
+    if (!std::holds_alternative<BoundLiteral>(*bound)) {
+        error(std::string("SemanticError: ") + clause_name + " must be a constant expression");
+        return std::nullopt;
+    }
+    auto& lit = std::get<BoundLiteral>(*bound);
+    if (!std::holds_alternative<int64_t>(lit.value)) {
+        error(std::string("SemanticError: ") + clause_name + " must be an integer");
+        return std::nullopt;
+    }
+    auto val = std::get<int64_t>(lit.value);
+    if (val < 0) {
+        error(std::string("SemanticError: ") + clause_name + " must be a non-negative integer");
+        return std::nullopt;
+    }
+    return val;
+}
+
 // ==================== RETURN Binding ====================
 
 std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClause& ret, BoundLogicalOperator child) {
@@ -50,28 +73,22 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             current = std::move(sort);
         }
         if (ret.skip) {
-            auto bound_skip = bindExpression(*ret.skip);
-            if (bound_skip && std::holds_alternative<BoundLiteral>(*bound_skip)) {
-                auto& lit = std::get<BoundLiteral>(*bound_skip);
-                if (std::holds_alternative<int64_t>(lit.value)) {
-                    auto skip = std::make_unique<BoundSkipOp>();
-                    skip->count = std::get<int64_t>(lit.value);
-                    skip->child = std::move(current);
-                    current = std::move(skip);
-                }
-            }
+            auto count = bindSkipLimit(*ret.skip, "SKIP");
+            if (!count)
+                return std::nullopt;
+            auto skip = std::make_unique<BoundSkipOp>();
+            skip->count = *count;
+            skip->child = std::move(current);
+            current = std::move(skip);
         }
         if (ret.limit) {
-            auto bound_limit = bindExpression(*ret.limit);
-            if (bound_limit && std::holds_alternative<BoundLiteral>(*bound_limit)) {
-                auto& lit = std::get<BoundLiteral>(*bound_limit);
-                if (std::holds_alternative<int64_t>(lit.value)) {
-                    auto limit = std::make_unique<BoundLimitOp>();
-                    limit->count = std::get<int64_t>(lit.value);
-                    limit->child = std::move(current);
-                    current = std::move(limit);
-                }
-            }
+            auto count = bindSkipLimit(*ret.limit, "LIMIT");
+            if (!count)
+                return std::nullopt;
+            auto limit = std::make_unique<BoundLimitOp>();
+            limit->count = *count;
+            limit->child = std::move(current);
+            current = std::move(limit);
         }
         if (ret.distinct) {
             auto distinct = std::make_unique<BoundDistinctOp>();
@@ -209,28 +226,22 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             current = std::move(sort);
         }
         if (ret.skip) {
-            auto bound_skip = bindExpression(*ret.skip);
-            if (bound_skip && std::holds_alternative<BoundLiteral>(*bound_skip)) {
-                auto& lit = std::get<BoundLiteral>(*bound_skip);
-                if (std::holds_alternative<int64_t>(lit.value)) {
-                    auto skip = std::make_unique<BoundSkipOp>();
-                    skip->count = std::get<int64_t>(lit.value);
-                    skip->child = std::move(current);
-                    current = std::move(skip);
-                }
-            }
+            auto count = bindSkipLimit(*ret.skip, "SKIP");
+            if (!count)
+                return std::nullopt;
+            auto skip = std::make_unique<BoundSkipOp>();
+            skip->count = *count;
+            skip->child = std::move(current);
+            current = std::move(skip);
         }
         if (ret.limit) {
-            auto bound_limit = bindExpression(*ret.limit);
-            if (bound_limit && std::holds_alternative<BoundLiteral>(*bound_limit)) {
-                auto& lit = std::get<BoundLiteral>(*bound_limit);
-                if (std::holds_alternative<int64_t>(lit.value)) {
-                    auto limit = std::make_unique<BoundLimitOp>();
-                    limit->count = std::get<int64_t>(lit.value);
-                    limit->child = std::move(current);
-                    current = std::move(limit);
-                }
-            }
+            auto count = bindSkipLimit(*ret.limit, "LIMIT");
+            if (!count)
+                return std::nullopt;
+            auto limit = std::make_unique<BoundLimitOp>();
+            limit->count = *count;
+            limit->child = std::move(current);
+            current = std::move(limit);
         }
         if (ret.distinct) {
             auto distinct = std::make_unique<BoundDistinctOp>();
@@ -340,28 +351,22 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
 
     // SKIP, LIMIT, DISTINCT
     if (ret.skip) {
-        auto bound_skip = bindExpression(*ret.skip);
-        if (bound_skip && std::holds_alternative<BoundLiteral>(*bound_skip)) {
-            auto& lit = std::get<BoundLiteral>(*bound_skip);
-            if (std::holds_alternative<int64_t>(lit.value)) {
-                auto skip = std::make_unique<BoundSkipOp>();
-                skip->count = std::get<int64_t>(lit.value);
-                skip->child = std::move(current);
-                current = std::move(skip);
-            }
-        }
+        auto count = bindSkipLimit(*ret.skip, "SKIP");
+        if (!count)
+            return std::nullopt;
+        auto skip = std::make_unique<BoundSkipOp>();
+        skip->count = *count;
+        skip->child = std::move(current);
+        current = std::move(skip);
     }
     if (ret.limit) {
-        auto bound_limit = bindExpression(*ret.limit);
-        if (bound_limit && std::holds_alternative<BoundLiteral>(*bound_limit)) {
-            auto& lit = std::get<BoundLiteral>(*bound_limit);
-            if (std::holds_alternative<int64_t>(lit.value)) {
-                auto limit = std::make_unique<BoundLimitOp>();
-                limit->count = std::get<int64_t>(lit.value);
-                limit->child = std::move(current);
-                current = std::move(limit);
-            }
-        }
+        auto count = bindSkipLimit(*ret.limit, "LIMIT");
+        if (!count)
+            return std::nullopt;
+        auto limit = std::make_unique<BoundLimitOp>();
+        limit->count = *count;
+        limit->child = std::move(current);
+        current = std::move(limit);
     }
     if (ret.distinct) {
         auto distinct = std::make_unique<BoundDistinctOp>();
@@ -505,30 +510,24 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
 
     // SKIP
     if (wc.skip) {
-        auto bound_skip = bindExpression(*wc.skip);
-        if (bound_skip && std::holds_alternative<BoundLiteral>(*bound_skip)) {
-            auto& lit = std::get<BoundLiteral>(*bound_skip);
-            if (std::holds_alternative<int64_t>(lit.value)) {
-                auto skip = std::make_unique<BoundSkipOp>();
-                skip->count = std::get<int64_t>(lit.value);
-                skip->child = std::move(current);
-                current = std::move(skip);
-            }
-        }
+        auto count = bindSkipLimit(*wc.skip, "SKIP");
+        if (!count)
+            return std::nullopt;
+        auto skip = std::make_unique<BoundSkipOp>();
+        skip->count = *count;
+        skip->child = std::move(current);
+        current = std::move(skip);
     }
 
     // LIMIT
     if (wc.limit) {
-        auto bound_limit = bindExpression(*wc.limit);
-        if (bound_limit && std::holds_alternative<BoundLiteral>(*bound_limit)) {
-            auto& lit = std::get<BoundLiteral>(*bound_limit);
-            if (std::holds_alternative<int64_t>(lit.value)) {
-                auto limit = std::make_unique<BoundLimitOp>();
-                limit->count = std::get<int64_t>(lit.value);
-                limit->child = std::move(current);
-                current = std::move(limit);
-            }
-        }
+        auto count = bindSkipLimit(*wc.limit, "LIMIT");
+        if (!count)
+            return std::nullopt;
+        auto limit = std::make_unique<BoundLimitOp>();
+        limit->count = *count;
+        limit->child = std::move(current);
+        current = std::move(limit);
     }
 
     // DISTINCT

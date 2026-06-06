@@ -1,5 +1,7 @@
 #include "query/planner/binder.hpp"
 
+#include <unordered_set>
+
 #include "common/types/temporal_value.hpp"
 #include "query/function/batch_ops.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
@@ -464,7 +466,12 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
             } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
                 auto bm = std::make_unique<BoundMap>();
                 BoundType merged_value_type = BoundType::Null();
+                std::unordered_set<std::string> seen_keys;
                 for (const auto& [key, expr] : ptr->entries) {
+                    if (!seen_keys.insert(key).second) {
+                        error("SemanticError: Duplicate map key '" + key + "'");
+                        return std::nullopt;
+                    }
                     auto bound_expr = bindExpression(expr);
                     if (!bound_expr)
                         return std::nullopt;

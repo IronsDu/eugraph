@@ -218,10 +218,10 @@ void FunctionRegistry::registerScalarBuiltins() {
 
     // toString(Any) -> String
     functions_["toString"].push_back({"toString",
-                                      {},
+                                      {BoundType::Any()},
                                       BoundType::String(),
                                       false,
-                                      true,
+                                      false,
                                       scalar::toStringScalarFn,
                                       scalar::toStringBatchFn,
                                       {},
