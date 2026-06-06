@@ -29,10 +29,12 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
     } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
         errorType = "SyntaxError";
         errorPhase = "compile time";
-    } else if (errMsg.find("SemanticError") != std::string::npos ||
-               errMsg.find("MergeReadOwnWrites") != std::string::npos) {
+    } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
         errorType = "SemanticError";
         errorPhase = "runtime";
+    } else if (errMsg.find("SemanticError") != std::string::npos) {
+        errorType = "SyntaxError";
+        errorPhase = "compile time";
     } else if (errMsg.find("TypeError") != std::string::npos) {
         errorType = "TypeError";
         errorPhase = "runtime";
