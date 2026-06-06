@@ -42,13 +42,24 @@ void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
             }
             const auto& list = std::get<ListValue>(rv);
             bool found = false;
+            bool saw_null = false;
             for (const auto& elem : list.elements) {
-                if (!eugraph::isNull(elem.value) && elem.value == lv) {
+                if (eugraph::isNull(elem.value)) {
+                    saw_null = true;
+                    continue;
+                }
+                if (elem.value == lv) {
                     found = true;
                     break;
                 }
             }
-            result.setValue(i, Value(found));
+            if (found) {
+                result.setValue(i, Value(true));
+            } else if (saw_null) {
+                result.setNull(i);
+            } else {
+                result.setValue(i, Value(false));
+            }
         }
         return;
     }

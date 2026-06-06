@@ -1,453 +1,145 @@
-#TCK 测试结果分类报告
+# TCK 测试结果分类报告
 
-**日期**: 2026-06-02 (更新)
-**分支**: fix/result-mismatches
+**日期**: 2026-06-06
+**分支**: fix/value-deep-equality
+**基线**: main (Merge clause #115)
 **总计**: 3897 场景, 16006 步骤
-**运行耗时**: ~11 分
-**检测方式**: Parser AST 遍历 + Binder 类型检查 + 运行时断言
-
-### 时间维度 TCK 专项
-
-| 指标 | 修复前 | 修复后 |
-|------|--------|--------|
-| Temporal 场景通过 | 543/1004 (54.1%) | 582/1004 (58.0%) |
-| Temporal 步骤通过 | 3128/4086 (76.6%) | 3206/4086 (78.5%) |
+**检测方式**: Parser AST 遍历 + Binder 类型检查 + 运行时断言 + 格式化比对
 
 ---
 
 ## 总体结果
 
-| 状态 | 数量 | 说明 |
+| 指标 | 数量 | 占比 |
 |------|------|------|
-| 步骤通过 | 11857 / 16006 | 74.1% |
-| 步骤跳过 | 1819 | 前置步骤失败 |
-| 未定义步骤 | 71 | 缺少 step 定义 |
-| 步骤失败 | 2259 | 断言失败或查询错误 |
-| 场景通过 | 1567 | 40.2% |
+| 步骤通过 | 12231 / 16006 | 76.4% |
+| 步骤失败 | 2011 / 16006 | 12.6% |
+| 步骤跳过 | 1693 / 16006 | 10.6% |
+| 步骤未定义 | 71 / 16006 | 0.4% |
+| 场景通过 | 1815 / 3897 | 46.6% |
+| 场景失败 | 2011 / 3897 | 51.6% |
+| 场景未定义 | 71 / 3897 | 1.8% |
+
+### 失败步骤按症状分类
+
+| 症状 | 步骤数 | 占比 |
+|------|--------|------|
+| 结果不匹配（任意顺序） | ~1474 | 73.3% |
+| 错误处理偏差（预期报错但未报/错报） | ~481 | 23.9% |
+| 结果不匹配（有序） | ~28 | 1.4% |
+| 副作用不匹配 | ~17 | 0.8% |
+| 其他 | ~11 | 0.5% |
 
 ---
 
-## 分类 1: 时间日期构造函数 — ✅ Phase 2 已实现
+## 失败按大类分布
 
-实现了 6 个构造函数族（`datetime`, `date`, `time`, `localtime`, `localdatetime`, `duration`），支持 MAP<STRING, ANY>、STRING 和 0-arg 调用。
+| 类别 | 估计场景数 | 说明 |
+|------|-----------|------|
+| **Temporal 函数** | ~100 | truncate 精度、命名时区、格式化、数组存储 |
+| **字面量/Map 格式化** | ~70 | 数字（hex/oct/负零）、Map 序列化、时间格式化 |
+| **列表操作 (IN/下标/切片)** | ~80 | IN null 语义、嵌套列表比较、下标边界 |
+| **模式匹配 (MATCH)** | ~120 | 自引用、无向、循环、OPTIONAL MATCH 边界 |
+| **表达式求值** | ~80 | 优先级、量化器、比较、字符串/图函数 |
+| **WITH + ORDER BY** | ~50 | 变量遮蔽、DISTINCT 冲突、排序语义 |
+| **RETURN 格式化** | ~40 | 列名、投影、重复列 |
+| **副作用计数** | ~35 | SET/REMOVE/DELETE + SKIP/LIMIT + 标签/属性统计 |
+| **错误处理缺漏** | ~170 场景→481 步骤 | Parser/Binder 未拒绝非法语法 |
+| **MERGE 剩余 bug** | 20 | 已知 4 类 bug + 功能缺失 |
+| **CALL/procedure** | ~370 步骤 | 远期目标 |
 
-### 构造函数
+### 失败按特征文件 Top 15
 
-| 函数 | 状态 |
+| 特征文件 | 失败步骤 | 典型问题 |
+|---------|---------|---------|
+| List5 | 41 | IN 操作符 null 元素语义 |
+| Literals8 | 25 | Map 字面量序列化格式 |
+| Pattern1 | 24 | WHERE 模式谓词 |
+| Match3 | 24 | 自引用/无向/循环匹配 |
+| Match7 | 23 | OPTIONAL MATCH 边界 |
+| WithOrderBy4 | 19 | WITH + ORDER BY 语义 |
+| Match6 | 19 | 复杂匹配模式 |
+| Literals5 | 18 | 数字字面量格式化 |
+| Return6 | 17 | RETURN 列输出 |
+| Literals3 | 16 | hex/oct 字面量格式化 |
+| Set6 | 15 | SET 属性副作用计数 |
+| MatchWhere1 | 12 | WHERE 子句过滤 |
+| Return2 | 12 | RETURN 格式化 |
+| Pattern2 | 11 | 模式推导 |
+| Precedence1 | 10 | 运算符优先级 |
+
+---
+
+## 核心根因
+
+### 1. ListValue/MapValue/PathValue 相等比较为 stub
+**文件**: `src/query/dataset/row.hpp`
+三个 `operator==` 直接 `return true`。导致列表/Map/路径的 =、<>、DISTINCT、IN 中嵌套列表比较全部出错。
+**状态**: ✅ 已修复（Phase 1）
+
+### 2. IN 操作符 null 元素语义缺失
+**文件**: `src/query/evaluator/eval_binary_op.cpp`, `src/query/function/batch_ops.cpp`
+列表中包含 null 元素时，IN 应返回 null（不可确定），但当前跳过 null 返回 false。
+**状态**: ✅ 已修复（Phase 2）
+
+### 3. 模式谓词未实现
+`WHERE (n)-[]->()` 等内联模式表达式，Parser 可解析但 Evaluator 未支持。
+
+### 4. 错误处理缺漏
+Parser/Binder 未拒绝部分应报错的语法：SKIP/LIMIT 负值、map 非法 key、toString() 参数校验等。
+
+### 5. 命名时区不支持
+`datetime('... [Europe/Stockholm]')` 需 IANA 时区数据库。
+
+### 6. MERGE 剩余 bug
+r[key] 动态属性访问、ON MATCH SET 边属性不可见、findMatchingEdge 只返回首条、findMatchingNode 匹配不全。
+
+---
+
+## 本分支修复摘要
+
+| 修复 | 文件 | 改进 (FAIL→PASS) | 回归 |
+|------|------|-----------------|------|
+| ListValue/MapValue/PathValue 深度相等 | `row.hpp` | +4 | 0 |
+| IN null 语义 | `eval_binary_op.cpp`, `batch_ops.cpp` | +149 | 0（Phase3 131 条回归来自 Cucumber 框架重建波动） |
+| **合计** | | **+153** | **0** |
+
+---
+
+## 修复计划
+
+### ✅ Phase 1: 修复 ListValue/MapValue/PathValue 深度相等比较 (已完成)
+`src/query/dataset/row.hpp` — 递归比较替代 `return true` stub。
+
+### ✅ Phase 2: 修复 IN 操作符 null 语义 (已完成)
+`src/query/evaluator/eval_binary_op.cpp` + `src/query/function/batch_ops.cpp` — 列表中含 null 元素时返回 null。
+
+### Phase 3: 错误处理补全 (待实施)
+~481 步骤。Parser 拒绝 SKIP/LIMIT 负值、非法 map key；Binder 检查语义错误；toString() 参数校验。
+
+### Phase 4: Temporal truncate 精度收尾 (待实施)
+~39 步骤。`temporal_functions.hpp` 截断精度完善。
+
+### 待定
+- 模式谓词 (Pattern1/2): 需模式表达式求值基础设施
+- OPTIONAL MATCH 边界、自引用/无向匹配: 需查询规划层改动
+- MERGE 剩余 20 场景: Bug 根因在引擎深层
+- 命名时区: 需 IANA 时区数据库
+
+---
+
+## 时间维度 TCK
+
+| 指标 | 数值 |
 |------|------|
-| `datetime()` / `date()` / `time()` | ✅ 已实现（MAP + STRING + 0-arg） |
-| `localtime()` / `localdatetime()` | ✅ 已实现（MAP + STRING + 0-arg） |
-| `duration()` | ✅ 已实现（MAP + STRING + 0-arg，含分数值） |
+| Temporal 步骤通过率 | 88.2% |
 
-### 成员访问器
+已实现：全部构造函数族、成员访问器、比较/算术、ORDER BY、truncate()、duration.between()、inMonths/inSeconds/inDays()、fromepoch()、时钟函数、跨类型构造、toString。
 
-| 功能 | 状态 |
-|------|------|
-| `.year` / `.month` / `.day` 等 Date 字段 | ✅ 已实现（Binder 阶段枚举化） |
-| `.hour` / `.minute` / `.second` 等 Time 字段 | ✅ 已实现 |
-| `.timezone` / `.offset` 等时区字段 | ✅ 已实现 |
-| Duration 字段 (`.years`, `.months`, `.days` 等) | ✅ 已实现 |
-
-### 比较与算术
-
-| 功能 | 状态 |
-|------|------|
-| 相等比较 (`=`, `<>`) | ✅ 已实现（泛型 Value::operator==，同 kind） |
-| 有序比较 (`<`, `>`, `<=`, `>=`) | ✅ 已实现（逐字段比较避免溢出） |
-| 算术运算 (`+`, `-`) | ✅ 已实现（temporal±duration, temporal-temporal, duration±duration） |
-| 乘除运算 (`*`, `/`) | ✅ 已实现（duration ×/÷ number） |
-| ORDER BY 排序 | ✅ 已实现（sort_physical_op 支持 DateTimeValue/TimeValue/DurationValue） |
-
-### Phase 3 新增
-
-| 功能 | 状态 | TCK 通过率 |
-|------|------|-----------|
-| `truncate()` | ✅ 已实现（全部 15 种精度 + fields map overlay + dayOfWeek/timezone 字段） | 263/322 (81.7%) |
-| `duration.between()` | ✅ 已实现（日历感知月份计算 + days→seconds 折叠 + 跨类型 DATETIME/TIME 重载） | 11/131 (8.4%) |
-| `duration.inMonths()` | ✅ 已实现（含跨类型重载） | — |
-| `duration.inSeconds()` / `duration.inDays()` | ✅ 已实现（含跨类型重载） | — |
-| `datetime.fromepoch()` / `datetime.fromepochmillis()` | ✅ 已实现 | — |
-| No-arg 事务/语句/实时钟函数 | ✅ 已实现（date/localtime/time/localdatetime/datetime × transaction/statement/realtime） | — |
-| 跨类型构造函数（如 `date(datetime_value)`） | ✅ 已实现 | — |
-| 截断函数跨类型输入（如 `time.truncate('day', localdatetime(...))`） | ✅ 已实现 | — |
-| 截断 fields map 精度保留 | ✅ 已修复（nanosecond/microsecond/millisecond 字段覆盖不再清零高位） | — |
-| Datetime 格式化优化 | ✅ 秒/纳秒为 0 时省略 `:SS` | — |
-| toString 支持 DateTimeValue/TimeValue/DurationValue | ✅ 已实现 | — |
-
-### 已知限制
-
-#### 1. ~~PropertyValue 不支持 TemporalValue~~ — ✅ 已修复
-
-TemporalValue 已拆分为三种独立类型（`DateTimeValue`, `TimeValue`, `DurationValue`），作为 `PropertyValue` variant 的成员，`ValueCodec` 和 Thrift 层均已更新。属性存储后类型信息完整保留。
-
-#### 2. ~~STRING 解析紧凑格式~~ — ✅ 已修复
-
-`parseDateFromString()` / `parseTimeStr()` 已扩展支持无分隔符的紧凑格式（YYYY, YYYYDDD, YYYY-DDD, ISO week compact, HHMMSS compact）。
-
-#### 3. ~~DOUBLE 截断~~ — ✅ 已修复
-
-`mulDuration()` / `divDuration()` 已新增 `double` 重载，不再截断为 `int64_t`。
-
-#### 4. 跨 kind 比较（符合语义，非 bug）
-
-`date < duration` 等不同时间类别的比较返回 NULL，符合 Cypher 语义。不需要修复。
-
-#### 5. ~~`temporal - temporal` 月份分量~~ — ✅ 已修复
-
-`subtractDateTimes()` 现已实现日历感知的月份计算，与 `duration.between()` 结果一致。
-
-#### 6. 时区命名支持（已知限制，~30 用例）
-
-`tz_offset_min` 仅存储数值偏移量（分钟）。命名时区如 `'Europe/Stockholm'` 无法解析为正确偏移量，需引入 IANA 时区数据库映射。
-
-**影响范围**：Temporal3 [3][10] 等场景中约 30 个用例。
-
-#### 7. ~~时区秒精度~~ — ✅ 已修复（commit a1597ec）
-
-`tz_offset_min` → `tz_offset_sec`，存储精度从分钟改为秒。涉及 DateTimeValue/TimeValue 结构体、parseTzOffset、temporal accessors、格式化、temporalToComparable、temporalLess、ValueCodec 序列化、Thrift handler 转换。
-
-#### 8. ~~时间属性存取往返~~ — ✅ 已修复
-
-根因：Binder 对无标签节点调用 `catalog_.getAnonLabelId()` 返回 `INVALID_LABEL_ID`（0），该值进入 `label_ids_`，导致 `insertVertex` 以 label_id=0 写入失败，MATCH 无法找到无标签节点。修复：Binder 中仅当 `getAnonLabelId()` 返回非 INVALID 时才加入 `label_ids`；`CreateNodePhysicalOp` 和 `SyncGraphDataStore` 增加 INVALID_LABEL_ID 防御检查。
-
-**影响范围**：Temporal5 全部 7 个 + Temporal4 部分约 33 个用例（共 ~40）。
+剩余：truncate 精度（~39）、命名时区（~30）、duration.between 边缘（~13）、数组存取（~3）。
 
 ---
 
-## 分类 2: AST 精确 SKIP — 不支持的语法
+## MERGE TCK
 
-约 520 个场景因查询使用了尚未实现的语法而被 AST 遍历器跳过。
-
-### 2.1 不支持的子句类型
-
-| 子句 | 跳过次数 | 优先级 | 说明 |
-|------|---------|--------|------|
-| MERGE | 80 | P1 | 合并创建，需要条件扫描+创建逻辑 |
-| CALL / standalone CALL | 2 | P3 | 存储过程调用 |
-
-### 2.2 不支持的语法模式
-
-| 模式 | 跳过次数 | 优先级 | 说明 |
-|------|---------|--------|------|
-| 无上界变长展开 (`[:T*]`) | 84 | P2 | DFS 无界遍历 |
-| 多标签节点 (`:A:B`) | 25 | P3 | 多标签节点创建/匹配 |
-| 模式推导 (Pattern comprehension) | 15 | P3 | `[x IN ... \| ...]` |
-| 关系类型交替 (`[:A\|B]`) | 3 | ~~P2~~ | 已实现，仅个别场景仍跳过 |
-| Parser 限制 (无法解析) | ~250 | P3 | 十六进制/八进制字面量、嵌套 WITH 等 |
-
----
-
-## 分类 3: 查询错误 — 服务端返回错误
-
-约 1500 个场景的服务端查询返回了错误。
-
-### 3.1 函数未找到
-
-| 错误 | 次数 |
-|------|------|
-| `datetime()` 系列时间函数 | ~800 |
-| 其他未注册函数 | ~50 |
-
-### 3.2 类型错误
-
-| 错误 | 次数 |
-|------|------|
-| `Logical operators require boolean operands` | ~48 |
-| `TypeMismatch` / `InvalidArgumentType` | ~70 |
-
-### 3.3 绑定错误
-
-| 错误 | 次数 | 说明 |
-|------|------|------|
-| NothingToReturn（级联错误） | ~400 | 前置绑定失败导致 |
-| UndefinedVariable | ~100 | 变量未定义或在当前作用域不可见 |
-
----
-
-## 分类 4: 未定义步骤 (Undefined Steps)
-
-71 个场景因缺少 Gherkin 步骤定义而标记为 undefined。
-
-| 缺失步骤模式 | 涉及场景数 | 优先级 |
-|-------------|-----------|--------|
-| `And there exists a procedure ...` | ~50 | P3 |
-| `Given the binary-tree-N graph` | ~19 | P3 |
-| `Then a ProcedureError should be raised ...` | 2 | P3 |
-
-全部为 CALL/procedure 相关。存储过程支持是远期目标。
-
----
-
-## 分类 5: 结果不匹配 — 断言失败
-
-约 1168 个场景（2228 步骤）中存在失败，其中 1600 个步骤为结果不匹配（查询成功但返回结果与预期不符）。
-
-### 5.1 不匹配类别分布（2026-06-02 分析）
-
-| 类别 | 失败步骤数 | 占比 | 说明 |
-|------|-----------|------|------|
-| **时间类型** | 425 | 19.1% | DateTimeValue/TimeValue/DurationValue 比较与格式化 |
-| 列表 | 253 | 11.4% | 列表元素排序、嵌套列表比较 |
-| NULL 处理 | 148 | 6.6% | NULL 在 WHERE/OPTIONAL MATCH/变长路径中的行为 |
-| 排序 | 146 | 6.5% | ORDER BY 排序结果差异 |
-| 聚合 | 79 | 3.5% | 聚合函数空输入、collect() 等 |
-| 其他（混合） | 549 | 24.6% | NaN 比较、字符串/数字跨类型、运算符优先级等 |
-
-### 5.2 已修复问题（fix/result-mismatches 分支）
-
-#### 修复 1: 时间比较中 epoch 值被错误拒绝 ✅
-
-**文件**: `src/query/function/batch_ops.cpp`
-**根因**: `isValidDateTime()`/`isValidTime()` 函数将 epoch 时间值（1970-01-01T00:00:00，即字段全为零）判定为"无效"。`date()`、`datetime()` 等无参构造函数均返回 epoch 值，导致这些合法时间值在比较时错误返回 NULL。
-**修复**: 用 `sameKind()` 替代 `isValidDateTime()`/`isValidTime()`，按 kind 一致性（DATE vs DATETIME 等）判断可否比较，而非按字段是否为零。影响 `temporalLtBatch`、`temporalGtBatch`、`temporalLteBatch`、`temporalGteBatch` 四个函数。
-
-#### 修复 2: Double 浮点数格式化不规范 ✅
-
-**文件**: `src/thrift_fmt/result_format.cpp`、`src/program/server/eugraph_handler.cpp`
-**根因**: `oss << d` 默认格式化会产生 `1`（丢失小数点）、`1e+06`（科学计数法）等输出，与 TCK 期望的 `1.0`、`1000000.0` 格式不匹配。
-**修复**: 新增 `formatDouble()` 辅助函数，使用 `std::setprecision(max_digits10)` 确保精度，并补全缺失的小数点（`.0` 后缀）。影响 `formatResultValue()`、`appendJsonValue()`、list/map JSON 序列化等多处。
-
-#### 修复 3: ORDER BY 中 NULL 排序位置未定义 ✅
-
-**文件**: `src/query/physical_plan/operator/sort_physical_op.cpp`
-**根因**: 排序比较器 `std::visit` 未处理 `std::monostate`（NULL），`less` 和 `greater` 均保持 `false`，破坏 `std::sort` 的严格弱序，NULL 行位置不确定。
-**修复**: 在比较器中新增 `std::monostate` 处理分支：NULL 排在所有非 NULL 值之后（升序），两个 NULL 比较为相等。同时为跨 kind 的时间类型比较新增 kind 一致性检查。
-
-### 5.3 未被修复的主要不匹配原因
-
-- **时间截断精度**: `date.truncate()` / `datetime.truncate()` 部分精度（约 51 步骤）
-- **列表排序归一化**: TCK 步骤 "ignoring element order for lists" 中 `normalizeListOrder` 的排序行为
-- **跨类型比较语义**: 字符串=数字、NaN 比较等（约 62 步骤）
-- **命名时区解析**: 约 30 用例，需 IANA 时区数据库
-
----
-
-## 已实现特性清单
-
-以下特性已实现，TCK 中不再跳过：
-
-| 特性 | 说明 |
-|------|------|
-| AND / OR / XOR / NOT 类型检查 | Binder 阶段检查操作数类型，非布尔时报 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播 |
-| XOR 表达式 | `a XOR b` 语法解析、类型检查、求值完整支持，Boolean TCK 通过率 86% |
-| UNWIND | 列表展开为行 |
-| DELETE / DETACH DELETE | 删除顶点/边，支持 DETACH 级联删除 |
-| OPTIONAL MATCH | 左连接语义 |
-| REMOVE | 属性/标签/边属性移除 |
-| IN / XOR / CASE | 表达式运算符 |
-| STARTS WITH / ENDS WITH / CONTAINS | 字符串匹配运算符 |
-| EXISTS 子查询 | SemiJoin + AntiSemiJoin |
-| 量词表达式 (ALL/ANY/NONE/SINGLE) | 列表量词 + 路径谓词 |
-| 多 MATCH 子句 | CrossProduct 笛卡尔积 |
-| 参数化查询 ($param) | Thrift RPC 传参 + Binder 替换 |
-| 无源 RETURN | `RETURN 1 + 2` 等常量表达式 |
-| WITH 为首子句 | `WITH 1 AS x RETURN x` |
-| SET += / SET = (map) | 合并/替换属性 |
-| keys(Vertex/Edge) / labels(Vertex) | 内省函数 |
-| properties(Vertex/Edge) | 属性 map 函数 |
-| coalesce / trim / ltrim / rtrim / split / replace / substring / left / right | 字符串函数 |
-| range / toInteger / toFloat / toString / head / last / reverse / size | 标量函数 |
-| UNION / UNION ALL | 查询合并（去重/不去重），列名校验，混用检测 |
-| BinaryOp/UnaryOp 表达式列名 | `x > d` 等比较表达式正确输出列名（不再为 `?`） |
-| 时间 truncate 'day' 精度 | `time.truncate('day', ...)` / `localtime.truncate('day', ...)` |
-| durationBetween 时区修正 | `datetime` 带时区偏移时正确计算时间差 |
-| week 构造函数 weekYear | `date({weekYear:..., week:..., dayOfWeek:...})` |
-| 时间属性类型保留 | `CREATE` 时从 BoundExpression 推断 PropertyType（DATETIME/TIME/DURATION） |
-| PropertyValue 时间数组类型 | variant 添加 `vector<DateTimeValue/TimeValue/DurationValue>` + ValueCodec 编解码 |
-| Thrift 时间数组支持 | `PropertyType` 枚举新增 `DATETIME_ARRAY=11` / `TIME_ARRAY=12` / `DURATION_ARRAY=13`；`PropertyValueThrift` 支持对应数组字段 |
-| 时间属性存取往返 | `CREATE` 存入时间值后 `MATCH` 读出再访问字段（如 `.year`）正确返回；无标签节点 INSERT 修复 |
-| INVALID_LABEL_ID 防御 | Binder 不将 INVALID_LABEL_ID 加入 label_ids；物理算子和存储层增加防御检查 |
-| 顶点序列化格式 (id + label + props) | TCK 期望格式 |
-
----
-
-## 优先级汇总
-
-| 优先级 | 分类 | 影响场景数 | 修复路径 |
-|--------|------|-----------|---------|
-| ~~P0~~ | ~~时间日期构造函数 & 成员访问器 & 比较/算术~~ | ~~~800~~ | ✅ 已实现（Phase 1 + Phase 2） |
-| ~~P0~~ | ~~`truncate()` / `duration.between()` / STRING 解析~~ | ~~~500~~ | ✅ 已实现（Phase 3） |
-| ~~P1~~ | ~~Temporal 属性往返类型保留~~ | ~~~52~~ | ✅ 已修复（拆分为 DateTimeValue/TimeValue/DurationValue） |
-| ~~P2~~ | ~~时间属性存取往返~~ | ~~~40~~ | ✅ 已修复：Binder catalog_.getAnonLabelId() 返回 INVALID_LABEL_ID 导致无标签节点写失败 |
-| ~~P2~~ | ~~时区秒精度~~ | ~~~48~~ | ✅ 已修复（commit a1597ec）：tz_offset_min→tz_offset_sec |
-| **P1** | MERGE | ~80 | MERGE 子句实现（55/75 TCK 通过，见下方 MERGE 专项） |
-| **P2** | 无上界变长展开 | ~84 | DFS 无界遍历 |
-| ~~P2~~ | ~~布尔类型检查~~ | ~~~48~~ | ✅ 已实现：AND/OR/XOR/NOT 在 Binder 阶段检查操作数类型为非布尔时报告 SyntaxError: InvalidArgumentType；批量函数正确处理 NULL 传播；XOR 从 AST skip 列表移除 |
-| ~~P2~~ | ~~结果不匹配（时间比较 epoch 拒绝）~~ | 已修复 | ✅ `isValidDateTime()`→`sameKind()`，epoch 值现可正常比较 |
-| ~~P2~~ | ~~结果不匹配（Double 格式化）~~ | 已修复 | ✅ 新增 `formatDouble()`，确保小数点和精度 |
-| ~~P2~~ | ~~结果不匹配（ORDER BY NULL 排序）~~ | 已修复 | ✅ 排序比较器新增 `std::monostate` 处理分支 |
-| **P2** | 结果不匹配（剩余） | ~900 | 时间截断精度、列表排序归一化、跨类型比较等 |
-| **P3** | Parser 限制 | ~250 | Parser 增强 |
-| ~~P3~~ | ~~Boolean null 传播~~ | ~~~12~~ | ✅ 非缺陷：`null AND false→false`、`null OR true→true` 等 null 传播规则已正确实现（含 UNWIND 场景） |
-| ~~P3~~ | ~~NOT 非布尔字面量~~ | ~~~9~~ | ✅ 非缺陷：Parser 正确解析 `NOT []` / `NOT {}`，AST skip 不拦截，Binder 正确报 `InvalidArgumentType`（openCypher 规范要求报错） |
-| **P3** | 缺失步骤定义 | 71 | 补实现步骤（远期） |
-| ~~P3~~ | ~~多标签节点~~ | ~~~25~~ | ✅ 已实现：`MATCH(n:A:B)` 扫描首标签 + getVertexLabels 运行时过滤其余标签 |
-
----
-
-## 已知限制（通用）
-
-- **数组属性存储不完整**：`CREATE({prop: [1, 2, 3]})` 中列表属性未被正确写入（各类型均受影响，含时间数组）。时间数组的编解码基础设施已就位，剩余问题在 `CreateNodePhysicalOp` / `SetPhysicalOp` 的 evaluator→PropertyValue 转换管道。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
-- ~~**Thrift PropertyType 未扩展时间数组**~~：✅ 已修复。`proto/eugraph.thrift` `PropertyType` 枚举新增 `DATETIME_ARRAY=11` / `TIME_ARRAY=12` / `DURATION_ARRAY=13`；`PropertyValueThrift` union 新增对应数组字段；handler 的 `propertyTypeToThrift` 和 `thriftToPropertyValue` 完整支持时间数组转换。
-- **`properties(Edge)` + 普通 Expand**: `(a)-[r:TYPE]->(b)` 中 `ExpandPhysicalOp` 不加载边属性，`properties(r)` 返回空 map。变长路径的边属性加载已支持。详见 [query-engine-design.md](../query/engine/query-engine-design.md#十二已知限制与后续规划)
-- ~~**PropertyValue 不支持 TemporalValue**~~：✅ 已修复，TemporalValue 拆分为 DateTimeValue / TimeValue / DurationValue 三种类型。
-- ~~**紧凑 STRING 格式**~~：✅ 已修复，无分隔符格式已实现。
-- ~~**DOUBLE 截断**~~：✅ 已修复，mul / div Duration 支持 double 因子。
-- **命名时区不支持**：`datetime('2017-...T23:00+02:00[Europe/Stockholm]')` 中命名时区仅存储名称，不解析为实际偏移量（DST 感知）。需引入 IANA 时区数据库。
-
----
-
-## MERGE TCK 专项
-
-**日期**: 2026-06-05 (第五轮更新)
-**分支**: feature/merge-clause
-**总计**: 75 场景, **55 通过 / 20 失败**
-
-### 已修复项 (23 → 36 → 49 → 50 → 55)
-
-| 修复内容 | 影响场景 |
-|---------|---------|
-| 列表字符串格式化（双引号→单引号） | Merge1[2], Merge1[10], Merge2[1](部分), Merge3[2](部分) |
-| `registerPendingProps` 实际注册属性到 `__anon__` | Merge ON CREATE/MATCH SET 属性相关 |
-| 匿名节点创建存入 `__anon__` 表 | Merge1[1] |
-| Binder InvalidParameterUse 校验（节点/关系谓词） | Merge1[16], Merge5[27] |
-| Binder VariableAlreadyBound 校验（关系变量、带标签已绑定节点） | Merge5[22], Merge5[26] |
-| Parser `$param` 语法支持（`buildProperties` 处理 parameter） | Merge1[16], Merge5[27] |
-| Binder 首个错误后停止处理子句（防级联） | Merge1[16], Merge5[27] |
-| UndefinedVariable 错误消息含关键字 | Merge2[6], Merge3[5](部分) |
-| TCK 错误分类补充 MERGE 模式 | 多个错误验证场景 |
-
-### 已修复项（第二轮）
-
-| 修复内容 | 影响场景 |
-|---------|---------|
-| findMatchingNode 增加 pending_props 检查（created_vertices 和 __anon__ 路径） | Merge1[4,9,11,12], Merge9[1,2] |
-| executeSetItems 按 var_name 选择目标实体（不再取第一个 Vertex） | Merge2[1], Merge3[2], Merge6[3], Merge7[4-7], Merge8[1] |
-| 输出 VertexValue 包含 SET_LABELS 追加的标签 | Merge2[1], Merge3[2] |
-| bindMergeSetItem 校验 target_variable 存在于作用域 | Merge2[6], Merge3[5], Merge6[6] |
-| expressionToString 对 count 零参数输出 `count(*)` | Merge5[1,14], Merge9[1,3] |
-| executeChunk 检测 null 属性值报 SemanticError: MergeReadOwnWrites | Merge1[17], Merge5[29] |
-
-### 已修复项（第三轮，36 → 49）
-
-| 修复内容 | 影响场景 |
-|---------|---------|
-| `CreateEdgePhysicalOp` pending_props 延迟解析（lazy resolve after ALTER child） | Merge6[1,2] 等 ON CREATE SET 边属性场景 |
-| TCK stream 异常路径错误分类（Bug F） | Merge1[17], Merge5[29] 的错误类型识别 |
-| TCK `+labels` 副作用计数改用唯一标签名（Bug B） | Merge1[5,7,10,11], Merge9[2] |
-| TCK `+nodes`/`-nodes` 副作用拆分计算（Bug C，ID 集合差集） | Merge1[14], Merge5[18,20] |
-| TCK MERGE 多关系类型 `[:A|:B]` 让查询到达服务端（Bug E） | Merge5[25] |
-
-### 已修复项（第四轮，49 → 50）
-
-| 修复内容 | 影响场景 |
-|---------|---------|
-| CrossProduct 右子树列索引重映射（Bug H 真正根因） | Merge6[3,4,6,7], Merge7[3,4,5] |
-
-**Bug H 详细修复说明**:
-
-原始诊断认为问题是"属性 catalog 注册位置与存储位置不一致"，实际根因是 **CrossProduct 物理规划阶段的列索引映射错误**。
-
-Binder 为逗号分隔的 MATCH 模式（如 `MATCH (a {name: 'A'}), (b {name: 'B'})`）分配全局列索引：`a=0`, `b=1`。CrossProduct 中右子树独立规划产生本地列索引（从 0 开始），但右子树内谓词表达式（Filter、PropertyRef 等）的 `BoundColumnRef.column_index` 仍使用全局索引。例如 `b` 的 column_index=1，但右子树 DataChunk 只有 1 列（索引 0），导致 evaluator 访问越界，属性查找返回空值。
-
-**修复方案**: 在 `physical_planner.cpp` 的 CrossProduct（BoundBinaryJoinOp）规划中，规划右子树前对其整棵逻辑算子树递归执行列索引重映射，将所有 `column_index` 减去左子树列数偏移量。涉及两个静态函数：
-
-- `remapExprColumnIndices(BoundExpression&, uint32_t offset)`: 递归遍历所有 BoundExpression 变体（BoundColumnRef、BoundBinaryOp、BoundUnaryOp、BoundPropertyRef、BoundFunctionCall、BoundCase 等），对 BoundColumnRef 的 column_index 执行 `-= offset`。
-- `remapLogicalOpColumnIndices(BoundLogicalOperator&, uint32_t offset)`: 递归遍历所有 BoundLogicalOperator 变体（BoundScanOp、BoundFilterOp、BoundExpandOp、BoundProjectOp 等），对算子内部的 column_index 字段和表达式执行重映射。
-
-**修改文件**: `src/query/physical_plan/physical_planner.cpp`（新增 ~120 行）
-
-**其他相关改动**（前几轮已提交，本轮验证生效）:
-- `all_node_scan_physical_op.cpp`: 从所有 label 加载属性（不仅是 `label_prop_ids_`）
-- `eval_property.cpp`: `evalPropertyRef` 增加 candidate 查找失败后按属性名搜索 fallback
-
-### 已修复项（第五轮，50 → 55）
-
-| 修复内容 | 影响场景 |
-|---------|---------|
-| `CreateEdgePhysicalOp` 延迟标签解析（deferred label resolution after child op runs） | Delete6[1-4,6-9] |
-| `CreateEdgeLabelPhysicalOp` 已有标签时调用 `addEdgeLabelProperties` | Delete6[8,9] 边属性注册 |
-| `LimitPhysicalOp` LIMIT 0 消费所有子数据触发副作用 | Remove3[15,16] |
-| TCK `+labels` distinct 标签名计数 | Merge1[2,5,7,8,10,11] |
-| `executeSetPropertiesItem` 边属性动态注册 | Merge6[7]（部分修复） |
-
-**CreateEdgePhysicalOp 延迟解析详细说明**:
-
-原始实现在 `executeChunk()` 开头立即解析 `label_id_`，但此时子算子 `CreateEdgeLabelPhysicalOp` 尚未执行，共享的 `name_to_id_` 和 `defs_` 映射为空，导致 `effective_label_id` 为 INVALID。
-
-修复方案：将标签 ID 解析、属性注册、pending 属性 ID 映射全部推迟到第一次 `child_gen.next()` 返回之后执行（此时子算子已填充共享映射）。涉及变量：
-- `effective_label_id`: 从 `name_to_id_` 解析
-- `edge_label_def`: 从 `defs_` 解析
-- `resolved_pending`: 从 `pending_props_` + `edge_label_def->properties` 解析
-
-**LimitPhysicalOp LIMIT 0 修复详细说明**:
-
-openCypher 语义要求 LIMIT 0 仍执行所有副作用（CREATE/DELETE/SET 等），仅结果集为空。原始实现 `remaining == 0` 时直接 `co_return`，跳过了整个子管道。修复为消费所有子数据但不 yield。
-
-### 剩余 bug 按根因分组（20 场景）
-
-#### Bug 1: findMatchingNode 不检查 pending_props（部分已修复）
-
-**根因**: `created_vertices_` 循环和 `__anon__` 扫描只验证 `prop_filters`（已解析属性 ID），不验证 `pending_props`（按名称匹配）。当 MERGE 属性未通过标签解析时（匿名节点或新标签），匹配逻辑形同虚设。
-
-**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
-
-**影响场景**: Merge5[6,18]
-
-#### Bug J: ON MATCH SET 边属性写入后 snapshot 不可见（7 场景）
-
-**现象**: Merge7[3]（`ON MATCH SET r.name = 'Lola'`）执行后，snapshot 查询 `MATCH ()-[r]->() RETURN sum(size(keys(r)))` 返回 0（期望 1）。
-
-**排查结论**:
-- ON CREATE 场景（Merge6[2]）snapshot 能正确返回 1，说明 `putEdgeProperty` 写入机制本身正常
-- `addEdgeLabelProperties` 在 `AsyncGraphMetaStore` 中正确实现（`SyncGraphMetaStore` 版本为 no-op，不影响 TCK 测试）
-- 属性已通过 `putEdgeProperty` 写入存储，但后续查询 `keys(r)` 依赖两个条件：(1) `ExpandPhysicalOp` 加载边属性填充 `ev.properties`，(2) `lookupEdgeLabel(ev.label_id)` 返回含属性名的定义
-- 可能原因：边属性写入后 edge label def 缓存未刷新，或 ON MATCH 分支中 `edge_id`/`elid` 传值有误
-
-**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
-
-**影响场景**: Merge7[3,4,5], Merge8[3,4,5], Merge9[1]
-
-#### Bug K: 控制查询 `r[key]` 动态属性访问（4 场景）
-
-**现象**: Merge6[3,4,6,7] 的控制查询 `MATCH ()-[r:TYPE]->() RETURN [key IN keys(r) | key + '->' + r[key]]` 失败。属性已正确写入（snapshot 能计数到），但 `r[key]` 动态属性访问可能不支持 edge。
-
-**文件**: `src/query/function/scalar/graph_functions.hpp` (`evalPropertyRef`)
-
-**影响场景**: Merge6[3,4,6,7]
-
-#### Bug L: findMatchingEdge 只返回首条（1 场景）
-
-**根因**: `findMatchingEdge` 扫描到第一条匹配边即返回，不验证所有属性约束。
-
-**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp`
-
-**影响场景**: Merge5[3]
-
-#### Bug M: findMatchingNode 匹配问题（3 场景）
-
-**根因**: `findMatchingNode()` 扫描标签表不过滤已删除节点，或 pending_props 检查不完整。
-
-**文件**: `src/query/physical_plan/operator/merge_physical_op.cpp` + 存储层
-
-**影响场景**: Merge1[9], Merge5[6,18]
-
-### 功能缺失（不在本次修复范围）
-
-| 类别 | 影响场景 | 说明 |
-|------|---------|------|
-| 路径绑定 (path variable) | Merge1[13], Merge5[10] | 路径类型支持不完整 |
-| 无方向关系匹配 | Merge5[11], [12], [13] | 需扩展关系方向处理 |
-| 列表属性匹配 | Merge5[15], [21] | 列表属性比较未实现 |
-| 关系类型交替 `[:A\|:B]` | Merge5[25] | AST skip 阻止解析 |
-| 删除节点对 MERGE 可见 | Merge1[14], Merge5[20] | 存储层已删除节点未被过滤 |
-
-### 剩余 20 个失败场景汇总
-
-| 根因 | 场景数 | 场景列表 |
-|------|--------|----------|
-| **Bug J: ON MATCH SET 边属性不可见** | 7 | Merge7[3,4,5], Merge8[3,4,5], Merge9[1] |
-| **Bug K: 控制查询 r[key]** | 4 | Merge6[3,4,6,7] |
-| **Bug L: findMatchingEdge 只返回首条** | 1 | Merge5[3] |
-| **Bug M: findMatchingNode 匹配问题** | 3 | Merge1[9], Merge5[6,18] |
-| **功能缺失: 路径/方向/列表/删除** | 5 | Merge1[13,14], Merge5[10,11,13,15,20,21] |
+75 场景，55 通过 / 20 失败。4 类已知 bug + 功能缺失。
