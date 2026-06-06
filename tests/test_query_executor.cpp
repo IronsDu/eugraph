@@ -5361,6 +5361,88 @@ TEST_F(QueryExecutorTest, NotWithStringLiteral) {
     EXPECT_FALSE(result.error.empty()) << "NOT 'hello' should raise an error";
 }
 
+// ==================== SKIP/LIMIT semantic validation ====================
+
+TEST_F(QueryExecutorTest, SkipNegativeFails) {
+    auto result = execSync(*executor_, "RETURN 1 AS x SKIP -1");
+    EXPECT_FALSE(result.error.empty()) << "SKIP -1 should raise an error";
+    EXPECT_NE(result.error.find("non-negative integer"), std::string::npos)
+        << "Expected 'non-negative integer', got: " << result.error;
+}
+
+TEST_F(QueryExecutorTest, SkipFloatFails) {
+    auto result = execSync(*executor_, "RETURN 1 AS x SKIP 1.5");
+    EXPECT_FALSE(result.error.empty()) << "SKIP 1.5 should raise an error";
+    EXPECT_NE(result.error.find("integer literal"), std::string::npos)
+        << "Expected 'integer literal', got: " << result.error;
+}
+
+TEST_F(QueryExecutorTest, LimitNegativeFails) {
+    auto result = execSync(*executor_, "RETURN 1 AS x LIMIT -5");
+    EXPECT_FALSE(result.error.empty()) << "LIMIT -5 should raise an error";
+    EXPECT_NE(result.error.find("non-negative integer"), std::string::npos)
+        << "Expected 'non-negative integer', got: " << result.error;
+}
+
+TEST_F(QueryExecutorTest, LimitFloatFails) {
+    auto result = execSync(*executor_, "RETURN 1 AS x LIMIT 2.5");
+    EXPECT_FALSE(result.error.empty()) << "LIMIT 2.5 should raise an error";
+    EXPECT_NE(result.error.find("integer literal"), std::string::npos)
+        << "Expected 'integer literal', got: " << result.error;
+}
+
+TEST_F(QueryExecutorTest, SkipZeroSucceeds) {
+    auto result = execSync(*executor_, "RETURN 1 AS x SKIP 0");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, LimitZeroSucceeds) {
+    auto result = execSync(*executor_, "RETURN 1 AS x LIMIT 0");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, WithSkipNegativeFails) {
+    auto result = execSync(*executor_, "WITH 1 AS x SKIP -1 RETURN x");
+    EXPECT_FALSE(result.error.empty()) << "WITH SKIP -1 should raise an error";
+    EXPECT_NE(result.error.find("non-negative integer"), std::string::npos)
+        << "Expected 'non-negative integer', got: " << result.error;
+}
+
+// ==================== Map duplicate key detection ====================
+
+TEST_F(QueryExecutorTest, DuplicateMapKeyFails) {
+    auto result = execSync(*executor_, "RETURN {a: 1, a: 2}");
+    EXPECT_FALSE(result.error.empty()) << "Duplicate map key should raise an error";
+    EXPECT_NE(result.error.find("Duplicate map key"), std::string::npos)
+        << "Expected 'Duplicate map key', got: " << result.error;
+}
+
+// ==================== toString parameter validation ====================
+
+TEST_F(QueryExecutorTest, ToStringNoArgsFails) {
+    auto result = execSync(*executor_, "RETURN toString()");
+    EXPECT_FALSE(result.error.empty()) << "toString() with no args should raise an error";
+    EXPECT_NE(result.error.find("Invalid argument type"), std::string::npos)
+        << "Expected 'Invalid argument type', got: " << result.error;
+}
+
+TEST_F(QueryExecutorTest, ToStringTwoArgsFails) {
+    auto result = execSync(*executor_, "RETURN toString(1, 2)");
+    EXPECT_FALSE(result.error.empty()) << "toString(1, 2) should raise an error";
+    EXPECT_NE(result.error.find("Invalid argument type"), std::string::npos)
+        << "Expected 'Invalid argument type', got: " << result.error;
+}
+
+TEST_F(QueryExecutorTest, ToStringOneArgSucceeds) {
+    auto result = execSync(*executor_, "RETURN toString(42)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "42");
+}
+
 // ==================== Boolean null propagation ====================
 
 TEST_F(QueryExecutorTest, NullAndFalseIsFalse) {

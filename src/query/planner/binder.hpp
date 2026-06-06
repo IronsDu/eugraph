@@ -122,6 +122,7 @@ private:
     static std::optional<cypher::Expression> removeExistsFromWhere(const cypher::Expression& expr);
 
     // ── Helpers ──
+    std::optional<int64_t> bindSkipLimit(const cypher::Expression& expr, const char* clause_name);
     uint32_t nextColumnIndex() {
         return ctx_.next_column_index++;
     }
