@@ -38,9 +38,7 @@ struct EdgeValue {
 
 struct PathValue {
     std::vector<struct ValueStorage> elements;
-    bool operator==(const PathValue& /*o*/) const {
-        return true; /* simplified — full comparison requires Value to be complete */
-    }
+    bool operator==(const PathValue& o) const;
 };
 
 // Runtime value produced by expression evaluation and query execution.
@@ -49,16 +47,12 @@ struct PathValue {
 // the recursion.
 struct ListValue {
     std::vector<struct ValueStorage> elements;
-    bool operator==(const ListValue& /*o*/) const {
-        return true; /* simplified */
-    }
+    bool operator==(const ListValue& o) const;
 };
 
 struct MapValue {
     std::vector<std::pair<std::string, struct ValueStorage>> entries;
-    bool operator==(const MapValue& /*o*/) const {
-        return true; /* simplified */
-    }
+    bool operator==(const MapValue& o) const;
 };
 
 // Forward-declare the storage variant.
@@ -73,6 +67,46 @@ using Value = std::variant<std::monostate, bool, int64_t, double, std::string, V
 struct ValueStorage {
     Value value;
 };
+
+// ==================== Deep equality for container types ====================
+
+inline bool PathValue::operator==(const PathValue& o) const {
+    if (elements.size() != o.elements.size())
+        return false;
+    for (size_t i = 0; i < elements.size(); ++i) {
+        if (!(elements[i].value == o.elements[i].value))
+            return false;
+    }
+    return true;
+}
+
+inline bool ListValue::operator==(const ListValue& o) const {
+    if (elements.size() != o.elements.size())
+        return false;
+    for (size_t i = 0; i < elements.size(); ++i) {
+        if (!(elements[i].value == o.elements[i].value))
+            return false;
+    }
+    return true;
+}
+
+inline bool MapValue::operator==(const MapValue& o) const {
+    if (entries.size() != o.entries.size())
+        return false;
+    // Order-independent comparison (Cypher map semantics)
+    for (const auto& lhs_entry : entries) {
+        bool found = false;
+        for (const auto& rhs_entry : o.entries) {
+            if (lhs_entry.first == rhs_entry.first && lhs_entry.second.value == rhs_entry.second.value) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            return false;
+    }
+    return true;
+}
 
 // Helper to check if a Value is null (monostate).
 inline bool isNull(const Value& v) {
