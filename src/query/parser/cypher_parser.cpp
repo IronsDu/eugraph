@@ -5,6 +5,9 @@
 #include "CypherParser.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
 #include <antlr4-runtime.h>
 
 namespace eugraph {
@@ -911,8 +914,66 @@ struct CypherQueryParser::Impl {};
 CypherQueryParser::CypherQueryParser() : impl_(std::make_unique<Impl>()) {}
 CypherQueryParser::~CypherQueryParser() = default;
 
+// Preprocess: replace hex/oct integer literals with decimal equivalents
+// so the ANTLR lexer can tokenize them as plain DIGIT tokens.
+// Matches: 0x[0-9a-fA-F_]+ and 0o[0-7_]+ optionally preceded by '-'
+static std::string preprocessIntegerLiterals(const std::string& input) {
+    std::string result;
+    result.reserve(input.size());
+    size_t i = 0;
+    while (i < input.size()) {
+        char c = input[i];
+        // Check for hex/oct prefix: optional '-' then '0' then 'x'/'X' or 'o'/'O'
+        bool negative = (c == '-' && i + 1 < input.size() && input[i + 1] == '0');
+        size_t start = negative ? i + 1 : i;
+        if (start + 1 < input.size() && input[start] == '0' &&
+            (input[start + 1] == 'x' || input[start + 1] == 'X' ||
+             input[start + 1] == 'o' || input[start + 1] == 'O')) {
+            // Collect hex/oct digits
+            bool is_hex = (input[start + 1] == 'x' || input[start + 1] == 'X');
+            size_t j = start + 2; // skip 0x or 0o
+            while (j < input.size()) {
+                char d = input[j];
+                if (is_hex && isxdigit(d)) { ++j; continue; }
+                if (!is_hex && d >= '0' && d <= '7') { ++j; continue; }
+                if (d == '_') { ++j; continue; }
+                break;
+            }
+            if (j > start + 2) {
+                // Parse and convert to decimal string
+                std::string digits = input.substr(start + 2, j - (start + 2));
+                digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+                errno = 0;
+                int64_t val = std::strtoll(digits.c_str(), nullptr, is_hex ? 16 : 8);
+                bool overflow = (errno == ERANGE);
+                // Check for values exactly at INT64_MIN boundary via UINT64
+                if (!overflow && negative && val == INT64_MIN) {
+                    // Check if unsigned value exceeds INT64_MAX+1
+                    uint64_t uval = std::strtoull(digits.c_str(), nullptr, is_hex ? 16 : 8);
+                    if (uval > static_cast<uint64_t>(INT64_MAX) + 1)
+                        overflow = true;
+                }
+                if (overflow) {
+                    // Keep original text — let parser/binder handle the overflow
+                    result.append(input.substr(i, j - i));
+                } else if (negative) {
+                    result += '-' + std::to_string(std::abs(val));
+                } else {
+                    result += std::to_string(val);
+                }
+                i = j;
+                continue;
+            }
+        }
+        result += c;
+        ++i;
+    }
+    return result;
+}
+
 std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& cypher_text) {
-    antlr4::ANTLRInputStream input(cypher_text);
+    auto preprocessed = preprocessIntegerLiterals(cypher_text);
+    antlr4::ANTLRInputStream input(preprocessed);
 
     CypherLexer lexer(&input);
     ParseErrorListener error_listener;

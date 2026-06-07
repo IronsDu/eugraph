@@ -145,19 +145,8 @@ std::string formatResultValue(const thrift::ResultValue& val) {
     case thrift::ResultValue::Type::int_val:
         return std::to_string(val.get_int_val());
 
-    case thrift::ResultValue::Type::double_val: {
-        double d = val.get_double_val();
-        if (std::isnan(d))
-            return "NaN";
-        if (std::isinf(d))
-            return d > 0 ? "Infinity" : "-Infinity";
-        std::ostringstream oss;
-        oss << std::setprecision(std::numeric_limits<double>::digits10) << d;
-        std::string s = oss.str();
-        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos)
-            s += ".0";
-        return s;
-    }
+    case thrift::ResultValue::Type::double_val:
+        return formatDouble(val.get_double_val());
 
     case thrift::ResultValue::Type::string_val:
         return "'" + val.get_string_val() + "'";
