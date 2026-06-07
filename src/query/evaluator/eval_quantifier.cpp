@@ -68,9 +68,10 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             }
             temp_chunk.columns[loop_column_index] = Column::constant(elem_val);
 
-            bool elem_passes = false;
+            bool elem_passes = true;
             bool inconclusive = false;
             if (where_pred) {
+                elem_passes = false;
                 auto pred_eval = evaluateInternal(*where_pred, temp_chunk);
                 if (pred_eval.column && !pred_eval.column->isNull(0)) {
                     Value v = pred_eval.column->getValue(0);
