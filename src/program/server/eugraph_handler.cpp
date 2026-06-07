@@ -2,6 +2,7 @@
 
 #include "common/types/temporal_value.hpp"
 #include "query/parser/cypher_parser.hpp"
+#include "thrift_fmt/result_format.hpp"
 
 #include <thrift/lib/cpp2/async/ServerStream.h>
 
@@ -172,18 +173,7 @@ namespace {
 
 // Format a double for TCK comparison: always includes a decimal point,
 // suppresses scientific notation without exposing floating-point noise.
-std::string formatDouble(double d) {
-    if (std::isnan(d))
-        return "NaN";
-    if (std::isinf(d))
-        return d > 0 ? "Infinity" : "-Infinity";
-    std::ostringstream oss;
-    oss << std::setprecision(std::numeric_limits<double>::digits10) << d;
-    std::string s = oss.str();
-    if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos)
-        s += ".0";
-    return s;
-}
+using eugraph::thrift_fmt::formatDouble;
 
 void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
     if (std::holds_alternative<bool>(pv)) {
@@ -491,7 +481,7 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         for (size_t i = 0; i < mv.entries.size(); ++i) {
             if (i > 0)
                 oss << ", ";
-            oss << '"' << mv.entries[i].first << "\": ";
+            oss << mv.entries[i].first << ": ";
             auto elem_rv = valueToThrift(mv.entries[i].second.value, label_defs, edge_label_defs);
             switch (elem_rv.getType()) {
             case thrift::ResultValue::Type::__EMPTY__:
@@ -507,7 +497,7 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                 oss << formatDouble(elem_rv.get_double_val());
                 break;
             case thrift::ResultValue::Type::string_val:
-                oss << '"' << elem_rv.get_string_val() << '"';
+                oss << "'" << elem_rv.get_string_val() << "'";
                 break;
             case thrift::ResultValue::Type::vertex_json:
                 oss << elem_rv.get_vertex_json();
