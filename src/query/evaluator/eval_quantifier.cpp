@@ -51,14 +51,9 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             continue;
         }
 
-        bool saw_null = false;
+        bool saw_inconclusive = false;
         for (const auto& elem_storage : lv.elements) {
             Value elem_val = elem_storage.value;
-
-            if (isNull(elem_val)) {
-                saw_null = true;
-                continue;
-            }
 
             DataChunk temp_chunk;
             temp_chunk.columns.resize(total_cols);
@@ -71,13 +66,24 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             for (size_t c = input.columns.size(); c < total_cols; ++c) {
                 temp_chunk.columns[c] = Column::constant(Value{});
             }
-            temp_chunk.columns[loop_column_index] = Column::constant(std::move(elem_val));
+            temp_chunk.columns[loop_column_index] = Column::constant(elem_val);
 
-            bool elem_passes = true;
+            bool elem_passes = false;
+            bool inconclusive = false;
             if (where_pred) {
-                std::vector<bool> pred_result;
-                evaluatePredicate(*where_pred, temp_chunk, pred_result);
-                elem_passes = !pred_result.empty() && pred_result[0];
+                auto pred_eval = evaluateInternal(*where_pred, temp_chunk);
+                if (pred_eval.column && !pred_eval.column->isNull(0)) {
+                    Value v = pred_eval.column->getValue(0);
+                    if (std::holds_alternative<bool>(v))
+                        elem_passes = std::get<bool>(v);
+                } else {
+                    inconclusive = true;
+                }
+            }
+
+            if (inconclusive) {
+                saw_inconclusive = true;
+                continue;
             }
 
             switch (kind) {
@@ -115,7 +121,7 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
         if (kind == QuantifierKind::SINGLE) {
             final_result = (single_match_count == 1);
         }
-        if (saw_null) {
+        if (saw_inconclusive) {
             bool at_initial = false;
             switch (kind) {
             case QuantifierKind::ALL:
