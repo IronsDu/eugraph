@@ -2,6 +2,8 @@
 
 #include "common/types/temporal_value.hpp"
 
+#include <cmath>
+
 namespace eugraph {
 
 namespace {
@@ -128,6 +130,35 @@ void inBatch(const Column& left, const Column& right, Column& result, size_t cou
     }
 }
 
+// ==================== List batch functions ====================
+
+void listConcatBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<ListValue>(lv) && std::holds_alternative<ListValue>(rv)) {
+            ListValue result_list = std::get<ListValue>(lv);
+            const auto& rlist = std::get<ListValue>(rv);
+            result_list.elements.insert(result_list.elements.end(), rlist.elements.begin(), rlist.elements.end());
+            result.setValue(i, Value(std::move(result_list)));
+        } else if (std::holds_alternative<ListValue>(lv)) {
+            // list + scalar: append scalar as single element
+            ListValue result_list = std::get<ListValue>(lv);
+            result_list.elements.push_back(ValueStorage{rv});
+            result.setValue(i, Value(std::move(result_list)));
+        } else if (std::holds_alternative<ListValue>(rv)) {
+            // scalar + list: prepend scalar
+            ListValue result_list;
+            result_list.elements.push_back(ValueStorage{lv});
+            const auto& rlist = std::get<ListValue>(rv);
+            result_list.elements.insert(result_list.elements.end(), rlist.elements.begin(), rlist.elements.end());
+            result.setValue(i, Value(std::move(result_list)));
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
 // ==================== Int64 arithmetic batch functions ====================
 
 void int64AddBatch(const Column& left, const Column& right, Column& result, size_t count) {
@@ -170,6 +201,33 @@ void int64DivBatch(const Column& left, const Column& right, Column& result, size
         if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
             int64_t b = std::get<int64_t>(rv);
             result.setValue(i, b != 0 ? Value(std::get<int64_t>(lv) / b) : Value{});
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
+void int64ModBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
+            int64_t b = std::get<int64_t>(rv);
+            result.setValue(i, b != 0 ? Value(std::get<int64_t>(lv) % b) : Value{});
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
+void int64PowBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
+            double base = static_cast<double>(std::get<int64_t>(lv));
+            double exp = static_cast<double>(std::get<int64_t>(rv));
+            result.setValue(i, Value(static_cast<int64_t>(std::llround(std::pow(base, exp)))));
         } else {
             result.setNull(i);
         }
@@ -221,6 +279,30 @@ void doubleDivBatch(const Column& left, const Column& right, Column& result, siz
         } else {
             result.setNull(i);
         }
+    }
+}
+
+void doubleModBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv)) {
+            double b = std::get<double>(rv);
+            result.setValue(i, b != 0.0 ? Value(std::fmod(std::get<double>(lv), b)) : Value{});
+        } else {
+            result.setNull(i);
+        }
+    }
+}
+
+void doublePowBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
+            result.setValue(i, Value(std::pow(std::get<double>(lv), std::get<double>(rv))));
+        else
+            result.setNull(i);
     }
 }
 
@@ -889,6 +971,12 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         }
     }
 
+    // List-specific operations (accept ANY for property round-trip)
+    if ((left_type == BTK::LIST || left_type == BTK::ANY) || (right_type == BTK::LIST || right_type == BTK::ANY)) {
+        if (op == BO::ADD)
+            return listConcatBatch;
+    }
+
     // Int64-specific operations
     if (left_type == BTK::INT64 && right_type == BTK::INT64) {
         switch (op) {
@@ -900,6 +988,10 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             return int64MulBatch;
         case BO::DIV:
             return int64DivBatch;
+        case BO::MOD:
+            return int64ModBatch;
+        case BO::POW:
+            return int64PowBatch;
         case BO::LT:
             return int64LtBatch;
         case BO::GT:
@@ -924,6 +1016,10 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             return doubleMulBatch;
         case BO::DIV:
             return doubleDivBatch;
+        case BO::MOD:
+            return doubleModBatch;
+        case BO::POW:
+            return doublePowBatch;
         case BO::LT:
             return doubleLtBatch;
         case BO::GT:

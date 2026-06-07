@@ -115,13 +115,6 @@ bool hasUnsupportedExpr(const ast::Expression& expr) {
                 // may still fail in binding.
                 return false;
             } else if constexpr (std::is_same_v<Inner, ast::BinaryOp>) {
-                switch (ptr->op) {
-                case ast::BinaryOperator::IN:
-                    spdlog::info("[TCK] skipping: IN");
-                    return true;
-                default:
-                    break;
-                }
                 return hasUnsupportedExpr(ptr->left) || hasUnsupportedExpr(ptr->right);
             } else if constexpr (std::is_same_v<Inner, ast::FunctionCall>) {
                 const std::string& name = ptr->name;

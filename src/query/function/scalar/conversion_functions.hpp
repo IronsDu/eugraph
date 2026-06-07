@@ -141,6 +141,44 @@ inline void toStringBatchFn(const std::vector<const Column*>& args, Column& resu
     }
 }
 
+// --- toBoolean ---
+
+inline Value toBooleanImpl(const Value& arg) {
+    if (isNull(arg))
+        return Value{};
+    if (std::holds_alternative<bool>(arg))
+        return arg;
+    if (std::holds_alternative<int64_t>(arg))
+        return Value(std::get<int64_t>(arg) != 0);
+    if (std::holds_alternative<double>(arg))
+        return Value(std::get<double>(arg) != 0.0);
+    if (std::holds_alternative<std::string>(arg)) {
+        const auto& s = std::get<std::string>(arg);
+        if (s == "true")
+            return Value(true);
+        if (s == "false")
+            return Value(false);
+        return Value{};
+    }
+    return Value{};
+}
+
+inline Value toBooleanScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
+    if (args.empty())
+        return Value{};
+    return toBooleanImpl(args[0]);
+}
+
+inline void toBooleanBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                             const EvalContext& /*ctx*/) {
+    if (args.empty())
+        return;
+    const auto& arg_col = *args[0];
+    for (size_t i = 0; i < count; ++i) {
+        result.setValue(i, toBooleanImpl(arg_col.getValue(i)));
+    }
+}
+
 } // namespace scalar
 } // namespace function
 } // namespace eugraph

@@ -51,8 +51,14 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             continue;
         }
 
+        bool saw_null = false;
         for (const auto& elem_storage : lv.elements) {
             Value elem_val = elem_storage.value;
+
+            if (isNull(elem_val)) {
+                saw_null = true;
+                continue;
+            }
 
             DataChunk temp_chunk;
             temp_chunk.columns.resize(total_cols);
@@ -109,7 +115,29 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
         if (kind == QuantifierKind::SINGLE) {
             final_result = (single_match_count == 1);
         }
-        result.setValue(i, Value(final_result));
+        if (saw_null) {
+            bool at_initial = false;
+            switch (kind) {
+            case QuantifierKind::ALL:
+                at_initial = final_result; // initial=true
+                break;
+            case QuantifierKind::ANY:
+                at_initial = !final_result; // initial=false
+                break;
+            case QuantifierKind::NONE:
+                at_initial = final_result; // initial=true
+                break;
+            case QuantifierKind::SINGLE:
+                at_initial = (single_match_count == 0 && !final_result); // initial=false
+                break;
+            }
+            if (at_initial)
+                result.setNull(i);
+            else
+                result.setValue(i, Value(final_result));
+        } else {
+            result.setValue(i, Value(final_result));
+        }
     }
 }
 
