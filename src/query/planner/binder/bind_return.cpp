@@ -64,8 +64,8 @@ static void walkAndReplaceAggCalls(binder::BoundExpression& expr,
                     std::string anon_name = "__agg_" + std::to_string(agg_idx++);
                     auto ret_type = out_aggs.back().result_type;
                     out_aggs.back().alias = anon_name;
-                    // Assign to the variant through the expr reference.
                     expr = BoundVariableRef{std::move(anon_name), std::move(ret_type)};
+                    return; // MUST return: ptr is now a dangling reference
                 } else {
                     // Non-aggregate function: recurse into args.
                     for (auto& arg : ptr->args)
