@@ -69,22 +69,26 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             temp_chunk.columns[loop_column_index] = Column::constant(elem_val);
 
             bool elem_passes = true;
-            bool inconclusive = false;
             if (where_pred) {
-                elem_passes = false;
-                auto pred_eval = evaluateInternal(*where_pred, temp_chunk);
-                if (pred_eval.column && !pred_eval.column->isNull(0)) {
-                    Value v = pred_eval.column->getValue(0);
-                    if (std::holds_alternative<bool>(v))
-                        elem_passes = std::get<bool>(v);
+                if (isNull(elem_val)) {
+                    // Null element: predicate may be inconclusive. Use
+                    // evaluateInternal linked via temp_columns_ indexing
+                    // to detect null result (reallocation-safe).
+                    size_t col_count_before = temp_columns_.size();
+                    evaluateInternal(*where_pred, temp_chunk);
+                    if (temp_columns_.size() > col_count_before && !temp_columns_[col_count_before].isNull(0)) {
+                        Value v = temp_columns_[col_count_before].getValue(0);
+                        if (std::holds_alternative<bool>(v))
+                            elem_passes = std::get<bool>(v);
+                    } else {
+                        saw_inconclusive = true;
+                        continue;
+                    }
                 } else {
-                    inconclusive = true;
+                    std::vector<bool> pred_result;
+                    evaluatePredicate(*where_pred, temp_chunk, pred_result);
+                    elem_passes = !pred_result.empty() && pred_result[0];
                 }
-            }
-
-            if (inconclusive) {
-                saw_inconclusive = true;
-                continue;
             }
 
             switch (kind) {
