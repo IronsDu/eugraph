@@ -150,8 +150,7 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                 for (size_t j = 0; j < aggregates_.size(); ++j) {
                     if (aggregates_[j].is_internal && aggregates_[j].func_def && state.agg_states[j] &&
                         aggregates_[j].func_def->agg_finalize)
-                        subs[aggregates_[j].func_def] =
-                            aggregates_[j].func_def->agg_finalize(*state.agg_states[j]);
+                        subs[aggregates_[j].func_def] = aggregates_[j].func_def->agg_finalize(*state.agg_states[j]);
                 }
                 DataChunk eval_chunk;
                 eval_chunk.count = 1;

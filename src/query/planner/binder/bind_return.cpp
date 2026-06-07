@@ -44,8 +44,7 @@ static bool hasAggregate(const cypher::Expression& expr) {
 /// a BoundVariableRef to an anonymous column (__agg_0, __agg_1, ...).
 /// The extracted aggregate info is pushed into `out_aggs`.
 static void walkAndReplaceAggCalls(binder::BoundExpression& expr,
-                                   std::vector<BoundAggregateOp::AggregateItem>& out_aggs,
-                                   uint32_t& agg_idx) {
+                                   std::vector<BoundAggregateOp::AggregateItem>& out_aggs, uint32_t& agg_idx) {
     std::visit(
         [&](auto& ptr) {
             using T = std::decay_t<decltype(ptr)>;
@@ -215,8 +214,8 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
 
         for (const auto& item : ret.items) {
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
-            bool is_simple_agg = std::holds_alternative<std::unique_ptr<cypher::FunctionCall>>(item.expr) &&
-                                 hasAggregate(item.expr);
+            bool is_simple_agg =
+                std::holds_alternative<std::unique_ptr<cypher::FunctionCall>>(item.expr) && hasAggregate(item.expr);
 
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
@@ -224,7 +223,6 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
 
             if (is_simple_agg) {
                 // Top-level aggregate function: e.g., RETURN count(a).
-                auto& fc = std::get<std::unique_ptr<cypher::FunctionCall>>(item.expr);
                 BoundAggregateOp::AggregateItem agg_item;
                 agg_item.alias = alias;
                 if (std::holds_alternative<std::unique_ptr<BoundFunctionCall>>(*bound_expr)) {
@@ -253,7 +251,6 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
 
                 // Register anonymous aggregate columns in the symbol table
                 // so the ProjectOp and ColumnResolver can find them.
-                size_t start_agg = agg->aggregates.size() - (agg->aggregates.size() > 0 ? 0 : 0);
                 for (size_t i = 0; i < agg->aggregates.size(); ++i) {
                     auto& ai = agg->aggregates[i];
                     if (ai.alias.starts_with("__agg_")) {
@@ -530,8 +527,8 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
 
         for (const auto& item : wc.items) {
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
-            bool is_simple_agg = std::holds_alternative<std::unique_ptr<cypher::FunctionCall>>(item.expr) &&
-                                 hasAggregate(item.expr);
+            bool is_simple_agg =
+                std::holds_alternative<std::unique_ptr<cypher::FunctionCall>>(item.expr) && hasAggregate(item.expr);
 
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
@@ -557,7 +554,6 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
 
                 for (auto& ai : agg->aggregates) {
                     if (ai.alias.starts_with("__agg_")) {
-                        size_t idx = agg->output_names.size();
                         agg->output_names.push_back(ai.alias);
                         with_outputs.emplace_back(ai.alias, BoundType::clone(ai.result_type));
                     }
