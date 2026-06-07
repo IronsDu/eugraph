@@ -46,25 +46,25 @@ ExternalProject_Add(wiredtiger_ext
     SOURCE_DIR "${PROJECT_SOURCE_DIR}/third_party/wiredtiger"
     INSTALL_DIR "${WT_INSTALL_DIR}"
     PATCH_COMMAND sed -i
-        "/add_subdirectory(bench\\/wtperf)/s/^/# PATCHED: /"
+        "/^[^#]/ { /add_subdirectory(bench\\/wtperf)/s/^/# PATCHED: / }"
         <SOURCE_DIR>/CMakeLists.txt &&
         sed -i
-        "/add_subdirectory(bench\\/tiered)/s/^/# PATCHED: /"
+        "/^[^#]/ { /add_subdirectory(bench\\/tiered)/s/^/# PATCHED: / }"
         <SOURCE_DIR>/CMakeLists.txt &&
         sed -i
-        "/add_subdirectory(bench\\/wt2853_perf)/s/^/# PATCHED: /"
+        "/^[^#]/ { /add_subdirectory(bench\\/wt2853_perf)/s/^/# PATCHED: / }"
         <SOURCE_DIR>/CMakeLists.txt &&
         sed -i
-        "/add_subdirectory(examples)/s/^/# PATCHED: /"
+        "/^[^#]/ { /add_subdirectory(examples)/s/^/# PATCHED: / }"
         <SOURCE_DIR>/CMakeLists.txt &&
         sed -i
-        "/^add_subdirectory(test)/s/^/# PATCHED: /"
+        "/^[^#]/ { /^add_subdirectory(test)/s/^/# PATCHED: / }"
         <SOURCE_DIR>/CMakeLists.txt &&
         sed -i
-        "/add_subdirectory(tools\\/checksum_bitflip)/s/^/# PATCHED: /"
+        "/^[^#]/ { /add_subdirectory(tools\\/checksum_bitflip)/s/^/# PATCHED: / }"
         <SOURCE_DIR>/CMakeLists.txt &&
         sed -i
-        "/add_subdirectory(test\\/fail_fs)/s/^/# PATCHED: /"
+        "/^[^#]/ { /add_subdirectory(test\\/fail_fs)/s/^/# PATCHED: / }"
         <SOURCE_DIR>/ext/CMakeLists.txt
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
