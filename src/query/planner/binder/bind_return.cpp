@@ -38,37 +38,50 @@ static bool hasAggregate(const cypher::Expression& expr) {
         expr);
 }
 
-// ==================== Aggregate Extraction Helper ====================
+// ==================== Aggregate Extraction & Replacement ====================
 
-/// Recursively find the first BoundFunctionCall with aggregate func_def in a BoundExpression tree.
-static void extractAggCall(binder::BoundExpression& expr, const function::FunctionDef*& out_def,
-                           binder::BoundExpression& out_arg, bool& out_distinct, binder::BoundType& out_ret_type) {
+/// Walk a BoundExpression tree, replacing every aggregate BoundFunctionCall with
+/// a BoundVariableRef to an anonymous column (__agg_0, __agg_1, ...).
+/// The extracted aggregate info is pushed into `out_aggs`.
+static void walkAndReplaceAggCalls(binder::BoundExpression& expr,
+                                   std::vector<BoundAggregateOp::AggregateItem>& out_aggs,
+                                   uint32_t& agg_idx) {
     std::visit(
         [&](auto& ptr) {
             using T = std::decay_t<decltype(ptr)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
                 if (ptr->func_def->is_aggregate) {
-                    out_def = ptr->func_def;
-                    out_distinct = ptr->distinct;
-                    out_ret_type = ptr->return_type;
+                    // Extract aggregate info.
+                    BoundAggregateOp::AggregateItem item;
+                    item.func_def = ptr->func_def;
+                    item.distinct = ptr->distinct;
+                    item.result_type = ptr->return_type;
                     if (!ptr->args.empty())
-                        out_arg = std::move(ptr->args[0]);
+                        item.argument = std::move(ptr->args[0]);
+                    out_aggs.push_back(std::move(item));
+
+                    // Replace this node with a BoundVariableRef.
+                    std::string anon_name = "__agg_" + std::to_string(agg_idx++);
+                    auto ret_type = out_aggs.back().result_type;
+                    out_aggs.back().alias = anon_name;
+                    // Assign to the variant through the expr reference.
+                    expr = BoundVariableRef{std::move(anon_name), std::move(ret_type)};
                 } else {
+                    // Non-aggregate function: recurse into args.
                     for (auto& arg : ptr->args)
-                        extractAggCall(arg, out_def, out_arg, out_distinct, out_ret_type);
+                        walkAndReplaceAggCalls(arg, out_aggs, agg_idx);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
-                extractAggCall(ptr->left, out_def, out_arg, out_distinct, out_ret_type);
-                if (!out_def)
-                    extractAggCall(ptr->right, out_def, out_arg, out_distinct, out_ret_type);
+                walkAndReplaceAggCalls(ptr->left, out_aggs, agg_idx);
+                walkAndReplaceAggCalls(ptr->right, out_aggs, agg_idx);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
-                extractAggCall(ptr->operand, out_def, out_arg, out_distinct, out_ret_type);
+                walkAndReplaceAggCalls(ptr->operand, out_aggs, agg_idx);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
                 for (auto& elem : ptr->elements)
-                    extractAggCall(elem, out_def, out_arg, out_distinct, out_ret_type);
+                    walkAndReplaceAggCalls(elem, out_aggs, agg_idx);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
                 for (auto& [k, v] : ptr->entries)
-                    extractAggCall(v, out_def, out_arg, out_distinct, out_ret_type);
+                    walkAndReplaceAggCalls(v, out_aggs, agg_idx);
             }
         },
         expr);
@@ -182,109 +195,145 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
     }
 
     if (has_aggregate) {
-        // Build aggregate operator
+        // ── Aggregate + Project strategy ──
+        // AggregateOp handles only simple aggregate functions, outputting them
+        // as anonymous columns (__agg_0, __agg_1...). Complex expressions like
+        // count(a)+3 are split: the aggregate goes to AggregateOp as an anonymous
+        // column, and the scalar part (+3) is handled by a downstream ProjectOp.
         auto agg = std::make_unique<BoundAggregateOp>();
 
-        for (const auto& item : ret.items) {
-            bool is_agg = hasAggregate(item.expr);
+        // Items for the downstream ProjectOp (complex aggregate expressions
+        // that were rewritten to reference anonymous columns).
+        struct ProjItem {
+            binder::BoundExpression expr;
+            std::string alias;
+        };
+        std::vector<ProjItem> proj_items;
 
+        // Column index tracker for anonymous aggregate columns.
+        uint32_t anon_idx = 0;
+
+        for (const auto& item : ret.items) {
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            bool is_simple_agg = std::holds_alternative<std::unique_ptr<cypher::FunctionCall>>(item.expr) &&
+                                 hasAggregate(item.expr);
+
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
                 continue;
 
-            // Detect whole-variable return (e.g., RETURN n) to add all property requirements
-            if (!is_agg) {
-                if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
-                    auto& col_ref = std::get<BoundColumnRef>(*bound_expr);
-                    if (col_ref.type.kind == BoundTypeKind::VERTEX) {
-                        addAllPropertiesForVariable(col_ref.name);
-                    }
-                } else if (std::holds_alternative<std::unique_ptr<BoundLabelCast>>(*bound_expr)) {
-                    auto& lc = std::get<std::unique_ptr<BoundLabelCast>>(*bound_expr);
-                    if (std::holds_alternative<BoundColumnRef>(lc->object)) {
-                        auto var_name = std::get<BoundColumnRef>(lc->object).name;
-                        const auto* ldef = catalog_.lookupLabel(lc->label_id);
-                        if (ldef) {
-                            for (const auto& pd : ldef->properties)
-                                ctx_.addPropertyRequirement(var_name, lc->label_id, pd.id);
-                        }
-                    }
-                }
-            }
-
-            if (is_agg) {
+            if (is_simple_agg) {
+                // Top-level aggregate function: e.g., RETURN count(a).
+                auto& fc = std::get<std::unique_ptr<cypher::FunctionCall>>(item.expr);
                 BoundAggregateOp::AggregateItem agg_item;
                 agg_item.alias = alias;
-                agg_item.result_type = getBoundExprType(*bound_expr);
-
                 if (std::holds_alternative<std::unique_ptr<BoundFunctionCall>>(*bound_expr)) {
-                    auto& fc = std::get<std::unique_ptr<BoundFunctionCall>>(*bound_expr);
-                    agg_item.function_name = fc->func_def->name;
-                    agg_item.func_def = fc->func_def;
-                    agg_item.distinct = fc->distinct;
-                    if (!fc->args.empty())
-                        agg_item.argument = std::move(fc->args[0]);
-                } else {
-                    // Complex aggregate expression (e.g., count(a) + 3,
-                    // $age + avg(person.age) - 1000). Extract inner aggregate
-                    // as internal accumulate-only item, store full expression
-                    // for output-phase evaluation with substitution.
-                    auto full_expr = std::move(*bound_expr);
-                    const function::FunctionDef* inner_def = nullptr;
-                    binder::BoundExpression inner_arg;
-                    bool inner_distinct = false;
-                    binder::BoundType inner_ret_type = BoundType::Any();
-                    extractAggCall(full_expr, inner_def, inner_arg, inner_distinct, inner_ret_type);
-                    if (inner_def) {
-                        BoundAggregateOp::AggregateItem inner_agg;
-                        inner_agg.is_internal = true;
-                        inner_agg.func_def = inner_def;
-                        inner_agg.distinct = inner_distinct;
-                        inner_agg.result_type = std::move(inner_ret_type);
-                        inner_agg.argument = std::move(inner_arg);
-                        agg->aggregates.push_back(std::move(inner_agg));
-                    }
-                    agg_item.argument = std::move(full_expr);
+                    auto& bfc = std::get<std::unique_ptr<BoundFunctionCall>>(*bound_expr);
+                    agg_item.func_def = bfc->func_def;
+                    agg_item.distinct = bfc->distinct;
+                    agg_item.result_type = bfc->return_type;
+                    if (!bfc->args.empty())
+                        agg_item.argument = std::move(bfc->args[0]);
                 }
                 agg->aggregates.push_back(std::move(agg_item));
+                agg->output_names.push_back(alias);
+
+                ColumnInfo info;
+                info.name = alias;
+                info.type = BoundType::clone(agg->aggregates.back().result_type);
+                info.column_index = static_cast<uint32_t>(agg->group_keys.size() + agg->aggregates.size() - 1);
+                ctx_.symbols[alias] = std::move(info);
+            } else if (hasAggregate(item.expr)) {
+                // Complex expression containing aggregates: e.g., RETURN count(a) + 3.
+                // Walk the bound expression, extract each aggregate call into
+                // AggregateOp as an anonymous column, and replace the call in the
+                // expression tree with a BoundVariableRef to that column.
+                auto full_expr = std::move(*bound_expr);
+                walkAndReplaceAggCalls(full_expr, agg->aggregates, anon_idx);
+
+                // Register anonymous aggregate columns in the symbol table
+                // so the ProjectOp and ColumnResolver can find them.
+                size_t start_agg = agg->aggregates.size() - (agg->aggregates.size() > 0 ? 0 : 0);
+                for (size_t i = 0; i < agg->aggregates.size(); ++i) {
+                    auto& ai = agg->aggregates[i];
+                    if (ai.alias.starts_with("__agg_")) {
+                        if (ctx_.symbols.find(ai.alias) == ctx_.symbols.end()) {
+                            ColumnInfo info;
+                            info.name = ai.alias;
+                            info.type = BoundType::clone(ai.result_type);
+                            info.column_index = static_cast<uint32_t>(agg->group_keys.size() + i);
+                            ctx_.symbols[ai.alias] = std::move(info);
+                        }
+                        agg->output_names.push_back(ai.alias);
+                    }
+                }
+
+                proj_items.push_back({std::move(full_expr), alias});
             } else {
+                // Group key: non-aggregate expression.
                 agg->group_keys.push_back(std::move(*bound_expr));
+                agg->output_names.push_back(alias);
+
+                ColumnInfo info;
+                info.name = alias;
+                info.type = getBoundExprType(agg->group_keys.back());
+                info.column_index = static_cast<uint32_t>(agg->group_keys.size() - 1);
+                ctx_.symbols[alias] = std::move(info);
             }
-            agg->output_names.push_back(std::move(alias));
         }
 
         agg->child = std::move(child);
 
-        // Register RETURN aliases so ORDER BY can reference them.
-        // Column index = aggregate output position (group_keys then aggregates).
+        // Register all AggregateOp columns (group keys + aggregates) in symbol table.
         for (size_t i = 0; i < agg->output_names.size(); ++i) {
             if (ctx_.symbols.find(agg->output_names[i]) == ctx_.symbols.end()) {
-                BoundType col_type = (i < agg->group_keys.size())
-                                         ? getBoundExprType(agg->group_keys[i])
-                                         : BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
                 ColumnInfo info;
                 info.name = agg->output_names[i];
-                info.type = std::move(col_type);
                 info.column_index = static_cast<uint32_t>(i);
+                // Determine type: group keys first, then aggregates.
+                if (i < agg->group_keys.size())
+                    info.type = getBoundExprType(agg->group_keys[i]);
+                else
+                    info.type = BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
                 ctx_.symbols[agg->output_names[i]] = std::move(info);
             }
-            // Populate return_columns for output_schema
-            ColumnInfo out_info;
-            out_info.name = agg->output_names[i];
-            out_info.type = (i < agg->group_keys.size())
-                                ? getBoundExprType(agg->group_keys[i])
-                                : BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
-            out_info.column_index = static_cast<uint32_t>(i);
-            ctx_.return_columns.push_back(std::move(out_info));
         }
 
-        auto result = std::make_unique<BoundProjectOp>(); // Agg is a kind of project
-        // Actually, aggregate is its own operator
-        BoundLogicalOperator agg_op = std::move(agg);
+        BoundLogicalOperator current;
+        if (!proj_items.empty()) {
+            // Build ProjectOp above AggregateOp for complex aggregate expressions.
+            auto proj = std::make_unique<BoundProjectOp>();
+            for (auto& pi : proj_items) {
+                BoundProjectOp::ProjectItem pi_item;
+                pi_item.expr = std::move(pi.expr);
+                pi_item.alias = std::move(pi.alias);
+                pi_item.result_type = getBoundExprType(pi_item.expr);
+                proj->items.push_back(std::move(pi_item));
+
+                ColumnInfo out_info;
+                out_info.name = proj->items.back().alias;
+                out_info.type = proj->items.back().result_type;
+                out_info.column_index = static_cast<uint32_t>(proj->items.size() - 1);
+                ctx_.return_columns.push_back(std::move(out_info));
+            }
+            proj->child = std::move(agg);
+            current = std::move(proj);
+        } else {
+            // No complex expressions: AggregateOp output is the final result.
+            for (size_t i = 0; i < agg->output_names.size(); ++i) {
+                ColumnInfo out_info;
+                out_info.name = agg->output_names[i];
+                out_info.column_index = static_cast<uint32_t>(i);
+                if (i < agg->group_keys.size())
+                    out_info.type = getBoundExprType(agg->group_keys[i]);
+                else
+                    out_info.type = BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
+                ctx_.return_columns.push_back(std::move(out_info));
+            }
+            current = std::move(agg);
+        }
 
         // ORDER BY, SKIP, LIMIT, DISTINCT
-        BoundLogicalOperator current = std::move(agg_op);
 
         if (ret.order_by) {
             auto sort = std::make_unique<BoundSortOp>();
@@ -472,55 +521,71 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     if (has_aggregate) {
         auto agg = std::make_unique<BoundAggregateOp>();
 
-        for (const auto& item : wc.items) {
-            bool is_agg = hasAggregate(item.expr);
+        struct ProjItem {
+            binder::BoundExpression expr;
+            std::string alias;
+        };
+        std::vector<ProjItem> proj_items;
+        uint32_t anon_idx = 0;
 
+        for (const auto& item : wc.items) {
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            bool is_simple_agg = std::holds_alternative<std::unique_ptr<cypher::FunctionCall>>(item.expr) &&
+                                 hasAggregate(item.expr);
+
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
                 continue;
 
-            if (is_agg) {
+            if (is_simple_agg) {
                 BoundAggregateOp::AggregateItem agg_item;
                 agg_item.alias = alias;
-                agg_item.result_type = getBoundExprType(*bound_expr);
-
                 if (std::holds_alternative<std::unique_ptr<BoundFunctionCall>>(*bound_expr)) {
                     auto& fc = std::get<std::unique_ptr<BoundFunctionCall>>(*bound_expr);
-                    agg_item.function_name = fc->func_def->name;
                     agg_item.func_def = fc->func_def;
                     agg_item.distinct = fc->distinct;
+                    agg_item.result_type = fc->return_type;
                     if (!fc->args.empty())
                         agg_item.argument = std::move(fc->args[0]);
-                } else {
-                    auto full_expr = std::move(*bound_expr);
-                    const function::FunctionDef* inner_def = nullptr;
-                    binder::BoundExpression inner_arg;
-                    bool inner_distinct = false;
-                    binder::BoundType inner_ret_type = BoundType::Any();
-                    extractAggCall(full_expr, inner_def, inner_arg, inner_distinct, inner_ret_type);
-                    if (inner_def) {
-                        BoundAggregateOp::AggregateItem inner_agg;
-                        inner_agg.is_internal = true;
-                        inner_agg.func_def = inner_def;
-                        inner_agg.distinct = inner_distinct;
-                        inner_agg.result_type = std::move(inner_ret_type);
-                        inner_agg.argument = std::move(inner_arg);
-                        agg->aggregates.push_back(std::move(inner_agg));
-                    }
-                    agg_item.argument = std::move(full_expr);
                 }
                 agg->aggregates.push_back(std::move(agg_item));
+                agg->output_names.push_back(alias);
                 with_outputs.emplace_back(alias, BoundType::clone(agg->aggregates.back().result_type));
+            } else if (hasAggregate(item.expr)) {
+                auto full_expr = std::move(*bound_expr);
+                walkAndReplaceAggCalls(full_expr, agg->aggregates, anon_idx);
+
+                for (auto& ai : agg->aggregates) {
+                    if (ai.alias.starts_with("__agg_")) {
+                        size_t idx = agg->output_names.size();
+                        agg->output_names.push_back(ai.alias);
+                        with_outputs.emplace_back(ai.alias, BoundType::clone(ai.result_type));
+                    }
+                }
+                proj_items.push_back({std::move(full_expr), alias});
             } else {
-                with_outputs.emplace_back(alias, getBoundExprType(*bound_expr));
                 agg->group_keys.push_back(std::move(*bound_expr));
+                agg->output_names.push_back(alias);
+                with_outputs.emplace_back(alias, getBoundExprType(agg->group_keys.back()));
             }
-            agg->output_names.push_back(std::move(alias));
         }
 
         agg->child = std::move(child);
-        current = std::move(agg);
+
+        if (!proj_items.empty()) {
+            auto proj = std::make_unique<BoundProjectOp>();
+            for (auto& pi : proj_items) {
+                BoundProjectOp::ProjectItem proj_item;
+                proj_item.expr = std::move(pi.expr);
+                proj_item.alias = std::move(pi.alias);
+                proj_item.result_type = getBoundExprType(proj_item.expr);
+                proj->items.push_back(std::move(proj_item));
+            }
+            proj->child = std::move(agg);
+            current = std::move(proj);
+        } else {
+            current = std::move(agg);
+        }
     } else {
         // Simple projection
         auto proj = std::make_unique<BoundProjectOp>();
