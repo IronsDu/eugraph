@@ -37,6 +37,7 @@ Cypher 查询文本
     → PhysicalPlanner::planBound: BoundLogicalPlan → PhysicalOperator 树
         ├── tryBoundIndexScan: Filter(LabelScan) + 可索引谓词 → IndexScanPhysicalOp
         ├── tryBoundEdgeIndexScan: Filter(Expand) + 可索引谓词 → EdgeIndexScanPhysicalOp
+        ├── 延迟属性物化：Scan/Expand 后自动插入 VertexLabelRead / VertexPropertyRead / EdgePropertyRead
         └── ID 解析，存储引用绑定
     → QueryExecutor: 协程管道执行 (Pull-based 火山模型，AsyncGenerator<DataChunk>)
 ```
@@ -384,8 +385,11 @@ class PhysicalOperator {
 | `LabelScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId` | FLAT columns |
 | `IndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId`, `prop_id`, `ScanMode` | FLAT columns |
 | `EdgeIndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `EdgeLabelId`, `prop_ids` | DICTIONARY columns for src/dst/edge |
-| `ExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, Schema | 输入 DICTIONARY + 新列 FLAT |
+| `ExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, Schema | 输入 DICTIONARY + 新列 FLAT。不再加载 dst labels/properties 和 edge properties |
 | `VarLenExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, `min_hops`, `max_hops`, Schema | DFS + 边唯一性，输入 DICTIONARY + 目标顶点 FLAT |
+| `VertexLabelReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `anon_label_id` | Column Replacement：替换指定列为 `VertexValue{id, labels}` |
+| `VertexPropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `label_prop_ids` | Column Replacement：替换指定列为 `VertexValue{id, labels?, properties}` |
+| `EdgePropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `edge_prop_ids` | Column Replacement：替换指定列为 `EdgeValue{..., properties}` |
 | `FilterPhysicalOp` | `BoundExpression` 谓词, Schema | DICTIONARY 共享 child buffer |
 | `ProjectPhysicalOp` | `BoundExpression` 投影项列表 | FLAT columns |
 | `AggregatePhysicalOp` | `FunctionDef*` 聚合, `BoundExpression` 分组键 | FLAT output |
@@ -412,7 +416,7 @@ class PhysicalOperator {
 
 **EdgeIndexScan**：由 `Filter(Expand)` 推导产生（单类型时）。边索引 value 包含邻接信息，可直接产出 src/dst/edge 列。
 
-**Expand**：对输入的每一行，调用 `scanEdges(src_id, dir, label_filter)`，每条边产生一行输出。输入列以 DICTIONARY 形式共享给子算子。
+**Expand**：对输入的每一行，调用 `scanEdges(src_id, dir, label_filter)`，每条边产生一行输出。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由 `VertexPropertyReadPhysicalOp` / `EdgePropertyReadPhysicalOp` 延迟加载（见 [延迟属性物化](deferred-property-loading.md)）。
 
 **Filter**：`VectorizedEvaluator` 求值 BoundExpression 谓词，DICTIONARY 选择向量标记有效行。
 
@@ -558,7 +562,7 @@ using Schema = vector<string>;   // 列名列表
 - DDL 异步执行（DdlWorker 后台线程）
 - 崩溃恢复（索引 DDL 状态恢复）
 - `properties(vertex/edge)` / `keys(map)` 函数 ✅ 已实现（`MapValue` 类型 + `BoundType::MAP`，2026-05-23）
-- **`properties(Edge)` + 普通 Expand 限制**：普通 `ExpandPhysicalOp` 不加载边属性（EdgeValue 的 properties 为空），因此 `properties(r)` 对定长 `(a)-[r:TYPE]->(b)` 中的边返回空 MapValue。变长 `VarLenExpandPhysicalOp` 已通过 `getEdgeProperties()` 加载边属性（用于属性过滤），故变长路径的 `properties(r)` 正常工作。普通 Expand 的边属性加载需后续补充。
+- **`properties(Edge)` + 普通 Expand**：✅ 已通过 `EdgePropertyReadPhysicalOp` 实现边属性延迟加载，`properties(r)` 对定长 `(a)-[r:TYPE]->(b)` 中的边正常工作。
 - **MapValue RPC 序列化**：`MapValue` 序列化为 JSON 字符串通过 `ResultValue::map_json`（Thrift union 字段 9）传输。需注意：修改 `proto/eugraph.thrift` 后运行 `thrift1 --gen mstch_cpp2 -o src/ proto/eugraph.thrift` 重新生成代码，并用 `sed 's|"proto/gen-cpp2/|"gen-cpp2/|g'` 修正 include 路径。
 - **`properties()` 触发全属性加载**：Binder 遇到 `properties(n)`（Vertex 参数）时，通过 `BindContext::addPropertyRequirement` 请求所有已知 Label 的全部属性 ID。此策略在单标签场景下开销可接受，多标签/宽表场景需后续优化为按需加载。
 

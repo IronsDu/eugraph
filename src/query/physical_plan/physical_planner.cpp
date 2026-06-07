@@ -19,6 +19,74 @@
 namespace eugraph {
 namespace compute {
 
+// ==================== Deferred Property Loading Wrappers ====================
+
+static PlanOperatorResult wrapVertexLabelRead(PlanOperatorResult&& child_result, const std::string& variable,
+                                              LabelId anon_label_id, IAsyncGraphDataStore& store) {
+    if (variable.empty())
+        return std::move(child_result);
+    // Find the LAST occurrence: for self-relationships like (n)-[r]->(n),
+    // the variable appears twice (src and dst). We want the Expand's
+    // output column (last occurrence), not the scan's input column.
+    size_t col_idx = SIZE_MAX;
+    for (size_t i = child_result.output_schema.size(); i-- > 0;) {
+        if (child_result.output_schema[i] == variable) {
+            col_idx = i;
+            break;
+        }
+    }
+    if (col_idx == SIZE_MAX)
+        return std::move(child_result);
+    auto read_op = std::make_unique<VertexLabelReadPhysicalOp>(
+        variable, col_idx, anon_label_id, store, Schema(child_result.output_schema),
+        std::vector<binder::BoundType>(child_result.output_types), std::move(child_result.op));
+    return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
+                              std::move(child_result.output_types)};
+}
+
+static PlanOperatorResult
+wrapVertexPropertyRead(PlanOperatorResult&& child_result, const std::string& variable,
+                       const std::unordered_map<LabelId, std::vector<uint16_t>>& label_prop_ids,
+                       IAsyncGraphDataStore& store) {
+    if (variable.empty() || label_prop_ids.empty())
+        return std::move(child_result);
+    size_t col_idx = SIZE_MAX;
+    for (size_t i = child_result.output_schema.size(); i-- > 0;) {
+        if (child_result.output_schema[i] == variable) {
+            col_idx = i;
+            break;
+        }
+    }
+    if (col_idx == SIZE_MAX)
+        return std::move(child_result);
+    auto read_op = std::make_unique<VertexPropertyReadPhysicalOp>(
+        variable, col_idx, label_prop_ids, store, Schema(child_result.output_schema),
+        std::vector<binder::BoundType>(child_result.output_types), std::move(child_result.op));
+    return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
+                              std::move(child_result.output_types)};
+}
+
+static PlanOperatorResult wrapEdgePropertyRead(PlanOperatorResult&& child_result, const std::string& variable,
+                                               const std::vector<uint16_t>& edge_prop_ids,
+                                               IAsyncGraphDataStore& store) {
+    if (variable.empty() || edge_prop_ids.empty())
+        return std::move(child_result);
+    size_t col_idx = SIZE_MAX;
+    for (size_t i = child_result.output_schema.size(); i-- > 0;) {
+        if (child_result.output_schema[i] == variable) {
+            col_idx = i;
+            break;
+        }
+    }
+    if (col_idx == SIZE_MAX)
+        return std::move(child_result);
+    auto read_op = std::make_unique<EdgePropertyReadPhysicalOp>(
+        variable, col_idx, edge_prop_ids, store, Schema(child_result.output_schema),
+        std::vector<binder::BoundType>(child_result.output_types), std::move(child_result.op));
+    return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
+                              std::move(child_result.output_types)};
+}
+
 // ==================== Column Index Remapping for CrossProduct ====================
 // When a CrossProduct's right child uses global column indices (assigned by the
 // binder starting from 0 for the left child), those indices need to be shifted
@@ -303,9 +371,9 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         auto result_output_types = output_types;
 
         if (!last_is_range) {
-            result = std::make_unique<IndexScanPhysicalOp>(
-                scan_op.variable, label_id, idx.prop_ids, ScanMode::EQUALITY, std::move(eq_values), std::nullopt,
-                std::nullopt, std::move(output_types), store, ctx.label_defs, scan_op.label_prop_ids);
+            result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, ScanMode::EQUALITY,
+                                                           std::move(eq_values), std::nullopt, std::nullopt,
+                                                           std::move(output_types), store, ctx.label_defs);
         } else {
             std::optional<std::vector<PropertyValue>> composite_start;
             std::optional<std::vector<PropertyValue>> composite_end;
@@ -321,13 +389,16 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                 end_vec.push_back(std::move(*range_end));
                 composite_end = std::move(end_vec);
             }
-            result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, ScanMode::RANGE,
-                                                           std::vector<PropertyValue>{}, std::move(composite_start),
-                                                           std::move(composite_end), std::move(output_types), store,
-                                                           ctx.label_defs, scan_op.label_prop_ids);
+            result = std::make_unique<IndexScanPhysicalOp>(
+                scan_op.variable, label_id, idx.prop_ids, ScanMode::RANGE, std::vector<PropertyValue>{},
+                std::move(composite_start), std::move(composite_end), std::move(output_types), store, ctx.label_defs);
         }
 
-        return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types)};
+        auto plan_result =
+            PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types)};
+        plan_result = wrapVertexLabelRead(std::move(plan_result), scan_op.variable, INVALID_LABEL_ID, store);
+        plan_result = wrapVertexPropertyRead(std::move(plan_result), scan_op.variable, scan_op.label_prop_ids, store);
+        return plan_result;
     }
     return std::nullopt;
 }
@@ -456,6 +527,7 @@ PlanOperatorResult extractChildResult(std::variant<PlanOperatorResult, std::stri
     }
     return cr;
 }
+
 } // namespace
 
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
@@ -507,8 +579,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 }
                 auto result = std::make_unique<AllNodeScanPhysicalOp>(
                     val.variable, std::vector<binder::BoundType>(output_types), store, ctx.label_name_to_id,
-                    ctx.label_defs, anon_id, val.label_prop_ids);
-                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    ctx.label_defs, anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
+                auto plan_result =
+                    PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                plan_result = wrapVertexLabelRead(std::move(plan_result), val.variable, anon_id, store);
+                plan_result = wrapVertexPropertyRead(std::move(plan_result), val.variable, val.label_prop_ids, store);
+                return plan_result;
             } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
                 Schema output_schema;
                 std::vector<binder::BoundType> output_types;
@@ -516,10 +592,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_schema.push_back(val.variable);
                     output_types.push_back(binder::BoundType::Vertex());
                 }
-                auto result = std::make_unique<LabelScanPhysicalOp>(val.variable, val.label_ids,
-                                                                    std::vector<binder::BoundType>(output_types), store,
-                                                                    ctx.label_defs, anon_id, val.label_prop_ids);
-                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                auto result = std::make_unique<LabelScanPhysicalOp>(
+                    val.variable, val.label_ids, std::vector<binder::BoundType>(output_types), store, ctx.label_defs,
+                    anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
+                auto plan_result =
+                    PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                plan_result = wrapVertexLabelRead(std::move(plan_result), val.variable, anon_id, store);
+                plan_result = wrapVertexPropertyRead(std::move(plan_result), val.variable, val.label_prop_ids, store);
+                return plan_result;
             } else {
                 using Elem = typename T::element_type;
                 if (!val)
@@ -552,8 +632,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result = std::make_unique<ExpandPhysicalOp>(
                         v.src_variable, v.dst_variable, v.edge_variable, std::move(label_filters), v.direction, store,
                         std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op),
-                        v.dst_label_prop_ids, v.edge_prop_ids);
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                        std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{});
+                    auto plan_result =
+                        PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    plan_result = wrapEdgePropertyRead(std::move(plan_result), v.edge_variable, v.edge_prop_ids, store);
+                    plan_result = wrapVertexLabelRead(std::move(plan_result), v.dst_variable, anon_id, store);
+                    plan_result =
+                        wrapVertexPropertyRead(std::move(plan_result), v.dst_variable, v.dst_label_prop_ids, store);
+                    return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundVarLenExpandOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -585,9 +671,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result = std::make_unique<VarLenExpandPhysicalOp>(
                         v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops, v.max_hops,
                         store, std::move(child_schema), std::vector<binder::BoundType>(output_types),
-                        std::move(child_op), v.dst_label_prop_ids, v.path_variable, v.edge_variable,
-                        v.edge_prop_filters);
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                        std::move(child_op), std::unordered_map<LabelId, std::vector<uint16_t>>{}, v.path_variable,
+                        v.edge_variable, v.edge_prop_filters);
+                    auto plan_result =
+                        PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    // VarLenExpand loads dst labels internally — skip VertexLabelRead wrap
+                    plan_result =
+                        wrapVertexPropertyRead(std::move(plan_result), v.dst_variable, v.dst_label_prop_ids, store);
+                    return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
                     // ── Index scan optimization: Filter(LabelScan) → IndexScan ──
                     if (std::holds_alternative<binder::BoundLabelScanOp>(v.child)) {

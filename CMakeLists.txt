@@ -186,6 +186,7 @@ add_library(eugraph_query_engine STATIC
     src/query/evaluator/eval_subscript.cpp
     src/query/evaluator/eval_slice.cpp
     src/query/physical_plan/operator/edge_index_scan_physical_op.cpp
+    src/query/physical_plan/operator/edge_property_read_physical_op.cpp
     src/query/physical_plan/operator/aggregate_physical_op.cpp
     src/query/physical_plan/operator/all_node_scan_physical_op.cpp
     src/query/physical_plan/operator/alter_edge_label_physical_op.cpp
@@ -214,6 +215,8 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/union_physical_op.cpp
     src/query/physical_plan/operator/unwind_physical_op.cpp
     src/query/physical_plan/operator/merge_physical_op.cpp
+    src/query/physical_plan/operator/vertex_label_read_physical_op.cpp
+    src/query/physical_plan/operator/vertex_property_read_physical_op.cpp
     src/query/physical_plan/physical_operator_base.cpp
     src/query/physical_plan/physical_planner.cpp
     src/query/executor/query_executor.cpp

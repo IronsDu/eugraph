@@ -130,8 +130,8 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 fc->return_type = BoundType::clone(func->return_type);
                 fc->distinct = ptr->distinct;
 
-                // properties(n) needs all vertex/edge properties loaded
-                if (func->name == "properties" && fc->args.size() == 1) {
+                // properties(n) / keys(n) need all vertex/edge properties loaded
+                if ((func->name == "properties" || func->name == "keys") && fc->args.size() == 1) {
                     const BoundType& arg_type = getBoundExprType(fc->args[0]);
                     std::optional<std::string> var_name;
                     if (std::holds_alternative<BoundColumnRef>(fc->args[0])) {
