@@ -5,10 +5,10 @@
 #include "CypherParser.h"
 
 #include <algorithm>
+#include <antlr4-runtime.h>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
-#include <antlr4-runtime.h>
 
 namespace eugraph {
 namespace cypher {
@@ -923,20 +923,48 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
     size_t i = 0;
     while (i < input.size()) {
         char c = input[i];
+        // Skip string/char literals: '...' and "..."
+        if (c == '\'' || c == '"') {
+            char quote = c;
+            result += c;
+            ++i;
+            while (i < input.size() && input[i] != quote) {
+                if (input[i] == '\\' && i + 1 < input.size()) {
+                    result += input[i++];
+                    result += input[i++];
+                } else {
+                    result += input[i++];
+                }
+            }
+            if (i < input.size()) {
+                result += input[i];
+                ++i;
+            }
+            continue;
+        }
         // Check for hex/oct prefix: optional '-' then '0' then 'x'/'X' or 'o'/'O'
         bool negative = (c == '-' && i + 1 < input.size() && input[i + 1] == '0');
         size_t start = negative ? i + 1 : i;
         if (start + 1 < input.size() && input[start] == '0' &&
-            (input[start + 1] == 'x' || input[start + 1] == 'X' ||
-             input[start + 1] == 'o' || input[start + 1] == 'O')) {
+            (input[start + 1] == 'x' || input[start + 1] == 'X' || input[start + 1] == 'o' ||
+             input[start + 1] == 'O')) {
             // Collect hex/oct digits
             bool is_hex = (input[start + 1] == 'x' || input[start + 1] == 'X');
             size_t j = start + 2; // skip 0x or 0o
             while (j < input.size()) {
                 char d = input[j];
-                if (is_hex && isxdigit(d)) { ++j; continue; }
-                if (!is_hex && d >= '0' && d <= '7') { ++j; continue; }
-                if (d == '_') { ++j; continue; }
+                if (is_hex && isxdigit(d)) {
+                    ++j;
+                    continue;
+                }
+                if (!is_hex && d >= '0' && d <= '7') {
+                    ++j;
+                    continue;
+                }
+                if (d == '_') {
+                    ++j;
+                    continue;
+                }
                 break;
             }
             if (j > start + 2) {
