@@ -101,6 +101,16 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 evalDynamicPropertyRef(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                // Check aggregate substitution map (used by AggregatePhysicalOp output phase)
+                if (aggregate_substitutions) {
+                    auto it = aggregate_substitutions->find(val->func_def);
+                    if (it != aggregate_substitutions->end()) {
+                        auto& col = acquireTempColumn(val->return_type.kind, count);
+                        for (size_t i = 0; i < count; ++i)
+                            col.setValue(i, it->second);
+                        return {&col, true};
+                    }
+                }
                 auto& col = acquireTempColumn(val->return_type.kind, count);
                 evalFunctionCall(*val, input, col, count);
                 return {&col, true};

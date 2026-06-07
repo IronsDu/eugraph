@@ -40,8 +40,14 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
         }
 
         // Evaluate aggregate argument expressions vectorized.
+        // Skip complex aggregates (func_def==null && !is_internal):
+        // they are evaluated during output with substitution.
         std::vector<std::vector<Value>> chunk_agg_vals(aggregates_.size());
         for (size_t a = 0; a < aggregates_.size(); ++a) {
+            if (!aggregates_[a].func_def && !aggregates_[a].is_internal) {
+                chunk_agg_vals[a].resize(n); // placeholder
+                continue;
+            }
             auto col = Column::flat(binder::BoundTypeKind::ANY, n);
             evaluator.evaluate(aggregates_[a].arg, *chunk, col);
             chunk_agg_vals[a].reserve(n);
@@ -100,7 +106,11 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
     }
 
     // Build output FLAT DataChunk.
-    size_t out_cols = group_keys_.size() + aggregates_.size();
+    size_t visible_aggs = 0;
+    for (const auto& a : aggregates_)
+        if (!a.is_internal)
+            ++visible_aggs;
+    size_t out_cols = group_keys_.size() + visible_aggs;
 
     auto buildOutputChunk = [&]() -> DataChunk {
         DataChunk dc;
@@ -121,12 +131,34 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
             output.columns[c].setValue(row_idx, key[c]);
         }
 
+        size_t visible_col = group_keys_.size();
         for (size_t i = 0; i < aggregates_.size(); ++i) {
             const auto& agg = aggregates_[i];
-            size_t col_idx = group_keys_.size() + i;
+            if (agg.is_internal) {
+                // Internal aggregates are accumulated but not output.
+                // They serve as inputs to complex aggregate expressions.
+                continue;
+            }
+            size_t col_idx = visible_col++;
 
             if (agg.func_def && agg.func_def->agg_finalize && state.agg_states[i]) {
                 output.columns[col_idx].setValue(row_idx, agg.func_def->agg_finalize(*state.agg_states[i]));
+            } else if (!agg.func_def) {
+                // Complex aggregate: find internal aggregates that provide inner results,
+                // build substitution map, then evaluate the full expression.
+                std::unordered_map<const function::FunctionDef*, Value> subs;
+                for (size_t j = 0; j < aggregates_.size(); ++j) {
+                    if (aggregates_[j].is_internal && aggregates_[j].func_def && state.agg_states[j] &&
+                        aggregates_[j].func_def->agg_finalize)
+                        subs[aggregates_[j].func_def] = aggregates_[j].func_def->agg_finalize(*state.agg_states[j]);
+                }
+                DataChunk eval_chunk;
+                eval_chunk.count = 1;
+                VectorizedEvaluator out_eval(eval_ctx_);
+                out_eval.aggregate_substitutions = &subs;
+                auto result_col = Column::flat(binder::BoundTypeKind::ANY, 1);
+                out_eval.evaluate(agg.arg, eval_chunk, result_col);
+                output.columns[col_idx].setValue(row_idx, result_col.getValue(0));
             } else {
                 output.columns[col_idx].setNull(row_idx);
             }
@@ -144,14 +176,18 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
 
     // Empty input with aggregates but no group keys → yield one row with default values.
     if (group_keys_.empty() && group_order.empty() && has_aggregates) {
+        size_t out_idx = 0;
         for (size_t i = 0; i < aggregates_.size(); ++i) {
+            if (aggregates_[i].is_internal)
+                continue;
             const auto& agg = aggregates_[i];
             if (agg.func_def && agg.func_def->agg_init && agg.func_def->agg_finalize) {
                 auto init_state = agg.func_def->agg_init();
-                output.columns[i].setValue(0, agg.func_def->agg_finalize(*init_state));
+                output.columns[out_idx].setValue(0, agg.func_def->agg_finalize(*init_state));
             } else {
-                output.columns[i].setNull(0);
+                output.columns[out_idx].setNull(0);
             }
+            ++out_idx;
         }
         output.count = 1;
     }

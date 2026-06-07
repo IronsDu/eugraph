@@ -26,6 +26,7 @@ public:
         binder::BoundExpression arg;
         bool distinct;
         std::string name;
+        bool is_internal = false; // accumulated but not output (inner aggregate of complex expression)
     };
 
     AggregatePhysicalOp(std::vector<GroupKey> group_keys, std::vector<AggregateExpr> aggregates,

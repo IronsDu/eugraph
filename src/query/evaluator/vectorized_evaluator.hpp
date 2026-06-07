@@ -37,6 +37,10 @@ public:
     /// (true = row passes). Used by Filter operator.
     void evaluatePredicate(const binder::BoundExpression& expr, const DataChunk& input, std::vector<bool>& result);
 
+    /// Optional substitution map for aggregate finalization: when set, BoundFunctionCall
+    /// nodes whose func_def matches a key are replaced with the pre-computed Value.
+    const std::unordered_map<const function::FunctionDef*, Value>* aggregate_substitutions = nullptr;
+
 private:
     // Temporary storage for recursive sub-expression evaluation.
     std::deque<Column> temp_columns_;

@@ -773,6 +773,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         ae.func_def = ai.func_def;
                         ae.arg = std::move(ai.argument);
                         ae.distinct = ai.distinct;
+                        ae.is_internal = ai.is_internal;
                         if (v.group_keys.size() + i < v.output_names.size())
                             ae.name = v.output_names[v.group_keys.size() + i];
                         aggregates.push_back(std::move(ae));
@@ -787,6 +788,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         output_type_kinds.push_back(gk_type.kind);
                     }
                     for (const auto& ae : aggregates) {
+                        if (ae.is_internal)
+                            continue;
                         if (ae.func_def) {
                             output_types.push_back(ae.func_def->return_type);
                             output_type_kinds.push_back(ae.func_def->return_type.kind);
