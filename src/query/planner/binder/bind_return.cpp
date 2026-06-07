@@ -38,6 +38,42 @@ static bool hasAggregate(const cypher::Expression& expr) {
         expr);
 }
 
+// ==================== Aggregate Extraction Helper ====================
+
+/// Recursively find the first BoundFunctionCall with aggregate func_def in a BoundExpression tree.
+static void extractAggCall(binder::BoundExpression& expr, const function::FunctionDef*& out_def,
+                           binder::BoundExpression& out_arg, bool& out_distinct, binder::BoundType& out_ret_type) {
+    std::visit(
+        [&](auto& ptr) {
+            using T = std::decay_t<decltype(ptr)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                if (ptr->func_def->is_aggregate) {
+                    out_def = ptr->func_def;
+                    out_distinct = ptr->distinct;
+                    out_ret_type = ptr->return_type;
+                    if (!ptr->args.empty())
+                        out_arg = std::move(ptr->args[0]);
+                } else {
+                    for (auto& arg : ptr->args)
+                        extractAggCall(arg, out_def, out_arg, out_distinct, out_ret_type);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
+                extractAggCall(ptr->left, out_def, out_arg, out_distinct, out_ret_type);
+                if (!out_def)
+                    extractAggCall(ptr->right, out_def, out_arg, out_distinct, out_ret_type);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
+                extractAggCall(ptr->operand, out_def, out_arg, out_distinct, out_ret_type);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
+                for (auto& elem : ptr->elements)
+                    extractAggCall(elem, out_def, out_arg, out_distinct, out_ret_type);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
+                for (auto& [k, v] : ptr->entries)
+                    extractAggCall(v, out_def, out_arg, out_distinct, out_ret_type);
+            }
+        },
+        expr);
+}
+
 // ==================== SKIP/LIMIT Helper ====================
 
 std::optional<int64_t> Binder::bindSkipLimit(const cypher::Expression& expr, const char* clause_name) {
@@ -150,18 +186,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         auto agg = std::make_unique<BoundAggregateOp>();
 
         for (const auto& item : ret.items) {
-            bool is_agg = false;
-            std::visit(
-                [&is_agg](const auto& ptr) {
-                    using Elem = typename std::decay_t<decltype(ptr)>::element_type;
-                    if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
-                        if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" ||
-                            ptr->name == "min" || ptr->name == "max" || ptr->name == "collect") {
-                            is_agg = true;
-                        }
-                    }
-                },
-                item.expr);
+            bool is_agg = hasAggregate(item.expr);
 
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
             auto bound_expr = bindExpression(item.expr);
@@ -189,12 +214,10 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             }
 
             if (is_agg) {
-                // Extract function name and argument from the expression
                 BoundAggregateOp::AggregateItem agg_item;
                 agg_item.alias = alias;
                 agg_item.result_type = getBoundExprType(*bound_expr);
 
-                // Walk the bound expression to find the function call
                 if (std::holds_alternative<std::unique_ptr<BoundFunctionCall>>(*bound_expr)) {
                     auto& fc = std::get<std::unique_ptr<BoundFunctionCall>>(*bound_expr);
                     agg_item.function_name = fc->func_def->name;
@@ -202,6 +225,27 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                     agg_item.distinct = fc->distinct;
                     if (!fc->args.empty())
                         agg_item.argument = std::move(fc->args[0]);
+                } else {
+                    // Complex aggregate expression (e.g., count(a) + 3,
+                    // $age + avg(person.age) - 1000). Extract inner aggregate
+                    // as internal accumulate-only item, store full expression
+                    // for output-phase evaluation with substitution.
+                    auto full_expr = std::move(*bound_expr);
+                    const function::FunctionDef* inner_def = nullptr;
+                    binder::BoundExpression inner_arg;
+                    bool inner_distinct = false;
+                    binder::BoundType inner_ret_type = BoundType::Any();
+                    extractAggCall(full_expr, inner_def, inner_arg, inner_distinct, inner_ret_type);
+                    if (inner_def) {
+                        BoundAggregateOp::AggregateItem inner_agg;
+                        inner_agg.is_internal = true;
+                        inner_agg.func_def = inner_def;
+                        inner_agg.distinct = inner_distinct;
+                        inner_agg.result_type = std::move(inner_ret_type);
+                        inner_agg.argument = std::move(inner_arg);
+                        agg->aggregates.push_back(std::move(inner_agg));
+                    }
+                    agg_item.argument = std::move(full_expr);
                 }
                 agg->aggregates.push_back(std::move(agg_item));
             } else {
@@ -429,18 +473,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         auto agg = std::make_unique<BoundAggregateOp>();
 
         for (const auto& item : wc.items) {
-            bool is_agg = false;
-            std::visit(
-                [&is_agg](const auto& ptr) {
-                    using Elem = typename std::decay_t<decltype(ptr)>::element_type;
-                    if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
-                        if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" ||
-                            ptr->name == "min" || ptr->name == "max" || ptr->name == "collect") {
-                            is_agg = true;
-                        }
-                    }
-                },
-                item.expr);
+            bool is_agg = hasAggregate(item.expr);
 
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
             auto bound_expr = bindExpression(item.expr);
@@ -459,6 +492,23 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                     agg_item.distinct = fc->distinct;
                     if (!fc->args.empty())
                         agg_item.argument = std::move(fc->args[0]);
+                } else {
+                    auto full_expr = std::move(*bound_expr);
+                    const function::FunctionDef* inner_def = nullptr;
+                    binder::BoundExpression inner_arg;
+                    bool inner_distinct = false;
+                    binder::BoundType inner_ret_type = BoundType::Any();
+                    extractAggCall(full_expr, inner_def, inner_arg, inner_distinct, inner_ret_type);
+                    if (inner_def) {
+                        BoundAggregateOp::AggregateItem inner_agg;
+                        inner_agg.is_internal = true;
+                        inner_agg.func_def = inner_def;
+                        inner_agg.distinct = inner_distinct;
+                        inner_agg.result_type = std::move(inner_ret_type);
+                        inner_agg.argument = std::move(inner_arg);
+                        agg->aggregates.push_back(std::move(inner_agg));
+                    }
+                    agg_item.argument = std::move(full_expr);
                 }
                 agg->aggregates.push_back(std::move(agg_item));
                 with_outputs.emplace_back(alias, BoundType::clone(agg->aggregates.back().result_type));

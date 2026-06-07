@@ -19,6 +19,7 @@ struct BoundAggregateOp {
         BoundType result_type;
         const function::FunctionDef* func_def;
         bool distinct = false;
+        bool is_internal = false;
     };
     std::vector<BoundExpression> group_keys;
     std::vector<AggregateItem> aggregates;
