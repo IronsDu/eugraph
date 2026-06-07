@@ -5,6 +5,39 @@
 namespace eugraph {
 namespace binder {
 
+// ==================== Aggregate Detection Helper ====================
+
+static bool hasAggregate(const cypher::Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" || ptr->name == "min" ||
+                    ptr->name == "max" || ptr->name == "collect")
+                    return true;
+                for (const auto& arg : ptr->args)
+                    if (hasAggregate(arg))
+                        return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return hasAggregate(ptr->left) || hasAggregate(ptr->right);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return hasAggregate(ptr->operand);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                return hasAggregate(ptr->object);
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries)
+                    if (hasAggregate(v))
+                        return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements)
+                    if (hasAggregate(e))
+                        return true;
+            }
+            return false;
+        },
+        expr);
+}
+
 // ==================== SKIP/LIMIT Helper ====================
 
 std::optional<int64_t> Binder::bindSkipLimit(const cypher::Expression& expr, const char* clause_name) {
@@ -36,19 +69,24 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
     // and then fall through to the normal bindReturn logic.
     // Instead, we build the items vector here and use it directly.
     if (ret.return_all && ret.items.empty()) {
-        // Build a simple projection over all symbols
+        // Build a simple projection over all symbols, ordered by column index
         auto proj = std::make_unique<BoundProjectOp>();
-        for (const auto& [name, col_info] : ctx_.symbols) {
-            auto bound_expr =
-                std::make_optional<BoundExpression>(BoundColumnRef(col_info.column_index, col_info.type, name));
+        std::vector<const ColumnInfo*> sorted_symbols;
+        for (const auto& [name, col_info] : ctx_.symbols)
+            sorted_symbols.push_back(&col_info);
+        std::sort(sorted_symbols.begin(), sorted_symbols.end(),
+                  [](const ColumnInfo* a, const ColumnInfo* b) { return a->column_index < b->column_index; });
+        for (const auto* col_info : sorted_symbols) {
+            auto bound_expr = std::make_optional<BoundExpression>(
+                BoundColumnRef(col_info->column_index, col_info->type, col_info->name));
             BoundProjectOp::ProjectItem proj_item;
             proj_item.expr = std::move(*bound_expr);
-            proj_item.alias = name;
+            proj_item.alias = col_info->name;
             proj_item.result_type = getBoundExprType(proj_item.expr);
             proj->items.push_back(std::move(proj_item));
 
             ColumnInfo out_info;
-            out_info.name = name;
+            out_info.name = col_info->name;
             out_info.type = proj_item.result_type;
             out_info.column_index = static_cast<uint32_t>(proj->items.size() - 1);
             ctx_.return_columns.push_back(std::move(out_info));
@@ -98,20 +136,13 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         return current;
     }
 
-    // Check for aggregate functions in return items
+    // Check for aggregate functions in return items (recursively)
     bool has_aggregate = false;
     for (const auto& item : ret.items) {
-        std::visit(
-            [&has_aggregate](const auto& ptr) {
-                using Elem = typename std::decay_t<decltype(ptr)>::element_type;
-                if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
-                    if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" || ptr->name == "min" ||
-                        ptr->name == "max") {
-                        has_aggregate = true;
-                    }
-                }
-            },
-            item.expr);
+        if (hasAggregate(item.expr)) {
+            has_aggregate = true;
+            break;
+        }
     }
 
     if (has_aggregate) {
@@ -124,8 +155,8 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                 [&is_agg](const auto& ptr) {
                     using Elem = typename std::decay_t<decltype(ptr)>::element_type;
                     if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
-                        if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" || ptr->name == "min" ||
-                            ptr->name == "max") {
+                        if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" ||
+                            ptr->name == "min" || ptr->name == "max" || ptr->name == "collect") {
                             is_agg = true;
                         }
                     }
@@ -380,20 +411,13 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
 // ==================== WITH Binding ====================
 
 std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& wc, BoundLogicalOperator child) {
-    // Check for aggregate functions in WITH items
+    // Check for aggregate functions in WITH items (recursively)
     bool has_aggregate = false;
     for (const auto& item : wc.items) {
-        std::visit(
-            [&has_aggregate](const auto& ptr) {
-                using Elem = typename std::decay_t<decltype(ptr)>::element_type;
-                if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
-                    if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" || ptr->name == "min" ||
-                        ptr->name == "max") {
-                        has_aggregate = true;
-                    }
-                }
-            },
-            item.expr);
+        if (hasAggregate(item.expr)) {
+            has_aggregate = true;
+            break;
+        }
     }
 
     // Collect output names and types for scope reset
@@ -410,8 +434,8 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 [&is_agg](const auto& ptr) {
                     using Elem = typename std::decay_t<decltype(ptr)>::element_type;
                     if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
-                        if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" || ptr->name == "min" ||
-                            ptr->name == "max") {
+                        if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" ||
+                            ptr->name == "min" || ptr->name == "max" || ptr->name == "collect") {
                             is_agg = true;
                         }
                     }
