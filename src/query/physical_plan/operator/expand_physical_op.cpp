@@ -119,7 +119,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             } else if (src_col.form == VectorForm::CONSTANT) {
                 output.columns.push_back(Column::constant(src_col.constant_value));
             } else {
-                output.columns.push_back(Column(src_col.type));
+                output.columns.push_back(Column::flat(src_col.type, edges.size()));
             }
         }
 
@@ -136,41 +136,21 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             if (!dst_var_.empty()) {
                 VertexValue dst_vv;
                 dst_vv.id = edges[i].dst_id;
-                auto dst_labels = co_await store_.getVertexLabels(edges[i].dst_id);
-                dst_vv.labels = dst_labels;
-                for (LabelId lid : dst_labels) {
-                    auto it = dst_label_prop_ids_.find(lid);
-                    if (it == dst_label_prop_ids_.end())
-                        continue;
-                    if (it->second.empty())
-                        continue;
-                    auto props = co_await store_.getVertexProperties(edges[i].dst_id, lid, it->second);
-                    if (props) {
-                        dst_vv.properties[lid] = std::move(*props);
-                    }
-                }
                 output.setValue(dst_col_idx, i, Value(std::move(dst_vv)));
             }
             if (!edge_var_.empty()) {
                 EdgeValue ev;
                 ev.id = edges[i].edge_id;
-                ev.src_id = INVALID_VERTEX_ID; // will be filled below
                 ev.dst_id = edges[i].dst_id;
                 ev.label_id = edges[i].edge_label_id;
                 ev.seq = edges[i].seq;
-
-                // Determine src_id
                 VertexId sid = INVALID_VERTEX_ID;
                 if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[edges[i].src_row].size()) {
                     const auto& val = rows[edges[i].src_row][src_col_idx_];
-                    if (std::holds_alternative<VertexValue>(val)) {
+                    if (std::holds_alternative<VertexValue>(val))
                         sid = std::get<VertexValue>(val).id;
-                    }
                 }
                 ev.src_id = sid;
-                auto edge_props = co_await store_.getEdgeProperties(edges[i].edge_label_id, edges[i].edge_id);
-                if (edge_props)
-                    ev.properties = std::move(*edge_props);
                 output.setValue(edge_col_idx, i, Value(std::move(ev)));
             }
         }

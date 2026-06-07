@@ -1348,7 +1348,7 @@ DateTimeValue temporalTruncate(const DateTimeValue& tv, const std::string& unit,
     } else if (unit == "month") {
         trunc_day = true;
         trunc_hour = trunc_min = trunc_sec = trunc_nanos = true;
-    } else if (unit == "week") {
+    } else if (unit == "week" || unit == "weekday") {
         // Truncate to Monday of current week
         int64_t days = daysFromCivil(result.year, result.month, result.day);
         int64_t dow = ((days % 7) + 10) % 7 + 1; // 1=Mon
@@ -1418,11 +1418,11 @@ DateTimeValue temporalTruncate(const DateTimeValue& tv, const std::string& unit,
             else if (k == "second")
                 result.second = val;
             else if (k == "nanosecond")
-                result.nanos = (result.nanos / 1'000'000'000) * 1'000'000'000 + val;
+                result.nanos = (result.nanos / 1'000) * 1'000 + val;
             else if (k == "millisecond")
                 result.nanos = (result.nanos / 1'000'000) * 1'000'000 + val * 1'000'000;
             else if (k == "microsecond")
-                result.nanos = (result.nanos / 1'000'000) * 1'000'000 + val * 1'000;
+                result.nanos = (result.nanos / 1'000) * 1'000 + val * 1'000;
             else if (k == "dayOfWeek")
                 day_of_week_override = val;
             else if (k == "timezone") {
@@ -1514,7 +1514,7 @@ TimeValue temporalTruncateTime(const TimeValue& tv, const std::string& unit, con
             else if (k == "millisecond")
                 result.nanos = (result.nanos / 1'000'000) * 1'000'000 + val * 1'000'000;
             else if (k == "microsecond")
-                result.nanos = (result.nanos / 1'000'000) * 1'000'000 + val * 1'000;
+                result.nanos = (result.nanos / 1'000) * 1'000 + val * 1'000;
             else if (k == "timezone") {
                 if (!str_val.empty()) {
                     if (str_val.find('/') != std::string::npos)

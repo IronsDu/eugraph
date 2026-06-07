@@ -259,7 +259,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                             } else if (src_col.form == VectorForm::CONSTANT) {
                                 output.columns.push_back(Column::constant(src_col.constant_value));
                             } else {
-                                output.columns.push_back(Column(src_col.type));
+                                output.columns.push_back(Column::flat(src_col.type, output_buffer.size()));
                             }
                         }
 
@@ -273,18 +273,6 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                             dst_vv.id = output_buffer[i].dst_id;
                             auto dst_labels = co_await store_.getVertexLabels(output_buffer[i].dst_id);
                             dst_vv.labels = dst_labels;
-                            for (LabelId lid : dst_labels) {
-                                auto it = dst_label_prop_ids_.find(lid);
-                                if (it == dst_label_prop_ids_.end())
-                                    continue;
-                                if (it->second.empty())
-                                    continue;
-                                auto props =
-                                    co_await store_.getVertexProperties(output_buffer[i].dst_id, lid, it->second);
-                                if (props) {
-                                    dst_vv.properties[lid] = std::move(*props);
-                                }
-                            }
                             output.setValue(dst_col_idx, i, Value(std::move(dst_vv)));
                         }
                         // Fill path column if present
@@ -361,7 +349,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 } else if (src_col.form == VectorForm::CONSTANT) {
                     output.columns.push_back(Column::constant(src_col.constant_value));
                 } else {
-                    output.columns.push_back(Column(src_col.type));
+                    output.columns.push_back(Column::flat(src_col.type, output_buffer.size()));
                 }
             }
 
@@ -375,17 +363,6 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 dst_vv.id = output_buffer[i].dst_id;
                 auto dst_labels = co_await store_.getVertexLabels(output_buffer[i].dst_id);
                 dst_vv.labels = dst_labels;
-                for (LabelId lid : dst_labels) {
-                    auto it = dst_label_prop_ids_.find(lid);
-                    if (it == dst_label_prop_ids_.end())
-                        continue;
-                    if (it->second.empty())
-                        continue;
-                    auto props = co_await store_.getVertexProperties(output_buffer[i].dst_id, lid, it->second);
-                    if (props) {
-                        dst_vv.properties[lid] = std::move(*props);
-                    }
-                }
                 output.setValue(dst_col_idx, i, Value(std::move(dst_vv)));
             }
             // Fill path column if present

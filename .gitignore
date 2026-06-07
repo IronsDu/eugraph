@@ -12,3 +12,4 @@ vcpkg_installed/
 *~
 __pycache__/
 *.pyc
+tck-step-results.json
