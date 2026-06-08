@@ -13,6 +13,7 @@
 #include "query/function/scalar/graph_functions.hpp"
 #include "query/function/scalar/id_function.hpp"
 #include "query/function/scalar/list_functions.hpp"
+#include "query/function/scalar/math_functions.hpp"
 #include "query/function/scalar/path_functions.hpp"
 #include "query/function/scalar/string_functions.hpp"
 #include "query/function/scalar/temporal_functions.hpp"
@@ -55,6 +56,29 @@ void FunctionRegistry::registerScalarBuiltins() {
                                 {},
                                 {},
                                 {}});
+
+    // abs(Int64) -> Int64
+    functions_["abs"].push_back({"abs",
+                                 {BoundType::Int64()},
+                                 BoundType::Int64(),
+                                 false,
+                                 false,
+                                 scalar::absScalarFn,
+                                 scalar::absBatchFn,
+                                 {},
+                                 {},
+                                 {}});
+    // abs(Double) -> Double
+    functions_["abs"].push_back({"abs",
+                                 {BoundType::Double()},
+                                 BoundType::Double(),
+                                 false,
+                                 false,
+                                 scalar::absScalarFn,
+                                 scalar::absBatchFn,
+                                 {},
+                                 {},
+                                 {}});
 
     // nodes(Path) -> List<Vertex>
     functions_["nodes"].push_back({"nodes",
@@ -184,6 +208,18 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   false,
                                   scalar::sizeScalarFn,
                                   scalar::sizeStringBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+
+    // sqrt(Double) -> Double
+    functions_["sqrt"].push_back({"sqrt",
+                                  {BoundType::Double()},
+                                  BoundType::Double(),
+                                  false,
+                                  false,
+                                  scalar::sqrtScalarFn,
+                                  scalar::sqrtBatchFn,
                                   {},
                                   {},
                                   {}});

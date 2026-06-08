@@ -456,8 +456,18 @@ inline std::string expressionToString(const Expression& expr) {
                     return std::get<std::string>(ptr->value);
                 if (std::holds_alternative<int64_t>(ptr->value))
                     return std::to_string(std::get<int64_t>(ptr->value));
-                if (std::holds_alternative<double>(ptr->value))
-                    return std::to_string(std::get<double>(ptr->value));
+                if (std::holds_alternative<double>(ptr->value)) {
+                    std::string s = std::to_string(std::get<double>(ptr->value));
+                    // Strip trailing zeros to match TCK expectation (e.g. 12.96 not 12.960000)
+                    auto dot = s.find('.');
+                    if (dot != std::string::npos) {
+                        size_t end = s.size() - 1;
+                        while (end > dot + 1 && s[end] == '0')
+                            --end;
+                        s = s.substr(0, end + 1);
+                    }
+                    return s;
+                }
                 if (std::holds_alternative<bool>(ptr->value))
                     return std::get<bool>(ptr->value) ? "true" : "false";
                 return "null";
@@ -468,7 +478,35 @@ inline std::string expressionToString(const Expression& expr) {
                 const char* opStr = static_cast<size_t>(ptr->op) < sizeof(binOpNames) / sizeof(binOpNames[0])
                                         ? binOpNames[static_cast<size_t>(ptr->op)]
                                         : "?";
-                return expressionToString(ptr->left) + " " + opStr + " " + expressionToString(ptr->right);
+                static const auto binPrec = [](BinaryOperator o) -> int {
+                    switch (o) {
+                    case BinaryOperator::POW:
+                        return 3;
+                    case BinaryOperator::MUL:
+                    case BinaryOperator::DIV:
+                    case BinaryOperator::MOD:
+                        return 2;
+                    case BinaryOperator::ADD:
+                    case BinaryOperator::SUB:
+                        return 1;
+                    default:
+                        return 0;
+                    }
+                };
+                int parentPrec = binPrec(ptr->op);
+                auto parenChild = [&](const Expression& child, bool isRight) -> std::string {
+                    auto s = expressionToString(child);
+                    if (std::holds_alternative<std::unique_ptr<BinaryOp>>(child)) {
+                        auto& childOp = *std::get<std::unique_ptr<BinaryOp>>(child);
+                        int childPrec = binPrec(childOp.op);
+                        // Left  child: parens when strictly lower precedence.
+                        // Right child: parens when lower or equal (non-associative ops like / and -).
+                        if (childPrec < parentPrec || (isRight && childPrec == parentPrec))
+                            return "(" + s + ")";
+                    }
+                    return s;
+                };
+                return parenChild(ptr->left, false) + " " + opStr + " " + parenChild(ptr->right, true);
             } else if constexpr (std::is_same_v<OpType, UnaryOp>) {
                 static const char* unaryOpNames[] = {"NOT ", "-", "+", "IS NULL", "IS NOT NULL"};
                 const char* opStr = static_cast<size_t>(ptr->op) < sizeof(unaryOpNames) / sizeof(unaryOpNames[0])
