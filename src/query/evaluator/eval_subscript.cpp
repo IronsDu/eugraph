@@ -43,8 +43,10 @@ void VectorizedEvaluator::evalSubscript(const binder::BoundSubscript& sub, const
             }
             if (!found)
                 result.setNull(i);
+        } else if (std::holds_alternative<MapValue>(list_val)) {
+            throw std::runtime_error("TypeError: MapElementAccessByNonString");
         } else {
-            result.setNull(i);
+            throw std::runtime_error("TypeError: InvalidArgumentType");
         }
     }
 }

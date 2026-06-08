@@ -789,11 +789,12 @@ public:
     NotExpressionContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
     ComparisonExpressionContext *comparisonExpression();
-    antlr4::tree::TerminalNode *NOT();
+    std::vector<antlr4::tree::TerminalNode *> NOT();
+    antlr4::tree::TerminalNode* NOT(size_t i);
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
+
   };
 
   NotExpressionContext* notExpression();

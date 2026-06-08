@@ -59,7 +59,7 @@ std::string convertVertexJson(const std::string& json) {
             props.emplace_back(key, formattedVal);
         }
         if (!props.empty()) {
-            oss << " {";
+            oss << "{";
             for (size_t i = 0; i < props.size(); ++i) {
                 if (i > 0)
                     oss << ", ";
@@ -120,7 +120,7 @@ std::string convertEdgeJson(const std::string& json) {
             props.emplace_back(key, formattedVal);
         }
         if (!props.empty()) {
-            oss << " {";
+            oss << "{";
             for (size_t i = 0; i < props.size(); ++i) {
                 if (i > 0)
                     oss << ", ";

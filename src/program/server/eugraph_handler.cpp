@@ -314,21 +314,19 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                 first = false;
             }
             oss << ']';
-            for (LabelId lid : *v.labels) {
-                auto it = label_defs.find(lid);
-                if (it == label_defs.end())
-                    continue;
-                auto prop_it = v.properties.find(lid);
-                if (prop_it == v.properties.end())
-                    continue;
-                const auto& props = prop_it->second;
-                for (const auto& pd : it->second.properties) {
-                    if (pd.id < props.size()) {
-                        const auto& pv = props[pd.id];
-                        if (pv.has_value()) {
-                            oss << ",\"" << pd.name << "\":";
-                            appendJsonValue(oss, *pv);
-                        }
+        }
+        // Serialize properties for all labels present on the vertex
+        // (including __anon__ for unlabeled nodes)
+        for (const auto& [lid, props] : v.properties) {
+            auto it = label_defs.find(lid);
+            if (it == label_defs.end())
+                continue;
+            for (const auto& pd : it->second.properties) {
+                if (pd.id < props.size()) {
+                    const auto& pv = props[pd.id];
+                    if (pv.has_value()) {
+                        oss << ",\"" << pd.name << "\":";
+                        appendJsonValue(oss, *pv);
                     }
                 }
             }
