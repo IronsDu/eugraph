@@ -44,9 +44,11 @@ void VectorizedEvaluator::evalSlice(const binder::BoundSlice& slice, const DataC
         }
 
         if (from_idx < 0)
-            from_idx = 0;
+            from_idx += static_cast<int64_t>(lv_size);
         if (to_idx < 0)
-            to_idx = 0;
+            to_idx += static_cast<int64_t>(lv_size);
+        if (from_idx < 0)
+            from_idx = 0;
         if (from_idx > static_cast<int64_t>(lv_size))
             from_idx = static_cast<int64_t>(lv_size);
         if (to_idx > static_cast<int64_t>(lv_size))

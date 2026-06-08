@@ -23,6 +23,8 @@ void VectorizedEvaluator::evalSubscript(const binder::BoundSubscript& sub, const
         if (std::holds_alternative<ListValue>(list_val) && std::holds_alternative<int64_t>(idx_val)) {
             const auto& lv = std::get<ListValue>(list_val);
             int64_t idx = std::get<int64_t>(idx_val);
+            if (idx < 0)
+                idx += static_cast<int64_t>(lv.elements.size());
             if (idx >= 0 && static_cast<size_t>(idx) < lv.elements.size()) {
                 result.setValue(i, lv.elements[static_cast<size_t>(idx)].value);
             } else {

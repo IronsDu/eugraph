@@ -3,6 +3,8 @@
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
 
+#include <cctype>
+
 namespace eugraph {
 namespace function {
 namespace scalar {
@@ -300,6 +302,58 @@ inline void rightBatchFn(const std::vector<const Column*>& args, Column& result,
         }
         result.setValue(i, rightImpl(str_col.getValue(i), std::get<int64_t>(n_val)));
     }
+}
+
+// --- toUpper ---
+
+inline Value toUpperImpl(const Value& arg) {
+    if (isNull(arg))
+        return Value{};
+    if (!std::holds_alternative<std::string>(arg))
+        return Value{};
+    std::string s = std::get<std::string>(arg);
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::toupper(c); });
+    return Value{std::move(s)};
+}
+
+inline Value toUpperScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (args.empty())
+        return Value{};
+    return toUpperImpl(args[0]);
+}
+
+inline void toUpperBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
+    if (args.empty())
+        return;
+    const auto& col = *args[0];
+    for (size_t i = 0; i < count; ++i)
+        result.setValue(i, toUpperImpl(col.getValue(i)));
+}
+
+// --- toLower ---
+
+inline Value toLowerImpl(const Value& arg) {
+    if (isNull(arg))
+        return Value{};
+    if (!std::holds_alternative<std::string>(arg))
+        return Value{};
+    std::string s = std::get<std::string>(arg);
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
+    return Value{std::move(s)};
+}
+
+inline Value toLowerScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (args.empty())
+        return Value{};
+    return toLowerImpl(args[0]);
+}
+
+inline void toLowerBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
+    if (args.empty())
+        return;
+    const auto& col = *args[0];
+    for (size_t i = 0; i < count; ++i)
+        result.setValue(i, toLowerImpl(col.getValue(i)));
 }
 
 } // namespace scalar

@@ -51,6 +51,7 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             continue;
         }
 
+        bool saw_inconclusive = false;
         for (const auto& elem_storage : lv.elements) {
             Value elem_val = elem_storage.value;
 
@@ -65,13 +66,29 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             for (size_t c = input.columns.size(); c < total_cols; ++c) {
                 temp_chunk.columns[c] = Column::constant(Value{});
             }
-            temp_chunk.columns[loop_column_index] = Column::constant(std::move(elem_val));
+            temp_chunk.columns[loop_column_index] = Column::constant(elem_val);
 
             bool elem_passes = true;
             if (where_pred) {
-                std::vector<bool> pred_result;
-                evaluatePredicate(*where_pred, temp_chunk, pred_result);
-                elem_passes = !pred_result.empty() && pred_result[0];
+                if (isNull(elem_val)) {
+                    // Null element: predicate may be inconclusive. Use
+                    // evaluateInternal linked via temp_columns_ indexing
+                    // to detect null result (reallocation-safe).
+                    size_t col_count_before = temp_columns_.size();
+                    evaluateInternal(*where_pred, temp_chunk);
+                    if (temp_columns_.size() > col_count_before && !temp_columns_[col_count_before].isNull(0)) {
+                        Value v = temp_columns_[col_count_before].getValue(0);
+                        if (std::holds_alternative<bool>(v))
+                            elem_passes = std::get<bool>(v);
+                    } else {
+                        saw_inconclusive = true;
+                        continue;
+                    }
+                } else {
+                    std::vector<bool> pred_result;
+                    evaluatePredicate(*where_pred, temp_chunk, pred_result);
+                    elem_passes = !pred_result.empty() && pred_result[0];
+                }
             }
 
             switch (kind) {
@@ -109,7 +126,29 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
         if (kind == QuantifierKind::SINGLE) {
             final_result = (single_match_count == 1);
         }
-        result.setValue(i, Value(final_result));
+        if (saw_inconclusive) {
+            bool at_initial = false;
+            switch (kind) {
+            case QuantifierKind::ALL:
+                at_initial = final_result; // initial=true
+                break;
+            case QuantifierKind::ANY:
+                at_initial = !final_result; // initial=false
+                break;
+            case QuantifierKind::NONE:
+                at_initial = final_result; // initial=true
+                break;
+            case QuantifierKind::SINGLE:
+                at_initial = (single_match_count == 0 && !final_result); // initial=false
+                break;
+            }
+            if (at_initial)
+                result.setNull(i);
+            else
+                result.setValue(i, Value(final_result));
+        } else {
+            result.setValue(i, Value(final_result));
+        }
     }
 }
 

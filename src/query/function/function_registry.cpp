@@ -152,6 +152,18 @@ void FunctionRegistry::registerScalarBuiltins() {
                                      {},
                                      {}});
 
+    // reverse(String) -> String
+    functions_["reverse"].push_back({"reverse",
+                                     {BoundType::String()},
+                                     BoundType::String(),
+                                     false,
+                                     false,
+                                     scalar::reverseStringScalarFn,
+                                     scalar::reverseStringBatchFn,
+                                     {},
+                                     {},
+                                     {}});
+
     // size(List<Any>) -> Int64
     functions_["size"].push_back({"size",
                                   {BoundType::List(BoundType::Any())},
@@ -215,6 +227,18 @@ void FunctionRegistry::registerScalarBuiltins() {
     // toFloat(Any) -> Double
     functions_["toFloat"].push_back(
         {"toFloat", {}, BoundType::Double(), false, true, scalar::toFloatScalarFn, scalar::toFloatBatchFn, {}, {}, {}});
+
+    // toBoolean(Any) -> Boolean
+    functions_["toBoolean"].push_back({"toBoolean",
+                                       {},
+                                       BoundType::Bool(),
+                                       false,
+                                       true,
+                                       scalar::toBooleanScalarFn,
+                                       scalar::toBooleanBatchFn,
+                                       {},
+                                       {},
+                                       {}});
 
     // toString(Any) -> String
     functions_["toString"].push_back({"toString",
@@ -409,6 +433,30 @@ void FunctionRegistry::registerScalarBuiltins() {
                                    {},
                                    {},
                                    {}});
+
+    // toUpper(String) -> String
+    functions_["toUpper"].push_back({"toUpper",
+                                     {BoundType::String()},
+                                     BoundType::String(),
+                                     false,
+                                     false,
+                                     scalar::toUpperScalarFn,
+                                     scalar::toUpperBatchFn,
+                                     {},
+                                     {},
+                                     {}});
+
+    // toLower(String) -> String
+    functions_["toLower"].push_back({"toLower",
+                                     {BoundType::String()},
+                                     BoundType::String(),
+                                     false,
+                                     false,
+                                     scalar::toLowerScalarFn,
+                                     scalar::toLowerBatchFn,
+                                     {},
+                                     {},
+                                     {}});
 
     // --- Coalesce ---
 

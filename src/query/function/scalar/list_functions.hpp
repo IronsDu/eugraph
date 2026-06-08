@@ -4,6 +4,8 @@
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
 
+#include <algorithm>
+
 namespace eugraph {
 namespace function {
 namespace scalar {
@@ -115,6 +117,34 @@ inline void reverseBatchFn(const std::vector<const Column*>& args, Column& resul
     const auto& arg_col = *args[0];
     for (size_t i = 0; i < count; ++i) {
         result.setValue(i, reverseImpl(arg_col.getValue(i)));
+    }
+}
+
+// --- reverse for strings ---
+
+inline Value reverseStringImpl(const Value& arg) {
+    if (isNull(arg))
+        return Value{};
+    if (!std::holds_alternative<std::string>(arg))
+        return Value{};
+    std::string s = std::get<std::string>(arg);
+    std::reverse(s.begin(), s.end());
+    return Value{std::move(s)};
+}
+
+inline Value reverseStringScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
+    if (args.empty())
+        return Value{};
+    return reverseStringImpl(args[0]);
+}
+
+inline void reverseStringBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                                 const EvalContext& /*ctx*/) {
+    if (args.empty())
+        return;
+    const auto& arg_col = *args[0];
+    for (size_t i = 0; i < count; ++i) {
+        result.setValue(i, reverseStringImpl(arg_col.getValue(i)));
     }
 }
 
