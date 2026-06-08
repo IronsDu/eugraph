@@ -59,6 +59,9 @@ std::string convertVertexJson(const std::string& json) {
             props.emplace_back(key, formattedVal);
         }
         if (!props.empty()) {
+            // Space before properties only when there is preceding content (labels)
+            if (oss.tellp() > 1)
+                oss << ' ';
             oss << "{";
             for (size_t i = 0; i < props.size(); ++i) {
                 if (i > 0)
@@ -120,6 +123,9 @@ std::string convertEdgeJson(const std::string& json) {
             props.emplace_back(key, formattedVal);
         }
         if (!props.empty()) {
+            // Space before properties only when there is preceding content (label)
+            if (oss.tellp() > 1)
+                oss << ' ';
             oss << "{";
             for (size_t i = 0; i < props.size(); ++i) {
                 if (i > 0)
