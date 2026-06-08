@@ -1,5 +1,5 @@
 
-// Generated from grammar/CypherLexer.g4 by ANTLR 4.13.2
+// Generated from /mnt/f/code/eugraph/grammar/CypherLexer.g4 by ANTLR 4.13.2
 
 #pragma once
 

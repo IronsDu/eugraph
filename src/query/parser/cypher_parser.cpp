@@ -38,6 +38,69 @@ private:
     ParseError error_;
 };
 
+// ==================== String Escape Processing ====================
+
+// Process ONLY \uXXXX unicode escape sequences in string/char literals.
+// All other escape sequences (\n, \\, \', etc.) are left as raw text,
+// matching the TCK expectation that only unicode escapes are interpolated.
+// Throws std::invalid_argument("InvalidUnicodeLiteral") on malformed \u.
+static std::string unescapeString(const std::string& raw) {
+    std::string result;
+    result.reserve(raw.size());
+    for (size_t i = 0; i < raw.size(); ++i) {
+        if (raw[i] != '\\' || i + 1 >= raw.size()) {
+            result += raw[i];
+            continue;
+        }
+        if (raw[i + 1] == 'u') {
+            // Unicode escape: \u followed by optional extra 'u' chars (per
+            // ANTLR grammar u'+') then exactly 4 hex digits.
+            size_t j = i + 2;
+            while (j < raw.size() && raw[j] == 'u')
+                ++j;
+            if (j + 4 > raw.size())
+                throw std::invalid_argument("InvalidUnicodeLiteral");
+            uint32_t cp = 0;
+            for (int k = 0; k < 4; ++k) {
+                char d = raw[j + k];
+                uint32_t val = 0;
+                if (d >= '0' && d <= '9')
+                    val = d - '0';
+                else if (d >= 'a' && d <= 'f')
+                    val = d - 'a' + 10;
+                else if (d >= 'A' && d <= 'F')
+                    val = d - 'A' + 10;
+                else
+                    throw std::invalid_argument("InvalidUnicodeLiteral");
+                cp = (cp << 4) | val;
+            }
+            if (cp > 0x10FFFF)
+                throw std::invalid_argument("InvalidUnicodeLiteral");
+            // Encode codepoint to UTF-8
+            if (cp <= 0x7F) {
+                result += static_cast<char>(cp);
+            } else if (cp <= 0x7FF) {
+                result += static_cast<char>(0xC0 | (cp >> 6));
+                result += static_cast<char>(0x80 | (cp & 0x3F));
+            } else if (cp <= 0xFFFF) {
+                result += static_cast<char>(0xE0 | (cp >> 12));
+                result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                result += static_cast<char>(0x80 | (cp & 0x3F));
+            } else {
+                result += static_cast<char>(0xF0 | (cp >> 18));
+                result += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+                result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                result += static_cast<char>(0x80 | (cp & 0x3F));
+            }
+            i = j + 3;
+        } else {
+            // Non-unicode escape: pass through as-is (raw text)
+            result += raw[i];
+        }
+    }
+    return result;
+}
+
 // ==================== AST Builder ====================
 // 直接遍历 ANTLR Parse Tree，不继承 BaseVisitor（避免 std::any 与 move-only 类型冲突）
 
@@ -420,8 +483,13 @@ private:
         Expression r = buildAtomNode(atom);
         // Process DOT name chains before ::
         auto names = ctx->name();
-        for (auto* n : names)
-            r = makePropertyAccess(std::move(r), n->getText());
+        for (auto* n : names) {
+            std::string name_text = n->getText();
+            // Strip backtick delimiters from ESC_LITERAL tokens
+            if (name_text.size() >= 2 && name_text.front() == '`' && name_text.back() == '`')
+                name_text = name_text.substr(1, name_text.size() - 2);
+            r = makePropertyAccess(std::move(r), name_text);
+        }
         // Process COLONCOLON labelCast if present
         if (ctx->COLONCOLON()) {
             auto* lc = ctx->labelCast();
@@ -429,8 +497,12 @@ private:
             // First name after :: is the label
             r = makeLabelCast(std::move(r), lc_names[0]->getText());
             // Remaining names are property accesses
-            for (size_t i = 1; i < lc_names.size(); i++)
-                r = makePropertyAccess(std::move(r), lc_names[i]->getText());
+            for (size_t i = 1; i < lc_names.size(); i++) {
+                std::string name_text = lc_names[i]->getText();
+                if (name_text.size() >= 2 && name_text.front() == '`' && name_text.back() == '`')
+                    name_text = name_text.substr(1, name_text.size() - 2);
+                r = makePropertyAccess(std::move(r), name_text);
+            }
         }
         return r;
     }
@@ -478,6 +550,8 @@ private:
                     text.find('E') != std::string::npos)
                     return makeLiteral(std::stod(text));
                 return makeLiteral(static_cast<int64_t>(std::stoll(text)));
+            } catch (const std::out_of_range&) {
+                throw; // Propagate overflow to parse() for proper error reporting
             } catch (...) {
                 // Not actually a number, fall through
             }
@@ -496,18 +570,22 @@ private:
             return makeLiteral(NullValue{});
         if (ctx->stringLit()) {
             auto t = ctx->stringLit()->getText();
-            return makeLiteral(t.substr(1, t.size() - 2));
+            return makeLiteral(unescapeString(t.substr(1, t.size() - 2)));
         }
         if (ctx->charLit()) {
             auto t = ctx->charLit()->getText();
-            return makeLiteral(t.substr(1, t.size() - 2));
+            return makeLiteral(unescapeString(t.substr(1, t.size() - 2)));
         }
         if (ctx->numLit()) {
             auto t = ctx->numLit()->getText();
-            if (t.find('.') != std::string::npos || t.find('e') != std::string::npos ||
-                t.find('E') != std::string::npos)
-                return makeLiteral(std::stod(t));
-            return makeLiteral(static_cast<int64_t>(std::stoll(t)));
+            try {
+                if (t.find('.') != std::string::npos || t.find('e') != std::string::npos ||
+                    t.find('E') != std::string::npos)
+                    return makeLiteral(std::stod(t));
+                return makeLiteral(static_cast<int64_t>(std::stoll(t)));
+            } catch (const std::out_of_range&) {
+                throw; // Propagate overflow to parse()
+            }
         }
         if (ctx->listLit()) {
             auto list = std::make_unique<ListExpr>();
@@ -930,6 +1008,27 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
             ++i;
             while (i < input.size() && input[i] != quote) {
                 if (input[i] == '\\' && i + 1 < input.size()) {
+                    if (input[i + 1] == 'u') {
+                        // Validate \uXXXX in preprocessor so malformed
+                        // escapes (e.g. \uH) are caught before ANTLR
+                        // tokenization fails and produces garbled parse
+                        // results.
+                        size_t u = i + 2;
+                        while (u < input.size() && input[u] == 'u')
+                            ++u;
+                        bool valid = (u + 4 <= input.size());
+                        if (valid) {
+                            for (int k = 0; k < 4; ++k) {
+                                char d = input[u + k];
+                                if (!((d >= '0' && d <= '9') || (d >= 'a' && d <= 'f') || (d >= 'A' && d <= 'F'))) {
+                                    valid = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!valid)
+                            throw std::invalid_argument("InvalidUnicodeLiteral");
+                    }
                     result += input[i++];
                     result += input[i++];
                 } else {
@@ -967,6 +1066,16 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
                 }
                 break;
             }
+            // If no digits after 0x/0o prefix (e.g. "0x") or digits
+            // followed by an alphabetic character (e.g. 0x1A2b3j...),
+            // throw here so ANTLR's error recovery doesn't silently
+            // produce a valid parse from the split tokens.
+            bool no_digits = (j == start + 2);
+            if (no_digits)
+                throw std::invalid_argument("InvalidNumberLiteral");
+            bool malformed = (j < input.size() && isalnum(static_cast<unsigned char>(input[j])));
+            if (malformed)
+                throw std::invalid_argument("InvalidNumberLiteral");
             if (j > start + 2) {
                 // Parse and convert to decimal string
                 std::string digits = input.substr(start + 2, j - (start + 2));
@@ -974,7 +1083,16 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
                 errno = 0;
                 int64_t val = std::strtoll(digits.c_str(), nullptr, is_hex ? 16 : 8);
                 bool overflow = (errno == ERANGE);
-                // Check for values exactly at INT64_MIN boundary via UINT64
+                // Handle INT64_MIN edge case: -0x8000000000000000 = -2^63 = INT64_MIN.
+                // strtoll overflows on the positive value 2^63, but the negative
+                // is representable. Check via unsigned strtoull.
+                if (overflow && negative) {
+                    uint64_t uval = std::strtoull(digits.c_str(), nullptr, is_hex ? 16 : 8);
+                    if (uval == static_cast<uint64_t>(INT64_MAX) + 1) {
+                        overflow = false;
+                        val = INT64_MIN;
+                    }
+                }
                 if (!overflow && negative && val == INT64_MIN) {
                     // Check if unsigned value exceeds INT64_MAX+1
                     uint64_t uval = std::strtoull(digits.c_str(), nullptr, is_hex ? 16 : 8);
@@ -982,8 +1100,12 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
                         overflow = true;
                 }
                 if (overflow) {
-                    // Keep original text — let parser/binder handle the overflow
-                    result.append(input.substr(i, j - i));
+                    // Emit a decimal guaranteed to overflow std::stoll
+                    // so the parser's overflow handler produces a clean
+                    // SyntaxError: IntegerOverflow message.
+                    if (negative)
+                        result += '-';
+                    result += "99999999999999999999"; // 20 digits, > INT64_MAX
                 } else if (negative) {
                     result += '-' + std::to_string(std::abs(val));
                 } else {
@@ -993,6 +1115,39 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
                 continue;
             }
         }
+
+        // Check for invalid suffix after a decimal digit.
+        // ANTLR tokenizes digit sequences greedily; a following
+        // alphabetic character (other than exponent / float suffix)
+        // or symbol produces split tokens that the parser may
+        // silently accept through error recovery.
+        if (isdigit(static_cast<unsigned char>(c))) {
+            // If the digit is preceded by an alphanumeric character,
+            // it's part of an identifier (e.g. map key "a1B2c3e67")
+            // and should not be checked for number-literal validity.
+            if (i > 0 && isalnum(static_cast<unsigned char>(input[i - 1]))) {
+                result += c;
+                ++i;
+                continue;
+            }
+            size_t j = i;
+            while (j < input.size() && (isdigit(static_cast<unsigned char>(input[j])) || input[j] == '_'))
+                ++j;
+            if (j < input.size()) {
+                char nc = input[j];
+                if (isalpha(static_cast<unsigned char>(nc)) && nc != 'e' && nc != 'E' && nc != 'f' && nc != 'F' &&
+                    nc != 'd' && nc != 'D') {
+                    // In map context (after '{'), a digit-letter sequence is
+                    // an invalid map key, not an invalid number literal.
+                    if (i > 0 && input[i - 1] == '{')
+                        throw std::invalid_argument("UnexpectedSyntax");
+                    throw std::invalid_argument("InvalidNumberLiteral");
+                }
+                if (nc == '#')
+                    throw std::invalid_argument("UnexpectedSyntax");
+            }
+        }
+
         result += c;
         ++i;
     }
@@ -1000,7 +1155,23 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
 }
 
 std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& cypher_text) {
-    auto preprocessed = preprocessIntegerLiterals(cypher_text);
+    std::string preprocessed;
+    try {
+        preprocessed = preprocessIntegerLiterals(cypher_text);
+    } catch (const std::invalid_argument& e) {
+        ParseError err;
+        std::string what_str = e.what();
+        if (what_str.find("InvalidUnicodeLiteral") != std::string::npos) {
+            err.message = "SyntaxError: InvalidUnicodeLiteral";
+        } else if (what_str.find("InvalidNumberLiteral") != std::string::npos) {
+            err.message = "SyntaxError: InvalidNumberLiteral";
+        } else if (what_str.find("UnexpectedSyntax") != std::string::npos) {
+            err.message = "SyntaxError: UnexpectedSyntax";
+        } else {
+            err.message = std::string("Invalid number: ") + what_str;
+        }
+        return err;
+    }
     antlr4::ANTLRInputStream input(preprocessed);
 
     CypherLexer lexer(&input);
@@ -1011,8 +1182,11 @@ std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& 
     antlr4::CommonTokenStream tokens(&lexer);
     tokens.fill();
 
-    if (error_listener.hasError())
-        return error_listener.getError();
+    if (error_listener.hasError()) {
+        ParseError err = error_listener.getError();
+        err.message = "SyntaxError: UnexpectedSyntax";
+        return err;
+    }
 
     ::CypherParser antlrParser(&tokens);
     antlrParser.removeErrorListeners();
@@ -1020,11 +1194,39 @@ std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& 
 
     auto* tree = antlrParser.script();
 
-    if (error_listener.hasError())
-        return error_listener.getError();
+    if (error_listener.hasError()) {
+        ParseError err = error_listener.getError();
+        err.message = "SyntaxError: UnexpectedSyntax";
+        return err;
+    }
 
     AstBuilder builder;
-    return builder.build(tree);
+    try {
+        return builder.build(tree);
+    } catch (const std::out_of_range& e) {
+        ParseError err;
+        // Use "SyntaxError" prefix so TCK error type classifier recognizes it.
+        // "FloatingPointOverflow" matches the TCK-expected error detail.
+        // e.what() from std::stod/stoll typically contains "stod" or "stoll" —
+        // check for a dot/exponent to distinguish float vs integer overflow.
+        std::string what_str = e.what();
+        bool is_float = (what_str.find("stod") != std::string::npos || what_str.find("stof") != std::string::npos);
+        err.message = std::string("SyntaxError: ") + (is_float ? "FloatingPointOverflow" : "IntegerOverflow");
+        return err;
+    } catch (const std::invalid_argument& e) {
+        ParseError err;
+        std::string what_str = e.what();
+        if (what_str.find("InvalidUnicodeLiteral") != std::string::npos) {
+            err.message = "SyntaxError: InvalidUnicodeLiteral";
+        } else if (what_str.find("InvalidNumberLiteral") != std::string::npos) {
+            err.message = "SyntaxError: InvalidNumberLiteral";
+        } else if (what_str.find("UnexpectedSyntax") != std::string::npos) {
+            err.message = "SyntaxError: UnexpectedSyntax";
+        } else {
+            err.message = std::string("Invalid number: ") + what_str;
+        }
+        return err;
+    }
 }
 
 } // namespace cypher

@@ -298,11 +298,13 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     return BoundExpression(std::move(sub));
                 }
 
+                // Temporal member access for datetime/time/duration/any types.
+                // For ANY: if the property name matches a temporal field, use the
+                // typed accessor. If not, fall through to the subscript path below
+                // so runtime map access (or null propagation) can handle it.
                 if ((obj_type.kind == BoundTypeKind::DATETIME || obj_type.kind == BoundTypeKind::TIME ||
                      obj_type.kind == BoundTypeKind::DURATION) ||
-                    obj_type.kind == BoundTypeKind::STRING || obj_type.kind == BoundTypeKind::ANY) {
-                    // Temporal member access: convert temporal.field to __temporal_field__(temporal, field_enum)
-                    // Try each field enum type to find a match
+                    obj_type.kind == BoundTypeKind::ANY) {
                     int64_t field_int = -1;
                     bool returns_string = false;
 
@@ -317,25 +319,37 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                         returns_string = false;
                     }
 
-                    if (field_int < 0) {
+                    if (field_int >= 0) {
+                        auto* func = func_registry_.lookup("__temporal_field__", {obj_type, BoundType::Int64()});
+                        if (!func) {
+                            error("Temporal field accessor not registered");
+                            return std::nullopt;
+                        }
+                        auto fc = std::make_unique<BoundFunctionCall>();
+                        fc->func_def = func;
+                        fc->args.push_back(std::move(*obj));
+                        fc->args.push_back(BoundLiteral(field_int));
+                        fc->return_type = returns_string ? BoundType::String() : BoundType::Int64();
+                        return BoundExpression(std::move(fc));
+                    }
+                    // For ANY: no temporal field matched, fall through to subscript
+                    if (obj_type.kind != BoundTypeKind::ANY) {
                         error("Unknown temporal field: '" + ptr->property + "'");
                         return std::nullopt;
                     }
-
-                    auto* func = func_registry_.lookup("__temporal_field__", {obj_type, BoundType::Int64()});
-                    if (!func) {
-                        error("Temporal field accessor not registered");
-                        return std::nullopt;
-                    }
-                    auto fc = std::make_unique<BoundFunctionCall>();
-                    fc->func_def = func;
-                    fc->args.push_back(std::move(*obj));
-                    fc->args.push_back(BoundLiteral(field_int));
-                    fc->return_type = returns_string ? BoundType::String() : BoundType::Int64();
-                    return BoundExpression(std::move(fc));
                 }
 
-                error("Property access on non-vertex/edge/map type: " + obj_type.toString());
+                // NULL_TYPE and ANY (non-temporal): produce subscript so the
+                // evaluator can propagate null or perform runtime map access.
+                if (obj_type.kind == BoundTypeKind::NULL_TYPE || obj_type.kind == BoundTypeKind::ANY) {
+                    auto sub = std::make_unique<BoundSubscript>();
+                    sub->list = std::move(*obj);
+                    sub->index = BoundLiteral(std::string(ptr->property));
+                    sub->result_type = BoundType::Any();
+                    return BoundExpression(std::move(sub));
+                }
+
+                error("TypeError: InvalidArgumentType");
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
                 auto obj = bindExpression(ptr->object);
