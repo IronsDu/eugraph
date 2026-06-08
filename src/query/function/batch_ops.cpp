@@ -971,12 +971,6 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         }
     }
 
-    // List-specific operations (accept ANY for property round-trip)
-    if ((left_type == BTK::LIST || left_type == BTK::ANY) || (right_type == BTK::LIST || right_type == BTK::ANY)) {
-        if (op == BO::ADD)
-            return listConcatBatch;
-    }
-
     // Int64-specific operations
     if (left_type == BTK::INT64 && right_type == BTK::INT64) {
         switch (op) {
@@ -1079,6 +1073,13 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         default:
             return nullptr;
         }
+    }
+
+    // List-specific operations (accept ANY for property round-trip)
+    // Must be after temporal checks so temporal+ANY ADD is correctly dispatched
+    if ((left_type == BTK::LIST || left_type == BTK::ANY) || (right_type == BTK::LIST || right_type == BTK::ANY)) {
+        if (op == BO::ADD)
+            return listConcatBatch;
     }
 
     return nullptr;
