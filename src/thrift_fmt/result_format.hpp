@@ -48,18 +48,28 @@ inline std::string formatDouble(double d) {
         }
     };
 
+    // Find the shortest fixed-decimal representation that round-trips.
+    // Try progressively fewer fractional digits to avoid noise like
+    // "0.0000099999999999999" when "0.00001" suffices.
     auto try_fixed = [&](double d) -> std::string {
+        for (int prec = 0; prec <= std::numeric_limits<double>::max_digits10; ++prec) {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(prec) << d;
+            std::string f = oss.str();
+            auto dot = f.find('.');
+            if (dot != std::string::npos) {
+                size_t end = f.size() - 1;
+                while (end > dot + 1 && f[end] == '0')
+                    --end;
+                f.erase(end + 1);
+            }
+            if (std::stod(f) == d)
+                return f;
+        }
+        // Fallback: max precision (should never fail to round-trip)
         std::ostringstream oss;
         oss << std::fixed << std::setprecision(std::numeric_limits<double>::max_digits10) << d;
-        std::string f = oss.str();
-        auto dot = f.find('.');
-        if (dot != std::string::npos) {
-            size_t end = f.size() - 1;
-            while (end > dot + 1 && f[end] == '0')
-                --end;
-            f.erase(end + 1);
-        }
-        return f;
+        return oss.str();
     };
 
     // Try digits10 first (shorter), then max_digits10. Pick the shorter
@@ -80,10 +90,12 @@ inline std::string formatDouble(double d) {
     else
         s = s_m10; // fallback
 
-    // If defaultfloat produced scientific notation, try fixed as well
+    // If defaultfloat produced scientific notation, try fixed as well.
+    // Prefer fixed decimal unless it is excessively long (>20 chars),
+    // matching Cypher TCK expectation for human-readable ranges.
     if (s.find('e') != std::string::npos || s.find('E') != std::string::npos) {
         std::string fixed = try_fixed(d);
-        if (fixed.size() <= s.size() && std::stod(fixed) == d)
+        if (fixed.size() <= 20 && std::stod(fixed) == d)
             return fixed;
     }
 

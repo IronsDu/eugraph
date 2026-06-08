@@ -155,7 +155,7 @@ fragment ExponentPart: [e] [+-]? Digits;
 fragment HexDigits  : '0x' HexDigit ((HexDigit | '_')* HexDigit)?;
 fragment HexDigit   : [0-9a-f];
 fragment OctalDigit : '0' Digits;
-fragment Digits     : [1-9] ([0-9_]* [0-9])?;
+fragment Digits     : [0-9] ([0-9_]* [0-9])?;
 
 fragment LetterOrDigit: Letter | [0-9];
 

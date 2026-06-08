@@ -443,7 +443,12 @@ inline std::string expressionToString(const Expression& expr) {
             if constexpr (std::is_same_v<OpType, Variable>) {
                 return ptr->name;
             } else if constexpr (std::is_same_v<OpType, PropertyAccess>) {
-                return expressionToString(ptr->object) + "." + ptr->property;
+                auto obj_str = expressionToString(ptr->object);
+                if (std::holds_alternative<std::unique_ptr<SubscriptExpr>>(ptr->object) ||
+                    std::holds_alternative<std::unique_ptr<SliceExpr>>(ptr->object)) {
+                    obj_str = "(" + obj_str + ")";
+                }
+                return obj_str + "." + ptr->property;
             } else if constexpr (std::is_same_v<OpType, LabelCastExpr>) {
                 return expressionToString(ptr->object) + "::" + ptr->label;
             } else if constexpr (std::is_same_v<OpType, Literal>) {
@@ -484,6 +489,17 @@ inline std::string expressionToString(const Expression& expr) {
                     }
                 }
                 return r + ")";
+            } else if constexpr (std::is_same_v<OpType, SubscriptExpr>) {
+                return expressionToString(ptr->list) + "[" + expressionToString(ptr->index) + "]";
+            } else if constexpr (std::is_same_v<OpType, SliceExpr>) {
+                std::string r = expressionToString(ptr->list) + "[";
+                if (ptr->from)
+                    r += expressionToString(*ptr->from);
+                r += "..";
+                if (ptr->to)
+                    r += expressionToString(*ptr->to);
+                r += "]";
+                return r;
             } else {
                 return "?";
             }

@@ -15,15 +15,19 @@
 
 namespace {
 void classifyError(const std::string& errMsg, std::string& errorType, std::string& errorPhase) {
-    if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
-        errMsg.find("parse") != std::string::npos || errMsg.find("UndefinedVariable") != std::string::npos ||
-        errMsg.find("VariableAlreadyBound") != std::string::npos ||
-        errMsg.find("InvalidArgumentType") != std::string::npos ||
-        errMsg.find("DifferentColumnsInUnion") != std::string::npos ||
-        errMsg.find("InvalidClauseComposition") != std::string::npos ||
-        errMsg.find("NoSingleRelationshipType") != std::string::npos ||
-        errMsg.find("CreatingVarLength") != std::string::npos ||
-        errMsg.find("InvalidParameterUse") != std::string::npos) {
+    if (errMsg.find("TypeError:") != std::string::npos) {
+        errorType = "TypeError";
+        errorPhase = "compile time";
+    } else if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
+               errMsg.find("parse") != std::string::npos || errMsg.find("UndefinedVariable") != std::string::npos ||
+               errMsg.find("VariableAlreadyBound") != std::string::npos ||
+               errMsg.find("InvalidUnicodeLiteral") != std::string::npos ||
+               errMsg.find("InvalidArgumentType") != std::string::npos ||
+               errMsg.find("DifferentColumnsInUnion") != std::string::npos ||
+               errMsg.find("InvalidClauseComposition") != std::string::npos ||
+               errMsg.find("NoSingleRelationshipType") != std::string::npos ||
+               errMsg.find("CreatingVarLength") != std::string::npos ||
+               errMsg.find("InvalidParameterUse") != std::string::npos) {
         errorType = "SyntaxError";
         errorPhase = "compile time";
     } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
@@ -340,7 +344,14 @@ bool TckContext::isQuerySupported(const std::string& query) {
     auto result = parser.parse(query);
 
     if (std::holds_alternative<cypher::ParseError>(result)) {
-        spdlog::info("[TCK] skipping: parse error — {}", std::get<cypher::ParseError>(result).message);
+        auto& msg = std::get<cypher::ParseError>(result).message;
+        // If the parser produced a structured error (SyntaxError/SemanticError),
+        // the syntax IS supported — our parser understood and rejected it.
+        // Allow the query to execute so TCK error-assertion steps can validate.
+        if (msg.find("SyntaxError:") != std::string::npos || msg.find("SemanticError:") != std::string::npos) {
+            return true;
+        }
+        spdlog::info("[TCK] skipping: parse error — {}", msg);
         return false;
     }
 
@@ -406,6 +417,16 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "InvalidArgumentType";
                 } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
                     lastErrorDetail = "MergeReadOwnWrites";
+                } else if (errMsg.find("FloatingPointOverflow") != std::string::npos) {
+                    lastErrorDetail = "FloatingPointOverflow";
+                } else if (errMsg.find("IntegerOverflow") != std::string::npos) {
+                    lastErrorDetail = "IntegerOverflow";
+                } else if (errMsg.find("InvalidUnicodeLiteral") != std::string::npos) {
+                    lastErrorDetail = "InvalidUnicodeLiteral";
+                } else if (errMsg.find("InvalidNumberLiteral") != std::string::npos) {
+                    lastErrorDetail = "InvalidNumberLiteral";
+                } else if (errMsg.find("UnexpectedSyntax") != std::string::npos) {
+                    lastErrorDetail = "UnexpectedSyntax";
                 } else {
                     lastErrorDetail = errMsg;
                 }
@@ -457,6 +478,16 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "InvalidArgumentType";
         } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
             lastErrorDetail = "MergeReadOwnWrites";
+        } else if (errMsg.find("FloatingPointOverflow") != std::string::npos) {
+            lastErrorDetail = "FloatingPointOverflow";
+        } else if (errMsg.find("IntegerOverflow") != std::string::npos) {
+            lastErrorDetail = "IntegerOverflow";
+        } else if (errMsg.find("InvalidUnicodeLiteral") != std::string::npos) {
+            lastErrorDetail = "InvalidUnicodeLiteral";
+        } else if (errMsg.find("InvalidNumberLiteral") != std::string::npos) {
+            lastErrorDetail = "InvalidNumberLiteral";
+        } else if (errMsg.find("UnexpectedSyntax") != std::string::npos) {
+            lastErrorDetail = "UnexpectedSyntax";
         } else {
             lastErrorDetail = errMsg;
         }
