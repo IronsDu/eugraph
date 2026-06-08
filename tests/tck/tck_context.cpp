@@ -421,6 +421,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "FloatingPointOverflow";
                 } else if (errMsg.find("IntegerOverflow") != std::string::npos) {
                     lastErrorDetail = "IntegerOverflow";
+                } else if (errMsg.find("InvalidUnicodeCharacter") != std::string::npos) {
+                    lastErrorDetail = "InvalidUnicodeCharacter";
                 } else if (errMsg.find("InvalidUnicodeLiteral") != std::string::npos) {
                     lastErrorDetail = "InvalidUnicodeLiteral";
                 } else if (errMsg.find("InvalidNumberLiteral") != std::string::npos) {
@@ -482,6 +484,8 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "FloatingPointOverflow";
         } else if (errMsg.find("IntegerOverflow") != std::string::npos) {
             lastErrorDetail = "IntegerOverflow";
+        } else if (errMsg.find("InvalidUnicodeCharacter") != std::string::npos) {
+            lastErrorDetail = "InvalidUnicodeCharacter";
         } else if (errMsg.find("InvalidUnicodeLiteral") != std::string::npos) {
             lastErrorDetail = "InvalidUnicodeLiteral";
         } else if (errMsg.find("InvalidNumberLiteral") != std::string::npos) {

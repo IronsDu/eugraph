@@ -922,3 +922,66 @@ TEST_F(CypherParserTest, RemoveVertexLabel) {
     EXPECT_EQ(remove->items[0].kind, RemoveItem::Kind::LABEL);
     EXPECT_EQ(remove->items[0].name, "Employee");
 }
+
+TEST_F(CypherParserTest, MathDivMult) {
+    auto stmt = parseSuccess("RETURN 12 / 4 * 3 - 2 * 4");
+    auto& query = getRegularQuery(stmt);
+    auto& ret = *std::get<std::unique_ptr<ReturnClause>>(query.first.clauses[0]);
+    ASSERT_EQ(ret.items.size(), 1);
+    auto expr_str = expressionToString(ret.items[0].expr);
+    EXPECT_EQ(expr_str, "12 / 4 * 3 - 2 * 4");
+}
+
+TEST_F(CypherParserTest, MathDivOnly) {
+    auto stmt = parseSuccess("RETURN 12 / 4");
+    auto& query = getRegularQuery(stmt);
+    auto& ret = *std::get<std::unique_ptr<ReturnClause>>(query.first.clauses[0]);
+    ASSERT_EQ(ret.items.size(), 1);
+    auto expr_str = expressionToString(ret.items[0].expr);
+    EXPECT_EQ(expr_str, "12 / 4");
+}
+
+TEST_F(CypherParserTest, MathMultOnly) {
+    auto stmt = parseSuccess("RETURN 3 * 5");
+    auto& query = getRegularQuery(stmt);
+    auto& ret = *std::get<std::unique_ptr<ReturnClause>>(query.first.clauses[0]);
+    ASSERT_EQ(ret.items.size(), 1);
+    auto expr_str = expressionToString(ret.items[0].expr);
+    EXPECT_EQ(expr_str, "3 * 5");
+}
+
+TEST_F(CypherParserTest, MathModOnly) {
+    auto stmt = parseSuccess("RETURN 7 % 3");
+    auto& query = getRegularQuery(stmt);
+    auto& ret = *std::get<std::unique_ptr<ReturnClause>>(query.first.clauses[0]);
+    ASSERT_EQ(ret.items.size(), 1);
+    auto expr_str = expressionToString(ret.items[0].expr);
+    EXPECT_EQ(expr_str, "7 % 3");
+}
+
+TEST_F(CypherParserTest, MathDivMultMod) {
+    auto stmt = parseSuccess("RETURN 12 / 4 * 3 % 5");
+    auto& query = getRegularQuery(stmt);
+    auto& ret = *std::get<std::unique_ptr<ReturnClause>>(query.first.clauses[0]);
+    ASSERT_EQ(ret.items.size(), 1);
+    auto expr_str = expressionToString(ret.items[0].expr);
+    EXPECT_EQ(expr_str, "12 / 4 * 3 % 5");
+}
+
+TEST_F(CypherParserTest, MathFunctionAbs) {
+    auto stmt = parseSuccess("RETURN abs(-1)");
+    auto& query = getRegularQuery(stmt);
+    auto& ret = *std::get<std::unique_ptr<ReturnClause>>(query.first.clauses[0]);
+    ASSERT_EQ(ret.items.size(), 1);
+    auto expr_str = expressionToString(ret.items[0].expr);
+    EXPECT_EQ(expr_str, "abs(-1)");
+}
+
+TEST_F(CypherParserTest, MathFunctionSqrt) {
+    auto stmt = parseSuccess("RETURN sqrt(12.96)");
+    auto& query = getRegularQuery(stmt);
+    auto& ret = *std::get<std::unique_ptr<ReturnClause>>(query.first.clauses[0]);
+    ASSERT_EQ(ret.items.size(), 1);
+    auto expr_str = expressionToString(ret.items[0].expr);
+    EXPECT_EQ(expr_str, "sqrt(12.96)");
+}

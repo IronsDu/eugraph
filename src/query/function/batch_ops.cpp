@@ -159,6 +159,109 @@ void listConcatBatch(const Column& left, const Column& right, Column& result, si
     }
 }
 
+// ==================== Generic numeric dispatch (ANY + ANY fallback) ====================
+
+namespace {
+
+// Extract numeric values for arithmetic: promotes int64→double when mixed.
+inline std::pair<double, double> numericPair(const Value& lv, const Value& rv) {
+    if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
+        return {std::get<double>(lv), std::get<double>(rv)};
+    if (std::holds_alternative<double>(lv) && std::holds_alternative<int64_t>(rv))
+        return {std::get<double>(lv), static_cast<double>(std::get<int64_t>(rv))};
+    if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<double>(rv))
+        return {static_cast<double>(std::get<int64_t>(lv)), std::get<double>(rv)};
+    if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
+        return {static_cast<double>(std::get<int64_t>(lv)), static_cast<double>(std::get<int64_t>(rv))};
+    return {std::nan(""), std::nan("")};
+}
+
+} // namespace
+
+void genericAddBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
+            result.setValue(i, Value(std::get<int64_t>(lv) + std::get<int64_t>(rv)));
+        else if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv))
+            result.setValue(i, Value(std::get<std::string>(lv) + std::get<std::string>(rv)));
+        else {
+            auto [a, b] = numericPair(lv, rv);
+            if (!std::isnan(a))
+                result.setValue(i, Value(a + b));
+            else
+                result.setNull(i);
+        }
+    }
+}
+
+#define DEF_GENERIC_NUMERIC_BATCH(name, op)                                                                            \
+    void name(const Column& left, const Column& right, Column& result, size_t count) {                                 \
+        for (size_t i = 0; i < count; ++i) {                                                                           \
+            auto [a, b] = numericPair(left.getValue(i), right.getValue(i));                                            \
+            if (!std::isnan(a))                                                                                        \
+                result.setValue(i, Value(a op b));                                                                     \
+            else                                                                                                       \
+                result.setNull(i);                                                                                     \
+        }                                                                                                              \
+    }
+
+DEF_GENERIC_NUMERIC_BATCH(genericSubBatch, -)
+DEF_GENERIC_NUMERIC_BATCH(genericMulBatch, *)
+DEF_GENERIC_NUMERIC_BATCH(genericDivBatch, /)
+
+void genericPowBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        auto [a, b] = numericPair(left.getValue(i), right.getValue(i));
+        if (!std::isnan(a))
+            result.setValue(i, Value(std::pow(a, b)));
+        else
+            result.setNull(i);
+    }
+}
+
+void genericModBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
+            result.setValue(i, Value(std::get<int64_t>(lv) % std::get<int64_t>(rv)));
+        else {
+            auto [a, b] = numericPair(lv, rv);
+            if (!std::isnan(a))
+                result.setValue(i, Value(std::fmod(a, b)));
+            else
+                result.setNull(i);
+        }
+    }
+}
+
+#define DEF_GENERIC_CMP_BATCH(name, op)                                                                                \
+    void name(const Column& left, const Column& right, Column& result, size_t count) {                                 \
+        for (size_t i = 0; i < count; ++i) {                                                                           \
+            Value lv = left.getValue(i);                                                                               \
+            Value rv = right.getValue(i);                                                                              \
+            if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))                            \
+                result.setValue(i, Value(std::get<int64_t>(lv) op std::get<int64_t>(rv)));                             \
+            else {                                                                                                     \
+                auto [a, b] = numericPair(lv, rv);                                                                     \
+                if (!std::isnan(a))                                                                                    \
+                    result.setValue(i, Value(a op b));                                                                 \
+                else                                                                                                   \
+                    result.setNull(i);                                                                                 \
+            }                                                                                                          \
+        }                                                                                                              \
+    }
+
+DEF_GENERIC_CMP_BATCH(genericLtBatch, <)
+DEF_GENERIC_CMP_BATCH(genericGtBatch, >)
+DEF_GENERIC_CMP_BATCH(genericLteBatch, <=)
+DEF_GENERIC_CMP_BATCH(genericGteBatch, >=)
+
+#undef DEF_GENERIC_NUMERIC_BATCH
+#undef DEF_GENERIC_CMP_BATCH
+
 // ==================== Int64 arithmetic batch functions ====================
 
 void int64AddBatch(const Column& left, const Column& right, Column& result, size_t count) {
@@ -1024,6 +1127,107 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             return doubleGteBatch;
         default:
             return nullptr;
+        }
+    }
+
+    // ANY-type fallback: properties stored as ANY need runtime dispatch.
+    // ANY + concrete → use concrete type's batch function.
+    // ANY + ANY → use generic dispatch that inspects runtime Value types.
+    if (left_type == BTK::ANY || right_type == BTK::ANY) {
+        auto concrete = (left_type != BTK::ANY) ? left_type : (right_type != BTK::ANY) ? right_type : BTK::ANY;
+        switch (concrete) {
+        case BTK::INT64:
+            switch (op) {
+            case BO::ADD:
+                return int64AddBatch;
+            case BO::SUB:
+                return int64SubBatch;
+            case BO::MUL:
+                return int64MulBatch;
+            case BO::DIV:
+                return int64DivBatch;
+            case BO::MOD:
+                return int64ModBatch;
+            case BO::POW:
+                return int64PowBatch;
+            case BO::LT:
+                return int64LtBatch;
+            case BO::GT:
+                return int64GtBatch;
+            case BO::LTE:
+                return int64LteBatch;
+            case BO::GTE:
+                return int64GteBatch;
+            default:
+                return nullptr;
+            }
+        case BTK::DOUBLE:
+            switch (op) {
+            case BO::ADD:
+                return doubleAddBatch;
+            case BO::SUB:
+                return doubleSubBatch;
+            case BO::MUL:
+                return doubleMulBatch;
+            case BO::DIV:
+                return doubleDivBatch;
+            case BO::MOD:
+                return doubleModBatch;
+            case BO::POW:
+                return doublePowBatch;
+            case BO::LT:
+                return doubleLtBatch;
+            case BO::GT:
+                return doubleGtBatch;
+            case BO::LTE:
+                return doubleLteBatch;
+            case BO::GTE:
+                return doubleGteBatch;
+            default:
+                return nullptr;
+            }
+        case BTK::STRING:
+            switch (op) {
+            case BO::ADD:
+                return stringConcatBatch;
+            case BO::LT:
+                return stringLtBatch;
+            case BO::GT:
+                return stringGtBatch;
+            case BO::LTE:
+                return stringLteBatch;
+            case BO::GTE:
+                return stringGteBatch;
+            default:
+                return nullptr;
+            }
+        case BTK::ANY: // both sides are ANY — runtime type dispatch
+            switch (op) {
+            case BO::ADD:
+                return genericAddBatch;
+            case BO::SUB:
+                return genericSubBatch;
+            case BO::MUL:
+                return genericMulBatch;
+            case BO::DIV:
+                return genericDivBatch;
+            case BO::MOD:
+                return genericModBatch;
+            case BO::POW:
+                return genericPowBatch;
+            case BO::LT:
+                return genericLtBatch;
+            case BO::GT:
+                return genericGtBatch;
+            case BO::LTE:
+                return genericLteBatch;
+            case BO::GTE:
+                return genericGteBatch;
+            default:
+                return nullptr;
+            }
+        default:
+            break;
         }
     }
 

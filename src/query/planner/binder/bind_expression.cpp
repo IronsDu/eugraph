@@ -254,6 +254,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                         auto saved_var_name = col_ref.name;
                         auto prop_ref = std::make_unique<BoundPropertyRef>();
                         prop_ref->object = std::move(*obj);
+                        prop_ref->property_name = ptr->property;
                         BoundType merged = BoundType::Null();
                         for (auto& [lid, pd] : candidates) {
                             BoundPropertyRef::ResolvedProperty rp;

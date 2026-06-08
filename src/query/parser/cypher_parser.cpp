@@ -395,9 +395,13 @@ private:
         if (muls.size() == 1)
             return buildMulDivExpr(muls[0]);
         Expression r = buildMulDivExpr(muls[0]);
-        for (size_t i = 1; i < muls.size(); i++)
-            r = makeBinaryOp(ctx->PLUS(i - 1) ? BinaryOperator::ADD : BinaryOperator::SUB, std::move(r),
-                             buildMulDivExpr(muls[i]));
+        for (size_t i = 1; i < muls.size(); i++) {
+            // Children layout: multDivExpr, operator, multDivExpr, operator, ...
+            auto* opNode = static_cast<antlr4::tree::TerminalNode*>(ctx->children[2 * i - 1]);
+            BinaryOperator op =
+                (opNode->getSymbol()->getType() == AP::PLUS) ? BinaryOperator::ADD : BinaryOperator::SUB;
+            r = makeBinaryOp(op, std::move(r), buildMulDivExpr(muls[i]));
+        }
         return r;
     }
 
@@ -407,9 +411,17 @@ private:
             return buildPowerExpr(pows[0]);
         Expression r = buildPowerExpr(pows[0]);
         for (size_t i = 1; i < pows.size(); i++) {
-            BinaryOperator op = ctx->MULT(i - 1)  ? BinaryOperator::MUL
-                                : ctx->DIV(i - 1) ? BinaryOperator::DIV
-                                                  : BinaryOperator::MOD;
+            // Children layout: powerExpression, operator, powerExpression, operator, ...
+            auto& opNode = static_cast<antlr4::tree::TerminalNode&>(*ctx->children[2 * i - 1]);
+            BinaryOperator op = BinaryOperator::MOD; // fallback
+            switch (opNode.getSymbol()->getType()) {
+            case AP::MULT:
+                op = BinaryOperator::MUL;
+                break;
+            case AP::DIV:
+                op = BinaryOperator::DIV;
+                break;
+            }
             r = makeBinaryOp(op, std::move(r), buildPowerExpr(pows[i]));
         }
         return r;
@@ -1155,6 +1167,13 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
 }
 
 std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& cypher_text) {
+    // U+2014 (EM DASH) is used as a minus sign in some contexts but is
+    // invalid in Cypher: SyntaxError: InvalidUnicodeCharacter
+    if (cypher_text.find("\xE2\x80\x94") != std::string::npos) {
+        ParseError err;
+        err.message = "SyntaxError: InvalidUnicodeCharacter";
+        return err;
+    }
     std::string preprocessed;
     try {
         preprocessed = preprocessIntegerLiterals(cypher_text);
