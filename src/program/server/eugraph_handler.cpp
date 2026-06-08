@@ -665,6 +665,49 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
     std::unordered_map<std::string, Value> params;
     if (parameters && !parameters->empty()) {
         static thread_local cypher::CypherQueryParser parser;
+
+        // Recursively convert AST expression to runtime Value.
+        // Returns nullopt for null literal (not inside a collection).
+        auto exprToValue = [](auto& self, const cypher::Expression& expr) -> std::optional<Value> {
+            if (auto* lit = std::get_if<std::unique_ptr<cypher::Literal>>(&expr)) {
+                if (!*lit)
+                    return std::nullopt;
+                return std::visit(
+                    [](const auto& v) -> std::optional<Value> {
+                        using V = std::decay_t<decltype(v)>;
+                        if constexpr (std::is_same_v<V, cypher::NullValue>) {
+                            return Value{}; // null → monostate
+                        } else {
+                            return Value(v);
+                        }
+                    },
+                    (*lit)->value);
+            }
+            if (auto* map = std::get_if<std::unique_ptr<cypher::MapExpr>>(&expr)) {
+                if (!*map)
+                    return std::nullopt;
+                MapValue mv;
+                for (auto& [k, v] : (*map)->entries) {
+                    auto val = self(self, v);
+                    if (val)
+                        mv.entries.push_back({k, ValueStorage{std::move(*val)}});
+                }
+                return Value(std::move(mv));
+            }
+            if (auto* list = std::get_if<std::unique_ptr<cypher::ListExpr>>(&expr)) {
+                if (!*list)
+                    return std::nullopt;
+                ListValue lv;
+                for (auto& elem : (*list)->elements) {
+                    auto val = self(self, elem);
+                    if (val)
+                        lv.elements.push_back(ValueStorage{std::move(*val)});
+                }
+                return Value(std::move(lv));
+            }
+            return std::nullopt;
+        };
+
         for (const auto& [name, literal_str] : *parameters) {
             auto result = parser.parse("RETURN " + literal_str);
             if (std::holds_alternative<cypher::Statement>(result)) {
@@ -673,55 +716,9 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
                 if (rq && *rq && !(*rq)->first.clauses.empty()) {
                     auto* ret = std::get_if<std::unique_ptr<cypher::ReturnClause>>(&(*rq)->first.clauses[0]);
                     if (ret && *ret && !(*ret)->items.empty()) {
-                        const auto& expr = (*ret)->items[0].expr;
-                        if (auto* lit = std::get_if<std::unique_ptr<cypher::Literal>>(&expr)) {
-                            if (*lit) {
-                                std::visit(
-                                    [&params, &name](const auto& v) {
-                                        using V = std::decay_t<decltype(v)>;
-                                        if constexpr (!std::is_same_v<V, cypher::NullValue>) {
-                                            params[name] = Value(v);
-                                        }
-                                    },
-                                    (*lit)->value);
-                            }
-                        } else if (auto* map = std::get_if<std::unique_ptr<cypher::MapExpr>>(&expr)) {
-                            if (*map) {
-                                MapValue mv;
-                                for (auto& [k, v] : (*map)->entries) {
-                                    auto* entry_lit = std::get_if<std::unique_ptr<cypher::Literal>>(&v);
-                                    if (entry_lit && *entry_lit) {
-                                        std::visit(
-                                            [&mv, &k](const auto& cv) {
-                                                using V = std::decay_t<decltype(cv)>;
-                                                if constexpr (!std::is_same_v<V, cypher::NullValue>) {
-                                                    mv.entries.push_back({k, ValueStorage{Value(cv)}});
-                                                }
-                                            },
-                                            (*entry_lit)->value);
-                                    }
-                                }
-                                params[name] = Value(std::move(mv));
-                            }
-                        } else if (auto* list = std::get_if<std::unique_ptr<cypher::ListExpr>>(&expr)) {
-                            if (*list) {
-                                ListValue lv;
-                                for (auto& elem : (*list)->elements) {
-                                    auto* elem_lit = std::get_if<std::unique_ptr<cypher::Literal>>(&elem);
-                                    if (elem_lit && *elem_lit) {
-                                        std::visit(
-                                            [&lv](const auto& cv) {
-                                                using V = std::decay_t<decltype(cv)>;
-                                                if constexpr (!std::is_same_v<V, cypher::NullValue>) {
-                                                    lv.elements.push_back(ValueStorage{Value(cv)});
-                                                }
-                                            },
-                                            (*elem_lit)->value);
-                                    }
-                                }
-                                params[name] = Value(std::move(lv));
-                            }
-                        }
+                        auto val = exprToValue(exprToValue, (*ret)->items[0].expr);
+                        if (val)
+                            params[name] = std::move(*val);
                     }
                 }
             }

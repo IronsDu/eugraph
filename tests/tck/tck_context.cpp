@@ -405,6 +405,9 @@ void TckContext::executeQuery(const std::string& query) {
                 std::string errMsg = batch.exception().what().toStdString();
                 spdlog::info("[TCK] Stream error: {}", errMsg);
                 classifyError(errMsg, lastErrorType, lastErrorPhase);
+                // Stream errors always occur at runtime (post-bind execution).
+                if (lastErrorPhase == "compile time")
+                    lastErrorPhase = "runtime";
                 // Extract error detail
                 if (errMsg.find("UndefinedVariable") != std::string::npos) {
                     lastErrorDetail = "UndefinedVariable";
@@ -417,6 +420,8 @@ void TckContext::executeQuery(const std::string& query) {
                 } else if (errMsg.find("must be an integer") != std::string::npos) {
                     lastErrorDetail = "InvalidArgumentType";
                 } else if (errMsg.find("Duplicate map key") != std::string::npos) {
+                    lastErrorDetail = "InvalidArgumentType";
+                } else if (errMsg.find("InvalidArgumentType") != std::string::npos) {
                     lastErrorDetail = "InvalidArgumentType";
                 } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
                     lastErrorDetail = "MergeReadOwnWrites";

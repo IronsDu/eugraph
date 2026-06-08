@@ -1,7 +1,7 @@
 # TCK 测试结果分类报告
 
-**日期**: 2026-06-08
-**分支**: feature/update-tck-report
+**日期**: 2026-06-09
+**分支**: feature/boolean-map-null-fixes
 **基线**: main
 
 ---
@@ -22,9 +22,9 @@
 |------|--------|------|------|---------|
 | Literals | 131 | **131** | 0 | ✅ 已全部修复 |
 | Conditional | 13 | **13** | 0 | ✅ 全部通过 |
-| Boolean | 150 | 148 | 2 | 2 个边缘 case |
-| Map | 44 | 38 | 6 | 属性访问 null 传播、非法 key 检测 |
-| Null | 44 | 31 | 13 | null 语义边界 |
+| Boolean | 150 | **150** | 0 | ✅ 已全部修复 |
+| Map | 44 | **44** | 0 | ✅ 已全部修复 |
+| Null | 44 | **42** | 2 | 2 个预存属性显示问题 (IS NULL 大小写) |
 | Path | 7 | 5 | 2 | 路径表达式 |
 | Mathematical | 6 | **6** | 0 | ✅ 已全部修复 |
 | String | 32 | 8 | 24 | left()/right()/substring()/replace() 等缺实现 |
@@ -71,6 +71,7 @@
 | Phase 5 | feature/list-op-fixes | 负数下标/切片、MOD/POW、list 拼接、toBoolean/toUpper/toLower、reverse 字符串、量化器 NULL 处理 |
 | Phase 6 | fix/literal-map-formatting | Literals1-8 全部 131/131：Unicode 转义、Digits 规则、hex/oct 检测、ANTLR 错误前缀、属性访问 null 传播、Map key 检测 |
 | Phase 7 | feature/update-tck-report | Mathematical 6/6：abs/sqrt 函数实现、ANTLR 运算符 token 索引修复、expressionToString 括号/去尾零、U+2014 检测、ANY 类型算术退路 |
+| Phase 8 | feature/boolean-map-null-fixes | Map 44/44：递归参数解析(嵌套 Map/List/null)、运行时 subscript 类型错误抛出/分类、LeftJoin projection pushdown。Null 42/44：IN + null binder 放宽、IN null 元素求值修复、OPTIONAL MATCH 首子句支持、OPTIONAL MATCH 属性加载、运行时错误分类修正 |
 
 ---
 
