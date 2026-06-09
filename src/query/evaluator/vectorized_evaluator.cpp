@@ -160,6 +160,10 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 evalQuantifierExpr(QuantifierKind::SINGLE, val->loop_column_index, val->list_expr, val->where_pred,
                                    input, col, count);
                 return {&col, true};
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>>) {
+                auto& col = acquireTempColumn(binder::BoundTypeKind::LIST, count);
+                evalListComprehension(*val, input, col, count);
+                return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
                 auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
                 evalCase(*val, input, col, count);

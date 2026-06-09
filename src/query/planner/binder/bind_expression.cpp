@@ -495,6 +495,52 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 }
                 bm->result_type = BoundType::Map(BoundType::String(), std::move(merged_value_type));
                 return BoundExpression(std::move(bm));
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                auto list_expr = bindExpression(ptr->list_expr);
+                if (!list_expr)
+                    return std::nullopt;
+
+                const BoundType& list_type = getBoundExprType(*list_expr);
+                BoundType elem_type = (list_type.kind == BoundTypeKind::LIST && list_type.element_type)
+                                          ? BoundType::clone(*list_type.element_type)
+                                          : BoundType::Any();
+
+                // Register loop variable in BindContext
+                uint32_t loop_col = nextColumnIndex();
+                ctx_.symbols[ptr->variable] = makeColumnInfo(ptr->variable, BoundType::clone(elem_type));
+
+                std::optional<BoundExpression> where_pred;
+                if (ptr->where_pred) {
+                    where_pred = bindExpression(*ptr->where_pred);
+                    if (!where_pred) {
+                        ctx_.symbols.erase(ptr->variable);
+                        return std::nullopt;
+                    }
+                }
+
+                std::optional<BoundExpression> projection;
+                if (ptr->projection) {
+                    projection = bindExpression(*ptr->projection);
+                } else {
+                    auto var_expr = cypher::Expression(std::make_unique<cypher::Variable>(ptr->variable));
+                    projection = bindExpression(var_expr);
+                }
+                if (!projection) {
+                    ctx_.symbols.erase(ptr->variable);
+                    return std::nullopt;
+                }
+
+                // Remove loop variable from scope
+                ctx_.symbols.erase(ptr->variable);
+
+                auto lc = std::make_unique<BoundListComprehension>();
+                lc->variable = ptr->variable;
+                lc->loop_column_index = loop_col;
+                lc->list_expr = std::move(*list_expr);
+                lc->where_pred = std::move(where_pred);
+                lc->projection = std::move(*projection);
+                lc->result_type = BoundType::List(BoundType::clone(getBoundExprType(lc->projection)));
+                return BoundExpression(std::move(lc));
             } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
                 auto bound_list = bindExpression(ptr->list);
                 auto bound_index = bindExpression(ptr->index);
