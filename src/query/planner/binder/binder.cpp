@@ -17,6 +17,23 @@ void Binder::registerColumn(const std::string& name, BoundType type) {
     ctx_.next_column_index = idx + 1;
 }
 
+bool Binder::registerPatternVariable(const std::string& name, BoundType type, bool as_path) {
+    auto* existing = ctx_.lookup(name);
+    if (!existing) {
+        nextColumnIndex(); // allocate the next column index
+        ctx_.symbols[name] = makeColumnInfo(name, std::move(type));
+        return true;
+    }
+
+    if (isCompatibleForPatternUse(existing->type, type))
+        return true;
+
+    const char* error_code = as_path ? "VariableAlreadyBound" : "VariableTypeConflict";
+    error(std::string(error_code) + ": variable '" + name + "' already defined as " + existing->type.toString() +
+          " but used as " + type.toString());
+    return false;
+}
+
 // ==================== Statement Binding ====================
 
 std::optional<BoundStatement> Binder::bind(const cypher::Statement& stmt) {

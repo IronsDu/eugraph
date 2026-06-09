@@ -24,6 +24,7 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
     } else if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
                errMsg.find("parse") != std::string::npos || errMsg.find("UndefinedVariable") != std::string::npos ||
                errMsg.find("VariableAlreadyBound") != std::string::npos ||
+               errMsg.find("VariableTypeConflict") != std::string::npos ||
                errMsg.find("InvalidUnicodeLiteral") != std::string::npos ||
                errMsg.find("InvalidArgumentType") != std::string::npos ||
                errMsg.find("DifferentColumnsInUnion") != std::string::npos ||
@@ -413,6 +414,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "UndefinedVariable";
                 } else if (errMsg.find("VariableAlreadyBound") != std::string::npos) {
                     lastErrorDetail = "VariableAlreadyBound";
+                } else if (errMsg.find("VariableTypeConflict") != std::string::npos) {
+                    lastErrorDetail = "VariableTypeConflict";
                 } else if (errMsg.find("must be a non-negative integer") != std::string::npos) {
                     lastErrorDetail = "NegativeIntegerArgument";
                 } else if (errMsg.find("must be a constant expression") != std::string::npos) {
@@ -466,6 +469,8 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "UndefinedVariable";
         } else if (errMsg.find("VariableAlreadyBound") != std::string::npos) {
             lastErrorDetail = "VariableAlreadyBound";
+        } else if (errMsg.find("VariableTypeConflict") != std::string::npos) {
+            lastErrorDetail = "VariableTypeConflict";
         } else if (errMsg.find("DifferentColumnsInUnion") != std::string::npos) {
             lastErrorDetail = "DifferentColumnsInUnion";
         } else if (errMsg.find("InvalidClauseComposition") != std::string::npos) {

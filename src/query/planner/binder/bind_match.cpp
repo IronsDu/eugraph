@@ -301,6 +301,12 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                         error("Named path with mixed fixed/varlen chain is not supported yet");
                         return std::nullopt;
                     }
+                    auto* path_existing = ctx_.lookup(*pp.variable);
+                    if (path_existing && !isCompatibleForPatternUse(path_existing->type, BoundType::Path())) {
+                        error("VariableAlreadyBound: variable '" + *pp.variable + "' already defined as " +
+                              path_existing->type.toString() + " but used as path");
+                        return std::nullopt;
+                    }
                     varlen->path_variable = *pp.variable;
                     varlen->path_column_index = nextColumnIndex();
                     varlen->path_handled_by_varlen = true;
@@ -309,6 +315,13 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
 
                 // P2: handle named edge variable → LIST<EDGE>
                 if (edge_var) {
+                    auto* edge_existing = ctx_.lookup(*edge_var);
+                    if (edge_existing &&
+                        !isCompatibleForPatternUse(edge_existing->type, BoundType::List(BoundType::Edge()))) {
+                        error("VariableTypeConflict: variable '" + *edge_var + "' already defined as " +
+                              edge_existing->type.toString() + " but used as variable-length edge");
+                        return std::nullopt;
+                    }
                     varlen->edge_variable = *edge_var;
                     varlen->edge_column_index = nextColumnIndex();
                     ctx_.symbols[varlen->edge_variable] =
@@ -454,6 +467,12 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 *current);
 
             if (!path_already_handled) {
+                auto* path_existing = ctx_.lookup(*pp.variable);
+                if (path_existing && !isCompatibleForPatternUse(path_existing->type, BoundType::Path())) {
+                    error("VariableAlreadyBound: variable '" + *pp.variable + "' already defined as " +
+                          path_existing->type.toString() + " but used as path");
+                    return std::nullopt;
+                }
                 auto path_build = std::make_unique<BoundPathBuildOp>();
                 path_build->path_variable = *pp.variable;
                 path_build->path_column_index = nextColumnIndex();

@@ -16,6 +16,25 @@
 namespace eugraph {
 namespace binder {
 
+/// Check whether two BoundTypes are compatible when reusing a pattern variable.
+/// Graph types (VERTEX, EDGE, PATH) are mutually exclusive.
+/// Scalar types are compatible via implicit conversion.
+/// NULL is compatible with everything (like implicitCastCost).
+inline bool isCompatibleForPatternUse(const BoundType& existing, const BoundType& desired) {
+    if (existing.kind == desired.kind)
+        return true;
+    // NULL and ANY are compatible with everything (like implicitCastCost)
+    if (existing.kind == BoundTypeKind::NULL_TYPE || desired.kind == BoundTypeKind::NULL_TYPE ||
+        existing.kind == BoundTypeKind::ANY || desired.kind == BoundTypeKind::ANY)
+        return true;
+    auto isGraph = [](BoundTypeKind k) {
+        return k == BoundTypeKind::VERTEX || k == BoundTypeKind::EDGE || k == BoundTypeKind::PATH;
+    };
+    if (!isGraph(existing.kind) && !isGraph(desired.kind))
+        return desired.implicitCastCost(existing) >= 0;
+    return false;
+}
+
 /// Semantic analyzer: binds AST → BoundStatement with type resolution.
 ///
 /// Responsibilities:
@@ -120,6 +139,23 @@ private:
     /// Remove EXISTS expressions (and their wrapping NOT, if any) from the top-level
     /// AND chain. Returns nullopt if the entire expression was EXISTS-related.
     static std::optional<cypher::Expression> removeExistsFromWhere(const cypher::Expression& expr);
+
+    // ── Variable registration ──
+
+    /// Register a pattern variable or check type compatibility with an existing binding.
+    /// Pattern variables (nodes, relationships, paths) are exclusive:
+    /// a variable cannot be both a VERTEX and an EDGE, for example.
+    /// Scalar types (INT64, DOUBLE, STRING, etc.) are compatible among themselves
+    /// (implicit conversion) but incompatible with graph types (VERTEX, EDGE, PATH).
+    ///
+    /// @param name    Variable name
+    /// @param type    Expected type
+    /// @param as_path If true, conflict is reported as VariableAlreadyBound
+    ///                (for path assignment p = ...).
+    ///                If false, conflict is reported as VariableTypeConflict
+    ///                (for node/relationship positions).
+    /// @return true if OK, false if type conflict (error already reported).
+    bool registerPatternVariable(const std::string& name, BoundType type, bool as_path);
 
     // ── Helpers ──
     std::optional<int64_t> bindSkipLimit(const cypher::Expression& expr, const char* clause_name);

@@ -16,8 +16,23 @@ bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_n
 
     if (skip_register) {
         auto* col = ctx_.lookup(var_name);
-        col_idx = col ? col->column_index : nextColumnIndex();
+        if (col) {
+            if (!isCompatibleForPatternUse(col->type, BoundType::Vertex())) {
+                error("VariableTypeConflict: variable '" + var_name + "' already defined as " + col->type.toString() +
+                      " but used as node");
+                return false;
+            }
+            col_idx = col->column_index;
+        } else {
+            col_idx = nextColumnIndex();
+        }
     } else {
+        auto* existing = ctx_.lookup(var_name);
+        if (existing && !isCompatibleForPatternUse(existing->type, BoundType::Vertex())) {
+            error("VariableTypeConflict: variable '" + var_name + "' already defined as " + existing->type.toString() +
+                  " but used as node");
+            return false;
+        }
         col_idx = nextColumnIndex();
     }
 
@@ -47,6 +62,13 @@ bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std
     var_name = rel.variable.value_or("");
     if (var_name.empty())
         var_name = "__anon_edge_" + std::to_string(nextAnonId());
+
+    auto* existing = ctx_.lookup(var_name);
+    if (existing && !isCompatibleForPatternUse(existing->type, BoundType::Edge())) {
+        error("VariableTypeConflict: variable '" + var_name + "' already defined as " + existing->type.toString() +
+              " but used as relationship");
+        return false;
+    }
     col_idx = nextColumnIndex();
 
     edge_label_ids.clear();
