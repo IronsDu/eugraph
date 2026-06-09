@@ -675,7 +675,8 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
         return BoundType::Any();
 
     case cypher::BinaryOperator::IN:
-        if (right_type.kind == BoundTypeKind::LIST || right_type.kind == BoundTypeKind::ANY)
+        if (right_type.kind == BoundTypeKind::LIST || right_type.kind == BoundTypeKind::ANY ||
+            right_type.kind == BoundTypeKind::NULL_TYPE)
             return BoundType::Bool();
         error_msg = "IN requires a list on the right side, got " + right_type.toString();
         return BoundType::Any();

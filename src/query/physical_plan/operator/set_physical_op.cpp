@@ -109,6 +109,27 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
             }
         }
 
+        // Ensure vertex columns are writable (FLAT) before mutation.
+        // DICTIONARY columns share data with other operators and are read-only;
+        // CONSTANT columns have a single shared value.
+        for (const auto& item : items_) {
+            if (item.var_name.empty())
+                continue;
+            int col = findColumn(input_schema_, item.var_name);
+            if (col < 0 || static_cast<size_t>(col) >= chunk->numColumns())
+                continue;
+            auto& column = chunk->columns[static_cast<size_t>(col)];
+            if (column.type != binder::BoundTypeKind::VERTEX)
+                continue;
+            if (column.form == VectorForm::FLAT)
+                continue;
+            // Copy into a new FLAT column
+            auto new_col = Column::flat(binder::BoundTypeKind::VERTEX, n);
+            for (size_t i = 0; i < n; ++i)
+                new_col.setValue(i, column.getValue(i));
+            column = std::move(new_col);
+        }
+
         for (size_t row_idx = 0; row_idx < n; ++row_idx) {
             for (size_t idx = 0; idx < items_.size(); ++idx) {
                 const auto& item = items_[idx];
@@ -191,32 +212,37 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         continue;
                     const auto& mv = std::get<MapValue>(v);
 
-                    // For '=' (replace): delete all existing vertex properties first
+                    // Keep a mutable copy of the vertex to update in-memory state
+                    // after store mutations, so the returned row reflects the changes.
+                    VertexValue updated_vertex = vertex;
+                    bool vertex_modified = false;
+
+                    // For '=' (replace): delete all existing vertex properties first.
+                    // Query the store directly to find all properties regardless of
+                    // what projection pushdown loaded into the in-memory vertex.
                     if (!item.is_add_assign) {
-                        if (vertex.labels.has_value()) {
-                            for (LabelId lid : *vertex.labels) {
-                                auto def_it = label_defs_.find(lid);
-                                if (def_it == label_defs_.end())
-                                    continue;
-                                for (const auto& pd : def_it->second.properties) {
-                                    co_await store_.deleteVertexProperty(vid, lid, pd.id);
+                        LabelIdSet all_lids = co_await store_.getVertexLabels(vid);
+                        if (anon_label_id_ != INVALID_LABEL_ID)
+                            all_lids.insert(anon_label_id_);
+                        for (LabelId lid : all_lids) {
+                            auto props = co_await store_.getVertexProperties(vid, lid);
+                            if (props) {
+                                for (size_t pid = 0; pid < props->size(); ++pid) {
+                                    if ((*props)[pid].has_value())
+                                        co_await store_.deleteVertexProperty(vid, lid, static_cast<uint16_t>(pid));
                                 }
                             }
                         }
-                        // Also delete anon properties
-                        if (anon_label_id_ != INVALID_LABEL_ID) {
-                            auto anon_it = label_defs_.find(anon_label_id_);
-                            if (anon_it != label_defs_.end()) {
-                                for (const auto& pd : anon_it->second.properties) {
-                                    co_await store_.deleteVertexProperty(vid, anon_label_id_, pd.id);
-                                }
-                            }
-                        }
+                        updated_vertex.properties.clear();
+                        vertex_modified = true;
                     }
 
                     // Write each map entry via convenience mode resolution
                     for (const auto& [key, vs] : mv.entries) {
                         Value entry_val = vs.value;
+                        // null map values remove the property
+                        if (std::holds_alternative<std::monostate>(entry_val))
+                            continue;
                         PropertyValue pv = valueToPropertyValue(entry_val);
 
                         std::vector<std::pair<LabelId, uint16_t>> matches;
@@ -236,11 +262,21 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
 
                         if (matches.size() == 1) {
                             co_await store_.putVertexProperty(vid, matches[0].first, matches[0].second, pv);
+                            auto& props_vec = updated_vertex.properties[matches[0].first];
+                            if (props_vec.size() <= matches[0].second)
+                                props_vec.resize(matches[0].second + 1);
+                            props_vec[matches[0].second] = pv;
+                            vertex_modified = true;
                         } else if (matches.empty()) {
                             if (anon_label_id_ != INVALID_LABEL_ID) {
                                 uint16_t anon_pid =
                                     co_await meta_.getOrCreateAnonPropId(key, propertyValueToPropertyType(pv));
                                 co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, pv);
+                                auto& props_vec = updated_vertex.properties[anon_label_id_];
+                                if (props_vec.size() <= anon_pid)
+                                    props_vec.resize(anon_pid + 1);
+                                props_vec[anon_pid] = pv;
+                                vertex_modified = true;
                             }
                         } else {
                             std::string label_names;
@@ -256,6 +292,10 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                           label_names);
                         }
                     }
+
+                    // Write updated vertex back to chunk so RETURN sees the mutated state
+                    if (vertex_modified)
+                        chunk->setValue(static_cast<size_t>(col), row_idx, Value(std::move(updated_vertex)));
                 }
             }
         }

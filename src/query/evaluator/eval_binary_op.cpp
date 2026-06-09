@@ -30,17 +30,26 @@ void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
 
     if (op.op == BO::IN) {
         for (size_t i = 0; i < count; ++i) {
-            if (left.column->isNull(i) || right.column->isNull(i)) {
+            if (right.column->isNull(i)) {
                 result.setNull(i);
                 continue;
             }
-            Value lv = left.column->getValue(i);
             Value rv = right.column->getValue(i);
             if (!std::holds_alternative<ListValue>(rv)) {
                 result.setNull(i);
                 continue;
             }
             const auto& list = std::get<ListValue>(rv);
+            // null IN [] → false (null is definitely not in an empty list)
+            if (left.column->isNull(i)) {
+                if (list.elements.empty()) {
+                    result.setValue(i, Value(false));
+                } else {
+                    result.setNull(i);
+                }
+                continue;
+            }
+            Value lv = left.column->getValue(i);
             bool found = false;
             bool saw_null = false;
             for (const auto& elem : list.elements) {

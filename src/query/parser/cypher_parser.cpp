@@ -358,8 +358,10 @@ private:
 
     Expression buildNotExpr(AP::NotExpressionContext* ctx) {
         auto e = buildComparisonExpr(ctx->comparisonExpression());
-        if (ctx->NOT())
-            return makeUnaryOp(UnaryOperator::NOT, std::move(e));
+        auto nots = ctx->NOT();
+        // Wrap with NOT for each NOT token (NOT NOT x → NOT(NOT(x)))
+        for (size_t i = nots.size(); i > 0; --i)
+            e = makeUnaryOp(UnaryOperator::NOT, std::move(e));
         return e;
     }
 

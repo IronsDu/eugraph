@@ -15,7 +15,10 @@
 
 namespace {
 void classifyError(const std::string& errMsg, std::string& errorType, std::string& errorPhase) {
-    if (errMsg.find("TypeError:") != std::string::npos) {
+    if (errMsg.find("MapElementAccessByNonString") != std::string::npos) {
+        errorType = "TypeError";
+        errorPhase = "runtime";
+    } else if (errMsg.find("TypeError:") != std::string::npos) {
         errorType = "TypeError";
         errorPhase = "compile time";
     } else if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
@@ -402,6 +405,9 @@ void TckContext::executeQuery(const std::string& query) {
                 std::string errMsg = batch.exception().what().toStdString();
                 spdlog::info("[TCK] Stream error: {}", errMsg);
                 classifyError(errMsg, lastErrorType, lastErrorPhase);
+                // Stream errors always occur at runtime (post-bind execution).
+                if (lastErrorPhase == "compile time")
+                    lastErrorPhase = "runtime";
                 // Extract error detail
                 if (errMsg.find("UndefinedVariable") != std::string::npos) {
                     lastErrorDetail = "UndefinedVariable";
@@ -415,6 +421,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "InvalidArgumentType";
                 } else if (errMsg.find("Duplicate map key") != std::string::npos) {
                     lastErrorDetail = "InvalidArgumentType";
+                } else if (errMsg.find("InvalidArgumentType") != std::string::npos) {
+                    lastErrorDetail = "InvalidArgumentType";
                 } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
                     lastErrorDetail = "MergeReadOwnWrites";
                 } else if (errMsg.find("FloatingPointOverflow") != std::string::npos) {
@@ -423,6 +431,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "IntegerOverflow";
                 } else if (errMsg.find("InvalidUnicodeCharacter") != std::string::npos) {
                     lastErrorDetail = "InvalidUnicodeCharacter";
+                } else if (errMsg.find("MapElementAccessByNonString") != std::string::npos) {
+                    lastErrorDetail = "MapElementAccessByNonString";
                 } else if (errMsg.find("InvalidUnicodeLiteral") != std::string::npos) {
                     lastErrorDetail = "InvalidUnicodeLiteral";
                 } else if (errMsg.find("InvalidNumberLiteral") != std::string::npos) {
@@ -462,6 +472,8 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "InvalidArgumentType";
         } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
             lastErrorDetail = "InvalidArgumentType";
+        } else if (errMsg.find("MapElementAccessByNonString") != std::string::npos) {
+            lastErrorDetail = "MapElementAccessByNonString";
         } else if (errMsg.find("InvalidInput") != std::string::npos) {
             lastErrorDetail = "InvalidInput";
         } else if (errMsg.find("NoSingleRelationshipType") != std::string::npos) {

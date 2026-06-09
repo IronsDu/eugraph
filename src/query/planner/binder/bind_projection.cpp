@@ -107,6 +107,9 @@ void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
                 } else if constexpr (std::is_same_v<Elem, BoundBinaryJoinOp>) {
                     applyProjectionPushdown(v.left);
                     applyProjectionPushdown(v.right);
+                } else if constexpr (std::is_same_v<Elem, BoundLeftJoinOp>) {
+                    applyProjectionPushdown(v.left);
+                    applyProjectionPushdown(v.right);
                 } else if constexpr (std::is_same_v<Elem, BoundSemiJoinOp>) {
                     applyProjectionPushdown(v.left);
                     applyProjectionPushdown(v.right);

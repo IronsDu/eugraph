@@ -3504,8 +3504,12 @@ CypherParser::ComparisonExpressionContext* CypherParser::NotExpressionContext::c
   return getRuleContext<CypherParser::ComparisonExpressionContext>(0);
 }
 
-tree::TerminalNode* CypherParser::NotExpressionContext::NOT() {
-  return getToken(CypherParser::NOT, 0);
+std::vector<tree::TerminalNode *> CypherParser::NotExpressionContext::NOT() {
+  return getTokens(CypherParser::NOT);
+}
+
+tree::TerminalNode* CypherParser::NotExpressionContext::NOT(size_t i) {
+  return getToken(CypherParser::NOT, i);
 }
 
 
@@ -3538,14 +3542,19 @@ CypherParser::NotExpressionContext* CypherParser::notExpression() {
     setState(467);
     _errHandler->sync(this);
 
+    setState(466);
+    _errHandler->sync(this);
     _la = _input->LA(1);
-    if (_la == CypherParser::NOT) {
+    while (_la == CypherParser::NOT) {
       setState(466);
       match(CypherParser::NOT);
+      setState(467);
+      _errHandler->sync(this);
+      _la = _input->LA(1);
     }
     setState(469);
     comparisonExpression();
-   
+
   }
   catch (RecognitionException &e) {
     _errHandler->reportError(this, e);

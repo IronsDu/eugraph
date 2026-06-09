@@ -134,8 +134,7 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                     // OPTIONAL MATCH: create a LeftJoin
                     if (ptr->optional) {
                         if (!current) {
-                            error("OPTIONAL MATCH requires a preceding clause");
-                            return std::nullopt;
+                            current = BoundSingletonOp{};
                         }
                         auto result = bindOptionalMatch(*ptr, std::move(*current));
                         first_clause = false;

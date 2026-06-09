@@ -204,7 +204,7 @@ andExpression
     ;
 
 notExpression
-    : NOT? comparisonExpression
+    : NOT* comparisonExpression
     ;
 
 comparisonExpression
