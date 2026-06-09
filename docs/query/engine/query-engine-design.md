@@ -331,6 +331,14 @@ struct SelectionVector {
 
 **符号表**：`Binder` 通过 `BindContext` 维护变量→列索引映射，MATCH 中每个变量分配列索引（在 `BoundScanOp::column_index` / `BoundLabelScanOp::column_index` 等字段中）。表达式中的变量引用在 Binder 阶段为 `BoundVariableRef`（变量名），经 `ColumnResolver` 解析为 `BoundColumnRef`（列索引）。
 
+**模式变量类型检查**：`Binder::registerPatternVariable` 是模式变量注册的统一入口，负责检查类型兼容性。图类型（VERTEX、EDGE、PATH）互斥——同一变量不能同时是两个不同的图元素类型，也不能从标量类型（INT64、DOUBLE、STRING 等）转为图类型。类型兼容性由 `isCompatibleForPatternUse` 判定：
+
+- 相同 `BoundTypeKind` → 兼容（合法的变量重引用，复用已有列索引）
+- 双方均为非图类型（标量）→ 依赖 `implicitCastCost`，允许隐式转换（如 INT64→DOUBLE）
+- 一方为图类型、另一方不同 → 冲突。若新绑定为 PATH 赋值（`p = ...`）报 `VariableAlreadyBound`，若为 node/rel 位置报 `VariableTypeConflict`
+
+`bindNodePattern` 和 `bindRelationshipPattern` 通过 `registerPatternVariable` 注册/检查节点和关系变量；varlen 展开和路径构建中的直接符号表写入也改为先检查后写入。`skip_register` 路径（correlated MATCH）同样进行类型检查，防止 `WITH 123 AS a MATCH (a)--()` 之类误用。
+
 **无 RETURN 子句时的输出**：当查询不含 `RETURN` 时（如 `CREATE`、`SET`、`DELETE` 等纯写操作），Binder 在逻辑计划根部追加空 `BoundProjectOp`（投影表达式数组为空）。物理计划顶层为空 `ProjectPhysicalOp`，产出 0 列 DataChunk，但仍遍历 child 触发副作用。这符合 TCK 语义——写操作不输出数据。
 
 **RETURN + ORDER BY 管线顺序**：`ORDER BY` 在 `ProjectOp` 之前执行（物理管线：child → Sort → Project）。这样 ORDER BY 表达式可以引用原始 child 列（如 `r.id`，其中 `r` 是 EdgeValue）。当 ORDER BY 引用 RETURN 别名（如 `RETURN id(n) AS x ORDER BY x`）时，Binder 将别名替换为原始 RETURN 表达式重新绑定。
