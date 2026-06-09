@@ -5,6 +5,8 @@
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
 
+#include <stdexcept>
+
 namespace eugraph {
 namespace function {
 namespace scalar {
@@ -23,15 +25,21 @@ inline Value toIntegerImpl(const Value& arg) {
     if (std::holds_alternative<std::string>(arg)) {
         try {
             const auto& s = std::get<std::string>(arg);
+            if (s.empty())
+                return Value{};
             size_t pos = 0;
-            long long v = std::stoll(s, &pos);
+            double d = std::stod(s, &pos);
             if (pos != s.size())
                 return Value{};
-            return Value(static_cast<int64_t>(v));
+            return Value(static_cast<int64_t>(d));
         } catch (...) {
             return Value{};
         }
     }
+    if (std::holds_alternative<ListValue>(arg) || std::holds_alternative<MapValue>(arg) ||
+        std::holds_alternative<VertexValue>(arg) || std::holds_alternative<EdgeValue>(arg) ||
+        std::holds_alternative<PathValue>(arg))
+        throw std::runtime_error("TypeError: InvalidArgumentValue");
     return Value{};
 }
 
@@ -63,6 +71,8 @@ inline Value toFloatImpl(const Value& arg) {
     if (std::holds_alternative<std::string>(arg)) {
         try {
             const auto& s = std::get<std::string>(arg);
+            if (s.empty())
+                return Value{};
             size_t pos = 0;
             double v = std::stod(s, &pos);
             if (pos != s.size())
@@ -72,6 +82,10 @@ inline Value toFloatImpl(const Value& arg) {
             return Value{};
         }
     }
+    if (std::holds_alternative<bool>(arg) || std::holds_alternative<ListValue>(arg) ||
+        std::holds_alternative<MapValue>(arg) || std::holds_alternative<VertexValue>(arg) ||
+        std::holds_alternative<EdgeValue>(arg) || std::holds_alternative<PathValue>(arg))
+        throw std::runtime_error("TypeError: InvalidArgumentValue");
     return Value{};
 }
 
@@ -122,6 +136,10 @@ inline Value toStringImpl(const Value& arg) {
         return Value(temporalToString(std::get<TimeValue>(arg)));
     if (std::holds_alternative<DurationValue>(arg))
         return Value(temporalToString(std::get<DurationValue>(arg)));
+    if (std::holds_alternative<ListValue>(arg) || std::holds_alternative<MapValue>(arg) ||
+        std::holds_alternative<VertexValue>(arg) || std::holds_alternative<EdgeValue>(arg) ||
+        std::holds_alternative<PathValue>(arg))
+        throw std::runtime_error("TypeError: InvalidArgumentValue");
     return Value{};
 }
 
@@ -150,8 +168,6 @@ inline Value toBooleanImpl(const Value& arg) {
         return arg;
     if (std::holds_alternative<int64_t>(arg))
         return Value(std::get<int64_t>(arg) != 0);
-    if (std::holds_alternative<double>(arg))
-        return Value(std::get<double>(arg) != 0.0);
     if (std::holds_alternative<std::string>(arg)) {
         const auto& s = std::get<std::string>(arg);
         if (s == "true")
@@ -160,6 +176,10 @@ inline Value toBooleanImpl(const Value& arg) {
             return Value(false);
         return Value{};
     }
+    if (std::holds_alternative<double>(arg) || std::holds_alternative<ListValue>(arg) ||
+        std::holds_alternative<MapValue>(arg) || std::holds_alternative<VertexValue>(arg) ||
+        std::holds_alternative<EdgeValue>(arg) || std::holds_alternative<PathValue>(arg))
+        throw std::runtime_error("TypeError: InvalidArgumentValue");
     return Value{};
 }
 

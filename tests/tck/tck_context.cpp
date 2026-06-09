@@ -421,6 +421,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "InvalidArgumentType";
                 } else if (errMsg.find("Duplicate map key") != std::string::npos) {
                     lastErrorDetail = "InvalidArgumentType";
+                } else if (errMsg.find("InvalidArgumentValue") != std::string::npos) {
+                    lastErrorDetail = "InvalidArgumentValue";
                 } else if (errMsg.find("InvalidArgumentType") != std::string::npos) {
                     lastErrorDetail = "InvalidArgumentType";
                 } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {

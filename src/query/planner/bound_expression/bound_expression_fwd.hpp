@@ -27,6 +27,7 @@ struct BoundAllExpr;
 struct BoundAnyExpr;
 struct BoundNoneExpr;
 struct BoundSingleExpr;
+struct BoundListComprehension;
 
 using BoundExpression =
     std::variant<BoundLiteral, BoundColumnRef, BoundVariableRef, BoundParameter,
@@ -35,7 +36,7 @@ using BoundExpression =
                  std::unique_ptr<BoundFunctionCall>, std::unique_ptr<BoundList>, std::unique_ptr<BoundMap>,
                  std::unique_ptr<BoundCase>, std::unique_ptr<BoundSubscript>, std::unique_ptr<BoundSlice>,
                  std::unique_ptr<BoundAllExpr>, std::unique_ptr<BoundAnyExpr>, std::unique_ptr<BoundNoneExpr>,
-                 std::unique_ptr<BoundSingleExpr>>;
+                 std::unique_ptr<BoundSingleExpr>, std::unique_ptr<BoundListComprehension>>;
 
 } // namespace binder
 } // namespace eugraph

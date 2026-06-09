@@ -55,5 +55,16 @@ struct BoundSingleExpr {
     BoundType result_type;
 };
 
+/// [x IN list | projection] or [x IN list WHERE pred | projection]
+/// Evaluates the projection for each element of the list and collects results.
+struct BoundListComprehension {
+    std::string variable;
+    uint32_t loop_column_index = 0;
+    BoundExpression list_expr;
+    std::optional<BoundExpression> where_pred;
+    BoundExpression projection;
+    BoundType result_type; // List<T> where T is the projection's result type
+};
+
 } // namespace binder
 } // namespace eugraph

@@ -80,6 +80,10 @@ private:
 
     /// Evaluate a slice expression: list[from..to].
     void evalSlice(const binder::BoundSlice& slice, const DataChunk& input, Column& result, size_t count);
+
+    /// Evaluate a list comprehension: [x IN list | projection].
+    void evalListComprehension(const binder::BoundListComprehension& lc, const DataChunk& input, Column& result,
+                               size_t count);
 };
 
 } // namespace compute

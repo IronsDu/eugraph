@@ -10,9 +10,9 @@
 
 | 指标 | 数量 |
 |------|------|
-| 场景通过 | ~2100 / 3897 |
-| 场景失败 | ~1700 |
-| 场景未定义 | ~90 (CALL/procedure + useCases) |
+| 场景通过 | ~2375 / 3897 |
+| 场景失败 | ~1451 |
+| 场景未定义 | ~71 (CALL/procedure + useCases) |
 
 ---
 
@@ -28,7 +28,7 @@
 | Path | 7 | 5 | 2 | 路径表达式 |
 | Mathematical | 6 | **6** | 0 | ✅ 已全部修复 |
 | String | 32 | 8 | 24 | left()/right()/substring()/replace() 等缺实现 |
-| TypeConversion | 47 | 14 | 33 | toInteger()/toFloat()/toString() 等缺实现 |
+| TypeConversion | 47 | **44** | 3 | toString/list/comprehension 已实现，3个跨积(MATCH...WITH * MATCH)预存问题 |
 | Precedence | 121 | 92 | 29 | 运算符优先级 |
 | Comparison | 72 | 29 | 43 | 比较语义、null 比较 |
 | Aggregation | 35 | 16 | 19 | 聚合函数、分组语义 |
@@ -83,7 +83,7 @@
 3. **Map (38→44)**：6 失败，属性访问/非法 key 边缘
 4. **Null (31→44)**：13 失败，null 传播和比较语义
 5. **String (8→32)**：24 失败，`left()/right()/substring()/replace()/trim()` 等函数
-6. **TypeConversion (14→47)**：33 失败，`toInteger()/toFloat()/toString()/toBoolean()` 等
+6. **TypeConversion (14→44)**：✅ 基本完成，仅剩 3 个跨积预存问题（`MATCH...WITH * MATCH (n)`），ListComprehension 已支持
 
 ### 中风险（涉及运算符/比较语义）
 
