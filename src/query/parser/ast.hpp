@@ -33,6 +33,7 @@ struct AnyExpr;
 struct NoneExpr;
 struct SingleExpr;
 struct LabelCastExpr;
+struct ParenExpr;
 
 // ==================== Expression ====================
 // 递归类型用 unique_ptr 包装
@@ -44,7 +45,7 @@ using Expression =
                  std::unique_ptr<MapExpr>, std::unique_ptr<CaseExpr>, std::unique_ptr<ListComprehension>,
                  std::unique_ptr<PatternComprehension>, std::unique_ptr<SubscriptExpr>, std::unique_ptr<SliceExpr>,
                  std::unique_ptr<ExistsExpr>, std::unique_ptr<AllExpr>, std::unique_ptr<AnyExpr>,
-                 std::unique_ptr<NoneExpr>, std::unique_ptr<SingleExpr>>;
+                 std::unique_ptr<NoneExpr>, std::unique_ptr<SingleExpr>, std::unique_ptr<ParenExpr>>;
 
 // ==================== Literal ====================
 
@@ -131,6 +132,15 @@ struct PropertyAccess {
 struct LabelCastExpr {
     Expression object;
     std::string label;
+};
+
+// ==================== ParenExpr ====================
+
+// Marks an expression that was wrapped in parentheses in the source text.
+// Used by hoistAtomicPredicates to prevent hoisting atomic predicates
+// across explicit parenthesization boundaries. Stripped before the binder.
+struct ParenExpr {
+    Expression inner;
 };
 
 // ==================== ListExpr ====================
@@ -431,6 +441,14 @@ inline Expression makeFunctionCall(std::string name, std::vector<Expression> arg
     return std::make_unique<FunctionCall>(FunctionCall{std::move(name), distinct, std::move(args)});
 }
 
+inline Expression makeParenExpr(Expression inner) {
+    return std::make_unique<ParenExpr>(ParenExpr{std::move(inner)});
+}
+
+// Strip ParenExpr wrappers from an Expression tree. Called after hoisting
+// and before the binder, so the binder never sees ParenExpr nodes.
+inline Expression stripParens(Expression expr);
+
 // ==================== 辅助：Expression → 字符串（用于生成默认列名）====================
 
 inline std::string expressionToString(const Expression& expr);
@@ -451,6 +469,8 @@ inline std::string expressionToString(const Expression& expr) {
                 return obj_str + "." + ptr->property;
             } else if constexpr (std::is_same_v<OpType, LabelCastExpr>) {
                 return expressionToString(ptr->object) + "::" + ptr->label;
+            } else if constexpr (std::is_same_v<OpType, ParenExpr>) {
+                return "(" + expressionToString(ptr->inner) + ")";
             } else if constexpr (std::is_same_v<OpType, Literal>) {
                 if (std::holds_alternative<std::string>(ptr->value))
                     return std::get<std::string>(ptr->value);
@@ -543,6 +563,102 @@ inline std::string expressionToString(const Expression& expr) {
             }
         },
         expr);
+}
+
+inline Expression stripParens(Expression expr) {
+    if (auto* paren = std::get_if<std::unique_ptr<ParenExpr>>(&expr)) {
+        if (*paren)
+            return stripParens(std::move((*paren)->inner));
+        return expr;
+    }
+    // Recurse into compound expression types that hold sub-expressions.
+    if (auto* bin = std::get_if<std::unique_ptr<BinaryOp>>(&expr)) {
+        if (*bin) {
+            (*bin)->left = stripParens(std::move((*bin)->left));
+            (*bin)->right = stripParens(std::move((*bin)->right));
+        }
+        return expr;
+    }
+    if (auto* un = std::get_if<std::unique_ptr<UnaryOp>>(&expr)) {
+        if (*un) {
+            (*un)->operand = stripParens(std::move((*un)->operand));
+        }
+        return expr;
+    }
+    if (auto* fc = std::get_if<std::unique_ptr<FunctionCall>>(&expr)) {
+        if (*fc) {
+            for (auto& a : (*fc)->args)
+                a = stripParens(std::move(a));
+        }
+        return expr;
+    }
+    if (auto* pa = std::get_if<std::unique_ptr<PropertyAccess>>(&expr)) {
+        if (*pa) {
+            (*pa)->object = stripParens(std::move((*pa)->object));
+        }
+        return expr;
+    }
+    if (auto* lc = std::get_if<std::unique_ptr<LabelCastExpr>>(&expr)) {
+        if (*lc) {
+            (*lc)->object = stripParens(std::move((*lc)->object));
+        }
+        return expr;
+    }
+    if (auto* le = std::get_if<std::unique_ptr<ListExpr>>(&expr)) {
+        if (*le) {
+            for (auto& e : (*le)->elements)
+                e = stripParens(std::move(e));
+        }
+        return expr;
+    }
+    if (auto* me = std::get_if<std::unique_ptr<MapExpr>>(&expr)) {
+        if (*me) {
+            for (auto& [k, v] : (*me)->entries)
+                v = stripParens(std::move(v));
+        }
+        return expr;
+    }
+    if (auto* ce = std::get_if<std::unique_ptr<CaseExpr>>(&expr)) {
+        if (*ce) {
+            if ((*ce)->subject)
+                (*ce)->subject = stripParens(std::move(*(*ce)->subject));
+            for (auto& [w, t] : (*ce)->when_thens) {
+                w = stripParens(std::move(w));
+                t = stripParens(std::move(t));
+            }
+            if ((*ce)->else_expr)
+                (*ce)->else_expr = stripParens(std::move(*(*ce)->else_expr));
+        }
+        return expr;
+    }
+    if (auto* lc2 = std::get_if<std::unique_ptr<ListComprehension>>(&expr)) {
+        if (*lc2) {
+            (*lc2)->list_expr = stripParens(std::move((*lc2)->list_expr));
+            if ((*lc2)->where_pred)
+                (*lc2)->where_pred = stripParens(std::move(*(*lc2)->where_pred));
+            if ((*lc2)->projection)
+                (*lc2)->projection = stripParens(std::move(*(*lc2)->projection));
+        }
+        return expr;
+    }
+    if (auto* sub = std::get_if<std::unique_ptr<SubscriptExpr>>(&expr)) {
+        if (*sub) {
+            (*sub)->list = stripParens(std::move((*sub)->list));
+            (*sub)->index = stripParens(std::move((*sub)->index));
+        }
+        return expr;
+    }
+    if (auto* sl = std::get_if<std::unique_ptr<SliceExpr>>(&expr)) {
+        if (*sl) {
+            (*sl)->list = stripParens(std::move((*sl)->list));
+            if ((*sl)->from)
+                (*sl)->from = stripParens(std::move(*(*sl)->from));
+            if ((*sl)->to)
+                (*sl)->to = stripParens(std::move(*(*sl)->to));
+        }
+        return expr;
+    }
+    return expr;
 }
 
 } // namespace cypher

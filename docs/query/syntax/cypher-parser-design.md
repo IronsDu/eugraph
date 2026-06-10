@@ -31,7 +31,7 @@ ANTLR 生成的 C++ 代码（Visitor + Lexer/Parser）**预生成后直接提交
 
 1. **与 ANTLR 解耦**：AST 是独立数据结构，不持有 ANTLR 类型引用
 2. **值语义**：`variant<unique_ptr<T>>` 模式，可自由拷贝/移动
-3. **精简**：只保留语义有意义的信息，丢弃括号、分号等语法细节
+3. **精简**：只保留语义有意义的信息，丢弃分号等纯语法细节。括号信息通过 `ParenExpr` 节点保留，后续阶段可通过 `stripParens()` 在不需要时去除。
 
 ### 节点层次
 
@@ -51,7 +51,7 @@ Statement → variant<RegularQuery, StandaloneCall>
 
 ### 核心类型
 
-- **Expression**：19 种 variant 类型，用 `unique_ptr` 实现递归
+- **Expression**：20 种 variant 类型，用 `unique_ptr` 实现递归
 - **Literal**：`variant<NullValue, bool, int64_t, double, string>`
 - **BinaryOp**：20 种操作符（算术、比较、字符串、逻辑、列表）
 - **UnaryOp**：5 种操作符（NOT, NEGATE, PLUS, IS_NULL, IS_NOT_NULL）

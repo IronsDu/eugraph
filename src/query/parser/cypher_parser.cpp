@@ -101,6 +101,97 @@ static std::string unescapeString(const std::string& raw) {
     return result;
 }
 
+// ==================== Atomic Predicate Hoisting ====================
+// The grammar places IN, IS NULL, IS NOT NULL, STARTS WITH, ENDS WITH, CONTAINS
+// at atomicExpression level (below arithmetic). But Cypher spec says they bind
+// looser than arithmetic and tighter than comparison. We restructure the AST
+// after parsing to fix the precedence.
+
+static bool isAtomicPredicateExpr(const Expression& expr) {
+    if (auto* binOp = std::get_if<std::unique_ptr<BinaryOp>>(&expr)) {
+        if (*binOp) {
+            auto op = (*binOp)->op;
+            return op == BinaryOperator::IN || op == BinaryOperator::STARTS_WITH || op == BinaryOperator::ENDS_WITH ||
+                   op == BinaryOperator::CONTAINS;
+        }
+    }
+    if (auto* unOp = std::get_if<std::unique_ptr<UnaryOp>>(&expr)) {
+        if (*unOp) {
+            auto op = (*unOp)->op;
+            return op == UnaryOperator::IS_NULL || op == UnaryOperator::IS_NOT_NULL;
+        }
+    }
+    return false;
+}
+
+// Hoists atomic predicates above arithmetic operators (ADD/SUB/MUL/DIV/MOD/POW).
+// E.g. ADD(a, IN(b, c)) → IN(ADD(a, b), c)
+static Expression hoistAtomicPredicates(Expression expr) {
+    // ParenExpr: recurse into inner, re-wrap to preserve parentheses boundary.
+    if (auto* paren = std::get_if<std::unique_ptr<ParenExpr>>(&expr)) {
+        if (*paren) {
+            (*paren)->inner = hoistAtomicPredicates(std::move((*paren)->inner));
+        }
+        return expr;
+    }
+
+    auto* binOp = std::get_if<std::unique_ptr<BinaryOp>>(&expr);
+    if (!binOp || !*binOp)
+        return expr;
+
+    auto op = (*binOp)->op;
+    bool isArith = (op == BinaryOperator::ADD || op == BinaryOperator::SUB || op == BinaryOperator::MUL ||
+                    op == BinaryOperator::DIV || op == BinaryOperator::MOD || op == BinaryOperator::POW);
+    if (!isArith) {
+        (*binOp)->left = hoistAtomicPredicates(std::move((*binOp)->left));
+        (*binOp)->right = hoistAtomicPredicates(std::move((*binOp)->right));
+        return expr;
+    }
+
+    (*binOp)->left = hoistAtomicPredicates(std::move((*binOp)->left));
+    (*binOp)->right = hoistAtomicPredicates(std::move((*binOp)->right));
+
+    bool leftIsPred = isAtomicPredicateExpr((*binOp)->left);
+    bool rightIsPred = isAtomicPredicateExpr((*binOp)->right);
+
+    if (!leftIsPred && !rightIsPred)
+        return expr;
+
+    if (rightIsPred) {
+        // OP(a, PRED(b, c)) → PRED(OP(a, b), c)
+        auto* rbin = std::get_if<std::unique_ptr<BinaryOp>>(&(*binOp)->right);
+        auto* run = std::get_if<std::unique_ptr<UnaryOp>>(&(*binOp)->right);
+        if (rbin && *rbin) {
+            auto ro = std::move(*rbin);
+            ro->left = makeBinaryOp(op, std::move((*binOp)->left), std::move(ro->left));
+            return hoistAtomicPredicates(Expression(std::move(ro)));
+        }
+        if (run && *run) {
+            auto ruo = std::move(*run);
+            ruo->operand = makeBinaryOp(op, std::move((*binOp)->left), std::move(ruo->operand));
+            return hoistAtomicPredicates(Expression(std::move(ruo)));
+        }
+    }
+
+    if (leftIsPred) {
+        // OP(PRED(a, b), c) → PRED(a, OP(b, c))
+        auto* lbin = std::get_if<std::unique_ptr<BinaryOp>>(&(*binOp)->left);
+        auto* lun = std::get_if<std::unique_ptr<UnaryOp>>(&(*binOp)->left);
+        if (lbin && *lbin) {
+            auto lo = std::move(*lbin);
+            lo->right = makeBinaryOp(op, std::move(lo->right), std::move((*binOp)->right));
+            return hoistAtomicPredicates(Expression(std::move(lo)));
+        }
+        if (lun && *lun) {
+            auto luo = std::move(*lun);
+            luo->operand = makeBinaryOp(op, std::move(luo->operand), std::move((*binOp)->right));
+            return hoistAtomicPredicates(Expression(std::move(luo)));
+        }
+    }
+
+    return expr;
+}
+
 // ==================== AST Builder ====================
 // 直接遍历 ANTLR Parse Tree，不继承 BaseVisitor（避免 std::any 与 move-only 类型冲突）
 
@@ -405,7 +496,7 @@ private:
     Expression buildAddSubExpr(AP::AddSubExpressionContext* ctx) {
         auto muls = ctx->multDivExpression();
         if (muls.size() == 1)
-            return buildMulDivExpr(muls[0]);
+            return hoistAtomicPredicates(buildMulDivExpr(muls[0]));
         Expression r = buildMulDivExpr(muls[0]);
         for (size_t i = 1; i < muls.size(); i++) {
             // Children layout: multDivExpr, operator, multDivExpr, operator, ...
@@ -414,13 +505,13 @@ private:
                 (opNode->getSymbol()->getType() == AP::PLUS) ? BinaryOperator::ADD : BinaryOperator::SUB;
             r = makeBinaryOp(op, std::move(r), buildMulDivExpr(muls[i]));
         }
-        return r;
+        return hoistAtomicPredicates(std::move(r));
     }
 
     Expression buildMulDivExpr(AP::MultDivExpressionContext* ctx) {
         auto pows = ctx->powerExpression();
         if (pows.size() == 1)
-            return buildPowerExpr(pows[0]);
+            return hoistAtomicPredicates(buildPowerExpr(pows[0]));
         Expression r = buildPowerExpr(pows[0]);
         for (size_t i = 1; i < pows.size(); i++) {
             // Children layout: powerExpression, operator, powerExpression, operator, ...
@@ -436,17 +527,17 @@ private:
             }
             r = makeBinaryOp(op, std::move(r), buildPowerExpr(pows[i]));
         }
-        return r;
+        return hoistAtomicPredicates(std::move(r));
     }
 
     Expression buildPowerExpr(AP::PowerExpressionContext* ctx) {
         auto us = ctx->unaryAddSubExpression();
         if (us.size() == 1)
-            return buildUnaryExpr(us[0]);
+            return hoistAtomicPredicates(buildUnaryExpr(us[0]));
         Expression r = buildUnaryExpr(us[0]);
         for (size_t i = 1; i < us.size(); i++)
             r = makeBinaryOp(BinaryOperator::POW, std::move(r), buildUnaryExpr(us[i]));
-        return r;
+        return hoistAtomicPredicates(std::move(r));
     }
 
     Expression buildUnaryExpr(AP::UnaryAddSubExpressionContext* ctx) {
@@ -547,7 +638,7 @@ private:
         if (ctx->filterWith())
             return buildFilterWith(ctx->filterWith());
         if (ctx->parenthesizedExpression())
-            return buildExpression(ctx->parenthesizedExpression()->expression());
+            return makeParenExpr(buildExpression(ctx->parenthesizedExpression()->expression()));
         if (ctx->functionInvocation())
             return buildFuncInvocation(ctx->functionInvocation());
         if (ctx->subqueryExist())

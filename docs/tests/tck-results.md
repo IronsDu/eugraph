@@ -29,7 +29,7 @@
 | Mathematical | 6 | **6** | 0 | ✅ 已全部修复 |
 | String | 32 | 25 | 7 | newline 转义、非字符串操作数 UNWIND+聚合、reverse 列名格式化 |
 | TypeConversion | 47 | **44** | 3 | toString/list/comprehension 已实现，3个跨积(MATCH...WITH * MATCH)预存问题 |
-| Precedence | 121 | 92 | 29 | 运算符优先级 |
+| Precedence | 121 | 93 | 28 | 运算符优先级（Precedence3 全通过，剩余 Precedence1/2/4 中 null 语义相关） |
 | Comparison | 72 | 62 | 10 | 预存问题：`toInteger`+下标+MATCH、命名路径、labels加载、复杂属性跨类型 |
 | Aggregation | 35 | 16 | 19 | 聚合函数、分组语义 |
 | List | 185 | 91 | 94 | IN/null 语义、嵌套比较、下标/切片边界 |
@@ -73,6 +73,7 @@
 | Phase 7 | feature/update-tck-report | Mathematical 6/6：abs/sqrt 函数实现、ANTLR 运算符 token 索引修复、expressionToString 括号/去尾零、U+2014 检测、ANY 类型算术退路 |
 | Phase 8 | feature/boolean-map-null-fixes | Map 44/44+Null 44/44：递归参数解析(嵌套 Map/List/null)、运行时 subscript 类型错误、LeftJoin projection pushdown、IN + null binder 放宽/求值修复、OPTIONAL MATCH 首子句支持+属性加载、vertex JSON 格式空格修复 |
 | Phase 9 | feature/comparison-null-semantics | Comparison 29→62 (+33)、String 8→25 (+17)：三值相等 valueEquals（List/Map/Path 深度 null 传播+int64/double 提升）、compareValues 三值有序比较、链式比较展开（`a<b<c` → `(a<b) AND (b<c)`）、double 除零返回 NaN、numericPair sentinel 改为 optional、List 有序比较、STARTS_WITH/ENDS_WITH/CONTAINS 跨类型允许+NULL_TYPE dispatch |
+| Phase 10 | feature/comparison-null-semantics | Precedence 92→93 (+1)：新增 ParenExpr AST 节点保留括号信息防止 hoistAtomicPredicates 错误提升、genericAddBatch 增加 List 运行时处理修复 ANY+INT64 的 ADD 误分发到 int64AddBatch |
 
 ## 推荐实施顺序
 
@@ -84,7 +85,7 @@
 4. **String (8→25)**：+17，剩余 7 失败（newline 转义 3 + 非字符串 UNWIND 3 + reverse 1）
 5. **TypeConversion (14→44)**：✅ 基本完成，仅剩 3 个跨积预存问题
 6. **Comparison (29→62)**：+33，剩余 10 失败（全部为预存问题）
-7. **Precedence (92→121)**：29 失败，运算符优先级
+7. **Precedence (93→121)**：28 失败，运算符优先级（Precedence3 已全通过，剩余 28 为 null 语义相关）
 
 ### 中风险（涉及运算符/比较语义）
 

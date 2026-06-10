@@ -52,6 +52,8 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     return std::nullopt;
                 }
                 return BoundExpression(BoundColumnRef(col->column_index, col->type, ptr->name));
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                return bindExpression(ptr->inner);
             } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
                 auto left = bindExpression(ptr->left);
                 auto right = bindExpression(ptr->right);
@@ -689,6 +691,9 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
             (left_type.kind == BoundTypeKind::INT64 || left_type.kind == BoundTypeKind::DOUBLE) &&
             right_type.kind == BoundTypeKind::DURATION)
             return BoundType::Duration();
+        // POW always returns DOUBLE even for integer operands (Cypher spec)
+        if (op == cypher::BinaryOperator::POW)
+            return BoundType::Double();
         // Arithmetic: INT64 or DOUBLE, with implicit conversion
         if (left_type == BoundType::Int64() && right_type == BoundType::Int64())
             return BoundType::Int64();
