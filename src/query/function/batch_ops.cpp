@@ -248,7 +248,25 @@ void genericAddBatch(const Column& left, const Column& right, Column& result, si
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
+        // lists: concatenation, append, or prepend
+        if (std::holds_alternative<ListValue>(lv) || std::holds_alternative<ListValue>(rv)) {
+            if (std::holds_alternative<ListValue>(lv) && std::holds_alternative<ListValue>(rv)) {
+                ListValue res = std::get<ListValue>(lv);
+                const auto& rlist = std::get<ListValue>(rv);
+                res.elements.insert(res.elements.end(), rlist.elements.begin(), rlist.elements.end());
+                result.setValue(i, Value(std::move(res)));
+            } else if (std::holds_alternative<ListValue>(lv)) {
+                ListValue res = std::get<ListValue>(lv);
+                res.elements.push_back(ValueStorage{rv});
+                result.setValue(i, Value(std::move(res)));
+            } else {
+                ListValue res;
+                res.elements.push_back(ValueStorage{lv});
+                const auto& rlist = std::get<ListValue>(rv);
+                res.elements.insert(res.elements.end(), rlist.elements.begin(), rlist.elements.end());
+                result.setValue(i, Value(std::move(res)));
+            }
+        } else if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
             result.setValue(i, Value(std::get<int64_t>(lv) + std::get<int64_t>(rv)));
         else if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv))
             result.setValue(i, Value(std::get<std::string>(lv) + std::get<std::string>(rv)));
@@ -396,7 +414,7 @@ void int64PowBatch(const Column& left, const Column& right, Column& result, size
         if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
             double base = static_cast<double>(std::get<int64_t>(lv));
             double exp = static_cast<double>(std::get<int64_t>(rv));
-            result.setValue(i, Value(static_cast<int64_t>(std::llround(std::pow(base, exp)))));
+            result.setValue(i, Value(std::pow(base, exp)));
         } else {
             result.setNull(i);
         }
@@ -1268,10 +1286,22 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         }
     }
 
-    // INT64+DOUBLE cross-type ordered comparison: promote int64→double at runtime.
+    // INT64+DOUBLE cross-type: promote int64→double at runtime.
     if ((left_type == BTK::INT64 && right_type == BTK::DOUBLE) ||
         (left_type == BTK::DOUBLE && right_type == BTK::INT64)) {
         switch (op) {
+        case BO::ADD:
+            return genericAddBatch;
+        case BO::SUB:
+            return genericSubBatch;
+        case BO::MUL:
+            return genericMulBatch;
+        case BO::DIV:
+            return genericDivBatch;
+        case BO::MOD:
+            return genericModBatch;
+        case BO::POW:
+            return genericPowBatch;
         case BO::LT:
             return genericLtBatch;
         case BO::GT:
@@ -1294,7 +1324,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         case BTK::INT64:
             switch (op) {
             case BO::ADD:
-                return int64AddBatch;
+                return genericAddBatch;
             case BO::SUB:
                 return int64SubBatch;
             case BO::MUL:
@@ -1319,7 +1349,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         case BTK::DOUBLE:
             switch (op) {
             case BO::ADD:
-                return doubleAddBatch;
+                return genericAddBatch;
             case BO::SUB:
                 return doubleSubBatch;
             case BO::MUL:
@@ -1344,7 +1374,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         case BTK::STRING:
             switch (op) {
             case BO::ADD:
-                return stringConcatBatch;
+                return genericAddBatch;
             case BO::LT:
                 return stringLtBatch;
             case BO::GT:

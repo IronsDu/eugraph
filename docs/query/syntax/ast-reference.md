@@ -85,6 +85,7 @@ Expression = variant<
     unique_ptr<FunctionCall>,   // 函数调用
     unique_ptr<PropertyAccess>, // .属性访问
     unique_ptr<LabelCastExpr>,  // n::Label 转型表达式
+    unique_ptr<ParenExpr>,      // (expr) 括号表达式
     unique_ptr<ListExpr>,       // [1, 2, 3]
     unique_ptr<MapExpr>,        // {k: v}
     unique_ptr<CaseExpr>,       // CASE WHEN THEN ELSE END
@@ -141,6 +142,14 @@ LabelCastExpr { Expression object; string label; }
 ```
 
 用于 `n::Label` 转型语法，将属性查找范围限定到指定标签。可嵌套 PropertyAccess（`n::Label.prop`）或单独使用（`RETURN n::Label` 返回该标签全部属性）。
+
+### ParenExpr
+
+```cpp
+ParenExpr { Expression inner; }
+```
+
+保留括号信息，供后续处理阶段感知括号边界（如 `hoistAtomicPredicates` 不跨 `ParenExpr` 提升原子谓词）。使用 `stripParens()` 可在不需要括号信息的阶段递归去除所有 `ParenExpr` 包装。
 
 ### 其他表达式类型
 

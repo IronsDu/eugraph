@@ -37,6 +37,10 @@ cypher::Expression cloneExpression(const cypher::Expression& expr) {
             using Elem = typename T::element_type;
             if constexpr (std::is_same_v<Elem, cypher::Literal>) {
                 return std::make_unique<cypher::Literal>(*ptr);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                auto c = std::make_unique<cypher::ParenExpr>();
+                c->inner = cloneExpression(ptr->inner);
+                return c;
             } else if constexpr (std::is_same_v<Elem, cypher::Variable>) {
                 return std::make_unique<cypher::Variable>(*ptr);
             } else if constexpr (std::is_same_v<Elem, cypher::Parameter>) {
