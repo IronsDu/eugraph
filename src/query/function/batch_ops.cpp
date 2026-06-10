@@ -17,23 +17,29 @@ namespace {
 
 // ==================== Generic (type-agnostic) binary batch functions ====================
 
+// Fallback: all-null result for incomparable type combinations (ordered comparison only).
+void nullCmpBatch(const Column& /*left*/, const Column& /*right*/, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i)
+        result.setNull(i);
+}
+
 void genericEqBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        if (left.isNull(i) || right.isNull(i)) {
+        auto cmp = valueEquals(left.getValue(i), right.getValue(i));
+        if (!cmp)
             result.setNull(i);
-        } else {
-            result.setValue(i, Value(left.getValue(i) == right.getValue(i)));
-        }
+        else
+            result.setValue(i, Value(*cmp));
     }
 }
 
 void genericNeqBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        if (left.isNull(i) || right.isNull(i)) {
+        auto cmp = valueEquals(left.getValue(i), right.getValue(i));
+        if (!cmp)
             result.setNull(i);
-        } else {
-            result.setValue(i, Value(!(left.getValue(i) == right.getValue(i))));
-        }
+        else
+            result.setValue(i, Value(!*cmp));
     }
 }
 
@@ -159,21 +165,81 @@ void listConcatBatch(const Column& left, const Column& right, Column& result, si
     }
 }
 
+// List ordered comparison — element-by-element with null propagation.
+// On first element that differs, the result is determined by that element's ordering.
+// If all elements equal, the longer list is "greater".
+// Null elements propagate: if any comparison returns unknown, the overall result is null.
+namespace {
+
+// Returns true/false/null for left CMP right on list values.
+// Cmp should be a functor on int: e.g., std::greater<int> for >, std::less<int> for <, etc.
+template <typename Cmp>
+void listCmpBatchImpl(const Column& left, const Column& right, Column& result, size_t count, bool equalLenResult) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (!std::holds_alternative<ListValue>(lv) || !std::holds_alternative<ListValue>(rv)) {
+            result.setNull(i);
+            continue;
+        }
+        const auto& la = std::get<ListValue>(lv);
+        const auto& lb = std::get<ListValue>(rv);
+        size_t min_len = std::min(la.elements.size(), lb.elements.size());
+        bool saw_null = false;
+        for (size_t j = 0; j < min_len; ++j) {
+            auto cmp = compareValues(la.elements[j].value, lb.elements[j].value);
+            if (!cmp) {
+                saw_null = true;
+                continue;
+            }
+            if (*cmp != 0) {
+                result.setValue(i, Value(Cmp{}(*cmp, 0)));
+                goto next_row;
+            }
+        }
+        // All elements equal up to min_len: compare lengths
+        if (saw_null)
+            result.setNull(i);
+        else if (la.elements.size() == lb.elements.size())
+            result.setValue(i, Value(equalLenResult));
+        else
+            result.setValue(i,
+                            Value(Cmp{}(static_cast<int>(la.elements.size()), static_cast<int>(lb.elements.size()))));
+    next_row:;
+    }
+}
+
+} // namespace
+
+void listGteBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    listCmpBatchImpl<std::greater_equal<int>>(left, right, result, count, true);
+}
+void listGtBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    listCmpBatchImpl<std::greater<int>>(left, right, result, count, false);
+}
+void listLteBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    listCmpBatchImpl<std::less_equal<int>>(left, right, result, count, true);
+}
+void listLtBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    listCmpBatchImpl<std::less<int>>(left, right, result, count, false);
+}
+
 // ==================== Generic numeric dispatch (ANY + ANY fallback) ====================
 
 namespace {
 
 // Extract numeric values for arithmetic: promotes int64→double when mixed.
-inline std::pair<double, double> numericPair(const Value& lv, const Value& rv) {
+// Returns nullopt when either operand is non-numeric (not int64/double).
+inline std::optional<std::pair<double, double>> numericPair(const Value& lv, const Value& rv) {
     if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
-        return {std::get<double>(lv), std::get<double>(rv)};
+        return std::pair{std::get<double>(lv), std::get<double>(rv)};
     if (std::holds_alternative<double>(lv) && std::holds_alternative<int64_t>(rv))
-        return {std::get<double>(lv), static_cast<double>(std::get<int64_t>(rv))};
+        return std::pair{std::get<double>(lv), static_cast<double>(std::get<int64_t>(rv))};
     if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<double>(rv))
-        return {static_cast<double>(std::get<int64_t>(lv)), std::get<double>(rv)};
+        return std::pair{static_cast<double>(std::get<int64_t>(lv)), std::get<double>(rv)};
     if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
-        return {static_cast<double>(std::get<int64_t>(lv)), static_cast<double>(std::get<int64_t>(rv))};
-    return {std::nan(""), std::nan("")};
+        return std::pair{static_cast<double>(std::get<int64_t>(lv)), static_cast<double>(std::get<int64_t>(rv))};
+    return std::nullopt;
 }
 
 } // namespace
@@ -187,9 +253,9 @@ void genericAddBatch(const Column& left, const Column& right, Column& result, si
         else if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv))
             result.setValue(i, Value(std::get<std::string>(lv) + std::get<std::string>(rv)));
         else {
-            auto [a, b] = numericPair(lv, rv);
-            if (!std::isnan(a))
-                result.setValue(i, Value(a + b));
+            auto pair = numericPair(lv, rv);
+            if (pair)
+                result.setValue(i, Value(pair->first + pair->second));
             else
                 result.setNull(i);
         }
@@ -199,9 +265,9 @@ void genericAddBatch(const Column& left, const Column& right, Column& result, si
 #define DEF_GENERIC_NUMERIC_BATCH(name, op)                                                                            \
     void name(const Column& left, const Column& right, Column& result, size_t count) {                                 \
         for (size_t i = 0; i < count; ++i) {                                                                           \
-            auto [a, b] = numericPair(left.getValue(i), right.getValue(i));                                            \
-            if (!std::isnan(a))                                                                                        \
-                result.setValue(i, Value(a op b));                                                                     \
+            auto pair = numericPair(left.getValue(i), right.getValue(i));                                              \
+            if (pair)                                                                                                  \
+                result.setValue(i, Value(pair->first op pair->second));                                                \
             else                                                                                                       \
                 result.setNull(i);                                                                                     \
         }                                                                                                              \
@@ -213,9 +279,9 @@ DEF_GENERIC_NUMERIC_BATCH(genericDivBatch, /)
 
 void genericPowBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        auto [a, b] = numericPair(left.getValue(i), right.getValue(i));
-        if (!std::isnan(a))
-            result.setValue(i, Value(std::pow(a, b)));
+        auto pair = numericPair(left.getValue(i), right.getValue(i));
+        if (pair)
+            result.setValue(i, Value(std::pow(pair->first, pair->second)));
         else
             result.setNull(i);
     }
@@ -228,9 +294,9 @@ void genericModBatch(const Column& left, const Column& right, Column& result, si
         if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
             result.setValue(i, Value(std::get<int64_t>(lv) % std::get<int64_t>(rv)));
         else {
-            auto [a, b] = numericPair(lv, rv);
-            if (!std::isnan(a))
-                result.setValue(i, Value(std::fmod(a, b)));
+            auto pair = numericPair(lv, rv);
+            if (pair)
+                result.setValue(i, Value(std::fmod(pair->first, pair->second)));
             else
                 result.setNull(i);
         }
@@ -245,9 +311,9 @@ void genericModBatch(const Column& left, const Column& right, Column& result, si
             if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))                            \
                 result.setValue(i, Value(std::get<int64_t>(lv) op std::get<int64_t>(rv)));                             \
             else {                                                                                                     \
-                auto [a, b] = numericPair(lv, rv);                                                                     \
-                if (!std::isnan(a))                                                                                    \
-                    result.setValue(i, Value(a op b));                                                                 \
+                auto pair = numericPair(lv, rv);                                                                       \
+                if (pair)                                                                                              \
+                    result.setValue(i, Value(pair->first op pair->second));                                            \
                 else                                                                                                   \
                     result.setNull(i);                                                                                 \
             }                                                                                                          \
@@ -376,12 +442,10 @@ void doubleDivBatch(const Column& left, const Column& right, Column& result, siz
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv)) {
-            double b = std::get<double>(rv);
-            result.setValue(i, b != 0.0 ? Value(std::get<double>(lv) / b) : Value{});
-        } else {
+        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
+            result.setValue(i, Value(std::get<double>(lv) / std::get<double>(rv)));
+        else
             result.setNull(i);
-        }
     }
 }
 
@@ -389,12 +453,10 @@ void doubleModBatch(const Column& left, const Column& right, Column& result, siz
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv)) {
-            double b = std::get<double>(rv);
-            result.setValue(i, b != 0.0 ? Value(std::fmod(std::get<double>(lv), b)) : Value{});
-        } else {
+        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
+            result.setValue(i, Value(std::fmod(std::get<double>(lv), std::get<double>(rv))));
+        else
             result.setNull(i);
-        }
     }
 }
 
@@ -404,6 +466,62 @@ void doublePowBatch(const Column& left, const Column& right, Column& result, siz
         Value rv = right.getValue(i);
         if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
             result.setValue(i, Value(std::pow(std::get<double>(lv), std::get<double>(rv))));
+        else
+            result.setNull(i);
+    }
+}
+
+// ==================== Bool comparison batch functions ====================
+// Bool ordering: true > false (true is "greater").
+// Null operands propagate: if either operand is null the result is null.
+
+void boolLtBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        auto lb = std::get_if<bool>(&lv);
+        auto rb = std::get_if<bool>(&rv);
+        if (lb && rb)
+            result.setValue(i, Value(!*lb && *rb));
+        else
+            result.setNull(i);
+    }
+}
+
+void boolGtBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        auto lb = std::get_if<bool>(&lv);
+        auto rb = std::get_if<bool>(&rv);
+        if (lb && rb)
+            result.setValue(i, Value(*lb && !*rb));
+        else
+            result.setNull(i);
+    }
+}
+
+void boolLteBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        auto lb = std::get_if<bool>(&lv);
+        auto rb = std::get_if<bool>(&rv);
+        if (lb && rb)
+            result.setValue(i, Value(*lb <= *rb));
+        else
+            result.setNull(i);
+    }
+}
+
+void boolGteBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        auto lb = std::get_if<bool>(&lv);
+        auto rb = std::get_if<bool>(&rv);
+        if (lb && rb)
+            result.setValue(i, Value(*lb >= *rb));
         else
             result.setNull(i);
     }
@@ -1050,8 +1168,34 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
     if (op == BO::IN)
         return inBatch;
 
-    // String-specific operations (accept ANY for property round-trip)
-    if ((left_type == BTK::STRING || left_type == BTK::ANY) && (right_type == BTK::STRING || right_type == BTK::ANY)) {
+    // STARTS_WITH / ENDS_WITH / CONTAINS: accept any types.
+    // Non-string operands return null at runtime via the string batch functions.
+    if (op == BO::STARTS_WITH)
+        return stringStartsWithBatch;
+    if (op == BO::ENDS_WITH)
+        return stringEndsWithBatch;
+    if (op == BO::CONTAINS)
+        return stringContainsBatch;
+
+    // Bool ordered comparison (true > false).
+    if (left_type == BTK::BOOL && right_type == BTK::BOOL) {
+        switch (op) {
+        case BO::LT:
+            return boolLtBatch;
+        case BO::GT:
+            return boolGtBatch;
+        case BO::LTE:
+            return boolLteBatch;
+        case BO::GTE:
+            return boolGteBatch;
+        default:
+            return nullptr;
+        }
+    }
+
+    // String-specific operations (accept ANY/NULL for property round-trip and null operands)
+    if ((left_type == BTK::STRING || left_type == BTK::ANY || left_type == BTK::NULL_TYPE) &&
+        (right_type == BTK::STRING || right_type == BTK::ANY || right_type == BTK::NULL_TYPE)) {
         switch (op) {
         case BO::ADD:
             return stringConcatBatch;
@@ -1063,12 +1207,6 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             return stringLteBatch;
         case BO::GTE:
             return stringGteBatch;
-        case BO::STARTS_WITH:
-            return stringStartsWithBatch;
-        case BO::ENDS_WITH:
-            return stringEndsWithBatch;
-        case BO::CONTAINS:
-            return stringContainsBatch;
         default:
             return nullptr;
         }
@@ -1125,6 +1263,23 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             return doubleLteBatch;
         case BO::GTE:
             return doubleGteBatch;
+        default:
+            return nullptr;
+        }
+    }
+
+    // INT64+DOUBLE cross-type ordered comparison: promote int64→double at runtime.
+    if ((left_type == BTK::INT64 && right_type == BTK::DOUBLE) ||
+        (left_type == BTK::DOUBLE && right_type == BTK::INT64)) {
+        switch (op) {
+        case BO::LT:
+            return genericLtBatch;
+        case BO::GT:
+            return genericGtBatch;
+        case BO::LTE:
+            return genericLteBatch;
+        case BO::GTE:
+            return genericGteBatch;
         default:
             return nullptr;
         }
@@ -1198,6 +1353,19 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
                 return stringLteBatch;
             case BO::GTE:
                 return stringGteBatch;
+            default:
+                return nullptr;
+            }
+        case BTK::BOOL:
+            switch (op) {
+            case BO::LT:
+                return boolLtBatch;
+            case BO::GT:
+                return boolGtBatch;
+            case BO::LTE:
+                return boolLteBatch;
+            case BO::GTE:
+                return boolGteBatch;
             default:
                 return nullptr;
             }
@@ -1284,7 +1452,26 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
     if ((left_type == BTK::LIST || left_type == BTK::ANY) || (right_type == BTK::LIST || right_type == BTK::ANY)) {
         if (op == BO::ADD)
             return listConcatBatch;
+        // Ordered comparison for list types (LT/GT/LTE/GTE)
+        if ((left_type == BTK::LIST || left_type == BTK::ANY) && (right_type == BTK::LIST || right_type == BTK::ANY)) {
+            switch (op) {
+            case BO::LT:
+                return listLtBatch;
+            case BO::GT:
+                return listGtBatch;
+            case BO::LTE:
+                return listLteBatch;
+            case BO::GTE:
+                return listGteBatch;
+            default:
+                break;
+            }
+        }
     }
+
+    // Unhandled type combination: for ordered comparison, return null (incomparable types).
+    if (op == BO::LT || op == BO::GT || op == BO::LTE || op == BO::GTE)
+        return nullCmpBatch;
 
     return nullptr;
 }

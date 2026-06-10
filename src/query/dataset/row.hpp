@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 #include "common/types/temporal_value.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -111,6 +112,155 @@ inline bool MapValue::operator==(const MapValue& o) const {
 // Helper to check if a Value is null (monostate).
 inline bool isNull(const Value& v) {
     return std::holds_alternative<std::monostate>(v);
+}
+
+// ==================== Three-valued equality ====================
+
+// Returns true (equal), false (not equal), or nullopt (unknown — a null was encountered).
+// Implements Cypher comparison semantics:
+//   - null == anything → null (unknown)
+//   - int64/double cross-type → promote to double, compare
+//   - containers → element-wise three-valued comparison
+//   - different non-numeric types → false (definitively not equal)
+//   - NaN == NaN → false (IEEE 754)
+inline std::optional<bool> valueEquals(const Value& a, const Value& b) {
+    // null == anything → unknown
+    if (isNull(a) || isNull(b))
+        return std::nullopt;
+
+    // ListValue
+    if (std::holds_alternative<ListValue>(a) && std::holds_alternative<ListValue>(b)) {
+        const auto& la = std::get<ListValue>(a);
+        const auto& lb = std::get<ListValue>(b);
+        if (la.elements.size() != lb.elements.size())
+            return false;
+        bool hasNull = false;
+        for (size_t i = 0; i < la.elements.size(); ++i) {
+            auto cmp = valueEquals(la.elements[i].value, lb.elements[i].value);
+            if (!cmp)
+                hasNull = true;
+            else if (!*cmp)
+                return false;
+        }
+        return hasNull ? std::optional<bool>(std::nullopt) : std::optional<bool>(true);
+    }
+
+    // MapValue (order-independent key matching)
+    if (std::holds_alternative<MapValue>(a) && std::holds_alternative<MapValue>(b)) {
+        const auto& ma = std::get<MapValue>(a);
+        const auto& mb = std::get<MapValue>(b);
+        if (ma.entries.size() != mb.entries.size())
+            return false;
+        bool hasNull = false;
+        for (const auto& lhs_entry : ma.entries) {
+            bool found = false;
+            for (const auto& rhs_entry : mb.entries) {
+                if (lhs_entry.first == rhs_entry.first) {
+                    auto cmp = valueEquals(lhs_entry.second.value, rhs_entry.second.value);
+                    if (!cmp) {
+                        found = true;
+                        hasNull = true;
+                    } else if (*cmp) {
+                        found = true;
+                    }
+                    break;
+                }
+            }
+            if (!found)
+                return false;
+        }
+        return hasNull ? std::optional<bool>(std::nullopt) : std::optional<bool>(true);
+    }
+
+    // PathValue
+    if (std::holds_alternative<PathValue>(a) && std::holds_alternative<PathValue>(b)) {
+        const auto& pa = std::get<PathValue>(a);
+        const auto& pb = std::get<PathValue>(b);
+        if (pa.elements.size() != pb.elements.size())
+            return false;
+        bool hasNull = false;
+        for (size_t i = 0; i < pa.elements.size(); ++i) {
+            auto cmp = valueEquals(pa.elements[i].value, pb.elements[i].value);
+            if (!cmp)
+                hasNull = true;
+            else if (!*cmp)
+                return false;
+        }
+        return hasNull ? std::optional<bool>(std::nullopt) : std::optional<bool>(true);
+    }
+
+    // int64/double cross-type: promote to double
+    if (std::holds_alternative<int64_t>(a) && std::holds_alternative<double>(b))
+        return static_cast<double>(std::get<int64_t>(a)) == std::get<double>(b);
+    if (std::holds_alternative<double>(a) && std::holds_alternative<int64_t>(b))
+        return std::get<double>(a) == static_cast<double>(std::get<int64_t>(b));
+
+    // Same variant index: use built-in comparison (bool, int64, double, string,
+    // VertexValue, EdgeValue, temporal types). NaN == NaN → false per IEEE 754.
+    if (a.index() == b.index())
+        return a == b;
+
+    // Different non-null, non-promotable types → definitively not equal
+    return false;
+}
+
+// Three-valued ordered comparison: returns -1 (a < b), 0 (equal), 1 (a > b),
+// or nullopt (unknown — null encountered or types are not ordered-comparable).
+// Semantics:
+//   - null in either operand → nullopt
+//   - int64/double cross-type → promote to double
+//   - NaN → nullopt (NaN is not ordered with anything)
+//   - string vs string → lexicographic
+//   - different non-numeric types → nullopt
+inline std::optional<int> compareValues(const Value& a, const Value& b) {
+    // null → unknown
+    if (isNull(a) || isNull(b))
+        return std::nullopt;
+
+    // Check equality first (handles null, int64/double promotion, containers)
+    auto eq = valueEquals(a, b);
+    if (!eq)
+        return std::nullopt; // null in container propagation
+    if (*eq)
+        return 0;
+
+    // Not equal — determine ordering
+    // int64 vs int64
+    if (std::holds_alternative<int64_t>(a) && std::holds_alternative<int64_t>(b)) {
+        int64_t la = std::get<int64_t>(a), lb = std::get<int64_t>(b);
+        return la < lb ? -1 : 1;
+    }
+    // double vs double (NaN → nullopt)
+    if (std::holds_alternative<double>(a) && std::holds_alternative<double>(b)) {
+        double da = std::get<double>(a), db = std::get<double>(b);
+        if (std::isnan(da) || std::isnan(db))
+            return std::nullopt;
+        return da < db ? -1 : (da > db ? 1 : 0);
+    }
+    // int64 vs double (promote)
+    if (std::holds_alternative<int64_t>(a) && std::holds_alternative<double>(b)) {
+        double da = static_cast<double>(std::get<int64_t>(a)), db = std::get<double>(b);
+        if (std::isnan(db))
+            return std::nullopt;
+        return da < db ? -1 : (da > db ? 1 : 0);
+    }
+    if (std::holds_alternative<double>(a) && std::holds_alternative<int64_t>(b)) {
+        double da = std::get<double>(a), db = static_cast<double>(std::get<int64_t>(b));
+        if (std::isnan(da))
+            return std::nullopt;
+        return da < db ? -1 : (da > db ? 1 : 0);
+    }
+    // string vs string
+    if (std::holds_alternative<std::string>(a) && std::holds_alternative<std::string>(b)) {
+        return std::get<std::string>(a) < std::get<std::string>(b) ? -1 : 1;
+    }
+    // bool vs bool (true > false)
+    if (std::holds_alternative<bool>(a) && std::holds_alternative<bool>(b)) {
+        bool ba = std::get<bool>(a), bb = std::get<bool>(b);
+        return ba == bb ? 0 : (ba ? 1 : -1);
+    }
+    // Different types → unknown for ordered comparison
+    return std::nullopt;
 }
 
 // ==================== Row ====================

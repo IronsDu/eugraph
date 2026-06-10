@@ -600,14 +600,9 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
     case cypher::BinaryOperator::GT:
     case cypher::BinaryOperator::LTE:
     case cypher::BinaryOperator::GTE:
-        // Comparison: operands must be compatible
-        // Temporal types can be compared across kinds (returns null at runtime for mismatches)
-        if (isTemporalType(left_type.kind) && isTemporalType(right_type.kind))
-            return BoundType::Bool();
-        if (left_type.canCastTo(right_type) || right_type.canCastTo(left_type))
-            return BoundType::Bool();
-        error_msg = "Cannot compare " + left_type.toString() + " with " + right_type.toString();
-        return BoundType::Any();
+        // Comparison: always allowed. Cross-type comparisons return false/null at runtime
+        // (EQ → false, NEQ → true, ordered → null for incompatible types).
+        return BoundType::Bool();
 
     case cypher::BinaryOperator::AND:
     case cypher::BinaryOperator::OR:
@@ -711,14 +706,8 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
     case cypher::BinaryOperator::STARTS_WITH:
     case cypher::BinaryOperator::ENDS_WITH:
     case cypher::BinaryOperator::CONTAINS:
-        if ((left_type.kind == BoundTypeKind::STRING || left_type.kind == BoundTypeKind::ANY ||
-             left_type.kind == BoundTypeKind::NULL_TYPE) &&
-            (right_type.kind == BoundTypeKind::STRING || right_type.kind == BoundTypeKind::ANY ||
-             right_type.kind == BoundTypeKind::NULL_TYPE))
-            return BoundType::Bool();
-        error_msg =
-            "String operations require string operands: got " + left_type.toString() + " and " + right_type.toString();
-        return BoundType::Any();
+        // Always allowed. Non-string operands return null at runtime.
+        return BoundType::Bool();
 
     case cypher::BinaryOperator::IN:
         if (right_type.kind == BoundTypeKind::LIST || right_type.kind == BoundTypeKind::ANY ||

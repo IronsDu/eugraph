@@ -370,9 +370,19 @@ private:
         auto signs = ctx->comparisonSigns();
         if (adds.size() == 1)
             return buildAddSubExpr(adds[0]);
-        Expression r = buildAddSubExpr(adds[0]);
+
+        // Chained comparison (a < b < c): expands to (a < b) AND (b < c).
+        // Each middle operand is shared between two adjacent pairwise comparisons.
+        // E.g. for "1 < n.num <= 3":
+        //   (1 < n.num) AND (n.num <= 3)
+        std::vector<Expression> parts;
         for (size_t i = 0; i < signs.size(); i++)
-            r = makeBinaryOp(parseCompSign(signs[i]), std::move(r), buildAddSubExpr(adds[i + 1]));
+            parts.push_back(
+                makeBinaryOp(parseCompSign(signs[i]), buildAddSubExpr(adds[i]), buildAddSubExpr(adds[i + 1])));
+
+        Expression r = std::move(parts[0]);
+        for (size_t i = 1; i < parts.size(); i++)
+            r = makeBinaryOp(BinaryOperator::AND, std::move(r), std::move(parts[i]));
         return r;
     }
 
