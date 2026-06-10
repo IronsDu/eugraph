@@ -17,9 +17,10 @@
 
 ## 二、Grammar 与代码生成
 
-Grammar 文件位于 `grammar/CypherLexer.g4` 和 `grammar/CypherParser.g4`，从 grammars-v4 复制，不修改。特性：
+Grammar 文件位于 `grammar/CypherLexer.g4` 和 `grammar/CypherParser.g4`，基于 grammars-v4 并已按 openCypher BNF 调整。特性：
 - `caseInsensitive = true`，自动处理大小写无关关键字
 - 覆盖 MATCH, CREATE, MERGE, DELETE, SET, REMOVE, RETURN, WITH, UNION, UNWIND 等全部子句
+- `singleQuery` 采用 BNF 的 `<linear statement>` 结构：`clause* primitiveResultStatement?`，所有子句（MATCH/UNWIND/WITH/CREATE/...）作为平级 `<primitive statement>`
 
 ANTLR 生成的 C++ 代码（Visitor + Lexer/Parser）**预生成后直接提交到源码树**，CMake 编译时直接使用，不依赖 Java/JAR。
 
@@ -105,6 +106,6 @@ src/query/parser/
 | 1 | ANTLR4 而非手写 Parser | Cypher 语法复杂（300+ 产生式），.g4 维护成本低 |
 | 2 | 直接遍历 Parse Tree 而非 Visitor | `std::any` 与 move-only AST 不兼容 |
 | 3 | AST 与 ANTLR 解耦 | Planner 不依赖 ANTLR 运行时；AST 更精简 |
-| 4 | Grammar 文件不修改 | 保持与上游一致，便于后续更新 |
-| 5 | `variant<unique_ptr<T>>` 模式 | 值语义、类型安全、无手动内存管理 |
+| 4 | Grammar 按 openCypher BNF 调整 | `singleQuery` 对齐 `<linear statement>`，子句平级无需 `singlePartQ`/`multiPartQ` 区分 |
+| 5 | 字符串转义仅处理 `\uXXXX` → 改为处理所有标准转义 | 修复 TCK newline 转义测试。`unescapeString` 处理 `\n`,`\t`,`\r`,`\\`,`\'`,`\"`,`\b`,`\f` |
 | 6 | 预生成 C++ 代码提交仓库 | 避免构建时 Java 依赖，简化 CI |

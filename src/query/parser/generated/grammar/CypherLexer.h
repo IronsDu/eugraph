@@ -1,5 +1,5 @@
 
-// Generated from grammar/CypherLexer.g4 by ANTLR 4.13.2
+// Generated from /home/dodo/code/fuck/eugraph/src/query/parser/generated/grammar/CypherLexer.g4 by ANTLR 4.13.2
 
 #pragma once
 

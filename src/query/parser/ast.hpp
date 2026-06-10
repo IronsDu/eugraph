@@ -473,7 +473,7 @@ inline std::string expressionToString(const Expression& expr) {
                 return "(" + expressionToString(ptr->inner) + ")";
             } else if constexpr (std::is_same_v<OpType, Literal>) {
                 if (std::holds_alternative<std::string>(ptr->value))
-                    return std::get<std::string>(ptr->value);
+                    return "'" + std::get<std::string>(ptr->value) + "'";
                 if (std::holds_alternative<int64_t>(ptr->value))
                     return std::to_string(std::get<int64_t>(ptr->value));
                 if (std::holds_alternative<double>(ptr->value)) {

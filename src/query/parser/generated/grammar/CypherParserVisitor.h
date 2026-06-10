@@ -1,5 +1,5 @@
 
-// Generated from grammar/CypherParser.g4 by ANTLR 4.13.2
+// Generated from /home/dodo/code/fuck/eugraph/src/query/parser/generated/grammar/CypherParser.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -27,6 +27,14 @@ public:
 
     virtual std::any visitSingleQuery(CypherParser::SingleQueryContext *context) = 0;
 
+    virtual std::any visitClause(CypherParser::ClauseContext *context) = 0;
+
+    virtual std::any visitReadingClause(CypherParser::ReadingClauseContext *context) = 0;
+
+    virtual std::any visitUpdatingClause(CypherParser::UpdatingClauseContext *context) = 0;
+
+    virtual std::any visitPrimitiveResultStatement(CypherParser::PrimitiveResultStatementContext *context) = 0;
+
     virtual std::any visitStandaloneCall(CypherParser::StandaloneCallContext *context) = 0;
 
     virtual std::any visitReturnSt(CypherParser::ReturnStContext *context) = 0;
@@ -46,10 +54,6 @@ public:
     virtual std::any visitOrderItem(CypherParser::OrderItemContext *context) = 0;
 
     virtual std::any visitOrderSt(CypherParser::OrderStContext *context) = 0;
-
-    virtual std::any visitSinglePartQ(CypherParser::SinglePartQContext *context) = 0;
-
-    virtual std::any visitMultiPartQ(CypherParser::MultiPartQContext *context) = 0;
 
     virtual std::any visitMatchSt(CypherParser::MatchStContext *context) = 0;
 

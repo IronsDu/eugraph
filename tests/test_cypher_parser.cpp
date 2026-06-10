@@ -795,8 +795,11 @@ TEST_F(CypherParserTest, SyntaxErrorTypo) {
 }
 
 TEST_F(CypherParserTest, SyntaxErrorMissingReturn) {
-    auto err = parseError("MATCH (n:Person)");
-    EXPECT_FALSE(err.message.empty());
+    // per openCypher BNF: <linear statement> ::= <primitive statement>... [ <primitive result statement> ]
+    // RETURN is optional at the grammar level; semantic validation is the binder's job
+    auto stmt = parseSuccess("MATCH (n:Person)");
+    auto& query = getRegularQuery(stmt);
+    EXPECT_EQ(query.first.clauses.size(), 1u);
 }
 
 TEST_F(CypherParserTest, SyntaxErrorInvalidExpression) {

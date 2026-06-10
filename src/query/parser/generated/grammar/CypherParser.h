@@ -1,5 +1,5 @@
 
-// Generated from grammar/CypherParser.g4 by ANTLR 4.13.2
+// Generated from /home/dodo/code/fuck/eugraph/src/query/parser/generated/grammar/CypherParser.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -33,30 +33,31 @@ public:
 
   enum {
     RuleScript = 0, RuleQuery = 1, RuleRegularQuery = 2, RuleSingleQuery = 3, 
-    RuleStandaloneCall = 4, RuleReturnSt = 5, RuleWithSt = 6, RuleSkipSt = 7, 
-    RuleLimitSt = 8, RuleProjectionBody = 9, RuleProjectionItems = 10, RuleProjectionItem = 11, 
-    RuleOrderItem = 12, RuleOrderSt = 13, RuleSinglePartQ = 14, RuleMultiPartQ = 15, 
-    RuleMatchSt = 16, RuleUnwindSt = 17, RuleReadingStatement = 18, RuleUpdatingStatement = 19, 
-    RuleDeleteSt = 20, RuleRemoveSt = 21, RuleRemoveItem = 22, RuleQueryCallSt = 23, 
-    RuleParenExpressionChain = 24, RuleYieldItems = 25, RuleYieldItem = 26, 
-    RuleMergeSt = 27, RuleMergeAction = 28, RuleSetSt = 29, RuleSetItem = 30, 
-    RuleNodeLabels = 31, RuleCreateSt = 32, RulePatternWhere = 33, RuleWhere = 34, 
-    RulePattern = 35, RuleExpression = 36, RuleXorExpression = 37, RuleAndExpression = 38, 
-    RuleNotExpression = 39, RuleComparisonExpression = 40, RuleComparisonSigns = 41, 
-    RuleAddSubExpression = 42, RuleMultDivExpression = 43, RulePowerExpression = 44, 
-    RuleUnaryAddSubExpression = 45, RuleAtomicExpression = 46, RuleListExpression = 47, 
-    RuleStringExpression = 48, RuleStringExpPrefix = 49, RuleNullExpression = 50, 
-    RulePropertyOrLabelExpression = 51, RulePropertyExpression = 52, RuleLabelCast = 53, 
-    RulePatternPart = 54, RulePatternElem = 55, RulePatternElemChain = 56, 
-    RuleProperties = 57, RuleNodePattern = 58, RuleAtom = 59, RuleLhs = 60, 
-    RuleRelationshipPattern = 61, RuleRelationDetail = 62, RuleRelationshipTypes = 63, 
-    RuleUnionSt = 64, RuleSubqueryExist = 65, RuleInvocationName = 66, RuleFunctionInvocation = 67, 
-    RuleParenthesizedExpression = 68, RuleFilterWith = 69, RulePatternComprehension = 70, 
-    RuleRelationshipsChainPattern = 71, RuleListComprehension = 72, RuleFilterExpression = 73, 
-    RuleCountAll = 74, RuleExpressionChain = 75, RuleCaseExpression = 76, 
-    RuleParameter = 77, RuleLiteral = 78, RuleRangeLit = 79, RuleBoolLit = 80, 
-    RuleNumLit = 81, RuleStringLit = 82, RuleCharLit = 83, RuleListLit = 84, 
-    RuleMapLit = 85, RuleMapPair = 86, RuleName = 87, RuleSymbol = 88, RuleReservedWord = 89
+    RuleClause = 4, RuleReadingClause = 5, RuleUpdatingClause = 6, RulePrimitiveResultStatement = 7, 
+    RuleStandaloneCall = 8, RuleReturnSt = 9, RuleWithSt = 10, RuleSkipSt = 11, 
+    RuleLimitSt = 12, RuleProjectionBody = 13, RuleProjectionItems = 14, 
+    RuleProjectionItem = 15, RuleOrderItem = 16, RuleOrderSt = 17, RuleMatchSt = 18, 
+    RuleUnwindSt = 19, RuleReadingStatement = 20, RuleUpdatingStatement = 21, 
+    RuleDeleteSt = 22, RuleRemoveSt = 23, RuleRemoveItem = 24, RuleQueryCallSt = 25, 
+    RuleParenExpressionChain = 26, RuleYieldItems = 27, RuleYieldItem = 28, 
+    RuleMergeSt = 29, RuleMergeAction = 30, RuleSetSt = 31, RuleSetItem = 32, 
+    RuleNodeLabels = 33, RuleCreateSt = 34, RulePatternWhere = 35, RuleWhere = 36, 
+    RulePattern = 37, RuleExpression = 38, RuleXorExpression = 39, RuleAndExpression = 40, 
+    RuleNotExpression = 41, RuleComparisonExpression = 42, RuleComparisonSigns = 43, 
+    RuleAddSubExpression = 44, RuleMultDivExpression = 45, RulePowerExpression = 46, 
+    RuleUnaryAddSubExpression = 47, RuleAtomicExpression = 48, RuleListExpression = 49, 
+    RuleStringExpression = 50, RuleStringExpPrefix = 51, RuleNullExpression = 52, 
+    RulePropertyOrLabelExpression = 53, RulePropertyExpression = 54, RuleLabelCast = 55, 
+    RulePatternPart = 56, RulePatternElem = 57, RulePatternElemChain = 58, 
+    RuleProperties = 59, RuleNodePattern = 60, RuleAtom = 61, RuleLhs = 62, 
+    RuleRelationshipPattern = 63, RuleRelationDetail = 64, RuleRelationshipTypes = 65, 
+    RuleUnionSt = 66, RuleSubqueryExist = 67, RuleInvocationName = 68, RuleFunctionInvocation = 69, 
+    RuleParenthesizedExpression = 70, RuleFilterWith = 71, RulePatternComprehension = 72, 
+    RuleRelationshipsChainPattern = 73, RuleListComprehension = 74, RuleFilterExpression = 75, 
+    RuleCountAll = 76, RuleExpressionChain = 77, RuleCaseExpression = 78, 
+    RuleParameter = 79, RuleLiteral = 80, RuleRangeLit = 81, RuleBoolLit = 82, 
+    RuleNumLit = 83, RuleStringLit = 84, RuleCharLit = 85, RuleListLit = 86, 
+    RuleMapLit = 87, RuleMapPair = 88, RuleName = 89, RuleSymbol = 90, RuleReservedWord = 91
   };
 
   explicit CypherParser(antlr4::TokenStream *input);
@@ -80,6 +81,10 @@ public:
   class QueryContext;
   class RegularQueryContext;
   class SingleQueryContext;
+  class ClauseContext;
+  class ReadingClauseContext;
+  class UpdatingClauseContext;
+  class PrimitiveResultStatementContext;
   class StandaloneCallContext;
   class ReturnStContext;
   class WithStContext;
@@ -90,8 +95,6 @@ public:
   class ProjectionItemContext;
   class OrderItemContext;
   class OrderStContext;
-  class SinglePartQContext;
-  class MultiPartQContext;
   class MatchStContext;
   class UnwindStContext;
   class ReadingStatementContext;
@@ -216,8 +219,9 @@ public:
   public:
     SingleQueryContext(antlr4::ParserRuleContext *parent, size_t invokingState);
     virtual size_t getRuleIndex() const override;
-    SinglePartQContext *singlePartQ();
-    MultiPartQContext *multiPartQ();
+    std::vector<ClauseContext *> clause();
+    ClauseContext* clause(size_t i);
+    PrimitiveResultStatementContext *primitiveResultStatement();
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
@@ -225,6 +229,66 @@ public:
   };
 
   SingleQueryContext* singleQuery();
+
+  class  ClauseContext : public antlr4::ParserRuleContext {
+  public:
+    ClauseContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    ReadingClauseContext *readingClause();
+    UpdatingClauseContext *updatingClause();
+    QueryCallStContext *queryCallSt();
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  ClauseContext* clause();
+
+  class  ReadingClauseContext : public antlr4::ParserRuleContext {
+  public:
+    ReadingClauseContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    MatchStContext *matchSt();
+    UnwindStContext *unwindSt();
+    WithStContext *withSt();
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  ReadingClauseContext* readingClause();
+
+  class  UpdatingClauseContext : public antlr4::ParserRuleContext {
+  public:
+    UpdatingClauseContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    CreateStContext *createSt();
+    MergeStContext *mergeSt();
+    DeleteStContext *deleteSt();
+    SetStContext *setSt();
+    RemoveStContext *removeSt();
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  UpdatingClauseContext* updatingClause();
+
+  class  PrimitiveResultStatementContext : public antlr4::ParserRuleContext {
+  public:
+    PrimitiveResultStatementContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    ReturnStContext *returnSt();
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  PrimitiveResultStatementContext* primitiveResultStatement();
 
   class  StandaloneCallContext : public antlr4::ParserRuleContext {
   public:
@@ -384,42 +448,6 @@ public:
   };
 
   OrderStContext* orderSt();
-
-  class  SinglePartQContext : public antlr4::ParserRuleContext {
-  public:
-    SinglePartQContext(antlr4::ParserRuleContext *parent, size_t invokingState);
-    virtual size_t getRuleIndex() const override;
-    ReturnStContext *returnSt();
-    std::vector<ReadingStatementContext *> readingStatement();
-    ReadingStatementContext* readingStatement(size_t i);
-    std::vector<UpdatingStatementContext *> updatingStatement();
-    UpdatingStatementContext* updatingStatement(size_t i);
-
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
-  };
-
-  SinglePartQContext* singlePartQ();
-
-  class  MultiPartQContext : public antlr4::ParserRuleContext {
-  public:
-    MultiPartQContext(antlr4::ParserRuleContext *parent, size_t invokingState);
-    virtual size_t getRuleIndex() const override;
-    SinglePartQContext *singlePartQ();
-    std::vector<ReadingStatementContext *> readingStatement();
-    ReadingStatementContext* readingStatement(size_t i);
-    std::vector<WithStContext *> withSt();
-    WithStContext* withSt(size_t i);
-    std::vector<UpdatingStatementContext *> updatingStatement();
-    UpdatingStatementContext* updatingStatement(size_t i);
-
-
-    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-   
-  };
-
-  MultiPartQContext* multiPartQ();
 
   class  MatchStContext : public antlr4::ParserRuleContext {
   public:
@@ -794,7 +822,7 @@ public:
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
-
+   
   };
 
   NotExpressionContext* notExpression();

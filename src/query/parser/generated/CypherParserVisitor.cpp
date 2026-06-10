@@ -1,5 +1,5 @@
 
-// Generated from /mnt/f/code/eugraph/grammar/CypherParser.g4 by ANTLR 4.13.2
+// Generated from /home/dodo/code/fuck/eugraph/src/query/parser/generated/grammar/CypherParser.g4 by ANTLR 4.13.2
 
 
 #include "CypherParserVisitor.h"

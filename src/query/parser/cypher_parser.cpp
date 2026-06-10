@@ -40,9 +40,8 @@ private:
 
 // ==================== String Escape Processing ====================
 
-// Process ONLY \uXXXX unicode escape sequences in string/char literals.
-// All other escape sequences (\n, \\, \', etc.) are left as raw text,
-// matching the TCK expectation that only unicode escapes are interpolated.
+// Process escape sequences in string/char literals.
+// Handles \uXXXX unicode escapes and standard escapes (\n, \t, \\, etc.).
 // Throws std::invalid_argument("InvalidUnicodeLiteral") on malformed \u.
 static std::string unescapeString(const std::string& raw) {
     std::string result;
@@ -94,8 +93,38 @@ static std::string unescapeString(const std::string& raw) {
             }
             i = j + 3;
         } else {
-            // Non-unicode escape: pass through as-is (raw text)
-            result += raw[i];
+            // Standard escape sequences
+            switch (raw[i + 1]) {
+            case 'n':
+                result += '\n';
+                break;
+            case 't':
+                result += '\t';
+                break;
+            case 'r':
+                result += '\r';
+                break;
+            case 'b':
+                result += '\b';
+                break;
+            case 'f':
+                result += '\f';
+                break;
+            case '\\':
+                result += '\\';
+                break;
+            case '\'':
+                result += '\'';
+                break;
+            case '"':
+                result += '"';
+                break;
+            default:
+                // Unknown escape: pass through as-is
+                result += raw[i];
+                break;
+            }
+            ++i; // skip the escaped character
         }
     }
     return result;
@@ -241,59 +270,40 @@ private:
     }
 
     // === SingleQuery ===
+    // Mirrors openCypher BNF:
+    //   <linear statement> ::= <primitive statement>... [ <primitive result statement> ]
 
     SingleQuery buildSingleQuery(AP::SingleQueryContext* ctx) {
-        if (ctx->singlePartQ())
-            return buildSinglePartQ(ctx->singlePartQ());
-        return buildMultiPartQ(ctx->multiPartQ());
-    }
-
-    SingleQuery buildSinglePartQ(AP::SinglePartQContext* ctx) {
         SingleQuery sq;
-        for (auto* rs : ctx->readingStatement())
-            sq.clauses.push_back(buildReadingStatement(rs));
-        for (auto* us : ctx->updatingStatement())
-            sq.clauses.push_back(buildUpdatingStatement(us));
-        if (ctx->returnSt())
-            sq.clauses.push_back(Clause(std::move(buildReturnClause(ctx->returnSt()))));
-
-        // Reorder: reading -> updating -> return
-        std::vector<Clause> reading, updating, returning;
-        for (auto& c : sq.clauses) {
-            if (std::holds_alternative<std::unique_ptr<ReturnClause>>(c) ||
-                std::holds_alternative<std::unique_ptr<WithClause>>(c))
-                returning.push_back(std::move(c));
-            else if (std::holds_alternative<std::unique_ptr<CreateClause>>(c) ||
-                     std::holds_alternative<std::unique_ptr<MergeClause>>(c) ||
-                     std::holds_alternative<std::unique_ptr<DeleteClause>>(c) ||
-                     std::holds_alternative<std::unique_ptr<SetClause>>(c) ||
-                     std::holds_alternative<std::unique_ptr<RemoveClause>>(c))
-                updating.push_back(std::move(c));
-            else
-                reading.push_back(std::move(c));
+        for (auto* c : ctx->clause()) {
+            if (auto* rc = c->readingClause()) {
+                if (rc->matchSt())
+                    sq.clauses.push_back(buildReadingStatementMatch(rc->matchSt()));
+                else if (rc->unwindSt())
+                    sq.clauses.push_back(buildReadingStatementUnwind(rc->unwindSt()));
+                else if (rc->withSt())
+                    sq.clauses.push_back(Clause(buildWithClause(rc->withSt())));
+            } else if (auto* uc = c->updatingClause()) {
+                sq.clauses.push_back(buildUpdatingStatement(uc));
+            } else if (auto* cc = c->queryCallSt()) {
+                sq.clauses.push_back(Clause(buildCallClause(cc)));
+            }
         }
-        sq.clauses.clear();
-        for (auto& c : reading)
-            sq.clauses.push_back(std::move(c));
-        for (auto& c : updating)
-            sq.clauses.push_back(std::move(c));
-        for (auto& c : returning)
-            sq.clauses.push_back(std::move(c));
+        if (auto* rs = ctx->primitiveResultStatement())
+            sq.clauses.push_back(Clause(std::move(buildReturnClause(rs->returnSt()))));
+        if (sq.clauses.empty())
+            throw std::invalid_argument("UnexpectedSyntax");
         return sq;
     }
 
-    SingleQuery buildMultiPartQ(AP::MultiPartQContext* ctx) {
-        SingleQuery sq;
-        for (auto* rs : ctx->readingStatement())
-            sq.clauses.push_back(buildReadingStatement(rs));
-        for (auto* us : ctx->updatingStatement())
-            sq.clauses.push_back(buildUpdatingStatement(us));
-        for (auto* ws : ctx->withSt())
-            sq.clauses.push_back(Clause(buildWithClause(ws)));
-        auto tail = buildSinglePartQ(ctx->singlePartQ());
-        for (auto& c : tail.clauses)
-            sq.clauses.push_back(std::move(c));
-        return sq;
+    Clause buildReadingStatementMatch(AP::MatchStContext* ctx) {
+        return Clause(buildMatchClause(ctx));
+    }
+    Clause buildReadingStatementUnwind(AP::UnwindStContext* ctx) {
+        return Clause(buildUnwindClause(ctx));
+    }
+    Clause buildReadingStatementCall(AP::QueryCallStContext* ctx) {
+        return Clause(buildCallClause(ctx));
     }
 
     // === Clause Dispatch ===
@@ -306,7 +316,7 @@ private:
         return Clause(buildCallClause(ctx->queryCallSt()));
     }
 
-    Clause buildUpdatingStatement(AP::UpdatingStatementContext* ctx) {
+    Clause buildUpdatingStatement(AP::UpdatingClauseContext* ctx) {
         if (ctx->createSt())
             return Clause(buildCreateClause(ctx->createSt()));
         if (ctx->mergeSt())
