@@ -778,8 +778,10 @@ TEST_F(CypherParserTest, AstParenthesizedExpression) {
     ASSERT_NE(mul, nullptr);
     EXPECT_EQ((*mul)->op, BinaryOperator::MUL);
 
-    // Left child should be ADD (from parentheses)
-    auto* add = std::get_if<std::unique_ptr<BinaryOp>>(&(*mul)->left);
+    // Left child should be ParenExpr wrapping ADD (from parentheses)
+    auto* paren = std::get_if<std::unique_ptr<ParenExpr>>(&(*mul)->left);
+    ASSERT_NE(paren, nullptr);
+    auto* add = std::get_if<std::unique_ptr<BinaryOp>>(&(*paren)->inner);
     ASSERT_NE(add, nullptr);
     EXPECT_EQ((*add)->op, BinaryOperator::ADD);
 }
