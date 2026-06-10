@@ -154,8 +154,18 @@ std::string formatResultValue(const thrift::ResultValue& val) {
     case thrift::ResultValue::Type::double_val:
         return formatDouble(val.get_double_val());
 
-    case thrift::ResultValue::Type::string_val:
-        return "'" + val.get_string_val() + "'";
+    case thrift::ResultValue::Type::string_val: {
+        std::string escaped;
+        for (char c : val.get_string_val()) {
+            if (c == '\\')
+                escaped += "\\\\";
+            else if (c == '\'')
+                escaped += "\\'";
+            else
+                escaped += c;
+        }
+        return "'" + escaped + "'";
+    }
 
     case thrift::ResultValue::Type::vertex_json:
         return convertVertexJson(val.get_vertex_json());

@@ -50,8 +50,31 @@ regularQuery
     ;
 
 singleQuery
-    : singlePartQ
-    | multiPartQ
+    : clause* primitiveResultStatement?
+    ;
+
+clause
+    : readingClause
+    | updatingClause
+    | queryCallSt
+    ;
+
+readingClause
+    : matchSt
+    | unwindSt
+    | withSt
+    ;
+
+updatingClause
+    : createSt
+    | mergeSt
+    | deleteSt
+    | setSt
+    | removeSt
+    ;
+
+primitiveResultStatement
+    : returnSt
     ;
 
 standaloneCall
@@ -92,14 +115,6 @@ orderItem
 
 orderSt
     : ORDER BY orderItem (COMMA orderItem)*
-    ;
-
-singlePartQ
-    : readingStatement* (returnSt | updatingStatement+ returnSt?)
-    ;
-
-multiPartQ
-    : readingStatement* (updatingStatement* withSt)+ singlePartQ
     ;
 
 matchSt

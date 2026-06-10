@@ -1,5 +1,5 @@
 
-// Generated from /mnt/f/code/eugraph/grammar/CypherParser.g4 by ANTLR 4.13.2
+// Generated from /home/dodo/code/fuck/eugraph/src/query/parser/generated/grammar/CypherParser.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -28,6 +28,22 @@ public:
   }
 
   virtual std::any visitSingleQuery(CypherParser::SingleQueryContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitClause(CypherParser::ClauseContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitReadingClause(CypherParser::ReadingClauseContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitUpdatingClause(CypherParser::UpdatingClauseContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
+  virtual std::any visitPrimitiveResultStatement(CypherParser::PrimitiveResultStatementContext *ctx) override {
     return visitChildren(ctx);
   }
 
@@ -68,14 +84,6 @@ public:
   }
 
   virtual std::any visitOrderSt(CypherParser::OrderStContext *ctx) override {
-    return visitChildren(ctx);
-  }
-
-  virtual std::any visitSinglePartQ(CypherParser::SinglePartQContext *ctx) override {
-    return visitChildren(ctx);
-  }
-
-  virtual std::any visitMultiPartQ(CypherParser::MultiPartQContext *ctx) override {
     return visitChildren(ctx);
   }
 
