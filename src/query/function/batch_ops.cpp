@@ -1456,6 +1456,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
 
     // Temporal * number / Temporal / number (must precede ANY fallback
     // so that ANY-typed temporal properties dispatch correctly).
+    // Only intercept MUL/DIV; other ops fall through to generic dispatch.
     if ((isTemporalType(left_type) || left_type == BTK::ANY) &&
         (right_type == BTK::INT64 || right_type == BTK::DOUBLE)) {
         switch (op) {
@@ -1464,7 +1465,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         case BO::DIV:
             return temporalDivBatch;
         default:
-            return nullptr;
+            break;
         }
     }
 
@@ -1475,7 +1476,7 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         case BO::MUL:
             return temporalMulBatch;
         default:
-            return nullptr;
+            break;
         }
     }
 
