@@ -131,6 +131,8 @@ struct DurationValue {
     bool operator==(const DurationValue& o) const;
 };
 
+void normalizeDuration(DurationValue& dur);
+
 // ==================== String / comparison helpers ====================
 
 std::string temporalToString(const DateTimeValue& tv);
@@ -171,5 +173,9 @@ DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b);
 DurationValue durationBetween(const TimeValue& a, const TimeValue& b);
 
 DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos);
+
+int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, const std::string& tz_name);
+int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, int64_t hour, int64_t minute,
+                                  int64_t second, const std::string& tz_name);
 
 } // namespace eugraph

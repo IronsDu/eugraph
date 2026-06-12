@@ -70,7 +70,7 @@ int64_t isoWeekNumber(int64_t year, int64_t month, int64_t day) {
     day_of_year += day;
     // Week number
     int64_t week = (day_of_year - monday_week1_day) / 7 + 1;
-    if (week < 1)
+    if (day_of_year < monday_week1_day)
         return isoWeekNumber(year - 1, 12, 31); // belonged to last year
     if (week > 52) {
         // Check if week 53
@@ -133,21 +133,36 @@ std::string strFromMap(const MapValue* mv, const std::string& key) {
 }
 
 int64_t extractNanosFromMap(const MapValue* mv) {
-    bool has_ms = hasMapKey(mv, "millisecond");
-    bool has_us = hasMapKey(mv, "microsecond");
-    bool has_ns = hasMapKey(mv, "nanosecond");
-    if (has_ns && !has_ms && !has_us)
-        return intFromMap(mv, "nanosecond");
+    // Support both singular (temporal constructors) and plural (duration constructor) forms
+    bool has_ms = hasMapKey(mv, "millisecond") || hasMapKey(mv, "milliseconds");
+    bool has_us = hasMapKey(mv, "microsecond") || hasMapKey(mv, "microseconds");
+    bool has_ns = hasMapKey(mv, "nanosecond") || hasMapKey(mv, "nanoseconds");
+    if (has_ns && !has_ms && !has_us) {
+        if (hasMapKey(mv, "nanosecond"))
+            return intFromMap(mv, "nanosecond");
+        return intFromMap(mv, "nanoseconds");
+    }
     int64_t total = 0;
-    total += intFromMap(mv, "millisecond") * 1'000'000LL;
-    total += intFromMap(mv, "microsecond") * 1'000LL;
-    total += intFromMap(mv, "nanosecond");
+    if (hasMapKey(mv, "millisecond"))
+        total += intFromMap(mv, "millisecond") * 1'000'000LL;
+    else if (hasMapKey(mv, "milliseconds"))
+        total += intFromMap(mv, "milliseconds") * 1'000'000LL;
+    if (hasMapKey(mv, "microsecond"))
+        total += intFromMap(mv, "microsecond") * 1'000LL;
+    else if (hasMapKey(mv, "microseconds"))
+        total += intFromMap(mv, "microseconds") * 1'000LL;
+    if (hasMapKey(mv, "nanosecond"))
+        total += intFromMap(mv, "nanosecond");
+    else if (hasMapKey(mv, "nanoseconds"))
+        total += intFromMap(mv, "nanoseconds");
     return total;
 }
 
 int32_t parseTzOffset(const std::string& tz) {
     if (tz.empty() || tz == "Z" || tz == "+00:00" || tz == "-00:00")
         return 0;
+    if (tz.find('/') != std::string::npos)
+        return 0; // named timezone like "Europe/Stockholm" — offset set separately
     int sign = (tz[0] == '-') ? -1 : 1;
     size_t start = (tz[0] == '+' || tz[0] == '-') ? 1 : 0;
     // Parse HH:MM[:SS] or HHMM
@@ -197,6 +212,8 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
     bool explicit_year = hasMapKey(mv, "year");
     bool explicit_month = hasMapKey(mv, "month");
     bool explicit_day = hasMapKey(mv, "day");
+    // Save original base date fields before explicit overrides, for week/ordinal/quarter dow preservation
+    int64_t base_year = year, base_month = month, base_day = day;
     if (explicit_year)
         year = intFromMap(mv, "year", 1970);
     if (explicit_month)
@@ -215,17 +232,22 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
         if (hasMapKey(mv, "dayOfWeek")) {
             dow = intFromMap(mv, "dayOfWeek", 1);
         } else if (has_date_base) {
-            // Preserve day-of-week from the base date
-            int64_t days = daysFromCivil(year, month, day);
+            // Preserve day-of-week from the base date (use original base fields before overrides)
+            int64_t days = daysFromCivil(base_year, base_month, base_day);
             dow = ((days % 7) + 10) % 7 + 1; // 1=Mon..7=Sun
         } else {
             dow = 1; // default Monday
         }
         // weekYear overrides the calendar year for ISO week date calculation
         // Explicit 'year' key takes precedence over 'weekYear' per Cypher spec
+        // When a base date is present without explicit year/weekYear, use the base date's ISO week-year
         int64_t iso_year = year;
-        if (!explicit_year && has_week_year)
-            iso_year = intFromMap(mv, "weekYear", 1970);
+        if (!explicit_year) {
+            if (has_week_year)
+                iso_year = intFromMap(mv, "weekYear", 1970);
+            else if (has_date_base)
+                iso_year = isoWeekYear(base_year, base_month, base_day);
+        }
         isoWeekToDate(iso_year, wk, dow, year, month, day);
     } else if (use_ordinal) {
         int64_t ord = intFromMap(mv, "ordinalDay", 1);
@@ -236,12 +258,12 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
         if (hasMapKey(mv, "dayOfQuarter")) {
             doq = intFromMap(mv, "dayOfQuarter", 1);
         } else if (has_date_base) {
-            // Preserve day-of-quarter from the base date
-            int64_t start_month = (month - 1) / 3 * 3 + 1;
+            // Preserve day-of-quarter from the base date (use original base fields before overrides)
+            int64_t start_month = (base_month - 1) / 3 * 3 + 1;
             doq = 0;
-            for (int64_t m2 = start_month; m2 < month; ++m2)
-                doq += daysInMonth(year, m2);
-            doq += day;
+            for (int64_t m2 = start_month; m2 < base_month; ++m2)
+                doq += daysInMonth(base_year, m2);
+            doq += base_day;
         } else {
             doq = 1; // default first day of quarter
         }
@@ -275,6 +297,22 @@ DateTimeValue parseDateFromString(const std::string& s) {
 
     auto isDigit = [](char c) { return c >= '0' && c <= '9'; };
 
+    // Extended year format: [+-]?YYYY...-MM-DD (more than 4 year digits)
+    // Find last two dashes: ...-MM-DD
+    if (s.size() >= 10) {
+        size_t last_dash = s.rfind('-');
+        if (last_dash != std::string::npos && last_dash >= 4) {
+            size_t mid_dash = s.rfind('-', last_dash - 1);
+            if (mid_dash != std::string::npos && last_dash - mid_dash == 3) {
+                // Found ...-MM-DD pattern with exactly 2-digit month
+                tv.year = std::stoll(s.substr(0, mid_dash));
+                tv.month = std::stoll(s.substr(mid_dash + 1, 2));
+                tv.day = std::stoll(s.substr(last_dash + 1));
+                return tv;
+            }
+        }
+    }
+
     if (s.size() >= 10 && s[4] == '-' && s[7] == '-') {
         // YYYY-MM-DD
         tv.year = std::stoll(s.substr(0, 4));
@@ -292,15 +330,14 @@ DateTimeValue parseDateFromString(const std::string& s) {
         if (wpos == std::string::npos)
             wpos = s.find('w');
         int64_t iso_year = std::stoll(s.substr(0, wpos));
+        // Check for extended format: dash before W (year-W...)
+        bool extended = (wpos > 0 && s[wpos - 1] == '-');
         size_t num_start = wpos + 1;
-        bool has_dash = (num_start < s.size() && s[num_start] == '-');
-        if (has_dash)
-            num_start++;
-
         int64_t iso_week = 0;
         int64_t iso_dow = 1;
-        if (has_dash) {
-            // With separator: read all digits for week, then optional -D
+        if (extended) {
+            // Extended: YYYY-Www-D or YYYY-Www
+            // Skip dash after W if present (it shouldn't be in standard, but be tolerant)
             size_t num_end = num_start;
             while (num_end < s.size() && isDigit(s[num_end]))
                 num_end++;
@@ -311,15 +348,20 @@ DateTimeValue parseDateFromString(const std::string& s) {
                 iso_dow = std::stoll(s.substr(num_end));
             }
         } else {
-            // Compact: exactly 2 digits for week, then optional digits for dow
+            // Compact: YYYYWwwD or YYYYWww (2-digit week, optional 1-digit dow)
             if (num_start + 2 <= s.size())
                 iso_week = std::stoll(s.substr(num_start, 2));
             if (num_start + 2 < s.size())
                 iso_dow = std::stoll(s.substr(num_start + 2));
         }
         isoWeekToDate(iso_year, iso_week, iso_dow, tv.year, tv.month, tv.day);
-    } else if (s.size() == 7 && s[4] == '-') {
-        // YYYY-DDD (ordinal day with dash)
+    } else if (s.size() == 7 && s[4] == '-' && s.rfind('-') == 4) {
+        // YYYY-MM (month only, 2 digits — must come before ordinal YYYY-DDD)
+        tv.year = std::stoll(s.substr(0, 4));
+        tv.month = std::stoll(s.substr(5, 2));
+        tv.day = 1;
+    } else if (s.size() == 8 && s[4] == '-') {
+        // YYYY-DDD (ordinal day with dash, 3 digits)
         tv.year = std::stoll(s.substr(0, 4));
         int64_t ordinal = std::stoll(s.substr(5));
         ordinalToDate(tv.year, ordinal, tv.month, tv.day);
@@ -329,11 +371,6 @@ DateTimeValue parseDateFromString(const std::string& s) {
         tv.year = std::stoll(s.substr(0, 4));
         int64_t ordinal = std::stoll(s.substr(4));
         ordinalToDate(tv.year, ordinal, tv.month, tv.day);
-    } else if (s.size() >= 7 && s[4] == '-' && s.rfind('-') == 4) {
-        // YYYY-MM (month only -- must come after YYYY-DDD check)
-        tv.year = std::stoll(s.substr(0, 4));
-        tv.month = std::stoll(s.substr(5, 2));
-        tv.day = 1;
     } else if (s.size() == 6 && isDigit(s[0]) && isDigit(s[1]) && isDigit(s[2]) && isDigit(s[3]) && isDigit(s[4]) &&
                isDigit(s[5])) {
         // YYYYMM (compact month)
@@ -355,20 +392,45 @@ TimeValue parseTimeStr(const std::string& s, TimeKind kind) {
     if (s.empty())
         return tv;
     size_t pos = 0;
-    tv.hour = std::stoll(s.substr(pos, 2));
-    pos += 2;
-    if (pos < s.size() && s[pos] == ':')
-        pos++;
-    tv.minute = std::stoll(s.substr(pos, 2));
-    pos += 2;
-    // Seconds: either after ':' or directly as digits (compact format HHMMSS)
-    if (pos < s.size() && s[pos] == ':') {
-        pos++;
-        tv.second = std::stoll(s.substr(pos, 2));
+    auto isDigit = [](char c) { return c >= '0' && c <= '9'; };
+    // Read initial digit run
+    size_t num_end = pos;
+    while (num_end < s.size() && isDigit(s[num_end]))
+        num_end++;
+    if (num_end == pos)
+        return tv;
+
+    // Compact format: no colon immediately after the initial digits
+    // (e.g., "2140", "214032.142", "22+18:00")
+    bool is_compact = (num_end >= s.size() || s[num_end] != ':') && (num_end - pos >= 4);
+    if (is_compact) {
+        // Fixed 2-digit components: HHMM[SS[.fff]][tz]
+        tv.hour = std::stoll(s.substr(pos, 2));
         pos += 2;
-    } else if (pos < s.size() && s[pos] >= '0' && s[pos] <= '9') {
-        tv.second = std::stoll(s.substr(pos, 2));
+        tv.minute = std::stoll(s.substr(pos, 2));
         pos += 2;
+        if (pos < s.size() && isDigit(s[pos])) {
+            tv.second = std::stoll(s.substr(pos, 2));
+            pos += 2;
+        }
+    } else {
+        // Separator format: variable-length hour, colon-delimited components
+        tv.hour = std::stoll(s.substr(pos, num_end - pos));
+        pos = num_end;
+        if (pos < s.size() && s[pos] == ':')
+            pos++;
+        if (pos < s.size() && isDigit(s[pos])) {
+            tv.minute = std::stoll(s.substr(pos, 2));
+            pos += 2;
+        }
+        if (pos < s.size() && s[pos] == ':') {
+            pos++;
+            tv.second = std::stoll(s.substr(pos, 2));
+            pos += 2;
+        } else if (pos < s.size() && isDigit(s[pos])) {
+            tv.second = std::stoll(s.substr(pos, 2));
+            pos += 2;
+        }
     }
     if (pos < s.size() && s[pos] == '.') {
         pos++;
@@ -381,8 +443,19 @@ TimeValue parseTimeStr(const std::string& s, TimeKind kind) {
     }
     if (kind == TimeKind::TIME && pos < s.size()) {
         std::string tz = s.substr(pos);
+        std::string tz_name_str;
+        auto bracket = tz.find('[');
+        if (bracket != std::string::npos) {
+            auto close = tz.find(']', bracket);
+            if (close != std::string::npos) {
+                tz_name_str = tz.substr(bracket + 1, close - bracket - 1);
+                tz = tz.substr(0, bracket);
+            }
+        }
         if (tz != "Z" && !tz.empty())
             tv.tz_offset_sec = parseTzOffset(tz);
+        if (!tz_name_str.empty())
+            tv.tz_name = tz_name_str;
     }
     return tv;
 }
@@ -392,44 +465,43 @@ DateTimeValue parseDatetimeStr(const std::string& s, DateTimeKind kind) {
     tv.kind = kind;
     if (s.empty())
         return tv;
-    size_t pos = 0;
-    tv.year = std::stoll(s.substr(0, 4));
-    pos += 4;
-    if (pos < s.size() && s[pos] == '-')
-        pos++;
-    tv.month = std::stoll(s.substr(pos, 2));
-    pos += 2;
-    if (pos < s.size() && s[pos] == '-')
-        pos++;
-    tv.day = std::stoll(s.substr(pos, 2));
-    pos += 2;
-    if (pos < s.size() && (s[pos] == 'T' || s[pos] == 't' || s[pos] == ' '))
-        pos++;
-    tv.hour = std::stoll(s.substr(pos, 2));
-    pos += 2;
-    if (pos < s.size() && s[pos] == ':')
-        pos++;
-    tv.minute = std::stoll(s.substr(pos, 2));
-    pos += 2;
-    if (pos < s.size() && s[pos] == ':') {
-        pos++;
-        tv.second = std::stoll(s.substr(pos, 2));
-        pos += 2;
+
+    // Find the T separator to split date and time parts
+    size_t t_pos = std::string::npos;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == 'T' || s[i] == 't' || s[i] == ' ') {
+            t_pos = i;
+            break;
+        }
     }
-    if (pos < s.size() && s[pos] == '.') {
-        pos++;
-        size_t start = pos;
-        while (pos < s.size() && s[pos] >= '0' && s[pos] <= '9')
-            pos++;
-        std::string frac = s.substr(start, pos - start);
-        frac.resize(9, '0');
-        tv.nanos = std::stoll(frac);
+
+    if (t_pos != std::string::npos) {
+        // Parse date portion using parseDateFromString (handles week, ordinal, etc.)
+        std::string date_part = s.substr(0, t_pos);
+        auto date_tv = parseDateFromString(date_part);
+        tv.year = date_tv.year;
+        tv.month = date_tv.month;
+        tv.day = date_tv.day;
+
+        // Parse time portion using parseTimeStr (handles compact and separator formats)
+        TimeKind time_kind = (kind == DateTimeKind::DATETIME) ? TimeKind::TIME : TimeKind::LOCAL_TIME;
+        auto time_tv = parseTimeStr(s.substr(t_pos + 1), time_kind);
+        tv.hour = time_tv.hour;
+        tv.minute = time_tv.minute;
+        tv.second = time_tv.second;
+        tv.nanos = time_tv.nanos;
+        if (kind == DateTimeKind::DATETIME) {
+            tv.tz_offset_sec = time_tv.tz_offset_sec;
+            tv.tz_name = time_tv.tz_name;
+        }
+        return tv;
     }
-    if (kind == DateTimeKind::DATETIME && pos < s.size()) {
-        std::string tz = s.substr(pos);
-        if (tz != "Z" && !tz.empty())
-            tv.tz_offset_sec = parseTzOffset(tz);
-    }
+
+    // No T separator — parse as date-only
+    auto date_tv = parseDateFromString(s);
+    tv.year = date_tv.year;
+    tv.month = date_tv.month;
+    tv.day = date_tv.day;
     return tv;
 }
 
@@ -438,6 +510,21 @@ DurationValue parseDurationFromString(const std::string& s) {
     if (s.empty() || s[0] != 'P')
         return dv;
     size_t pos = 1;
+
+    // Check for date-based duration format: PYYYY-MM-DDThh:mm:ss
+    // Must start with 4+ digits followed by '-' after P
+    if (s.size() >= 12 && s[1] >= '0' && s[1] <= '9' && s[2] >= '0' && s[2] <= '9' && s[3] >= '0' && s[3] <= '9' &&
+        s[4] >= '0' && s[4] <= '9' && s[5] == '-') {
+        // Date-based format: extract components from date-time string
+        auto date_tv = parseDatetimeStr(s.substr(1), DateTimeKind::DATE);
+        dv.months = date_tv.year * 12 + date_tv.month;
+        dv.days = date_tv.day;
+        dv.seconds = date_tv.hour * 3600 + date_tv.minute * 60 + date_tv.second;
+        dv.nanos = date_tv.nanos;
+        return dv;
+    }
+
+    static constexpr double kDaysPerMonth = 365.2425 / 12.0;
     bool in_time = false;
     while (pos < s.size()) {
         if (s[pos] == 'T') {
@@ -456,41 +543,85 @@ DurationValue parseDurationFromString(const std::string& s) {
             break;
         char unit = s[pos++];
         int64_t int_part = static_cast<int64_t>(val);
-        double frac = val - int_part;
+        double frac = val - static_cast<double>(int_part);
         switch (unit) {
         case 'Y':
             dv.months += int_part * 12;
+            if (frac != 0) {
+                double frac_days = frac * 12.0 * kDaysPerMonth;
+                int64_t frac_days_int = static_cast<int64_t>(frac_days);
+                dv.days += frac_days_int;
+                double frac_secs = (frac_days - static_cast<double>(frac_days_int)) * 86400.0;
+                int64_t frac_secs_int = static_cast<int64_t>(frac_secs);
+                dv.seconds += frac_secs_int;
+                dv.nanos += static_cast<int64_t>((frac_secs - static_cast<double>(frac_secs_int)) * 1'000'000'000.0);
+            }
             break;
         case 'M':
             if (!in_time) {
                 dv.months += int_part;
+                if (frac != 0) {
+                    double frac_days = frac * kDaysPerMonth;
+                    int64_t frac_days_int = static_cast<int64_t>(frac_days);
+                    dv.days += frac_days_int;
+                    double frac_secs = (frac_days - static_cast<double>(frac_days_int)) * 86400.0;
+                    int64_t frac_secs_int = static_cast<int64_t>(frac_secs);
+                    dv.seconds += frac_secs_int;
+                    dv.nanos +=
+                        static_cast<int64_t>((frac_secs - static_cast<double>(frac_secs_int)) * 1'000'000'000.0);
+                }
             } else {
                 dv.seconds += int_part * 60;
-                if (frac != 0)
-                    dv.seconds += static_cast<int64_t>(frac * 60);
+                if (frac != 0) {
+                    double frac_secs = frac * 60.0;
+                    int64_t frac_secs_int = static_cast<int64_t>(frac_secs);
+                    dv.seconds += frac_secs_int;
+                    dv.nanos +=
+                        static_cast<int64_t>((frac_secs - static_cast<double>(frac_secs_int)) * 1'000'000'000.0);
+                }
             }
             break;
         case 'W':
             dv.days += int_part * 7;
+            if (frac != 0) {
+                double frac_secs = frac * 7.0 * 86400.0;
+                dv.seconds += static_cast<int64_t>(frac_secs);
+                dv.nanos += static_cast<int64_t>((frac_secs - static_cast<int64_t>(frac_secs)) * 1'000'000'000.0);
+            }
             break;
         case 'D':
             dv.days += int_part;
-            if (frac != 0)
-                dv.seconds += static_cast<int64_t>(frac * 86400);
+            if (frac != 0) {
+                double frac_secs = frac * 86400.0;
+                dv.seconds += static_cast<int64_t>(frac_secs);
+                dv.nanos += static_cast<int64_t>((frac_secs - static_cast<int64_t>(frac_secs)) * 1'000'000'000.0);
+            }
             break;
         case 'H':
             dv.seconds += int_part * 3600;
-            if (frac != 0)
-                dv.seconds += static_cast<int64_t>(frac * 3600);
+            if (frac != 0) {
+                double frac_secs = frac * 3600.0;
+                dv.seconds += static_cast<int64_t>(frac_secs);
+                dv.nanos += static_cast<int64_t>((frac_secs - static_cast<int64_t>(frac_secs)) * 1'000'000'000.0);
+            }
             break;
         case 'S': {
             dv.seconds += int_part;
             if (frac != 0) {
-                int64_t frac_ns = static_cast<int64_t>(frac * 1'000'000'000.0);
-                dv.nanos += frac_ns;
-                if (dv.nanos >= 1'000'000'000LL) {
-                    dv.seconds += dv.nanos / 1'000'000'000LL;
-                    dv.nanos %= 1'000'000'000LL;
+                // Parse fractional seconds as nanoseconds to avoid floating-point precision loss
+                std::string num_str = s.substr(num_start, pos - num_start - 1);
+                auto dot_pos = num_str.find('.');
+                if (dot_pos != std::string::npos) {
+                    std::string frac_str = num_str.substr(dot_pos + 1);
+                    // Pad or truncate to 9 digits
+                    if (frac_str.size() > 9)
+                        frac_str.resize(9);
+                    else if (frac_str.size() < 9)
+                        frac_str.append(9 - frac_str.size(), '0');
+                    int64_t frac_ns = std::stoll(frac_str);
+                    if (neg)
+                        frac_ns = -frac_ns;
+                    dv.nanos += frac_ns;
                 }
             }
             break;
@@ -498,6 +629,14 @@ DurationValue parseDurationFromString(const std::string& s) {
         default:
             break;
         }
+    }
+    normalizeDuration(dv);
+    // Normalize seconds into days for parsed durations
+    static constexpr int64_t kSecPerDay = 86'400;
+    if (dv.seconds >= kSecPerDay || dv.seconds <= -kSecPerDay) {
+        int64_t extra_days = dv.seconds / kSecPerDay;
+        dv.days += extra_days;
+        dv.seconds -= extra_days * kSecPerDay;
     }
     return dv;
 }
@@ -643,19 +782,22 @@ inline Value timeImpl(const Value& arg) {
         tv.kind = TimeKind::TIME;
         // Check for 'time' key as base
         bool has_base = false;
+        bool base_has_tz = false;
         for (const auto& [k, vs] : mv->entries) {
             if (k == "time" && !std::holds_alternative<std::monostate>(vs.value)) {
                 if (std::holds_alternative<TimeValue>(vs.value)) {
-                    tv = std::get<TimeValue>(vs.value);
+                    const auto& base_tv = std::get<TimeValue>(vs.value);
+                    base_has_tz = (base_tv.kind == TimeKind::TIME);
+                    tv = base_tv;
                     tv.kind = TimeKind::TIME;
                 } else if (std::holds_alternative<DateTimeValue>(vs.value)) {
                     const auto& dtv = std::get<DateTimeValue>(vs.value);
+                    base_has_tz = (dtv.kind == DateTimeKind::DATETIME);
                     tv.hour = dtv.hour;
                     tv.minute = dtv.minute;
                     tv.second = dtv.second;
                     tv.nanos = dtv.nanos;
                     tv.tz_offset_sec = dtv.tz_offset_sec;
-                    tv.tz_name = dtv.tz_name;
                 }
                 has_base = true;
                 break;
@@ -669,9 +811,48 @@ inline Value timeImpl(const Value& arg) {
             tv.second = intFromMap(mv, "second");
         if (hasMapKey(mv, "nanosecond") || hasMapKey(mv, "millisecond") || hasMapKey(mv, "microsecond"))
             tv.nanos = extractNanosFromMap(mv);
-        if (!has_base || hasMapKey(mv, "timezone")) {
+        bool explicit_tz = hasMapKey(mv, "timezone");
+        if (!has_base || explicit_tz) {
             std::string tz = strFromMap(mv, "timezone");
-            tv.tz_offset_sec = parseTzOffset(tz);
+            if (tz.find('/') != std::string::npos) {
+                tv.tz_name = tz;
+                if (has_base && explicit_tz && base_has_tz) {
+                    // Convert time from old timezone to new named timezone
+                    int64_t nano_day = tv.hour * 3600LL * 1'000'000'000LL + tv.minute * 60LL * 1'000'000'000LL +
+                                       tv.second * 1'000'000'000LL + tv.nanos;
+                    int64_t utc_nano = nano_day - static_cast<int64_t>(tv.tz_offset_sec) * 1'000'000'000LL;
+                    int32_t new_offset = lookupNamedTimezoneOffset(0, 1, 1, tz);
+                    int64_t new_nano = utc_nano + static_cast<int64_t>(new_offset) * 1'000'000'000LL;
+                    static constexpr int64_t kDayNs = 86'400LL * 1'000'000'000LL;
+                    new_nano = ((new_nano % kDayNs) + kDayNs) % kDayNs;
+                    tv.hour = new_nano / (3600LL * 1'000'000'000LL);
+                    new_nano %= 3600LL * 1'000'000'000LL;
+                    tv.minute = new_nano / (60LL * 1'000'000'000LL);
+                    new_nano %= 60LL * 1'000'000'000LL;
+                    tv.second = new_nano / 1'000'000'000LL;
+                    tv.nanos = new_nano % 1'000'000'000LL;
+                    tv.tz_offset_sec = new_offset;
+                }
+            } else {
+                int32_t new_offset = parseTzOffset(tz);
+                if (has_base && explicit_tz && base_has_tz) {
+                    // Convert time from old timezone to new numeric timezone
+                    int64_t nano_day = tv.hour * 3600LL * 1'000'000'000LL + tv.minute * 60LL * 1'000'000'000LL +
+                                       tv.second * 1'000'000'000LL + tv.nanos;
+                    int64_t utc_nano = nano_day - static_cast<int64_t>(tv.tz_offset_sec) * 1'000'000'000LL;
+                    int64_t new_nano = utc_nano + static_cast<int64_t>(new_offset) * 1'000'000'000LL;
+                    static constexpr int64_t kDayNs = 86'400LL * 1'000'000'000LL;
+                    new_nano = ((new_nano % kDayNs) + kDayNs) % kDayNs;
+                    tv.hour = new_nano / (3600LL * 1'000'000'000LL);
+                    new_nano %= 3600LL * 1'000'000'000LL;
+                    tv.minute = new_nano / (60LL * 1'000'000'000LL);
+                    new_nano %= 60LL * 1'000'000'000LL;
+                    tv.second = new_nano / 1'000'000'000LL;
+                    tv.nanos = new_nano % 1'000'000'000LL;
+                }
+                tv.tz_offset_sec = new_offset;
+                tv.tz_name.clear();
+            }
         }
         return Value{tv};
     }
@@ -694,7 +875,6 @@ inline Value timeImpl(const Value& arg) {
         tv.second = dtv.second;
         tv.nanos = dtv.nanos;
         tv.tz_offset_sec = dtv.tz_offset_sec;
-        tv.tz_name = dtv.tz_name;
         return Value{tv};
     }
 
@@ -732,7 +912,7 @@ inline Value localdatetimeImpl(const Value& arg) {
     if (auto* mv = asMap(arg)) {
         DateTimeValue tv;
         tv.kind = DateTimeKind::LOCAL_DATETIME;
-        // Check for 'datetime' or 'date' key as base
+        // Check for 'datetime' or 'date' key as base (for date part)
         for (const auto& [k, vs] : mv->entries) {
             if ((k == "datetime" || k == "date") && !std::holds_alternative<std::monostate>(vs.value)) {
                 if (std::holds_alternative<DateTimeValue>(vs.value)) {
@@ -752,6 +932,25 @@ inline Value localdatetimeImpl(const Value& arg) {
                     tv.minute = timv.minute;
                     tv.second = timv.second;
                     tv.nanos = timv.nanos;
+                }
+                break;
+            }
+        }
+        // Also check for 'time' key (for time-of-day part)
+        for (const auto& [k, vs] : mv->entries) {
+            if (k == "time" && !std::holds_alternative<std::monostate>(vs.value)) {
+                if (std::holds_alternative<TimeValue>(vs.value)) {
+                    const auto& timv = std::get<TimeValue>(vs.value);
+                    tv.hour = timv.hour;
+                    tv.minute = timv.minute;
+                    tv.second = timv.second;
+                    tv.nanos = timv.nanos;
+                } else if (std::holds_alternative<DateTimeValue>(vs.value)) {
+                    const auto& dtv = std::get<DateTimeValue>(vs.value);
+                    tv.hour = dtv.hour;
+                    tv.minute = dtv.minute;
+                    tv.second = dtv.second;
+                    tv.nanos = dtv.nanos;
                 }
                 break;
             }
@@ -813,8 +1012,9 @@ inline Value datetimeImpl(const Value& arg) {
     if (auto* mv = asMap(arg)) {
         DateTimeValue tv;
         tv.kind = DateTimeKind::DATETIME;
-        // Check for 'datetime' or 'date' key as base
+        // Check for 'datetime' or 'date' key as base (for date part)
         bool has_base = false;
+        bool base_has_tz = false;
         for (const auto& [k, vs] : mv->entries) {
             if ((k == "datetime" || k == "date") && !std::holds_alternative<std::monostate>(vs.value)) {
                 if (std::holds_alternative<DateTimeValue>(vs.value)) {
@@ -829,6 +1029,7 @@ inline Value datetimeImpl(const Value& arg) {
                         tv.nanos = base.nanos;
                         tv.tz_offset_sec = base.tz_offset_sec;
                         tv.tz_name = base.tz_name;
+                        base_has_tz = (base.kind == DateTimeKind::DATETIME);
                     }
                 } else if (std::holds_alternative<TimeValue>(vs.value)) {
                     const auto& timv = std::get<TimeValue>(vs.value);
@@ -838,6 +1039,35 @@ inline Value datetimeImpl(const Value& arg) {
                     tv.nanos = timv.nanos;
                     tv.tz_offset_sec = timv.tz_offset_sec;
                     tv.tz_name = timv.tz_name;
+                    base_has_tz = (timv.kind == TimeKind::TIME);
+                }
+                has_base = true;
+                break;
+            }
+        }
+        // Also check for 'time' key (for time-of-day part, including timezone)
+        for (const auto& [k, vs] : mv->entries) {
+            if (k == "time" && !std::holds_alternative<std::monostate>(vs.value)) {
+                if (std::holds_alternative<TimeValue>(vs.value)) {
+                    const auto& timv = std::get<TimeValue>(vs.value);
+                    tv.hour = timv.hour;
+                    tv.minute = timv.minute;
+                    tv.second = timv.second;
+                    tv.nanos = timv.nanos;
+                    if (timv.kind == TimeKind::TIME) {
+                        tv.tz_offset_sec = timv.tz_offset_sec;
+                        tv.tz_name = timv.tz_name;
+                        base_has_tz = true;
+                    }
+                } else if (std::holds_alternative<DateTimeValue>(vs.value)) {
+                    const auto& dtv = std::get<DateTimeValue>(vs.value);
+                    tv.hour = dtv.hour;
+                    tv.minute = dtv.minute;
+                    tv.second = dtv.second;
+                    tv.nanos = dtv.nanos;
+                    tv.tz_offset_sec = dtv.tz_offset_sec;
+                    tv.tz_name = dtv.tz_name;
+                    base_has_tz = (dtv.kind == DateTimeKind::DATETIME);
                 }
                 has_base = true;
                 break;
@@ -853,15 +1083,95 @@ inline Value datetimeImpl(const Value& arg) {
             tv.second = intFromMap(mv, "second");
         if (hasMapKey(mv, "nanosecond") || hasMapKey(mv, "millisecond") || hasMapKey(mv, "microsecond"))
             tv.nanos = extractNanosFromMap(mv);
-        if (!has_base || hasMapKey(mv, "timezone")) {
+        // Recompute base named timezone offset for final date before any tz conversion
+        if (base_has_tz && !tv.tz_name.empty())
+            tv.tz_offset_sec =
+                lookupNamedTimezoneOffset(tv.year, tv.month, tv.day, tv.hour, tv.minute, tv.second, tv.tz_name);
+        bool explicit_tz = hasMapKey(mv, "timezone");
+        if (!has_base || explicit_tz) {
             std::string tz = strFromMap(mv, "timezone");
-            tv.tz_offset_sec = parseTzOffset(tz);
+            if (tz.find('/') != std::string::npos) {
+                int32_t new_offset = lookupNamedTimezoneOffset(tv.year, tv.month, tv.day, tz);
+                if (has_base && explicit_tz && base_has_tz) {
+                    int64_t nano_day = tv.hour * 3600LL * 1'000'000'000LL + tv.minute * 60LL * 1'000'000'000LL +
+                                       tv.second * 1'000'000'000LL + tv.nanos;
+                    int64_t utc_nano = nano_day - static_cast<int64_t>(tv.tz_offset_sec) * 1'000'000'000LL;
+                    int64_t new_nano = utc_nano + static_cast<int64_t>(new_offset) * 1'000'000'000LL;
+                    static constexpr int64_t kDayNs = 86'400LL * 1'000'000'000LL;
+                    int64_t day_shift = 0;
+                    if (new_nano < 0) {
+                        day_shift = new_nano / kDayNs - 1;
+                        new_nano = new_nano % kDayNs + kDayNs;
+                        if (new_nano == kDayNs) {
+                            new_nano = 0;
+                            day_shift++;
+                        }
+                    } else if (new_nano >= kDayNs) {
+                        day_shift = new_nano / kDayNs;
+                        new_nano %= kDayNs;
+                    }
+                    tv.hour = new_nano / (3600LL * 1'000'000'000LL);
+                    new_nano %= 3600LL * 1'000'000'000LL;
+                    tv.minute = new_nano / (60LL * 1'000'000'000LL);
+                    new_nano %= 60LL * 1'000'000'000LL;
+                    tv.second = new_nano / 1'000'000'000LL;
+                    tv.nanos = new_nano % 1'000'000'000LL;
+                    if (day_shift != 0) {
+                        int64_t total_days = daysFromCivil(tv.year, tv.month, tv.day) + day_shift;
+                        civilFromDays(total_days, tv.year, tv.month, tv.day);
+                    }
+                }
+                tv.tz_offset_sec = new_offset;
+                tv.tz_name = tz;
+            } else {
+                int32_t new_offset = parseTzOffset(tz);
+                if (has_base && explicit_tz && base_has_tz) {
+                    int64_t nano_day = tv.hour * 3600LL * 1'000'000'000LL + tv.minute * 60LL * 1'000'000'000LL +
+                                       tv.second * 1'000'000'000LL + tv.nanos;
+                    int64_t utc_nano = nano_day - static_cast<int64_t>(tv.tz_offset_sec) * 1'000'000'000LL;
+                    int64_t new_nano = utc_nano + static_cast<int64_t>(new_offset) * 1'000'000'000LL;
+                    static constexpr int64_t kDayNs = 86'400LL * 1'000'000'000LL;
+                    int64_t day_shift = 0;
+                    if (new_nano < 0) {
+                        day_shift = new_nano / kDayNs - 1;
+                        new_nano = new_nano % kDayNs + kDayNs;
+                        if (new_nano == kDayNs) {
+                            new_nano = 0;
+                            day_shift++;
+                        }
+                    } else if (new_nano >= kDayNs) {
+                        day_shift = new_nano / kDayNs;
+                        new_nano %= kDayNs;
+                    }
+                    tv.hour = new_nano / (3600LL * 1'000'000'000LL);
+                    new_nano %= 3600LL * 1'000'000'000LL;
+                    tv.minute = new_nano / (60LL * 1'000'000'000LL);
+                    new_nano %= 60LL * 1'000'000'000LL;
+                    tv.second = new_nano / 1'000'000'000LL;
+                    tv.nanos = new_nano % 1'000'000'000LL;
+                    if (day_shift != 0) {
+                        int64_t total_days = daysFromCivil(tv.year, tv.month, tv.day) + day_shift;
+                        civilFromDays(total_days, tv.year, tv.month, tv.day);
+                    }
+                }
+                tv.tz_offset_sec = new_offset;
+                tv.tz_name.clear();
+            }
         }
+        // Recompute named timezone offset for final date (may have changed via field overrides)
+        if (!tv.tz_name.empty())
+            tv.tz_offset_sec =
+                lookupNamedTimezoneOffset(tv.year, tv.month, tv.day, tv.hour, tv.minute, tv.second, tv.tz_name);
         return Value{tv};
     }
 
-    if (std::holds_alternative<std::string>(arg))
-        return Value{parseDatetimeStr(std::get<std::string>(arg), DateTimeKind::DATETIME)};
+    if (std::holds_alternative<std::string>(arg)) {
+        auto tv = parseDatetimeStr(std::get<std::string>(arg), DateTimeKind::DATETIME);
+        if (!tv.tz_name.empty() && tv.tz_offset_sec == 0)
+            tv.tz_offset_sec =
+                lookupNamedTimezoneOffset(tv.year, tv.month, tv.day, tv.hour, tv.minute, tv.second, tv.tz_name);
+        return Value{tv};
+    }
 
     if (std::holds_alternative<DateTimeValue>(arg)) {
         auto tv = std::get<DateTimeValue>(arg);
@@ -952,6 +1262,7 @@ inline Value durationImpl(const Value& arg) {
             dv.seconds -= 1;
         }
 
+        normalizeDuration(dv);
         return Value{dv};
     }
 
@@ -1125,6 +1436,13 @@ inline Value temporalAccessorImpl(const Value& tv_val, int64_t field_raw) {
     if (std::holds_alternative<TimeValue>(tv_val)) {
         const auto& tv = std::get<TimeValue>(tv_val);
         const TimeKind k = tv.kind;
+        // Remap DateTimeField→TimeField when property stored with ANY type.
+        // DateTimeField time values (HOUR=9 ... OFFSET_SECONDS=18) map to
+        // TimeField (HOUR=0 ... OFFSET_SECONDS=9) by subtracting 9.
+        if (field_raw >= 9 && field_raw <= 18)
+            field_raw -= 9;
+        else if (field_raw > 18 || field_raw < 0)
+            return Value{};
         auto field = static_cast<TimeField>(field_raw);
 
         auto isZoned = [](TimeKind kk) { return kk == TimeKind::TIME; };
@@ -1226,11 +1544,11 @@ inline Value temporalAccessorImpl(const Value& tv_val, int64_t field_raw) {
         case DurationField::SECONDS:
             return Value{dv.seconds};
         case DurationField::MILLISECONDS:
-            return Value{dv.nanos / 1'000'000LL};
+            return Value{dv.seconds * 1000 + dv.nanos / 1'000'000LL};
         case DurationField::MICROSECONDS:
-            return Value{dv.nanos / 1'000LL};
+            return Value{dv.seconds * 1'000'000 + dv.nanos / 1'000LL};
         case DurationField::NANOSECONDS:
-            return Value{dv.nanos};
+            return Value{dv.seconds * 1'000'000'000 + dv.nanos};
         case DurationField::MINUTES_OF_HOUR:
             return Value{(dv.seconds / 60) % 60};
         case DurationField::SECONDS_OF_MINUTE:
@@ -1445,9 +1763,13 @@ DateTimeValue temporalTruncate(const DateTimeValue& tv, const std::string& unit,
         }
 
         if (has_tz) {
-            if (!tz_name_override.empty())
+            if (!tz_name_override.empty()) {
                 result.tz_name = tz_name_override;
-            result.tz_offset_sec = tz_override;
+                result.tz_offset_sec =
+                    lookupNamedTimezoneOffset(result.year, result.month, result.day, tz_name_override);
+            } else {
+                result.tz_offset_sec = tz_override;
+            }
         }
     }
 
@@ -1643,11 +1965,13 @@ inline Value durationBetweenScalarFn(const std::vector<Value>& args, const EvalC
         if (std::holds_alternative<DateTimeValue>(v)) {
             const auto& dtv = std::get<DateTimeValue>(v);
             TimeValue tv;
-            tv.kind = TimeKind::LOCAL_TIME;
+            tv.kind = (dtv.kind == DateTimeKind::DATETIME) ? TimeKind::TIME : TimeKind::LOCAL_TIME;
             tv.hour = dtv.hour;
             tv.minute = dtv.minute;
             tv.second = dtv.second;
             tv.nanos = dtv.nanos;
+            tv.tz_offset_sec = dtv.tz_offset_sec;
+            tv.tz_name = dtv.tz_name;
             return tv;
         }
         if (std::holds_alternative<TimeValue>(v))
@@ -1682,11 +2006,13 @@ inline void durationBetweenBatchFn(const std::vector<const Column*>& args, Colum
                 if (std::holds_alternative<DateTimeValue>(v)) {
                     const auto& dtv = std::get<DateTimeValue>(v);
                     TimeValue tv;
-                    tv.kind = TimeKind::LOCAL_TIME;
+                    tv.kind = (dtv.kind == DateTimeKind::DATETIME) ? TimeKind::TIME : TimeKind::LOCAL_TIME;
                     tv.hour = dtv.hour;
                     tv.minute = dtv.minute;
                     tv.second = dtv.second;
                     tv.nanos = dtv.nanos;
+                    tv.tz_offset_sec = dtv.tz_offset_sec;
+                    tv.tz_name = dtv.tz_name;
                     return tv;
                 }
                 if (std::holds_alternative<TimeValue>(v))
@@ -1711,9 +2037,11 @@ inline Value durationInMonthsScalarFn(const std::vector<Value>& args, const Eval
     if (std::holds_alternative<DateTimeValue>(args[0]) && std::holds_alternative<DateTimeValue>(args[1])) {
         auto dur = durationBetween(std::get<DateTimeValue>(args[0]), std::get<DateTimeValue>(args[1]));
         // Normalize days and seconds into months: duration.inMonths returns months only
-        int64_t total_days = dur.days;
-        total_days += dur.seconds / 86400;
-        dur.months += total_days / 30;
+        static constexpr double kDaysPerMonth = 365.2425 / 12.0;
+        double total_days =
+            static_cast<double>(dur.months) * kDaysPerMonth + static_cast<double>(dur.days) +
+            (static_cast<double>(dur.seconds) + static_cast<double>(dur.nanos) / 1'000'000'000.0) / 86400.0;
+        dur.months = static_cast<int64_t>(std::trunc(total_days / kDaysPerMonth));
         dur.days = 0;
         dur.seconds = 0;
         dur.nanos = 0;
@@ -1725,11 +2053,13 @@ inline Value durationInMonthsScalarFn(const std::vector<Value>& args, const Eval
         if (std::holds_alternative<DateTimeValue>(v)) {
             const auto& dtv = std::get<DateTimeValue>(v);
             TimeValue tv;
-            tv.kind = TimeKind::LOCAL_TIME;
+            tv.kind = (dtv.kind == DateTimeKind::DATETIME) ? TimeKind::TIME : TimeKind::LOCAL_TIME;
             tv.hour = dtv.hour;
             tv.minute = dtv.minute;
             tv.second = dtv.second;
             tv.nanos = dtv.nanos;
+            tv.tz_offset_sec = dtv.tz_offset_sec;
+            tv.tz_name = dtv.tz_name;
             return tv;
         }
         if (std::holds_alternative<TimeValue>(v))
@@ -1741,8 +2071,10 @@ inline Value durationInMonthsScalarFn(const std::vector<Value>& args, const Eval
     auto b = toTime(args[1]);
     if (a && b) {
         auto dur = durationBetween(*a, *b);
-        dur.days = 0; // Time-only: no days/months component
+        dur.days = 0;
         dur.months = 0;
+        dur.seconds = 0;
+        dur.nanos = 0;
         return Value{dur};
     }
 
@@ -1760,9 +2092,11 @@ inline void durationInMonthsBatchFn(const std::vector<const Column*>& args, Colu
         if (std::holds_alternative<DateTimeValue>(a) && std::holds_alternative<DateTimeValue>(b)) {
             auto dur = durationBetween(std::get<DateTimeValue>(a), std::get<DateTimeValue>(b));
             // Normalize days and seconds into months: duration.inMonths returns months only
-            int64_t total_days = dur.days;
-            total_days += dur.seconds / 86400;
-            dur.months += total_days / 30;
+            static constexpr double kDaysPerMonth = 365.2425 / 12.0;
+            double total_days =
+                static_cast<double>(dur.months) * kDaysPerMonth + static_cast<double>(dur.days) +
+                (static_cast<double>(dur.seconds) + static_cast<double>(dur.nanos) / 1'000'000'000.0) / 86400.0;
+            dur.months = static_cast<int64_t>(std::trunc(total_days / kDaysPerMonth));
             dur.days = 0;
             dur.seconds = 0;
             dur.nanos = 0;
@@ -1772,11 +2106,13 @@ inline void durationInMonthsBatchFn(const std::vector<const Column*>& args, Colu
                 if (std::holds_alternative<DateTimeValue>(v)) {
                     const auto& dtv = std::get<DateTimeValue>(v);
                     TimeValue tv;
-                    tv.kind = TimeKind::LOCAL_TIME;
+                    tv.kind = (dtv.kind == DateTimeKind::DATETIME) ? TimeKind::TIME : TimeKind::LOCAL_TIME;
                     tv.hour = dtv.hour;
                     tv.minute = dtv.minute;
                     tv.second = dtv.second;
                     tv.nanos = dtv.nanos;
+                    tv.tz_offset_sec = dtv.tz_offset_sec;
+                    tv.tz_name = dtv.tz_name;
                     return tv;
                 }
                 if (std::holds_alternative<TimeValue>(v))
@@ -1789,6 +2125,8 @@ inline void durationInMonthsBatchFn(const std::vector<const Column*>& args, Colu
                 auto dur = durationBetween(*ta, *tb);
                 dur.days = 0;
                 dur.months = 0;
+                dur.seconds = 0;
+                dur.nanos = 0;
                 result.setValue(i, Value{dur});
             } else {
                 result.setValue(i, Value{});
@@ -1803,35 +2141,119 @@ inline Value durationInSecondsScalarFn(const std::vector<Value>& args, const Eva
     if (args.size() < 2)
         return Value{};
 
-    auto computeSeconds = [](const DurationValue& dur) -> double {
-        return static_cast<double>(dur.months) * 30.0 * 86400.0 + static_cast<double>(dur.days) * 86400.0 +
-               static_cast<double>(dur.seconds) + static_cast<double>(dur.nanos) / 1'000'000'000.0;
-    };
+    if (std::holds_alternative<DateTimeValue>(args[0]) && std::holds_alternative<DateTimeValue>(args[1])) {
+        const auto& a = std::get<DateTimeValue>(args[0]);
+        const auto& b = std::get<DateTimeValue>(args[1]);
+        bool a_zoned = (a.kind == DateTimeKind::DATETIME);
+        bool b_zoned = (b.kind == DateTimeKind::DATETIME);
 
-    if (std::holds_alternative<DateTimeValue>(args[0]) && std::holds_alternative<DateTimeValue>(args[1]))
-        return Value{
-            computeSeconds(durationBetween(std::get<DateTimeValue>(args[0]), std::get<DateTimeValue>(args[1])))};
+        auto utcNanos = [](const DateTimeValue& dtv, const std::string& ref_tz_name, int32_t ref_tz_offset) -> int64_t {
+            int64_t days = daysFromCivil(dtv.year, dtv.month, dtv.day);
+            int64_t day_ns = ((dtv.hour * 3600 + dtv.minute * 60 + dtv.second) * 1'000'000'000LL) + dtv.nanos;
+            if (dtv.kind == DateTimeKind::DATETIME) {
+                day_ns -= static_cast<int64_t>(dtv.tz_offset_sec) * 1'000'000'000LL;
+            } else if (!ref_tz_name.empty()) {
+                int32_t offset = lookupNamedTimezoneOffset(dtv.year, dtv.month, dtv.day, dtv.hour, dtv.minute,
+                                                           dtv.second, ref_tz_name);
+                day_ns -= static_cast<int64_t>(offset) * 1'000'000'000LL;
+            } else {
+                day_ns -= static_cast<int64_t>(ref_tz_offset) * 1'000'000'000LL;
+            }
+            return days * 86'400'000'000'000LL + day_ns;
+        };
 
-    // Cross-type / Time-only: compare time components
-    auto toTime = [](const Value& v) -> std::optional<TimeValue> {
-        if (std::holds_alternative<DateTimeValue>(v)) {
-            const auto& dtv = std::get<DateTimeValue>(v);
-            TimeValue tv;
-            tv.kind = TimeKind::LOCAL_TIME;
-            tv.hour = dtv.hour;
-            tv.minute = dtv.minute;
-            tv.second = dtv.second;
-            tv.nanos = dtv.nanos;
-            return tv;
+        if (a_zoned || b_zoned) {
+            const auto& zoned = a_zoned ? a : b;
+            int64_t a_utc = utcNanos(a, zoned.tz_name, zoned.tz_offset_sec);
+            int64_t b_utc = utcNanos(b, zoned.tz_name, zoned.tz_offset_sec);
+            int64_t total_ns = b_utc - a_utc;
+
+            DurationValue result;
+            result.seconds = total_ns / 1'000'000'000LL;
+            result.nanos = total_ns % 1'000'000'000LL;
+            if (result.nanos < 0) {
+                result.nanos += 1'000'000'000LL;
+                result.seconds -= 1;
+            }
+            return Value{result};
         }
-        if (std::holds_alternative<TimeValue>(v))
-            return std::get<TimeValue>(v);
+
+        // Neither zoned: simple wall-clock difference.
+        // Convert days to seconds manually to avoid day*nanosecond overflow
+        // (days * 86'400'000'000'000LL can overflow int64 for large year spans).
+        int64_t exact_days = daysFromCivil(b.year, b.month, b.day) - daysFromCivil(a.year, a.month, a.day);
+        auto toNs = [](const DateTimeValue& dtv) -> int64_t {
+            return ((dtv.hour * 60 + dtv.minute) * 60 + dtv.second) * 1'000'000'000LL + dtv.nanos;
+        };
+        int64_t a_ns = toNs(a);
+        int64_t b_ns = toNs(b);
+        int64_t time_diff_ns = b_ns - a_ns;
+
+        DurationValue result;
+        result.days = 0;
+        static constexpr int64_t kSecPerDay = 86'400;
+        int64_t day_sec = exact_days * kSecPerDay;
+        result.seconds = day_sec + time_diff_ns / 1'000'000'000LL;
+        result.nanos = time_diff_ns % 1'000'000'000LL;
+        if (result.nanos < 0) {
+            result.nanos += 1'000'000'000LL;
+            result.seconds -= 1;
+        }
+        return Value{result};
+    }
+
+    // Cross-type / Time-only: convert to DateTimeValue with full timezone info
+    auto toZonedDt = [](const Value& v, const Value& other) -> std::optional<DateTimeValue> {
+        if (std::holds_alternative<DateTimeValue>(v))
+            return std::get<DateTimeValue>(v);
+        if (!std::holds_alternative<TimeValue>(v))
+            return std::nullopt;
+        const auto& tv = std::get<TimeValue>(v);
+        if (std::holds_alternative<DateTimeValue>(other)) {
+            const auto& ref = std::get<DateTimeValue>(other);
+            DateTimeValue dtv;
+            dtv.kind = DateTimeKind::LOCAL_DATETIME;
+            dtv.year = ref.year;
+            dtv.month = ref.month;
+            dtv.day = ref.day;
+            dtv.hour = tv.hour;
+            dtv.minute = tv.minute;
+            dtv.second = tv.second;
+            dtv.nanos = tv.nanos;
+            if (ref.kind == DateTimeKind::DATETIME || tv.kind == TimeKind::TIME) {
+                dtv.kind = DateTimeKind::DATETIME;
+                if (ref.kind == DateTimeKind::DATETIME) {
+                    dtv.tz_name = ref.tz_name;
+                    dtv.tz_offset_sec = ref.tz_offset_sec;
+                }
+                if (tv.kind == TimeKind::TIME) {
+                    dtv.tz_name = tv.tz_name;
+                    dtv.tz_offset_sec = tv.tz_offset_sec;
+                }
+                if (!dtv.tz_name.empty() && tv.kind == TimeKind::LOCAL_TIME) {
+                    dtv.tz_offset_sec = lookupNamedTimezoneOffset(dtv.year, dtv.month, dtv.day, dtv.hour, dtv.minute,
+                                                                  dtv.second, dtv.tz_name);
+                }
+            }
+            return dtv;
+        }
+        if (std::holds_alternative<TimeValue>(other)) {
+            DateTimeValue dtv;
+            dtv.kind = (tv.kind == TimeKind::TIME) ? DateTimeKind::DATETIME : DateTimeKind::LOCAL_DATETIME;
+            dtv.hour = tv.hour;
+            dtv.minute = tv.minute;
+            dtv.second = tv.second;
+            dtv.nanos = tv.nanos;
+            dtv.tz_offset_sec = tv.tz_offset_sec;
+            dtv.tz_name = tv.tz_name;
+            return dtv;
+        }
         return std::nullopt;
     };
-    auto a = toTime(args[0]);
-    auto b = toTime(args[1]);
-    if (a && b)
-        return Value{computeSeconds(durationBetween(*a, *b))};
+    auto da = toZonedDt(args[0], args[1]);
+    auto db = toZonedDt(args[1], args[0]);
+    if (da && db)
+        return durationInSecondsScalarFn({Value{*da}, Value{*db}}, EvalContext{});
 
     return Value{};
 }
@@ -1853,23 +2275,46 @@ inline Value durationInDaysScalarFn(const std::vector<Value>& args, const EvalCo
     if (args.size() < 2)
         return Value{};
 
-    auto computeDays = [](const DurationValue& dur) -> double {
-        return static_cast<double>(dur.months) * 30.0 + static_cast<double>(dur.days) +
-               (static_cast<double>(dur.seconds) + static_cast<double>(dur.nanos) / 1'000'000'000.0) / 86400.0;
-    };
+    if (std::holds_alternative<DateTimeValue>(args[0]) && std::holds_alternative<DateTimeValue>(args[1])) {
+        const auto& a = std::get<DateTimeValue>(args[0]);
+        const auto& b = std::get<DateTimeValue>(args[1]);
+        // Exact calendar days between date portions
+        int64_t exact_days = daysFromCivil(b.year, b.month, b.day) - daysFromCivil(a.year, a.month, a.day);
+        // Time difference in nanoseconds (wall-clock comparison)
+        auto toNs = [](const DateTimeValue& dtv) -> int64_t {
+            return ((dtv.hour * 60 + dtv.minute) * 60 + dtv.second) * 1'000'000'000LL + dtv.nanos;
+        };
+        int64_t a_ns = toNs(a);
+        int64_t b_ns = toNs(b);
+        // Only when both are DATETIME: adjust for timezone (compare UTC)
+        if (a.kind == DateTimeKind::DATETIME && b.kind == DateTimeKind::DATETIME) {
+            a_ns -= static_cast<int64_t>(a.tz_offset_sec) * 1'000'000'000LL;
+            b_ns -= static_cast<int64_t>(b.tz_offset_sec) * 1'000'000'000LL;
+        }
+        int64_t time_diff_ns = b_ns - a_ns;
 
-    if (std::holds_alternative<DateTimeValue>(args[0]) && std::holds_alternative<DateTimeValue>(args[1]))
-        return Value{computeDays(durationBetween(std::get<DateTimeValue>(args[0]), std::get<DateTimeValue>(args[1])))};
+        static constexpr int64_t kDayNs = 86'400LL * 1'000'000'000LL;
+        int64_t total_ns = exact_days * kDayNs + time_diff_ns;
+        // Truncate toward zero (C++ default) for whole days
+        int64_t total_days = total_ns / kDayNs;
 
+        DurationValue result;
+        result.days = total_days;
+        return Value{result};
+    }
+
+    // Cross-type with TimeValue: return PT0S
     auto toTime = [](const Value& v) -> std::optional<TimeValue> {
         if (std::holds_alternative<DateTimeValue>(v)) {
             const auto& dtv = std::get<DateTimeValue>(v);
             TimeValue tv;
-            tv.kind = TimeKind::LOCAL_TIME;
+            tv.kind = (dtv.kind == DateTimeKind::DATETIME) ? TimeKind::TIME : TimeKind::LOCAL_TIME;
             tv.hour = dtv.hour;
             tv.minute = dtv.minute;
             tv.second = dtv.second;
             tv.nanos = dtv.nanos;
+            tv.tz_offset_sec = dtv.tz_offset_sec;
+            tv.tz_name = dtv.tz_name;
             return tv;
         }
         if (std::holds_alternative<TimeValue>(v))
@@ -1878,8 +2323,10 @@ inline Value durationInDaysScalarFn(const std::vector<Value>& args, const EvalCo
     };
     auto a = toTime(args[0]);
     auto b = toTime(args[1]);
-    if (a && b)
-        return Value{computeDays(durationBetween(*a, *b))};
+    if (a && b) {
+        DurationValue result;
+        return Value{result};
+    }
 
     return Value{};
 }
@@ -1991,59 +2438,89 @@ TimeValue currentLocalTimeUTC() {
 
 } // namespace
 
-inline Value dateTransactionScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value dateTransactionScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentDateUTC()};
 }
-inline Value dateStatementScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value dateStatementScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentDateUTC()};
 }
-inline Value dateRealtimeScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value dateRealtimeScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentDateUTC()};
 }
 
-inline Value localtimeTransactionScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value localtimeTransactionScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentLocalTimeUTC()};
 }
-inline Value localtimeStatementScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value localtimeStatementScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentLocalTimeUTC()};
 }
-inline Value localtimeRealtimeScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value localtimeRealtimeScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentLocalTimeUTC()};
 }
 
-inline Value timeTransactionScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value timeTransactionScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentTimeUTC()};
 }
-inline Value timeStatementScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value timeStatementScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentTimeUTC()};
 }
-inline Value timeRealtimeScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value timeRealtimeScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentTimeUTC()};
 }
 
-inline Value localdatetimeTransactionScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value localdatetimeTransactionScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     auto dtv = currentDateTimeUTC();
     dtv.kind = DateTimeKind::LOCAL_DATETIME;
     return Value{dtv};
 }
-inline Value localdatetimeStatementScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value localdatetimeStatementScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     auto dtv = currentDateTimeUTC();
     dtv.kind = DateTimeKind::LOCAL_DATETIME;
     return Value{dtv};
 }
-inline Value localdatetimeRealtimeScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value localdatetimeRealtimeScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     auto dtv = currentDateTimeUTC();
     dtv.kind = DateTimeKind::LOCAL_DATETIME;
     return Value{dtv};
 }
 
-inline Value datetimeTransactionScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value datetimeTransactionScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentDateTimeUTC()};
 }
-inline Value datetimeStatementScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value datetimeStatementScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentDateTimeUTC()};
 }
-inline Value datetimeRealtimeScalarFn(const std::vector<Value>&, const EvalContext&) {
+inline Value datetimeRealtimeScalarFn(const std::vector<Value>& args, const EvalContext&) {
+    if (!args.empty() && isNull(args[0]))
+        return Value{};
     return Value{currentDateTimeUTC()};
 }
 

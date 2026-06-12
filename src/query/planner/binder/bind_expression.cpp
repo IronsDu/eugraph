@@ -311,15 +311,28 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     int64_t field_int = -1;
                     bool returns_string = false;
 
-                    if (auto dtf = dateTimeFieldFromString(ptr->property)) {
-                        field_int = static_cast<int64_t>(*dtf);
-                        returns_string = dateTimeFieldReturnsString(*dtf);
-                    } else if (auto tf = timeFieldFromString(ptr->property)) {
-                        field_int = static_cast<int64_t>(*tf);
-                        returns_string = timeFieldReturnsString(*tf);
-                    } else if (auto df = durationFieldFromString(ptr->property)) {
-                        field_int = static_cast<int64_t>(*df);
-                        returns_string = false;
+                    // Look up field respecting object type to avoid enum value clashes:
+                    // DateTimeField::HOUR (9) ≠ TimeField::HOUR (0), etc.
+                    if (obj_type.kind == BoundTypeKind::TIME) {
+                        if (auto tf = timeFieldFromString(ptr->property)) {
+                            field_int = static_cast<int64_t>(*tf);
+                            returns_string = timeFieldReturnsString(*tf);
+                        }
+                    } else if (obj_type.kind == BoundTypeKind::DURATION) {
+                        if (auto df = durationFieldFromString(ptr->property)) {
+                            field_int = static_cast<int64_t>(*df);
+                        }
+                    } else {
+                        // DATETIME or ANY: try DateTimeField first, then TimeField, then DurationField
+                        if (auto dtf = dateTimeFieldFromString(ptr->property)) {
+                            field_int = static_cast<int64_t>(*dtf);
+                            returns_string = dateTimeFieldReturnsString(*dtf);
+                        } else if (auto tf = timeFieldFromString(ptr->property)) {
+                            field_int = static_cast<int64_t>(*tf);
+                            returns_string = timeFieldReturnsString(*tf);
+                        } else if (auto df = durationFieldFromString(ptr->property)) {
+                            field_int = static_cast<int64_t>(*df);
+                        }
                     }
 
                     if (field_int >= 0) {

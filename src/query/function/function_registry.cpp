@@ -914,10 +914,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                {},
                                                {}});
 
-    // duration.inSeconds(DATETIME, DATETIME) -> Double
+    // duration.inSeconds(DATETIME, DATETIME) -> Duration
     functions_["duration.inSeconds"].push_back({"duration.inSeconds",
                                                 {BoundType::DateTime(), BoundType::DateTime()},
-                                                BoundType::Double(),
+                                                BoundType::Duration(),
                                                 false,
                                                 false,
                                                 scalar::durationInSecondsScalarFn,
@@ -925,10 +925,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 {},
                                                 {},
                                                 {}});
-    // duration.inSeconds(TIME, TIME) -> Double
+    // duration.inSeconds(TIME, TIME) -> Duration
     functions_["duration.inSeconds"].push_back({"duration.inSeconds",
                                                 {BoundType::Time(), BoundType::Time()},
-                                                BoundType::Double(),
+                                                BoundType::Duration(),
                                                 false,
                                                 false,
                                                 scalar::durationInSecondsScalarFn,
@@ -936,10 +936,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 {},
                                                 {},
                                                 {}});
-    // duration.inSeconds(DATETIME, TIME) -> Double
+    // duration.inSeconds(DATETIME, TIME) -> Duration
     functions_["duration.inSeconds"].push_back({"duration.inSeconds",
                                                 {BoundType::DateTime(), BoundType::Time()},
-                                                BoundType::Double(),
+                                                BoundType::Duration(),
                                                 false,
                                                 false,
                                                 scalar::durationInSecondsScalarFn,
@@ -947,10 +947,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 {},
                                                 {},
                                                 {}});
-    // duration.inSeconds(TIME, DATETIME) -> Double
+    // duration.inSeconds(TIME, DATETIME) -> Duration
     functions_["duration.inSeconds"].push_back({"duration.inSeconds",
                                                 {BoundType::Time(), BoundType::DateTime()},
-                                                BoundType::Double(),
+                                                BoundType::Duration(),
                                                 false,
                                                 false,
                                                 scalar::durationInSecondsScalarFn,
@@ -959,10 +959,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 {},
                                                 {}});
 
-    // duration.inDays(DATETIME, DATETIME) -> Double
+    // duration.inDays(DATETIME, DATETIME) -> Duration
     functions_["duration.inDays"].push_back({"duration.inDays",
                                              {BoundType::DateTime(), BoundType::DateTime()},
-                                             BoundType::Double(),
+                                             BoundType::Duration(),
                                              false,
                                              false,
                                              scalar::durationInDaysScalarFn,
@@ -970,10 +970,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                              {},
                                              {},
                                              {}});
-    // duration.inDays(TIME, TIME) -> Double
+    // duration.inDays(TIME, TIME) -> Duration
     functions_["duration.inDays"].push_back({"duration.inDays",
                                              {BoundType::Time(), BoundType::Time()},
-                                             BoundType::Double(),
+                                             BoundType::Duration(),
                                              false,
                                              false,
                                              scalar::durationInDaysScalarFn,
@@ -981,10 +981,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                              {},
                                              {},
                                              {}});
-    // duration.inDays(DATETIME, TIME) -> Double
+    // duration.inDays(DATETIME, TIME) -> Duration
     functions_["duration.inDays"].push_back({"duration.inDays",
                                              {BoundType::DateTime(), BoundType::Time()},
-                                             BoundType::Double(),
+                                             BoundType::Duration(),
                                              false,
                                              false,
                                              scalar::durationInDaysScalarFn,
@@ -992,10 +992,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                              {},
                                              {},
                                              {}});
-    // duration.inDays(TIME, DATETIME) -> Double
+    // duration.inDays(TIME, DATETIME) -> Duration
     functions_["duration.inDays"].push_back({"duration.inDays",
                                              {BoundType::Time(), BoundType::DateTime()},
-                                             BoundType::Double(),
+                                             BoundType::Duration(),
                                              false,
                                              false,
                                              scalar::durationInDaysScalarFn,
