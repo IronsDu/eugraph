@@ -29,6 +29,42 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             return Value(std::get<TimeValue>(pv));
         if (std::holds_alternative<DurationValue>(pv))
             return Value(std::get<DurationValue>(pv));
+        if (std::holds_alternative<std::vector<int64_t>>(pv)) {
+            ListValue lv;
+            for (auto v : std::get<std::vector<int64_t>>(pv))
+                lv.elements.push_back(ValueStorage{Value(v)});
+            return Value(std::move(lv));
+        }
+        if (std::holds_alternative<std::vector<double>>(pv)) {
+            ListValue lv;
+            for (auto v : std::get<std::vector<double>>(pv))
+                lv.elements.push_back(ValueStorage{Value(v)});
+            return Value(std::move(lv));
+        }
+        if (std::holds_alternative<std::vector<std::string>>(pv)) {
+            ListValue lv;
+            for (auto& s : std::get<std::vector<std::string>>(pv))
+                lv.elements.push_back(ValueStorage{Value(std::move(s))});
+            return Value(std::move(lv));
+        }
+        if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
+            ListValue lv;
+            for (const auto& v : std::get<std::vector<DateTimeValue>>(pv))
+                lv.elements.push_back(ValueStorage{Value(v)});
+            return Value(std::move(lv));
+        }
+        if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
+            ListValue lv;
+            for (const auto& v : std::get<std::vector<TimeValue>>(pv))
+                lv.elements.push_back(ValueStorage{Value(v)});
+            return Value(std::move(lv));
+        }
+        if (std::holds_alternative<std::vector<DurationValue>>(pv)) {
+            ListValue lv;
+            for (const auto& v : std::get<std::vector<DurationValue>>(pv))
+                lv.elements.push_back(ValueStorage{Value(v)});
+            return Value(std::move(lv));
+        }
         return Value{};
     };
 

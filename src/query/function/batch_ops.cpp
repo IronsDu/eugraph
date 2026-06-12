@@ -2,6 +2,8 @@
 
 #include "common/types/temporal_value.hpp"
 
+#include <spdlog/spdlog.h>
+
 #include <cmath>
 
 namespace eugraph {
@@ -245,6 +247,7 @@ inline std::optional<std::pair<double, double>> numericPair(const Value& lv, con
 } // namespace
 
 void genericAddBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    spdlog::info("[genericAddBatch] called count={}", count);
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
@@ -270,7 +273,34 @@ void genericAddBatch(const Column& left, const Column& right, Column& result, si
             result.setValue(i, Value(std::get<int64_t>(lv) + std::get<int64_t>(rv)));
         else if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv))
             result.setValue(i, Value(std::get<std::string>(lv) + std::get<std::string>(rv)));
-        else {
+        else if (std::holds_alternative<DurationValue>(lv) || std::holds_alternative<DurationValue>(rv) ||
+                 std::holds_alternative<DateTimeValue>(lv) || std::holds_alternative<DateTimeValue>(rv) ||
+                 std::holds_alternative<TimeValue>(lv) || std::holds_alternative<TimeValue>(rv)) {
+            bool left_is_duration = std::holds_alternative<DurationValue>(lv);
+            bool right_is_duration = std::holds_alternative<DurationValue>(rv);
+            bool left_is_datetime = std::holds_alternative<DateTimeValue>(lv);
+            bool right_is_datetime = std::holds_alternative<DateTimeValue>(rv);
+            bool left_is_time = std::holds_alternative<TimeValue>(lv);
+            bool right_is_time = std::holds_alternative<TimeValue>(rv);
+
+            spdlog::info("[genericAddBatch] temporal: l_dur={} r_dur={} l_dt={} r_dt={} l_t={} r_t={}",
+                         left_is_duration, right_is_duration, left_is_datetime, right_is_datetime, left_is_time,
+                         right_is_time);
+
+            if (left_is_duration && right_is_duration) {
+                result.setValue(i, Value(addDurations(std::get<DurationValue>(lv), std::get<DurationValue>(rv))));
+            } else if (left_is_datetime && right_is_duration) {
+                result.setValue(i, Value(addDuration(std::get<DateTimeValue>(lv), std::get<DurationValue>(rv))));
+            } else if (left_is_duration && right_is_datetime) {
+                result.setValue(i, Value(addDuration(std::get<DateTimeValue>(rv), std::get<DurationValue>(lv))));
+            } else if (left_is_time && right_is_duration) {
+                result.setValue(i, Value(addDuration(std::get<TimeValue>(lv), std::get<DurationValue>(rv))));
+            } else if (left_is_duration && right_is_time) {
+                result.setValue(i, Value(addDuration(std::get<TimeValue>(rv), std::get<DurationValue>(lv))));
+            } else {
+                result.setNull(i);
+            }
+        } else {
             auto pair = numericPair(lv, rv);
             if (pair)
                 result.setValue(i, Value(pair->first + pair->second));
@@ -280,20 +310,107 @@ void genericAddBatch(const Column& left, const Column& right, Column& result, si
     }
 }
 
-#define DEF_GENERIC_NUMERIC_BATCH(name, op)                                                                            \
-    void name(const Column& left, const Column& right, Column& result, size_t count) {                                 \
-        for (size_t i = 0; i < count; ++i) {                                                                           \
-            auto pair = numericPair(left.getValue(i), right.getValue(i));                                              \
-            if (pair)                                                                                                  \
-                result.setValue(i, Value(pair->first op pair->second));                                                \
-            else                                                                                                       \
-                result.setNull(i);                                                                                     \
-        }                                                                                                              \
-    }
+void genericSubBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<DurationValue>(lv) || std::holds_alternative<DurationValue>(rv) ||
+            std::holds_alternative<DateTimeValue>(lv) || std::holds_alternative<DateTimeValue>(rv) ||
+            std::holds_alternative<TimeValue>(lv) || std::holds_alternative<TimeValue>(rv)) {
+            bool left_is_duration = std::holds_alternative<DurationValue>(lv);
+            bool right_is_duration = std::holds_alternative<DurationValue>(rv);
+            bool left_is_datetime = std::holds_alternative<DateTimeValue>(lv);
+            bool right_is_datetime = std::holds_alternative<DateTimeValue>(rv);
+            bool left_is_time = std::holds_alternative<TimeValue>(lv);
+            bool right_is_time = std::holds_alternative<TimeValue>(rv);
 
-DEF_GENERIC_NUMERIC_BATCH(genericSubBatch, -)
-DEF_GENERIC_NUMERIC_BATCH(genericMulBatch, *)
-DEF_GENERIC_NUMERIC_BATCH(genericDivBatch, /)
+            if (left_is_duration && right_is_duration) {
+                auto neg = std::get<DurationValue>(rv);
+                neg.months = -neg.months;
+                neg.days = -neg.days;
+                neg.seconds = -neg.seconds;
+                neg.nanos = -neg.nanos;
+                result.setValue(i, Value(addDurations(std::get<DurationValue>(lv), neg)));
+            } else if (left_is_datetime && right_is_duration) {
+                auto neg = std::get<DurationValue>(rv);
+                neg.months = -neg.months;
+                neg.days = -neg.days;
+                neg.seconds = -neg.seconds;
+                neg.nanos = -neg.nanos;
+                result.setValue(i, Value(addDuration(std::get<DateTimeValue>(lv), neg)));
+            } else if (left_is_duration && right_is_datetime) {
+                result.setNull(i);
+            } else if (left_is_time && right_is_duration) {
+                auto neg = std::get<DurationValue>(rv);
+                neg.months = -neg.months;
+                neg.days = -neg.days;
+                neg.seconds = -neg.seconds;
+                neg.nanos = -neg.nanos;
+                result.setValue(i, Value(addDuration(std::get<TimeValue>(lv), neg)));
+            } else if (left_is_duration && right_is_time) {
+                result.setNull(i);
+            } else {
+                result.setNull(i);
+            }
+        } else {
+            auto pair = numericPair(lv, rv);
+            if (pair)
+                result.setValue(i, Value(pair->first - pair->second));
+            else
+                result.setNull(i);
+        }
+    }
+}
+
+void genericMulBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<DurationValue>(lv) && std::holds_alternative<double>(rv)) {
+            result.setValue(i, Value(mulDuration(std::get<DurationValue>(lv), std::get<double>(rv))));
+        } else if (std::holds_alternative<double>(lv) && std::holds_alternative<DurationValue>(rv)) {
+            result.setValue(i, Value(mulDuration(std::get<DurationValue>(rv), std::get<double>(lv))));
+        } else if (std::holds_alternative<DurationValue>(lv) && std::holds_alternative<int64_t>(rv)) {
+            result.setValue(
+                i, Value(mulDuration(std::get<DurationValue>(lv), static_cast<double>(std::get<int64_t>(rv)))));
+        } else if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<DurationValue>(rv)) {
+            result.setValue(
+                i, Value(mulDuration(std::get<DurationValue>(rv), static_cast<double>(std::get<int64_t>(lv)))));
+        } else {
+            auto pair = numericPair(lv, rv);
+            if (pair)
+                result.setValue(i, Value(pair->first * pair->second));
+            else
+                result.setNull(i);
+        }
+    }
+}
+
+void genericDivBatch(const Column& left, const Column& right, Column& result, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Value lv = left.getValue(i);
+        Value rv = right.getValue(i);
+        if (std::holds_alternative<DurationValue>(lv) && std::holds_alternative<double>(rv)) {
+            double d = std::get<double>(rv);
+            if (d == 0.0)
+                result.setNull(i);
+            else
+                result.setValue(i, Value(mulDuration(std::get<DurationValue>(lv), 1.0 / d)));
+        } else if (std::holds_alternative<DurationValue>(lv) && std::holds_alternative<int64_t>(rv)) {
+            int64_t div = std::get<int64_t>(rv);
+            if (div == 0)
+                result.setNull(i);
+            else
+                result.setValue(i, Value(mulDuration(std::get<DurationValue>(lv), 1.0 / static_cast<double>(div))));
+        } else {
+            auto pair = numericPair(lv, rv);
+            if (pair)
+                result.setValue(i, Value(pair->first / pair->second));
+            else
+                result.setNull(i);
+        }
+    }
+}
 
 void genericPowBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
@@ -1028,8 +1145,12 @@ void temporalAddBatch(const Column& left, const Column& right, Column& result, s
             continue;
         }
 
-        // Non-duration + non-duration or mismatched types: null
-        result.setNull(i);
+        // Not a temporal operation: fall back to generic numeric addition
+        auto pair = numericPair(lv, rv);
+        if (pair)
+            result.setValue(i, Value(pair->first + pair->second));
+        else
+            result.setNull(i);
     }
 }
 
@@ -1075,7 +1196,12 @@ void temporalSubBatch(const Column& left, const Column& right, Column& result, s
             continue;
         }
 
-        result.setNull(i);
+        // Not a temporal operation: fall back to generic numeric subtraction
+        auto pair = numericPair(lv, rv);
+        if (pair)
+            result.setValue(i, Value(pair->first - pair->second));
+        else
+            result.setNull(i);
     }
 }
 
@@ -1126,7 +1252,12 @@ void temporalMulBatch(const Column& left, const Column& right, Column& result, s
             }
         }
 
-        result.setNull(i);
+        // Not a Duration operation: fall back to generic numeric multiplication
+        auto pair = numericPair(lv, rv);
+        if (pair)
+            result.setValue(i, Value(pair->first * pair->second));
+        else
+            result.setNull(i);
     }
 }
 
@@ -1136,7 +1267,11 @@ void temporalDivBatch(const Column& left, const Column& right, Column& result, s
         Value rv = right.getValue(i);
 
         if (!std::holds_alternative<DurationValue>(lv)) {
-            result.setNull(i);
+            auto pair = numericPair(lv, rv);
+            if (pair)
+                result.setValue(i, Value(pair->first / pair->second));
+            else
+                result.setNull(i);
             continue;
         }
         const auto& dur = std::get<DurationValue>(lv);
@@ -1154,7 +1289,11 @@ void temporalDivBatch(const Column& left, const Column& right, Column& result, s
             else
                 result.setNull(i);
         } else {
-            result.setNull(i);
+            auto pair = numericPair(lv, rv);
+            if (pair)
+                result.setValue(i, Value(pair->first / pair->second));
+            else
+                result.setNull(i);
         }
     }
 }
@@ -1211,9 +1350,9 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         }
     }
 
-    // String-specific operations (accept ANY/NULL for property round-trip and null operands)
-    if ((left_type == BTK::STRING || left_type == BTK::ANY || left_type == BTK::NULL_TYPE) &&
-        (right_type == BTK::STRING || right_type == BTK::ANY || right_type == BTK::NULL_TYPE)) {
+    // String-specific operations (accept NULL for null operands)
+    if ((left_type == BTK::STRING || left_type == BTK::NULL_TYPE) &&
+        (right_type == BTK::STRING || right_type == BTK::NULL_TYPE)) {
         switch (op) {
         case BO::ADD:
             return stringConcatBatch;
@@ -1315,6 +1454,32 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
         }
     }
 
+    // Temporal * number / Temporal / number (must precede ANY fallback
+    // so that ANY-typed temporal properties dispatch correctly).
+    // Only intercept MUL/DIV; other ops fall through to generic dispatch.
+    if ((isTemporalType(left_type) || left_type == BTK::ANY) &&
+        (right_type == BTK::INT64 || right_type == BTK::DOUBLE)) {
+        switch (op) {
+        case BO::MUL:
+            return temporalMulBatch;
+        case BO::DIV:
+            return temporalDivBatch;
+        default:
+            break;
+        }
+    }
+
+    // number * Temporal (commutative MUL, accept ANY as temporal)
+    if ((left_type == BTK::INT64 || left_type == BTK::DOUBLE) &&
+        (isTemporalType(right_type) || right_type == BTK::ANY)) {
+        switch (op) {
+        case BO::MUL:
+            return temporalMulBatch;
+        default:
+            break;
+        }
+    }
+
     // ANY-type fallback: properties stored as ANY need runtime dispatch.
     // ANY + concrete → use concrete type's batch function.
     // ANY + ANY → use generic dispatch that inspects runtime Value types.
@@ -1328,9 +1493,9 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             case BO::SUB:
                 return int64SubBatch;
             case BO::MUL:
-                return int64MulBatch;
+                return genericMulBatch;
             case BO::DIV:
-                return int64DivBatch;
+                return genericDivBatch;
             case BO::MOD:
                 return int64ModBatch;
             case BO::POW:
@@ -1353,9 +1518,9 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             case BO::SUB:
                 return doubleSubBatch;
             case BO::MUL:
-                return doubleMulBatch;
+                return genericMulBatch;
             case BO::DIV:
-                return doubleDivBatch;
+                return genericDivBatch;
             case BO::MOD:
                 return doubleModBatch;
             case BO::POW:
@@ -1448,30 +1613,6 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             return temporalAddBatch;
         case BO::SUB:
             return temporalSubBatch;
-        default:
-            return nullptr;
-        }
-    }
-
-    // Temporal * number  /  Temporal / number  (accept ANY as temporal)
-    if ((isTemporalType(left_type) || left_type == BTK::ANY) &&
-        (right_type == BTK::INT64 || right_type == BTK::DOUBLE)) {
-        switch (op) {
-        case BO::MUL:
-            return temporalMulBatch;
-        case BO::DIV:
-            return temporalDivBatch;
-        default:
-            return nullptr;
-        }
-    }
-
-    // number * Temporal  (commutative MUL, accept ANY as temporal)
-    if ((left_type == BTK::INT64 || left_type == BTK::DOUBLE) &&
-        (isTemporalType(right_type) || right_type == BTK::ANY)) {
-        switch (op) {
-        case BO::MUL:
-            return temporalMulBatch;
         default:
             return nullptr;
         }

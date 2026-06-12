@@ -1,5 +1,7 @@
 #include "common/types/temporal_value.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <sstream>
 
@@ -173,8 +175,26 @@ void normalizeDate(int64_t& year, int64_t& month, int64_t& day) {
 
 int64_t daysFromCivil(int64_t y, int64_t m, int64_t d) {
     y -= (m <= 2);
-    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    // Floor division: C++11 truncates toward zero, but the algorithm
+    // requires truncation toward negative infinity for negative years.
+    int64_t era;
+    if (y >= 0) {
+        era = y / 400;
+    } else {
+        int64_t num = y - 399;
+        era = num / 400;
+        if (num < 0 && num % 400 != 0)
+            era--;
+    }
     int64_t yoe = static_cast<int64_t>(y - era * 400);
+    // Handle yoe overflow (can exceed 399 for negative years divisible by 400)
+    if (yoe >= 400) {
+        yoe -= 400;
+        era++;
+    } else if (yoe < 0) {
+        yoe += 400;
+        era--;
+    }
     int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
     int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     return era * 146097 + doe - 719468;
@@ -309,6 +329,15 @@ DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& du
     result.day += duration.days;
     normalizeDate(result.year, result.month, result.day);
 
+    if (result.kind == DateTimeKind::DATE) {
+        static constexpr int64_t kDayNanos = 86'400LL * 1'000'000'000LL;
+        int64_t total_nanos = duration.seconds * 1'000'000'000LL + duration.nanos;
+        int64_t extra_days = total_nanos / kDayNanos;
+        result.day += extra_days;
+        normalizeDate(result.year, result.month, result.day);
+        return result;
+    }
+
     int64_t total_nanos = duration.seconds * 1'000'000'000LL + duration.nanos;
     int64_t add_seconds = total_nanos / 1'000'000'000LL;
     int64_t add_nanos = total_nanos % 1'000'000'000LL;
@@ -418,6 +447,24 @@ TimeValue subDuration(const TimeValue& temporal, const DurationValue& duration) 
 
 // ==================== Arithmetic: Temporal - Temporal ====================
 
+void normalizeDuration(DurationValue& dur) {
+    // Normalize nanos into seconds
+    if (dur.nanos < 0) {
+        dur.nanos += 1'000'000'000LL;
+        dur.seconds -= 1;
+    } else if (dur.nanos >= 1'000'000'000LL) {
+        dur.nanos -= 1'000'000'000LL;
+        dur.seconds += 1;
+    }
+    if (dur.seconds < 0 && dur.nanos > 0) {
+        dur.nanos -= 1'000'000'000LL;
+        dur.seconds += 1;
+    } else if (dur.seconds > 0 && dur.nanos < 0) {
+        dur.nanos += 1'000'000'000LL;
+        dur.seconds -= 1;
+    }
+}
+
 DurationValue subtractDateTimes(const DateTimeValue& a, const DateTimeValue& b) {
     DurationValue result;
     int64_t a_ns = temporalToComparable(a);
@@ -428,21 +475,33 @@ DurationValue subtractDateTimes(const DateTimeValue& a, const DateTimeValue& b) 
     int64_t remaining_ns = diff_ns % ns_per_day;
     result.seconds = remaining_ns / 1'000'000'000LL;
     result.nanos = remaining_ns % 1'000'000'000LL;
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.seconds -= 1;
-    }
+    normalizeDuration(result);
     return result;
 }
 
 DurationValue subtractTimes(const TimeValue& a, const TimeValue& b) {
     DurationValue result;
-    int64_t a_ns = temporalToComparable(a);
-    int64_t b_ns = temporalToComparable(b);
+    // If kinds differ, normalize both to wall clock (LOCAL_TIME) so neither gets UTC-adjusted
+    TimeValue a_norm = a;
+    TimeValue b_norm = b;
+    if (a.kind != b.kind) {
+        a_norm.kind = TimeKind::LOCAL_TIME;
+        b_norm.kind = TimeKind::LOCAL_TIME;
+    }
+    int64_t a_ns = temporalToComparable(a_norm);
+    int64_t b_ns = temporalToComparable(b_norm);
     int64_t diff_ns = a_ns - b_ns;
     result.seconds = diff_ns / 1'000'000'000LL;
     result.nanos = diff_ns % 1'000'000'000LL;
     if (result.nanos < 0) {
+        result.nanos += 1'000'000'000LL;
+        result.seconds -= 1;
+    }
+    // Ensure consistent sign between seconds and nanos
+    if (result.seconds < 0 && result.nanos > 0) {
+        result.nanos -= 1'000'000'000LL;
+        result.seconds += 1;
+    } else if (result.seconds > 0 && result.nanos < 0) {
         result.nanos += 1'000'000'000LL;
         result.seconds -= 1;
     }
@@ -494,12 +553,24 @@ DurationValue divDuration(const DurationValue& dur, int64_t divisor) {
     if (divisor == 0)
         return DurationValue{};
     DurationValue result;
-    result.months = dur.months / divisor;
-    result.days = dur.days / divisor;
-    int64_t total = dur.seconds * 1'000'000'000LL + dur.nanos;
-    total /= divisor;
-    result.seconds = total / 1'000'000'000LL;
-    result.nanos = total % 1'000'000'000LL;
+    static constexpr double kDaysPerMonth = 365.2425 / 12.0;
+
+    double m = static_cast<double>(dur.months) / static_cast<double>(divisor);
+    result.months = static_cast<int64_t>(std::trunc(m));
+    double frac_m = m - static_cast<double>(result.months);
+
+    double d = static_cast<double>(dur.days) / static_cast<double>(divisor) + frac_m * kDaysPerMonth;
+    result.days = static_cast<int64_t>(std::trunc(d));
+    double frac_d = d - static_cast<double>(result.days);
+
+    // Divide seconds+nanos with integer truncation. The cascaded fractional
+    // days (frac_d) are added AFTER division — they are already fractional.
+    int64_t ns_per_divisor = (dur.seconds * 1'000'000'000LL + dur.nanos) / divisor;
+    int64_t cascade_ns = static_cast<int64_t>(std::round(frac_d * 86400.0 * 1e9));
+    int64_t total_sec = ns_per_divisor / 1'000'000'000LL + cascade_ns / 1'000'000'000LL;
+    int64_t total_nanos = (ns_per_divisor % 1'000'000'000LL) + (cascade_ns % 1'000'000'000LL);
+    result.seconds = total_sec + total_nanos / 1'000'000'000LL;
+    result.nanos = total_nanos % 1'000'000'000LL;
     if (result.nanos < 0) {
         result.nanos += 1'000'000'000LL;
         result.seconds -= 1;
@@ -509,19 +580,19 @@ DurationValue divDuration(const DurationValue& dur, int64_t divisor) {
 
 DurationValue mulDuration(const DurationValue& dur, double factor) {
     DurationValue result;
+    static constexpr double kDaysPerMonth = 365.2425 / 12.0;
     double m = static_cast<double>(dur.months) * factor;
     result.months = static_cast<int64_t>(std::trunc(m));
     double frac_m = m - static_cast<double>(result.months);
 
-    double d = static_cast<double>(dur.days) * factor + frac_m * 30.0;
+    double d = static_cast<double>(dur.days) * factor + frac_m * kDaysPerMonth;
     result.days = static_cast<int64_t>(std::trunc(d));
     double frac_d = d - static_cast<double>(result.days);
 
-    double total_secs =
-        (static_cast<double>(dur.seconds) + static_cast<double>(dur.nanos) / 1e9) * factor + frac_d * 86400.0;
-    result.seconds = static_cast<int64_t>(std::trunc(total_secs));
-    double frac_s = total_secs - static_cast<double>(result.seconds);
-    result.nanos = static_cast<int64_t>(std::round(frac_s * 1e9));
+    // Use total nanoseconds for better precision (avoid nanos/1e9 rounding)
+    double total_ns = static_cast<double>(dur.seconds * 1'000'000'000LL + dur.nanos) * factor + frac_d * 86400.0 * 1e9;
+    result.seconds = static_cast<int64_t>(total_ns / 1e9);
+    result.nanos = static_cast<int64_t>(total_ns - static_cast<double>(result.seconds) * 1e9);
 
     if (result.nanos >= 1'000'000'000LL) {
         result.seconds += result.nanos / 1'000'000'000LL;
@@ -546,17 +617,23 @@ DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b) {
     DurationValue result;
 
     int64_t months_diff = (b.year - a.year) * 12 + (b.month - a.month);
+    bool same_calendar_month = (months_diff == 0);
     if (b.day < a.day) {
-        months_diff--;
-        int64_t prev_month = b.month - 1;
-        int64_t prev_year = b.year;
-        if (prev_month < 1) {
-            prev_month = 12;
-            prev_year--;
+        if (same_calendar_month) {
+            result.months = 0;
+            result.days = b.day - a.day;
+        } else {
+            months_diff--;
+            int64_t prev_month = b.month - 1;
+            int64_t prev_year = b.year;
+            if (prev_month < 1) {
+                prev_month = 12;
+                prev_year--;
+            }
+            int64_t days_in_prev = daysInMonth(prev_year, prev_month);
+            result.months = months_diff;
+            result.days = (days_in_prev - a.day) + b.day;
         }
-        int64_t days_in_prev = daysInMonth(prev_year, prev_month);
-        result.months = months_diff;
-        result.days = (days_in_prev - a.day) + b.day;
     } else {
         result.months = months_diff;
         result.days = b.day - a.day;
@@ -564,13 +641,29 @@ DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b) {
 
     int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos;
     int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos;
-    if (a.kind == DateTimeKind::DATETIME)
+    if (a.kind == DateTimeKind::DATETIME && b.kind == DateTimeKind::DATETIME)
         a_ns -= static_cast<int64_t>(a.tz_offset_sec) * 1'000'000'000LL;
-    if (b.kind == DateTimeKind::DATETIME)
+    if (b.kind == DateTimeKind::DATETIME && a.kind == DateTimeKind::DATETIME)
         b_ns -= static_cast<int64_t>(b.tz_offset_sec) * 1'000'000'000LL;
     int64_t time_diff = b_ns - a_ns;
 
-    if (result.months == 0) {
+    // Normalize months/days conflicting signs: fold months into days (30 days/month)
+    if (result.months != 0 && result.days != 0 && ((result.months < 0) != (result.days < 0))) {
+        result.days += result.months * 30;
+        result.months = 0;
+    }
+
+    // Normalize time sign: borrow from days if time conflicts with days
+    if (time_diff < 0 && result.days > 0) {
+        result.days--;
+        time_diff += 86'400'000'000'000LL;
+    } else if (time_diff > 0 && result.days < 0) {
+        result.days++;
+        time_diff -= 86'400'000'000'000LL;
+    }
+
+    // Fold days into time only for same-calendar-month (not month-normalized) cases
+    if (result.months == 0 && result.days != 0 && same_calendar_month) {
         time_diff += result.days * 86'400'000'000'000LL;
         result.days = 0;
     }
@@ -585,7 +678,7 @@ DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b) {
 }
 
 DurationValue durationBetween(const TimeValue& a, const TimeValue& b) {
-    return subtractTimes(a, b);
+    return subtractTimes(b, a);
 }
 
 // ==================== Epoch conversion ====================
@@ -622,6 +715,42 @@ DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos) {
     return result;
 }
 
+// ==================== Named timezone offset lookup ====================
+
+int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, const std::string& tz_name) {
+    if (tz_name.find('/') == std::string::npos)
+        return 0;
+    try {
+        auto tz = std::chrono::locate_zone(tz_name);
+        auto days = std::chrono::year{static_cast<int>(year)} / std::chrono::month{static_cast<unsigned>(month)} /
+                    std::chrono::day{static_cast<unsigned>(day)};
+        auto tp = std::chrono::sys_days{days};
+        auto info = tz->get_info(tp);
+        return static_cast<int32_t>(info.offset.count());
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, int64_t hour, int64_t minute,
+                                  int64_t second, const std::string& tz_name) {
+    if (tz_name.find('/') == std::string::npos)
+        return 0;
+    try {
+        auto tz = std::chrono::locate_zone(tz_name);
+        namespace chr = std::chrono;
+        auto ymd = chr::year{static_cast<int>(year)} / chr::month{static_cast<unsigned>(month)} /
+                   chr::day{static_cast<unsigned>(day)};
+        auto local_tp = chr::local_days{ymd} + chr::hours{static_cast<int>(hour)} +
+                        chr::minutes{static_cast<int>(minute)} + chr::seconds{static_cast<int>(second)};
+        auto sys_tp = tz->to_sys(local_tp, chr::choose::latest);
+        auto info = tz->get_info(sys_tp);
+        return static_cast<int32_t>(info.offset.count());
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
 // ==================== String formatting ====================
 
 namespace {
@@ -647,8 +776,9 @@ std::string pad2(int64_t v) {
 std::string fmtSubsecond(int64_t nanos) {
     if (nanos == 0)
         return "";
-    char buf[10];
-    snprintf(buf, sizeof(buf), "%09lld", static_cast<long long>(nanos));
+    int64_t n = nanos < 0 ? -nanos : nanos;
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%09lld", static_cast<long long>(n));
     std::string s(buf);
     while (!s.empty() && s.back() == '0')
         s.pop_back();
@@ -656,8 +786,17 @@ std::string fmtSubsecond(int64_t nanos) {
 }
 
 std::string fmtTimezone(int32_t offset_sec, const std::string& tz_name) {
-    if (!tz_name.empty())
-        return "+00:00[" + tz_name + "]";
+    if (!tz_name.empty()) {
+        int32_t abs_s = offset_sec < 0 ? -offset_sec : offset_sec;
+        int32_t hours = abs_s / 3600;
+        int32_t minutes = (abs_s % 3600) / 60;
+        int32_t seconds = abs_s % 60;
+        std::string sign = offset_sec >= 0 ? "+" : "-";
+        std::string result = sign + pad2(hours) + ":" + pad2(minutes);
+        if (seconds != 0)
+            result += ":" + pad2(seconds);
+        return result + "[" + tz_name + "]";
+    }
     if (offset_sec == 0)
         return "Z";
     int32_t abs_s = offset_sec < 0 ? -offset_sec : offset_sec;
@@ -707,22 +846,39 @@ std::string temporalToString(const TimeValue& tv) {
 }
 
 std::string temporalToString(const DurationValue& tv) {
+    // Normalize nanos into seconds ensuring sign consistency.
+    // Avoid total_sec * 1e9 overflow for large durations (use conditional
+    // adjustment instead of full multiplication).
+    int64_t total_sec = tv.seconds;
+    int64_t nanos = tv.nanos;
+    // Only do full ns normalization when it's safe (won't overflow)
+    static constexpr int64_t kMaxSafeSec = INT64_MAX / 1'000'000'000LL;
+    if (total_sec <= kMaxSafeSec && total_sec >= -kMaxSafeSec) {
+        int64_t total_ns = total_sec * 1'000'000'000LL + nanos;
+        total_sec = total_ns / 1'000'000'000LL;
+        nanos = total_ns % 1'000'000'000LL;
+    }
+    if (total_sec < 0 && nanos > 0) {
+        total_sec += 1;
+        nanos -= 1'000'000'000LL;
+    } else if (total_sec > 0 && nanos < 0) {
+        total_sec -= 1;
+        nanos += 1'000'000'000LL;
+    }
+
     std::ostringstream oss;
     oss << "P";
+    int64_t days = tv.days;
     int64_t years = tv.months / 12;
     int64_t months = tv.months % 12;
-    int64_t weeks = tv.days / 7;
-    int64_t days = tv.days % 7;
-    int64_t hours = tv.seconds / 3600;
-    int64_t minutes = (tv.seconds % 3600) / 60;
-    int64_t seconds = tv.seconds % 60;
-    bool has_time = (hours != 0 || minutes != 0 || seconds != 0 || tv.nanos != 0);
+    int64_t hours = total_sec / 3600;
+    int64_t minutes = (total_sec % 3600) / 60;
+    int64_t seconds = total_sec % 60;
+    bool has_time = (hours != 0 || minutes != 0 || seconds != 0 || nanos != 0);
     if (years != 0)
         oss << years << "Y";
     if (months != 0)
         oss << months << "M";
-    if (weeks != 0)
-        oss << weeks << "W";
     if (days != 0)
         oss << days << "D";
     if (has_time) {
@@ -731,11 +887,15 @@ std::string temporalToString(const DurationValue& tv) {
             oss << hours << "H";
         if (minutes != 0)
             oss << minutes << "M";
-        if (seconds != 0 || tv.nanos != 0) {
-            if (tv.nanos != 0)
-                oss << seconds << fmtSubsecond(tv.nanos) << "S";
-            else
+        if (seconds != 0 || nanos != 0) {
+            if (nanos != 0) {
+                if (seconds == 0 && nanos < 0)
+                    oss << "-0" << fmtSubsecond(nanos) << "S";
+                else
+                    oss << seconds << fmtSubsecond(nanos) << "S";
+            } else {
                 oss << seconds << "S";
+            }
         }
     }
     std::string s = oss.str();

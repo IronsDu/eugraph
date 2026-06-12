@@ -1,7 +1,7 @@
 # TCK 测试结果分类报告
 
-**日期**: 2026-06-10
-**分支**: feature/comparison-null-semantics
+**日期**: 2026-06-11
+**分支**: feature/temporal-tck-fixes
 **基线**: main
 
 ---
@@ -35,7 +35,7 @@
 | List | 185 | 91 | 94 | IN/null 语义、嵌套比较、下标/切片边界 |
 | Graph | 61 | 26 | 35 | nodes()/relationships()/labels() 等图函数 |
 | Quantifier | 604 | 479 | 125 | ALL/ANY/NONE/SINGLE 量化器边界 |
-| Temporal | 1004 | 600 | 404 | truncate 精度、命名时区、格式化、数组存取 |
+| Temporal | 1004 | 645 | 359 | **improving**: truncate 精度、命名时区格式化、duration toString/计算、解析单复数/时区处理 |
 | ExistentialSubqueries | 10 | 2 | 8 | EXISTS 子查询 |
 
 ## 子句类
@@ -75,6 +75,7 @@
 | Phase 9 | feature/comparison-null-semantics | Comparison 29→62 (+33)、String 8→25 (+17)：三值相等 valueEquals（List/Map/Path 深度 null 传播+int64/double 提升）、compareValues 三值有序比较、链式比较展开（`a<b<c` → `(a<b) AND (b<c)`）、double 除零返回 NaN、numericPair sentinel 改为 optional、List 有序比较、STARTS_WITH/ENDS_WITH/CONTAINS 跨类型允许+NULL_TYPE dispatch |
 | Phase 10 | feature/comparison-null-semantics | Precedence 92→93 (+1)：新增 ParenExpr AST 节点保留括号信息防止 hoistAtomicPredicates 错误提升、genericAddBatch 增加 List 运行时处理修复 ANY+INT64 的 ADD 误分发到 int64AddBatch |
 | Phase 11 | feature/fix-boolean-remaining | String 25→32 (+7)：unescapeString 标准转义序列处理（\n,\t,\\等）、语法重构对齐 openCypher BNF `<linear statement>`、expressionToString 字符串字面量加引号、Precedence 93→121 |
+| Phase 12 | feature/temporal-tck-fixes | **场景级**: 33/88→47/88 (+14 场景)。**Step 级**: 600→645 passed (+45), 404→359 failed (-45)。修复：duration toString 移除 weeks、extractDateFields 用 ISO week-year、parseTzOffset 命名时区不崩溃、parseDatetimeStr/parseTimeStr [ZoneName] 支持、isoWeekNumber 边界检测、duration.inDays/Months/Seconds 返回 DurationValue、base date dayOfWeek 被显式 year 覆盖、extractNanosFromMap 单复数、durationBetween 符号/时区/months_diff==0、'time' key 支持 |
 
 ## 推荐实施顺序
 
@@ -101,3 +102,57 @@
 ### 远期目标
 
 13. CALL/procedure (52 undefined)
+
+---
+
+## Temporal 修复详情 (Phase 12)
+
+**分支**: `feature/temporal-tck-fixes`
+**日期**: 2026-06-11
+
+### Feature 级进度
+
+| Feature | 修复前 | 修复后 | 变化 |
+|---------|--------|--------|------|
+| Temporal1 (构造) | 8/13 | **12/13** | +4 |
+| Temporal2 (解析) | 0/7 | 0/7 | — (string parse 边界) |
+| Temporal3 (选择) | 4/11 | **6/11** | +2 |
+| Temporal4 (存储) | 6/13 | 6/13 | — (数组+时区) |
+| Temporal5 (访问器) | 2/7 | **3/7** | +1 |
+| Temporal6 (序列化) | 5/7 | 5/7 | — |
+| Temporal7 (比较) | 6/6 | 6/6 | ✅ 完全通过 |
+| Temporal8 (算术) | 0/7 | **4/7** | +4 |
+| Temporal9 (截断) | 2/5 | **4/5** | +2 |
+| Temporal10 (duration.between) | 0/12 | **1/12** | +1 |
+| **总计** | **33/88** | **47/88** | **+14** |
+
+### 已修复 Bug 清单
+
+| # | Bug | 文件 |
+|---|-----|------|
+| 1 | Duration toString 保留 weeks → 统一输出 days | `temporal_value.cpp:714` |
+| 2 | extractDateFields 用日历年份 → 用 ISO week-year | `temporal_functions.hpp:226` |
+| 3 | parseTzOffset 对命名时区崩溃 → 安全返回 0 | `temporal_functions.hpp:148` |
+| 4 | parseDatetimeStr/parseTimeStr 不处理 `[ZoneName]` 后缀 | `temporal_functions.hpp:390,352` |
+| 5 | isoWeekNumber 不检测周一前日期 → `day_of_year < monday_week1_day` | `temporal_functions.hpp:72` |
+| 6 | duration.inDays/Months/Seconds 返回 double → DurationValue | `temporal_functions.hpp:1802+`, `function_registry.cpp` |
+| 7 | base date 的 dayOfWeek 被显式 year 覆盖 → 保存原始 base 字段 | `temporal_functions.hpp:197,216,226,240` |
+| 8 | extractNanosFromMap 只支持单数形式 → 同时支持单/复数 | `temporal_functions.hpp:135` |
+| 9 | durationBetween(Time) 用 a-b → b-a | `temporal_value.cpp:587` |
+| 10 | durationBetween months_diff==0 时不该借月份 | `temporal_value.cpp:549` |
+| 11 | durationBetween DATE vs DATETIME 时区不一致 | `temporal_value.cpp:567` |
+| 12 | localdatetime/datetime 构造器不处理 'time' key | `temporal_functions.hpp:806,880` |
+| 13 | fmtTimezone 命名时区总是 +00:00 → 用实际 offset | `temporal_value.cpp:658` |
+| 14 | parseDatetimeStr 不支持 week/ordinal 日期格式 | `temporal_functions.hpp:390` |
+| 15 | parseTimeStr 不支持简写（如 '21' 只给小时） | `temporal_functions.hpp:359` |
+
+### 剩余失败分类 (41 场景)
+
+| 类别 | 数量 | 说明 |
+|------|------|------|
+| IANA 时区偏移 | ~30 step failures (2 场景) | 需要 IANA 时区数据库才能根据 `Europe/Stockholm` + 日期计算正确 UTC 偏移 |
+| duration.between 精度 | ~8 场景 | 浮点精度、inDays/inMonths 月份转天数近似值 |
+| 解析边界情况 | ~5 场景 | week/ordinal 格式 datetime string、compact time format |
+| 算术精度 | ~3 场景 | 浮点 carry chain、时区保留 |
+| Store 数组 | ~7 场景 | temporal 数组属性 Thrift 格式化 |
+| 其他 | ~18 | truncate 时区叠加、serialize 边界等 |
