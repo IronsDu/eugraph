@@ -301,12 +301,14 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         oss << "{\"id\":" << v.id;
 
         if (v.labels.has_value() && !v.labels->empty()) {
-            // Output all labels for multi-label node support
+            // Output all labels for multi-label node support (skip __anon__)
             oss << ",\"labels\":[";
             bool first = true;
             for (LabelId lid : *v.labels) {
                 auto it = label_defs.find(lid);
                 if (it == label_defs.end())
+                    continue;
+                if (it->second.name == kAnonLabelName)
                     continue;
                 if (!first)
                     oss << ',';
@@ -316,7 +318,6 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
             oss << ']';
         }
         // Serialize properties for all labels present on the vertex
-        // (including __anon__ for unlabeled nodes)
         for (const auto& [lid, props] : v.properties) {
             auto it = label_defs.find(lid);
             if (it == label_defs.end())

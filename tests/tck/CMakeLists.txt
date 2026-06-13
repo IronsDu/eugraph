@@ -202,7 +202,7 @@ target_link_options(tck_tests PRIVATE
     -Wl,--end-group
 )
 
-add_dependencies(tck_tests eugraph-server ccr_ext)
+add_dependencies(tck_tests ccr_ext)
 
 # Symlink features/ -> openCypher TCK features for cucumber discovery
 add_custom_command(TARGET tck_tests POST_BUILD

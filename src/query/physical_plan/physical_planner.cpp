@@ -6,6 +6,7 @@
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
 #include "query/physical_plan/operator/merge_physical_op.hpp"
+#include "query/physical_plan/operator/path_element_property_read_physical_op.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
 #include "query/physical_plan/operator/union_physical_op.hpp"
@@ -82,6 +83,26 @@ static PlanOperatorResult wrapEdgePropertyRead(PlanOperatorResult&& child_result
         return std::move(child_result);
     auto read_op = std::make_unique<EdgePropertyReadPhysicalOp>(
         variable, col_idx, edge_prop_ids, store, Schema(child_result.output_schema),
+        std::vector<binder::BoundType>(child_result.output_types), std::move(child_result.op));
+    return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
+                              std::move(child_result.output_types)};
+}
+
+static PlanOperatorResult wrapPathElementPropertyRead(PlanOperatorResult&& child_result,
+                                                      const std::string& path_variable, IAsyncGraphDataStore& store) {
+    if (path_variable.empty())
+        return std::move(child_result);
+    size_t col_idx = SIZE_MAX;
+    for (size_t i = child_result.output_schema.size(); i-- > 0;) {
+        if (child_result.output_schema[i] == path_variable) {
+            col_idx = i;
+            break;
+        }
+    }
+    if (col_idx == SIZE_MAX)
+        return std::move(child_result);
+    auto read_op = std::make_unique<PathElementPropertyReadPhysicalOp>(
+        path_variable, col_idx, store, Schema(child_result.output_schema),
         std::vector<binder::BoundType>(child_result.output_types), std::move(child_result.op));
     return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
                               std::move(child_result.output_types)};
@@ -678,6 +699,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // VarLenExpand loads dst labels internally — skip VertexLabelRead wrap
                     plan_result =
                         wrapVertexPropertyRead(std::move(plan_result), v.dst_variable, v.dst_label_prop_ids, store);
+                    plan_result = wrapPathElementPropertyRead(std::move(plan_result), v.path_variable, store);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
                     // ── Index scan optimization: Filter(LabelScan) → IndexScan ──

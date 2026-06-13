@@ -2,8 +2,6 @@
 
 #include "common/types/temporal_value.hpp"
 
-#include <spdlog/spdlog.h>
-
 #include <cmath>
 
 namespace eugraph {
@@ -247,7 +245,6 @@ inline std::optional<std::pair<double, double>> numericPair(const Value& lv, con
 } // namespace
 
 void genericAddBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    spdlog::info("[genericAddBatch] called count={}", count);
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
@@ -282,10 +279,6 @@ void genericAddBatch(const Column& left, const Column& right, Column& result, si
             bool right_is_datetime = std::holds_alternative<DateTimeValue>(rv);
             bool left_is_time = std::holds_alternative<TimeValue>(lv);
             bool right_is_time = std::holds_alternative<TimeValue>(rv);
-
-            spdlog::info("[genericAddBatch] temporal: l_dur={} r_dur={} l_dt={} r_dt={} l_t={} r_t={}",
-                         left_is_duration, right_is_duration, left_is_datetime, right_is_datetime, left_is_time,
-                         right_is_time);
 
             if (left_is_duration && right_is_duration) {
                 result.setValue(i, Value(addDurations(std::get<DurationValue>(lv), std::get<DurationValue>(rv))));
@@ -443,13 +436,15 @@ void genericModBatch(const Column& left, const Column& right, Column& result, si
         for (size_t i = 0; i < count; ++i) {                                                                           \
             Value lv = left.getValue(i);                                                                               \
             Value rv = right.getValue(i);                                                                              \
-            if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))                            \
-                result.setValue(i, Value(std::get<int64_t>(lv) op std::get<int64_t>(rv)));                             \
-            else {                                                                                                     \
+            if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {                          \
+                bool cmp = std::get<int64_t>(lv) op std::get<int64_t>(rv);                                             \
+                result.setValue(i, Value(cmp));                                                                        \
+            } else {                                                                                                   \
                 auto pair = numericPair(lv, rv);                                                                       \
-                if (pair)                                                                                              \
-                    result.setValue(i, Value(pair->first op pair->second));                                            \
-                else                                                                                                   \
+                if (pair) {                                                                                            \
+                    bool cmp = pair->first op pair->second;                                                            \
+                    result.setValue(i, Value(cmp));                                                                    \
+                } else                                                                                                 \
                     result.setNull(i);                                                                                 \
             }                                                                                                          \
         }                                                                                                              \
@@ -469,10 +464,11 @@ void int64AddBatch(const Column& left, const Column& right, Column& result, size
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
+        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
             result.setValue(i, Value(std::get<int64_t>(lv) + std::get<int64_t>(rv)));
-        else
+        } else {
             result.setNull(i);
+        }
     }
 }
 
@@ -493,8 +489,9 @@ void int64MulBatch(const Column& left, const Column& right, Column& result, size
         Value rv = right.getValue(i);
         if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
             result.setValue(i, Value(std::get<int64_t>(lv) * std::get<int64_t>(rv)));
-        else
+        else {
             result.setNull(i);
+        }
     }
 }
 
@@ -679,10 +676,12 @@ void int64GtBatch(const Column& left, const Column& right, Column& result, size_
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
-            result.setValue(i, Value(std::get<int64_t>(lv) > std::get<int64_t>(rv)));
-        else
+        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
+            bool cmp = std::get<int64_t>(lv) > std::get<int64_t>(rv);
+            result.setValue(i, Value(cmp));
+        } else {
             result.setNull(i);
+        }
     }
 }
 
@@ -1491,23 +1490,23 @@ binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::Bo
             case BO::ADD:
                 return genericAddBatch;
             case BO::SUB:
-                return int64SubBatch;
+                return genericSubBatch;
             case BO::MUL:
                 return genericMulBatch;
             case BO::DIV:
                 return genericDivBatch;
             case BO::MOD:
-                return int64ModBatch;
+                return genericModBatch;
             case BO::POW:
-                return int64PowBatch;
+                return genericPowBatch;
             case BO::LT:
-                return int64LtBatch;
+                return genericLtBatch;
             case BO::GT:
-                return int64GtBatch;
+                return genericGtBatch;
             case BO::LTE:
-                return int64LteBatch;
+                return genericLteBatch;
             case BO::GTE:
-                return int64GteBatch;
+                return genericGteBatch;
             default:
                 return nullptr;
             }

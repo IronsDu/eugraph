@@ -355,14 +355,14 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     }
                 }
 
-                // NULL_TYPE and ANY (non-temporal): produce subscript so the
-                // evaluator can propagate null or perform runtime map access.
+                // NULL_TYPE and ANY (non-temporal): use dynamic property ref
+                // so the evaluator can handle VertexValue/EdgeValue at runtime.
                 if (obj_type.kind == BoundTypeKind::NULL_TYPE || obj_type.kind == BoundTypeKind::ANY) {
-                    auto sub = std::make_unique<BoundSubscript>();
-                    sub->list = std::move(*obj);
-                    sub->index = BoundLiteral(std::string(ptr->property));
-                    sub->result_type = BoundType::Any();
-                    return BoundExpression(std::move(sub));
+                    auto dyn_ref = std::make_unique<BoundDynamicPropertyRef>();
+                    dyn_ref->object = std::move(*obj);
+                    dyn_ref->property = ptr->property;
+                    dyn_ref->result_type = BoundType::Any();
+                    return BoundExpression(std::move(dyn_ref));
                 }
 
                 error("TypeError: InvalidArgumentType");
@@ -717,8 +717,8 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
         if (left_type.kind == BoundTypeKind::ANY || left_type.kind == BoundTypeKind::NULL_TYPE ||
             right_type.kind == BoundTypeKind::ANY || right_type.kind == BoundTypeKind::NULL_TYPE)
             return BoundType::Any();
-        error_msg =
-            "Arithmetic requires numeric operands: got " + left_type.toString() + " and " + right_type.toString();
+        error_msg = "InvalidArgumentType: Arithmetic requires numeric operands: got " + left_type.toString() + " and " +
+                    right_type.toString();
         return BoundType::Any();
 
     case cypher::BinaryOperator::STARTS_WITH:

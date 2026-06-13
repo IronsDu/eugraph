@@ -71,9 +71,6 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             bool elem_passes = true;
             if (where_pred) {
                 if (isNull(elem_val)) {
-                    // Null element: predicate may be inconclusive. Use
-                    // evaluateInternal linked via temp_columns_ indexing
-                    // to detect null result (reallocation-safe).
                     size_t col_count_before = temp_columns_.size();
                     evaluateInternal(*where_pred, temp_chunk);
                     if (temp_columns_.size() > col_count_before && !temp_columns_[col_count_before].isNull(0)) {
@@ -130,16 +127,16 @@ void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
             bool at_initial = false;
             switch (kind) {
             case QuantifierKind::ALL:
-                at_initial = final_result; // initial=true
+                at_initial = final_result;
                 break;
             case QuantifierKind::ANY:
-                at_initial = !final_result; // initial=false
+                at_initial = !final_result;
                 break;
             case QuantifierKind::NONE:
-                at_initial = final_result; // initial=true
+                at_initial = final_result;
                 break;
             case QuantifierKind::SINGLE:
-                at_initial = (single_match_count == 0 && !final_result); // initial=false
+                at_initial = (single_match_count <= 1);
                 break;
             }
             if (at_initial)

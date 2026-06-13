@@ -224,6 +224,10 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   {},
                                   {}});
 
+    // rand() -> Double
+    functions_["rand"].push_back(
+        {"rand", {}, BoundType::Double(), false, false, scalar::randScalarFn, scalar::randBatchFn, {}, {}, {}});
+
     // range(Int64, Int64) -> List<Int64>
     functions_["range"].push_back({"range",
                                    {BoundType::Int64(), BoundType::Int64()},

@@ -196,6 +196,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                             pv.elements.push_back(ValueStorage{Value(std::move(ev))});
                             VertexValue vv;
                             vv.id = stack[si].vertex;
+                            vv.labels = co_await store_.getVertexLabels(stack[si].vertex);
                             pv.elements.push_back(ValueStorage{Value(std::move(vv))});
                         }
                         // Add current edge and destination vertex
@@ -208,6 +209,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                         pv.elements.push_back(ValueStorage{Value(std::move(ev))});
                         VertexValue dst_vv;
                         dst_vv.id = edge.neighbor_id;
+                        dst_vv.labels = co_await store_.getVertexLabels(edge.neighbor_id);
                         pv.elements.push_back(ValueStorage{Value(std::move(dst_vv))});
                         entry.path = std::move(pv);
                     }
