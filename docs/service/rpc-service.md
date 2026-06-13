@@ -62,6 +62,16 @@ QueryStreamMeta,stream<ResultRowBatch> executeCypher(
 - `bool/int64_t/double/string` → 对应 Thrift 字段
 - `VertexValue` / `EdgeValue` / `PathValue` / `ListValue` → JSON string（对应 `vertex_json` / `edge_json` / `path_json` / `list_json` 字段）
 
+## 结果序列化与 TCK 格式化
+
+`thrift_fmt::formatResultValue`（`src/thrift_fmt/result_format.cpp`）将 Thrift `ResultValue` 转为 Cypher 语法字符串供 TCK 比较：
+
+- `vertex_json` → `(:Label {prop: 'val'})`，`__anon__` 标签被过滤（内部默认标签，不可见）
+- `edge_json` → `[:TYPE {prop: 'val'}]`
+- `list_json` → 解析 JSON 数组，对每个元素递归格式化（边/顶点用上述规则），输出 `[elem1, elem2]`
+
+`list_json` 由 handler 的 `valueToThrift` 构建：遍历 ListValue 元素，对每个元素递归调用 `valueToThrift` 后将原始 JSON 拼接。`formatResultValue` 的 `list_json` 分支负责将其解析回结构化形式并按 Cypher 语法输出。
+
 ## RPC 客户端
 
 `EuGraphRpcClient` 管理独立的 `folly::EventBase` 后台线程（`loopForever()`）。

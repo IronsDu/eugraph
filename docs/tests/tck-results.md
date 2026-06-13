@@ -34,7 +34,7 @@
 | Aggregation | 35 | 16 | 19 | 聚合函数、分组语义 |
 | List | 185 | 91 | 94 | IN/null 语义、嵌套比较、下标/切片边界 |
 | Graph | 61 | 26 | 35 | nodes()/relationships()/labels() 等图函数 |
-| Quantifier | 604 | 479 | 125 | ALL/ANY/NONE/SINGLE 量化器边界 |
+| Quantifier | 604 | **604** | 0 | ✅ 已全部修复（嵌套量词 ANY 类型、路径元素序列化） |
 | Temporal | 1004 | 645 | 359 | **improving**: truncate 精度、命名时区格式化、duration toString/计算、解析单复数/时区处理 |
 | ExistentialSubqueries | 10 | 2 | 8 | EXISTS 子查询 |
 
@@ -91,7 +91,7 @@
 ### 中风险（涉及运算符/比较语义）
 
 8. List (91→185)：94 失败，IN/null 语义、嵌套比较、下标/切片边界
-9. Quantifier (479→604)：125 失败，ALL/ANY/NONE/SINGLE 量化器边界
+9. ~~Quantifier (479→604)~~ ✅ 已全部修复（604/604）：嵌套量词 ANY 类型 fallback、路径元素属性/标签加载、list_json 序列化
 
 ### 高风险（涉及规划/引擎层改动）
 

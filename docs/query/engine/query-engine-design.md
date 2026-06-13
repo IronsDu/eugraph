@@ -640,6 +640,7 @@ using Schema = vector<string>;   // 列名列表
 - **循环变量作用域在 Binder 处理**：绑定 `where_pred` 前将循环变量临时注册到 `BindContext`（分配真实 column_index），绑定后移除。`where_pred` 中的循环变量自然解析为 `BoundColumnRef`，无需修改 ColumnResolver 的核心逻辑。
 - **运行时求值**：`VectorizedEvaluator::evalQuantifierExpr()` 为 list 中每个元素构建临时单行 DataChunk（input columns + loop var column），走正常 `evaluateInternal` 路径求值 `where_pred`。不修改 `BoundVariableRef`/`BoundColumnRef` 的现有求值分支。
 - **量词语义**：遵循 Cypher 标准——ALL 空列表→true，ANY 空列表→false，NONE 空列表→true，SINGLE→恰好一个元素满足。
+- **嵌套量词与 ANY 类型**：当列表元素类型为 ANY（如路径元素），`resolveBinaryBatchFn` 的 ANY-type fallback 必须对算术与比较一致使用 `generic*Batch` 变体。`genericMulBatch/genericAddBatch` 通过 `numericPair` 产生 double 结果，若比较算子用 `int64Lt/Gt` 等只接受 int64_t 的变体，会在运行时因类型不匹配返回 null，导致嵌套谓词（如 `any(y IN ... WHERE 2*x+y > 20)`）全部误判为 false。
 - `BoundList` 求值同步修复（此前落入 evaluator 的 catch-all else，返回空列）。
 
 ### 已知限制（VarLenExpand 特有）
@@ -647,5 +648,5 @@ using Schema = vector<string>;   // 列名列表
 - **LIMIT 不参与 DFS 剪枝**：DFS 先穷举当前 source vertex 的所有路径才输出，LIMIT 在后续 pipeline 截断。超级节点（100 条边）上 `[*2]` 会产生 ~10k 中间结果，此时 LIMIT 无法提前终止遍历。
 - **混合固定+varlen 链 + 命名路径**：`p = (a)-[:X]->(b)-[:Y*2..3]->(c)` 不支持（Binder 阶段拒绝）。
 - **边属性过滤仅支持字面常量**：`{prop: value}` 中 value 必须为字面量（int/string/bool/double），不支持表达式或变量引用。
-- **中间顶点缺少属性**：DFS 构建 PathValue 时，除首尾顶点外只设置 `id`，无 labels 和 properties。因此 `ALL(x IN nodes(p) WHERE x.name = 'Alice')` 对中间顶点不生效。
+- **中间顶点属性加载**：DFS 构建 PathValue 时为所有顶点调用 `getVertexLabels()` 填充 `labels`（使 `nodes(p)` 结果能正确显示标签）。属性由下游 `PathElementPropertyReadPhysicalOp` 填充（当前全量加载，待优化为按需加载——见 [deferred-property-loading.md](deferred-property-loading.md) PathElementPropertyRead 小节）。
 - **多 MATCH + VarLenExpand 未实现**：当前不支持多条 MATCH 子句中包含变长邻接的组合（属于多 MATCH + JOIN 的通用待实现项）。

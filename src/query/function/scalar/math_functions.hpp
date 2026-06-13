@@ -5,6 +5,7 @@
 #include "query/function/function_def.hpp"
 
 #include <cmath>
+#include <random>
 
 namespace eugraph {
 namespace function {
@@ -53,6 +54,23 @@ inline void sqrtBatchFn(const std::vector<const Column*>& args, Column& result, 
                         const EvalContext& /*ctx*/) {
     for (size_t i = 0; i < count; i++) {
         result.setValue(i, sqrtImpl(args[0]->getValue(i)));
+    }
+}
+
+// --- rand ---
+
+inline Value randScalarFn(const std::vector<Value>& /*args*/, const EvalContext& /*ctx*/) {
+    thread_local std::mt19937 gen(std::random_device{}());
+    thread_local std::uniform_real_distribution<double> dist(0.0, 1.0);
+    return Value(dist(gen));
+}
+
+inline void randBatchFn(const std::vector<const Column*>& /*args*/, Column& result, size_t count,
+                        const EvalContext& /*ctx*/) {
+    thread_local std::mt19937 gen(std::random_device{}());
+    thread_local std::uniform_real_distribution<double> dist(0.0, 1.0);
+    for (size_t i = 0; i < count; ++i) {
+        result.setValue(i, Value(dist(gen)));
     }
 }
 

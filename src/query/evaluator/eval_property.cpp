@@ -239,6 +239,40 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 }
             }
         found:;
+        } else if (std::holds_alternative<EdgeValue>(ov)) {
+            const auto& edge = std::get<EdgeValue>(ov);
+            if (ref.property == "id") {
+                r = Value(static_cast<int64_t>(edge.id));
+            } else if (ref.property == "src_id") {
+                r = Value(static_cast<int64_t>(edge.src_id));
+            } else if (ref.property == "dst_id") {
+                r = Value(static_cast<int64_t>(edge.dst_id));
+            } else if (ref.property == "label_id") {
+                r = Value(static_cast<int64_t>(edge.label_id));
+            } else if (edge.properties.has_value()) {
+                const auto& props = *edge.properties;
+                if (eval_ctx_.catalog) {
+                    const auto* eldef = eval_ctx_.catalog->lookupEdgeLabel(edge.label_id);
+                    if (eldef) {
+                        for (const auto& pd : eldef->properties) {
+                            if (pd.name == ref.property && pd.id < props.size()) {
+                                const auto& pv = props[pd.id];
+                                if (pv.has_value())
+                                    r = pvToValue(*pv);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (std::holds_alternative<MapValue>(ov)) {
+            const auto& mv = std::get<MapValue>(ov);
+            for (const auto& [key, storage] : mv.entries) {
+                if (key == ref.property) {
+                    r = storage.value;
+                    break;
+                }
+            }
         }
         result.setValue(i, r);
     }

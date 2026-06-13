@@ -143,6 +143,46 @@ std::string convertEdgeJson(const std::string& json) {
 
 } // namespace
 
+std::string formatJsonArray(const nlohmann::json& arr) {
+    std::ostringstream oss;
+    oss << "[";
+    for (size_t i = 0; i < arr.size(); ++i) {
+        if (i > 0)
+            oss << ", ";
+        auto& elem = arr[i];
+        if (elem.is_array()) {
+            oss << formatJsonArray(elem);
+        } else if (elem.is_object() && (elem.contains("src") || elem.contains("dst"))) {
+            oss << convertEdgeJson(elem.dump());
+        } else if (elem.is_object() && (elem.contains("label") || elem.contains("labels"))) {
+            oss << convertVertexJson(elem.dump());
+        } else if (elem.is_string()) {
+            std::string escaped;
+            for (char c : elem.get<std::string>()) {
+                if (c == '\\')
+                    escaped += "\\\\";
+                else if (c == '\'')
+                    escaped += "\\'";
+                else
+                    escaped += c;
+            }
+            oss << "'" << escaped << "'";
+        } else if (elem.is_number_integer()) {
+            oss << elem.get<int64_t>();
+        } else if (elem.is_number_float()) {
+            oss << formatDouble(elem.get<double>());
+        } else if (elem.is_boolean()) {
+            oss << (elem.get<bool>() ? "true" : "false");
+        } else if (elem.is_null()) {
+            oss << "null";
+        } else {
+            oss << elem.dump();
+        }
+    }
+    oss << "]";
+    return oss.str();
+}
+
 std::string formatResultValue(const thrift::ResultValue& val) {
     switch (val.getType()) {
     case thrift::ResultValue::Type::bool_val:
@@ -176,8 +216,17 @@ std::string formatResultValue(const thrift::ResultValue& val) {
     case thrift::ResultValue::Type::path_json:
         return val.get_path_json();
 
-    case thrift::ResultValue::Type::list_json:
-        return val.get_list_json();
+    case thrift::ResultValue::Type::list_json: {
+        const auto& raw = val.get_list_json();
+        try {
+            auto arr = nlohmann::json::parse(raw);
+            if (!arr.is_array())
+                return raw;
+            return formatJsonArray(arr);
+        } catch (...) {
+            return raw;
+        }
+    }
 
     case thrift::ResultValue::Type::map_json:
         return val.get_map_json();
