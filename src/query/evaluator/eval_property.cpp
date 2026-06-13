@@ -265,6 +265,14 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     }
                 }
             }
+        } else if (std::holds_alternative<MapValue>(ov)) {
+            const auto& mv = std::get<MapValue>(ov);
+            for (const auto& [key, storage] : mv.entries) {
+                if (key == ref.property) {
+                    r = storage.value;
+                    break;
+                }
+            }
         }
         result.setValue(i, r);
     }
