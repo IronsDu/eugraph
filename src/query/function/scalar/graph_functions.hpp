@@ -30,7 +30,7 @@ inline Value labelsImpl(const Value& arg, const EvalContext& ctx) {
     }
     if (std::holds_alternative<std::monostate>(arg))
         return Value{};
-    throw std::runtime_error("TypeError: InvalidArgumentType");
+    throw std::runtime_error("TypeError: InvalidArgumentValue");
 }
 
 inline Value labelsScalarFn(const std::vector<Value>& args, const EvalContext& ctx) {
