@@ -232,6 +232,11 @@ public:
     }
 
 private:
+    // Tracks whether we are inside a function call argument list, where
+    // a bare pattern expression is a syntax error. In other contexts
+    // (e.g. WHERE clause) a bare pattern is a valid pattern predicate.
+    bool in_function_args_ = false;
+
     // === Query ===
 
     Statement buildQuery(AP::QueryContext* ctx) {
@@ -686,14 +691,14 @@ private:
         if (ctx->subqueryExist())
             return buildExistsExpr(ctx->subqueryExist());
         if (ctx->relationshipsChainPattern()) {
-            // A bare pattern expression (e.g. `()--()` or `(a)-->(b)`) appearing
-            // as an atom is only valid inside pattern comprehension or as a
-            // pattern predicate. Using it as a value expression (e.g. inside a
-            // function call like `size(...)`) is a syntax error.
-            // Thrown as std::invalid_argument so that CypherQueryParser::parse()
-            // catches it (its catch list excludes std::runtime_error) and
-            // converts the message into a ParseError with SyntaxError prefix.
-            throw std::invalid_argument("UnexpectedSyntax: pattern expression is not allowed in this context");
+            // A bare pattern is valid as a pattern predicate (e.g. WHERE
+            // clause) but invalid as a value expression (e.g. inside a
+            // function call like `size(...)`). We only reject it when
+            // inside function arguments; elsewhere the pattern falls
+            // through to makeVariable and the binder rejects it with
+            // UndefinedVariable.
+            if (in_function_args_)
+                throw std::invalid_argument("UnexpectedSyntax: pattern expression is not allowed in this context");
         }
 
         // ANTLR's adaptive prediction may route numeric literals (emitted as ID tokens)
@@ -865,8 +870,12 @@ private:
         auto fn = std::make_unique<FunctionCall>();
         fn->name = buildInvocationName(ctx->invocationName());
         fn->distinct = (ctx->DISTINCT() != nullptr);
-        if (ctx->expressionChain())
+        if (ctx->expressionChain()) {
+            bool saved = in_function_args_;
+            in_function_args_ = true;
             fn->args = buildExprChain(ctx->expressionChain());
+            in_function_args_ = saved;
+        }
         return Expression(std::move(fn));
     }
 
