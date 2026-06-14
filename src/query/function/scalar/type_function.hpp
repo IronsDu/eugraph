@@ -11,15 +11,18 @@ namespace scalar {
 
 /// type(Edge) -> String: returns the edge type name.
 inline Value typeImpl(const Value& arg, const EvalContext& ctx) {
-    if (!std::holds_alternative<EdgeValue>(arg))
+    if (std::holds_alternative<EdgeValue>(arg)) {
+        const auto& ev = std::get<EdgeValue>(arg);
+        if (!ctx.catalog)
+            return Value{};
+        auto* def = ctx.catalog->lookupEdgeLabel(ev.label_id);
+        if (!def)
+            return Value{};
+        return Value(def->name);
+    }
+    if (std::holds_alternative<std::monostate>(arg))
         return Value{};
-    const auto& ev = std::get<EdgeValue>(arg);
-    if (!ctx.catalog)
-        return Value{};
-    auto* def = ctx.catalog->lookupEdgeLabel(ev.label_id);
-    if (!def)
-        return Value{};
-    return Value(def->name);
+    throw std::runtime_error("TypeError: InvalidArgumentType");
 }
 
 inline Value typeScalarFn(const std::vector<Value>& args, const EvalContext& ctx) {

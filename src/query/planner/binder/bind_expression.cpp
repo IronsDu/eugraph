@@ -388,11 +388,37 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     // Structural fields of EdgeValue
                     if (ptr->property == "id" || ptr->property == "src_id" || ptr->property == "dst_id") {
                         prop_ref->result_type = BoundType::Int64();
-                    } else if (ptr->property == "label_id") {
-                        prop_ref->result_type = BoundType::Int64();
-                    } else {
-                        prop_ref->result_type = BoundType::Any();
+                        return BoundExpression(std::move(prop_ref));
                     }
+                    if (ptr->property == "label_id") {
+                        prop_ref->result_type = BoundType::Int64();
+                        return BoundExpression(std::move(prop_ref));
+                    }
+
+                    // Extract variable name for property requirement pushdown
+                    std::optional<std::string> var_name;
+                    if (std::holds_alternative<BoundColumnRef>(prop_ref->object))
+                        var_name = std::get<BoundColumnRef>(prop_ref->object).name;
+                    else if (std::holds_alternative<BoundVariableRef>(prop_ref->object))
+                        var_name = std::get<BoundVariableRef>(prop_ref->object).name;
+
+                    // Look up the property across all edge labels
+                    BoundType merged = BoundType::Null();
+                    for (const auto& [elid, eldef] : catalog_.allEdgeLabels()) {
+                        for (const auto& pd : eldef.properties) {
+                            if (pd.name == ptr->property) {
+                                BoundPropertyRef::ResolvedProperty rp;
+                                rp.label_id = static_cast<LabelId>(elid);
+                                rp.prop_id = pd.id;
+                                rp.type = propertyTypeToBoundType(pd.type);
+                                merged = BoundType::merge(merged, rp.type);
+                                prop_ref->candidates.push_back(rp);
+                                if (var_name)
+                                    ctx_.addPropertyRequirement(*var_name, static_cast<LabelId>(elid), pd.id);
+                            }
+                        }
+                    }
+                    prop_ref->result_type = prop_ref->candidates.empty() ? BoundType::Any() : merged;
                     return BoundExpression(std::move(prop_ref));
                 }
 
@@ -676,8 +702,35 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 auto bound_index = bindExpression(ptr->index);
                 if (!bound_list || !bound_index)
                     return std::nullopt;
-                auto sub = std::make_unique<BoundSubscript>();
                 const BoundType& list_type = getBoundExprType(*bound_list);
+
+                // For vertices/edges, n['name'] is dynamic property access.
+                if ((list_type.kind == BoundTypeKind::VERTEX || list_type.kind == BoundTypeKind::EDGE ||
+                     list_type.kind == BoundTypeKind::ANY || list_type.kind == BoundTypeKind::NULL_TYPE)) {
+                    // Extract property name from string literal or parameter
+                    std::optional<std::string> prop_name;
+                    if (std::holds_alternative<BoundLiteral>(*bound_index)) {
+                        const auto& lit = std::get<BoundLiteral>(*bound_index);
+                        if (auto* s = std::get_if<std::string>(&lit.value))
+                            prop_name = *s;
+                    } else if (std::holds_alternative<BoundParameter>(*bound_index)) {
+                        // Parameter — defer to runtime; use empty name as sentinel
+                        auto dyn_ref = std::make_unique<BoundDynamicPropertyRef>();
+                        dyn_ref->object = std::move(*bound_list);
+                        dyn_ref->property = std::get<BoundParameter>(*bound_index).name;
+                        dyn_ref->result_type = BoundType::Any();
+                        return BoundExpression(std::move(dyn_ref));
+                    }
+                    if (prop_name) {
+                        auto dyn_ref = std::make_unique<BoundDynamicPropertyRef>();
+                        dyn_ref->object = std::move(*bound_list);
+                        dyn_ref->property = *prop_name;
+                        dyn_ref->result_type = BoundType::Any();
+                        return BoundExpression(std::move(dyn_ref));
+                    }
+                }
+
+                auto sub = std::make_unique<BoundSubscript>();
                 if (list_type.kind == BoundTypeKind::LIST) {
                     sub->result_type =
                         list_type.element_type ? BoundType::clone(*list_type.element_type) : BoundType::Any();

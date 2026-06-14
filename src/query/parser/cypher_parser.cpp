@@ -637,7 +637,32 @@ private:
     }
 
     Expression buildPropOrLabelExpr(AP::PropertyOrLabelExpressionContext* ctx) {
-        return buildPropertyExpression(ctx->propertyExpression());
+        Expression expr = buildPropertyExpression(ctx->propertyExpression());
+        if (auto* nl = ctx->nodeLabels()) {
+            auto names = nl->name();
+            if (names.empty())
+                return expr;
+            // Extract variable name from the atom for label checks.
+            // a:B → IN('B', labels(a));  a:B:C → AND(IN('B', labels(a)), IN('C', labels(a)))
+            std::string var_name;
+            if (auto* atom = ctx->propertyExpression()->atom()) {
+                if (auto* sym = atom->symbol())
+                    var_name = sym->getText();
+            }
+            if (var_name.empty())
+                return expr;
+            auto makeLabelCheck = [&](const std::string& label) -> Expression {
+                std::vector<Expression> args;
+                args.push_back(makeVariable(var_name));
+                return makeBinaryOp(BinaryOperator::IN, makeLiteral(std::string(label)),
+                                    makeFunctionCall("labels", std::move(args)));
+            };
+            Expression result = makeLabelCheck(names[0]->getText());
+            for (size_t i = 1; i < names.size(); ++i)
+                result = makeBinaryOp(BinaryOperator::AND, std::move(result), makeLabelCheck(names[i]->getText()));
+            return result;
+        }
+        return expr;
     }
 
     Expression buildPropertyExpression(AP::PropertyExpressionContext* ctx) {

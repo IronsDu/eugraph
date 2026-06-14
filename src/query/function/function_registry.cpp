@@ -389,6 +389,18 @@ void FunctionRegistry::registerScalarBuiltins() {
                                         {},
                                         {}});
 
+    // properties(Map<String, Any>) -> Map<String, Any> (identity)
+    functions_["properties"].push_back({"properties",
+                                        {BoundType::Map(BoundType::String(), BoundType::Any())},
+                                        BoundType::Map(BoundType::String(), BoundType::Any()),
+                                        false,
+                                        false,
+                                        scalar::propertiesScalarFn,
+                                        scalar::propertiesBatchFn,
+                                        {},
+                                        {},
+                                        {}});
+
     // --- String functions ---
 
     // trim(String) -> String

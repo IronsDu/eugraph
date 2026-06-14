@@ -12,19 +12,25 @@ namespace scalar {
 // --- labels ---
 
 inline Value labelsImpl(const Value& arg, const EvalContext& ctx) {
-    if (!std::holds_alternative<VertexValue>(arg))
-        return Value{};
-    const auto& vv = std::get<VertexValue>(arg);
-    if (!vv.labels || !ctx.catalog)
-        return Value{ListValue{}};
-    ListValue lv;
-    for (LabelId lid : *vv.labels) {
-        auto* def = ctx.catalog->lookupLabel(lid);
-        if (def) {
-            lv.elements.push_back(ValueStorage{Value(def->name)});
+    if (std::holds_alternative<VertexValue>(arg)) {
+        const auto& vv = std::get<VertexValue>(arg);
+        if (!vv.labels || !ctx.catalog)
+            return Value{ListValue{}};
+        ListValue lv;
+        LabelId anon_id = ctx.catalog->getAnonLabelId();
+        for (LabelId lid : *vv.labels) {
+            if (lid == anon_id)
+                continue;
+            auto* def = ctx.catalog->lookupLabel(lid);
+            if (def) {
+                lv.elements.push_back(ValueStorage{Value(def->name)});
+            }
         }
+        return Value(std::move(lv));
     }
-    return Value(std::move(lv));
+    if (std::holds_alternative<std::monostate>(arg))
+        return Value{};
+    throw std::runtime_error("TypeError: InvalidArgumentType");
 }
 
 inline Value labelsScalarFn(const std::vector<Value>& args, const EvalContext& ctx) {
@@ -56,12 +62,9 @@ inline Value keysVertexImpl(const Value& arg, const EvalContext& ctx) {
         auto* label_def = ctx.catalog->lookupLabel(lid);
         if (!label_def)
             continue;
-        for (size_t pid = 0; pid < props.size(); ++pid) {
-            if (!props[pid].has_value())
-                continue;
-            if (pid < label_def->properties.size()) {
-                lv.elements.push_back(ValueStorage{Value(label_def->properties[pid].name)});
-            }
+        for (const auto& pd : label_def->properties) {
+            if (pd.id < props.size() && props[pd.id].has_value())
+                lv.elements.push_back(ValueStorage{Value(pd.name)});
         }
     }
     return Value(std::move(lv));
@@ -80,12 +83,9 @@ inline Value keysEdgeImpl(const Value& arg, const EvalContext& ctx) {
         return Value{ListValue{}};
     const auto& props = *ev.properties;
     ListValue lv;
-    for (size_t pid = 0; pid < props.size(); ++pid) {
-        if (!props[pid].has_value())
-            continue;
-        if (pid < edge_def->properties.size()) {
-            lv.elements.push_back(ValueStorage{Value(edge_def->properties[pid].name)});
-        }
+    for (const auto& pd : edge_def->properties) {
+        if (pd.id < props.size() && props[pd.id].has_value())
+            lv.elements.push_back(ValueStorage{Value(pd.name)});
     }
     return Value(std::move(lv));
 }
@@ -234,10 +234,20 @@ inline Value propertiesScalarFn(const std::vector<Value>& args, const EvalContex
     if (args.empty())
         return Value{};
     const auto& v = args[0];
-    if (std::holds_alternative<VertexValue>(v))
+    if (std::holds_alternative<VertexValue>(v)) {
+        const auto& vv = std::get<VertexValue>(v);
+        if (vv.id == INVALID_VERTEX_ID)
+            return Value{};
         return propertiesVertexImpl(v, ctx);
-    if (std::holds_alternative<EdgeValue>(v))
+    }
+    if (std::holds_alternative<EdgeValue>(v)) {
+        const auto& ev = std::get<EdgeValue>(v);
+        if (ev.id == INVALID_EDGE_ID)
+            return Value{};
         return propertiesEdgeImpl(v, ctx);
+    }
+    if (std::holds_alternative<MapValue>(v))
+        return v;
     return Value{};
 }
 
