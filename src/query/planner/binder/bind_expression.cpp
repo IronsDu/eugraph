@@ -187,11 +187,6 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     }
                     sig += ")";
                     if (func_registry_.exists(ptr->name)) {
-                        // Function exists but no overload matches these argument types.
-                        // Per openCypher TCK convention, function overload failures
-                        // detected at compile time are classified as SyntaxError
-                        // (not TypeError, which is reserved for property-access
-                        // type mismatches like Map1/Graph6).
                         error("SyntaxError: InvalidArgumentType: no overload of '" + ptr->name + "' accepts (" + sig +
                               ")");
                     } else {

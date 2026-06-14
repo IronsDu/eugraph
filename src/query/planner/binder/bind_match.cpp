@@ -241,14 +241,13 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     return std::nullopt;
                 }
 
-                // Bind edge types
+                // Bind edge types. Non-existent edge types produce an empty
+                // label list, causing the expand to match zero rows — correct
+                // behaviour for both OPTIONAL MATCH (null row via LeftJoin) and
+                // regular MATCH (no matches when the edge type doesn't exist).
                 std::vector<EdgeLabelId> edge_label_ids;
                 if (!rel_pat.rel_types.empty()) {
                     edge_label_ids = catalog_.resolveEdgeLabelIds(rel_pat.rel_types);
-                    if (edge_label_ids.empty()) {
-                        error("Edge type '" + rel_pat.rel_types[0] + "' does not exist");
-                        return std::nullopt;
-                    }
                 } else {
                     for (const auto& [id, def] : catalog_.allEdgeLabels()) {
                         edge_label_ids.push_back(id);
