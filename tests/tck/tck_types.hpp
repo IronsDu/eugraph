@@ -2,9 +2,7 @@
 
 #include <cstdint>
 #include <map>
-#include <memory>
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -38,7 +36,7 @@ struct TckRow {
     std::vector<TckCell> cells;
 };
 
-// Property key: (element_id, prop_name). Value: serialized form (via formatResultValue).
+// Property key: (element_id, prop_name). Value: serialized form.
 using PropertyMap = std::map<std::pair<int64_t, std::string>, std::string>;
 
 // Tracks graph state before/after a query to compute side effects
@@ -52,8 +50,6 @@ struct GraphSnapshot {
     std::unordered_set<int64_t> nodeIds;
     std::unordered_set<int64_t> edgeIds;
     // Per-property state for accurate add/remove/modify counting.
-    // A modification (same key, different value) counts as BOTH +1 and -1
-    // under TCK semantics.
     PropertyMap vertexProps;
     PropertyMap edgeProps;
 };

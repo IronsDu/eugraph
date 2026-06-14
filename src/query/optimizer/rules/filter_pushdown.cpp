@@ -94,33 +94,34 @@ void collectColumnNames(const binder::BoundExpression& expr, std::unordered_set<
         expr);
 }
 
-/// Returns the set of variable names that the given operator *introduces* (i.e.
-/// produces for its parent). Pushing a Filter that references any of these
-/// names below the operator would leave those references dangling.
-std::unordered_set<std::string> producedVariableNames(const binder::BoundLogicalOperator& op) {
-    std::unordered_set<std::string> produced;
+/// Returns the set of variable names that the given operator newly introduces
+/// (i.e. columns it creates, excluding columns passed through from its child).
+/// Pushing a Filter that references any of these names below the operator
+/// would leave those references dangling because the columns don't exist yet.
+std::unordered_set<std::string> introducedVariableNames(const binder::BoundLogicalOperator& op) {
+    std::unordered_set<std::string> introduced;
     std::visit(
-        [&produced](const auto& val) {
+        [&introduced](const auto& val) {
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (!val->edge_variable.empty())
-                    produced.insert(val->edge_variable);
+                    introduced.insert(val->edge_variable);
                 if (!val->dst_variable.empty())
-                    produced.insert(val->dst_variable);
+                    introduced.insert(val->dst_variable);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                 if (!val->dst_variable.empty())
-                    produced.insert(val->dst_variable);
+                    introduced.insert(val->dst_variable);
                 if (!val->path_variable.empty())
-                    produced.insert(val->path_variable);
+                    introduced.insert(val->path_variable);
                 if (!val->edge_variable.empty())
-                    produced.insert(val->edge_variable);
+                    introduced.insert(val->edge_variable);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
                 if (!val->path_variable.empty())
-                    produced.insert(val->path_variable);
+                    introduced.insert(val->path_variable);
             }
         },
         op);
-    return produced;
+    return introduced;
 }
 
 } // namespace
@@ -145,11 +146,11 @@ bool FilterPushdownRule::condition(GroupExpr& expr, Memo& memo) const {
     // Otherwise the pushed Filter would be placed where those variables are
     // not yet in scope, leaving dangling column references.
     const auto& filter_op = std::get<std::unique_ptr<binder::BoundFilterOp>>(expr.op);
-    auto produced = producedVariableNames(child_expr.op);
-    if (!produced.empty()) {
+    auto introduced = introducedVariableNames(child_expr.op);
+    if (!introduced.empty()) {
         std::unordered_set<std::string> referenced;
         collectColumnNames(filter_op->predicate, referenced);
-        for (const auto& name : produced) {
+        for (const auto& name : introduced) {
             if (referenced.count(name))
                 return false;
         }

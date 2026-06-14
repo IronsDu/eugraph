@@ -181,9 +181,8 @@ struct TckContext {
             if (!after.labelNames.count(name))
                 se.removed_labels++;
         }
-        // Properties: per-key diff so modifications count as both +1 and -1
-        // (TCK semantics: setting an existing property to a new value is an
-        //  add AND a remove, not a no-op).
+        // Properties: per-key diff so modifications count as +1 and -1
+        // (TCK semantics: SET on existing property = add AND remove).
         auto diffProps = [](const PropertyMap& b, const PropertyMap& a, int64_t& added, int64_t& removed) {
             for (const auto& [k, v] : a) {
                 auto it = b.find(k);

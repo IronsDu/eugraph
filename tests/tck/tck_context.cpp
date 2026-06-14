@@ -677,10 +677,10 @@ GraphSnapshot TckContext::takeSnapshot() {
 
     // Collect per-property state for accurate add/remove/modify counting.
     // For each element, fetch (id, properties-map) and parse the map into
-    // (id, key, value) entries. Using properties() avoids UNWIND quirks.
+    // (id, key, value) entries.
     auto collectProps = [](const std::string& mapJson, int64_t id, PropertyMap& out) {
-        // Map format from valueToThrift: {key1: value1, key2: value2, ...}
-        // Values follow formatResultValue conventions (quoted strings, etc.).
+        // Map format from valueToThrift: {key1: 'val1', key2: 1999, ...}
+        // String values have `'` escaped as `\'` by the server.
         size_t i = 0;
         auto skipWs = [&](size_t& p) {
             while (p < mapJson.size() && (mapJson[p] == ' ' || mapJson[p] == ','))
@@ -692,7 +692,7 @@ GraphSnapshot TckContext::takeSnapshot() {
             skipWs(i);
             if (i >= mapJson.size() || mapJson[i] == '}')
                 break;
-            // Parse key: bare identifier (alphanumeric/underscore) before ':'
+            // Parse key: bare identifier before ':'
             size_t k_start = i;
             while (i < mapJson.size() && mapJson[i] != ':' && mapJson[i] != ' ')
                 ++i;
@@ -703,17 +703,21 @@ GraphSnapshot TckContext::takeSnapshot() {
                 ++i; // skip ':'
             while (i < mapJson.size() && mapJson[i] == ' ')
                 ++i;
-            // Parse value: read one balanced unit (string, number, object, etc.)
+            // Parse value: one balanced unit
             std::string val;
             if (i < mapJson.size() && mapJson[i] == '\'') {
+                // Quoted string — unescape embedded \'
                 size_t start = i++;
-                while (i < mapJson.size() && mapJson[i] != '\'') {
-                    if (mapJson[i] == '\\' && i + 1 < mapJson.size())
+                while (i < mapJson.size()) {
+                    if (mapJson[i] == '\\' && i + 1 < mapJson.size() && mapJson[i + 1] == '\'') {
+                        i += 2; // skip escaped quote
+                    } else if (mapJson[i] == '\'') {
+                        ++i; // closing quote
+                        break;
+                    } else {
                         ++i;
-                    ++i;
+                    }
                 }
-                if (i < mapJson.size())
-                    ++i;
                 val = mapJson.substr(start, i - start);
             } else if (i < mapJson.size() && mapJson[i] == '"') {
                 size_t start = i++;
@@ -740,10 +744,15 @@ GraphSnapshot TckContext::takeSnapshot() {
                         }
                     } else if (mapJson[i] == '\'') {
                         ++i;
-                        while (i < mapJson.size() && mapJson[i] != '\'') {
-                            if (mapJson[i] == '\\' && i + 1 < mapJson.size())
+                        while (i < mapJson.size()) {
+                            if (mapJson[i] == '\\' && i + 1 < mapJson.size() && mapJson[i + 1] == '\'') {
+                                i += 2;
+                            } else if (mapJson[i] == '\'') {
                                 ++i;
-                            ++i;
+                                break;
+                            } else {
+                                ++i;
+                            }
                         }
                     }
                     ++i;
@@ -754,7 +763,6 @@ GraphSnapshot TckContext::takeSnapshot() {
                 while (i < mapJson.size() && mapJson[i] != ',' && mapJson[i] != '}')
                     ++i;
                 val = mapJson.substr(start, i - start);
-                // trim trailing whitespace
                 while (!val.empty() && (val.back() == ' '))
                     val.pop_back();
             }
