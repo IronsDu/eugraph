@@ -74,6 +74,35 @@ inline void randBatchFn(const std::vector<const Column*>& /*args*/, Column& resu
     }
 }
 
+// --- sign ---
+
+inline Value signImpl(const Value& arg) {
+    if (isNull(arg))
+        return Value{};
+    int64_t s = 0;
+    if (std::holds_alternative<int64_t>(arg)) {
+        int64_t v = std::get<int64_t>(arg);
+        s = (v > 0) ? 1 : (v < 0 ? -1 : 0);
+    } else if (std::holds_alternative<double>(arg)) {
+        double v = std::get<double>(arg);
+        s = (v > 0.0) ? 1 : (v < 0.0 ? -1 : 0);
+    } else {
+        return Value{};
+    }
+    return Value{s};
+}
+
+inline Value signScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
+    return signImpl(args[0]);
+}
+
+inline void signBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                        const EvalContext& /*ctx*/) {
+    for (size_t i = 0; i < count; i++) {
+        result.setValue(i, signImpl(args[0]->getValue(i)));
+    }
+}
+
 } // namespace scalar
 } // namespace function
 } // namespace eugraph

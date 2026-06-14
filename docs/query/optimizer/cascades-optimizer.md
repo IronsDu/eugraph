@@ -265,13 +265,38 @@ Filter(LEAF)  — 匹配有一个子节点的 Filter
 
 | 算子 | 可穿透 | 原因 |
 |------|--------|------|
-| Expand | ✅ | 保留已有列，新增边/目标顶点列 |
-| PathBuild | ✅ | 保留已有列，新增路径列 |
+| Expand | ✅\* | 保留已有列，新增边/目标顶点列 |
+| VarLenExpand | ✅\* | 保留已有列，新增 dst/path/edge 列 |
+| PathBuild | ✅\* | 保留已有列，新增路径列 |
 | Filter | ✅ | 不改变 schema |
 | Sort / Skip / Limit / Distinct | ✅ | 不改变 schema |
 | Aggregate | ❌ | 改变 schema |
 | Project | ❌ | 可能丢弃所需列 |
 | LabelScan / Scan | ❌ | 叶子节点，Filter 停在此上方 |
+
+\* 标记的算子会**引入新变量**（如 Expand 的 `edge`/`dst`、PathBuild 的 `path`）。
+对于这些算子，下推条件由 `condition()` 中的"引用-新引入重叠检查"决定：
+
+1. 收集 Filter 谓词中引用的所有列名（`collectColumnNames`）
+2. 收集子算子**新引入**的变量名（`introducedVariableNames`）——注意：不是算子输出的全部列，只含算子**自己制造**的列。Expand 输出 n/edge/b，但只引入 edge 和 b（n 是从子算子透传的）
+3. 若两者有交集，则**禁止下推**——谓词引用了尚未定义的新变量
+
+**不变量**：Filter 谓词只能引用其输入 chunk 中已存在的列。若引用了算子 O 新引入的变量，推到 O 下方会因列缺失导致悬空引用。
+
+**具体例子**：
+
+查询 `MATCH (n:Person)-->(b) WHERE b.age > 18 RETURN n, b`
+
+- Expand 输入 chunk: `{n}`；输出 chunk: `{n, edge, b}`
+- `introducedVariableNames(Expand)` = `{edge, b}`（不含 n，n 是透传的）
+- `collectColumnNames(b.age > 18)` = `{b}`
+- 交集 `{b} ∩ {edge, b}` = `{b}` ≠ ∅ → **禁止下推**
+
+查询 `MATCH (n:Person)-->(b) WHERE n.age > 18 RETURN n, b`
+
+- `introducedVariableNames(Expand)` = `{edge, b}`
+- `collectColumnNames(n.age > 18)` = `{n}`
+- 交集 `{n} ∩ {edge, b}` = ∅ → **允许下推**。n 在 Expand 之前就存在，推到 Expand 下方 n 列仍在 chunk 里，谓词不依赖 Expand 的新变量，语义等价。
 
 ### substitute 过程
 

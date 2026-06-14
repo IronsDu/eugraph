@@ -14,12 +14,6 @@ folly::coro::AsyncGenerator<DataChunk> FilterPhysicalOp::executeChunk() {
         std::vector<bool> predicate(n);
         evaluator.evaluatePredicate(predicate_, *chunk, predicate);
 
-        int pass_count = 0;
-        for (auto p : predicate)
-            if (p)
-                pass_count++;
-        spdlog::info("[Filter] input_rows={} passed={}", n, pass_count);
-
         // Build filtered SelectionVector
         SelectionVector filtered;
         filtered.is_identity = false;

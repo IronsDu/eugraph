@@ -2,6 +2,8 @@
 #include "query/dataset/row.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
 
+#include <spdlog/spdlog.h>
+
 #include <unordered_map>
 #include <unordered_set>
 
@@ -184,6 +186,24 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
             if (agg.func_def && agg.func_def->agg_init && agg.func_def->agg_finalize) {
                 auto init_state = agg.func_def->agg_init();
                 output.columns[out_idx].setValue(0, agg.func_def->agg_finalize(*init_state));
+            } else if (!agg.func_def) {
+                // Complex aggregate (e.g. size(collect(...))): substitute internal
+                // aggregate results with their empty-init values, then evaluate.
+                std::unordered_map<const function::FunctionDef*, Value> subs;
+                for (size_t j = 0; j < aggregates_.size(); ++j) {
+                    if (aggregates_[j].is_internal && aggregates_[j].func_def && aggregates_[j].func_def->agg_init &&
+                        aggregates_[j].func_def->agg_finalize) {
+                        auto init_state = aggregates_[j].func_def->agg_init();
+                        subs[aggregates_[j].func_def] = aggregates_[j].func_def->agg_finalize(*init_state);
+                    }
+                }
+                DataChunk eval_chunk;
+                eval_chunk.count = 1;
+                VectorizedEvaluator out_eval(eval_ctx_);
+                out_eval.aggregate_substitutions = &subs;
+                auto result_col = Column::flat(binder::BoundTypeKind::ANY, 1);
+                out_eval.evaluate(agg.arg, eval_chunk, result_col);
+                output.columns[out_idx].setValue(0, result_col.getValue(0));
             } else {
                 output.columns[out_idx].setNull(0);
             }

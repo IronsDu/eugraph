@@ -1,10 +1,10 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
+#include <map>
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace eugraph::tck {
@@ -36,6 +36,9 @@ struct TckRow {
     std::vector<TckCell> cells;
 };
 
+// Property key: (element_id, prop_name). Value: serialized form.
+using PropertyMap = std::map<std::pair<int64_t, std::string>, std::string>;
+
 // Tracks graph state before/after a query to compute side effects
 struct GraphSnapshot {
     int64_t nodeCount = 0;
@@ -46,6 +49,9 @@ struct GraphSnapshot {
     // ID sets for add/remove detection
     std::unordered_set<int64_t> nodeIds;
     std::unordered_set<int64_t> edgeIds;
+    // Per-property state for accurate add/remove/modify counting.
+    PropertyMap vertexProps;
+    PropertyMap edgeProps;
 };
 
 } // namespace eugraph::tck

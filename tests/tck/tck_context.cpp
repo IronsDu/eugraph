@@ -21,6 +21,10 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
     } else if (errMsg.find("TypeError:") != std::string::npos) {
         errorType = "TypeError";
         errorPhase = "compile time";
+    } else if (errMsg.find("ArgumentError") != std::string::npos) {
+        // Runtime argument validation failures (e.g. range() step=0, invalid types)
+        errorType = "ArgumentError";
+        errorPhase = "runtime";
     } else if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
                errMsg.find("parse") != std::string::npos || errMsg.find("UndefinedVariable") != std::string::npos ||
                errMsg.find("VariableAlreadyBound") != std::string::npos ||
@@ -83,17 +87,10 @@ bool hasUnsupportedPattern(const ast::PatternPart& pp, bool is_create = false) {
             spdlog::info("[TCK] skipping: relationship type alternation");
             return true;
         }
-        // Unbounded variable-length expand? [:T*] without upper bound
-        if (rel.range.has_value()) {
-            const auto& [min_expr, max_expr] = *rel.range;
-            if (std::holds_alternative<std::unique_ptr<ast::Literal>>(max_expr)) {
-                auto& lit = std::get<std::unique_ptr<ast::Literal>>(max_expr);
-                if (std::holds_alternative<int64_t>(lit->value) && std::get<int64_t>(lit->value) < 0) {
-                    spdlog::info("[TCK] skipping: unbounded variable-length expand");
-                    return true;
-                }
-            }
-        }
+        // Unbounded variable-length expand? [:T*] without upper bound.
+        // The binder accepts this and produces an explicit error if execution
+        // is unsupported; skipping here would suppress legitimate binding-time
+        // errors (e.g. size(path) → InvalidArgumentType).
         // Check properties in rel and node
         if (rel.properties.has_value()) {
             for (const auto& [k, v] : rel.properties->entries) {
@@ -428,6 +425,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "InvalidArgumentValue";
                 } else if (errMsg.find("InvalidArgumentType") != std::string::npos) {
                     lastErrorDetail = "InvalidArgumentType";
+                } else if (errMsg.find("NumberOutOfRange") != std::string::npos) {
+                    lastErrorDetail = "NumberOutOfRange";
                 } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
                     lastErrorDetail = "MergeReadOwnWrites";
                 } else if (errMsg.find("FloatingPointOverflow") != std::string::npos) {
@@ -444,6 +443,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "InvalidNumberLiteral";
                 } else if (errMsg.find("UnexpectedSyntax") != std::string::npos) {
                     lastErrorDetail = "UnexpectedSyntax";
+                } else if (errMsg.find("InvalidAggregation") != std::string::npos) {
+                    lastErrorDetail = "InvalidAggregation";
                 } else {
                     lastErrorDetail = errMsg;
                 }
@@ -511,6 +512,8 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "InvalidNumberLiteral";
         } else if (errMsg.find("UnexpectedSyntax") != std::string::npos) {
             lastErrorDetail = "UnexpectedSyntax";
+        } else if (errMsg.find("InvalidAggregation") != std::string::npos) {
+            lastErrorDetail = "InvalidAggregation";
         } else {
             lastErrorDetail = errMsg;
         }
@@ -668,6 +671,139 @@ GraphSnapshot TckContext::takeSnapshot() {
                         }
                     }
                 }
+            }
+        });
+    } catch (...) {}
+
+    // Collect per-property state for accurate add/remove/modify counting.
+    // For each element, fetch (id, properties-map) and parse the map into
+    // (id, key, value) entries.
+    auto collectProps = [](const std::string& mapJson, int64_t id, PropertyMap& out) {
+        // Map format from valueToThrift: {key1: 'val1', key2: 1999, ...}
+        // String values have `'` escaped as `\'` by the server.
+        size_t i = 0;
+        auto skipWs = [&](size_t& p) {
+            while (p < mapJson.size() && (mapJson[p] == ' ' || mapJson[p] == ','))
+                ++p;
+        };
+        if (i < mapJson.size() && mapJson[i] == '{')
+            ++i;
+        while (i < mapJson.size()) {
+            skipWs(i);
+            if (i >= mapJson.size() || mapJson[i] == '}')
+                break;
+            // Parse key: bare identifier before ':'
+            size_t k_start = i;
+            while (i < mapJson.size() && mapJson[i] != ':' && mapJson[i] != ' ')
+                ++i;
+            std::string key = mapJson.substr(k_start, i - k_start);
+            while (i < mapJson.size() && mapJson[i] != ':')
+                ++i;
+            if (i < mapJson.size())
+                ++i; // skip ':'
+            while (i < mapJson.size() && mapJson[i] == ' ')
+                ++i;
+            // Parse value: one balanced unit
+            std::string val;
+            if (i < mapJson.size() && mapJson[i] == '\'') {
+                // Quoted string — unescape embedded \'
+                size_t start = i++;
+                while (i < mapJson.size()) {
+                    if (mapJson[i] == '\\' && i + 1 < mapJson.size() && mapJson[i + 1] == '\'') {
+                        i += 2; // skip escaped quote
+                    } else if (mapJson[i] == '\'') {
+                        ++i; // closing quote
+                        break;
+                    } else {
+                        ++i;
+                    }
+                }
+                val = mapJson.substr(start, i - start);
+            } else if (i < mapJson.size() && mapJson[i] == '"') {
+                size_t start = i++;
+                while (i < mapJson.size() && mapJson[i] != '"') {
+                    if (mapJson[i] == '\\' && i + 1 < mapJson.size())
+                        ++i;
+                    ++i;
+                }
+                if (i < mapJson.size())
+                    ++i;
+                val = mapJson.substr(start, i - start);
+            } else if (i < mapJson.size() && (mapJson[i] == '{' || mapJson[i] == '[')) {
+                char open = mapJson[i], close = (open == '{') ? '}' : ']';
+                int depth = 0;
+                size_t start = i;
+                while (i < mapJson.size()) {
+                    if (mapJson[i] == open)
+                        ++depth;
+                    else if (mapJson[i] == close) {
+                        --depth;
+                        if (depth == 0) {
+                            ++i;
+                            break;
+                        }
+                    } else if (mapJson[i] == '\'') {
+                        ++i;
+                        while (i < mapJson.size()) {
+                            if (mapJson[i] == '\\' && i + 1 < mapJson.size() && mapJson[i + 1] == '\'') {
+                                i += 2;
+                            } else if (mapJson[i] == '\'') {
+                                ++i;
+                                break;
+                            } else {
+                                ++i;
+                            }
+                        }
+                    }
+                    ++i;
+                }
+                val = mapJson.substr(start, i - start);
+            } else {
+                size_t start = i;
+                while (i < mapJson.size() && mapJson[i] != ',' && mapJson[i] != '}')
+                    ++i;
+                val = mapJson.substr(start, i - start);
+                while (!val.empty() && (val.back() == ' '))
+                    val.pop_back();
+            }
+            if (!key.empty())
+                out[{id, key}] = val;
+            skipWs(i);
+        }
+    };
+
+    try {
+        auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN id(n), properties(n)", graphName);
+        std::move(stream).subscribeInline([&](folly::Try<thrift::ResultRowBatch>&& batch) {
+            if (!batch.hasValue())
+                return;
+            for (const auto& row : *batch->rows()) {
+                const auto& vals = *row.values();
+                if (vals.size() < 2)
+                    continue;
+                if (vals[0].getType() != thrift::ResultValue::Type::int_val)
+                    continue;
+                int64_t id = vals[0].get_int_val();
+                if (vals[1].getType() == thrift::ResultValue::Type::map_json)
+                    collectProps(vals[1].get_map_json(), id, snap.vertexProps);
+            }
+        });
+    } catch (...) {}
+
+    try {
+        auto [meta, stream] = rpc->executeCypher("MATCH ()-[r]->() RETURN id(r), properties(r)", graphName);
+        std::move(stream).subscribeInline([&](folly::Try<thrift::ResultRowBatch>&& batch) {
+            if (!batch.hasValue())
+                return;
+            for (const auto& row : *batch->rows()) {
+                const auto& vals = *row.values();
+                if (vals.size() < 2)
+                    continue;
+                if (vals[0].getType() != thrift::ResultValue::Type::int_val)
+                    continue;
+                int64_t id = vals[0].get_int_val();
+                if (vals[1].getType() == thrift::ResultValue::Type::map_json)
+                    collectProps(vals[1].get_map_json(), id, snap.edgeProps);
             }
         });
     } catch (...) {}

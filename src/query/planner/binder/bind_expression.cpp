@@ -16,6 +16,75 @@ namespace {
 bool isTemporalType(BoundTypeKind k) {
     return k == BoundTypeKind::DATETIME || k == BoundTypeKind::TIME || k == BoundTypeKind::DURATION;
 }
+
+bool isAggregateFunctionName(const std::string& name) {
+    return name == "count" || name == "sum" || name == "avg" || name == "min" || name == "max" || name == "collect" ||
+           name == "percentile_cont" || name == "percentile_disc" || name == "st_dev" || name == "st_dev_p";
+}
+
+// Detect aggregate function calls inside a Cypher expression subtree.
+// Used to reject aggregates in contexts where row-wise evaluation is required
+// (e.g. inside a list comprehension projection / WHERE filter).
+bool containsAggregateCall(const cypher::Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                if (isAggregateFunctionName(ptr->name))
+                    return true;
+                for (const auto& arg : ptr->args)
+                    if (containsAggregateCall(arg))
+                        return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return containsAggregateCall(ptr->left) || containsAggregateCall(ptr->right);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return containsAggregateCall(ptr->operand);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                return containsAggregateCall(ptr->object);
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries)
+                    if (containsAggregateCall(v))
+                        return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements)
+                    if (containsAggregateCall(e))
+                        return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
+                                 std::is_same_v<Elem, cypher::NoneExpr> || std::is_same_v<Elem, cypher::SingleExpr>) {
+                if (containsAggregateCall(ptr->list_expr))
+                    return true;
+                if (ptr->where_pred && containsAggregateCall(*ptr->where_pred))
+                    return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                if (containsAggregateCall(ptr->list_expr))
+                    return true;
+                if (ptr->where_pred && containsAggregateCall(*ptr->where_pred))
+                    return true;
+                if (ptr->projection && containsAggregateCall(*ptr->projection))
+                    return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject && containsAggregateCall(*ptr->subject))
+                    return true;
+                for (const auto& [w, t] : ptr->when_thens)
+                    if (containsAggregateCall(w) || containsAggregateCall(t))
+                        return true;
+                if (ptr->else_expr && containsAggregateCall(*ptr->else_expr))
+                    return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                if (containsAggregateCall(ptr->list) || containsAggregateCall(ptr->index))
+                    return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                if (containsAggregateCall(ptr->list))
+                    return true;
+                if (ptr->from && containsAggregateCall(*ptr->from))
+                    return true;
+                if (ptr->to && containsAggregateCall(*ptr->to))
+                    return true;
+            }
+            return false;
+        },
+        expr);
+}
 } // namespace
 
 // ==================== Expression Binding ====================
@@ -118,8 +187,13 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     }
                     sig += ")";
                     if (func_registry_.exists(ptr->name)) {
-                        // Function exists but no overload matches these argument types
-                        error("Invalid argument type for function '" + ptr->name + "': got " + sig);
+                        // Function exists but no overload matches these argument types.
+                        // Per openCypher TCK convention, function overload failures
+                        // detected at compile time are classified as SyntaxError
+                        // (not TypeError, which is reserved for property-access
+                        // type mismatches like Map1/Graph6).
+                        error("SyntaxError: InvalidArgumentType: no overload of '" + ptr->name + "' accepts (" + sig +
+                              ")");
                     } else {
                         error("Function not found: " + sig);
                     }
@@ -134,6 +208,37 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
 
                 // properties(n) / keys(n) need all vertex/edge properties loaded
                 if ((func->name == "properties" || func->name == "keys") && fc->args.size() == 1) {
+                    const BoundType& arg_type = getBoundExprType(fc->args[0]);
+                    std::optional<std::string> var_name;
+                    if (std::holds_alternative<BoundColumnRef>(fc->args[0])) {
+                        var_name = std::get<BoundColumnRef>(fc->args[0]).name;
+                    } else if (std::holds_alternative<BoundVariableRef>(fc->args[0])) {
+                        var_name = std::get<BoundVariableRef>(fc->args[0]).name;
+                    }
+                    if (var_name) {
+                        if (arg_type.kind == BoundTypeKind::VERTEX) {
+                            for (const auto& [lid, ldef] : catalog_.allLabels()) {
+                                for (const auto& pd : ldef.properties) {
+                                    ctx_.addPropertyRequirement(*var_name, lid, pd.id);
+                                }
+                            }
+                        } else if (arg_type.kind == BoundTypeKind::EDGE) {
+                            for (const auto& [elid, eldef] : catalog_.allEdgeLabels()) {
+                                for (const auto& pd : eldef.properties) {
+                                    ctx_.addPropertyRequirement(*var_name, elid, pd.id);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // collect(vertex_var) / collect(edge_var): ensure all properties are
+                // loaded on the source so that subsequent list comprehension or other
+                // per-element property access sees them. Without this, the source
+                // vertex would only have explicitly-referenced properties loaded,
+                // leaving later x.prop accesses inside [x IN collect(v) | x.prop]
+                // returning null.
+                if (func->name == "collect" && fc->args.size() == 1 && fc->args.size() >= 1 && !ptr->distinct) {
                     const BoundType& arg_type = getBoundExprType(fc->args[0]);
                     std::optional<std::string> var_name;
                     if (std::holds_alternative<BoundColumnRef>(fc->args[0])) {
@@ -511,6 +616,16 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 bm->result_type = BoundType::Map(BoundType::String(), std::move(merged_value_type));
                 return BoundExpression(std::move(bm));
             } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                // openCypher forbids aggregate calls inside the row-wise parts of a
+                // list comprehension (WHERE filter and projection). Aggregates are
+                // permitted in the list_expr (iteration source), e.g. `[x IN collect(p) | ...]`.
+                if ((ptr->where_pred && containsAggregateCall(*ptr->where_pred)) ||
+                    (ptr->projection && containsAggregateCall(*ptr->projection))) {
+                    error("SyntaxError: InvalidAggregation: aggregation functions are not allowed "
+                          "inside a list comprehension's WHERE filter or projection");
+                    return std::nullopt;
+                }
+
                 auto list_expr = bindExpression(ptr->list_expr);
                 if (!list_expr)
                     return std::nullopt;
@@ -731,7 +846,7 @@ BoundType Binder::inferBinaryOpType(cypher::BinaryOperator op, const BoundType& 
         if (right_type.kind == BoundTypeKind::LIST || right_type.kind == BoundTypeKind::ANY ||
             right_type.kind == BoundTypeKind::NULL_TYPE)
             return BoundType::Bool();
-        error_msg = "IN requires a list on the right side, got " + right_type.toString();
+        error_msg = "InvalidArgumentType: IN requires a list on the right side, got " + right_type.toString();
         return BoundType::Any();
 
     case cypher::BinaryOperator::LIST_CONCAT: {

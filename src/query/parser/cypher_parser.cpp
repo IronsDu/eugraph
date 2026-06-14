@@ -232,6 +232,11 @@ public:
     }
 
 private:
+    // Tracks whether we are inside a function call argument list, where
+    // a bare pattern expression is a syntax error. In other contexts
+    // (e.g. WHERE clause) a bare pattern is a valid pattern predicate.
+    bool in_function_args_ = false;
+
     // === Query ===
 
     Statement buildQuery(AP::QueryContext* ctx) {
@@ -557,6 +562,40 @@ private:
         return e;
     }
 
+    // Apply a single listExpression context (subscript or slice) to `base`.
+    // Walks children to distinguish implicit-start (`[..N]`) from implicit-end
+    // (`[N..]`) slices: any expression appearing before RANGE is `from`; any
+    // expression after RANGE is `to`.
+    Expression applyListPostfix(AP::ListExpressionContext* le, Expression base) {
+        if (le->RANGE()) {
+            auto slice = std::make_unique<SliceExpr>();
+            slice->list = std::move(base);
+            // Walk children in source order to determine which expression is
+            // `from` (before RANGE) vs `to` (after RANGE).
+            bool seen_range = false;
+            for (auto* child : le->children) {
+                if (child == le->RANGE()) {
+                    seen_range = true;
+                    continue;
+                }
+                auto* expr_ctx = dynamic_cast<AP::ExpressionContext*>(child);
+                if (!expr_ctx)
+                    continue;
+                Expression built = buildExpression(expr_ctx);
+                if (!seen_range)
+                    slice->from = std::move(built);
+                else
+                    slice->to = std::move(built);
+            }
+            return Expression(std::move(slice));
+        }
+        auto sub = std::make_unique<SubscriptExpr>();
+        sub->list = std::move(base);
+        if (!le->expression().empty())
+            sub->index = buildExpression(le->expression(0));
+        return Expression(std::move(sub));
+    }
+
     Expression buildAtomicExpr(AP::AtomicExpressionContext* ctx) {
         Expression r = buildPropOrLabelExpr(ctx->propertyOrLabelExpression());
 
@@ -569,27 +608,25 @@ private:
             r = makeBinaryOp(op, std::move(r), std::move(right));
         }
 
-        for (auto* le : ctx->listExpression()) {
+        // Cypher precedence: list subscript `[...]` binds tighter than `IN`.
+        // The grammar attaches both as sibling listExpressions to the same
+        // atomicExpression, so for `a IN b[i]` we must attach `[i]` to `b`
+        // (the IN's RHS) rather than to the IN result. We do this by folding
+        // trailing subscripts into the IN's RHS before building the IN.
+        auto list_exprs = ctx->listExpression();
+        for (size_t i = 0; i < list_exprs.size(); ++i) {
+            auto* le = list_exprs[i];
             if (le->IN()) {
-                auto right = buildPropOrLabelExpr(le->propertyOrLabelExpression());
-                r = makeBinaryOp(BinaryOperator::IN, std::move(r), std::move(right));
-            } else if (le->RBRACK()) {
-                if (le->RANGE()) {
-                    auto slice = std::make_unique<SliceExpr>();
-                    slice->list = std::move(r);
-                    auto exprs = le->expression();
-                    if (exprs.size() >= 1)
-                        slice->from = buildExpression(exprs[0]);
-                    if (exprs.size() >= 2)
-                        slice->to = buildExpression(exprs.back());
-                    r = Expression(std::move(slice));
-                } else {
-                    auto sub = std::make_unique<SubscriptExpr>();
-                    sub->list = std::move(r);
-                    if (!le->expression().empty())
-                        sub->index = buildExpression(le->expression(0));
-                    r = Expression(std::move(sub));
+                Expression right = buildPropOrLabelExpr(le->propertyOrLabelExpression());
+                // Consume any immediately-following subscripts/slices so they
+                // bind to the IN's RHS (correct Cypher precedence).
+                while (i + 1 < list_exprs.size() && !list_exprs[i + 1]->IN()) {
+                    right = applyListPostfix(list_exprs[i + 1], std::move(right));
+                    ++i;
                 }
+                r = makeBinaryOp(BinaryOperator::IN, std::move(r), std::move(right));
+            } else {
+                r = applyListPostfix(le, std::move(r));
             }
         }
 
@@ -653,6 +690,16 @@ private:
             return buildFuncInvocation(ctx->functionInvocation());
         if (ctx->subqueryExist())
             return buildExistsExpr(ctx->subqueryExist());
+        if (ctx->relationshipsChainPattern()) {
+            // A bare pattern is valid as a pattern predicate (e.g. WHERE
+            // clause) but invalid as a value expression (e.g. inside a
+            // function call like `size(...)`). We only reject it when
+            // inside function arguments; elsewhere the pattern falls
+            // through to makeVariable and the binder rejects it with
+            // UndefinedVariable.
+            if (in_function_args_)
+                throw std::invalid_argument("UnexpectedSyntax: pattern expression is not allowed in this context");
+        }
 
         // ANTLR's adaptive prediction may route numeric literals (emitted as ID tokens)
         // to the symbol alternative instead of the literal alternative.
@@ -823,8 +870,12 @@ private:
         auto fn = std::make_unique<FunctionCall>();
         fn->name = buildInvocationName(ctx->invocationName());
         fn->distinct = (ctx->DISTINCT() != nullptr);
-        if (ctx->expressionChain())
+        if (ctx->expressionChain()) {
+            bool saved = in_function_args_;
+            in_function_args_ = true;
             fn->args = buildExprChain(ctx->expressionChain());
+            in_function_args_ = saved;
+        }
         return Expression(std::move(fn));
     }
 

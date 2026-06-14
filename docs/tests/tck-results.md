@@ -1,7 +1,7 @@
 # TCK 测试结果分类报告
 
-**日期**: 2026-06-11
-**分支**: feature/temporal-tck-fixes
+**日期**: 2026-06-14
+**分支**: feature/list-tck-fixes
 **基线**: main
 
 ---
@@ -10,9 +10,10 @@
 
 | 指标 | 数量 |
 |------|------|
-| 场景通过 | ~2425 / 3897 |
-| 场景失败 | ~1401 |
-| 场景未定义 | ~71 (CALL/procedure + useCases) |
+| 场景通过 | **3316 / 3897** |
+| 场景失败 | 510 |
+| 场景未定义 | 71 |
+| Skip 步骤 | 575 |
 
 ---
 
@@ -32,7 +33,7 @@
 | TypeConversion | 47 | **44** | 3 | toString/list/comprehension 已实现，3个跨积(MATCH...WITH * MATCH)预存问题 |
 | Comparison | 72 | 62 | 10 | 预存问题：`toInteger`+下标+MATCH、命名路径、labels加载、复杂属性跨类型 |
 | Aggregation | 35 | 16 | 19 | 聚合函数、分组语义 |
-| List | 185 | 91 | 94 | IN/null 语义、嵌套比较、下标/切片边界 |
+| List | 185 | **181** | 4 | Pattern comprehension 未实现（List6[7-10]），详见下方 |
 | Graph | 61 | 26 | 35 | nodes()/relationships()/labels() 等图函数 |
 | Quantifier | 604 | **604** | 0 | ✅ 已全部修复（嵌套量词 ANY 类型、路径元素序列化） |
 | Temporal | 1004 | 645 | 359 | **improving**: truncate 精度、命名时区格式化、duration toString/计算、解析单复数/时区处理 |
@@ -76,6 +77,40 @@
 | Phase 10 | feature/comparison-null-semantics | Precedence 92→93 (+1)：新增 ParenExpr AST 节点保留括号信息防止 hoistAtomicPredicates 错误提升、genericAddBatch 增加 List 运行时处理修复 ANY+INT64 的 ADD 误分发到 int64AddBatch |
 | Phase 11 | feature/fix-boolean-remaining | String 25→32 (+7)：unescapeString 标准转义序列处理（\n,\t,\\等）、语法重构对齐 openCypher BNF `<linear statement>`、expressionToString 字符串字面量加引号、Precedence 93→121 |
 | Phase 12 | feature/temporal-tck-fixes | **场景级**: 33/88→47/88 (+14 场景)。**Step 级**: 600→645 passed (+45), 404→359 failed (-45)。修复：duration toString 移除 weeks、extractDateFields 用 ISO week-year、parseTzOffset 命名时区不崩溃、parseDatetimeStr/parseTimeStr [ZoneName] 支持、isoWeekNumber 边界检测、duration.inDays/Months/Seconds 返回 DurationValue、base date dayOfWeek 被显式 year 覆盖、extractNanosFromMap 单复数、durationBetween 符号/时区/months_diff==0、'time' key 支持 |
+
+### List TCK 修复详情 (Phase 13)
+
+**分支**: `feature/list-tck-fixes`
+**日期**: 2026-06-14
+**结果**: 91 → **181** / 185 (+90 scenarios, +445 steps)
+
+#### 引擎变更
+
+| 文件 | 变更 |
+|------|------|
+| `src/query/optimizer/rules/filter_pushdown.cpp` | `collectColumnNames()` / `producedVariableNames()` 实现变量重叠检查，替换原有的保守 `VarLenExpand` 跳过 |
+| `src/query/evaluator/eval_slice.cpp` | 重构：null 边界返回 null；负索引规范化 |
+| `src/query/evaluator/eval_binary_op.cpp` | `IN` 三值逻辑（`valueEquals` → `optional<bool>`） |
+| `src/query/function/batch_ops.cpp` | `inBatch` 三值逻辑同步 |
+| `src/query/function/function_registry.cpp` | 新增 `sign()`；`range()` 参数放宽到 ANY，类型检查移至运行时 |
+| `src/query/function/scalar/list_functions.hpp` | `size(null)` → null；`range()` 类型/step=0 改为 ArgumentError |
+| `src/query/function/scalar/math_functions.hpp` | 新增 `sign()` |
+| `src/query/parser/cypher_parser.cpp` | 裸 pattern 表达式在 value 上下文抛 UnexpectedSyntax；IN 优先级/下标链修复 |
+| `src/query/parser/ast.hpp` | `expressionToString` 补全 ListExpr/MapExpr/CaseExpr/ExistsExpr |
+| `src/query/physical_plan/operator/aggregate_physical_op.cpp` | 复杂聚合 0 行输入时使用空初始化值 |
+| `src/query/physical_plan/operator/set_physical_op.cpp` | SET 后同步更新内存顶点属性 |
+| `src/query/planner/binder/bind_expression.cpp` | 函数 overload 失败 → `SyntaxError: InvalidArgumentType` |
+| `src/query/planner/binder/bind_return.cpp` | 两阶段聚合检测，仅存在复杂聚合时才插 ProjectOp |
+
+#### 剩余 4 个失败：Pattern Comprehension 未实现
+
+List6.feature [7]-[10] 全部使用 `[(pattern) | expr]` 语法，该特性在引擎中只解析不执行。本质是**相关子查询**（correlated subquery），需要 Binder → Evaluator → 物理算子三层实现，应作为独立工作项。
+
+#### 单元测试
+
+全部 624 用例通过，无回归。
+
+---
 
 ## 推荐实施顺序
 
