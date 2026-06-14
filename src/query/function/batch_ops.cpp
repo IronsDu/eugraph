@@ -117,11 +117,14 @@ void inBatch(const Column& left, const Column& right, Column& result, size_t cou
         bool found = false;
         bool saw_null = false;
         for (const auto& elem : list.elements) {
-            if (eugraph::isNull(elem.value)) {
+            // Use three-valued equality so nested nulls propagate correctly:
+            // [1,2] IN [[null,2]] must return null, not false.
+            auto cmp = valueEquals(elem.value, lv);
+            if (!cmp) {
                 saw_null = true;
                 continue;
             }
-            if (elem.value == lv) {
+            if (*cmp) {
                 found = true;
                 break;
             }

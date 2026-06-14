@@ -5424,15 +5424,15 @@ TEST_F(QueryExecutorTest, DuplicateMapKeyFails) {
 TEST_F(QueryExecutorTest, ToStringNoArgsFails) {
     auto result = execSync(*executor_, "RETURN toString()");
     EXPECT_FALSE(result.error.empty()) << "toString() with no args should raise an error";
-    EXPECT_NE(result.error.find("Invalid argument type"), std::string::npos)
-        << "Expected 'Invalid argument type', got: " << result.error;
+    EXPECT_NE(result.error.find("InvalidArgumentType"), std::string::npos)
+        << "Expected 'InvalidArgumentType', got: " << result.error;
 }
 
 TEST_F(QueryExecutorTest, ToStringTwoArgsFails) {
     auto result = execSync(*executor_, "RETURN toString(1, 2)");
     EXPECT_FALSE(result.error.empty()) << "toString(1, 2) should raise an error";
-    EXPECT_NE(result.error.find("Invalid argument type"), std::string::npos)
-        << "Expected 'Invalid argument type', got: " << result.error;
+    EXPECT_NE(result.error.find("InvalidArgumentType"), std::string::npos)
+        << "Expected 'InvalidArgumentType', got: " << result.error;
 }
 
 TEST_F(QueryExecutorTest, ToStringOneArgSucceeds) {

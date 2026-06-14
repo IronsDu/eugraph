@@ -55,11 +55,14 @@ void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
             bool found = false;
             bool saw_null = false;
             for (const auto& elem : list.elements) {
-                if (eugraph::isNull(elem.value)) {
+                // Three-valued equality: nested nulls (e.g. `[null] IN [[null]]`)
+                // must propagate to unknown, not collapse to a definitive answer.
+                auto cmp = valueEquals(elem.value, lv);
+                if (!cmp) {
                     saw_null = true;
                     continue;
                 }
-                if (elem.value == lv) {
+                if (*cmp) {
                     found = true;
                     break;
                 }

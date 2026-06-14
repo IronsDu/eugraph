@@ -10,6 +10,22 @@ namespace compute {
 
 namespace {
 
+void ensureLabelDefProp(std::unordered_map<LabelId, LabelDef>& label_defs, LabelId lid, uint16_t pid,
+                        const std::string& prop_name, PropertyType prop_type) {
+    auto it = label_defs.find(lid);
+    if (it == label_defs.end())
+        return;
+    auto& props = it->second.properties;
+    for (const auto& pd : props)
+        if (pd.id == pid || pd.name == prop_name)
+            return;
+    PropertyDef pd;
+    pd.id = pid;
+    pd.name = prop_name;
+    pd.type = prop_type;
+    props.push_back(std::move(pd));
+}
+
 PropertyValue valueToPropertyValue(const Value& v) {
     if (std::holds_alternative<std::monostate>(v))
         return PropertyValue{};
@@ -159,9 +175,15 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     Value v = value_results[idx][row_idx];
                     PropertyValue pv = valueToPropertyValue(v);
 
+                    // Determine which (label_id, prop_id) the value is written to,
+                    // so we can mirror the mutation into the in-memory vertex state
+                    // and make subsequent RETURN/ WITH clauses observe the new value.
+                    std::optional<std::pair<LabelId, uint16_t>> written_at;
+
                     if (item.strong_mode && item.resolved_label_id && item.resolved_prop_id) {
                         // Strong mode: use resolved IDs directly
                         co_await store_.putVertexProperty(vid, *item.resolved_label_id, *item.resolved_prop_id, pv);
+                        written_at = std::make_pair(*item.resolved_label_id, *item.resolved_prop_id);
                     } else {
                         // Convenience mode: runtime inference based on actual labels
                         std::vector<std::pair<LabelId, uint16_t>> matches;
@@ -181,12 +203,16 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
 
                         if (matches.size() == 1) {
                             co_await store_.putVertexProperty(vid, matches[0].first, matches[0].second, pv);
+                            written_at = matches[0];
                         } else if (matches.empty()) {
                             // No match in actual labels: write to __anon__ via lightweight allocation
                             if (anon_label_id_ != INVALID_LABEL_ID) {
                                 uint16_t anon_pid = co_await meta_.getOrCreateAnonPropId(
                                     item.prop_name, propertyValueToPropertyType(pv));
                                 co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, pv);
+                                ensureLabelDefProp(label_defs_, anon_label_id_, anon_pid, item.prop_name,
+                                                   propertyValueToPropertyType(pv));
+                                written_at = std::make_pair(anon_label_id_, anon_pid);
                             }
                         } else {
                             // Multiple matches: runtime error
@@ -202,6 +228,18 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             spdlog::error("Ambiguous property '{}' found in labels: {}. Use ::Label to specify.",
                                           item.prop_name, label_names);
                         }
+                    }
+
+                    // Mirror the write into the in-memory vertex so that any
+                    // subsequent RETURN/WITH in the same query observes the
+                    // updated property without re-reading from the store.
+                    if (written_at) {
+                        VertexValue updated = vertex;
+                        auto& props_vec = updated.properties[written_at->first];
+                        if (props_vec.size() <= written_at->second)
+                            props_vec.resize(written_at->second + 1);
+                        props_vec[written_at->second] = pv;
+                        chunk->setValue(static_cast<size_t>(col), row_idx, Value(std::move(updated)));
                     }
                 } else if (item.kind == cypher::SetItemKind::SET_PROPERTIES) {
                     if (!item.value.has_value())
@@ -272,6 +310,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                 uint16_t anon_pid =
                                     co_await meta_.getOrCreateAnonPropId(key, propertyValueToPropertyType(pv));
                                 co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, pv);
+                                ensureLabelDefProp(label_defs_, anon_label_id_, anon_pid, key,
+                                                   propertyValueToPropertyType(pv));
                                 auto& props_vec = updated_vertex.properties[anon_label_id_];
                                 if (props_vec.size() <= anon_pid)
                                     props_vec.resize(anon_pid + 1);

@@ -34,7 +34,7 @@ public:
     };
 
     SetPhysicalOp(std::vector<BoundSetItem> items, Schema input_schema, IAsyncGraphDataStore& store,
-                  IAsyncGraphMetaStore& meta, const std::unordered_map<LabelId, LabelDef>& label_defs,
+                  IAsyncGraphMetaStore& meta, std::unordered_map<LabelId, LabelDef>& label_defs,
                   const std::unordered_map<std::string, LabelId>& label_name_to_id, LabelId anon_label_id,
                   std::unique_ptr<PhysicalOperator> child)
         : items_(std::move(items)), input_schema_(std::move(input_schema)), store_(store), meta_(meta),
@@ -57,7 +57,7 @@ private:
     Schema input_schema_;
     IAsyncGraphDataStore& store_;
     IAsyncGraphMetaStore& meta_;
-    const std::unordered_map<LabelId, LabelDef>& label_defs_;
+    std::unordered_map<LabelId, LabelDef>& label_defs_;
     const std::unordered_map<std::string, LabelId>& label_name_to_id_;
     LabelId anon_label_id_;
     std::unique_ptr<PhysicalOperator> child_;

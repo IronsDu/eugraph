@@ -265,13 +265,24 @@ Filter(LEAF)  — 匹配有一个子节点的 Filter
 
 | 算子 | 可穿透 | 原因 |
 |------|--------|------|
-| Expand | ✅ | 保留已有列，新增边/目标顶点列 |
-| PathBuild | ✅ | 保留已有列，新增路径列 |
+| Expand | ✅\* | 保留已有列，新增边/目标顶点列 |
+| VarLenExpand | ✅\* | 保留已有列，新增 dst/path/edge 列 |
+| PathBuild | ✅\* | 保留已有列，新增路径列 |
 | Filter | ✅ | 不改变 schema |
 | Sort / Skip / Limit / Distinct | ✅ | 不改变 schema |
 | Aggregate | ❌ | 改变 schema |
 | Project | ❌ | 可能丢弃所需列 |
 | LabelScan / Scan | ❌ | 叶子节点，Filter 停在此上方 |
+
+\* 标记的算子会**引入新变量**（如 Expand 的 `edge`/`dst`、PathBuild 的 `path`）。
+对于这些算子，下推条件由 `condition()` 中的"引用-产出重叠检查"决定：
+
+1. 收集 Filter 谓词中引用的所有列名（`collectColumnNames`）
+2. 收集子算子产出的变量名（`producedVariableNames`）
+3. 若两者有交集，则**禁止下推**——谓词引用的变量在下推目标处尚不存在
+
+例如 `MATCH (n)-->(b) WHERE b.x > 0` 中的 `b.x > 0` 引用了 Expand
+产出的 `b`，因此 Filter 不能穿过该 Expand；下推会在 Expand 上方停留。
 
 ### substitute 过程
 

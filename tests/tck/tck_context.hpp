@@ -181,13 +181,23 @@ struct TckContext {
             if (!after.labelNames.count(name))
                 se.removed_labels++;
         }
-        // Properties: use net delta (no property-level ID tracking)
-        int64_t prop_delta = after.propertyCount - before.propertyCount;
-        if (prop_delta >= 0) {
-            se.properties = prop_delta;
-        } else {
-            se.removed_properties = -prop_delta;
-        }
+        // Properties: per-key diff so modifications count as both +1 and -1
+        // (TCK semantics: setting an existing property to a new value is an
+        //  add AND a remove, not a no-op).
+        auto diffProps = [](const PropertyMap& b, const PropertyMap& a, int64_t& added, int64_t& removed) {
+            for (const auto& [k, v] : a) {
+                auto it = b.find(k);
+                if (it == b.end() || it->second != v)
+                    ++added;
+            }
+            for (const auto& [k, v] : b) {
+                auto it = a.find(k);
+                if (it == a.end() || it->second != v)
+                    ++removed;
+            }
+        };
+        diffProps(before.vertexProps, after.vertexProps, se.properties, se.removed_properties);
+        diffProps(before.edgeProps, after.edgeProps, se.properties, se.removed_properties);
         return se;
     }
 

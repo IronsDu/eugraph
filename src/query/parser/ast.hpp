@@ -558,6 +558,37 @@ inline std::string expressionToString(const Expression& expr) {
                     r += expressionToString(*ptr->to);
                 r += "]";
                 return r;
+            } else if constexpr (std::is_same_v<OpType, ListExpr>) {
+                std::string r = "[";
+                for (size_t i = 0; i < ptr->elements.size(); ++i) {
+                    if (i > 0)
+                        r += ", ";
+                    r += expressionToString(ptr->elements[i]);
+                }
+                r += "]";
+                return r;
+            } else if constexpr (std::is_same_v<OpType, MapExpr>) {
+                std::string r = "{";
+                for (size_t i = 0; i < ptr->entries.size(); ++i) {
+                    if (i > 0)
+                        r += ", ";
+                    r += ptr->entries[i].first + ": " + expressionToString(ptr->entries[i].second);
+                }
+                r += "}";
+                return r;
+            } else if constexpr (std::is_same_v<OpType, CaseExpr>) {
+                std::string r = "CASE";
+                if (ptr->subject)
+                    r += " " + expressionToString(*ptr->subject);
+                for (const auto& [when, then] : ptr->when_thens) {
+                    r += " WHEN " + expressionToString(when) + " THEN " + expressionToString(then);
+                }
+                if (ptr->else_expr)
+                    r += " ELSE " + expressionToString(*ptr->else_expr);
+                r += " END";
+                return r;
+            } else if constexpr (std::is_same_v<OpType, ExistsExpr>) {
+                return "exists({ ... })";
             } else {
                 return "?";
             }

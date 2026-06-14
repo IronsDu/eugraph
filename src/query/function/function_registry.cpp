@@ -80,6 +80,29 @@ void FunctionRegistry::registerScalarBuiltins() {
                                  {},
                                  {}});
 
+    // sign(Int64) -> Int64
+    functions_["sign"].push_back({"sign",
+                                  {BoundType::Int64()},
+                                  BoundType::Int64(),
+                                  false,
+                                  false,
+                                  scalar::signScalarFn,
+                                  scalar::signBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+    // sign(Double) -> Int64 (Cypher: returns -1/0/1 as integer)
+    functions_["sign"].push_back({"sign",
+                                  {BoundType::Double()},
+                                  BoundType::Int64(),
+                                  false,
+                                  false,
+                                  scalar::signScalarFn,
+                                  scalar::signBatchFn,
+                                  {},
+                                  {},
+                                  {}});
+
     // nodes(Path) -> List<Vertex>
     functions_["nodes"].push_back({"nodes",
                                    {BoundType::Path()},
@@ -228,9 +251,11 @@ void FunctionRegistry::registerScalarBuiltins() {
     functions_["rand"].push_back(
         {"rand", {}, BoundType::Double(), false, false, scalar::randScalarFn, scalar::randBatchFn, {}, {}, {}});
 
-    // range(Int64, Int64) -> List<Int64>
+    // range(Any, Any) -> List<Int64>
+    // Cypher defers argument type validation to runtime (ArgumentError /
+    // InvalidArgumentType). Accept ANY at bind time; the scalar fn throws.
     functions_["range"].push_back({"range",
-                                   {BoundType::Int64(), BoundType::Int64()},
+                                   {BoundType::Any(), BoundType::Any()},
                                    BoundType::List(BoundType::Int64()),
                                    false,
                                    false,
@@ -240,9 +265,9 @@ void FunctionRegistry::registerScalarBuiltins() {
                                    {},
                                    {}});
 
-    // range(Int64, Int64, Int64) -> List<Int64>
+    // range(Any, Any, Any) -> List<Int64>
     functions_["range"].push_back({"range",
-                                   {BoundType::Int64(), BoundType::Int64(), BoundType::Int64()},
+                                   {BoundType::Any(), BoundType::Any(), BoundType::Any()},
                                    BoundType::List(BoundType::Int64()),
                                    false,
                                    false,

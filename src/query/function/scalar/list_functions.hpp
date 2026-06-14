@@ -151,8 +151,11 @@ inline void reverseStringBatchFn(const std::vector<const Column*>& args, Column&
 // --- size ---
 
 inline Value sizeListImpl(const Value& arg) {
+    // Cypher: size(null) = null. Any non-list non-null is a type error -> null.
+    if (isNull(arg))
+        return Value{};
     if (!std::holds_alternative<ListValue>(arg))
-        return Value{int64_t(0)};
+        return Value{};
     return Value{static_cast<int64_t>(std::get<ListValue>(arg).elements.size())};
 }
 
@@ -166,11 +169,13 @@ inline Value sizeScalarFn(const std::vector<Value>& args, const EvalContext& /*c
     if (args.empty())
         return Value{int64_t(0)};
     const auto& v = args[0];
+    if (isNull(v))
+        return Value{};
     if (std::holds_alternative<ListValue>(v))
         return sizeListImpl(v);
     if (std::holds_alternative<std::string>(v))
         return sizeStringImpl(v);
-    return Value{int64_t(0)};
+    return Value{};
 }
 
 inline void sizeListBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
@@ -196,8 +201,6 @@ inline void sizeStringBatchFn(const std::vector<const Column*>& args, Column& re
 // --- range ---
 
 inline Value rangeImpl(int64_t start, int64_t end, int64_t step) {
-    if (step == 0)
-        return Value{};
     ListValue lv;
     if (step > 0) {
         for (int64_t i = start; i <= end; i += step) {
@@ -214,15 +217,27 @@ inline Value rangeImpl(int64_t start, int64_t end, int64_t step) {
 inline Value rangeScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
     if (args.size() < 2)
         return Value{};
-    if (isNull(args[0]) || isNull(args[1]))
-        return Value{};
-    auto start = std::get<int64_t>(args[0]);
-    auto end = std::get<int64_t>(args[1]);
+    // Cypher: null arguments propagate to null result (no error).
+    for (const auto& a : args) {
+        if (isNull(a))
+            return Value{};
+    }
+    // Type validation: every argument must be INT64. Booleans, floats,
+    // strings, lists, maps are rejected at runtime as ArgumentError.
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (!std::holds_alternative<int64_t>(args[i])) {
+            throw std::runtime_error("ArgumentError: InvalidArgumentType: range() argument " + std::to_string(i + 1) +
+                                     " must be INTEGER");
+        }
+    }
+    int64_t start = std::get<int64_t>(args[0]);
+    int64_t end = std::get<int64_t>(args[1]);
     int64_t step = 1;
     if (args.size() >= 3) {
-        if (isNull(args[2]))
-            return Value{};
         step = std::get<int64_t>(args[2]);
+        if (step == 0) {
+            throw std::runtime_error("ArgumentError: NumberOutOfRange: range() step must be non-zero");
+        }
     }
     return rangeImpl(start, end, step);
 }

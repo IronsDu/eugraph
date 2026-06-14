@@ -7,6 +7,11 @@ namespace binder {
 
 // ==================== Aggregate Detection Helper ====================
 
+static bool isAggregateFunctionName(const std::string& name) {
+    return name == "count" || name == "sum" || name == "avg" || name == "min" || name == "max" || name == "collect" ||
+           name == "percentile_cont" || name == "percentile_disc" || name == "st_dev" || name == "st_dev_p";
+}
+
 static bool hasAggregate(const cypher::Expression& expr) {
     return std::visit(
         [](const auto& ptr) -> bool {
@@ -32,6 +37,27 @@ static bool hasAggregate(const cypher::Expression& expr) {
                 for (const auto& e : ptr->elements)
                     if (hasAggregate(e))
                         return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
+                                 std::is_same_v<Elem, cypher::NoneExpr> || std::is_same_v<Elem, cypher::SingleExpr>) {
+                if (hasAggregate(ptr->list_expr))
+                    return true;
+                if (ptr->where_pred && hasAggregate(*ptr->where_pred))
+                    return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                if (hasAggregate(ptr->list_expr))
+                    return true;
+                if (ptr->where_pred && hasAggregate(*ptr->where_pred))
+                    return true;
+                if (ptr->projection && hasAggregate(*ptr->projection))
+                    return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject && hasAggregate(*ptr->subject))
+                    return true;
+                for (const auto& [w, t] : ptr->when_thens)
+                    if (hasAggregate(w) || hasAggregate(t))
+                        return true;
+                if (ptr->else_expr && hasAggregate(*ptr->else_expr))
+                    return true;
             }
             return false;
         },
@@ -44,7 +70,8 @@ static bool hasAggregate(const cypher::Expression& expr) {
 /// a BoundVariableRef to an anonymous column (__agg_0, __agg_1, ...).
 /// The extracted aggregate info is pushed into `out_aggs`.
 static void walkAndReplaceAggCalls(binder::BoundExpression& expr,
-                                   std::vector<BoundAggregateOp::AggregateItem>& out_aggs, uint32_t& agg_idx) {
+                                   std::vector<BoundAggregateOp::AggregateItem>& out_aggs, uint32_t& agg_idx,
+                                   size_t group_keys_size) {
     std::visit(
         [&](auto& ptr) {
             using T = std::decay_t<decltype(ptr)>;
@@ -59,28 +86,43 @@ static void walkAndReplaceAggCalls(binder::BoundExpression& expr,
                         item.argument = std::move(ptr->args[0]);
                     out_aggs.push_back(std::move(item));
 
-                    // Replace this node with a BoundVariableRef.
+                    // Replace this node with a BoundColumnRef pointing at the new
+                    // aggregate's output column. Index = group_keys_size + position
+                    // of this item in out_aggs (just pushed, so size-1).
                     std::string anon_name = "__agg_" + std::to_string(agg_idx++);
                     auto ret_type = out_aggs.back().result_type;
                     out_aggs.back().alias = anon_name;
-                    expr = BoundVariableRef{std::move(anon_name), std::move(ret_type)};
+                    uint32_t col_idx = static_cast<uint32_t>(group_keys_size + out_aggs.size() - 1);
+                    expr = binder::BoundColumnRef{col_idx, std::move(ret_type), std::move(anon_name)};
                     return; // MUST return: ptr is now a dangling reference
                 } else {
                     // Non-aggregate function: recurse into args.
                     for (auto& arg : ptr->args)
-                        walkAndReplaceAggCalls(arg, out_aggs, agg_idx);
+                        walkAndReplaceAggCalls(arg, out_aggs, agg_idx, group_keys_size);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
-                walkAndReplaceAggCalls(ptr->left, out_aggs, agg_idx);
-                walkAndReplaceAggCalls(ptr->right, out_aggs, agg_idx);
+                walkAndReplaceAggCalls(ptr->left, out_aggs, agg_idx, group_keys_size);
+                walkAndReplaceAggCalls(ptr->right, out_aggs, agg_idx, group_keys_size);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
-                walkAndReplaceAggCalls(ptr->operand, out_aggs, agg_idx);
+                walkAndReplaceAggCalls(ptr->operand, out_aggs, agg_idx, group_keys_size);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
                 for (auto& elem : ptr->elements)
-                    walkAndReplaceAggCalls(elem, out_aggs, agg_idx);
+                    walkAndReplaceAggCalls(elem, out_aggs, agg_idx, group_keys_size);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
                 for (auto& [k, v] : ptr->entries)
-                    walkAndReplaceAggCalls(v, out_aggs, agg_idx);
+                    walkAndReplaceAggCalls(v, out_aggs, agg_idx, group_keys_size);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundAnyExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundNoneExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSingleExpr>>) {
+                walkAndReplaceAggCalls(ptr->list_expr, out_aggs, agg_idx, group_keys_size);
+                if (ptr->where_pred)
+                    walkAndReplaceAggCalls(*ptr->where_pred, out_aggs, agg_idx, group_keys_size);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>>) {
+                walkAndReplaceAggCalls(ptr->list_expr, out_aggs, agg_idx, group_keys_size);
+                if (ptr->where_pred)
+                    walkAndReplaceAggCalls(*ptr->where_pred, out_aggs, agg_idx, group_keys_size);
+                walkAndReplaceAggCalls(ptr->projection, out_aggs, agg_idx, group_keys_size);
             }
         },
         expr);
@@ -209,13 +251,38 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         };
         std::vector<ProjItem> proj_items;
 
+        // First pass: detect whether any item is a *complex* aggregate
+        // (an expression containing an aggregate but not a bare aggregate call).
+        // Only then do we need a ProjectOp above the AggregateOp; otherwise the
+        // AggregateOp's output schema is already the final result and adding
+        // a ProjectOp would drop non-aggregate columns (group keys).
+        bool has_complex_agg = false;
+        for (const auto& item : ret.items) {
+            if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
+                if (fc && *fc && isAggregateFunctionName((*fc)->name))
+                    continue; // bare aggregate call → simple
+            }
+            if (hasAggregate(item.expr)) {
+                has_complex_agg = true;
+                break;
+            }
+        }
+
         // Column index tracker for anonymous aggregate columns.
         uint32_t anon_idx = 0;
 
         for (const auto& item : ret.items) {
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
-            bool is_simple_agg =
-                std::holds_alternative<std::unique_ptr<cypher::FunctionCall>>(item.expr) && hasAggregate(item.expr);
+            // "Simple" aggregate = the entire item is a single top-level aggregate call
+            // (e.g. `count(*)`, `collect(x)`). Expressions like `size(collect(x))` are
+            // NOT simple — size() is scalar, collect() is the inner aggregate, so they
+            // must go through walkAndReplaceAggCalls to be split into an internal
+            // aggregate column + a ProjectOp expression.
+            bool is_simple_agg = false;
+            if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
+                if (fc && *fc && isAggregateFunctionName((*fc)->name))
+                    is_simple_agg = true;
+            }
 
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
@@ -241,13 +308,26 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                 info.type = BoundType::clone(agg->aggregates.back().result_type);
                 info.column_index = static_cast<uint32_t>(agg->group_keys.size() + agg->aggregates.size() - 1);
                 ctx_.symbols[alias] = std::move(info);
+
+                // When a sibling item is a complex aggregate expression, the
+                // ProjectOp path is taken and we need this simple aggregate's
+                // column re-exposed as a passthrough ProjectItem so it survives
+                // the projection. In pure-simple-aggregate returns there is no
+                // ProjectOp and the AggregateOp output is the final result, so
+                // adding a passthrough here would incorrectly drop the group
+                // keys from the output schema.
+                if (has_complex_agg) {
+                    binder::BoundExpression passthrough =
+                        binder::BoundColumnRef{info.column_index, BoundType::clone(info.type), alias};
+                    proj_items.push_back({std::move(passthrough), alias});
+                }
             } else if (hasAggregate(item.expr)) {
                 // Complex expression containing aggregates: e.g., RETURN count(a) + 3.
                 // Walk the bound expression, extract each aggregate call into
                 // AggregateOp as an anonymous column, and replace the call in the
                 // expression tree with a BoundVariableRef to that column.
                 auto full_expr = std::move(*bound_expr);
-                walkAndReplaceAggCalls(full_expr, agg->aggregates, anon_idx);
+                walkAndReplaceAggCalls(full_expr, agg->aggregates, anon_idx, agg->group_keys.size());
 
                 // Register anonymous aggregate columns in the symbol table
                 // so the ProjectOp and ColumnResolver can find them.
@@ -525,10 +605,30 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         std::vector<ProjItem> proj_items;
         uint32_t anon_idx = 0;
 
+        // First pass: detect whether any item is a *complex* aggregate so we
+        // know whether to build a ProjectOp above the AggregateOp. See
+        // bindReturn for the rationale.
+        bool has_complex_agg = false;
+        for (const auto& item : wc.items) {
+            if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
+                if (fc && *fc && isAggregateFunctionName((*fc)->name))
+                    continue;
+            }
+            if (hasAggregate(item.expr)) {
+                has_complex_agg = true;
+                break;
+            }
+        }
+
         for (const auto& item : wc.items) {
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
-            bool is_simple_agg =
-                std::holds_alternative<std::unique_ptr<cypher::FunctionCall>>(item.expr) && hasAggregate(item.expr);
+            // "Simple" aggregate = the entire item is a single top-level aggregate call.
+            // See bindReturn for the rationale.
+            bool is_simple_agg = false;
+            if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
+                if (fc && *fc && isAggregateFunctionName((*fc)->name))
+                    is_simple_agg = true;
+            }
 
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
@@ -547,10 +647,21 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 }
                 agg->aggregates.push_back(std::move(agg_item));
                 agg->output_names.push_back(alias);
+                uint32_t col_idx = static_cast<uint32_t>(agg->group_keys.size() + agg->aggregates.size() - 1);
                 with_outputs.emplace_back(alias, BoundType::clone(agg->aggregates.back().result_type));
+
+                // Only build a passthrough ProjectItem when there is a sibling
+                // complex aggregate forcing the ProjectOp path; otherwise the
+                // AggregateOp output is the final result and adding a
+                // passthrough would drop group keys from the schema.
+                if (has_complex_agg) {
+                    binder::BoundExpression passthrough =
+                        binder::BoundColumnRef{col_idx, BoundType::clone(agg->aggregates.back().result_type), alias};
+                    proj_items.push_back({std::move(passthrough), alias});
+                }
             } else if (hasAggregate(item.expr)) {
                 auto full_expr = std::move(*bound_expr);
-                walkAndReplaceAggCalls(full_expr, agg->aggregates, anon_idx);
+                walkAndReplaceAggCalls(full_expr, agg->aggregates, anon_idx, agg->group_keys.size());
 
                 for (auto& ai : agg->aggregates) {
                     if (ai.alias.starts_with("__agg_")) {
@@ -569,12 +680,18 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         agg->child = std::move(child);
 
         if (!proj_items.empty()) {
+            // ProjectOp output names are the proj_item aliases — the user-facing
+            // names (e.g. `p` for `WITH [x IN collect(p) | ...] AS p`).
+            // The internal __agg_* names belong to the AggregateOp below; downstream
+            // clauses must NOT see them. Rebuild with_outputs to mirror ProjectOp.
+            with_outputs.clear();
             auto proj = std::make_unique<BoundProjectOp>();
             for (auto& pi : proj_items) {
                 BoundProjectOp::ProjectItem proj_item;
                 proj_item.expr = std::move(pi.expr);
                 proj_item.alias = std::move(pi.alias);
                 proj_item.result_type = getBoundExprType(proj_item.expr);
+                with_outputs.emplace_back(proj_item.alias, proj_item.result_type);
                 proj->items.push_back(std::move(proj_item));
             }
             proj->child = std::move(agg);
