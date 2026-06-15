@@ -636,9 +636,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_schema = std::move(cr.output_schema);
                     auto output_types = std::move(cr.output_types);
 
-                    std::optional<std::vector<EdgeLabelId>> label_filters;
-                    if (!v.edge_label_ids.empty())
-                        label_filters = v.edge_label_ids;
+                    std::optional<std::vector<EdgeLabelId>> label_filters = v.edge_label_ids;
 
                     Schema output_schema = child_schema;
                     if (!v.edge_variable.empty()) {
@@ -670,9 +668,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_schema = std::move(cr.output_schema);
                     auto output_types = std::move(cr.output_types);
 
-                    std::optional<std::vector<EdgeLabelId>> label_filters;
-                    if (!v.edge_label_ids.empty())
-                        label_filters = v.edge_label_ids;
+                    std::optional<std::vector<EdgeLabelId>> label_filters = v.edge_label_ids;
 
                     Schema output_schema = child_schema;
                     output_schema.push_back(v.dst_variable);
