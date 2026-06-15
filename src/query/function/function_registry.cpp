@@ -329,6 +329,18 @@ void FunctionRegistry::registerScalarBuiltins() {
                                     {},
                                     {}});
 
+    // labels(Edge) -> List<String>
+    functions_["labels"].push_back({"labels",
+                                    {BoundType::Edge()},
+                                    BoundType::List(BoundType::String()),
+                                    false,
+                                    false,
+                                    scalar::labelsScalarFn,
+                                    scalar::labelsBatchFn,
+                                    {},
+                                    {},
+                                    {}});
+
     // keys(Vertex) -> List<String>
     functions_["keys"].push_back({"keys",
                                   {BoundType::Vertex()},
@@ -380,6 +392,18 @@ void FunctionRegistry::registerScalarBuiltins() {
     // properties(Edge) -> Map<String, Any>
     functions_["properties"].push_back({"properties",
                                         {BoundType::Edge()},
+                                        BoundType::Map(BoundType::String(), BoundType::Any()),
+                                        false,
+                                        false,
+                                        scalar::propertiesScalarFn,
+                                        scalar::propertiesBatchFn,
+                                        {},
+                                        {},
+                                        {}});
+
+    // properties(Map<String, Any>) -> Map<String, Any> (identity)
+    functions_["properties"].push_back({"properties",
+                                        {BoundType::Map(BoundType::String(), BoundType::Any())},
                                         BoundType::Map(BoundType::String(), BoundType::Any()),
                                         false,
                                         false,

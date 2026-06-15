@@ -115,8 +115,7 @@ private:
                          std::vector<LabelId>& label_ids, std::vector<uint16_t>& default_prop_ids,
                          bool skip_register = false);
     bool bindRelationshipPattern(const cypher::RelationshipPattern& rel, std::string& var_name, uint32_t& col_idx,
-                                 std::vector<EdgeLabelId>& edge_label_ids, std::vector<uint16_t>& default_prop_ids,
-                                 bool for_create = false);
+                                 std::vector<EdgeLabelId>& edge_label_ids, std::vector<uint16_t>& default_prop_ids);
 
     // ── OPTIONAL MATCH binding ──
     std::optional<BoundLogicalOperator> bindOptionalMatch(const cypher::MatchClause& match,

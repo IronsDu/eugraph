@@ -58,7 +58,7 @@ bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_n
 
 bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std::string& var_name, uint32_t& col_idx,
                                      std::vector<EdgeLabelId>& edge_label_ids,
-                                     std::vector<uint16_t>& /*default_prop_ids*/, bool for_create) {
+                                     std::vector<uint16_t>& /*default_prop_ids*/) {
     var_name = rel.variable.value_or("");
     if (var_name.empty())
         var_name = "__anon_edge_" + std::to_string(nextAnonId());
@@ -74,10 +74,9 @@ bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std
     edge_label_ids.clear();
     if (!rel.rel_types.empty()) {
         edge_label_ids = catalog_.resolveEdgeLabelIds(rel.rel_types);
-        if (edge_label_ids.empty() && !for_create) {
-            error("Edge type '" + rel.rel_types[0] + "' does not exist");
-            return false;
-        }
+        // Non-existent edge types produce an empty label list:
+        // - MATCH / OPTIONAL MATCH: empty → zero rows (LeftJoin gives null for OPTIONAL)
+        // - CREATE / MERGE: empty → label_name is set, auto-created by the physical operator
     } else {
         // No type filter: collect all edge labels
         for (const auto& [id, def] : catalog_.allEdgeLabels()) {
