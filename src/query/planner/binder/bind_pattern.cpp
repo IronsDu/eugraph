@@ -74,14 +74,9 @@ bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std
     edge_label_ids.clear();
     if (!rel.rel_types.empty()) {
         edge_label_ids = catalog_.resolveEdgeLabelIds(rel.rel_types);
-        // Non-existent edge types: empty label list → expand matches zero rows.
-        // For OPTIONAL MATCH the LeftJoin introduces null rows; for regular
-        // MATCH zero matches is correct. Only reject for CREATE where the
-        // edge type must exist to insert.
-        if (edge_label_ids.empty() && for_create) {
-            error("Edge type '" + rel.rel_types[0] + "' does not exist");
-            return false;
-        }
+        // Non-existent edge types produce an empty label list:
+        // - MATCH / OPTIONAL MATCH: empty → zero rows (LeftJoin gives null for OPTIONAL)
+        // - CREATE / MERGE: empty → label_name is set, auto-created by the physical operator
     } else {
         // No type filter: collect all edge labels
         for (const auto& [id, def] : catalog_.allEdgeLabels()) {
