@@ -142,8 +142,7 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
             uint32_t edge_col;
             std::vector<EdgeLabelId> edge_label_ids;
             std::vector<uint16_t> edge_prop_ids;
-            if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids,
-                                         /*for_create=*/true))
+            if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids))
                 return std::nullopt;
 
             // Create edge

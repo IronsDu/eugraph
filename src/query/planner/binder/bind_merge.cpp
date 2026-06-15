@@ -296,7 +296,7 @@ std::optional<BoundLogicalOperator> Binder::bindMerge(const cypher::MergeClause&
         uint32_t edge_col;
         std::vector<EdgeLabelId> edge_label_ids;
         std::vector<uint16_t> edge_prop_ids;
-        if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids, true))
+        if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids))
             return std::nullopt;
 
         direction = rel_pat.direction;

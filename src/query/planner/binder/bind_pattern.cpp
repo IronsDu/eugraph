@@ -58,7 +58,7 @@ bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_n
 
 bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std::string& var_name, uint32_t& col_idx,
                                      std::vector<EdgeLabelId>& edge_label_ids,
-                                     std::vector<uint16_t>& /*default_prop_ids*/, bool for_create) {
+                                     std::vector<uint16_t>& /*default_prop_ids*/) {
     var_name = rel.variable.value_or("");
     if (var_name.empty())
         var_name = "__anon_edge_" + std::to_string(nextAnonId());
