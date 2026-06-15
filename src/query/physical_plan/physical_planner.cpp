@@ -1087,6 +1087,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result = std::make_unique<UnwindPhysicalOp>(
                         std::move(v.list_expr), v.variable_column_index, binder::BoundType::Any(),
                         std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op));
+                    result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundUnionOp>) {
                     auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);

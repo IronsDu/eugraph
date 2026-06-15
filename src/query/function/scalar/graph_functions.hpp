@@ -28,6 +28,16 @@ inline Value labelsImpl(const Value& arg, const EvalContext& ctx) {
         }
         return Value(std::move(lv));
     }
+    if (std::holds_alternative<EdgeValue>(arg)) {
+        const auto& ev = std::get<EdgeValue>(arg);
+        if (!ctx.catalog)
+            return Value{ListValue{}};
+        auto* def = ctx.catalog->lookupEdgeLabel(ev.label_id);
+        if (!def)
+            return Value{ListValue{}};
+        // labels(r) on a relationship returns [type(r)]
+        return Value(ListValue{{ValueStorage{Value(def->name)}}});
+    }
     if (std::holds_alternative<std::monostate>(arg))
         return Value{};
     throw std::runtime_error("TypeError: InvalidArgumentValue");

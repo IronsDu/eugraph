@@ -329,6 +329,18 @@ void FunctionRegistry::registerScalarBuiltins() {
                                     {},
                                     {}});
 
+    // labels(Edge) -> List<String>
+    functions_["labels"].push_back({"labels",
+                                    {BoundType::Edge()},
+                                    BoundType::List(BoundType::String()),
+                                    false,
+                                    false,
+                                    scalar::labelsScalarFn,
+                                    scalar::labelsBatchFn,
+                                    {},
+                                    {},
+                                    {}});
+
     // keys(Vertex) -> List<String>
     functions_["keys"].push_back({"keys",
                                   {BoundType::Vertex()},

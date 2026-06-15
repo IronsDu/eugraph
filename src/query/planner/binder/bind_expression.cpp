@@ -521,6 +521,35 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 }
                 bl->element_type = merged_elem;
                 bl->result_type = BoundType::List(BoundType::clone(merged_elem));
+
+                // When a VERTEX or EDGE variable is placed in a heterogeneous
+                // list (any non-graph element mixed in), the element type
+                // degrades to ANY.  Downstream dynamic property accesses like
+                // (list[i]).prop then can't resolve which properties to load.
+                // Pre-load all properties for those graph-element variables so
+                // the runtime evaluator can find them.
+                if (merged_elem.kind == BoundTypeKind::ANY) {
+                    for (const auto& element : bl->elements) {
+                        if (std::holds_alternative<BoundColumnRef>(element)) {
+                            const auto& col_ref = std::get<BoundColumnRef>(element);
+                            const BoundType& elem_type = getBoundExprType(element);
+                            if (elem_type.kind == BoundTypeKind::VERTEX) {
+                                for (const auto& [lid, ldef] : catalog_.allLabels()) {
+                                    for (const auto& pd : ldef.properties) {
+                                        ctx_.addPropertyRequirement(col_ref.name, lid, pd.id);
+                                    }
+                                }
+                            } else if (elem_type.kind == BoundTypeKind::EDGE) {
+                                for (const auto& [elid, eldef] : catalog_.allEdgeLabels()) {
+                                    for (const auto& pd : eldef.properties) {
+                                        ctx_.addPropertyRequirement(col_ref.name, elid, pd.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 return BoundExpression(std::move(bl));
             } else if constexpr (std::is_same_v<Elem, cypher::Parameter>) {
                 auto it = params_.find(ptr->name);

@@ -492,6 +492,19 @@ inline std::string expressionToString(const Expression& expr) {
                     return std::get<bool>(ptr->value) ? "true" : "false";
                 return "null";
             } else if constexpr (std::is_same_v<OpType, BinaryOp>) {
+                // Detect the label-check pattern produced by the parser:
+                //   m:TYPE  →  IN('TYPE', labels(m))
+                // Format it back as  var:label  for human-readable column names.
+                if (ptr->op == BinaryOperator::IN && std::holds_alternative<std::unique_ptr<Literal>>(ptr->left) &&
+                    std::holds_alternative<std::unique_ptr<FunctionCall>>(ptr->right)) {
+                    auto& lit = *std::get<std::unique_ptr<Literal>>(ptr->left);
+                    auto& fc = *std::get<std::unique_ptr<FunctionCall>>(ptr->right);
+                    if (std::holds_alternative<std::string>(lit.value) && fc.name == "labels" && fc.args.size() == 1 &&
+                        std::holds_alternative<std::unique_ptr<Variable>>(fc.args[0])) {
+                        auto& var = *std::get<std::unique_ptr<Variable>>(fc.args[0]);
+                        return var.name + ":" + std::get<std::string>(lit.value);
+                    }
+                }
                 static const char* binOpNames[] = {"+",        "-",  "*",   "/",  "%",   "^",           "=",
                                                    "<>",       "<",  ">",   "<=", ">=",  "STARTS WITH", "ENDS WITH",
                                                    "CONTAINS", "IN", "AND", "OR", "XOR", "||"};

@@ -149,6 +149,10 @@ VarLenExpand 的 `edge_prop_filters_`（DFS 逐跳过滤）继续使用 `getEdge
 
 VarLenExpand 构建 PathValue 时为所有内部顶点（含中间节点和终点）调用 `getVertexLabels()` 填充 `VertexValue.labels`。这是 `nodes(p)` / `relationships(p)` 能在结果中正确显示标签的前提。注意：这会增加每跳 1 次 KV 读，后续若路径元素属性按需加载（见 PathElementPropertyRead 的优化方向），可考虑合并 labels 与属性读取。
 
+### 7.6 异构列表的全属性预加载
+
+当 VERTEX 和 EDGE 类型的列被放入同一个列表（如 `[n, r]`），binder 的 `BoundType::merge` 会将结果类型合并为 ANY。此时列表元素绑定为 `BoundDynamicPropertyRef`（运行时动态解析属性名），binder 无法在编译期确定需要哪些具体属性。为此，在 `bindListExpr` 中检测到合并类型为 ANY 时，对列表中每个 VERTEX/EDGE 元素预加载其所有标签的全部属性，确保运行时属性访问能正确命中。
+
 ## 八、验证
 
 - **单元测试**: 384/384 pass
