@@ -232,7 +232,9 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     return std::nullopt;
 
                 if (min_hops < 0) {
-                    error("Variable-length minimum hop count must be >= 0 (got " + std::to_string(min_hops) + ")");
+                    error("SyntaxError: InvalidRelationshipPattern: Variable-length minimum hop count must be >= 0 "
+                          "(got " +
+                          std::to_string(min_hops) + ")");
                     return std::nullopt;
                 }
                 if (max_hops >= 0 && max_hops < min_hops) {

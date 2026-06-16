@@ -15,6 +15,7 @@
 #include "query/function/scalar/list_functions.hpp"
 #include "query/function/scalar/math_functions.hpp"
 #include "query/function/scalar/path_functions.hpp"
+#include "query/function/scalar/start_end_node_function.hpp"
 #include "query/function/scalar/string_functions.hpp"
 #include "query/function/scalar/temporal_functions.hpp"
 #include "query/function/scalar/type_function.hpp"
@@ -150,6 +151,30 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   {},
                                   {},
                                   {}});
+
+    // startNode(Edge) -> Vertex
+    functions_["startNode"].push_back({"startNode",
+                                       {BoundType::Edge()},
+                                       BoundType::Vertex(),
+                                       false,
+                                       false,
+                                       scalar::startNodeScalarFn,
+                                       scalar::startNodeBatchFn,
+                                       {},
+                                       {},
+                                       {}});
+
+    // endNode(Edge) -> Vertex
+    functions_["endNode"].push_back({"endNode",
+                                     {BoundType::Edge()},
+                                     BoundType::Vertex(),
+                                     false,
+                                     false,
+                                     scalar::endNodeScalarFn,
+                                     scalar::endNodeBatchFn,
+                                     {},
+                                     {},
+                                     {}});
 
     // last(List<Any>) -> Any
     functions_["last"].push_back({"last",

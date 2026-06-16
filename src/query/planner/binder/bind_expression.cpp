@@ -190,7 +190,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                         error("SyntaxError: InvalidArgumentType: no overload of '" + ptr->name + "' accepts (" + sig +
                               ")");
                     } else {
-                        error("Function not found: " + sig);
+                        error("SyntaxError: UnknownFunction: Function not found: " + sig);
                     }
                     return std::nullopt;
                 }

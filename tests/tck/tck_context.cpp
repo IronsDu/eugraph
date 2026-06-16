@@ -25,11 +25,15 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
         // Runtime argument validation failures (e.g. range() step=0, invalid types)
         errorType = "ArgumentError";
         errorPhase = "runtime";
+    } else if (errMsg.find("EntityNotFound") != std::string::npos) {
+        errorType = "EntityNotFound";
+        errorPhase = "runtime";
     } else if (errMsg.find("SyntaxError") != std::string::npos || errMsg.find("syntax") != std::string::npos ||
                errMsg.find("parse") != std::string::npos || errMsg.find("UndefinedVariable") != std::string::npos ||
                errMsg.find("VariableAlreadyBound") != std::string::npos ||
                errMsg.find("VariableTypeConflict") != std::string::npos ||
                errMsg.find("InvalidUnicodeLiteral") != std::string::npos ||
+               errMsg.find("InvalidDelete") != std::string::npos ||
                errMsg.find("InvalidArgumentType") != std::string::npos ||
                errMsg.find("DifferentColumnsInUnion") != std::string::npos ||
                errMsg.find("InvalidClauseComposition") != std::string::npos ||
@@ -38,9 +42,18 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
                errMsg.find("InvalidParameterUse") != std::string::npos) {
         errorType = "SyntaxError";
         errorPhase = "compile time";
+    } else if (errMsg.find("Function not found") != std::string::npos) {
+        errorType = "SyntaxError";
+        errorPhase = "compile time";
+    } else if (errMsg.find("InvalidRelationshipPattern") != std::string::npos) {
+        errorType = "SyntaxError";
+        errorPhase = "compile time";
     } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {
         errorType = "SyntaxError";
         errorPhase = "compile time";
+    } else if (errMsg.find("ConstraintVerificationFailed") != std::string::npos) {
+        errorType = "ConstraintVerificationFailed";
+        errorPhase = "runtime";
     } else if (errMsg.find("MergeReadOwnWrites") != std::string::npos) {
         errorType = "SemanticError";
         errorPhase = "runtime";
@@ -445,6 +458,16 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "UnexpectedSyntax";
                 } else if (errMsg.find("InvalidAggregation") != std::string::npos) {
                     lastErrorDetail = "InvalidAggregation";
+                } else if (errMsg.find("EntityNotFound") != std::string::npos) {
+                    lastErrorDetail = "DeletedEntityAccess";
+                } else if (errMsg.find("Function not found") != std::string::npos) {
+                    lastErrorDetail = "UnknownFunction";
+                } else if (errMsg.find("InvalidRelationshipPattern") != std::string::npos) {
+                    lastErrorDetail = "InvalidRelationshipPattern";
+                } else if (errMsg.find("ConstraintVerificationFailed") != std::string::npos) {
+                    lastErrorDetail = "DeleteConnectedNode";
+                } else if (errMsg.find("InvalidDelete") != std::string::npos) {
+                    lastErrorDetail = "InvalidDelete";
                 } else {
                     lastErrorDetail = errMsg;
                 }
@@ -476,6 +499,16 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "DifferentColumnsInUnion";
         } else if (errMsg.find("InvalidClauseComposition") != std::string::npos) {
             lastErrorDetail = "InvalidClauseComposition";
+        } else if (errMsg.find("InvalidDelete") != std::string::npos) {
+            lastErrorDetail = "InvalidDelete";
+        } else if (errMsg.find("EntityNotFound") != std::string::npos) {
+            lastErrorDetail = "DeletedEntityAccess";
+        } else if (errMsg.find("Function not found") != std::string::npos) {
+            lastErrorDetail = "UnknownFunction";
+        } else if (errMsg.find("InvalidRelationshipPattern") != std::string::npos) {
+            lastErrorDetail = "InvalidRelationshipPattern";
+        } else if (errMsg.find("ConstraintVerificationFailed") != std::string::npos) {
+            lastErrorDetail = "DeleteConnectedNode";
         } else if (errMsg.find("InvalidArgumentType") != std::string::npos) {
             lastErrorDetail = "InvalidArgumentType";
         } else if (errMsg.find("Invalid argument type for function") != std::string::npos) {

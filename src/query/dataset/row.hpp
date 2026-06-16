@@ -20,6 +20,7 @@ struct VertexValue {
     VertexId id = INVALID_VERTEX_ID;
     std::unordered_map<LabelId, Properties> properties;
     std::optional<LabelIdSet> labels;
+    bool deleted = false;
     bool operator==(const VertexValue& o) const {
         return id == o.id;
     }
@@ -32,6 +33,7 @@ struct EdgeValue {
     EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
     uint64_t seq = 0;
     std::optional<Properties> properties;
+    bool deleted = false;
     bool operator==(const EdgeValue& o) const {
         return id == o.id;
     }

@@ -3953,13 +3953,17 @@ TEST_F(QueryExecutorTest, DeleteNodeWithEdgesFails) {
     auto create = execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person)");
     ASSERT_TRUE(create.error.empty()) << create.error;
 
-    // DELETE without DETACH on a vertex with edges should fail
-    // Note: this may succeed at the storage level depending on implementation;
-    // the TCK expects a constraint violation, but this test validates current behavior
-    auto del = execSync(*executor_, "MATCH (n:Person) WHERE id(n) = 1 DELETE n");
-    // In standard Cypher this should error, but our storage layer may allow it
-    // Just verify the query completes (either success or error)
-    (void)del;
+    // DELETE without DETACH on a vertex with edges must fail
+    try {
+        auto del = execSync(*executor_, "MATCH (n:Person) WHERE id(n) = 1 DELETE n");
+        // If we get here, the query succeeded when it should have failed
+        if (del.error.empty())
+            FAIL() << "Expected ConstraintVerificationFailed but query succeeded";
+        else
+            EXPECT_NE(del.error.find("DeleteConnectedNode"), std::string::npos);
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("DeleteConnectedNode"), std::string::npos);
+    }
 }
 
 TEST_F(QueryExecutorTest, DeleteSyntaxErrorUndefinedVar) {

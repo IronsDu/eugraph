@@ -49,6 +49,8 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                 if (col < 0 || static_cast<size_t>(col) >= chunk->numColumns())
                     continue;
 
+                // Re-read value each iteration so that multiple REMOVE items
+                // on the same variable accumulate their modifications.
                 Value val = chunk->getValue(static_cast<size_t>(col), row_idx);
 
                 if (std::holds_alternative<VertexValue>(val)) {
@@ -71,7 +73,7 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                             co_await store_.deleteVertexProperty(vid, *item.resolved_label_id, *item.resolved_prop_id);
                             auto pit = updated.properties.find(*item.resolved_label_id);
                             if (pit != updated.properties.end() && pit->second.size() > *item.resolved_prop_id) {
-                                pit->second[*item.resolved_prop_id] = PropertyValue{};
+                                pit->second[*item.resolved_prop_id] = std::nullopt;
                                 modified = true;
                             }
                         } else {
@@ -88,7 +90,7 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                                             any_deleted = true;
                                             auto pit = updated.properties.find(lid);
                                             if (pit != updated.properties.end() && pit->second.size() > pd.id) {
-                                                pit->second[pd.id] = PropertyValue{};
+                                                pit->second[pd.id] = std::nullopt;
                                                 modified = true;
                                             }
                                             break;
@@ -105,7 +107,7 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                                             co_await store_.deleteVertexProperty(vid, anon_label_id_, pd.id);
                                             auto pit = updated.properties.find(anon_label_id_);
                                             if (pit != updated.properties.end() && pit->second.size() > pd.id) {
-                                                pit->second[pd.id] = PropertyValue{};
+                                                pit->second[pd.id] = std::nullopt;
                                                 modified = true;
                                             }
                                             break;
@@ -133,7 +135,7 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                             // downstream RETURN/WITH observes the removed property.
                             EdgeValue updated = edge;
                             if (updated.properties.has_value() && updated.properties->size() > pd.id) {
-                                (*updated.properties)[pd.id] = PropertyValue{};
+                                (*updated.properties)[pd.id] = std::nullopt;
                                 chunk->setValue(static_cast<size_t>(col), row_idx, Value(std::move(updated)));
                             }
                             break;

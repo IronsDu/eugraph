@@ -9,7 +9,43 @@
 #include <sstream>
 
 namespace eugraph::thrift_fmt {
+
+// Forward declaration for use by anonymous-namespace helpers.
+std::string formatJsonArray(const nlohmann::json& arr);
+
 namespace {
+
+static std::string formatPropValue(const nlohmann::json& value) {
+    if (value.is_string())
+        return "'" + value.get<std::string>() + "'";
+    if (value.is_number_integer())
+        return std::to_string(value.get<int64_t>());
+    if (value.is_number_float()) {
+        double dv = value.get<double>();
+        if (std::isnan(dv))
+            return "NaN";
+        if (std::isinf(dv))
+            return dv > 0 ? "Infinity" : "-Infinity";
+        std::ostringstream dss;
+        dss << std::setprecision(std::numeric_limits<double>::digits10) << dv;
+        auto s = dss.str();
+        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos)
+            s += ".0";
+        return s;
+    }
+    if (value.is_boolean())
+        return value.get<bool>() ? "true" : "false";
+    if (value.is_null())
+        return "null";
+    return value.dump();
+}
+
+static void collectProps(const nlohmann::json& src, std::vector<std::pair<std::string, std::string>>& props) {
+    if (src.contains("properties") && src["properties"].is_object()) {
+        for (auto& [key, value] : src["properties"].items())
+            props.emplace_back(key, formatPropValue(value));
+    }
+}
 
 std::string convertVertexJson(const std::string& json) {
     if (json.empty())
@@ -21,45 +57,10 @@ std::string convertVertexJson(const std::string& json) {
         if (j.contains("labels") && j["labels"].is_array()) {
             for (const auto& l : j["labels"])
                 oss << ":" << l.get<std::string>();
-        } else if (j.contains("label") && j["label"].is_string()) {
-            oss << ":" << j["label"].get<std::string>();
         }
         std::vector<std::pair<std::string, std::string>> props;
-        for (auto& [key, value] : j.items()) {
-            if (key == "id" || key == "label" || key == "labels")
-                continue;
-            std::string formattedVal;
-            if (value.is_string()) {
-                formattedVal = "'" + value.get<std::string>() + "'";
-            } else if (value.is_number_integer()) {
-                formattedVal = std::to_string(value.get<int64_t>());
-            } else if (value.is_number_float()) {
-                double dv = value.get<double>();
-                if (std::isnan(dv))
-                    formattedVal = "NaN";
-                else if (std::isinf(dv))
-                    formattedVal = dv > 0 ? "Infinity" : "-Infinity";
-                else {
-                    std::ostringstream dss;
-                    dss << std::setprecision(std::numeric_limits<double>::digits10) << dv;
-                    formattedVal = dss.str();
-                    if (formattedVal.find('.') == std::string::npos && formattedVal.find('e') == std::string::npos &&
-                        formattedVal.find('E') == std::string::npos)
-                        formattedVal += ".0";
-                }
-            } else if (value.is_boolean()) {
-                formattedVal = value.get<bool>() ? "true" : "false";
-            } else if (value.is_null()) {
-                formattedVal = "null";
-            } else if (value.is_array()) {
-                formattedVal = value.dump();
-            } else {
-                formattedVal = value.dump();
-            }
-            props.emplace_back(key, formattedVal);
-        }
+        collectProps(j, props);
         if (!props.empty()) {
-            // Space before properties only when there is preceding content (labels)
             if (oss.tellp() > 1)
                 oss << ' ';
             oss << "{";
@@ -84,46 +85,11 @@ std::string convertEdgeJson(const std::string& json) {
         auto j = nlohmann::json::parse(json);
         std::ostringstream oss;
         oss << "[";
-        if (j.contains("labels") && j["labels"].is_array()) {
-            for (const auto& l : j["labels"])
-                oss << ":" << l.get<std::string>();
-        } else if (j.contains("label") && j["label"].is_string()) {
-            oss << ":" << j["label"].get<std::string>();
-        }
+        if (j.contains("type") && j["type"].is_string())
+            oss << ":" << j["type"].get<std::string>();
         std::vector<std::pair<std::string, std::string>> props;
-        for (auto& [key, value] : j.items()) {
-            if (key == "id" || key == "src" || key == "dst" || key == "label")
-                continue;
-            std::string formattedVal;
-            if (value.is_string()) {
-                formattedVal = "'" + value.get<std::string>() + "'";
-            } else if (value.is_number_integer()) {
-                formattedVal = std::to_string(value.get<int64_t>());
-            } else if (value.is_number_float()) {
-                double dv = value.get<double>();
-                if (std::isnan(dv))
-                    formattedVal = "NaN";
-                else if (std::isinf(dv))
-                    formattedVal = dv > 0 ? "Infinity" : "-Infinity";
-                else {
-                    std::ostringstream dss;
-                    dss << std::setprecision(std::numeric_limits<double>::digits10) << dv;
-                    formattedVal = dss.str();
-                    if (formattedVal.find('.') == std::string::npos && formattedVal.find('e') == std::string::npos &&
-                        formattedVal.find('E') == std::string::npos)
-                        formattedVal += ".0";
-                }
-            } else if (value.is_boolean()) {
-                formattedVal = value.get<bool>() ? "true" : "false";
-            } else if (value.is_null()) {
-                formattedVal = "null";
-            } else {
-                formattedVal = value.dump();
-            }
-            props.emplace_back(key, formattedVal);
-        }
+        collectProps(j, props);
         if (!props.empty()) {
-            // Space before properties only when there is preceding content (label)
             if (oss.tellp() > 1)
                 oss << ' ';
             oss << "{";
@@ -141,6 +107,151 @@ std::string convertEdgeJson(const std::string& json) {
     }
 }
 
+std::string convertMapJson(const std::string& json);
+
+// Extract a balanced value from a Cypher-formatted map string starting at pos.
+// Values can be: Cypher strings '...', JSON objects {...}, JSON arrays [...],
+// and unquoted scalars (numbers, bools, null).
+// Advances pos past the extracted value.
+std::string extractBalancedValue(const std::string& s, size_t& pos) {
+    while (pos < s.size() && std::isspace(s[pos]))
+        pos++;
+    if (pos >= s.size())
+        return "";
+
+    char open = s[pos];
+    if (open == '\'') {
+        // Cypher single-quoted string
+        size_t val_start = pos + 1;
+        pos++;
+        while (pos < s.size() && s[pos] != '\'')
+            pos++;
+        std::string val = s.substr(val_start, pos - val_start);
+        if (pos < s.size())
+            pos++; // skip closing quote
+        return "'" + val + "'";
+    }
+
+    if (open != '{' && open != '[' && open != '"') {
+        size_t start = pos;
+        while (pos < s.size() && s[pos] != ',' && s[pos] != '}' && s[pos] != ']')
+            pos++;
+        std::string val = s.substr(start, pos - start);
+        while (!val.empty() && std::isspace(val.back()))
+            val.pop_back();
+        return val;
+    }
+
+    char close = (open == '{') ? '}' : (open == '[') ? ']' : '"';
+    if (open == '"') {
+        // JSON double-quoted string
+        size_t val_start = pos + 1;
+        pos++;
+        while (pos < s.size() && !(s[pos] == '"' && s[pos - 1] != '\\'))
+            pos++;
+        std::string val = s.substr(val_start, pos - val_start);
+        if (pos < s.size())
+            pos++;
+        return "'" + val + "'";
+    }
+
+    int depth = 1;
+    size_t start = pos;
+    pos++;
+    bool in_string = false;
+
+    while (pos < s.size() && depth > 0) {
+        char c = s[pos];
+        if (in_string) {
+            if (c == '"' && s[pos - 1] != '\\')
+                in_string = false;
+        } else {
+            if (c == '"')
+                in_string = true;
+            else if (c == open)
+                depth++;
+            else if (c == close)
+                depth--;
+        }
+        pos++;
+    }
+    return s.substr(start, pos - start);
+}
+
+// Format a single value extracted from a map. Returns formatted representation.
+std::string formatMapValue(const std::string& val) {
+    if (val.empty())
+        return val;
+    char first = val[0];
+
+    if (first == '{') {
+        try {
+            auto j = nlohmann::json::parse(val);
+            if (j.is_object()) {
+                if (j.contains("start") || j.contains("end"))
+                    return convertEdgeJson(val);
+                if (j.contains("labels") || j.contains("id"))
+                    return convertVertexJson(val);
+            }
+        } catch (...) {}
+        return convertMapJson(val);
+    }
+
+    if (first == '[') {
+        try {
+            auto arr = nlohmann::json::parse(val);
+            if (arr.is_array())
+                return formatJsonArray(arr);
+        } catch (...) {}
+        return val;
+    }
+
+    return val;
+}
+
+std::string convertMapJson(const std::string& json) {
+    if (json.empty() || json.size() < 2 || json[0] != '{')
+        return json;
+
+    std::ostringstream oss;
+    oss << "{";
+
+    size_t pos = 1;
+    bool first = true;
+
+    while (pos < json.size()) {
+        while (pos < json.size() && std::isspace(json[pos]))
+            pos++;
+        if (pos >= json.size() || json[pos] == '}')
+            break;
+
+        if (!first) {
+            if (json[pos] == ',')
+                pos++;
+            while (pos < json.size() && std::isspace(json[pos]))
+                pos++;
+            oss << ", ";
+        }
+        first = false;
+
+        size_t key_start = pos;
+        while (pos < json.size() && json[pos] != ':')
+            pos++;
+        std::string key = json.substr(key_start, pos - key_start);
+        while (!key.empty() && std::isspace(key.back()))
+            key.pop_back();
+
+        if (pos < json.size())
+            pos++;
+
+        std::string value = extractBalancedValue(json, pos);
+        oss << key << ": " << formatMapValue(value);
+    }
+
+    oss << "}";
+    return oss.str();
+}
+
 } // namespace
 
 std::string formatJsonArray(const nlohmann::json& arr) {
@@ -152,9 +263,9 @@ std::string formatJsonArray(const nlohmann::json& arr) {
         auto& elem = arr[i];
         if (elem.is_array()) {
             oss << formatJsonArray(elem);
-        } else if (elem.is_object() && (elem.contains("src") || elem.contains("dst"))) {
+        } else if (elem.is_object() && (elem.contains("start") || elem.contains("end"))) {
             oss << convertEdgeJson(elem.dump());
-        } else if (elem.is_object() && (elem.contains("label") || elem.contains("labels"))) {
+        } else if (elem.is_object() && (elem.contains("labels") || elem.contains("id"))) {
             oss << convertVertexJson(elem.dump());
         } else if (elem.is_string()) {
             std::string escaped;
@@ -229,7 +340,7 @@ std::string formatResultValue(const thrift::ResultValue& val) {
     }
 
     case thrift::ResultValue::Type::map_json:
-        return val.get_map_json();
+        return convertMapJson(val.get_map_json());
 
     default:
         return "null";

@@ -425,14 +425,14 @@ std::optional<BoundLogicalOperator> Binder::bindDelete(const cypher::DeleteClaus
             expr);
 
         if (var_name.empty()) {
-            error("DELETE requires variable references, not expressions");
+            error("InvalidDelete: DELETE requires variable references, not expressions");
             continue;
         }
 
         // Validate the variable exists and determine its type
         auto* col = ctx_.lookup(var_name);
         if (!col) {
-            error("DELETE: variable '" + var_name + "' not defined");
+            error("UndefinedVariable: variable '" + var_name + "' not defined");
             continue;
         }
 
