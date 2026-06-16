@@ -5,6 +5,65 @@
 namespace eugraph {
 namespace binder {
 
+// ==================== Helpers ====================
+
+static bool expressionReferencesVariableImpl(const cypher::Expression& expr, const std::string& name);
+
+static bool expressionReferencesVariable(const cypher::Expression& expr, const std::string& name) {
+    return expressionReferencesVariableImpl(expr, name);
+}
+
+static bool expressionReferencesVariableImpl(const cypher::Expression& expr, const std::string& name) {
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                return ptr->name == name;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return expressionReferencesVariableImpl(ptr->left, name) ||
+                       expressionReferencesVariableImpl(ptr->right, name);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return expressionReferencesVariableImpl(ptr->operand, name);
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    if (expressionReferencesVariableImpl(arg, name))
+                        return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                return expressionReferencesVariableImpl(ptr->object, name);
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                return expressionReferencesVariableImpl(ptr->list, name) ||
+                       expressionReferencesVariableImpl(ptr->index, name);
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject && expressionReferencesVariableImpl(*ptr->subject, name))
+                    return true;
+                for (const auto& [cond, res] : ptr->when_thens) {
+                    if (expressionReferencesVariableImpl(cond, name) || expressionReferencesVariableImpl(res, name))
+                        return true;
+                }
+                if (ptr->else_expr && expressionReferencesVariableImpl(*ptr->else_expr, name))
+                    return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& elem : ptr->elements)
+                    if (expressionReferencesVariableImpl(elem, name))
+                        return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries)
+                    if (expressionReferencesVariableImpl(v, name))
+                        return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                return expressionReferencesVariableImpl(ptr->list_expr, name) ||
+                       (ptr->where_pred && expressionReferencesVariableImpl(*ptr->where_pred, name));
+            } else {
+                return false;
+            }
+        },
+        expr);
+}
+
 // ==================== Aggregate Detection Helper ====================
 
 static bool isAggregateFunctionName(const std::string& name) {
@@ -590,6 +649,10 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         }
     }
 
+    // Tracks whether WHERE references a projected variable; used to decide
+    // filter placement (before vs after projection).
+    bool where_has_projected_ref = false;
+
     // Collect output names and types for scope reset
     std::vector<std::pair<std::string, BoundType>> with_outputs;
 
@@ -677,6 +740,26 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             }
         }
 
+        // WHERE on WITH: if it references projected (aggregate-output) variables,
+        // it must be placed AFTER the aggregation. Otherwise (pure old-scope refs),
+        // bind and insert it BEFORE the aggregation for efficiency.
+        where_has_projected_ref = false;
+        if (wc.where_pred) {
+            for (const auto& item : wc.items) {
+                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                if (expressionReferencesVariable(*wc.where_pred, alias)) {
+                    where_has_projected_ref = true;
+                    break;
+                }
+            }
+        }
+        if (wc.where_pred && !where_has_projected_ref) {
+            auto where_op = bindWhere(*wc.where_pred, std::move(child));
+            if (!where_op)
+                return std::nullopt;
+            child = std::move(*where_op);
+        }
+
         agg->child = std::move(child);
 
         if (!proj_items.empty()) {
@@ -700,6 +783,29 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             current = std::move(agg);
         }
     } else {
+        // Compute projected aliases upfront (without binding expressions,
+        // just extracting alias names from the AST) so we can check whether
+        // WHERE references them.
+        where_has_projected_ref = false;
+        if (wc.where_pred) {
+            for (const auto& item : wc.items) {
+                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                if (expressionReferencesVariable(*wc.where_pred, alias)) {
+                    where_has_projected_ref = true;
+                    break;
+                }
+            }
+        }
+
+        // If WHERE only uses old-scope variables, bind and insert it BEFORE
+        // the projection (e.g. WITH types[i] AS x WHERE i <> j).
+        if (wc.where_pred && !where_has_projected_ref) {
+            auto where_op = bindWhere(*wc.where_pred, std::move(child));
+            if (!where_op)
+                return std::nullopt;
+            child = std::move(*where_op);
+        }
+
         // Simple projection
         auto proj = std::make_unique<BoundProjectOp>();
         for (const auto& item : wc.items) {
@@ -727,7 +833,8 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         current = std::move(proj);
     }
 
-    // Register WITH aliases temporarily so ORDER BY / SKIP / LIMIT can resolve them.
+    // Register WITH aliases temporarily so ORDER BY / SKIP / LIMIT can resolve them
+    // AND so that post-projection WHERE can reference projected variables.
     // Preserve metadata (source_label, etc.) from any prior registration so that
     // downstream SET/REMOVE can resolve property IDs.
     for (size_t i = 0; i < with_outputs.size(); ++i) {
@@ -742,6 +849,15 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             info.strong_typed = existing->second.strong_typed;
         }
         ctx_.symbols[with_outputs[i].first] = std::move(info);
+    }
+
+    // WHERE that references projected variables (e.g. WITH x+1 AS y WHERE y > 0)
+    // must be placed AFTER the projection so projected columns are visible.
+    if (where_has_projected_ref && wc.where_pred) {
+        auto where_op = bindWhere(*wc.where_pred, std::move(current));
+        if (!where_op)
+            return std::nullopt;
+        current = std::move(*where_op);
     }
 
     // ORDER BY
@@ -789,6 +905,13 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         current = std::move(distinct);
     }
 
+    // WHERE: must be bound against the union of old-scope and projected
+    // variables. WITH types[i] AS lhs WHERE i <> j references old vars;
+    // WITH x+1 AS y WHERE y > 0 references projected vars.
+    // WHERE was already bound and inserted before the projection.
+    // The code above consumes wc.where_pred and places the filter correctly.
+    // This block is intentionally empty — do NOT bind WHERE here.
+
     // Scope reset: only WITH output columns are visible after this point.
     // Preserve metadata (source_label, source_prop_id, strong_typed) from old
     // symbols so that downstream SET/REMOVE can resolve property IDs.
@@ -809,14 +932,6 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         ctx_.symbols[with_outputs[i].first] = std::move(info);
     }
     ctx_.next_column_index = static_cast<uint32_t>(with_outputs.size());
-
-    // WHERE
-    if (wc.where_pred) {
-        auto where_op = bindWhere(*wc.where_pred, std::move(current));
-        if (!where_op)
-            return std::nullopt;
-        current = std::move(*where_op);
-    }
 
     return current;
 }

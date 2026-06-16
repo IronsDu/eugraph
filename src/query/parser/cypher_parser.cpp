@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <antlr4-runtime.h>
+#include <cctype>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -400,10 +401,14 @@ private:
         for (auto* item : ctx->removeItem()) {
             RemoveItem ri;
             if (item->symbol() && item->nodeLabels()) {
-                ri.kind = RemoveItem::Kind::LABEL;
-                ri.target = makeVariable(item->symbol()->getText());
-                for (auto* n : item->nodeLabels()->name())
-                    ri.name = n->getText();
+                for (auto* n : item->nodeLabels()->name()) {
+                    RemoveItem label_ri;
+                    label_ri.kind = RemoveItem::Kind::LABEL;
+                    label_ri.target = makeVariable(item->symbol()->getText());
+                    label_ri.name = n->getText();
+                    r->items.push_back(std::move(label_ri));
+                }
+                continue;
             } else {
                 ri.kind = RemoveItem::Kind::PROPERTY;
                 ri.target = buildPropertyExpression(item->propertyExpression());
@@ -1308,7 +1313,14 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
                         result += '-';
                     result += "99999999999999999999"; // 20 digits, > INT64_MAX
                 } else if (negative) {
-                    result += '-' + std::to_string(std::abs(val));
+                    // val is the absolute value (non-negative) when strtoll
+                    // succeeded normally. It may be INT64_MIN when the
+                    // hex value is exactly -0x8000000000000000 and overflow
+                    // was handled by the INT64_MIN edge-case block above.
+                    if (val >= 0)
+                        result += '-' + std::to_string(val);
+                    else
+                        result += std::to_string(val); // val is already negative
                 } else {
                     result += std::to_string(val);
                 }
@@ -1356,6 +1368,28 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
 }
 
 std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& cypher_text) {
+    // Detects `..` not preceded by `*` — used by Match4[9] (asterisk operator missing).
+    // Valid: *.., *1.., *..5, *0..2.  Invalid: :Label.., rel_type..
+    auto isInvalidRangePattern = [](const std::string& text) {
+        for (size_t i = 1; i < text.size(); ++i) {
+            if (text[i] == '.' && text[i - 1] == '.') {
+                bool has_star = false;
+                for (size_t j = i - 1; j > 0; --j) {
+                    if (text[j - 1] == '*') {
+                        has_star = true;
+                        break;
+                    }
+                    if (!std::isdigit(static_cast<unsigned char>(text[j - 1])) &&
+                        !std::isspace(static_cast<unsigned char>(text[j - 1])))
+                        break;
+                }
+                if (!has_star)
+                    return true;
+            }
+        }
+        return false;
+    };
+
     // U+2014 (EM DASH) is used as a minus sign in some contexts but is
     // invalid in Cypher: SyntaxError: InvalidUnicodeCharacter
     if (cypher_text.find("\xE2\x80\x94") != std::string::npos) {
@@ -1374,7 +1408,8 @@ std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& 
         } else if (what_str.find("InvalidNumberLiteral") != std::string::npos) {
             err.message = "SyntaxError: InvalidNumberLiteral";
         } else if (what_str.find("UnexpectedSyntax") != std::string::npos) {
-            err.message = "SyntaxError: UnexpectedSyntax";
+            err.message = std::string("SyntaxError: ") +
+                          (isInvalidRangePattern(cypher_text) ? "InvalidRelationshipPattern" : "UnexpectedSyntax");
         } else {
             err.message = std::string("Invalid number: ") + what_str;
         }
@@ -1392,7 +1427,8 @@ std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& 
 
     if (error_listener.hasError()) {
         ParseError err = error_listener.getError();
-        err.message = "SyntaxError: UnexpectedSyntax";
+        err.message = std::string("SyntaxError: ") +
+                      (isInvalidRangePattern(cypher_text) ? "InvalidRelationshipPattern" : "UnexpectedSyntax");
         return err;
     }
 
@@ -1404,7 +1440,8 @@ std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& 
 
     if (error_listener.hasError()) {
         ParseError err = error_listener.getError();
-        err.message = "SyntaxError: UnexpectedSyntax";
+        err.message = std::string("SyntaxError: ") +
+                      (isInvalidRangePattern(cypher_text) ? "InvalidRelationshipPattern" : "UnexpectedSyntax");
         return err;
     }
 
@@ -1429,7 +1466,8 @@ std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& 
         } else if (what_str.find("InvalidNumberLiteral") != std::string::npos) {
             err.message = "SyntaxError: InvalidNumberLiteral";
         } else if (what_str.find("UnexpectedSyntax") != std::string::npos) {
-            err.message = "SyntaxError: UnexpectedSyntax";
+            err.message = std::string("SyntaxError: ") +
+                          (isInvalidRangePattern(cypher_text) ? "InvalidRelationshipPattern" : "UnexpectedSyntax");
         } else {
             err.message = std::string("Invalid number: ") + what_str;
         }

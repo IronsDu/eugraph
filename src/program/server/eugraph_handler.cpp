@@ -301,7 +301,6 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         oss << "{\"id\":" << v.id;
 
         if (v.labels.has_value() && !v.labels->empty()) {
-            // Output all labels for multi-label node support (skip __anon__)
             oss << ",\"labels\":[";
             bool first = true;
             for (LabelId lid : *v.labels) {
@@ -317,7 +316,10 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
             }
             oss << ']';
         }
-        // Serialize properties for all labels present on the vertex
+        // Serialize properties into a "properties" sub-object (Neo4j-style)
+        // so user property names never collide with metadata keys like "id".
+        oss << ",\"properties\":{";
+        bool first_prop = true;
         for (const auto& [lid, props] : v.properties) {
             auto it = label_defs.find(lid);
             if (it == label_defs.end())
@@ -326,35 +328,45 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                 if (pd.id < props.size()) {
                     const auto& pv = props[pd.id];
                     if (pv.has_value()) {
-                        oss << ",\"" << pd.name << "\":";
+                        if (!first_prop)
+                            oss << ',';
+                        oss << '"' << pd.name << "\":";
                         appendJsonValue(oss, *pv);
+                        first_prop = false;
                     }
                 }
             }
         }
         oss << '}';
+        oss << '}';
         rv.set_vertex_json(oss.str());
     } else if (std::holds_alternative<EdgeValue>(val)) {
         auto& e = std::get<EdgeValue>(val);
         std::ostringstream oss;
-        oss << "{\"id\":" << e.id << ",\"src\":" << e.src_id << ",\"dst\":" << e.dst_id;
+        oss << "{\"id\":" << e.id << ",\"start\":" << e.src_id << ",\"end\":" << e.dst_id;
 
         auto elit = edge_label_defs.find(e.label_id);
         if (elit != edge_label_defs.end()) {
-            oss << ",\"label\":\"" << elit->second.name << '"';
+            oss << ",\"type\":\"" << elit->second.name << '"';
         }
 
+        oss << ",\"properties\":{";
+        bool first_prop = true;
         if (e.properties.has_value() && elit != edge_label_defs.end()) {
             for (const auto& pd : elit->second.properties) {
                 if (pd.id < e.properties->size()) {
                     const auto& pv = (*e.properties)[pd.id];
                     if (pv.has_value()) {
-                        oss << ",\"" << pd.name << "\":";
+                        if (!first_prop)
+                            oss << ',';
+                        oss << '"' << pd.name << "\":";
                         appendJsonValue(oss, *pv);
+                        first_prop = false;
                     }
                 }
             }
         }
+        oss << '}';
         oss << '}';
         rv.set_edge_json(oss.str());
     } else if (std::holds_alternative<PathValue>(val)) {

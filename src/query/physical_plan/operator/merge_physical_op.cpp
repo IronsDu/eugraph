@@ -245,15 +245,101 @@ bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Va
         [&expected](const auto& sv) -> bool {
             using T = std::decay_t<decltype(sv)>;
             if constexpr (std::is_same_v<T, std::monostate>) {
-                return std::holds_alternative<std::monostate>(expected);
+                return isNull(expected);
             } else if constexpr (std::is_same_v<T, bool>) {
                 return std::holds_alternative<bool>(expected) && sv == std::get<bool>(expected);
             } else if constexpr (std::is_same_v<T, int64_t>) {
-                return std::holds_alternative<int64_t>(expected) && sv == std::get<int64_t>(expected);
+                if (std::holds_alternative<int64_t>(expected))
+                    return sv == std::get<int64_t>(expected);
+                if (std::holds_alternative<double>(expected))
+                    return static_cast<double>(sv) == std::get<double>(expected);
+                return false;
             } else if constexpr (std::is_same_v<T, double>) {
-                return std::holds_alternative<double>(expected) && sv == std::get<double>(expected);
+                if (std::holds_alternative<double>(expected))
+                    return sv == std::get<double>(expected);
+                if (std::holds_alternative<int64_t>(expected))
+                    return sv == static_cast<double>(std::get<int64_t>(expected));
+                return false;
             } else if constexpr (std::is_same_v<T, std::string>) {
                 return std::holds_alternative<std::string>(expected) && sv == std::get<std::string>(expected);
+            } else if constexpr (std::is_same_v<T, DateTimeValue>) {
+                return std::holds_alternative<DateTimeValue>(expected) && sv == std::get<DateTimeValue>(expected);
+            } else if constexpr (std::is_same_v<T, TimeValue>) {
+                return std::holds_alternative<TimeValue>(expected) && sv == std::get<TimeValue>(expected);
+            } else if constexpr (std::is_same_v<T, DurationValue>) {
+                return std::holds_alternative<DurationValue>(expected) && sv == std::get<DurationValue>(expected);
+            } else if constexpr (std::is_same_v<T, std::vector<int64_t>>) {
+                if (!std::holds_alternative<ListValue>(expected))
+                    return false;
+                const auto& lv = std::get<ListValue>(expected);
+                if (sv.size() != lv.elements.size())
+                    return false;
+                for (size_t i = 0; i < sv.size(); ++i) {
+                    if (!std::holds_alternative<int64_t>(lv.elements[i].value) ||
+                        sv[i] != std::get<int64_t>(lv.elements[i].value))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, std::vector<double>>) {
+                if (!std::holds_alternative<ListValue>(expected))
+                    return false;
+                const auto& lv = std::get<ListValue>(expected);
+                if (sv.size() != lv.elements.size())
+                    return false;
+                for (size_t i = 0; i < sv.size(); ++i) {
+                    if (!std::holds_alternative<double>(lv.elements[i].value) ||
+                        sv[i] != std::get<double>(lv.elements[i].value))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+                if (!std::holds_alternative<ListValue>(expected))
+                    return false;
+                const auto& lv = std::get<ListValue>(expected);
+                if (sv.size() != lv.elements.size())
+                    return false;
+                for (size_t i = 0; i < sv.size(); ++i) {
+                    if (!std::holds_alternative<std::string>(lv.elements[i].value) ||
+                        sv[i] != std::get<std::string>(lv.elements[i].value))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, std::vector<DateTimeValue>>) {
+                if (!std::holds_alternative<ListValue>(expected))
+                    return false;
+                const auto& lv = std::get<ListValue>(expected);
+                if (sv.size() != lv.elements.size())
+                    return false;
+                for (size_t i = 0; i < sv.size(); ++i) {
+                    if (!std::holds_alternative<DateTimeValue>(lv.elements[i].value) ||
+                        sv[i] != std::get<DateTimeValue>(lv.elements[i].value))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, std::vector<TimeValue>>) {
+                if (!std::holds_alternative<ListValue>(expected))
+                    return false;
+                const auto& lv = std::get<ListValue>(expected);
+                if (sv.size() != lv.elements.size())
+                    return false;
+                for (size_t i = 0; i < sv.size(); ++i) {
+                    if (!std::holds_alternative<TimeValue>(lv.elements[i].value) ||
+                        sv[i] != std::get<TimeValue>(lv.elements[i].value))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, std::vector<DurationValue>>) {
+                if (!std::holds_alternative<ListValue>(expected))
+                    return false;
+                const auto& lv = std::get<ListValue>(expected);
+                if (sv.size() != lv.elements.size())
+                    return false;
+                for (size_t i = 0; i < sv.size(); ++i) {
+                    if (!std::holds_alternative<DurationValue>(lv.elements[i].value) ||
+                        sv[i] != std::get<DurationValue>(lv.elements[i].value))
+                        return false;
+                }
+                return true;
             }
             return false;
         },

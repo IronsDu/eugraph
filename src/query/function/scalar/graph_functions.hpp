@@ -14,6 +14,9 @@ namespace scalar {
 inline Value labelsImpl(const Value& arg, const EvalContext& ctx) {
     if (std::holds_alternative<VertexValue>(arg)) {
         const auto& vv = std::get<VertexValue>(arg);
+        if (vv.deleted)
+            throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
+
         if (!vv.labels || !ctx.catalog)
             return Value{ListValue{}};
         ListValue lv;

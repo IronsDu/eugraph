@@ -1,7 +1,5 @@
 #include "query/evaluator/vectorized_evaluator.hpp"
 
-#include <spdlog/spdlog.h>
-
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 
@@ -73,6 +71,8 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
         Value r;
         if (std::holds_alternative<VertexValue>(ov)) {
             const auto& vertex = std::get<VertexValue>(ov);
+            if (vertex.deleted)
+                throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
             std::vector<Value> found;
             for (const auto& candidate : ref.candidates) {
                 auto lit = vertex.properties.find(candidate.label_id);
@@ -83,9 +83,6 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     }
                 }
             }
-            spdlog::info("[evalPropRef] vid={} prop_name='{}' candidates={} found={} props_labels={}",
-                         std::holds_alternative<VertexValue>(ov) ? std::get<VertexValue>(ov).id : -1, ref.property_name,
-                         ref.candidates.size(), found.size(), vertex.properties.size());
             // Fallback: a property may be registered on __anon__ in the
             // catalog but physically stored under the vertex's concrete
             // label.  Search all loaded labels by name.
@@ -124,6 +121,8 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             }
         } else if (std::holds_alternative<EdgeValue>(ov)) {
             const auto& edge = std::get<EdgeValue>(ov);
+            if (edge.deleted)
+                throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
             // Structural fields (r.id, r.src_id, r.dst_id, r.label_id)
             if (ref.candidates.empty() && !ref.property_name.empty()) {
                 if (ref.property_name == "id") {
@@ -216,6 +215,8 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
         Value r;
         if (std::holds_alternative<VertexValue>(ov)) {
             const auto& vertex = std::get<VertexValue>(ov);
+            if (vertex.deleted)
+                throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
             for (const auto& [label_id, props_vec] : vertex.properties) {
                 const LabelDef* ldef = nullptr;
                 if (eval_ctx_.label_defs) {
@@ -241,6 +242,8 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
         found:;
         } else if (std::holds_alternative<EdgeValue>(ov)) {
             const auto& edge = std::get<EdgeValue>(ov);
+            if (edge.deleted)
+                throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
             if (ref.property == "id") {
                 r = Value(static_cast<int64_t>(edge.id));
             } else if (ref.property == "src_id") {
