@@ -175,6 +175,7 @@ add_library(eugraph_query_engine STATIC
     src/query/planner/binder/bind_expression.cpp
     src/query/planner/binder/bind_pattern.cpp
     src/query/planner/binder/bind_projection.cpp
+    src/query/planner/bound_logical_plan.cpp
     src/query/planner/column_resolver.cpp
     src/query/evaluator/vectorized_evaluator.cpp
     src/query/evaluator/eval_binary_op.cpp
@@ -226,7 +227,13 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/opt_rule.cpp
     src/query/optimizer/task.cpp
     src/query/optimizer/logical_optimizer.cpp
+    src/query/optimizer/log_prop.cpp
+    src/query/optimizer/cost_model.cpp
+    src/query/optimizer/physical_expr.cpp
+    src/query/optimizer/operator_hash.cpp
+    src/query/optimizer/operator_eq.cpp
     src/query/optimizer/rules/filter_pushdown.cpp
+    src/query/optimizer/rules/impl/impl_rules.cpp
 )
 
 target_include_directories(eugraph_query_engine PUBLIC

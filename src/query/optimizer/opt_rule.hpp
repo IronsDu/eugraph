@@ -57,21 +57,33 @@ public:
     virtual PatternNode pattern() const = 0;
 
     // Fast top-operator match check (O(1)).
+    // Checks that the root operator of the GroupExpr matches the pattern's root.
+    // Does NOT do full BINDERY-style multi-level binding.
     bool topMatch(const GroupExpr& expr) const;
 
-    // Detailed condition check after binding.
+    // BINDERY-style multi-level pattern match (Columbia: BINDERY::advance + extract_expr).
+    // Checks that the full expression tree matches the pattern, including child levels.
+    // Returns true if the expression binds to the pattern.
+    bool fullMatch(const GroupExpr& expr, Memo& memo) const;
+
+    // Detailed condition check after binding (Columbia: RULE::condition).
     virtual bool condition(GroupExpr& /*expr*/, Memo& /*memo*/) const {
         return true;
     }
 
-    // Generate replacement expressions. Non-const because rules may move
-    // operator data from the original GroupExpr (BoundExpression contains
-    // unique_ptr members that cannot be copied).
+    // Generate replacement expressions.
     virtual std::vector<std::unique_ptr<GroupExpr>> substitute(GroupExpr& expr, Memo& memo) const = 0;
 
     // Priority: 0 = skip, higher = fire first.
     virtual int promise() const {
         return 1;
+    }
+
+    // Whether this is an implementation rule (logical→physical).
+    // Used by OExprTask to skip implementation rules during exploration.
+    // (Columbia: substitute->GetOp()->is_physical())
+    virtual bool isImplementation() const {
+        return false;
     }
 
     int index() const {
@@ -83,6 +95,9 @@ public:
 
 private:
     int index_ = -1;
+
+    // Recursive helper for fullMatch
+    bool matchNode(const PatternNode& pattern, const GroupExpr& expr, Memo& memo) const;
 };
 
 class RuleSet {

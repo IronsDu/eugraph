@@ -1,5 +1,7 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "common/types/graph_types.hpp"
+#include "query/optimizer/chosen_plan.hpp"
+#include "query/optimizer/memo.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/delete_physical_op.hpp"
@@ -557,6 +559,61 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(bound_plan.root, store, meta, ctx, empty_schema, empty_types);
+    if (std::holds_alternative<std::string>(result))
+        return std::get<std::string>(result);
+    return finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
+}
+
+namespace {
+// Materialize a ChosenPlan tree into a fresh BoundLogicalOperator tree by
+// cloning each node's source op and recursively attaching materialized
+// children. Mirrors Memo::copyOut's child attachment (handles both the
+// single-child `child` field and binary operators' `left`/`right` pair).
+// We rebuild rather than reuse plan.root because the CBO winner chain may
+// select a different physical plan than the RBO path through plan.root.
+binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chosen) {
+    binder::BoundLogicalOperator result = optimizer::cloneBoundLogicalOperator(chosen.op);
+
+    if (chosen.children.size() == 1) {
+        optimizer::setChild(result, materializeChosen(*chosen.children[0]));
+    } else if (chosen.children.size() == 2) {
+        if (std::holds_alternative<std::unique_ptr<binder::BoundBinaryJoinOp>>(result)) {
+            auto& join = std::get<std::unique_ptr<binder::BoundBinaryJoinOp>>(result);
+            join->left = materializeChosen(*chosen.children[0]);
+            join->right = materializeChosen(*chosen.children[1]);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundSemiJoinOp>>(result)) {
+            auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
+            sj->left = materializeChosen(*chosen.children[0]);
+            sj->right = materializeChosen(*chosen.children[1]);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundLeftJoinOp>>(result)) {
+            auto& lj = std::get<std::unique_ptr<binder::BoundLeftJoinOp>>(result);
+            lj->left = materializeChosen(*chosen.children[0]);
+            lj->right = materializeChosen(*chosen.children[1]);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundUnionOp>>(result)) {
+            auto& uo = std::get<std::unique_ptr<binder::BoundUnionOp>>(result);
+            uo->left = materializeChosen(*chosen.children[0]);
+            uo->right = materializeChosen(*chosen.children[1]);
+        }
+    }
+    return result;
+}
+} // namespace
+
+std::variant<std::unique_ptr<PhysicalOperator>, std::string>
+PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphDataStore& store,
+                            IAsyncGraphMetaStore& meta, PlanContext& ctx) {
+    // Materialize the chosen physical plan as a logical operator tree, then
+    // reuse planBoundOperator's dispatch. The CBO's PhysicalOpTag selection
+    // is currently 1:1 with the source logical operator's variant type —
+    // impl rules emit a single physical expression per logical op family —
+    // so the variant dispatch in planBoundOperator produces the matching
+    // physical operator. Future alternative impl rules (e.g. NL vs Hash
+    // join) will need explicit tag dispatch here.
+    binder::BoundLogicalOperator materialized = materializeChosen(chosen);
+
+    Schema empty_schema;
+    std::vector<binder::BoundType> empty_types;
+    auto result = planBoundOperator(materialized, store, meta, ctx, empty_schema, empty_types);
     if (std::holds_alternative<std::string>(result))
         return std::get<std::string>(result);
     return finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));

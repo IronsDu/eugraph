@@ -130,5 +130,18 @@ EdgeLabelId Catalog::edgeLabelNameToId(const std::string& name) const {
     return it != edge_label_name_to_id_.end() ? it->second : INVALID_EDGE_LABEL_ID;
 }
 
+bool Catalog::hasIndex(LabelId lid, uint16_t prop_id) const {
+    auto lit = label_defs_.find(lid);
+    if (lit == label_defs_.end())
+        return false;
+    for (const auto& idx : lit->second.indexes) {
+        for (uint16_t pid : idx.prop_ids) {
+            if (pid == prop_id)
+                return true;
+        }
+    }
+    return false;
+}
+
 } // namespace catalog
 } // namespace eugraph

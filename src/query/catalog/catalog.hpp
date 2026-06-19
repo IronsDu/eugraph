@@ -66,6 +66,31 @@ public:
         return edge_label_defs_;
     }
 
+    // ── Cardinality statistics (Phase 3 CBO) ──
+    // Stored separately from LabelDef/EdgeLabelDef to avoid breaking
+    // meta_codec serialization. Populated by storage layer; defaults to 0.
+
+    void setLabelStats(LabelId lid, uint64_t vertex_count) {
+        label_vertex_counts_[lid] = vertex_count;
+    }
+    void setEdgeLabelStats(EdgeLabelId elid, uint64_t edge_count, double avg_out_degree) {
+        edge_label_counts_[elid] = edge_count;
+        edge_avg_out_degrees_[elid] = avg_out_degree;
+    }
+
+    /// Returns vertex count for label, or 0 if unknown (caller applies default).
+    uint64_t getVertexCount(LabelId lid) const {
+        auto it = label_vertex_counts_.find(lid);
+        return it != label_vertex_counts_.end() ? it->second : 0;
+    }
+    /// Returns avg out-degree for edge label, or 0.0 if unknown.
+    double getAvgOutDegree(EdgeLabelId elid) const {
+        auto it = edge_avg_out_degrees_.find(elid);
+        return it != edge_avg_out_degrees_.end() ? it->second : 0.0;
+    }
+    /// Returns true if label has an index on the given property id.
+    bool hasIndex(LabelId lid, uint16_t prop_id) const;
+
     // ── Name-id mappings ──
 
     LabelId labelNameToId(const std::string& name) const;
@@ -85,6 +110,11 @@ private:
 
     std::unordered_map<std::string, EdgeLabelId> edge_label_name_to_id_;
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs_;
+
+    // Cardinality statistics (separate from LabelDef to avoid serialization changes)
+    std::unordered_map<LabelId, uint64_t> label_vertex_counts_;
+    std::unordered_map<EdgeLabelId, uint64_t> edge_label_counts_;
+    std::unordered_map<EdgeLabelId, double> edge_avg_out_degrees_;
 };
 
 } // namespace catalog

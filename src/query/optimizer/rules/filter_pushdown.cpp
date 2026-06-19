@@ -168,9 +168,9 @@ std::vector<std::unique_ptr<GroupExpr>> FilterPushdownRule::substitute(GroupExpr
     // 4. Create a new GroupExpr for the child operator whose child is the new Filter group
     // 5. Return the child operator GroupExpr (to be inserted into original group)
 
-    // Step 1: Extract predicate from the original Filter
+    // Step 1: Clone predicate from the original Filter (do NOT move — original stays in Memo)
     auto& filter_op = std::get<std::unique_ptr<binder::BoundFilterOp>>(expr.op);
-    auto predicate = std::move(filter_op->predicate);
+    auto predicate = cloneBoundExpression(filter_op->predicate);
 
     // Step 2: Get child GroupExpr
     GroupId child_gid = expr.child_groups[0];
@@ -178,8 +178,8 @@ std::vector<std::unique_ptr<GroupExpr>> FilterPushdownRule::substitute(GroupExpr
     ExprId child_eid = child_group.logical_exprs.back();
     GroupExpr& child_expr = memo.getExpr(child_eid);
 
-    // Move the child operator data and save its child group reference
-    binder::BoundLogicalOperator child_op = std::move(child_expr.op);
+    // Clone the child operator data (do NOT move — original stays in Memo for other rules)
+    binder::BoundLogicalOperator child_op = cloneBoundLogicalOperator(child_expr.op);
     auto grandchild_groups = child_expr.child_groups;
 
     // Step 3: Create a new group with the pushed-down Filter
