@@ -159,11 +159,25 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
 
     // 2.5. Logical optimization
     optimizer::LogicalOptimizer logical_optimizer;
-    logical_optimizer.optimize(bound_stmt->plan);
+    logical_optimizer.optimize(bound_stmt->plan, ctx->catalog.get());
 
-    // 3. Physical planning from BoundLogicalPlan
+    // 3. Physical planning. Try CBO-chosen plan first (Phase 4); fall back
+    // to planBound (RBO over the optimized logical tree) when no winner.
     PhysicalPlanner physical_planner;
-    auto phys_result = physical_planner.planBound(bound_stmt->plan, async_data_, async_meta_, plan_ctx);
+    std::variant<std::unique_ptr<PhysicalOperator>, std::string> phys_result = std::string("");
+    if (bound_stmt->plan.chosen) {
+        phys_result = physical_planner.planChosen(*bound_stmt->plan.chosen, async_data_, async_meta_, plan_ctx);
+        if (std::holds_alternative<std::string>(phys_result)) {
+            // planChosen failed — log and fall through to planBound rather than
+            // aborting the whole query. The RBO path produces a known-good plan.
+            spdlog::warn("[executor] planChosen failed ({}); falling back to planBound",
+                         std::get<std::string>(phys_result));
+            phys_result = std::string("");
+        }
+    }
+    if (!bound_stmt->plan.chosen || std::holds_alternative<std::string>(phys_result)) {
+        phys_result = physical_planner.planBound(bound_stmt->plan, async_data_, async_meta_, plan_ctx);
+    }
     if (std::holds_alternative<std::string>(phys_result)) {
         ctx->error = std::get<std::string>(phys_result);
         co_await async_data_.rollbackTran(txn);

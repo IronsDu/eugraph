@@ -14,6 +14,10 @@
 #include <variant>
 
 namespace eugraph {
+namespace optimizer {
+struct ChosenPlan;
+}
+
 namespace compute {
 
 /// Context passed through physical planning: maps label/edge-label names to IDs,
@@ -41,6 +45,18 @@ public:
                                                                            IAsyncGraphDataStore& store,
                                                                            IAsyncGraphMetaStore& meta,
                                                                            PlanContext& ctx);
+
+    /// Plan from a CBO-chosen physical plan (Phase 4). Materializes the
+    /// ChosenPlan tree into a fresh BoundLogicalOperator tree and delegates
+    /// to planBoundOperator. Honors the optimizer's tag selections where
+    /// they matter; for most operators the source logical operator's variant
+    /// type alone determines the physical op (1:1 mapping).
+    ///
+    /// Falls back to planBound when `chosen` is null.
+    std::variant<std::unique_ptr<PhysicalOperator>, std::string> planChosen(const optimizer::ChosenPlan& chosen,
+                                                                            IAsyncGraphDataStore& store,
+                                                                            IAsyncGraphMetaStore& meta,
+                                                                            PlanContext& ctx);
 
 private:
     std::variant<PlanOperatorResult, std::string>

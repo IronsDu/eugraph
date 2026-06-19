@@ -26,14 +26,30 @@
 #include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
+#include <memory>
 #include <vector>
 
 namespace eugraph {
+namespace optimizer {
+struct ChosenPlan; // forward declaration — PIMPL to break circular dependency
+}
+
 namespace binder {
 
 struct BoundLogicalPlan {
     BoundLogicalOperator root;
     std::vector<ColumnInfo> output_schema;
+    // Phase 4: CBO-chosen physical plan. Null when CBO didn't produce a winner
+    // (e.g. no implementation rules fired); PhysicalPlanner falls back to planBound.
+    std::unique_ptr<optimizer::ChosenPlan> chosen;
+
+    // Out-of-line special members — ChosenPlan is forward-declared (PIMPL pattern)
+    BoundLogicalPlan();
+    ~BoundLogicalPlan();
+    BoundLogicalPlan(BoundLogicalPlan&&);
+    BoundLogicalPlan& operator=(BoundLogicalPlan&&);
+    BoundLogicalPlan(const BoundLogicalPlan&) = delete;
+    BoundLogicalPlan& operator=(const BoundLogicalPlan&) = delete;
 };
 
 struct BoundStatement {
