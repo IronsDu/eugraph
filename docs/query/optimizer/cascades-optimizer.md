@@ -462,13 +462,13 @@ CBO 扩展需要增加 `E_GROUP` Task（探索子 Group 的所有等价表达式
 **后续修复（框架正确性对齐）**：
 - `Memo::copyOut(gid, prop)` 子节点递归改用 `copyOut(child_gid, PhysProp{})`（先前是无 prop 版本，命中 winner 后子树会回退 RBO，使 plan.root 与 plan.chosen 结构不一致）
 
-### 待实施（Phase B — Cascades PhysProp + Enforcer 框架，进行中）
+### ✅ 已完成（Phase B — Cascades PhysProp + Enforcer 框架）
 
 把 Columbia 的 Enforcer 模式接入 Cascades，让优化器能在代价搜索过程中识别"拓扑形 → 语义形"的属性升级需求并按需插入 Enricher enforcer。这是物理算子审计 (`docs/query/engine/physical-operator-audit.md`) 中 demand-driven Enricher 设计的优化器侧基础。
 
-**当前状态**：数据结构、RequirementCollector、O_INPUTS 的物化感知路径、Memo 的 enforcer 插入 API 全部就位，82/82 optimizer 测试通过，384/384 query_executor 测试通过。当前 impl rule 仍未声明 `required_input_mat`（默认空），因此 enforcer 路径暂不会被现有查询触发；待 Phase C 在 Scan/Expand 输出改拓扑类型、impl rule 加 `required_input_mat` 后整体生效。
+**当前状态（2026-06）**：数据结构、RequirementCollector、O_INPUTS 的物化感知路径、Memo 的 enforcer 插入 API 全部就位，804/804 单元测试通过。`need_entire` 标志已添加到 MaterializationReq 中用于 RETURN n/e/p 全对象物化判断。column_rewrite pass 已实现（`column_rewrite.cpp/hpp`）。ASAN use-after-free 问题已修复（OInputsTask 中 `localReqdProp` 引用在 `memo.addContext()` 后悬空）。
 
-**已完成的改动**：
+**已完成的改动（补充 2026-06 新增）**：
 - 新增 `materialization_req.hpp` — `MaterializationReq{need_labels, need_props}` + `merge`/`intersect`/`satisfies`/`totalPropertyCount`；`VarRequirements = map<string, MaterializationReq>`；`mergeVarRequirements`/`satisfiesVarRequirements` 自由函数
 - 新增 `requirement_collector.{hpp,cpp}` — `collectExprRequirements` 走 BoundExpression 树识别 `BoundPropertyRef`（强类型，emit `need_props[label]={prop}`）/ `BoundDynamicPropertyRef`（弱类型，emit `need_labels`）/ `BoundLabelCast` / `labels()` 函数调用；`collectOpRequirements` 走 BoundLogicalOperator 树，**仅收集本算子自身表达式的需求**（不递归子树），用于后续 impl rule 声明 `required_input_mat`
 - `cbo.hpp` — `PhysProp` 新增 `VarRequirements materializations_` + `setMaterializations`/`hasMaterializations`/`materializations`/`satisfies(provider, required)`；`isAny()` 改为同时检查 sort 与 materializations；operator==/!= 覆盖 materializations
@@ -478,10 +478,14 @@ CBO 扩展需要增加 `E_GROUP` Task（探索子 Group 的所有等价表达式
 - `memo.{hpp,cpp}` — `Group` 新增 `requirements_`/`requirements_valid_` + `setRequirements`/`requirements`/`requirementsValid`；`Memo::copyIn` 在创建新 group 时调用 `collectOpRequirements` 自动填充；新增 `Group::getSatisfyingWinner`（最便宜的满足 prop 的 done winner）；新增 `Memo::insertEnricherEnforcer(g, req_mat)` 按 LogProp.columns 推断变量类型（Vertex/Edge/Path），per-variable 插入对应 Enricher 物理 GroupExpr（child_groups=[g]）；`PhysProp::dump` 输出 mat{...}；`extractChosen` 改用 `getSatisfyingWinner` + 递归时按算子 `required_input_mat[i]` ∪ `parent_mat` 计算子节点 prop
 - `task.cpp` — `OInputsTask::perform` 改为物化感知：(1) 算 input required prop = `expr.required_input_mat[i]` ∪ `ctx.materializations`；(2) 先查 `getSatisfyingWinner(inputProp)`，若 input.optimized 仍无则调 `insertEnricherEnforcer` 试图插入 enforcer 包装 any-winner；(3) 注册 winner 前校验 `expr.output_mat` 满足 `ctx.materializations`（拓扑形叶子在要求物化的 context 下不再误注册 winner，由 enforcer 路径补救）；`OGroupTask::perform` 新增 case 4 分支：已 optimized 的 group 收到新 context 时对全部 physical_exprs 推 O_INPUTS（无 physical_exprs 时回退 O_EXPR）
 
-**当前限制（Phase C 之前）**：
-- 19 个 impl rule 的 `substitute` 未填充 `required_input_mat`，因此算子间不会传递物化需求；当前 Phase B 路径对所有现有查询"透明"——winner 仍按 any 属性正常注册，不会插入 enforcer
-- Enricher 的 cost 公式仅按 input cardinality 估计，未计入物化宽度
-- 多变量物化时 enforcer 串联（链式 Enricher）已支持，但 `extractChosen` 的子节点 prop 推导按全 prop 联合传递，未做 schema-aware 过滤（保守正确，可后续优化）
+**当前限制（2026-06）**：
+- PropertyExtract 算子（Vertex/Edge/Path）已实现但未接入执行管线。`planChosen` 中通过 `hasPropertyExtract(chosen)` 判断是否激活 standalone 模式；当前 CBO 不产生 PropertyExtract 标签，因此仍走旧 wrap 管线。`PhysicalOpTag` 新增了 `VertexPropertyExtract`/`EdgePropertyExtract`/`PathPropertyExtract`。
+- Enricher（VertexEnrich/EdgeEnrich/PathEnrich）physical operator 尚未实现——当前由 RBO wrap 管线（wrapVertexLabelRead / wrapVertexPropertyRead / wrapEdgePropertyRead / wrapPathElementPropertyRead）原地升级拓扑类型。
+- `need_entire` 标志已添加到 MaterializationReq 中，用于 RETURN n/e/p 全对象物化判断。`insertEnricherEnforcer` 根据 `need_entire` 决定插入 PropertyExtract 还是 Enricher。
+- column_rewrite pass 已实现（`column_rewrite.cpp/hpp`），用于将 BoundPropertyRef 替换为 BoundColumnRef，配合 standalone PropertyExtractPhysicalOp 的列追加模式。
+- `OInputsTask` 中 ASAN use-after-free 已修复（`localReqdProp` 引用在 `memo.addContext()` 后悬空，改为拷贝）。
+- `OExprTask` 中空 if-body 编译警告已修复。
+- 路径函数 `nodes()`/`relationships()`/`length()` 已支持 PathTopology 类型。
 
 **测试覆盖**（`tests/test_optimizer.cpp`，共 82 例）：
 - 原有 61 例全部保留

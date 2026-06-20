@@ -102,14 +102,14 @@ AsyncGenerator<RowBatch>
 
 | 算子 | 特征 | IO 操作 |
 |------|------|---------|
-| AllNodeScan | 扫描所有标签，去重，产出 VertexValue{id} | scanVerticesByLabel × N |
-| LabelScan | 按标签 ID 扫描，产出 VertexValue{id}（单标签）/ VertexValue{id, labels}（多标签） | scanVerticesByLabel |
+| AllNodeScan | 扫描所有标签，去重，产出 VertexRef（拓扑） | scanVerticesByLabel × N |
+| LabelScan | 按标签 ID 扫描，产出 VertexRef（拓扑） | scanVerticesByLabel |
 | IndexScan | 等值或范围扫描，通过 IndexKeyCodec | scanVerticesByIndex / scanVerticesByIndexRange |
-| VertexLabelRead | Column Replacement：加载顶点 labels | getVertexLabels |
-| VertexPropertyRead | Column Replacement：加载顶点属性 | getVertexProperties |
-| EdgePropertyRead | Column Replacement：加载边属性 | getEdgeProperties |
-| Expand | 嵌套循环：对每行输入扫描邻居边，产出轻量 EdgeValue + dst VertexValue{id} | scanEdges |
-| VarLenExpand | DFS + 显式栈 + 边唯一性回溯，产出 dst VertexValue{id, labels} | scanEdges × hop_depth |
+| VertexLabelRead | Column Replacement：VertexRef → VertexValue（加载 labels） | getVertexLabels |
+| VertexPropertyRead | Column Replacement：填充 VertexValue 的 properties | getVertexProperties |
+| EdgePropertyRead | Column Replacement：EdgeKey → EdgeValue（加载属性） | getEdgeProperties |
+| Expand | 嵌套循环：对每行输入扫描邻居边，产出 VertexRef / EdgeKey / VertexRef（拓扑） | scanEdges |
+| VarLenExpand | DFS + 显式栈 + 边唯一性回溯，产出 VertexRef（dst），PathValue（path），List\<EdgeValue\>（edge list） | scanEdges × hop_depth |
 | Filter | 纯计算，无 IO | 无 |
 | Project | 纯计算，无 IO | 无。无 RETURN 时空 ProjectOp 输出 0 列 |
 | Sort | **阻断**：全量物化后 `std::sort`。在 Project 之前执行，可引用原始列 | 无 |
