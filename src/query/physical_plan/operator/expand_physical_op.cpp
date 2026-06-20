@@ -148,7 +148,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     else if (std::holds_alternative<VertexRef>(val))
                         sid = std::get<VertexRef>(val).id;
                 }
-                EdgeKey ek{edges[i].edge_id, sid, edges[i].dst_id, edges[i].edge_label_id, edges[i].seq};
+                EdgeKey ek{edges[i].edge_id, sid, edges[i].dst_id, edges[i].edge_label_id,
+                          static_cast<uint32_t>(edges[i].seq)};
                 output.setValue(edge_col_idx, i, Value(std::move(ek)));
             }
         }
