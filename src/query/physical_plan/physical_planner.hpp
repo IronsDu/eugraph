@@ -16,7 +16,8 @@
 namespace eugraph {
 namespace optimizer {
 struct ChosenPlan;
-}
+struct PropertyExtractionInfo;
+} // namespace optimizer
 
 namespace compute {
 

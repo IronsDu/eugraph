@@ -70,7 +70,10 @@ public:
 
 ```cpp
 enum class BoundTypeKind {
-    BOOL, INT64, DOUBLE, STRING, VERTEX, EDGE, PATH, LIST, MAP,
+    BOOL, INT64, DOUBLE, STRING,
+    VERTEX_REF, EDGE_KEY, PATH_TOPOLOGY, // 拓扑阶段（Scan/Expand 输出）
+    VERTEX, EDGE, PATH,                  // 语义阶段（Enricher/Read 升级后）
+    LIST, MAP,
     DATETIME, TIME, DURATION, ANY, NULL_TYPE
 };
 
@@ -389,15 +392,16 @@ class PhysicalOperator {
 
 | 物理算子 | 持有的额外信息 | DataChunk 特性 |
 |----------|---------------|---------------|
-| `AllNodeScanPhysicalOp` | `IAsyncGraphDataStore&`, label 定义 | FLAT columns |
-| `LabelScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId` | FLAT columns |
-| `IndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId`, `prop_id`, `ScanMode` | FLAT columns |
-| `EdgeIndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `EdgeLabelId`, `prop_ids` | DICTIONARY columns for src/dst/edge |
-| `ExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, Schema | 输入 DICTIONARY + 新列 FLAT。不再加载 dst labels/properties 和 edge properties |
-| `VarLenExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, `min_hops`, `max_hops`, Schema | DFS + 边唯一性，输入 DICTIONARY + 目标顶点 FLAT |
-| `VertexLabelReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `anon_label_id` | Column Replacement：替换指定列为 `VertexValue{id, labels}` |
-| `VertexPropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `label_prop_ids` | Column Replacement：替换指定列为 `VertexValue{id, labels?, properties}` |
-| `EdgePropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `edge_prop_ids` | Column Replacement：替换指定列为 `EdgeValue{..., properties}` |
+| `AllNodeScanPhysicalOp` | `IAsyncGraphDataStore&`, label 定义 | 输出 `VertexRef`（VERTEX_REF），拓扑阶段 |
+| `LabelScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId` | 输出 `VertexRef`（VERTEX_REF），拓扑阶段 |
+| `IndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId`, `prop_id`, `ScanMode` | 输出 `VertexRef`（VERTEX_REF） |
+| `EdgeIndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `EdgeLabelId`, `prop_ids` | 输出 `VertexRef` / `EdgeKey` / `VertexRef` |
+| `ExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, Schema | 输出 `VertexRef` / `EdgeKey` / `VertexRef`（拓扑类型）。语义升级由 wrap 管线完成 |
+| `VarLenExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, `min_hops`, `max_hops`, Schema | DFS + 边唯一性。输出 `VertexRef`（dst）、`PathValue`（path 列）、`List<EdgeValue>`（edge list 列）。path 列内部已加载 labels |
+| `VertexLabelReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `anon_label_id` | 拓扑→语义升级：`VertexRef` → `VertexValue{id, labels}` |
+| `VertexPropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `label_prop_ids` | 属性加载：填充 `VertexValue` 的 `properties` map |
+| `EdgePropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `edge_prop_ids` | 拓扑→语义升级：`EdgeKey` → `EdgeValue{..., properties}` |
+| `PathElementPropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx` | 拓扑→语义升级：`PathTopology` → `PathValue`（加载元素属性和标签） |
 | `FilterPhysicalOp` | `BoundExpression` 谓词, Schema | DICTIONARY 共享 child buffer |
 | `ProjectPhysicalOp` | `BoundExpression` 投影项列表 | FLAT columns |
 | `AggregatePhysicalOp` | `FunctionDef*` 聚合, `BoundExpression` 分组键 | FLAT output |
@@ -529,7 +533,8 @@ class PhysicalOperator {
 
 ```cpp
 using Value = variant<monostate, bool, int64_t, double, string,
-                      VertexValue, EdgeValue, PathValue,
+                      VertexRef, EdgeKey, PathTopology,        // 拓扑阶段
+                      VertexValue, EdgeValue, PathValue,       // 语义阶段
                       DateTimeValue, TimeValue, DurationValue, ListValue, MapValue>;
 ```
 

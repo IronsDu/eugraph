@@ -75,6 +75,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 const auto& val = rows[src_row][src_col_idx_];
                 if (std::holds_alternative<VertexValue>(val)) {
                     src_id = std::get<VertexValue>(val).id;
+                } else if (std::holds_alternative<VertexRef>(val)) {
+                    src_id = std::get<VertexRef>(val).id;
                 } else if (std::holds_alternative<int64_t>(val)) {
                     src_id = static_cast<VertexId>(std::get<int64_t>(val));
                 }
@@ -134,24 +136,21 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             size_t dst_col_idx = input_cols + (edge_var_.empty() ? 0 : 1);
 
             if (!dst_var_.empty()) {
-                VertexValue dst_vv;
-                dst_vv.id = edges[i].dst_id;
-                output.setValue(dst_col_idx, i, Value(std::move(dst_vv)));
+                VertexRef dst_ref{edges[i].dst_id};
+                output.setValue(dst_col_idx, i, Value(dst_ref));
             }
             if (!edge_var_.empty()) {
-                EdgeValue ev;
-                ev.id = edges[i].edge_id;
-                ev.dst_id = edges[i].dst_id;
-                ev.label_id = edges[i].edge_label_id;
-                ev.seq = edges[i].seq;
                 VertexId sid = INVALID_VERTEX_ID;
                 if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[edges[i].src_row].size()) {
                     const auto& val = rows[edges[i].src_row][src_col_idx_];
                     if (std::holds_alternative<VertexValue>(val))
                         sid = std::get<VertexValue>(val).id;
+                    else if (std::holds_alternative<VertexRef>(val))
+                        sid = std::get<VertexRef>(val).id;
                 }
-                ev.src_id = sid;
-                output.setValue(edge_col_idx, i, Value(std::move(ev)));
+                EdgeKey ek{edges[i].edge_id, sid, edges[i].dst_id, edges[i].edge_label_id,
+                           static_cast<uint32_t>(edges[i].seq)};
+                output.setValue(edge_col_idx, i, Value(std::move(ek)));
             }
         }
         output.count = edges.size();

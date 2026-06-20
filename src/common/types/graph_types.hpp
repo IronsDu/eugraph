@@ -195,4 +195,89 @@ struct EdgeIndexScanEntry {
     EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
 };
 
+// ==================== Topology-stage Types ====================
+// Lightweight, ID-only counterparts of the semantic Value types
+// (VertexValue/EdgeValue/PathValue). Used by topology-stage operators
+// (Scan/Expand/VarLenExpand) and promoted to their semantic form by
+// Enricher operators at the latest possible position.
+//
+// Design notes:
+//   - VertexRef is a strong type wrapping VertexId (which is itself a
+//     uint64_t typedef). The strong wrapper prevents accidental
+//     confusion with other uint64_t values (EdgeId, count(*), etc.)
+//     at compile time, with zero runtime overhead.
+//   - EdgeKey mirrors EdgeValue's topology-only fields (no Properties,
+//     no deleted flag) so Expand can avoid fetching semantic data.
+//   - PathTopology stores its elements in parallel arrays rather than
+//     a sequence of variant Values. This is more cache-friendly for
+//     batch I/O and avoids the cost of the PathValue element variants.
+
+struct VertexRef {
+    VertexId id = INVALID_VERTEX_ID;
+
+    VertexRef() = default;
+    explicit VertexRef(VertexId vid) : id(vid) {}
+
+    bool operator==(const VertexRef& o) const {
+        return id == o.id;
+    }
+    bool operator!=(const VertexRef& o) const {
+        return id != o.id;
+    }
+    bool operator<(const VertexRef& o) const {
+        return id < o.id;
+    }
+};
+
+static_assert(sizeof(VertexRef) == sizeof(VertexId),
+              "VertexRef must be zero-overhead; sizeof must equal sizeof(VertexId)");
+static_assert(std::is_trivially_copyable_v<VertexRef>, "VertexRef must be trivially copyable for use in plain arrays");
+
+struct EdgeKey {
+    EdgeId id = INVALID_EDGE_ID;
+    VertexId src_id = INVALID_VERTEX_ID;
+    VertexId dst_id = INVALID_VERTEX_ID;
+    EdgeLabelId label_id = INVALID_EDGE_LABEL_ID;
+    uint32_t seq = 0;
+
+    EdgeKey() = default;
+    EdgeKey(EdgeId eid, VertexId s, VertexId d, EdgeLabelId lid, uint32_t seq_)
+        : id(eid), src_id(s), dst_id(d), label_id(lid), seq(seq_) {}
+
+    bool operator==(const EdgeKey& o) const {
+        return id == o.id && src_id == o.src_id && dst_id == o.dst_id && label_id == o.label_id && seq == o.seq;
+    }
+    bool operator!=(const EdgeKey& o) const {
+        return !(*this == o);
+    }
+};
+
+// Path topology: parallel arrays of vertex/edge IDs.
+// For an n-hop path, vertex_ids.size() == n+1, edge_ids.size() == n,
+// edge_label_ids.size() == n, seqs.size() == n.
+struct PathTopology {
+    std::vector<VertexId> vertex_ids;
+    std::vector<EdgeId> edge_ids;
+    std::vector<EdgeLabelId> edge_label_ids;
+    std::vector<uint32_t> seqs;
+
+    size_t hopCount() const {
+        return edge_ids.size();
+    }
+    size_t vertexCount() const {
+        return vertex_ids.size();
+    }
+    bool empty() const {
+        return vertex_ids.empty();
+    }
+
+    bool operator==(const PathTopology& o) const {
+        return vertex_ids == o.vertex_ids && edge_ids == o.edge_ids && edge_label_ids == o.edge_label_ids &&
+               seqs == o.seqs;
+    }
+    bool operator!=(const PathTopology& o) const {
+        return !(*this == o);
+    }
+};
+
 } // namespace eugraph

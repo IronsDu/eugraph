@@ -25,9 +25,8 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
     chunk.reserve(DataChunk::DEFAULT_CAPACITY);
 
     for (VertexId vid : seen_vids) {
-        VertexValue vv;
-        vv.id = vid;
-        chunk.appendRow({Value(std::move(vv))});
+        VertexRef vr{vid};
+        chunk.appendRow({Value(vr)});
         if (chunk.count >= DataChunk::DEFAULT_CAPACITY) {
             co_yield std::move(chunk);
             chunk = DataChunk{};

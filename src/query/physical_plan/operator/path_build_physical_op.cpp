@@ -25,11 +25,26 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
         output.reserve(rows.size());
 
         for (auto& row : rows) {
-            PathValue pv;
+            PathTopology pt;
             for (size_t i = 0; i < element_vars_.size(); ++i) {
                 int col = element_cols_[i];
                 if (col >= 0 && static_cast<size_t>(col) < row.size()) {
-                    pv.elements.push_back(ValueStorage{row[col]});
+                    const auto& val = row[col];
+                    if (std::holds_alternative<VertexRef>(val)) {
+                        pt.vertex_ids.push_back(std::get<VertexRef>(val).id);
+                    } else if (std::holds_alternative<VertexValue>(val)) {
+                        pt.vertex_ids.push_back(std::get<VertexValue>(val).id);
+                    } else if (std::holds_alternative<EdgeKey>(val)) {
+                        const auto& ek = std::get<EdgeKey>(val);
+                        pt.edge_ids.push_back(ek.id);
+                        pt.edge_label_ids.push_back(ek.label_id);
+                        pt.seqs.push_back(ek.seq);
+                    } else if (std::holds_alternative<EdgeValue>(val)) {
+                        const auto& ev = std::get<EdgeValue>(val);
+                        pt.edge_ids.push_back(ev.id);
+                        pt.edge_label_ids.push_back(ev.label_id);
+                        pt.seqs.push_back(ev.seq);
+                    }
                 }
             }
 
@@ -38,7 +53,7 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
             for (auto& val : row) {
                 out_values.push_back(std::move(val));
             }
-            out_values.push_back(Value(std::move(pv)));
+            out_values.push_back(Value(std::move(pt)));
             output.appendRow(out_values);
         }
         if (output.count > 0) {

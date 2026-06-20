@@ -4,11 +4,13 @@
 #include "query/optimizer/cost_model.hpp"
 #include "query/optimizer/log_prop.hpp"
 #include "query/optimizer/logical_optimizer.hpp"
+#include "query/optimizer/materialization_req.hpp"
 #include "query/optimizer/memo.hpp"
 #include "query/optimizer/operator_eq.hpp"
 #include "query/optimizer/operator_hash.hpp"
 #include "query/optimizer/opt_rule.hpp"
 #include "query/optimizer/physical_expr.hpp"
+#include "query/optimizer/requirement_collector.hpp"
 #include "query/optimizer/rules/filter_pushdown.hpp"
 #include "query/optimizer/rules/impl/impl_rules.hpp"
 #include "query/planner/bound_logical_plan.hpp"
@@ -1325,4 +1327,484 @@ TEST(GroupMergeTest, LogicalExprsUnionAfterMerge) {
     // The other group is now empty
     GroupId other = (merged == g1) ? g2 : g1;
     EXPECT_TRUE(memo.getGroup(other).logical_exprs.empty());
+}
+
+// ============================================================
+// Phase B — Cascades PhysProp + Enforcer framework tests
+//
+// These tests exercise the new materialization-aware Cascades
+// infrastructure: MaterializationReq lattice operations, PhysProp
+// carrying materializations, RequirementCollector walking bound
+// expressions, Memo's group-level requirement storage, Enricher
+// enforcer insertion, and ChosenPlan extraction.
+// ============================================================
+
+TEST(MaterializationReqTest, EmptyByDefault) {
+    MaterializationReq r;
+    EXPECT_TRUE(r.empty());
+    EXPECT_EQ(r.totalPropertyCount(), 0u);
+}
+
+TEST(MaterializationReqTest, MergeIsSetUnion) {
+    MaterializationReq a;
+    a.need_labels = true;
+    a.need_props[LabelId{1}] = {10, 20};
+
+    MaterializationReq b;
+    b.need_props[LabelId{1}] = {20, 30};
+    b.need_props[LabelId{2}] = {40};
+
+    a.merge(b);
+    EXPECT_TRUE(a.need_labels);
+    EXPECT_EQ(a.need_props[LabelId{1}], (std::set<uint16_t>{10, 20, 30}));
+    EXPECT_EQ(a.need_props[LabelId{2}], (std::set<uint16_t>{40}));
+    EXPECT_EQ(a.totalPropertyCount(), 4u);
+}
+
+TEST(MaterializationReqTest, SatisfiesIsSuperset) {
+    MaterializationReq provided;
+    provided.need_labels = true;
+    provided.need_props[LabelId{1}] = {10, 20, 30};
+
+    MaterializationReq required;
+    required.need_labels = true;
+    required.need_props[LabelId{1}] = {10, 20};
+
+    EXPECT_TRUE(provided.satisfies(required));
+
+    // Missing a property → not satisfied.
+    MaterializationReq required2;
+    required2.need_props[LabelId{1}] = {10, 40};
+    EXPECT_FALSE(provided.satisfies(required2));
+
+    // Missing labels → not satisfied.
+    MaterializationReq provided_no_labels;
+    provided_no_labels.need_props[LabelId{1}] = {10};
+    MaterializationReq required_labels;
+    required_labels.need_labels = true;
+    EXPECT_FALSE(provided_no_labels.satisfies(required_labels));
+}
+
+TEST(MaterializationReqTest, IntersectFindsCommonSubset) {
+    MaterializationReq a;
+    a.need_labels = true;
+    a.need_props[LabelId{1}] = {10, 20, 30};
+    a.need_props[LabelId{2}] = {40};
+
+    MaterializationReq b;
+    b.need_labels = true;
+    b.need_props[LabelId{1}] = {20, 30, 50};
+
+    MaterializationReq r = a.intersect(b);
+    EXPECT_TRUE(r.need_labels);
+    EXPECT_EQ(r.need_props[LabelId{1}], (std::set<uint16_t>{20, 30}));
+    EXPECT_EQ(r.need_props.count(LabelId{2}), 0u);
+}
+
+TEST(MaterializationReqTest, SatisfiesVarRequirementsHandlesMissingVar) {
+    VarRequirements provided;
+    VarRequirements required;
+    required["n"].need_props[LabelId{1}] = {10};
+
+    // provided is empty → cannot satisfy a non-empty requirement.
+    EXPECT_FALSE(satisfiesVarRequirements(provided, required));
+
+    // Empty requirements are trivially satisfied.
+    VarRequirements empty_req;
+    EXPECT_TRUE(satisfiesVarRequirements(provided, empty_req));
+}
+
+TEST(MaterializationReqTest, MergeVarRequirementsUnionsAcrossVars) {
+    VarRequirements a;
+    a["n"].need_props[LabelId{1}] = {10};
+    VarRequirements b;
+    b["n"].need_props[LabelId{1}] = {20};
+    b["m"].need_labels = true;
+
+    mergeVarRequirements(a, b);
+    EXPECT_EQ(a["n"].need_props[LabelId{1}], (std::set<uint16_t>{10, 20}));
+    EXPECT_TRUE(a["m"].need_labels);
+}
+
+TEST(PhysPropTest, AnyPropHasNoMaterializations) {
+    PhysProp p;
+    EXPECT_TRUE(p.isAny());
+    EXPECT_FALSE(p.hasMaterializations());
+    EXPECT_TRUE(p.materializations().empty());
+}
+
+TEST(PhysPropTest, MaterializationsMakePropNonAny) {
+    PhysProp p;
+    VarRequirements mat;
+    mat["n"].need_props[LabelId{1}] = {10};
+    p.setMaterializations(mat);
+    EXPECT_FALSE(p.isAny());
+    EXPECT_TRUE(p.hasMaterializations());
+}
+
+TEST(PhysPropTest, SatisfiesRequiresSupersetMaterialization) {
+    PhysProp provided;
+    {
+        VarRequirements mat;
+        mat["n"].need_props[LabelId{1}] = {10, 20};
+        provided.setMaterializations(mat);
+    }
+    PhysProp required;
+    {
+        VarRequirements mat;
+        mat["n"].need_props[LabelId{1}] = {10};
+        required.setMaterializations(mat);
+    }
+    EXPECT_TRUE(provided.satisfies(required));
+    EXPECT_FALSE(required.satisfies(provided));
+}
+
+TEST(PhysPropTest, SatisfiesHandlesSortAndMaterializationTogether) {
+    PhysProp provided(7, SortOrder::ascending);
+    {
+        VarRequirements mat;
+        mat["n"].need_props[LabelId{1}] = {10};
+        provided.setMaterializations(mat);
+    }
+    PhysProp required_asc(7, SortOrder::ascending);
+    {
+        VarRequirements mat;
+        mat["n"].need_props[LabelId{1}] = {10};
+        required_asc.setMaterializations(mat);
+    }
+    EXPECT_TRUE(provided.satisfies(required_asc));
+
+    // Different sort property on the same name → not satisfied.
+    PhysProp required_desc(7, SortOrder::descending);
+    EXPECT_FALSE(provided.satisfies(required_desc));
+}
+
+TEST(PhysPropTest, DumpProducesNonEmptyStringForMaterialized) {
+    PhysProp p;
+    VarRequirements mat;
+    mat["n"].need_labels = true;
+    mat["n"].need_props[LabelId{1}] = {10, 20};
+    p.setMaterializations(mat);
+    std::string s = p.dump();
+    EXPECT_NE(s, "any");
+    EXPECT_NE(s.find("n"), std::string::npos);
+    EXPECT_NE(s.find("L"), std::string::npos);
+}
+
+// === RequirementCollector ===
+
+TEST(RequirementCollectorTest, StrongPropertyRefProducesNeedProps) {
+    // Build: BoundPropertyRef{property_name="age", object=VariableRef("n"),
+    //                        candidates=[{label=1, prop=10}]}
+    auto pref = std::make_unique<BoundPropertyRef>();
+    pref->property_name = "age";
+    pref->object = BoundVariableRef("n", BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty cand;
+    cand.label_id = LabelId{1};
+    cand.prop_id = 10;
+    cand.type = BoundType::Int64();
+    pref->candidates.push_back(cand);
+
+    BoundExpression expr = std::move(pref);
+    VarRequirements reqs;
+    collectExprRequirements(expr, reqs);
+
+    ASSERT_EQ(reqs.count("n"), 1u);
+    EXPECT_FALSE(reqs["n"].need_labels);
+    ASSERT_EQ(reqs["n"].need_props.count(LabelId{1}), 1u);
+    EXPECT_EQ(reqs["n"].need_props[LabelId{1}], (std::set<uint16_t>{10}));
+}
+
+TEST(RequirementCollectorTest, DynamicPropertyRefSetsNeedLabels) {
+    auto dpref = std::make_unique<BoundDynamicPropertyRef>();
+    dpref->object = BoundVariableRef("n", BoundType::Vertex());
+    dpref->property = "name";
+    dpref->result_type = BoundType::Any();
+
+    BoundExpression expr = std::move(dpref);
+    VarRequirements reqs;
+    collectExprRequirements(expr, reqs);
+
+    ASSERT_EQ(reqs.count("n"), 1u);
+    EXPECT_TRUE(reqs["n"].need_labels);
+    EXPECT_TRUE(reqs["n"].need_props.empty());
+}
+
+TEST(RequirementCollectorTest, BinaryOpRecursesIntoBothOperands) {
+    // n.age = 1 OR m.id = 2
+    auto lhs = std::make_unique<BoundPropertyRef>();
+    lhs->property_name = "age";
+    lhs->object = BoundVariableRef("n", BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty c1;
+    c1.label_id = LabelId{1};
+    c1.prop_id = 10;
+    lhs->candidates.push_back(c1);
+
+    auto rhs = std::make_unique<BoundPropertyRef>();
+    rhs->property_name = "id";
+    rhs->object = BoundVariableRef("m", BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty c2;
+    c2.label_id = LabelId{2};
+    c2.prop_id = 20;
+    rhs->candidates.push_back(c2);
+
+    auto bin = std::make_unique<BoundBinaryOp>();
+    bin->op = cypher::BinaryOperator::OR;
+    bin->left = std::move(lhs);
+    bin->right = std::move(rhs);
+    BoundExpression expr = std::move(bin);
+
+    VarRequirements reqs;
+    collectExprRequirements(expr, reqs);
+    EXPECT_EQ(reqs.count("n"), 1u);
+    EXPECT_EQ(reqs.count("m"), 1u);
+    EXPECT_EQ(reqs["n"].need_props[LabelId{1}], (std::set<uint16_t>{10}));
+    EXPECT_EQ(reqs["m"].need_props[LabelId{2}], (std::set<uint16_t>{20}));
+}
+
+TEST(RequirementCollectorTest, FilterOpOwnRequirementsExcludeChild) {
+    // Build Filter(predicate=n.age=10) over LabelScan.
+    // The Filter's own requirements should be {n:{age}} — NOT unioned
+    // with the subtree (which would still be {n:{age}} here, but the
+    // point is the collector does not recurse).
+    auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+
+    auto pref = std::make_unique<BoundPropertyRef>();
+    pref->property_name = "age";
+    pref->object = BoundVariableRef("n", BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty cand;
+    cand.label_id = LabelId{1};
+    cand.prop_id = 10;
+    pref->candidates.push_back(cand);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundLiteral(true);
+    // Replace predicate with property ref so the collector finds it.
+    {
+        auto bin = std::make_unique<BoundBinaryOp>();
+        bin->op = cypher::BinaryOperator::EQ;
+        bin->left = std::move(pref);
+        bin->right = BoundLiteral(int64_t{10});
+        filter->predicate = std::move(bin);
+    }
+    filter->child = std::move(scan);
+    BoundLogicalOperator op = std::move(filter);
+
+    VarRequirements reqs = collectOpRequirements(op);
+    EXPECT_EQ(reqs.count("n"), 1u);
+    EXPECT_EQ(reqs["n"].need_props[LabelId{1}], (std::set<uint16_t>{10}));
+}
+
+// === Memo group-level requirements ===
+
+TEST(MemoRequirementsTest, CopyInPopulatesRequirementsField) {
+    auto pref = std::make_unique<BoundPropertyRef>();
+    pref->property_name = "age";
+    pref->object = BoundVariableRef("n", BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty cand;
+    cand.label_id = LabelId{1};
+    cand.prop_id = 10;
+    pref->candidates.push_back(cand);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    {
+        auto bin = std::make_unique<BoundBinaryOp>();
+        bin->op = cypher::BinaryOperator::EQ;
+        bin->left = std::move(pref);
+        bin->right = BoundLiteral(int64_t{10});
+        filter->predicate = std::move(bin);
+    }
+    filter->child = makeLabelScanWithLabel("n", 0, LabelId{1});
+
+    BoundLogicalOperator op = std::move(filter);
+    Memo memo;
+    GroupId gid = memo.copyIn(op);
+
+    const Group& g = memo.getGroup(gid);
+    EXPECT_TRUE(g.requirementsValid());
+    const auto& reqs = g.requirements();
+    EXPECT_EQ(reqs.count("n"), 1u);
+    EXPECT_EQ(reqs.at("n").need_props.at(LabelId{1}), (std::set<uint16_t>{10}));
+}
+
+// === Enricher enforcer insertion ===
+
+TEST(EnricherEnforcerTest, InsertReturnsInvalidWithoutAnyWinner) {
+    Memo memo;
+    auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+    GroupId gid = memo.copyIn(scan);
+
+    VarRequirements reqs;
+    reqs["n"].need_props[LabelId{1}] = {10};
+    // No "any" winner exists yet → enforcer insertion should fail.
+    ExprId eid = memo.insertEnricherEnforcer(gid, reqs);
+    EXPECT_EQ(eid, INVALID_EXPR_ID);
+}
+
+TEST(EnricherEnforcerTest, GetSatisfyingWinnerFindsCheaperCandidate) {
+    Memo memo;
+    auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+    GroupId gid = memo.copyIn(scan);
+    Group& g = memo.getGroup(gid);
+
+    // Register two winners: one providing {10} (cost 5) and one providing
+    // {10, 20} (cost 10). A query for {10} should pick the cheaper.
+    PhysProp p1;
+    {
+        VarRequirements m;
+        m["n"].need_props[LabelId{1}] = {10};
+        p1.setMaterializations(m);
+    }
+    g.newWinner(p1, /*plan=*/ExprId{100}, Cost(5.0), /*done=*/true);
+
+    PhysProp p2;
+    {
+        VarRequirements m;
+        m["n"].need_props[LabelId{1}] = {10, 20};
+        p2.setMaterializations(m);
+    }
+    g.newWinner(p2, /*plan=*/ExprId{101}, Cost(10.0), /*done=*/true);
+
+    PhysProp query;
+    {
+        VarRequirements m;
+        m["n"].need_props[LabelId{1}] = {10};
+        query.setMaterializations(m);
+    }
+    Winner* w = g.getSatisfyingWinner(query);
+    ASSERT_NE(w, nullptr);
+    EXPECT_EQ(w->plan(), ExprId{100}); // cheaper one
+    EXPECT_EQ(w->cost().value(), 5.0);
+}
+
+// === PhysicalExpr round-trip ===
+
+TEST(PhysicalExprTest, HashAndEqualityIncludeEnricherFields) {
+    PhysicalExpr a;
+    a.tag = PhysicalOpTag::VertexEnrich;
+    a.enrich_variable = "n";
+    a.output_mat["n"].need_props[LabelId{1}] = {10};
+
+    PhysicalExpr b = clonePhysicalExpr(a);
+    EXPECT_EQ(hashPhysicalExpr(a), hashPhysicalExpr(b));
+    EXPECT_TRUE(equalPhysicalExpr(a, b));
+
+    // Different variable → unequal.
+    PhysicalExpr c = clonePhysicalExpr(a);
+    c.enrich_variable = "m";
+    EXPECT_FALSE(equalPhysicalExpr(a, c));
+
+    // Different output materialization → unequal.
+    PhysicalExpr d = clonePhysicalExpr(a);
+    d.output_mat["n"].need_props[LabelId{1}] = {20};
+    EXPECT_FALSE(equalPhysicalExpr(a, d));
+}
+
+TEST(PhysicalExprTest, ClonePreservesEnricherFields) {
+    PhysicalExpr src;
+    src.tag = PhysicalOpTag::EdgeEnrich;
+    src.enrich_variable = "r";
+    src.output_mat["r"].need_labels = true;
+    src.required_input_mat.push_back(VarRequirements{});
+
+    PhysicalExpr dst = clonePhysicalExpr(src);
+    EXPECT_EQ(dst.tag, PhysicalOpTag::EdgeEnrich);
+    EXPECT_EQ(dst.enrich_variable, "r");
+    EXPECT_TRUE(dst.output_mat.at("r").need_labels);
+    EXPECT_EQ(dst.required_input_mat.size(), 1u);
+}
+
+// === Cost model enricher cases ===
+
+TEST(CostModelTest, EnricherCostProportionalToInputCardinality) {
+    LogProp group_lp;
+    group_lp.cardinality = 100.0;
+    LogProp input_lp;
+    input_lp.cardinality = 100.0;
+
+    Cost vc = findLocalCost(PhysicalOpTag::VertexEnrich, group_lp, {input_lp});
+    Cost ec = findLocalCost(PhysicalOpTag::EdgeEnrich, group_lp, {input_lp});
+    Cost pc = findLocalCost(PhysicalOpTag::PathEnrich, group_lp, {input_lp});
+
+    EXPECT_GT(vc.value(), 0.0);
+    EXPECT_GT(ec.value(), 0.0);
+    EXPECT_GT(pc.value(), 0.0);
+    EXPECT_EQ(vc.value(), ec.value());
+    EXPECT_EQ(ec.value(), pc.value());
+}
+
+// === Phase C — Enricher enforcer end-to-end ===
+
+TEST(EnricherE2ETest, OptimizerEmitsVertexEnrichForPropertyAccess) {
+    // Build: Filter(n.age = 10) → LabelScan(n:Person)
+    //
+    // The Filter's predicate accesses n.age, so Filter's group has
+    // requirements = {n: Person.{age=10}}. The Filter's impl rule
+    // declares required_input_mat[0] = those requirements.
+    //
+    // LabelScan is a topology-stage leaf; its output_mat is empty.
+    // O_INPUTS for Filter should detect the mismatch and insert a
+    // VertexEnrich enforcer in LabelScan's group.
+    auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+
+    auto pref = std::make_unique<BoundPropertyRef>();
+    pref->property_name = "age";
+    pref->object = BoundVariableRef("n", BoundType::Vertex());
+    BoundPropertyRef::ResolvedProperty cand;
+    cand.label_id = LabelId{1};
+    cand.prop_id = 10;
+    pref->candidates.push_back(cand);
+
+    auto bin = std::make_unique<BoundBinaryOp>();
+    bin->op = cypher::BinaryOperator::EQ;
+    bin->left = std::move(pref);
+    bin->right = BoundLiteral(int64_t{10});
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundExpression(std::move(bin));
+    filter->child = std::move(scan);
+
+    BoundLogicalPlan plan;
+    plan.root = BoundLogicalOperator(std::move(filter));
+
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan);
+
+    // The optimizer should have produced a ChosenPlan with a VertexEnrich
+    // node in the LabelScan group's winner chain.
+    ASSERT_NE(plan.chosen, nullptr);
+    EXPECT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
+    ASSERT_EQ(plan.chosen->children.size(), 1u);
+
+    // The Filter's child should be a VertexPropertyExtract wrapping the LabelScan.
+    // Since the query only needs n.age (not the entire vertex), the optimizer
+    // inserts a flat extractor instead of a heavy VertexEnricher.
+    const ChosenPlan& filter_child = *plan.chosen->children[0];
+    EXPECT_EQ(filter_child.tag, PhysicalOpTag::VertexPropertyExtract);
+    EXPECT_EQ(filter_child.enrich_variable, "n");
+    ASSERT_EQ(filter_child.children.size(), 1u);
+
+    // VertexPropertyExtract's child should be the LabelScan.
+    const ChosenPlan& enrich_child = *filter_child.children[0];
+    EXPECT_EQ(enrich_child.tag, PhysicalOpTag::LabelScan);
+}
+
+TEST(EnricherE2ETest, NoEnricherWhenNoPropertyAccess) {
+    // Filter(true) → LabelScan: no property access → no Enricher.
+    auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundLiteral(true);
+    filter->child = std::move(scan);
+
+    BoundLogicalPlan plan;
+    plan.root = BoundLogicalOperator(std::move(filter));
+
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan);
+
+    ASSERT_NE(plan.chosen, nullptr);
+    EXPECT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
+    ASSERT_EQ(plan.chosen->children.size(), 1u);
+    EXPECT_EQ(plan.chosen->children[0]->tag, PhysicalOpTag::LabelScan);
 }

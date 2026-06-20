@@ -70,27 +70,16 @@ folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
             std::vector<Value> values;
 
             if (!src_var_.empty()) {
-                VertexValue src_vv;
-                src_vv.id = entry.src_id;
-                src_vv.labels = co_await store_.getVertexLabels(entry.src_id);
-                values.push_back(Value(std::move(src_vv)));
+                values.push_back(Value(VertexRef{entry.src_id}));
             }
             if (!dst_var_.empty()) {
-                VertexValue dst_vv;
-                dst_vv.id = entry.dst_id;
-                dst_vv.labels = co_await store_.getVertexLabels(entry.dst_id);
-                values.push_back(Value(std::move(dst_vv)));
+                values.push_back(Value(VertexRef{entry.dst_id}));
             }
             if (!edge_var_.empty()) {
-                EdgeValue ev;
-                ev.id = entry.edge_id;
-                ev.src_id = entry.src_id;
-                ev.dst_id = entry.dst_id;
-                ev.label_id = entry.label_id;
-                ev.seq = entry.seq;
-                values.push_back(Value(std::move(ev)));
+                values.push_back(Value(EdgeKey{entry.edge_id, entry.src_id, entry.dst_id, entry.label_id,
+                                               static_cast<uint32_t>(entry.seq)}));
             }
-            chunk.appendRow(values);
+            chunk.appendRow(std::move(values));
         }
         if (chunk.count > 0) {
             co_yield std::move(chunk);

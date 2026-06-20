@@ -175,10 +175,13 @@ class OInputsTask : public Task {
 public:
     OInputsTask(ExprId expr_id, int context_id = 0, bool last = false) : Task(context_id, last), expr_id_(expr_id) {}
 
+    ~OInputsTask() override;
+
     void perform(Memo& memo, RuleSet& rules, TaskQueue& queue) override;
 
 private:
     ExprId expr_id_;
+    Memo* memo_ = nullptr; // set in perform() so the destructor can mark the group
 };
 
 } // namespace optimizer

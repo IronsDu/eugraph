@@ -64,8 +64,13 @@ struct ValueStorage;
 // The actual runtime value type.
 // VertexId and EdgeId are both uint64_t — use VertexValue/EdgeValue to distinguish,
 // or just use int64_t for IDs in the runtime Value.
-using Value = std::variant<std::monostate, bool, int64_t, double, std::string, VertexValue, EdgeValue, PathValue,
-                           DateTimeValue, TimeValue, DurationValue, ListValue, MapValue>;
+//
+// Topology-stage alternatives (VertexRef/EdgeKey/PathTopology) carry bare IDs
+// only and are produced by Scan/Expand/VarLenExpand. Enricher operators
+// upgrade them in-place to their semantic counterparts.
+using Value =
+    std::variant<std::monostate, bool, int64_t, double, std::string, VertexRef, EdgeKey, PathTopology, VertexValue,
+                 EdgeValue, PathValue, DateTimeValue, TimeValue, DurationValue, ListValue, MapValue>;
 
 struct ValueStorage {
     Value value;
@@ -332,6 +337,22 @@ struct ValueHash {
                     return std::hash<double>{}(val);
                 } else if constexpr (std::is_same_v<T, std::string>) {
                     return std::hash<std::string>{}(val);
+                } else if constexpr (std::is_same_v<T, VertexRef>) {
+                    return std::hash<uint64_t>{}(val.id);
+                } else if constexpr (std::is_same_v<T, EdgeKey>) {
+                    size_t h = std::hash<uint64_t>{}(val.id);
+                    h ^= std::hash<uint64_t>{}(val.src_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    h ^= std::hash<uint64_t>{}(val.dst_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    return h;
+                } else if constexpr (std::is_same_v<T, PathTopology>) {
+                    size_t h = 0;
+                    for (auto v : val.vertex_ids) {
+                        h ^= std::hash<uint64_t>{}(v) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    }
+                    for (auto e : val.edge_ids) {
+                        h ^= std::hash<uint64_t>{}(e) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    }
+                    return h;
                 } else if constexpr (std::is_same_v<T, VertexValue>) {
                     return std::hash<uint64_t>{}(val.id);
                 } else if constexpr (std::is_same_v<T, EdgeValue>) {

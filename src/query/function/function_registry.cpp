@@ -46,9 +46,31 @@ void FunctionRegistry::registerScalarBuiltins() {
                                 {},
                                 {},
                                 {}});
+    // id(VertexRef) -> Int64
+    functions_["id"].push_back({"id",
+                                {BoundType::VertexRef()},
+                                BoundType::Int64(),
+                                false,
+                                false,
+                                scalar::idScalarFn,
+                                scalar::idBatchFn,
+                                {},
+                                {},
+                                {}});
     // id(Edge) -> Int64
     functions_["id"].push_back({"id",
                                 {BoundType::Edge()},
+                                BoundType::Int64(),
+                                false,
+                                false,
+                                scalar::idScalarFn,
+                                scalar::idBatchFn,
+                                {},
+                                {},
+                                {}});
+    // id(EdgeKey) -> Int64
+    functions_["id"].push_back({"id",
+                                {BoundType::EdgeKey()},
                                 BoundType::Int64(),
                                 false,
                                 false,

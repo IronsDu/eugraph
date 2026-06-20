@@ -13,7 +13,7 @@
 3. **AllNodeScan 尤其浪费**：无条件加载**全部标签的全部属性**
 4. **Expand 忽略 `edge_prop_ids_`**：代码实际加载全部边属性，过滤参数未生效
 
-## 二、目标
+## 二、目标（✅ 已实现）
 
 将 labels 和属性加载从数据源算子中剥离为独立算子：
 
@@ -22,32 +22,25 @@
          (加载 labels + 全部属性)
 
 目标:  Scan → VertexLabelRead → VertexPropertyRead → Filter → Project
-         (仅id)  (按需加载)     (按需加载)      (只对幸存行)
+         (拓扑id) (按需加载)    (按需加载)      (只对幸存行)
 ```
 
-Scan/Expand 只产出最简身份标识，需要什么再挂什么算子。
+Scan/Expand 只产出拓扑类型（VertexRef / EdgeKey / PathTopology），需要什么再挂什么算子。
 
-## 三、方案概要
+> **实施状态（2026-06）**：分支 `feature/topology-semantic-split` 已完整实现。Scan/Expand 输出拓扑类型，wrap 管线（`wrapVertexLabelRead` / `wrapVertexPropertyRead` / `wrapEdgePropertyRead` / `wrapPathElementPropertyRead`）按需加载语义数据。
 
-- Scan 输出 `VertexValue{id}` — VERTEX 类型，仅含 id
-- Expand 输出 `EdgeValue{id, src_id, dst_id, label_id}` — 仅结构字段，无 properties
-- `VertexLabelReadOp` — 读 labels，替换列为 `VertexValue{id, labels}`
-- `VertexPropertyReadOp` — 读属性，替换列为 `VertexValue{id, labels?, properties}`
-- `EdgePropertyReadOp` — 读边属性，替换列为 `EdgeValue{..., properties}`
-- 所有新算子通过 **Column Replacement** 替换对应列，其他列 DICTIONARY 零拷贝透传
+## 三、方案概要（已实施）
+
+- Scan 输出 `VertexRef{id}` — VERTEX_REF 类型，仅含 id
+- Expand 输出 `EdgeKey{id, src_id, dst_id, label_id, seq}` — 仅结构字段
+- `VertexLabelReadPhysicalOp` — 读 labels，将 VertexRef 原地升级为 VertexValue
+- `VertexPropertyReadPhysicalOp` — 读属性，将 VertexValue 的 properties 填充
+- `EdgePropertyReadPhysicalOp` — 读边属性，将 EdgeKey 原地升级为 EdgeValue
+- `PathElementPropertyReadPhysicalOp` — 读路径元素属性和标签，将 PathTopology 升级为 PathValue
+- 所有 wrap 算子通过 **Column Replacement** 替换对应列，其他列 DICTIONARY 零拷贝透传
 - **不改 evaluator、不改 BoundPropertyRef、不改列索引**
 
-## 四、最终架构
-
-| 算子 | labels | 属性 | 加载方式 |
-|------|:---:|:---:|------|
-| LabelScan（单标签） | VertexLabelRead（零 IO） | VertexPropertyRead | 编译时已知 labels |
-| LabelScan（多标签） | VertexLabelRead（1 KV） | VertexPropertyRead | 过滤需要 labels |
-| AllNodeScan | VertexLabelRead | VertexPropertyRead | 完全剥离 |
-| IndexScan | VertexLabelRead | VertexPropertyRead | 完全剥离 |
-| Expand dst | VertexLabelRead | VertexPropertyRead | 完全剥离 |
-| Expand edge | — | EdgePropertyRead | 按需加载 |
-| VarLenExpand dst | 内部加载（1 KV） | VertexPropertyRead | DFS 需要 labels |
+## 四、最终架构（已实施）
 | VarLenExpand edge | — | 不加载 | 输出仅结构字段 |
 | VarLenExpand path | — | PathElementPropertyRead | 路径元素属性按需加载（当前全量） |
 

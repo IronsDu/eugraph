@@ -14,8 +14,14 @@ inline Value idImpl(const Value& arg) {
     if (std::holds_alternative<VertexValue>(arg)) {
         return Value(static_cast<int64_t>(std::get<VertexValue>(arg).id));
     }
+    if (std::holds_alternative<VertexRef>(arg)) {
+        return Value(static_cast<int64_t>(std::get<VertexRef>(arg).id));
+    }
     if (std::holds_alternative<EdgeValue>(arg)) {
         return Value(static_cast<int64_t>(std::get<EdgeValue>(arg).id));
+    }
+    if (std::holds_alternative<EdgeKey>(arg)) {
+        return Value(static_cast<int64_t>(std::get<EdgeKey>(arg).id));
     }
     return Value{};
 }

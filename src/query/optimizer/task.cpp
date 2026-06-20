@@ -75,6 +75,32 @@ void OGroupTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
                 bool is_last = (i == group.logical_exprs.size()) && has_last;
                 queue.push(std::make_unique<OExprTask>(eid, /*explore=*/false, memo, context_id_, is_last));
             }
+        } else if (group.optimized) {
+            // Phase B case (4): the group was already optimized for some
+            // property; the new context requires re-costing under a new
+            // property (e.g. a child group now needs materialized form).
+            // Physical exprs are already in place — re-run O_INPUTS on
+            // each under the new context to register winners for this
+            // property. Columbia: O_GROUP case (4) re-cost path.
+            group.newWinner(ctx.getPhysProp(), INVALID_EXPR_ID, Cost(ctx.getUpperBound()), /*done=*/false);
+            bool has_last = last_;
+            last_ = false;
+            // If there are no physical exprs yet (group has only logical
+            // exprs and no impl rule has fired), fall back to O_EXPR so
+            // impl rules fire under the new context.
+            if (group.physical_exprs.empty()) {
+                for (size_t i = group.logical_exprs.size(); i > 0; --i) {
+                    ExprId eid = group.logical_exprs[i - 1];
+                    bool is_last = (i == group.logical_exprs.size()) && has_last;
+                    queue.push(std::make_unique<OExprTask>(eid, /*explore=*/false, memo, context_id_, is_last));
+                }
+            } else {
+                for (size_t i = group.physical_exprs.size(); i > 0; --i) {
+                    ExprId eid = group.physical_exprs[i - 1];
+                    bool is_last = (i == group.physical_exprs.size()) && has_last;
+                    queue.push(std::make_unique<OInputsTask>(eid, context_id_, is_last));
+                }
+            }
         }
         return;
     }
@@ -126,11 +152,13 @@ void OExprTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
     for (const auto& rule : rules.rules()) {
         if (!expr.canFire(rule->index()))
             continue;
-        if (!rule->topMatch(expr))
+        if (!rule->topMatch(expr)) {
             continue;
+        }
 
-        if (explore_ && rule->isImplementation())
+        if (explore_ && rule->isImplementation()) {
             continue;
+        }
 
         int p = rule->promise();
         if (p <= 0)
@@ -151,6 +179,13 @@ void OExprTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
         bool is_last_rule = (i == applicable.size()) && has_last;
         queue.push(
             std::make_unique<ApplyRuleTask>(applicable[idx].index, expr_id_, explore_, context_id_, is_last_rule));
+    }
+    // If no rules were applicable at all, re-arm last_ so the destructor
+    // still marks the group explored/optimized. Without this, groups with
+    // operators that have no matching impl rules (e.g. BoundCreateNodeOp)
+    // stay optimizing=true forever, and parent O_INPUTS loops.
+    if (applicable.empty()) {
+        last_ = has_last;
     }
 
     // Push E_GROUP for child inputs that haven't been explored.
@@ -264,13 +299,21 @@ void ApplyRuleTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
 // ============================================================
 // OInputsTask — costs a physical expression by optimizing inputs
 //
-// Stateless single-pass: checks all inputs each invocation.
-//   - If all inputs have done winners → compute total cost, register winner
-//   - If any input lacks a winner and is not yet optimized → push O_GROUP
-//     for it and re-push self (LIFO ensures input optimized before re-run)
-//   - If any input is optimized but has no winner → impossible plan, terminate
+// Materialization-aware (Phase B):
+//   - Each input is looked up under the materialization property
+//     required by THIS operator for that input (expr.required_input_mat[i])
+//     unioned with what the parent context demands of this group's
+//     output (localReqdProp.materializations).
+//   - If the input group has been optimized but no winner satisfies
+//     the required input property, attempt Enricher enforcer insertion
+//     (Memo::insertEnricherEnforcer) to wrap the input's "any"-winner.
+//   - Before registering a winner, the operator's own output_mat must
+//     satisfy localReqdProp — operators that don't provide the required
+//     materialization are skipped (an Enricher enforcer in the current
+//     group will handle it instead).
 // ============================================================
 void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
+    memo_ = &memo; // re-arm for destructor — perform always runs before destruction
     GroupExpr& expr = memo.getExpr(expr_id_);
     Group& group = memo.getGroup(expr.group_id);
 
@@ -278,7 +321,10 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         return;
     }
     const Context& ctx = memo.contexts()[context_id_];
-    const PhysProp& localReqdProp = ctx.getPhysProp();
+    // Copy required properties upfront — the loop below calls memo.addContext()
+    // which may reallocate the contexts vector and invalidate this reference.
+    PhysProp localReqdProp = ctx.getPhysProp();
+    const VarRequirements& localReqdMat = localReqdProp.materializations();
 
     int arity = static_cast<int>(expr.child_groups.size());
 
@@ -286,30 +332,87 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     // cost = cardinality), not 0. Using 0 here made every leaf free, which
     // distorted downstream comparisons.
     if (arity == 0) {
+        // Phase C: always register the winner under the property the leaf
+        // actually provides (its `output_mat`). For topology-stage leaves
+        // (Scan, Expand) this is "any". The parent's input lookup uses
+        // getSatisfyingWinner, which finds this winner when the parent's
+        // required input property is a SUBSET of provided. When the parent
+        // demands materialization the leaf cannot satisfy, the parent's
+        // enforcer-insertion path picks up the any-winner and wraps it
+        // with an Enricher.
         LogProp group_lp = group.getLogProp(memo, memo.getCatalog());
         Cost localCost = findLocalCost(expr.physOp().tag, group_lp, {});
-        group.newWinner(localReqdProp, expr_id_, localCost, /*done=*/true);
+        PhysProp provided;
+        provided.setMaterializations(expr.physOp().output_mat);
+        group.newWinner(provided, expr_id_, localCost, /*done=*/true);
         return;
     }
 
-    // Check all inputs for done winners
+    // Build per-input required materializations: union of what this operator
+    // declares per-input and what the parent context demands transitively.
+    // Conservative: the full parent materialization is passed down to every
+    // input. Refinement using schema visibility can come later.
+    //
+    // Enricher enforcers are exempt: they PROVIDE materialization (so they
+    // satisfy the parent's demand themselves) and their input is the same
+    // group's topology-form winner — they must NOT propagate the parent's
+    // materialization demand to the input, or they recurse forever.
+    auto inputRequiredProp = [&](int i) -> PhysProp {
+        PhysicalOpTag tag = expr.physOp().tag;
+        if (tag == PhysicalOpTag::VertexEnrich || tag == PhysicalOpTag::EdgeEnrich ||
+            tag == PhysicalOpTag::PathEnrich || tag == PhysicalOpTag::VertexPropertyExtract ||
+            tag == PhysicalOpTag::EdgePropertyExtract || tag == PhysicalOpTag::PathPropertyExtract) {
+            return PhysProp{}; // any — enricher/extract provides its own materializations
+        }
+        VarRequirements mat;
+        if (i < static_cast<int>(expr.physOp().required_input_mat.size()))
+            mergeVarRequirements(mat, expr.physOp().required_input_mat[i]);
+        mergeVarRequirements(mat, localReqdMat);
+        PhysProp p;
+        p.setMaterializations(std::move(mat));
+        return p;
+    };
+
+    // Cost pass: check each input for a satisfying done winner.
     Cost totalCost(0.0);
     bool allCosted = true;
     bool impossible = false;
 
-    PhysProp anyProp;
     for (int i = 0; i < arity; i++) {
         Group& ig = memo.getGroup(expr.child_groups[i]);
-        Winner* w = ig.getWinner(anyProp);
+        PhysProp inputProp = inputRequiredProp(i);
+
+        Winner* w = ig.getSatisfyingWinner(inputProp);
         if (w && w->done() && w->plan() != INVALID_EXPR_ID) {
             totalCost = totalCost + w->cost();
-        } else if (ig.optimized) {
-            // Input is fully optimized but has no winner — impossible plan
+            continue;
+        }
+
+        // No satisfying winner. If the input is fully optimized, attempt
+        // Enricher enforcer insertion.
+        if (ig.optimized && !ig.optimizing) {
+            if (inputProp.hasMaterializations()) {
+                ExprId enforcer_id = memo.insertEnricherEnforcer(expr.child_groups[i], inputProp.materializations());
+                if (enforcer_id != INVALID_EXPR_ID) {
+                    // Cost the enforcer: local cost (input cardinality) +
+                    // wrapped "any"-winner cost.
+                    LogProp child_lp = ig.getLogProp(memo, memo.getCatalog());
+                    GroupExpr& enforcer_expr = memo.getExpr(enforcer_id);
+                    Cost enforcer_local = findLocalCost(enforcer_expr.physOp().tag, child_lp, {child_lp});
+                    Winner* any_w = ig.getWinner(PhysProp{});
+                    Cost wrapped =
+                        (any_w && any_w->done() && any_w->plan() != INVALID_EXPR_ID) ? any_w->cost() : Cost(0.0);
+                    Cost enforcer_total = enforcer_local + wrapped;
+                    ig.newWinner(inputProp, enforcer_id, enforcer_total, /*done=*/true);
+                    totalCost = totalCost + enforcer_total;
+                    continue;
+                }
+            }
             impossible = true;
             break;
-        } else {
-            allCosted = false;
         }
+
+        allCosted = false;
     }
 
     if (impossible) {
@@ -317,20 +420,34 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     }
 
     if (!allCosted) {
-        // Push O_GROUP for uncosted inputs, then re-push self.
+        // Push O_GROUP for uncosted inputs (under input-specific property),
+        // then re-push self.
         queue.push(std::make_unique<OInputsTask>(expr_id_, context_id_, last_));
         last_ = false;
 
         for (int i = 0; i < arity; i++) {
             Group& ig = memo.getGroup(expr.child_groups[i]);
-            Winner* w = ig.getWinner(anyProp);
+            PhysProp inputProp = inputRequiredProp(i);
+            Winner* w = ig.getSatisfyingWinner(inputProp);
             if (!(w && w->done() && w->plan() != INVALID_EXPR_ID) && !ig.optimized && !ig.optimizing) {
-                Context inputCtx(anyProp, Cost::infinity());
+                Context inputCtx(inputProp, Cost::infinity());
                 int inputCtxId = memo.addContext(std::move(inputCtx));
                 queue.push(std::make_unique<OGroupTask>(expr.child_groups[i], inputCtxId, /*last=*/true));
             }
         }
         return;
+    }
+
+    // Phase B: before registering, verify this operator's output satisfies
+    // what the parent requires. Operators that cannot satisfy (e.g. a
+    // topology-stage Scan asked to provide materialized data) are skipped —
+    // an Enricher enforcer in this group will satisfy it instead.
+    {
+        PhysProp provided;
+        provided.setMaterializations(expr.physOp().output_mat);
+        if (!provided.satisfies(localReqdProp)) {
+            return;
+        }
     }
 
     // Compute local cost via Phase 3 cost model
@@ -358,6 +475,36 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     }
 
     group.newWinner(localReqdProp, expr_id_, totalCost, /*done=*/true);
+}
+
+OInputsTask::~OInputsTask() {
+    // Columbia ~O_INPUTS: when Last, mark owning group optimized so
+    // O_GROUP can iterate (case 4) or terminate (search_circle). The
+    // Last flag is propagated down the cascade O_GROUP → O_EXPR →
+    // APPLY_RULE → O_INPUTS, so the O_INPUTS at the bottom of the
+    // cascade is responsible for closing out the round. Without this
+    // destructor the group stayed optimizing=true forever, breaking
+    // the parent group's O_INPUTS re-run scheduling — that manifested
+    // as the max-iterations infinite loop.
+    if (!last_ || !memo_)
+        return;
+    Group& group = memo_->getGroup(memo_->getExpr(expr_id_).group_id);
+    if (group.changed) {
+        // New logical exprs appeared during this round — keep the
+        // group open so O_GROUP iterates again to optimize them.
+        group.optimized = false;
+        group.optimizing = false;
+        group.changed = false;
+    } else {
+        if (context_id_ >= 0 && context_id_ < static_cast<int>(memo_->contexts().size())) {
+            const Context& ctx = memo_->contexts()[context_id_];
+            Winner* w = group.getWinner(ctx.getPhysProp());
+            if (w)
+                w->setDone(true);
+        }
+        group.optimized = true;
+        group.optimizing = false;
+    }
 }
 
 } // namespace optimizer

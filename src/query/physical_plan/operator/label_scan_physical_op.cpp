@@ -28,15 +28,11 @@ folly::coro::AsyncGenerator<DataChunk> LabelScanPhysicalOp::executeChunk() {
                 }
                 if (!has_all)
                     continue;
-                VertexValue vv;
-                vv.id = vid;
-                vv.labels = std::move(vlabels);
-                chunk.appendRow({Value(std::move(vv))});
+                VertexRef vr{vid};
+                chunk.appendRow({Value(vr)});
             } else {
-                VertexValue vv;
-                vv.id = vid;
-                vv.labels = LabelIdSet(label_ids_.begin(), label_ids_.end());
-                chunk.appendRow({Value(std::move(vv))});
+                VertexRef vr{vid};
+                chunk.appendRow({Value(vr)});
             }
         }
         if (chunk.count > 0)

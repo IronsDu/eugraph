@@ -2,7 +2,6 @@
 
 #include "query/optimizer/log_prop.hpp"
 
-#include <algorithm>
 #include <cmath>
 
 namespace eugraph {
@@ -70,6 +69,21 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     case PhysicalOpTag::PathBuild:
     case PhysicalOpTag::Unwind:
         return Cost(group_lp.cardinality);
+
+    // Enrichers (Phase B): per-row materialisation cost. Full object construction
+    // costs more than flat extraction because of map/heap allocation overhead.
+    case PhysicalOpTag::VertexEnrich:
+    case PhysicalOpTag::EdgeEnrich:
+    case PhysicalOpTag::PathEnrich:
+        return Cost(input0Card() * 1.5);
+
+    // Property extractors (Phase F): flat columnar output, no heap allocation.
+    // Cheaper than Enrichers — just sequential typed vector writes.
+    case PhysicalOpTag::VertexPropertyExtract:
+    case PhysicalOpTag::EdgePropertyExtract:
+        return Cost(input0Card() * 1.1);
+    case PhysicalOpTag::PathPropertyExtract:
+        return Cost(input0Card() * 1.2); // extra cost for flatten+dedup
     }
     return Cost(0.0);
 }
