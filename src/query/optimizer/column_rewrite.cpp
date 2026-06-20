@@ -310,7 +310,6 @@ void collectFromPlan(const binder::BoundLogicalOperator& op,
                 base_col += 1;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (v) {
-                    uint32_t child_cols = base_col;
                     collectFromPlan(v->child, info, base_col);
                     uint32_t after_child = base_col;
                     if (!v->edge_variable.empty()) {

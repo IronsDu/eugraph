@@ -52,8 +52,10 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
             for (auto& elem : pv.elements) {
                 if (std::holds_alternative<VertexValue>(elem.value)) {
                     auto& vv = std::get<VertexValue>(elem.value);
-                    if (vv.properties.empty()) {
+                    if (!vv.labels.has_value() || vv.properties.empty()) {
                         auto labels = co_await store_.getVertexLabels(vv.id);
+                        if (!vv.labels.has_value())
+                            vv.labels = labels;
                         for (auto lid : labels) {
                             auto props = co_await store_.getVertexProperties(vv.id, lid);
                             if (props)
