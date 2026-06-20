@@ -323,7 +323,10 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         return;
     }
     const Context& ctx = memo.contexts()[context_id_];
-    const PhysProp& localReqdProp = ctx.getPhysProp();
+    // Copy required properties upfront — the loop below calls memo.addContext()
+    // which may reallocate the contexts vector and invalidate this reference.
+    PhysProp localReqdProp = ctx.getPhysProp();
+    const VarRequirements& localReqdMat = localReqdProp.materializations();
 
     int arity = static_cast<int>(expr.child_groups.size());
 
@@ -366,7 +369,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         VarRequirements mat;
         if (i < static_cast<int>(expr.physOp().required_input_mat.size()))
             mergeVarRequirements(mat, expr.physOp().required_input_mat[i]);
-        mergeVarRequirements(mat, localReqdProp.materializations());
+        mergeVarRequirements(mat, localReqdMat);
         PhysProp p;
         p.setMaterializations(std::move(mat));
         return p;

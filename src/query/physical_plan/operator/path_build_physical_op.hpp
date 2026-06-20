@@ -13,7 +13,7 @@
 namespace eugraph {
 namespace compute {
 
-/// Assembles a PathValue from named row columns and appends it as a new column.
+/// Assembles a PathTopology from named row columns and appends it as a new column.
 class PathBuildPhysicalOp : public PhysicalOperator {
 public:
     PathBuildPhysicalOp(std::string path_var, std::vector<std::string> element_vars, Schema input_schema,

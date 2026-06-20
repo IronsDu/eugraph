@@ -1122,12 +1122,16 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     Schema output_schema = child_schema;
                     output_schema.push_back(v.path_variable);
-                    output_types.push_back(binder::BoundType::Path());
+                    output_types.push_back(binder::BoundType::PathTopology());
 
                     auto result = std::make_unique<PathBuildPhysicalOp>(
                         v.path_variable, v.element_variables, std::move(child_schema),
                         std::vector<binder::BoundType>(output_types), std::move(child_op));
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    auto plan_result =
+                        PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    // Phase D: PathBuild produces PathTopology; upgrade to PathValue for RETURN output.
+                    plan_result = wrapPathElementPropertyRead(std::move(plan_result), v.path_variable, store);
+                    return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundCreateNodeOp>) {
                     std::vector<LabelId> label_ids = v.label_ids;
                     // Pass BoundExpressions to the operator for runtime evaluation.
