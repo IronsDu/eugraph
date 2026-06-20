@@ -1391,7 +1391,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     auto result = std::make_unique<CrossProductPhysicalOp>(
                         std::move(lr.op), std::move(rr.op), std::move(lr.output_schema), std::move(rr.output_schema),
-                        std::move(output_types));
+                        std::vector<binder::BoundType>(output_types));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSemiJoinOp>) {
