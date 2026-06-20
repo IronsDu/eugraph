@@ -16,14 +16,58 @@ enum class BoundTypeKind : uint8_t {
     VERTEX,
     EDGE,
     PATH,
-    LIST,      // List<T>
-    MAP,       // Map<K, V>
-    DATETIME,  // date, datetime, localdatetime
-    TIME,      // time, localtime
-    DURATION,  // duration
-    ANY,       // 多标签弱类型访问，运行时类型不确定
-    NULL_TYPE, // 字面量 NULL
+    VERTEX_REF,    // Topology-stage vertex reference (bare VertexId)
+    EDGE_KEY,      // Topology-stage edge reference (EdgeKey)
+    PATH_TOPOLOGY, // Topology-stage path (PathTopology)
+    LIST,          // List<T>
+    MAP,           // Map<K, V>
+    DATETIME,      // date, datetime, localdatetime
+    TIME,          // time, localtime
+    DURATION,      // duration
+    ANY,           // 多标签弱类型访问，运行时类型不确定
+    NULL_TYPE,     // 字面量 NULL
 };
+
+/// Topology-stage kinds (bare ID, no semantic data).
+inline bool isTopologyKind(BoundTypeKind k) {
+    return k == BoundTypeKind::VERTEX_REF || k == BoundTypeKind::EDGE_KEY || k == BoundTypeKind::PATH_TOPOLOGY;
+}
+
+/// Semantic-stage kinds (full data: labels + properties).
+inline bool isSemanticGraphKind(BoundTypeKind k) {
+    return k == BoundTypeKind::VERTEX || k == BoundTypeKind::EDGE || k == BoundTypeKind::PATH;
+}
+
+/// Returns the topology-stage counterpart of a semantic graph kind, or the
+/// input unchanged if not a semantic graph kind. Used by Enricher rules to
+/// describe the property upgrade path (e.g. VERTEX_REF → VERTEX).
+inline BoundTypeKind topologyCounterpart(BoundTypeKind k) {
+    switch (k) {
+    case BoundTypeKind::VERTEX:
+        return BoundTypeKind::VERTEX_REF;
+    case BoundTypeKind::EDGE:
+        return BoundTypeKind::EDGE_KEY;
+    case BoundTypeKind::PATH:
+        return BoundTypeKind::PATH_TOPOLOGY;
+    default:
+        return k;
+    }
+}
+
+/// Returns the semantic counterpart of a topology-stage kind, or the input
+/// unchanged if not a topology kind.
+inline BoundTypeKind semanticCounterpart(BoundTypeKind k) {
+    switch (k) {
+    case BoundTypeKind::VERTEX_REF:
+        return BoundTypeKind::VERTEX;
+    case BoundTypeKind::EDGE_KEY:
+        return BoundTypeKind::EDGE;
+    case BoundTypeKind::PATH_TOPOLOGY:
+        return BoundTypeKind::PATH;
+    default:
+        return k;
+    }
+}
 
 struct BoundType {
     BoundTypeKind kind = BoundTypeKind::NULL_TYPE;
@@ -75,6 +119,15 @@ struct BoundType {
     }
     static BoundType Path() {
         return {BoundTypeKind::PATH, nullptr};
+    }
+    static BoundType VertexRef() {
+        return {BoundTypeKind::VERTEX_REF, nullptr};
+    }
+    static BoundType EdgeKey() {
+        return {BoundTypeKind::EDGE_KEY, nullptr};
+    }
+    static BoundType PathTopology() {
+        return {BoundTypeKind::PATH_TOPOLOGY, nullptr};
     }
     static BoundType Any() {
         return {BoundTypeKind::ANY, nullptr};
@@ -141,6 +194,12 @@ struct BoundType {
             return "EDGE";
         case BoundTypeKind::PATH:
             return "PATH";
+        case BoundTypeKind::VERTEX_REF:
+            return "VERTEX_REF";
+        case BoundTypeKind::EDGE_KEY:
+            return "EDGE_KEY";
+        case BoundTypeKind::PATH_TOPOLOGY:
+            return "PATH_TOPOLOGY";
         case BoundTypeKind::LIST:
             return "LIST<" + (element_type ? element_type->toString() : "?") + ">";
         case BoundTypeKind::MAP:

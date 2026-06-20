@@ -140,7 +140,7 @@ LogProp LogPropDeriver::deriveScan(const binder::BoundScanOp& op) const {
     ColumnInfo ci;
     ci.variable = op.variable;
     ci.column_index = op.column_index;
-    ci.type_kind = binder::BoundTypeKind::VERTEX;
+    ci.type_kind = binder::BoundTypeKind::VERTEX_REF;
     lp.columns.push_back(std::move(ci));
     lp.valid = true;
     return lp;
@@ -162,7 +162,7 @@ LogProp LogPropDeriver::deriveLabelScan(const binder::BoundLabelScanOp& op) cons
     ColumnInfo ci;
     ci.variable = op.variable;
     ci.column_index = op.column_index;
-    ci.type_kind = binder::BoundTypeKind::VERTEX;
+    ci.type_kind = binder::BoundTypeKind::VERTEX_REF;
     ci.label_ids = op.label_ids;
     lp.columns.push_back(std::move(ci));
     lp.valid = true;
@@ -192,13 +192,13 @@ LogProp LogPropDeriver::deriveExpand(const binder::BoundExpandOp& op, const LogP
     ColumnInfo edgeCol;
     edgeCol.variable = op.edge_variable;
     edgeCol.column_index = op.edge_column_index;
-    edgeCol.type_kind = binder::BoundTypeKind::EDGE;
+    edgeCol.type_kind = binder::BoundTypeKind::EDGE_KEY;
     lp.columns.push_back(std::move(edgeCol));
 
     ColumnInfo dstCol;
     dstCol.variable = op.dst_variable;
     dstCol.column_index = op.dst_column_index;
-    dstCol.type_kind = binder::BoundTypeKind::VERTEX;
+    dstCol.type_kind = binder::BoundTypeKind::VERTEX_REF;
     lp.columns.push_back(std::move(dstCol));
 
     lp.valid = true;
@@ -234,7 +234,7 @@ LogProp LogPropDeriver::deriveVarLenExpand(const binder::BoundVarLenExpandOp& op
     ColumnInfo dstCol;
     dstCol.variable = op.dst_variable;
     dstCol.column_index = op.dst_column_index;
-    dstCol.type_kind = binder::BoundTypeKind::VERTEX;
+    dstCol.type_kind = binder::BoundTypeKind::VERTEX_REF;
     lp.columns.push_back(std::move(dstCol));
 
     if (!op.path_variable.empty()) {
@@ -329,7 +329,7 @@ LogProp LogPropDeriver::derivePathBuild(const binder::BoundPathBuildOp& op, cons
     ColumnInfo pathCol;
     pathCol.variable = op.path_variable;
     pathCol.column_index = op.path_column_index;
-    pathCol.type_kind = binder::BoundTypeKind::PATH;
+    pathCol.type_kind = binder::BoundTypeKind::PATH_TOPOLOGY;
     lp.columns.push_back(std::move(pathCol));
 
     lp.valid = true;

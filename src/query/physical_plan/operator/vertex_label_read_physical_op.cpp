@@ -23,9 +23,14 @@ folly::coro::AsyncGenerator<DataChunk> VertexLabelReadPhysicalOp::executeChunk()
             if (col_idx_ >= rows[i].size())
                 continue;
             const auto& val = rows[i][col_idx_];
-            if (!std::holds_alternative<VertexValue>(val))
+            VertexValue vv;
+            if (std::holds_alternative<VertexRef>(val)) {
+                vv.id = std::get<VertexRef>(val).id;
+            } else if (std::holds_alternative<VertexValue>(val)) {
+                vv = std::get<VertexValue>(val);
+            } else {
                 continue;
-            VertexValue vv = std::get<VertexValue>(val);
+            }
 
             auto labels = co_await store_.getVertexLabels(vv.id);
             if (anon_label_id_ != INVALID_LABEL_ID)

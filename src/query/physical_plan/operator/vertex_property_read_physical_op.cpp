@@ -42,9 +42,14 @@ folly::coro::AsyncGenerator<DataChunk> VertexPropertyReadPhysicalOp::executeChun
             if (col_idx_ >= rows[i].size())
                 continue;
             const auto& val = rows[i][col_idx_];
-            if (!std::holds_alternative<VertexValue>(val))
+            VertexValue vv;
+            if (std::holds_alternative<VertexRef>(val)) {
+                vv.id = std::get<VertexRef>(val).id;
+            } else if (std::holds_alternative<VertexValue>(val)) {
+                vv = std::get<VertexValue>(val);
+            } else {
                 continue;
-            VertexValue vv = std::get<VertexValue>(val);
+            }
 
             for (const auto& [lid, prop_ids] : label_prop_ids_) {
                 auto props = co_await store_.getVertexProperties(vv.id, lid, prop_ids);

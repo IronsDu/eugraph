@@ -62,9 +62,8 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
         chunk.reserve(batch->size());
 
         for (VertexId vid : *batch) {
-            VertexValue vv;
-            vv.id = vid;
-            chunk.appendRow({Value(std::move(vv))});
+            VertexRef vr{vid};
+            chunk.appendRow({Value(vr)});
         }
         if (chunk.count > 0) {
             co_yield std::move(chunk);

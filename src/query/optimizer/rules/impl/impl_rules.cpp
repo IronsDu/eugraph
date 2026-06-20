@@ -7,12 +7,31 @@ namespace eugraph {
 namespace optimizer {
 
 // ============================================================
-// Helper: create a physical GroupExpr from a logical source
+// Helper: create a physical GroupExpr from a logical source.
+//
+// Phase C: each non-leaf physical operator declares its per-input
+// required materializations (required_input_mat[i]) from the source
+// group's own requirements — i.e. the property accesses in THIS
+// operator's expressions (Filter predicate, Project items, etc.).
+// This is what feeds the Enricher enforcer mechanism: when a parent
+// demands materialization that a child's topology-form winner cannot
+// provide, O_INPUTS inserts an Enricher to bridge the gap.
 // ============================================================
 static std::vector<std::unique_ptr<GroupExpr>> makePhysicalExpr(GroupExpr& expr, Memo& memo, PhysicalOpTag tag) {
     auto phys = std::make_unique<PhysicalExpr>();
     phys->tag = tag;
     phys->source = cloneBoundLogicalOperator(expr.op);
+
+    // Each input must provide what this operator's own expressions need.
+    // Leaf operators (arity 0) get no entries.
+    Group& group = memo.getGroup(expr.group_id);
+    if (group.requirementsValid()) {
+        const VarRequirements& reqs = group.requirements();
+        for (size_t i = 0; i < expr.child_groups.size(); ++i) {
+            phys->required_input_mat.push_back(reqs);
+        }
+    }
+
     auto ge = std::make_unique<GroupExpr>(memo.newExprId(), expr.group_id, std::move(phys), expr.child_groups);
     std::vector<std::unique_ptr<GroupExpr>> result;
     result.push_back(std::move(ge));

@@ -5678,3 +5678,198 @@ TEST_F(QueryExecutorTest, MergeVariableAlreadyBoundFails) {
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("VariableAlreadyBound"), std::string::npos);
 }
+
+// ==================== PropertyExtract Plan Correctness Tests ====================
+
+// Verify that EXPLAIN shows PropertyExtract operators in the plan for
+// property-access queries, and that execution produces correct results.
+class PropertyExtractPlanTest : public QueryExecutorTest {
+protected:
+    void SetUp() override {
+        QueryExecutorTest::SetUp();
+
+        // Add properties to existing Person label.
+        blockingWait(async_meta_->addVertexLabelProperties(
+            "Person", {{"name", PropertyType::STRING}, {"age", PropertyType::INT64}, {"city", PropertyType::STRING}}));
+        // Add since property to KNOWS edge label.
+        blockingWait(async_meta_->addEdgeLabelProperties("KNOWS", {{"since", PropertyType::INT64}}));
+
+        // Recreate data tables with new schema.
+        blockingWait(async_data_->createLabel(PERSON_LABEL));
+        blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
+
+        auto txn = sync_data_->beginTransaction();
+        // Person 1: Alice, 30, NY
+        std::vector<std::pair<LabelId, Properties>> p1 = {
+            {PERSON_LABEL,
+             {PropertyValue(std::string("Alice")), PropertyValue(int64_t{30}), PropertyValue(std::string("NY"))}}};
+        ASSERT_TRUE(sync_data_->insertVertex(txn, 1, p1));
+        // Person 2: Bob, 25, SF
+        std::vector<std::pair<LabelId, Properties>> p2 = {
+            {PERSON_LABEL,
+             {PropertyValue(std::string("Bob")), PropertyValue(int64_t{25}), PropertyValue(std::string("SF"))}}};
+        ASSERT_TRUE(sync_data_->insertVertex(txn, 2, p2));
+        // Person 3: Carol, 35, LA
+        std::vector<std::pair<LabelId, Properties>> p3 = {
+            {PERSON_LABEL,
+             {PropertyValue(std::string("Carol")), PropertyValue(int64_t{35}), PropertyValue(std::string("LA"))}}};
+        ASSERT_TRUE(sync_data_->insertVertex(txn, 3, p3));
+        // KNOWS edges with since property
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, Properties{PropertyValue(int64_t{2020})}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 3, KNOWS_LABEL, 0, Properties{PropertyValue(int64_t{2019})}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 3, KNOWS_LABEL, 0, Properties{PropertyValue(int64_t{2021})}));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+
+        executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+    }
+
+    // Run EXPLAIN and extract operator names from the plan tree.
+    // The EXPLAIN format is a top-down box diagram:
+    //   +---...---+
+    //   | OpName  |
+    //   | output:...|
+    //   +---...---+
+    //       ↓
+    //   ...children...
+    // Operator name lines start with "| " and are NOT output lines ("| output:").
+    // Returns operator names in root-to-leaf order.
+    std::vector<std::string> parsePlanOperators(const std::string& query) {
+        auto result = execSync(*executor_, "EXPLAIN " + query);
+        EXPECT_TRUE(result.error.empty()) << result.error;
+        std::vector<std::string> ops;
+        for (const auto& row : result.rows) {
+            if (row.empty() || !std::holds_alternative<std::string>(row[0]))
+                continue;
+            const auto& line = std::get<std::string>(row[0]);
+            // Operator name lines: "| Name...|". Skip borders ("+---"), arrows, and
+            // output lines ("|  output:" has two spaces after the pipe).
+            if (line.size() < 3 || line[0] != '|')
+                continue;
+            if (line.find("+---") != std::string::npos)
+                continue;
+            if (line.find("output:") != std::string::npos)
+                continue; // skip output schema lines
+            if (line.find("\xe2\x86\x93") != std::string::npos)
+                continue; // ↓ arrow
+            // Extract name between "| " and trailing "|".
+            std::string content = line.substr(2);
+            while (!content.empty() && (content.back() == ' '))
+                content.pop_back();
+            if (!content.empty() && content.back() == '|')
+                content.pop_back();
+            // Also trim trailing spaces after removing the trailing pipe.
+            while (!content.empty() && content.back() == ' ')
+                content.pop_back();
+            if (!content.empty())
+                ops.push_back(content);
+        }
+        return ops;
+    }
+
+    // Assert the plan contains the expected operators in root-to-leaf order.
+    // Does a subsequence match: each expected prefix must appear in `ops` in
+    // order, but there may be additional operators between them (e.g. both
+    // VertexPropertyRead AND VertexLabelRead can appear between Project and
+    // Expand). This correctly handles per-variable wrap chains.
+    void expectPlanOrder(const std::string& query, const std::vector<std::string>& op_prefixes) {
+        auto ops = parsePlanOperators(query);
+        size_t match_idx = 0;
+        std::vector<std::string> matched, unmatched;
+        for (size_t i = 0; i < ops.size() && match_idx < op_prefixes.size(); ++i) {
+            if (ops[i].find(op_prefixes[match_idx]) != std::string::npos) {
+                matched.push_back(ops[i]);
+                ++match_idx;
+            }
+        }
+        // Collect remaining ops for diagnostics.
+        for (size_t i = 0; i < ops.size(); ++i) {
+            bool is_matched = false;
+            for (const auto& m : matched)
+                if (m == ops[i]) {
+                    is_matched = true;
+                    break;
+                }
+            if (!is_matched)
+                unmatched.push_back(ops[i]);
+        }
+        EXPECT_EQ(match_idx, op_prefixes.size())
+            << "Expected " << op_prefixes.size() << " operators in order, matched " << match_idx
+            << "\n  Matched: " << ::testing::PrintToString(matched) << "\n  All ops (" << ops.size()
+            << "): " << ::testing::PrintToString(ops) << "\n  Unmatched: " << ::testing::PrintToString(unmatched);
+    }
+};
+
+TEST_F(PropertyExtractPlanTest, BasicVertexPropertyRead) {
+    // Standalone mode: Project → VertexPropertyRead → LabelScan
+    expectPlanOrder("MATCH (n:Person) RETURN n.name, n.age", {"Project", "VertexPropertyRead", "Scan"});
+}
+
+TEST_F(PropertyExtractPlanTest, FilterPropertyExtract) {
+    // Standalone mode: Project → Filter → VertexPropertyRead → LabelScan
+    expectPlanOrder("MATCH (n:Person) WHERE n.age > 30 RETURN n.name",
+                    {"Project", "Filter", "VertexPropertyRead", "Scan"});
+}
+
+TEST_F(PropertyExtractPlanTest, ExpandBothSidesPropertyExtract) {
+    // MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.city
+    // Pipeline: Project → VertexPropertyRead(b) → VertexLabelRead(b) →
+    //           EdgePropertyRead → VertexPropertyRead(a) → VertexLabelRead(a) →
+    //           Expand → LabelScan
+    // RBO path for multi-hop (PropertyExtract placement not yet handled for Expand variables).
+    expectPlanOrder("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.city",
+                    {"Project", "VertexPropertyRead", "EdgePropertyRead", "Expand", "Scan"});
+}
+
+TEST_F(PropertyExtractPlanTest, EdgePropertyExtract) {
+    // MATCH (a)-[r:KNOWS]->(b:Person) WHERE r.since > 2020 RETURN a.name
+    // Pipeline: Project → Filter → ... → EdgePropertyRead(r) → Expand →
+    //           VertexPropertyRead(a) → VertexLabelRead(a) → AllNodeScan
+    // (Filter is on r.since, not on a.property, so a's reads come after Expand.
+    //  'a' is unlabeled in MATCH so it's AllNodeScan, not LabelScan.)
+    expectPlanOrder("MATCH (a)-[r:KNOWS]->(b:Person) WHERE r.since > 2020 RETURN a.name",
+                    {"Project", "Filter", "EdgePropertyRead", "Expand", "VertexPropertyRead", "Scan"});
+}
+
+// Execution tests — verify results are correct.
+TEST_F(PropertyExtractPlanTest, ExecuteBasicVertexProp) {
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.name, n.age ORDER BY n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Alice");
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 30);
+}
+
+TEST_F(PropertyExtractPlanTest, ExecuteFilterVertexProp) {
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE n.age > 30 RETURN n.name, n.age");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Carol");
+}
+
+TEST_F(PropertyExtractPlanTest, ExecuteExpandVertexProp) {
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b:Person) "
+                                       "RETURN a.name, b.city ORDER BY a.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3u);
+}
+
+TEST_F(PropertyExtractPlanTest, ExecuteEdgeProp) {
+    auto result = execSync(*executor_, "MATCH (a)-[r:KNOWS]->(b:Person) WHERE r.since > 2020 RETURN a.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Bob");
+}
+
+TEST_F(PropertyExtractPlanTest, ExecuteReturnVertex) {
+    auto result = execSync(*executor_, "MATCH (n:Person) WHERE n.name = 'Alice' RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(result.rows[0][0]));
+}
+
+TEST_F(PropertyExtractPlanTest, ExecutePathLength) {
+    auto result =
+        execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN length(p) ORDER BY length(p)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_GE(result.rows.size(), 2u);
+}

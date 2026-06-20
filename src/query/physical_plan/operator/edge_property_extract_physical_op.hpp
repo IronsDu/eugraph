@@ -1,0 +1,48 @@
+#pragma once
+
+#include "common/types/graph_types.hpp"
+#include "query/dataset/data_chunk.hpp"
+#include "query/physical_plan/physical_operator_base.hpp"
+#include "query/planner/bound_type.hpp"
+#include "storage/data/i_async_graph_data_store.hpp"
+
+#include <folly/coro/AsyncGenerator.h>
+
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace eugraph {
+namespace compute {
+
+/// Batch property extractor for edge variables. Takes an EdgeKey column
+/// and appends flat typed columns without constructing an EdgeValue object.
+class EdgePropertyExtractPhysicalOp : public PhysicalOperator {
+public:
+    EdgePropertyExtractPhysicalOp(std::string variable, size_t col_idx, std::vector<uint16_t> edge_prop_ids,
+                                  IAsyncGraphDataStore& store, Schema input_schema,
+                                  std::vector<binder::BoundType> output_types, std::unique_ptr<PhysicalOperator> child)
+        : variable_(std::move(variable)), col_idx_(col_idx), edge_prop_ids_(std::move(edge_prop_ids)), store_(store),
+          input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)) {}
+
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
+    folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
+    std::string toString() const override;
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
+    }
+
+private:
+    std::string variable_;
+    size_t col_idx_;
+    std::vector<uint16_t> edge_prop_ids_;
+    IAsyncGraphDataStore& store_;
+    Schema input_schema_;
+    std::vector<binder::BoundType> output_types_;
+    std::unique_ptr<PhysicalOperator> child_;
+};
+
+} // namespace compute
+} // namespace eugraph

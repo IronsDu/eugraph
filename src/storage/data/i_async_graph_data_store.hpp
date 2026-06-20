@@ -41,6 +41,15 @@ public:
     getVertexProperties(VertexId vid, LabelId label_id, const std::vector<uint16_t>& /*projection*/) {
         return getVertexProperties(vid, label_id);
     }
+    /// Single-property convenience wrapper. Returns the value at index prop_id
+    /// from the full Properties vector, or std::nullopt if not present.
+    folly::coro::Task<std::optional<PropertyValue>> getVertexProperty(VertexId vid, LabelId label_id,
+                                                                      uint16_t prop_id) {
+        auto props = co_await getVertexProperties(vid, label_id);
+        if (props && prop_id < props->size())
+            co_return (*props)[prop_id];
+        co_return std::nullopt;
+    }
     virtual folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) = 0;
 
     // Edge Properties
@@ -49,6 +58,14 @@ public:
     virtual folly::coro::Task<std::optional<Properties>>
     getEdgeProperties(EdgeLabelId label_id, EdgeId eid, const std::vector<uint16_t>& /*projection*/) {
         return getEdgeProperties(label_id, eid);
+    }
+    /// Single-property convenience wrapper.
+    folly::coro::Task<std::optional<PropertyValue>> getEdgeProperty(EdgeLabelId label_id, EdgeId eid,
+                                                                    uint16_t prop_id) {
+        auto props = co_await getEdgeProperties(label_id, eid);
+        if (props && prop_id < props->size())
+            co_return (*props)[prop_id];
+        co_return std::nullopt;
     }
 
     /// Batch vertex property fetch for multiple vertices (same label, same projection).

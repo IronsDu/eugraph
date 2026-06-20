@@ -34,9 +34,19 @@ folly::coro::AsyncGenerator<DataChunk> EdgePropertyReadPhysicalOp::executeChunk(
             if (col_idx_ >= rows[i].size())
                 continue;
             const auto& val = rows[i][col_idx_];
-            if (!std::holds_alternative<EdgeValue>(val))
+            EdgeValue ev;
+            if (std::holds_alternative<EdgeKey>(val)) {
+                const auto& ek = std::get<EdgeKey>(val);
+                ev.id = ek.id;
+                ev.src_id = ek.src_id;
+                ev.dst_id = ek.dst_id;
+                ev.label_id = ek.label_id;
+                ev.seq = ek.seq;
+            } else if (std::holds_alternative<EdgeValue>(val)) {
+                ev = std::get<EdgeValue>(val);
+            } else {
                 continue;
-            EdgeValue ev = std::get<EdgeValue>(val);
+            }
 
             if (!edge_prop_ids_.empty()) {
                 auto props = co_await store_.getEdgeProperties(ev.label_id, ev.id, edge_prop_ids_);

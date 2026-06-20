@@ -79,6 +79,9 @@ struct ColumnBuffer {
     std::vector<int64_t> int64_data;
     std::vector<double> double_data;
     std::vector<std::string> string_data;
+    std::vector<VertexRef> vertex_ref_data;
+    std::vector<EdgeKey> edge_key_data;
+    std::vector<PathTopology> path_topology_data;
     std::vector<VertexValue> vertex_data;
     std::vector<EdgeValue> edge_data;
     std::vector<PathValue> path_data;
@@ -108,6 +111,15 @@ struct ColumnBuffer {
             break;
         case binder::BoundTypeKind::STRING:
             string_data.resize(n);
+            break;
+        case binder::BoundTypeKind::VERTEX_REF:
+            vertex_ref_data.resize(n);
+            break;
+        case binder::BoundTypeKind::EDGE_KEY:
+            edge_key_data.resize(n);
+            break;
+        case binder::BoundTypeKind::PATH_TOPOLOGY:
+            path_topology_data.resize(n);
             break;
         case binder::BoundTypeKind::VERTEX:
             vertex_data.resize(n);
@@ -163,6 +175,12 @@ struct ColumnBuffer {
             return Value(double_data[i]);
         case binder::BoundTypeKind::STRING:
             return Value(string_data[i]);
+        case binder::BoundTypeKind::VERTEX_REF:
+            return Value(vertex_ref_data[i]);
+        case binder::BoundTypeKind::EDGE_KEY:
+            return Value(edge_key_data[i]);
+        case binder::BoundTypeKind::PATH_TOPOLOGY:
+            return Value(path_topology_data[i]);
         case binder::BoundTypeKind::VERTEX:
             return Value(vertex_data[i]);
         case binder::BoundTypeKind::EDGE:
@@ -209,6 +227,18 @@ struct ColumnBuffer {
         case binder::BoundTypeKind::STRING:
             if (std::holds_alternative<std::string>(val))
                 string_data[i] = std::get<std::string>(val);
+            break;
+        case binder::BoundTypeKind::VERTEX_REF:
+            if (std::holds_alternative<VertexRef>(val))
+                vertex_ref_data[i] = std::get<VertexRef>(val);
+            break;
+        case binder::BoundTypeKind::EDGE_KEY:
+            if (std::holds_alternative<EdgeKey>(val))
+                edge_key_data[i] = std::get<EdgeKey>(val);
+            break;
+        case binder::BoundTypeKind::PATH_TOPOLOGY:
+            if (std::holds_alternative<PathTopology>(val))
+                path_topology_data[i] = std::get<PathTopology>(val);
             break;
         case binder::BoundTypeKind::VERTEX:
             if (std::holds_alternative<VertexValue>(val))
@@ -432,6 +462,29 @@ struct DataChunk {
         for (const auto& t : types) {
             columns.push_back(Column::flat(t.kind));
         }
+    }
+
+    /// Replace the column at `idx` with a new Column. The new column becomes
+    /// the column at that index — the column count is unchanged. Used by
+    /// Enricher operators to upgrade a topology-typed column (VERTEX_REF /
+    /// EDGE_KEY / PATH_TOPOLOGY) to its semantic counterpart (VERTEX / EDGE /
+    /// PATH) in-place: downstream operators keep referencing the same column
+    /// index, but the type and data change. The old ColumnBuffer is released
+    /// once its shared_ptr refcount drops to zero (no explicit teardown).
+    void replaceColumn(size_t idx, Column new_col) {
+        if (idx < columns.size()) {
+            columns[idx] = std::move(new_col);
+        }
+    }
+
+    /// Convenience: replace the column at `idx` with a freshly allocated FLAT
+    /// column of the given type. The caller is expected to populate the new
+    /// column's buffer before downstream consumption.
+    Column& replaceColumn(size_t idx, binder::BoundTypeKind new_type, size_t capacity = 0) {
+        if (idx < columns.size()) {
+            columns[idx] = Column::flat(new_type, capacity);
+        }
+        return columns[idx];
     }
 
     /// Allocate capacity for all FLAT columns.

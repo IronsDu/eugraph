@@ -21,6 +21,30 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
             if (path_col_idx_ >= rows[i].size())
                 continue;
             auto& val = rows[i][path_col_idx_];
+            // Phase D: accept both PathTopology (topology-stage) and PathValue
+            // (legacy RBO path). Upgrade PathTopology to PathValue in-place.
+            if (std::holds_alternative<PathTopology>(val)) {
+                auto& pt = std::get<PathTopology>(val);
+                PathValue pv;
+                pv.elements.reserve(pt.vertexCount() + pt.hopCount());
+                for (size_t j = 0; j < pt.vertex_ids.size(); ++j) {
+                    ValueStorage ve;
+                    ve.value = VertexValue{pt.vertex_ids[j], {}, {}, false};
+                    pv.elements.push_back(std::move(ve));
+                    if (j < pt.edge_ids.size()) {
+                        ValueStorage ee;
+                        ee.value = EdgeValue{pt.edge_ids[j],
+                                             pt.vertex_ids[j],
+                                             pt.vertex_ids[j + 1],
+                                             pt.edge_label_ids[j],
+                                             pt.seqs[j],
+                                             std::nullopt,
+                                             false};
+                        pv.elements.push_back(std::move(ee));
+                    }
+                }
+                rows[i][path_col_idx_] = Value(std::move(pv));
+            }
             if (!std::holds_alternative<PathValue>(val))
                 continue;
             auto& pv = std::get<PathValue>(val);

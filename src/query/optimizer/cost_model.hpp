@@ -46,6 +46,20 @@ enum class PhysicalOpTag {
     // Path / list
     PathBuild,
     Unwind,
+    // Enrichers (Phase B) — property/label materialisation enforcers.
+    // Each upgrades a topology-form variable (VertexRef/EdgeKey/PathTopology)
+    // to its semantic counterpart with the required labels and properties
+    // loaded into the column buffer.
+    VertexEnrich,
+    EdgeEnrich,
+    PathEnrich,
+    // Property extractors (Phase F) — extract only the needed properties as
+    // flat columnar vectors (StringVector, Int64Vector, ...) without
+    // constructing heavy semantic objects. Used for 90% of queries that only
+    // need individual properties rather than full VertexValue/EdgeValue.
+    VertexPropertyExtract,
+    EdgePropertyExtract,
+    PathPropertyExtract,
 };
 
 // ============================================================

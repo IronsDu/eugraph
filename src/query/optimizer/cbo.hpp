@@ -1,5 +1,7 @@
 #pragma once
 
+#include "query/optimizer/materialization_req.hpp"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -69,9 +71,17 @@ private:
 // ============================================================
 // PhysProp — required physical properties (Columbia: PHYS_PROP)
 //
-// Currently models sort order (property index + ascending/descending).
-// "any" order means no physical property requirement.
-// Extensible to distribution, partitioning, etc.
+// Models two orthogonal property dimensions:
+//   1. Sort order on a single property (Columbia-style).
+//   2. Per-variable materialization requirements (Enricher-driven):
+//      a subplan whose output PhysProp carries
+//      materializations_["v"] = {need_labels=true, need_props[Person]={age,name}}
+//      guarantees that variable v is materialised as a full VERTEX with
+//      labels and at least the listed properties already loaded into
+//      the column buffer.
+//
+// Sort order is satisfied by SortEnforcer; materialization requirements
+// are satisfied by VertexEnrich/EdgeEnrich/PathEnrich enforcers.
 // ============================================================
 enum class SortOrder {
     any,
@@ -91,18 +101,42 @@ public:
         return order_;
     }
     bool isAny() const {
-        return order_ == SortOrder::any;
+        return order_ == SortOrder::any && materializations_.empty();
     }
     uint16_t propId() const {
         return prop_id_;
     }
 
+    // --- Materialization accessors ---
+
+    const VarRequirements& materializations() const {
+        return materializations_;
+    }
+    void setMaterializations(VarRequirements reqs) {
+        materializations_ = std::move(reqs);
+    }
+    bool hasMaterializations() const {
+        for (const auto& [_, req] : materializations_) {
+            if (!req.empty())
+                return true;
+        }
+        return false;
+    }
+
+    // Does this PhysProp, as a provider, satisfy `required`?
+    // Sort provider must match exactly; materialization provider must
+    // be a superset (satisfiesVarRequirements semantics).
+    bool satisfies(const PhysProp& required) const;
+
     bool operator==(const PhysProp& o) const {
         if (order_ != o.order_)
             return false;
-        if (order_ == SortOrder::any)
-            return true;
-        return prop_id_ == o.prop_id_;
+        if (order_ != SortOrder::any && prop_id_ != o.prop_id_)
+            return false;
+        return materializations_ == o.materializations_;
+    }
+    bool operator!=(const PhysProp& o) const {
+        return !(*this == o);
     }
 
     std::string dump() const;
@@ -110,6 +144,7 @@ public:
 private:
     SortOrder order_ = SortOrder::any;
     uint16_t prop_id_ = 0;
+    VarRequirements materializations_;
 };
 
 // ============================================================

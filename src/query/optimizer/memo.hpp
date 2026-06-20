@@ -103,6 +103,12 @@ public:
     // Find a winner for the given physical property. Returns nullptr if none.
     Winner* getWinner(const PhysProp& prop);
 
+    // Find the cheapest winner whose PhysProp SATISFIES the requested
+    // property (i.e. provides at least the required sort + materializations).
+    // Used by OInputsTask when looking up input costs — a winner that
+    // materialises more than required is still a valid input.
+    Winner* getSatisfyingWinner(const PhysProp& prop);
+
     // Create or update a winner for the given physical property.
     void newWinner(PhysProp prop, ExprId plan, Cost cost, bool done);
 
@@ -129,11 +135,30 @@ public:
         return log_prop_valid_;
     }
 
+    // ----- Materialization requirements (Phase B) -----
+    //
+    // Per-group VarRequirements captured at copyIn time by
+    // RequirementCollector. Read by O_INPUTS when assembling each
+    // physical operator's required-input materializations.
+    const VarRequirements& requirements() const {
+        return requirements_;
+    }
+    void setRequirements(VarRequirements reqs) {
+        requirements_ = std::move(reqs);
+        requirements_valid_ = true;
+    }
+    bool requirementsValid() const {
+        return requirements_valid_;
+    }
+
 private:
     LogProp log_prop_;
     bool log_prop_valid_ = false;
     // Groups that derived their LogProp from this group (for invalidation propagation)
     std::set<GroupId> parents_;
+
+    VarRequirements requirements_;
+    bool requirements_valid_ = false;
 };
 
 // ============================================================
@@ -226,6 +251,16 @@ public:
 
     // Insert a physical expression into a group.
     GroupExpr* insertPhysExpr(std::unique_ptr<GroupExpr> expr, GroupId target_group);
+
+    // Phase B: insert an Enricher enforcer in group `g` that upgrades
+    // the group's "any"-property winner to satisfy the materialization
+    // requirements in `req_mat`. The enforcer is a physical GroupExpr
+    // whose child_groups = [g] (the same group). For multi-variable
+    // requirements, this inserts one Enricher per variable and chains
+    // them: each Enricher's child is the previous Enricher's group.
+    // Returns the final enforcer's ExprId, or INVALID_EXPR_ID if no
+    // any-property winner exists to wrap.
+    ExprId insertEnricherEnforcer(GroupId g, const VarRequirements& req_mat);
 
     // Create a new group with a single GroupExpr. Returns the GroupExpr pointer.
     GroupExpr* createGroupWithExpr(binder::BoundLogicalOperator op, std::vector<GroupId> child_groups);

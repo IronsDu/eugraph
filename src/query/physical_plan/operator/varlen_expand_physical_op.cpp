@@ -87,6 +87,8 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 const auto& val = rows[src_row][src_col_idx_];
                 if (std::holds_alternative<VertexValue>(val)) {
                     src_id = std::get<VertexValue>(val).id;
+                } else if (std::holds_alternative<VertexRef>(val)) {
+                    src_id = std::get<VertexRef>(val).id;
                 } else if (std::holds_alternative<int64_t>(val)) {
                     src_id = static_cast<VertexId>(std::get<int64_t>(val));
                 }
@@ -271,11 +273,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
 
                         for (size_t i = 0; i < output_buffer.size(); ++i) {
                             size_t dst_col_idx = input_cols;
-                            VertexValue dst_vv;
-                            dst_vv.id = output_buffer[i].dst_id;
-                            auto dst_labels = co_await store_.getVertexLabels(output_buffer[i].dst_id);
-                            dst_vv.labels = dst_labels;
-                            output.setValue(dst_col_idx, i, Value(std::move(dst_vv)));
+                            output.setValue(dst_col_idx, i, Value(VertexRef{output_buffer[i].dst_id}));
                         }
                         // Fill path column if present
                         if (!path_var_.empty()) {
@@ -361,11 +359,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
 
             for (size_t i = 0; i < output_buffer.size(); ++i) {
                 size_t dst_col_idx = input_cols;
-                VertexValue dst_vv;
-                dst_vv.id = output_buffer[i].dst_id;
-                auto dst_labels = co_await store_.getVertexLabels(output_buffer[i].dst_id);
-                dst_vv.labels = dst_labels;
-                output.setValue(dst_col_idx, i, Value(std::move(dst_vv)));
+                output.setValue(dst_col_idx, i, Value(VertexRef{output_buffer[i].dst_id}));
             }
             // Fill path column if present
             if (!path_var_.empty()) {

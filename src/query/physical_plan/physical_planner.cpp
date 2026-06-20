@@ -1,11 +1,13 @@
 #include "query/physical_plan/physical_planner.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/optimizer/chosen_plan.hpp"
+#include "query/optimizer/column_rewrite.hpp"
 #include "query/optimizer/memo.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/delete_physical_op.hpp"
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
+#include "query/physical_plan/operator/edge_property_extract_physical_op.hpp"
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
 #include "query/physical_plan/operator/merge_physical_op.hpp"
 #include "query/physical_plan/operator/path_element_property_read_physical_op.hpp"
@@ -14,6 +16,7 @@
 #include "query/physical_plan/operator/union_physical_op.hpp"
 #include "query/physical_plan/operator/unwind_physical_op.hpp"
 #include "query/physical_plan/operator/varlen_expand_physical_op.hpp"
+#include "query/physical_plan/operator/vertex_property_extract_physical_op.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
 #include <functional>
@@ -40,9 +43,14 @@ static PlanOperatorResult wrapVertexLabelRead(PlanOperatorResult&& child_result,
     }
     if (col_idx == SIZE_MAX)
         return std::move(child_result);
-    auto read_op = std::make_unique<VertexLabelReadPhysicalOp>(
-        variable, col_idx, anon_label_id, store, Schema(child_result.output_schema),
-        std::vector<binder::BoundType>(child_result.output_types), std::move(child_result.op));
+    // Phase D: upgrade output type from topology (VERTEX_REF) to semantic (VERTEX)
+    // at the target column. The runtime operator accepts both but produces VERTEX.
+    auto output_types = std::vector<binder::BoundType>(child_result.output_types);
+    output_types[col_idx] = binder::BoundType::Vertex();
+    child_result.output_types[col_idx] = binder::BoundType::Vertex();
+    auto read_op = std::make_unique<VertexLabelReadPhysicalOp>(variable, col_idx, anon_label_id, store,
+                                                               Schema(child_result.output_schema),
+                                                               std::move(output_types), std::move(child_result.op));
     return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
                               std::move(child_result.output_types)};
 }
@@ -62,9 +70,13 @@ wrapVertexPropertyRead(PlanOperatorResult&& child_result, const std::string& var
     }
     if (col_idx == SIZE_MAX)
         return std::move(child_result);
+    // Phase D: upgrade output type from topology (VERTEX_REF) to semantic (VERTEX).
+    auto vpr_output_types = std::vector<binder::BoundType>(child_result.output_types);
+    vpr_output_types[col_idx] = binder::BoundType::Vertex();
+    child_result.output_types[col_idx] = binder::BoundType::Vertex();
     auto read_op = std::make_unique<VertexPropertyReadPhysicalOp>(
-        variable, col_idx, label_prop_ids, store, Schema(child_result.output_schema),
-        std::vector<binder::BoundType>(child_result.output_types), std::move(child_result.op));
+        variable, col_idx, label_prop_ids, store, Schema(child_result.output_schema), std::move(vpr_output_types),
+        std::move(child_result.op));
     return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
                               std::move(child_result.output_types)};
 }
@@ -72,7 +84,11 @@ wrapVertexPropertyRead(PlanOperatorResult&& child_result, const std::string& var
 static PlanOperatorResult wrapEdgePropertyRead(PlanOperatorResult&& child_result, const std::string& variable,
                                                const std::vector<uint16_t>& edge_prop_ids,
                                                IAsyncGraphDataStore& store) {
-    if (variable.empty() || edge_prop_ids.empty())
+    // For the EdgeKey→EdgeValue topology upgrade, always wrap even when no
+    // properties were requested.  Operators like DELETE/REMOVE still need a
+    // semantic EdgeValue to extract the edge id / label.  The underlying
+    // EdgePropertyReadPhysicalOp handles empty edge_prop_ids gracefully.
+    if (variable.empty())
         return std::move(child_result);
     size_t col_idx = SIZE_MAX;
     for (size_t i = child_result.output_schema.size(); i-- > 0;) {
@@ -83,9 +99,13 @@ static PlanOperatorResult wrapEdgePropertyRead(PlanOperatorResult&& child_result
     }
     if (col_idx == SIZE_MAX)
         return std::move(child_result);
+    // Phase D: upgrade output type from topology (EDGE_KEY) to semantic (EDGE).
+    auto epr_output_types = std::vector<binder::BoundType>(child_result.output_types);
+    epr_output_types[col_idx] = binder::BoundType::Edge();
+    child_result.output_types[col_idx] = binder::BoundType::Edge();
     auto read_op = std::make_unique<EdgePropertyReadPhysicalOp>(
-        variable, col_idx, edge_prop_ids, store, Schema(child_result.output_schema),
-        std::vector<binder::BoundType>(child_result.output_types), std::move(child_result.op));
+        variable, col_idx, edge_prop_ids, store, Schema(child_result.output_schema), std::move(epr_output_types),
+        std::move(child_result.op));
     return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
                               std::move(child_result.output_types)};
 }
@@ -103,9 +123,13 @@ static PlanOperatorResult wrapPathElementPropertyRead(PlanOperatorResult&& child
     }
     if (col_idx == SIZE_MAX)
         return std::move(child_result);
+    // Phase D: upgrade output type from topology (PATH_TOPOLOGY) to semantic (PATH).
+    auto ppr_output_types = std::vector<binder::BoundType>(child_result.output_types);
+    ppr_output_types[col_idx] = binder::BoundType::Path();
+    child_result.output_types[col_idx] = binder::BoundType::Path();
     auto read_op = std::make_unique<PathElementPropertyReadPhysicalOp>(
-        path_variable, col_idx, store, Schema(child_result.output_schema),
-        std::vector<binder::BoundType>(child_result.output_types), std::move(child_result.op));
+        path_variable, col_idx, store, Schema(child_result.output_schema), std::move(ppr_output_types),
+        std::move(child_result.op));
     return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
                               std::move(child_result.output_types)};
 }
@@ -388,7 +412,7 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         std::vector<binder::BoundType> output_types;
         if (!scan_op.variable.empty()) {
             output_schema.push_back(scan_op.variable);
-            output_types.push_back(binder::BoundType::Vertex());
+            output_types.push_back(binder::BoundType::VertexRef());
         }
 
         auto result_output_types = output_types;
@@ -489,15 +513,15 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
         std::vector<binder::BoundType> output_types;
         if (!expand_op.src_variable.empty()) {
             output_schema.push_back(expand_op.src_variable);
-            output_types.push_back(binder::BoundType::Vertex());
+            output_types.push_back(binder::BoundType::VertexRef());
         }
         if (!expand_op.dst_variable.empty()) {
             output_schema.push_back(expand_op.dst_variable);
-            output_types.push_back(binder::BoundType::Vertex());
+            output_types.push_back(binder::BoundType::VertexRef());
         }
         if (!expand_op.edge_variable.empty()) {
             output_schema.push_back(expand_op.edge_variable);
-            output_types.push_back(binder::BoundType::Edge());
+            output_types.push_back(binder::BoundType::EdgeKey());
         }
 
         auto result_output_types = output_types;
@@ -565,13 +589,58 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
 }
 
 namespace {
+
+// Recursive helper: walk the materialized BoundLogicalOperator tree and
+// merge the Enricher's materialization requirements into the descendant
+// scan/expand that produces `var`. This "lowers" the Enricher into the
+// RBO-style label_prop_ids / dst_label_prop_ids / edge_prop_ids so the
+// existing wrapVertexPropertyRead / wrapEdgePropertyRead in planBoundOperator
+// can do the heavy lifting. A proper runtime Enricher operator would make
+// this function obsolete (Phase E).
+void applyEnrichInPlace(binder::BoundLogicalOperator& op, const std::string& var,
+                        const optimizer::MaterializationReq& req);
+
+// Walk all variables in `enrich` and apply them to the tree rooted at `op`.
+void applyMultiEnrich(binder::BoundLogicalOperator& op, const optimizer::VarRequirements& enrich) {
+    for (const auto& [var, req] : enrich) {
+        if (!req.empty())
+            applyEnrichInPlace(op, var, req);
+    }
+}
+
 // Materialize a ChosenPlan tree into a fresh BoundLogicalOperator tree by
 // cloning each node's source op and recursively attaching materialized
 // children. Mirrors Memo::copyOut's child attachment (handles both the
 // single-child `child` field and binary operators' `left`/`right` pair).
 // We rebuild rather than reuse plan.root because the CBO winner chain may
 // select a different physical plan than the RBO path through plan.root.
+//
+// Enricher nodes (VertexEnrich/EdgeEnrich/PathEnrich) carry placeholder
+// source ops (default BoundSingletonOp) — we fold their enrich_output
+// into the descendant topology source's label_prop_ids / edge_prop_ids
+// and skip them, so planBoundOperator's property-read wraps produce the
+// correct runtime plan.
 binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chosen) {
+    // Enricher nodes: lower into child tree by merging enrich_output
+    // into the descendant scan/expand that produces enrich_variable.
+    if (chosen.tag == optimizer::PhysicalOpTag::VertexEnrich || chosen.tag == optimizer::PhysicalOpTag::EdgeEnrich ||
+        chosen.tag == optimizer::PhysicalOpTag::PathEnrich) {
+        auto child_op = materializeChosen(*chosen.children[0]);
+        applyMultiEnrich(child_op, chosen.enrich_output);
+        return child_op;
+    }
+
+    // PropertyExtract nodes: merge enrich_output into label_prop_ids so the
+    // existing wrap pipeline can handle the property loading.
+    if (chosen.tag == optimizer::PhysicalOpTag::VertexPropertyExtract ||
+        chosen.tag == optimizer::PhysicalOpTag::EdgePropertyExtract ||
+        chosen.tag == optimizer::PhysicalOpTag::PathPropertyExtract) {
+        auto child_op = materializeChosen(*chosen.children[0]);
+        applyMultiEnrich(child_op, chosen.enrich_output);
+        return child_op;
+    }
+
+    // Non-Enricher nodes: materialize conventionally.
     binder::BoundLogicalOperator result = optimizer::cloneBoundLogicalOperator(chosen.op);
 
     if (chosen.children.size() == 1) {
@@ -597,20 +666,140 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
     }
     return result;
 }
+
+// --- applyEnrichInPlace — recursive tree walkers ---
+
+// Merge req.need_props into a vertex-level label→prop mapping.
+void mergePropsIntoVertex(std::unordered_map<LabelId, std::vector<uint16_t>>& dst,
+                          const optimizer::MaterializationReq& req) {
+    for (const auto& [lid, props] : req.need_props) {
+        auto& vec = dst[lid];
+        for (uint16_t p : props) {
+            if (std::find(vec.begin(), vec.end(), p) == vec.end())
+                vec.push_back(p);
+        }
+    }
+}
+
+// Merge req.need_props into an edge-level prop list (not per-label).
+void mergePropsIntoEdge(std::vector<uint16_t>& dst, const optimizer::MaterializationReq& req) {
+    for (const auto& [lid, props] : req.need_props) {
+        for (uint16_t p : props) {
+            if (std::find(dst.begin(), dst.end(), p) == dst.end())
+                dst.push_back(p);
+        }
+    }
+}
+
+// Recurse into a unary operator's child (bound form: single `child` field).
+void recurseChild(binder::BoundLogicalOperator& op, const std::string& var, const optimizer::MaterializationReq& req) {
+    std::visit(
+        [&](auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            // Unary operators: all have a `child` member of type BoundLogicalOperator.
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                if (v)
+                    applyEnrichInPlace(v->child, var, req);
+                // BoundCreateNodeOp stores child as optional<BoundLogicalOperator>.
+                // All other write-op types store child as plain BoundLogicalOperator.
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
+                if (v && v->child.has_value())
+                    applyEnrichInPlace(*v->child, var, req);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>>) {
+                if (v)
+                    applyEnrichInPlace(v->child, var, req);
+            }
+            // Binary operators: recursively walk left/right.
+            else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+                if (v) {
+                    applyEnrichInPlace(v->left, var, req);
+                    applyEnrichInPlace(v->right, var, req);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
+                if (v) {
+                    applyEnrichInPlace(v->left, var, req);
+                    applyEnrichInPlace(v->right, var, req);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+                if (v) {
+                    applyEnrichInPlace(v->left, var, req);
+                    applyEnrichInPlace(v->right, var, req);
+                }
+            }
+            // Leaf types: stop.
+        },
+        op);
+}
+
+void applyEnrichInPlace(binder::BoundLogicalOperator& op, const std::string& var,
+                        const optimizer::MaterializationReq& req) {
+    std::visit(
+        [&](auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            // Vertex-producing leaf operators.
+            if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
+                if (v.variable == var)
+                    mergePropsIntoVertex(v.label_prop_ids, req);
+            } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
+                if (v.variable == var)
+                    mergePropsIntoVertex(v.label_prop_ids, req);
+            }
+            // Expand: three variables — src (from child), edge, dst.
+            else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                if (!v)
+                    return;
+                if (v->dst_variable == var)
+                    mergePropsIntoVertex(v->dst_label_prop_ids, req);
+                if (v->edge_variable == var)
+                    mergePropsIntoEdge(v->edge_prop_ids, req);
+                applyEnrichInPlace(v->child, var, req);
+            }
+            // VarLenExpand: similar to Expand. Note: VarLenExpand uses
+            // edge_prop_filters for filtering (not edge_prop_ids for eager
+            // loading), so edge-property Enricher lowering drops the prop IDs
+            // here. Edge props from VarLenExpand edges rely on the existing
+            // planBoundOperator wrap which applies filters, not eager loads.
+            else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                if (!v)
+                    return;
+                if (v->dst_variable == var)
+                    mergePropsIntoVertex(v->dst_label_prop_ids, req);
+                applyEnrichInPlace(v->child, var, req);
+            }
+            // Recurse into internal operators.
+            else {
+                recurseChild(op, var, req);
+            }
+        },
+        op);
+}
+
 } // namespace
 
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
 PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphDataStore& store,
                             IAsyncGraphMetaStore& meta, PlanContext& ctx) {
-    // Materialize the chosen physical plan as a logical operator tree, then
-    // reuse planBoundOperator's dispatch. The CBO's PhysicalOpTag selection
-    // is currently 1:1 with the source logical operator's variant type —
-    // impl rules emit a single physical expression per logical op family —
-    // so the variant dispatch in planBoundOperator produces the matching
-    // physical operator. Future alternative impl rules (e.g. NL vs Hash
-    // join) will need explicit tag dispatch here.
+    // PropertyExtract/Enricher tags are lowered to label_prop_ids by
+    // materializeChosen. The old wrap pipeline (wrapVertexPropertyRead etc.)
+    // handles the actual property loading in-place, preserving column layout.
+    // Standalone PropertyExtractPhysicalOp operators (flat columnar) will be
+    // enabled once per-operator column index mapping is implemented.
     binder::BoundLogicalOperator materialized = materializeChosen(chosen);
-
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(materialized, store, meta, ctx, empty_schema, empty_types);
@@ -653,7 +842,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 std::vector<binder::BoundType> output_types;
                 if (!val.variable.empty()) {
                     output_schema.push_back(val.variable);
-                    output_types.push_back(binder::BoundType::Vertex());
+                    output_types.push_back(binder::BoundType::VertexRef());
                 }
                 auto result = std::make_unique<AllNodeScanPhysicalOp>(
                     val.variable, std::vector<binder::BoundType>(output_types), store, ctx.label_name_to_id,
@@ -668,7 +857,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 std::vector<binder::BoundType> output_types;
                 if (!val.variable.empty()) {
                     output_schema.push_back(val.variable);
-                    output_types.push_back(binder::BoundType::Vertex());
+                    output_types.push_back(binder::BoundType::VertexRef());
                 }
                 auto result = std::make_unique<LabelScanPhysicalOp>(
                     val.variable, val.label_ids, std::vector<binder::BoundType>(output_types), store, ctx.label_defs,
@@ -698,11 +887,11 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     Schema output_schema = child_schema;
                     if (!v.edge_variable.empty()) {
                         output_schema.push_back(v.edge_variable);
-                        output_types.push_back(binder::BoundType::Edge());
+                        output_types.push_back(binder::BoundType::EdgeKey());
                     }
                     if (!v.dst_variable.empty()) {
                         output_schema.push_back(v.dst_variable);
-                        output_types.push_back(binder::BoundType::Vertex());
+                        output_types.push_back(binder::BoundType::VertexRef());
                     }
 
                     auto result = std::make_unique<ExpandPhysicalOp>(
@@ -729,7 +918,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     Schema output_schema = child_schema;
                     output_schema.push_back(v.dst_variable);
-                    output_types.push_back(binder::BoundType::Vertex());
+                    output_types.push_back(binder::BoundType::VertexRef());
 
                     // P1: add PATH column if path variable is set
                     if (!v.path_variable.empty()) {
@@ -932,12 +1121,16 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     Schema output_schema = child_schema;
                     output_schema.push_back(v.path_variable);
-                    output_types.push_back(binder::BoundType::Path());
+                    output_types.push_back(binder::BoundType::PathTopology());
 
                     auto result = std::make_unique<PathBuildPhysicalOp>(
                         v.path_variable, v.element_variables, std::move(child_schema),
                         std::vector<binder::BoundType>(output_types), std::move(child_op));
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    auto plan_result =
+                        PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    // Phase D: PathBuild produces PathTopology; upgrade to PathValue for RETURN output.
+                    plan_result = wrapPathElementPropertyRead(std::move(plan_result), v.path_variable, store);
+                    return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundCreateNodeOp>) {
                     std::vector<LabelId> label_ids = v.label_ids;
                     // Pass BoundExpressions to the operator for runtime evaluation.

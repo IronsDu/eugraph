@@ -189,6 +189,9 @@ add_library(eugraph_query_engine STATIC
     src/query/evaluator/eval_list_comprehension.cpp
     src/query/physical_plan/operator/edge_index_scan_physical_op.cpp
     src/query/physical_plan/operator/edge_property_read_physical_op.cpp
+    src/query/physical_plan/operator/edge_property_extract_physical_op.cpp
+    src/query/physical_plan/operator/vertex_property_extract_physical_op.cpp
+    src/query/physical_plan/operator/path_property_extract_physical_op.cpp
     src/query/physical_plan/operator/aggregate_physical_op.cpp
     src/query/physical_plan/operator/all_node_scan_physical_op.cpp
     src/query/physical_plan/operator/alter_edge_label_physical_op.cpp
@@ -224,6 +227,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/physical_planner.cpp
     src/query/executor/query_executor.cpp
     src/query/optimizer/memo.cpp
+    src/query/optimizer/column_rewrite.cpp
     src/query/optimizer/opt_rule.cpp
     src/query/optimizer/task.cpp
     src/query/optimizer/logical_optimizer.cpp
@@ -232,6 +236,7 @@ add_library(eugraph_query_engine STATIC
     src/query/optimizer/physical_expr.cpp
     src/query/optimizer/operator_hash.cpp
     src/query/optimizer/operator_eq.cpp
+    src/query/optimizer/requirement_collector.cpp
     src/query/optimizer/rules/filter_pushdown.cpp
     src/query/optimizer/rules/impl/impl_rules.cpp
 )
@@ -505,6 +510,26 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(optimizer_tests wiredtiger_ext)
     gtest_add_tests(TARGET optimizer_tests)
+
+    # Topology type tests (Phase A of the topology/semantic split refactor)
+    add_executable(topology_types_tests
+        tests/test_topology_types.cpp
+    )
+
+    target_include_directories(topology_types_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+    )
+
+    target_link_libraries(topology_types_tests PRIVATE
+        eugraph_query_engine
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    gtest_add_tests(TARGET topology_types_tests)
 
     # Metadata service tests
     add_executable(metadata_tests
