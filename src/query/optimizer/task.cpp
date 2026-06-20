@@ -163,8 +163,6 @@ void OExprTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
         int p = rule->promise();
         if (p <= 0)
             continue;
-        if (!applicable.empty() && applicable.size() == 0)
-            ; // silence
         applicable.push_back({p, rule->index()});
     }
     std::sort(applicable.begin(), applicable.end(), [](const auto& a, const auto& b) { return a.promise > b.promise; });
