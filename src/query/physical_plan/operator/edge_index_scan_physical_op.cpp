@@ -76,7 +76,8 @@ folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
                 values.push_back(Value(VertexRef{entry.dst_id}));
             }
             if (!edge_var_.empty()) {
-                values.push_back(Value(EdgeKey{entry.edge_id, entry.src_id, entry.dst_id, entry.label_id, entry.seq}));
+                values.push_back(Value(EdgeKey{entry.edge_id, entry.src_id, entry.dst_id, entry.label_id,
+                                               static_cast<uint32_t>(entry.seq)}));
             }
             chunk.appendRow(std::move(values));
         }

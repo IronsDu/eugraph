@@ -9,7 +9,8 @@ namespace compute {
 std::string EdgePropertyExtractPhysicalOp::toString() const {
     std::string s = "EdgePropertyExtract(var=" + variable_ + ", props=[";
     for (size_t i = 0; i < edge_prop_ids_.size(); ++i) {
-        if (i > 0) s += ",";
+        if (i > 0)
+            s += ",";
         s += std::to_string(edge_prop_ids_[i]);
     }
     s += "])";
@@ -24,10 +25,14 @@ folly::coro::AsyncGenerator<DataChunk> EdgePropertyExtractPhysicalOp::executeChu
         size_t input_cols = chunk->numColumns();
         size_t row_count = rows.size();
 
-        struct EdgeQuery { EdgeId id; EdgeLabelId label_id; };
+        struct EdgeQuery {
+            EdgeId id;
+            EdgeLabelId label_id;
+        };
         std::vector<EdgeQuery> queries(row_count, {INVALID_EDGE_ID, INVALID_EDGE_LABEL_ID});
         for (size_t i = 0; i < row_count; ++i) {
-            if (col_idx_ >= rows[i].size()) continue;
+            if (col_idx_ >= rows[i].size())
+                continue;
             const auto& val = rows[i][col_idx_];
             if (std::holds_alternative<EdgeKey>(val)) {
                 const auto& ek = std::get<EdgeKey>(val);
@@ -43,9 +48,11 @@ folly::coro::AsyncGenerator<DataChunk> EdgePropertyExtractPhysicalOp::executeChu
             prop_values[p].resize(row_count);
             uint16_t pid = edge_prop_ids_[p];
             for (size_t i = 0; i < row_count; ++i) {
-                if (queries[i].id == INVALID_EDGE_ID) continue;
+                if (queries[i].id == INVALID_EDGE_ID)
+                    continue;
                 auto pv = co_await store_.getEdgeProperty(queries[i].label_id, queries[i].id, pid);
-                if (pv.has_value()) prop_values[p][i] = propertyValueToValue(*pv);
+                if (pv.has_value())
+                    prop_values[p][i] = propertyValueToValue(*pv);
             }
         }
 
@@ -56,9 +63,11 @@ folly::coro::AsyncGenerator<DataChunk> EdgePropertyExtractPhysicalOp::executeChu
             if (src_col.form == VectorForm::DICTIONARY && src_col.buffer)
                 output.columns.push_back(Column::dict(src_col.buffer, SelectionVector(src_col.dict_sel)));
             else if (src_col.form == VectorForm::FLAT && src_col.buffer) {
-                SelectionVector id_sel; id_sel.is_identity = false;
+                SelectionVector id_sel;
+                id_sel.is_identity = false;
                 id_sel.indices.reserve(row_count);
-                for (size_t i = 0; i < row_count; ++i) id_sel.indices.push_back(static_cast<uint32_t>(i));
+                for (size_t i = 0; i < row_count; ++i)
+                    id_sel.indices.push_back(static_cast<uint32_t>(i));
                 id_sel.count = row_count;
                 output.columns.push_back(Column::dict(src_col.buffer, id_sel));
             } else if (src_col.form == VectorForm::CONSTANT)
@@ -75,15 +84,31 @@ folly::coro::AsyncGenerator<DataChunk> EdgePropertyExtractPhysicalOp::executeChu
             else {
                 for (size_t i = 0; i < row_count; ++i) {
                     const auto& v = prop_values[p][i];
-                    if (std::holds_alternative<bool>(v)) { kind = binder::BoundTypeKind::BOOL; break; }
-                    if (std::holds_alternative<int64_t>(v)) { kind = binder::BoundTypeKind::INT64; break; }
-                    if (std::holds_alternative<double>(v)) { kind = binder::BoundTypeKind::DOUBLE; break; }
-                    if (std::holds_alternative<std::string>(v)) { kind = binder::BoundTypeKind::STRING; break; }
-                    if (std::holds_alternative<ListValue>(v)) { kind = binder::BoundTypeKind::LIST; break; }
+                    if (std::holds_alternative<bool>(v)) {
+                        kind = binder::BoundTypeKind::BOOL;
+                        break;
+                    }
+                    if (std::holds_alternative<int64_t>(v)) {
+                        kind = binder::BoundTypeKind::INT64;
+                        break;
+                    }
+                    if (std::holds_alternative<double>(v)) {
+                        kind = binder::BoundTypeKind::DOUBLE;
+                        break;
+                    }
+                    if (std::holds_alternative<std::string>(v)) {
+                        kind = binder::BoundTypeKind::STRING;
+                        break;
+                    }
+                    if (std::holds_alternative<ListValue>(v)) {
+                        kind = binder::BoundTypeKind::LIST;
+                        break;
+                    }
                 }
             }
             auto col = Column::flat(kind, row_count);
-            for (size_t i = 0; i < row_count; ++i) col.setValue(i, prop_values[p][i]);
+            for (size_t i = 0; i < row_count; ++i)
+                col.setValue(i, prop_values[p][i]);
             output.columns.push_back(std::move(col));
         }
 
