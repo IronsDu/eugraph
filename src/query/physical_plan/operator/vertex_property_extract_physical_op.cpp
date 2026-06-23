@@ -7,12 +7,15 @@ namespace compute {
 
 std::string VertexPropertyExtractPhysicalOp::toString() const {
     std::string s = "VertexPropertyExtract(var=" + variable_ + ", ";
-    if (!label_requests_.empty()) s += "labels, ";
-    if (!vertex_requests_.empty()) s += "vertex, ";
+    if (!label_requests_.empty())
+        s += "labels, ";
+    if (!vertex_requests_.empty())
+        s += "vertex, ";
     s += "props=[";
     bool first = true;
     for (auto& req : prop_requests_) {
-        if (!first) s += ",";
+        if (!first)
+            s += ",";
         first = false;
         s += std::to_string(req.label_id) + "." + std::to_string(req.prop_id);
     }
@@ -26,10 +29,10 @@ folly::coro::AsyncGenerator<DataChunk> VertexPropertyExtractPhysicalOp::executeC
     while (auto chunk = co_await child_gen.next()) {
         size_t input_cols = chunk->numColumns();
         size_t row_count = chunk->numRows();
-        size_t nlabels  = label_requests_.size();
-        size_t nprops   = prop_requests_.size();
-        size_t nverts   = vertex_requests_.size();
-        size_t nnew     = nlabels + nprops + nverts;
+        size_t nlabels = label_requests_.size();
+        size_t nprops = prop_requests_.size();
+        size_t nverts = vertex_requests_.size();
+        size_t nnew = nlabels + nprops + nverts;
 
         std::vector<Column> new_cols(nnew);
         for (size_t i = 0; i < nlabels; ++i)
@@ -42,20 +45,25 @@ folly::coro::AsyncGenerator<DataChunk> VertexPropertyExtractPhysicalOp::executeC
             new_cols[nlabels + nprops + v] = Column::flat(binder::BoundTypeKind::VERTEX, row_count);
 
         VertexId cached_vid = INVALID_VERTEX_ID;
-        size_t   cached_col = SIZE_MAX;
+        size_t cached_col = SIZE_MAX;
         for (size_t row = 0; row < row_count; ++row) {
             // Labels.
             for (size_t li = 0; li < nlabels; ++li) {
                 auto& lr = label_requests_[li];
                 VertexId vid = INVALID_VERTEX_ID;
-                if (lr.source_col == cached_col) vid = cached_vid;
+                if (lr.source_col == cached_col)
+                    vid = cached_vid;
                 else {
                     auto v = chunk->columns[lr.source_col].getValue(row);
-                    if (std::holds_alternative<VertexRef>(v)) vid = std::get<VertexRef>(v).id;
-                    else if (std::holds_alternative<VertexValue>(v)) vid = std::get<VertexValue>(v).id;
-                    cached_vid = vid; cached_col = lr.source_col;
+                    if (std::holds_alternative<VertexRef>(v))
+                        vid = std::get<VertexRef>(v).id;
+                    else if (std::holds_alternative<VertexValue>(v))
+                        vid = std::get<VertexValue>(v).id;
+                    cached_vid = vid;
+                    cached_col = lr.source_col;
                 }
-                if (vid == INVALID_VERTEX_ID) continue;
+                if (vid == INVALID_VERTEX_ID)
+                    continue;
                 auto labels = co_await store_.getVertexLabels(vid);
                 labels.erase(INVALID_LABEL_ID);
                 ListValue lv;
@@ -71,14 +79,19 @@ folly::coro::AsyncGenerator<DataChunk> VertexPropertyExtractPhysicalOp::executeC
             for (size_t p = 0; p < nprops; ++p) {
                 auto& pr = prop_requests_[p];
                 VertexId vid = INVALID_VERTEX_ID;
-                if (pr.source_col == cached_col) vid = cached_vid;
+                if (pr.source_col == cached_col)
+                    vid = cached_vid;
                 else {
                     auto v = chunk->columns[pr.source_col].getValue(row);
-                    if (std::holds_alternative<VertexRef>(v)) vid = std::get<VertexRef>(v).id;
-                    else if (std::holds_alternative<VertexValue>(v)) vid = std::get<VertexValue>(v).id;
-                    cached_vid = vid; cached_col = pr.source_col;
+                    if (std::holds_alternative<VertexRef>(v))
+                        vid = std::get<VertexRef>(v).id;
+                    else if (std::holds_alternative<VertexValue>(v))
+                        vid = std::get<VertexValue>(v).id;
+                    cached_vid = vid;
+                    cached_col = pr.source_col;
                 }
-                if (vid == INVALID_VERTEX_ID) continue;
+                if (vid == INVALID_VERTEX_ID)
+                    continue;
                 auto pv = co_await store_.getVertexProperty(vid, pr.label_id, pr.prop_id);
                 if (pv.has_value())
                     new_cols[nlabels + p].setValue(row, propertyValueToValue(*pv));
@@ -88,14 +101,19 @@ folly::coro::AsyncGenerator<DataChunk> VertexPropertyExtractPhysicalOp::executeC
             for (size_t v = 0; v < nverts; ++v) {
                 auto& vr = vertex_requests_[v];
                 VertexId vid = INVALID_VERTEX_ID;
-                if (vr.source_col == cached_col) vid = cached_vid;
+                if (vr.source_col == cached_col)
+                    vid = cached_vid;
                 else {
                     auto val = chunk->columns[vr.source_col].getValue(row);
-                    if (std::holds_alternative<VertexRef>(val)) vid = std::get<VertexRef>(val).id;
-                    else if (std::holds_alternative<VertexValue>(val)) vid = std::get<VertexValue>(val).id;
-                    cached_vid = vid; cached_col = vr.source_col;
+                    if (std::holds_alternative<VertexRef>(val))
+                        vid = std::get<VertexRef>(val).id;
+                    else if (std::holds_alternative<VertexValue>(val))
+                        vid = std::get<VertexValue>(val).id;
+                    cached_vid = vid;
+                    cached_col = vr.source_col;
                 }
-                if (vid == INVALID_VERTEX_ID) continue;
+                if (vid == INVALID_VERTEX_ID)
+                    continue;
                 VertexValue vv;
                 vv.id = vid;
                 auto labels = co_await store_.getVertexLabels(vid);
@@ -103,7 +121,8 @@ folly::coro::AsyncGenerator<DataChunk> VertexPropertyExtractPhysicalOp::executeC
                 vv.labels = std::move(labels);
                 for (auto lid : vv.labels.value_or(LabelIdSet{})) {
                     auto p = co_await store_.getVertexProperties(vid, lid);
-                    if (p) vv.properties[lid] = std::move(*p);
+                    if (p)
+                        vv.properties[lid] = std::move(*p);
                 }
                 new_cols[nlabels + nprops + v].setValue(row, Value(std::move(vv)));
             }

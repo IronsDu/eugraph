@@ -40,20 +40,24 @@ public:
     };
 
     VertexPropertyExtractPhysicalOp(std::string variable, std::vector<LabelRequest> label_requests,
-                                    std::vector<PropRequest> prop_requests,
-                                    std::vector<VertexRequest> vertex_requests, IAsyncGraphDataStore& store,
-                                    std::unordered_map<LabelId, std::string> label_id_to_name,
-                                    Schema input_schema, std::vector<binder::BoundType> output_types,
+                                    std::vector<PropRequest> prop_requests, std::vector<VertexRequest> vertex_requests,
+                                    IAsyncGraphDataStore& store,
+                                    std::unordered_map<LabelId, std::string> label_id_to_name, Schema input_schema,
+                                    std::vector<binder::BoundType> output_types,
                                     std::unique_ptr<PhysicalOperator> child)
         : variable_(std::move(variable)), label_requests_(std::move(label_requests)),
           prop_requests_(std::move(prop_requests)), vertex_requests_(std::move(vertex_requests)), store_(store),
           label_id_to_name_(std::move(label_id_to_name)), input_schema_(std::move(input_schema)),
           output_types_(std::move(output_types)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+    folly::coro::AsyncGenerator<RowBatch> execute() override {
+        return executeViaChunk();
+    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
-    std::vector<const PhysicalOperator*> children() const override { return {child_.get()}; }
+    std::vector<const PhysicalOperator*> children() const override {
+        return {child_.get()};
+    }
 
 private:
     std::string variable_;
