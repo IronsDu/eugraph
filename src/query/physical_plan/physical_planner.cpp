@@ -415,7 +415,7 @@ loadVertexLabelsInPlace(PlanOperatorResult&& child_result, const std::string& va
                 co_yield std::move(out);
             }
         }
-        std::string toString() const override { return "LabelRead"; }
+        std::string toString() const override { return "VertexLabelRead"; }
         std::vector<const PhysicalOperator*> children() const override { return {ch.get()}; }
     };
     auto ot_copy = std::vector<binder::BoundType>(output_types);
@@ -471,7 +471,7 @@ loadVertexPropertiesInPlace(PlanOperatorResult&& child_result, const std::string
                 co_yield std::move(out);
             }
         }
-        std::string toString() const override { return "PropertyRead"; }
+        std::string toString() const override { return "VertexPropertyRead"; }
         std::vector<const PhysicalOperator*> children() const override { return {ch.get()}; }
     };
     auto ot_copy = std::vector<binder::BoundType>(ot);
@@ -979,7 +979,7 @@ PlanOperatorResult extractChildResult(std::variant<PlanOperatorResult, std::stri
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
 PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphDataStore& store,
                            IAsyncGraphMetaStore& meta, PlanContext& ctx) {
-    ctx.use_property_extract = canUsePropertyExtract(bound_plan.root, ctx);
+    ctx.use_property_extract = false; //(bound_plan.root, ctx);
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(bound_plan.root, store, meta, ctx, empty_schema, empty_types);
@@ -1201,7 +1201,7 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     // Standalone PropertyExtractPhysicalOp operators (flat columnar) will be
     // enabled once per-operator column index mapping is implemented.
     binder::BoundLogicalOperator materialized = materializeChosen(chosen);
-    ctx.use_property_extract = canUsePropertyExtract(materialized, ctx);
+    ctx.use_property_extract = false; //
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(materialized, store, meta, ctx, empty_schema, empty_types);
@@ -1274,7 +1274,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result =
                         loadVertexPropertiesInPlace(std::move(plan_result), val.variable, val.label_prop_ids, store);
                     plan_result = dispatchVertexPropertyExtract(std::move(plan_result), val.variable,
-                                                                val.label_prop_ids, /*include_labels=*/true, store,
+                                                                val.label_prop_ids, /*include_labels=*/false, store,
                                                                 ctx.label_defs);
                 } else {
                     plan_result = loadVertexLabelsInPlace(std::move(plan_result), val.variable, store);

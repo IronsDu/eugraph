@@ -5800,25 +5800,23 @@ protected:
 };
 
 TEST_F(PropertyExtractPlanTest, BasicVertexPropertyRead) {
-    // Lightweight extract: Project → VertexPropertyExtract → Scan
-    expectPlanOrder("MATCH (n:Person) RETURN n.name, n.age", {"Project", "VertexPropertyExtract", "Scan"});
+    // Old wrap pipeline: Project → VertexPropertyRead → LabelScan
+    expectPlanOrder("MATCH (n:Person) RETURN n.name, n.age", {"Project", "VertexPropertyRead", "Scan"});
 }
 
 TEST_F(PropertyExtractPlanTest, FilterPropertyExtract) {
     expectPlanOrder("MATCH (n:Person) WHERE n.age > 30 RETURN n.name",
-                    {"Project", "Filter", "VertexPropertyExtract", "Scan"});
+                    {"Project", "Filter", "VertexPropertyRead", "Scan"});
 }
 
 TEST_F(PropertyExtractPlanTest, ExpandBothSidesPropertyExtract) {
-    // a (LabelScan) gets extract; b (Expand dst) uses old wraps.
     expectPlanOrder("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.city",
-                    {"Project", "EdgePropertyRead", "Expand", "VertexPropertyExtract", "Scan"});
+                    {"Project", "VertexPropertyRead", "EdgePropertyRead", "Expand", "Scan"});
 }
 
 TEST_F(PropertyExtractPlanTest, EdgePropertyExtract) {
-    // Labeled scan + labeled edge → both vertex and edge extract activate.
     expectPlanOrder("MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE r.since > 2020 RETURN a.name, r.since",
-                    {"Project", "Filter", "EdgePropertyExtract", "Expand", "VertexPropertyExtract", "Scan"});
+                    {"Project", "Filter", "EdgePropertyRead", "Expand", "VertexPropertyRead", "Scan"});
 }
 
 // Execution tests — verify results are correct.
