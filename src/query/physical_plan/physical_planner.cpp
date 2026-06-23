@@ -27,7 +27,7 @@ namespace compute {
 
 // ==================== Helpers ====================
 
-static binder::BoundType propertyTypeToBoundType(PropertyType pt) {
+[[maybe_unused]] static binder::BoundType propertyTypeToBoundType(PropertyType pt) {
     switch (pt) {
     case PropertyType::BOOL:
         return binder::BoundType::Bool();
@@ -58,7 +58,7 @@ static binder::BoundType propertyTypeToBoundType(PropertyType pt) {
     }
 }
 
-static PlanOperatorResult
+[[maybe_unused]] static PlanOperatorResult
 dispatchVertexPropertyExtract(PlanOperatorResult&& child_result, const std::string& variable,
                               const std::unordered_map<LabelId, std::vector<uint16_t>>& label_prop_ids,
                               bool include_labels, IAsyncGraphDataStore& store,
@@ -110,13 +110,12 @@ dispatchVertexPropertyExtract(PlanOperatorResult&& child_result, const std::stri
     auto extract_op = std::make_unique<VertexPropertyExtractPhysicalOp>(
         variable, std::move(label_requests), std::move(prop_requests),
         std::vector<VertexPropertyExtractPhysicalOp::VertexRequest>{}, store, std::move(label_id_to_name),
-        Schema(child_result.output_schema), std::vector<binder::BoundType>(output_types),
-        std::move(child_result.op));
+        Schema(child_result.output_schema), std::vector<binder::BoundType>(output_types), std::move(child_result.op));
     return PlanOperatorResult{std::move(extract_op), std::move(output_schema), std::move(output_types)};
 }
 
 /// Create an EdgePropertyExtractPhysicalOp that appends flat edge property columns.
-static PlanOperatorResult
+[[maybe_unused]] static PlanOperatorResult
 dispatchEdgePropertyExtract(PlanOperatorResult&& child_result, const std::string& variable,
                             const std::vector<uint16_t>& edge_prop_ids, EdgeLabelId edge_label_id,
                             IAsyncGraphDataStore& store,
@@ -162,7 +161,7 @@ dispatchEdgePropertyExtract(PlanOperatorResult&& child_result, const std::string
 // - Only labeled scans (no unlabeled AllNodeScan)
 // - No BoundDynamicPropertyRef
 // - At least one known (non-__anon__) property
-static bool canUsePropertyExtract(const binder::BoundLogicalOperator& op, PlanContext& ctx) {
+[[maybe_unused]] static bool canUsePropertyExtract(const binder::BoundLogicalOperator& op, PlanContext& ctx) {
     std::function<bool(const binder::BoundExpression&)> exprHasDPR;
     exprHasDPR = [&](const binder::BoundExpression& expr) -> bool {
         return std::visit(
@@ -371,14 +370,16 @@ static bool canUsePropertyExtract(const binder::BoundLogicalOperator& op, PlanCo
 
 /// Inline label loader for non-standalone path. Upgrades VertexRef→VertexValue
 /// in-place (preserves old wrap semantics for BoundDynamicPropertyRef / RETURN n).
-static PlanOperatorResult
-loadVertexLabelsInPlace(PlanOperatorResult&& child_result, const std::string& variable,
-                        IAsyncGraphDataStore& store) {
+static PlanOperatorResult loadVertexLabelsInPlace(PlanOperatorResult&& child_result, const std::string& variable,
+                                                  IAsyncGraphDataStore& store) {
     if (variable.empty())
         return std::move(child_result);
     size_t col_idx = SIZE_MAX;
     for (size_t i = child_result.output_schema.size(); i-- > 0;)
-        if (child_result.output_schema[i] == variable) { col_idx = i; break; }
+        if (child_result.output_schema[i] == variable) {
+            col_idx = i;
+            break;
+        }
     if (col_idx == SIZE_MAX)
         return std::move(child_result);
 
@@ -386,12 +387,16 @@ loadVertexLabelsInPlace(PlanOperatorResult&& child_result, const std::string& va
     output_types[col_idx] = binder::BoundType::Vertex();
 
     struct LabelReadOp : PhysicalOperator {
-        size_t ci; IAsyncGraphDataStore& s; std::vector<binder::BoundType> ot;
+        size_t ci;
+        IAsyncGraphDataStore& s;
+        std::vector<binder::BoundType> ot;
         std::unique_ptr<PhysicalOperator> ch;
         LabelReadOp(size_t c, IAsyncGraphDataStore& st, std::vector<binder::BoundType> o,
                     std::unique_ptr<PhysicalOperator> chld)
             : ci(c), s(st), ot(std::move(o)), ch(std::move(chld)) {}
-        folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+        folly::coro::AsyncGenerator<RowBatch> execute() override {
+            return executeViaChunk();
+        }
         folly::coro::AsyncGenerator<DataChunk> executeChunk() override {
             auto g = ch->executeChunk();
             while (auto ck = co_await g.next()) {
@@ -400,9 +405,12 @@ loadVertexLabelsInPlace(PlanOperatorResult&& child_result, const std::string& va
                 for (size_t r = 0; r < n; ++r) {
                     auto v = ck->columns[ci].getValue(r);
                     VertexValue vv;
-                    if (std::holds_alternative<VertexRef>(v)) vv.id = std::get<VertexRef>(v).id;
-                    else if (std::holds_alternative<VertexValue>(v)) vv = std::get<VertexValue>(v);
-                    else continue;
+                    if (std::holds_alternative<VertexRef>(v))
+                        vv.id = std::get<VertexRef>(v).id;
+                    else if (std::holds_alternative<VertexValue>(v))
+                        vv = std::get<VertexValue>(v);
+                    else
+                        continue;
                     auto lbs = co_await s.getVertexLabels(vv.id);
                     lbs.erase(INVALID_LABEL_ID);
                     vv.labels = std::move(lbs);
@@ -415,8 +423,12 @@ loadVertexLabelsInPlace(PlanOperatorResult&& child_result, const std::string& va
                 co_yield std::move(out);
             }
         }
-        std::string toString() const override { return "VertexLabelRead"; }
-        std::vector<const PhysicalOperator*> children() const override { return {ch.get()}; }
+        std::string toString() const override {
+            return "VertexLabelRead";
+        }
+        std::vector<const PhysicalOperator*> children() const override {
+            return {ch.get()};
+        }
     };
     auto ot_copy = std::vector<binder::BoundType>(output_types);
     auto op = std::make_unique<LabelReadOp>(col_idx, store, std::move(output_types), std::move(child_result.op));
@@ -425,7 +437,7 @@ loadVertexLabelsInPlace(PlanOperatorResult&& child_result, const std::string& va
 
 /// Inline property loader for non-standalone path. Loads properties into
 /// VertexValue in-place (preserves old wrap semantics for BoundPropertyRef).
-static PlanOperatorResult
+[[maybe_unused]] static PlanOperatorResult
 loadVertexPropertiesInPlace(PlanOperatorResult&& child_result, const std::string& variable,
                             const std::unordered_map<LabelId, std::vector<uint16_t>>& label_prop_ids,
                             IAsyncGraphDataStore& store) {
@@ -433,7 +445,10 @@ loadVertexPropertiesInPlace(PlanOperatorResult&& child_result, const std::string
         return std::move(child_result);
     size_t col_idx = SIZE_MAX;
     for (size_t i = child_result.output_schema.size(); i-- > 0;)
-        if (child_result.output_schema[i] == variable) { col_idx = i; break; }
+        if (child_result.output_schema[i] == variable) {
+            col_idx = i;
+            break;
+        }
     if (col_idx == SIZE_MAX)
         return std::move(child_result);
 
@@ -441,14 +456,17 @@ loadVertexPropertiesInPlace(PlanOperatorResult&& child_result, const std::string
     ot[col_idx] = binder::BoundType::Vertex();
 
     struct PropReadOp : PhysicalOperator {
-        size_t ci; std::unordered_map<LabelId, std::vector<uint16_t>> lp;
-        IAsyncGraphDataStore& s; std::vector<binder::BoundType> ot;
+        size_t ci;
+        std::unordered_map<LabelId, std::vector<uint16_t>> lp;
+        IAsyncGraphDataStore& s;
+        std::vector<binder::BoundType> ot;
         std::unique_ptr<PhysicalOperator> ch;
-        PropReadOp(size_t c, std::unordered_map<LabelId, std::vector<uint16_t>> l,
-                   IAsyncGraphDataStore& st, std::vector<binder::BoundType> o,
-                   std::unique_ptr<PhysicalOperator> chld)
+        PropReadOp(size_t c, std::unordered_map<LabelId, std::vector<uint16_t>> l, IAsyncGraphDataStore& st,
+                   std::vector<binder::BoundType> o, std::unique_ptr<PhysicalOperator> chld)
             : ci(c), lp(std::move(l)), s(st), ot(std::move(o)), ch(std::move(chld)) {}
-        folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+        folly::coro::AsyncGenerator<RowBatch> execute() override {
+            return executeViaChunk();
+        }
         folly::coro::AsyncGenerator<DataChunk> executeChunk() override {
             auto g = ch->executeChunk();
             while (auto ck = co_await g.next()) {
@@ -457,26 +475,35 @@ loadVertexPropertiesInPlace(PlanOperatorResult&& child_result, const std::string
                 for (size_t r = 0; r < n; ++r) {
                     auto v = ck->columns[ci].getValue(r);
                     VertexValue vv;
-                    if (std::holds_alternative<VertexRef>(v)) vv.id = std::get<VertexRef>(v).id;
-                    else if (std::holds_alternative<VertexValue>(v)) vv = std::get<VertexValue>(v);
-                    else continue;
+                    if (std::holds_alternative<VertexRef>(v))
+                        vv.id = std::get<VertexRef>(v).id;
+                    else if (std::holds_alternative<VertexValue>(v))
+                        vv = std::get<VertexValue>(v);
+                    else
+                        continue;
                     for (const auto& [lid, pids] : lp) {
                         auto ps = co_await s.getVertexProperties(vv.id, lid, pids);
-                        if (ps) vv.properties[lid] = std::move(*ps);
+                        if (ps)
+                            vv.properties[lid] = std::move(*ps);
                     }
                     en.setValue(r, Value(std::move(vv)));
                 }
-                DataChunk out; out.columns = std::move(ck->columns);
-                out.columns[ci] = std::move(en); out.count = n;
+                DataChunk out;
+                out.columns = std::move(ck->columns);
+                out.columns[ci] = std::move(en);
+                out.count = n;
                 co_yield std::move(out);
             }
         }
-        std::string toString() const override { return "VertexPropertyRead"; }
-        std::vector<const PhysicalOperator*> children() const override { return {ch.get()}; }
+        std::string toString() const override {
+            return "VertexPropertyRead";
+        }
+        std::vector<const PhysicalOperator*> children() const override {
+            return {ch.get()};
+        }
     };
     auto ot_copy = std::vector<binder::BoundType>(ot);
-    auto op = std::make_unique<PropReadOp>(col_idx, label_prop_ids, store, std::move(ot),
-                                            std::move(child_result.op));
+    auto op = std::make_unique<PropReadOp>(col_idx, label_prop_ids, store, std::move(ot), std::move(child_result.op));
     return PlanOperatorResult{std::move(op), std::move(child_result.output_schema), std::move(ot_copy)};
 }
 
@@ -843,7 +870,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         auto plan_result =
             PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types)};
         plan_result = loadVertexLabelsInPlace(std::move(plan_result), scan_op.variable, store);
-        plan_result = loadVertexPropertiesInPlace(std::move(plan_result), scan_op.variable, scan_op.label_prop_ids, store);
+        plan_result =
+            loadVertexPropertiesInPlace(std::move(plan_result), scan_op.variable, scan_op.label_prop_ids, store);
         return plan_result;
     }
     return std::nullopt;
@@ -1253,7 +1281,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 auto plan_result =
                     PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                 plan_result = loadVertexLabelsInPlace(std::move(plan_result), val.variable, store);
-                plan_result = loadVertexPropertiesInPlace(std::move(plan_result), val.variable, val.label_prop_ids, store);
+                plan_result =
+                    loadVertexPropertiesInPlace(std::move(plan_result), val.variable, val.label_prop_ids, store);
                 return plan_result;
             } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
                 Schema output_schema;
@@ -1273,9 +1302,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = loadVertexLabelsInPlace(std::move(plan_result), val.variable, store);
                     plan_result =
                         loadVertexPropertiesInPlace(std::move(plan_result), val.variable, val.label_prop_ids, store);
-                    plan_result = dispatchVertexPropertyExtract(std::move(plan_result), val.variable,
-                                                                val.label_prop_ids, /*include_labels=*/false, store,
-                                                                ctx.label_defs);
+                    plan_result =
+                        dispatchVertexPropertyExtract(std::move(plan_result), val.variable, val.label_prop_ids,
+                                                      /*include_labels=*/false, store, ctx.label_defs);
                 } else {
                     plan_result = loadVertexLabelsInPlace(std::move(plan_result), val.variable, store);
                     plan_result =
@@ -1321,8 +1350,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             dispatchEdgePropertyExtract(std::move(plan_result), v.edge_variable, v.edge_prop_ids,
                                                         v.edge_label_ids[0], store, ctx.edge_label_defs);
                     plan_result = loadVertexLabelsInPlace(std::move(plan_result), v.dst_variable, store);
-                    plan_result =
-                        loadVertexPropertiesInPlace(std::move(plan_result), v.dst_variable, v.dst_label_prop_ids, store);
+                    plan_result = loadVertexPropertiesInPlace(std::move(plan_result), v.dst_variable,
+                                                              v.dst_label_prop_ids, store);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundVarLenExpandOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
@@ -1359,8 +1388,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                     // Phase D: VarLenExpand now outputs VertexRef for dst; load labels here.
                     plan_result = loadVertexLabelsInPlace(std::move(plan_result), v.dst_variable, store);
-                    plan_result =
-                        loadVertexPropertiesInPlace(std::move(plan_result), v.dst_variable, v.dst_label_prop_ids, store);
+                    plan_result = loadVertexPropertiesInPlace(std::move(plan_result), v.dst_variable,
+                                                              v.dst_label_prop_ids, store);
                     plan_result = wrapPathElementPropertyRead(std::move(plan_result), v.path_variable, store);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
