@@ -1,21 +1,20 @@
 #include "query/physical_plan/operator/vertex_property_extract_physical_op.hpp"
 #include "common/types/graph_types.hpp"
-#include "query/dataset/row.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
 
 namespace eugraph {
 namespace compute {
 
 std::string VertexPropertyExtractPhysicalOp::toString() const {
-    std::string s = "VertexPropertyExtract(var=" + variable_ + ", props=[";
+    std::string s = "VertexPropertyExtract(var=" + variable_ + ", ";
+    if (!label_requests_.empty()) s += "labels, ";
+    if (!vertex_requests_.empty()) s += "vertex, ";
+    s += "props=[";
     bool first = true;
-    for (const auto& [lid, pids] : label_prop_ids_) {
-        for (uint16_t pid : pids) {
-            if (!first)
-                s += ",";
-            first = false;
-            s += std::to_string(lid) + "." + std::to_string(pid);
-        }
+    for (auto& req : prop_requests_) {
+        if (!first) s += ",";
+        first = false;
+        s += std::to_string(req.label_id) + "." + std::to_string(req.prop_id);
     }
     s += "])";
     return s;
@@ -25,91 +24,95 @@ folly::coro::AsyncGenerator<DataChunk> VertexPropertyExtractPhysicalOp::executeC
     auto child_gen = child_->executeChunk();
 
     while (auto chunk = co_await child_gen.next()) {
-        auto rows = chunk->toRows();
         size_t input_cols = chunk->numColumns();
-        size_t row_count = rows.size();
+        size_t row_count = chunk->numRows();
+        size_t nlabels  = label_requests_.size();
+        size_t nprops   = prop_requests_.size();
+        size_t nverts   = vertex_requests_.size();
+        size_t nnew     = nlabels + nprops + nverts;
 
-        std::vector<VertexId> vids(row_count, INVALID_VERTEX_ID);
-        for (size_t i = 0; i < row_count; ++i) {
-            if (col_idx_ >= rows[i].size())
-                continue;
-            const auto& val = rows[i][col_idx_];
-            if (std::holds_alternative<VertexRef>(val))
-                vids[i] = std::get<VertexRef>(val).id;
-            else if (std::holds_alternative<VertexValue>(val))
-                vids[i] = std::get<VertexValue>(val).id;
+        std::vector<Column> new_cols(nnew);
+        for (size_t i = 0; i < nlabels; ++i)
+            new_cols[i] = Column::flat(binder::BoundTypeKind::LIST, row_count);
+        for (size_t p = 0; p < nprops; ++p) {
+            auto kind = output_types_[input_cols + nlabels + p].kind;
+            new_cols[nlabels + p] = Column::flat(kind, row_count);
         }
+        for (size_t v = 0; v < nverts; ++v)
+            new_cols[nlabels + nprops + v] = Column::flat(binder::BoundTypeKind::VERTEX, row_count);
 
-        std::vector<std::vector<Value>> prop_values(prop_list_.size());
-        for (size_t p = 0; p < prop_list_.size(); ++p) {
-            prop_values[p].resize(row_count);
-            auto [lid, pid] = prop_list_[p];
-            for (size_t i = 0; i < row_count; ++i) {
-                if (vids[i] == INVALID_VERTEX_ID)
-                    continue;
-                auto pv = co_await store_.getVertexProperty(vids[i], lid, pid);
+        VertexId cached_vid = INVALID_VERTEX_ID;
+        size_t   cached_col = SIZE_MAX;
+        for (size_t row = 0; row < row_count; ++row) {
+            // Labels.
+            for (size_t li = 0; li < nlabels; ++li) {
+                auto& lr = label_requests_[li];
+                VertexId vid = INVALID_VERTEX_ID;
+                if (lr.source_col == cached_col) vid = cached_vid;
+                else {
+                    auto v = chunk->columns[lr.source_col].getValue(row);
+                    if (std::holds_alternative<VertexRef>(v)) vid = std::get<VertexRef>(v).id;
+                    else if (std::holds_alternative<VertexValue>(v)) vid = std::get<VertexValue>(v).id;
+                    cached_vid = vid; cached_col = lr.source_col;
+                }
+                if (vid == INVALID_VERTEX_ID) continue;
+                auto labels = co_await store_.getVertexLabels(vid);
+                labels.erase(INVALID_LABEL_ID);
+                ListValue lv;
+                for (auto lid : labels) {
+                    auto it = label_id_to_name_.find(lid);
+                    if (it != label_id_to_name_.end())
+                        lv.elements.push_back(ValueStorage{Value(it->second)});
+                }
+                new_cols[li].setValue(row, Value(std::move(lv)));
+            }
+
+            // Properties.
+            for (size_t p = 0; p < nprops; ++p) {
+                auto& pr = prop_requests_[p];
+                VertexId vid = INVALID_VERTEX_ID;
+                if (pr.source_col == cached_col) vid = cached_vid;
+                else {
+                    auto v = chunk->columns[pr.source_col].getValue(row);
+                    if (std::holds_alternative<VertexRef>(v)) vid = std::get<VertexRef>(v).id;
+                    else if (std::holds_alternative<VertexValue>(v)) vid = std::get<VertexValue>(v).id;
+                    cached_vid = vid; cached_col = pr.source_col;
+                }
+                if (vid == INVALID_VERTEX_ID) continue;
+                auto pv = co_await store_.getVertexProperty(vid, pr.label_id, pr.prop_id);
                 if (pv.has_value())
-                    prop_values[p][i] = propertyValueToValue(*pv);
+                    new_cols[nlabels + p].setValue(row, propertyValueToValue(*pv));
+            }
+
+            // Full vertices.
+            for (size_t v = 0; v < nverts; ++v) {
+                auto& vr = vertex_requests_[v];
+                VertexId vid = INVALID_VERTEX_ID;
+                if (vr.source_col == cached_col) vid = cached_vid;
+                else {
+                    auto val = chunk->columns[vr.source_col].getValue(row);
+                    if (std::holds_alternative<VertexRef>(val)) vid = std::get<VertexRef>(val).id;
+                    else if (std::holds_alternative<VertexValue>(val)) vid = std::get<VertexValue>(val).id;
+                    cached_vid = vid; cached_col = vr.source_col;
+                }
+                if (vid == INVALID_VERTEX_ID) continue;
+                VertexValue vv;
+                vv.id = vid;
+                auto labels = co_await store_.getVertexLabels(vid);
+                labels.erase(INVALID_LABEL_ID);
+                vv.labels = std::move(labels);
+                for (auto lid : vv.labels.value_or(LabelIdSet{})) {
+                    auto p = co_await store_.getVertexProperties(vid, lid);
+                    if (p) vv.properties[lid] = std::move(*p);
+                }
+                new_cols[nlabels + nprops + v].setValue(row, Value(std::move(vv)));
             }
         }
 
         DataChunk output;
-        output.columns.reserve(output_types_.size());
-        for (size_t c = 0; c < input_cols; ++c) {
-            auto& src_col = chunk->columns[c];
-            if (src_col.form == VectorForm::DICTIONARY && src_col.buffer)
-                output.columns.push_back(Column::dict(src_col.buffer, SelectionVector(src_col.dict_sel)));
-            else if (src_col.form == VectorForm::FLAT && src_col.buffer) {
-                SelectionVector id_sel;
-                id_sel.is_identity = false;
-                id_sel.indices.reserve(row_count);
-                for (size_t i = 0; i < row_count; ++i)
-                    id_sel.indices.push_back(static_cast<uint32_t>(i));
-                id_sel.count = row_count;
-                output.columns.push_back(Column::dict(src_col.buffer, id_sel));
-            } else if (src_col.form == VectorForm::CONSTANT)
-                output.columns.push_back(Column::constant(src_col.constant_value));
-            else
-                output.columns.push_back(Column::flat(src_col.type, row_count));
-        }
-
-        for (size_t p = 0; p < prop_list_.size(); ++p) {
-            auto col_idx = input_cols + p;
-            auto kind = binder::BoundTypeKind::ANY;
-            if (col_idx < output_types_.size())
-                kind = output_types_[col_idx].kind;
-            else {
-                // Infer type from the first non-empty value at runtime.
-                for (size_t i = 0; i < row_count; ++i) {
-                    const auto& v = prop_values[p][i];
-                    if (std::holds_alternative<bool>(v)) {
-                        kind = binder::BoundTypeKind::BOOL;
-                        break;
-                    }
-                    if (std::holds_alternative<int64_t>(v)) {
-                        kind = binder::BoundTypeKind::INT64;
-                        break;
-                    }
-                    if (std::holds_alternative<double>(v)) {
-                        kind = binder::BoundTypeKind::DOUBLE;
-                        break;
-                    }
-                    if (std::holds_alternative<std::string>(v)) {
-                        kind = binder::BoundTypeKind::STRING;
-                        break;
-                    }
-                    if (std::holds_alternative<ListValue>(v)) {
-                        kind = binder::BoundTypeKind::LIST;
-                        break;
-                    }
-                }
-            }
-            auto col = Column::flat(kind, row_count);
-            for (size_t i = 0; i < row_count; ++i)
-                col.setValue(i, prop_values[p][i]);
-            output.columns.push_back(std::move(col));
-        }
-
+        output.columns = std::move(chunk->columns);
+        for (auto& nc : new_cols)
+            output.columns.push_back(std::move(nc));
         output.count = row_count;
         co_yield std::move(output);
     }

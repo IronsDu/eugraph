@@ -25,60 +25,459 @@
 namespace eugraph {
 namespace compute {
 
-// ==================== Deferred Property Loading Wrappers ====================
+// ==================== Helpers ====================
 
-static PlanOperatorResult wrapVertexLabelRead(PlanOperatorResult&& child_result, const std::string& variable,
-                                              LabelId anon_label_id, IAsyncGraphDataStore& store) {
-    if (variable.empty())
-        return std::move(child_result);
-    // Find the LAST occurrence: for self-relationships like (n)-[r]->(n),
-    // the variable appears twice (src and dst). We want the Expand's
-    // output column (last occurrence), not the scan's input column.
-    size_t col_idx = SIZE_MAX;
-    for (size_t i = child_result.output_schema.size(); i-- > 0;) {
-        if (child_result.output_schema[i] == variable) {
-            col_idx = i;
-            break;
-        }
+static binder::BoundType propertyTypeToBoundType(PropertyType pt) {
+    switch (pt) {
+    case PropertyType::BOOL:
+        return binder::BoundType::Bool();
+    case PropertyType::INT64:
+        return binder::BoundType::Int64();
+    case PropertyType::DOUBLE:
+        return binder::BoundType::Double();
+    case PropertyType::STRING:
+        return binder::BoundType::String();
+    case PropertyType::DATETIME:
+        return binder::BoundType::DateTime();
+    case PropertyType::TIME:
+        return binder::BoundType::Time();
+    case PropertyType::DURATION:
+        return binder::BoundType::Duration();
+    case PropertyType::INT64_ARRAY:
+    case PropertyType::DOUBLE_ARRAY:
+    case PropertyType::STRING_ARRAY:
+        return binder::BoundType::List(binder::BoundType::Any());
+    case PropertyType::DATETIME_ARRAY:
+        return binder::BoundType::List(binder::BoundType::DateTime());
+    case PropertyType::TIME_ARRAY:
+        return binder::BoundType::List(binder::BoundType::Time());
+    case PropertyType::DURATION_ARRAY:
+        return binder::BoundType::List(binder::BoundType::Duration());
+    default:
+        return binder::BoundType::Any();
     }
-    if (col_idx == SIZE_MAX)
-        return std::move(child_result);
-    // Phase D: upgrade output type from topology (VERTEX_REF) to semantic (VERTEX)
-    // at the target column. The runtime operator accepts both but produces VERTEX.
-    auto output_types = std::vector<binder::BoundType>(child_result.output_types);
-    output_types[col_idx] = binder::BoundType::Vertex();
-    child_result.output_types[col_idx] = binder::BoundType::Vertex();
-    auto read_op = std::make_unique<VertexLabelReadPhysicalOp>(variable, col_idx, anon_label_id, store,
-                                                               Schema(child_result.output_schema),
-                                                               std::move(output_types), std::move(child_result.op));
-    return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
-                              std::move(child_result.output_types)};
 }
 
 static PlanOperatorResult
-wrapVertexPropertyRead(PlanOperatorResult&& child_result, const std::string& variable,
-                       const std::unordered_map<LabelId, std::vector<uint16_t>>& label_prop_ids,
-                       IAsyncGraphDataStore& store) {
-    if (variable.empty() || label_prop_ids.empty())
-        return std::move(child_result);
+dispatchVertexPropertyExtract(PlanOperatorResult&& child_result, const std::string& variable,
+                              const std::unordered_map<LabelId, std::vector<uint16_t>>& label_prop_ids,
+                              bool include_labels, IAsyncGraphDataStore& store,
+                              const std::unordered_map<LabelId, LabelDef>& label_defs) {
     size_t col_idx = SIZE_MAX;
-    for (size_t i = child_result.output_schema.size(); i-- > 0;) {
+    for (size_t i = child_result.output_schema.size(); i-- > 0;)
         if (child_result.output_schema[i] == variable) {
             col_idx = i;
             break;
         }
-    }
     if (col_idx == SIZE_MAX)
         return std::move(child_result);
-    // Phase D: upgrade output type from topology (VERTEX_REF) to semantic (VERTEX).
-    auto vpr_output_types = std::vector<binder::BoundType>(child_result.output_types);
-    vpr_output_types[col_idx] = binder::BoundType::Vertex();
-    child_result.output_types[col_idx] = binder::BoundType::Vertex();
-    auto read_op = std::make_unique<VertexPropertyReadPhysicalOp>(
-        variable, col_idx, label_prop_ids, store, Schema(child_result.output_schema), std::move(vpr_output_types),
+    if (!include_labels && label_prop_ids.empty())
+        return std::move(child_result);
+
+    std::vector<VertexPropertyExtractPhysicalOp::LabelRequest> label_requests;
+    std::vector<VertexPropertyExtractPhysicalOp::PropRequest> prop_requests;
+    Schema output_schema = child_result.output_schema;
+    auto output_types = child_result.output_types;
+
+    std::unordered_map<LabelId, std::string> label_id_to_name;
+    if (include_labels) {
+        label_requests.push_back({col_idx});
+        output_schema.push_back(variable + ".labels");
+        output_types.push_back(binder::BoundType::List(binder::BoundType::String()));
+        for (const auto& [lid, ldef] : label_defs)
+            if (ldef.name != kAnonLabelName)
+                label_id_to_name[lid] = ldef.name;
+    }
+
+    for (const auto& [lid, pids] : label_prop_ids) {
+        auto def_it = label_defs.find(lid);
+        for (uint16_t pid : pids) {
+            std::string pn = std::to_string(pid);
+            binder::BoundType pt = binder::BoundType::Any();
+            if (def_it != label_defs.end())
+                for (const auto& pd : def_it->second.properties)
+                    if (pd.id == pid) {
+                        pn = pd.name;
+                        pt = propertyTypeToBoundType(pd.type);
+                        break;
+                    }
+            output_schema.push_back(variable + "." + pn);
+            output_types.push_back(pt);
+            prop_requests.push_back({col_idx, lid, pid});
+        }
+    }
+
+    auto extract_op = std::make_unique<VertexPropertyExtractPhysicalOp>(
+        variable, std::move(label_requests), std::move(prop_requests),
+        std::vector<VertexPropertyExtractPhysicalOp::VertexRequest>{}, store, std::move(label_id_to_name),
+        Schema(child_result.output_schema), std::vector<binder::BoundType>(output_types),
         std::move(child_result.op));
-    return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
-                              std::move(child_result.output_types)};
+    return PlanOperatorResult{std::move(extract_op), std::move(output_schema), std::move(output_types)};
+}
+
+/// Create an EdgePropertyExtractPhysicalOp that appends flat edge property columns.
+static PlanOperatorResult
+dispatchEdgePropertyExtract(PlanOperatorResult&& child_result, const std::string& variable,
+                            const std::vector<uint16_t>& edge_prop_ids, EdgeLabelId edge_label_id,
+                            IAsyncGraphDataStore& store,
+                            const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs) {
+    if (variable.empty() || edge_prop_ids.empty())
+        return std::move(child_result);
+    size_t col_idx = SIZE_MAX;
+    for (size_t i = child_result.output_schema.size(); i-- > 0;)
+        if (child_result.output_schema[i] == variable) {
+            col_idx = i;
+            break;
+        }
+    if (col_idx == SIZE_MAX)
+        return std::move(child_result);
+
+    Schema output_schema = child_result.output_schema;
+    auto output_types = child_result.output_types;
+    auto def_it = edge_label_defs.find(edge_label_id);
+    for (uint16_t pid : edge_prop_ids) {
+        std::string pn = std::to_string(pid);
+        binder::BoundType pt = binder::BoundType::Any();
+        if (def_it != edge_label_defs.end()) {
+            for (const auto& pd : def_it->second.properties) {
+                if (pd.id == pid) {
+                    pn = pd.name;
+                    pt = propertyTypeToBoundType(pd.type);
+                    break;
+                }
+            }
+        }
+        output_schema.push_back(variable + "." + pn);
+        output_types.push_back(pt);
+    }
+
+    auto extract_op = std::make_unique<EdgePropertyExtractPhysicalOp>(
+        variable, col_idx, edge_prop_ids, store, Schema(child_result.output_schema),
+        std::vector<binder::BoundType>(output_types), std::move(child_result.op));
+    return PlanOperatorResult{std::move(extract_op), std::move(output_schema), std::move(output_types)};
+}
+
+// Returns true if the plan is safe for standalone extract.
+// - Single-scan only (no WITH/multi-MATCH) — extract appends columns
+// - Only labeled scans (no unlabeled AllNodeScan)
+// - No BoundDynamicPropertyRef
+// - At least one known (non-__anon__) property
+static bool canUsePropertyExtract(const binder::BoundLogicalOperator& op, PlanContext& ctx) {
+    std::function<bool(const binder::BoundExpression&)> exprHasDPR;
+    exprHasDPR = [&](const binder::BoundExpression& expr) -> bool {
+        return std::visit(
+            [&](const auto& ptr) -> bool {
+                using T = std::decay_t<decltype(ptr)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>)
+                    return true;
+                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>)
+                    return exprHasDPR(ptr->left) || exprHasDPR(ptr->right);
+                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>)
+                    return exprHasDPR(ptr->operand);
+                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                    for (const auto& a : ptr->args)
+                        if (exprHasDPR(a))
+                            return true;
+                    return false;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>)
+                    return exprHasDPR(ptr->object);
+                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
+                    for (const auto& e : ptr->elements)
+                        if (exprHasDPR(e))
+                            return true;
+                    return false;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
+                    if (ptr->subject && exprHasDPR(*ptr->subject))
+                        return true;
+                    for (const auto& [w, t] : ptr->when_thens)
+                        if (exprHasDPR(w) || exprHasDPR(t))
+                            return true;
+                    if (ptr->else_expr && exprHasDPR(*ptr->else_expr))
+                        return true;
+                    return false;
+                }
+                return false;
+            },
+            expr);
+    };
+    std::function<bool(const binder::BoundLogicalOperator&)> opHasDPR;
+    opHasDPR = [&](const binder::BoundLogicalOperator& o) -> bool {
+        return std::visit(
+            [&](const auto& v) -> bool {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                    if (v) {
+                        if (exprHasDPR(v->predicate))
+                            return true;
+                        return opHasDPR(v->child);
+                    }
+                    return false;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                    if (v) {
+                        for (auto& i : v->items)
+                            if (exprHasDPR(i.expr))
+                                return true;
+                        return opHasDPR(v->child);
+                    }
+                    return false;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                    if (v) {
+                        for (auto& i : v->items)
+                            if (exprHasDPR(i.expr))
+                                return true;
+                        return opHasDPR(v->child);
+                    }
+                    return false;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
+                    if (v) {
+                        for (auto& e : v->group_keys)
+                            if (exprHasDPR(e))
+                                return true;
+                        for (auto& a : v->aggregates)
+                            if (exprHasDPR(a.argument))
+                                return true;
+                        return opHasDPR(v->child);
+                    }
+                    return false;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>)
+                    return v && opHasDPR(v->child);
+                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
+                                   std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
+                                   std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>)
+                    return v && opHasDPR(v->child);
+                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>)
+                    return v && (opHasDPR(v->left) || opHasDPR(v->right));
+                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
+                                   std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                   std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>)
+                    return v && (opHasDPR(v->left) || opHasDPR(v->right));
+                return false;
+            },
+            o);
+    };
+    if (opHasDPR(op))
+        return false;
+
+    // Count scans — only single-scan queries are safe (no WITH/multi-MATCH)
+    int scan_count = 0;
+    bool has_unlabeled = false;
+    auto walk = [&](auto& self, const binder::BoundLogicalOperator& o) -> void {
+        std::visit(
+            [&](const auto& v) {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
+                    ++scan_count;
+                    if (!v.label_prop_ids.empty())
+                        has_unlabeled = true;
+                } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
+                    ++scan_count;
+                } else if constexpr (std::is_same_v<T, binder::BoundBinaryJoinOp> ||
+                                     std::is_same_v<T, binder::BoundLeftJoinOp> ||
+                                     std::is_same_v<T, binder::BoundSemiJoinOp> ||
+                                     std::is_same_v<T, binder::BoundUnionOp>) {
+                    if (v) {
+                        self(self, v->left);
+                        self(self, v->right);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                    if (v)
+                        self(self, v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                    if (v)
+                        self(self, v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                    if (v)
+                        self(self, v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                    if (v)
+                        self(self, v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                    if (v)
+                        self(self, v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+                    if (v)
+                        self(self, v->child);
+                }
+            },
+            o);
+    };
+    // Also count ProjectOps — WITH creates extra ProjectOps that reference
+    // columns by index, which would be broken by extract column shifts.
+    int proj_count = 0;
+    auto countProj = [&](auto& self, const binder::BoundLogicalOperator& o) -> void {
+        std::visit(
+            [&](const auto& v) {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>)
+                    ++proj_count;
+                if constexpr (std::is_same_v<T, binder::BoundBinaryJoinOp> ||
+                              std::is_same_v<T, binder::BoundLeftJoinOp> ||
+                              std::is_same_v<T, binder::BoundSemiJoinOp> || std::is_same_v<T, binder::BoundUnionOp>) {
+                    if (v) {
+                        self(self, v->left);
+                        self(self, v->right);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                    if (v)
+                        self(self, v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                    if (v)
+                        self(self, v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                    if (v)
+                        self(self, v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                    if (v)
+                        self(self, v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                    if (v)
+                        self(self, v->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+                    if (v)
+                        self(self, v->child);
+                }
+            },
+            o);
+    };
+    countProj(countProj, op);
+
+    walk(walk, op);
+    if (scan_count != 1)
+        return false;
+    if (has_unlabeled)
+        return false;
+    // Only single-Project queries (no WITH): extra ProjectOps reference
+    // columns by index which would be shifted by extract.
+    if (proj_count > 1)
+        return false;
+
+    auto info = optimizer::collectExtractionFromPlan(op, 0);
+    if (info.empty())
+        return false;
+    for (const auto& [var, ext] : info) {
+        for (const auto& [lid, pid] : ext.prop_order) {
+            auto def_it = ctx.label_defs.find(lid);
+            if (def_it != ctx.label_defs.end() && def_it->second.name != kAnonLabelName)
+                return true;
+        }
+    }
+    return false;
+}
+
+// ==================== Deferred Property Loading Wrappers ====================
+
+/// Inline label loader for non-standalone path. Upgrades VertexRef→VertexValue
+/// in-place (preserves old wrap semantics for BoundDynamicPropertyRef / RETURN n).
+static PlanOperatorResult
+loadVertexLabelsInPlace(PlanOperatorResult&& child_result, const std::string& variable,
+                        IAsyncGraphDataStore& store) {
+    if (variable.empty())
+        return std::move(child_result);
+    size_t col_idx = SIZE_MAX;
+    for (size_t i = child_result.output_schema.size(); i-- > 0;)
+        if (child_result.output_schema[i] == variable) { col_idx = i; break; }
+    if (col_idx == SIZE_MAX)
+        return std::move(child_result);
+
+    auto output_types = std::vector<binder::BoundType>(child_result.output_types);
+    output_types[col_idx] = binder::BoundType::Vertex();
+
+    struct LabelReadOp : PhysicalOperator {
+        size_t ci; IAsyncGraphDataStore& s; std::vector<binder::BoundType> ot;
+        std::unique_ptr<PhysicalOperator> ch;
+        LabelReadOp(size_t c, IAsyncGraphDataStore& st, std::vector<binder::BoundType> o,
+                    std::unique_ptr<PhysicalOperator> chld)
+            : ci(c), s(st), ot(std::move(o)), ch(std::move(chld)) {}
+        folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+        folly::coro::AsyncGenerator<DataChunk> executeChunk() override {
+            auto g = ch->executeChunk();
+            while (auto ck = co_await g.next()) {
+                size_t n = ck->numRows();
+                auto en = Column::flat(binder::BoundTypeKind::VERTEX, n);
+                for (size_t r = 0; r < n; ++r) {
+                    auto v = ck->columns[ci].getValue(r);
+                    VertexValue vv;
+                    if (std::holds_alternative<VertexRef>(v)) vv.id = std::get<VertexRef>(v).id;
+                    else if (std::holds_alternative<VertexValue>(v)) vv = std::get<VertexValue>(v);
+                    else continue;
+                    auto lbs = co_await s.getVertexLabels(vv.id);
+                    lbs.erase(INVALID_LABEL_ID);
+                    vv.labels = std::move(lbs);
+                    en.setValue(r, Value(std::move(vv)));
+                }
+                DataChunk out;
+                out.columns = std::move(ck->columns);
+                out.columns[ci] = std::move(en);
+                out.count = n;
+                co_yield std::move(out);
+            }
+        }
+        std::string toString() const override { return "LabelRead"; }
+        std::vector<const PhysicalOperator*> children() const override { return {ch.get()}; }
+    };
+    auto ot_copy = std::vector<binder::BoundType>(output_types);
+    auto op = std::make_unique<LabelReadOp>(col_idx, store, std::move(output_types), std::move(child_result.op));
+    return PlanOperatorResult{std::move(op), std::move(child_result.output_schema), std::move(ot_copy)};
+}
+
+/// Inline property loader for non-standalone path. Loads properties into
+/// VertexValue in-place (preserves old wrap semantics for BoundPropertyRef).
+static PlanOperatorResult
+loadVertexPropertiesInPlace(PlanOperatorResult&& child_result, const std::string& variable,
+                            const std::unordered_map<LabelId, std::vector<uint16_t>>& label_prop_ids,
+                            IAsyncGraphDataStore& store) {
+    if (variable.empty() || label_prop_ids.empty())
+        return std::move(child_result);
+    size_t col_idx = SIZE_MAX;
+    for (size_t i = child_result.output_schema.size(); i-- > 0;)
+        if (child_result.output_schema[i] == variable) { col_idx = i; break; }
+    if (col_idx == SIZE_MAX)
+        return std::move(child_result);
+
+    auto ot = std::vector<binder::BoundType>(child_result.output_types);
+    ot[col_idx] = binder::BoundType::Vertex();
+
+    struct PropReadOp : PhysicalOperator {
+        size_t ci; std::unordered_map<LabelId, std::vector<uint16_t>> lp;
+        IAsyncGraphDataStore& s; std::vector<binder::BoundType> ot;
+        std::unique_ptr<PhysicalOperator> ch;
+        PropReadOp(size_t c, std::unordered_map<LabelId, std::vector<uint16_t>> l,
+                   IAsyncGraphDataStore& st, std::vector<binder::BoundType> o,
+                   std::unique_ptr<PhysicalOperator> chld)
+            : ci(c), lp(std::move(l)), s(st), ot(std::move(o)), ch(std::move(chld)) {}
+        folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
+        folly::coro::AsyncGenerator<DataChunk> executeChunk() override {
+            auto g = ch->executeChunk();
+            while (auto ck = co_await g.next()) {
+                size_t n = ck->numRows();
+                auto en = Column::flat(binder::BoundTypeKind::VERTEX, n);
+                for (size_t r = 0; r < n; ++r) {
+                    auto v = ck->columns[ci].getValue(r);
+                    VertexValue vv;
+                    if (std::holds_alternative<VertexRef>(v)) vv.id = std::get<VertexRef>(v).id;
+                    else if (std::holds_alternative<VertexValue>(v)) vv = std::get<VertexValue>(v);
+                    else continue;
+                    for (const auto& [lid, pids] : lp) {
+                        auto ps = co_await s.getVertexProperties(vv.id, lid, pids);
+                        if (ps) vv.properties[lid] = std::move(*ps);
+                    }
+                    en.setValue(r, Value(std::move(vv)));
+                }
+                DataChunk out; out.columns = std::move(ck->columns);
+                out.columns[ci] = std::move(en); out.count = n;
+                co_yield std::move(out);
+            }
+        }
+        std::string toString() const override { return "PropertyRead"; }
+        std::vector<const PhysicalOperator*> children() const override { return {ch.get()}; }
+    };
+    auto ot_copy = std::vector<binder::BoundType>(ot);
+    auto op = std::make_unique<PropReadOp>(col_idx, label_prop_ids, store, std::move(ot),
+                                            std::move(child_result.op));
+    return PlanOperatorResult{std::move(op), std::move(child_result.output_schema), std::move(ot_copy)};
 }
 
 static PlanOperatorResult wrapEdgePropertyRead(PlanOperatorResult&& child_result, const std::string& variable,
@@ -443,8 +842,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
 
         auto plan_result =
             PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types)};
-        plan_result = wrapVertexLabelRead(std::move(plan_result), scan_op.variable, INVALID_LABEL_ID, store);
-        plan_result = wrapVertexPropertyRead(std::move(plan_result), scan_op.variable, scan_op.label_prop_ids, store);
+        plan_result = loadVertexLabelsInPlace(std::move(plan_result), scan_op.variable, store);
+        plan_result = loadVertexPropertiesInPlace(std::move(plan_result), scan_op.variable, scan_op.label_prop_ids, store);
         return plan_result;
     }
     return std::nullopt;
@@ -580,9 +979,11 @@ PlanOperatorResult extractChildResult(std::variant<PlanOperatorResult, std::stri
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
 PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphDataStore& store,
                            IAsyncGraphMetaStore& meta, PlanContext& ctx) {
+    ctx.use_property_extract = canUsePropertyExtract(bound_plan.root, ctx);
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(bound_plan.root, store, meta, ctx, empty_schema, empty_types);
+    ctx.use_property_extract = false;
     if (std::holds_alternative<std::string>(result))
         return std::get<std::string>(result);
     return finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
@@ -800,9 +1201,11 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     // Standalone PropertyExtractPhysicalOp operators (flat columnar) will be
     // enabled once per-operator column index mapping is implemented.
     binder::BoundLogicalOperator materialized = materializeChosen(chosen);
+    ctx.use_property_extract = canUsePropertyExtract(materialized, ctx);
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(materialized, store, meta, ctx, empty_schema, empty_types);
+    ctx.use_property_extract = false;
     if (std::holds_alternative<std::string>(result))
         return std::get<std::string>(result);
     return finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
@@ -849,8 +1252,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     ctx.label_defs, anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
                 auto plan_result =
                     PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
-                plan_result = wrapVertexLabelRead(std::move(plan_result), val.variable, anon_id, store);
-                plan_result = wrapVertexPropertyRead(std::move(plan_result), val.variable, val.label_prop_ids, store);
+                plan_result = loadVertexLabelsInPlace(std::move(plan_result), val.variable, store);
+                plan_result = loadVertexPropertiesInPlace(std::move(plan_result), val.variable, val.label_prop_ids, store);
                 return plan_result;
             } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
                 Schema output_schema;
@@ -864,8 +1267,20 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
                 auto plan_result =
                     PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
-                plan_result = wrapVertexLabelRead(std::move(plan_result), val.variable, anon_id, store);
-                plan_result = wrapVertexPropertyRead(std::move(plan_result), val.variable, val.label_prop_ids, store);
+                if (ctx.use_property_extract) {
+                    // Extract adds decorative label+property columns;
+                    // in-place loading preserves old wrap semantics for RETURN n etc.
+                    plan_result = loadVertexLabelsInPlace(std::move(plan_result), val.variable, store);
+                    plan_result =
+                        loadVertexPropertiesInPlace(std::move(plan_result), val.variable, val.label_prop_ids, store);
+                    plan_result = dispatchVertexPropertyExtract(std::move(plan_result), val.variable,
+                                                                val.label_prop_ids, /*include_labels=*/true, store,
+                                                                ctx.label_defs);
+                } else {
+                    plan_result = loadVertexLabelsInPlace(std::move(plan_result), val.variable, store);
+                    plan_result =
+                        loadVertexPropertiesInPlace(std::move(plan_result), val.variable, val.label_prop_ids, store);
+                }
                 return plan_result;
             } else {
                 using Elem = typename T::element_type;
@@ -901,9 +1316,13 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto plan_result =
                         PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                     plan_result = wrapEdgePropertyRead(std::move(plan_result), v.edge_variable, v.edge_prop_ids, store);
-                    plan_result = wrapVertexLabelRead(std::move(plan_result), v.dst_variable, anon_id, store);
+                    if (ctx.use_property_extract && !v.edge_prop_ids.empty() && !v.edge_label_ids.empty())
+                        plan_result =
+                            dispatchEdgePropertyExtract(std::move(plan_result), v.edge_variable, v.edge_prop_ids,
+                                                        v.edge_label_ids[0], store, ctx.edge_label_defs);
+                    plan_result = loadVertexLabelsInPlace(std::move(plan_result), v.dst_variable, store);
                     plan_result =
-                        wrapVertexPropertyRead(std::move(plan_result), v.dst_variable, v.dst_label_prop_ids, store);
+                        loadVertexPropertiesInPlace(std::move(plan_result), v.dst_variable, v.dst_label_prop_ids, store);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundVarLenExpandOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
@@ -939,9 +1358,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto plan_result =
                         PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                     // Phase D: VarLenExpand now outputs VertexRef for dst; load labels here.
-                    plan_result = wrapVertexLabelRead(std::move(plan_result), v.dst_variable, anon_id, store);
+                    plan_result = loadVertexLabelsInPlace(std::move(plan_result), v.dst_variable, store);
                     plan_result =
-                        wrapVertexPropertyRead(std::move(plan_result), v.dst_variable, v.dst_label_prop_ids, store);
+                        loadVertexPropertiesInPlace(std::move(plan_result), v.dst_variable, v.dst_label_prop_ids, store);
                     plan_result = wrapPathElementPropertyRead(std::move(plan_result), v.path_variable, store);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {

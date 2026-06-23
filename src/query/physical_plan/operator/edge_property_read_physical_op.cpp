@@ -1,6 +1,5 @@
 #include "query/physical_plan/operator/edge_property_read_physical_op.hpp"
 #include "common/types/graph_types.hpp"
-#include "query/dataset/row.hpp"
 
 namespace eugraph {
 namespace compute {
@@ -24,29 +23,27 @@ folly::coro::AsyncGenerator<DataChunk> EdgePropertyReadPhysicalOp::executeChunk(
     auto child_gen = child_->executeChunk();
 
     while (auto chunk = co_await child_gen.next()) {
-        auto rows = chunk->toRows();
-        size_t input_cols = chunk->numColumns();
-        size_t row_count = rows.size();
+        size_t row_count = chunk->numRows();
 
-        // Load edge properties for each row
-        // TODO: batch co_await
-        for (size_t i = 0; i < row_count; ++i) {
-            if (col_idx_ >= rows[i].size())
-                continue;
-            const auto& val = rows[i][col_idx_];
+        // Build the enriched column first (need to read from chunk).
+        auto kind = output_types_[col_idx_].kind;
+        auto enriched = Column::flat(kind, row_count);
+
+        // Row-major: load properties, write directly to enriched column.
+        for (size_t row = 0; row < row_count; ++row) {
+            auto v = chunk->columns[col_idx_].getValue(row);
             EdgeValue ev;
-            if (std::holds_alternative<EdgeKey>(val)) {
-                const auto& ek = std::get<EdgeKey>(val);
+            if (std::holds_alternative<EdgeKey>(v)) {
+                auto& ek = std::get<EdgeKey>(v);
                 ev.id = ek.id;
                 ev.src_id = ek.src_id;
                 ev.dst_id = ek.dst_id;
                 ev.label_id = ek.label_id;
                 ev.seq = ek.seq;
-            } else if (std::holds_alternative<EdgeValue>(val)) {
-                ev = std::get<EdgeValue>(val);
-            } else {
+            } else if (std::holds_alternative<EdgeValue>(v)) {
+                ev = std::get<EdgeValue>(v);
+            } else
                 continue;
-            }
 
             if (!edge_prop_ids_.empty()) {
                 auto props = co_await store_.getEdgeProperties(ev.label_id, ev.id, edge_prop_ids_);
@@ -54,39 +51,13 @@ folly::coro::AsyncGenerator<DataChunk> EdgePropertyReadPhysicalOp::executeChunk(
                     ev.properties = std::move(*props);
             }
 
-            rows[i][col_idx_] = Value(std::move(ev));
+            enriched.setValue(row, Value(std::move(ev)));
         }
 
-        // Build output DataChunk
+        // Move upstream columns, replace target column.
         DataChunk output;
-        output.columns.reserve(output_types_.size());
-
-        for (size_t c = 0; c < input_cols; ++c) {
-            if (c == col_idx_) {
-                auto col = Column::flat(output_types_[c].kind, row_count);
-                for (size_t i = 0; i < row_count; ++i)
-                    col.setValue(i, rows[i][c]);
-                output.columns.push_back(std::move(col));
-            } else {
-                auto& src_col = chunk->columns[c];
-                if (src_col.form == VectorForm::DICTIONARY && src_col.buffer) {
-                    output.columns.push_back(Column::dict(src_col.buffer, SelectionVector(src_col.dict_sel)));
-                } else if (src_col.form == VectorForm::FLAT && src_col.buffer) {
-                    SelectionVector id_sel;
-                    id_sel.is_identity = false;
-                    id_sel.indices.reserve(row_count);
-                    for (size_t i = 0; i < row_count; ++i)
-                        id_sel.indices.push_back(static_cast<uint32_t>(i));
-                    id_sel.count = row_count;
-                    output.columns.push_back(Column::dict(src_col.buffer, id_sel));
-                } else if (src_col.form == VectorForm::CONSTANT) {
-                    output.columns.push_back(Column::constant(src_col.constant_value));
-                } else {
-                    output.columns.push_back(Column::flat(src_col.type, row_count));
-                }
-            }
-        }
-
+        output.columns = std::move(chunk->columns);
+        output.columns[col_idx_] = std::move(enriched);
         output.count = row_count;
         co_yield std::move(output);
     }
