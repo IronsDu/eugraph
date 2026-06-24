@@ -104,8 +104,11 @@ void rewriteColumnIndices(binder::BoundLogicalOperator& op,
 /// After materializing the logical tree, update base_col in extraction_info
 /// to match the actual column indices. This fixes the base_col for non-root
 /// variables (e.g. edge variable at column 1 in Expand output).
+/// reqs is the full requirement map (including need_whole_*/labels/type) so
+/// the column counter can account for ALL columns ProjectionExtract appends.
 void updateExtractionBaseCols(const binder::BoundLogicalOperator& op,
-                              std::unordered_map<std::string, PropertyExtractionInfo>& info);
+                              std::unordered_map<std::string, PropertyExtractionInfo>& info,
+                              const PlanRequirements& reqs);
 
 /// Walk the plan and find variables that need full objects (RETURN n, RETURN r).
 /// These variables must NOT use standalone PropertyExtract — they need VertexValue.

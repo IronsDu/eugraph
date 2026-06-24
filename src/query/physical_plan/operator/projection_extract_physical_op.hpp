@@ -63,8 +63,8 @@ struct ColumnSpec {
     uint16_t prop_id = 0;
 };
 
-/// Unified schema-reshaping operator. Replaces VertexPropertyExtractPhysicalOp,
-/// EdgePropertyExtractPhysicalOp, and the inline label/property loaders.
+/// Unified schema-reshaping operator that loads vertex/edge properties and
+/// labels on demand per downstream requirements.
 ///
 /// The operator takes a child producing topology columns (VertexRef, EdgeKey,
 /// or already-upgraded VertexValue/EdgeValue) and outputs exactly the columns

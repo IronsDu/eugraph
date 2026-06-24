@@ -112,7 +112,15 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 identity_entry.dst_id = src_id;
                 if (!path_var_.empty()) {
                     PathValue pv;
-                    pv.elements.push_back(ValueStorage{rows[src_row][src_col_idx_]});
+                    const auto& src_val = rows[src_row][src_col_idx_];
+                    if (std::holds_alternative<VertexValue>(src_val)) {
+                        pv.elements.push_back(ValueStorage{src_val});
+                    } else {
+                        VertexValue src_vv;
+                        src_vv.id = src_id;
+                        src_vv.labels = co_await store_.getVertexLabels(src_id);
+                        pv.elements.push_back(ValueStorage{Value(std::move(src_vv))});
+                    }
                     identity_entry.path = std::move(pv);
                 }
                 if (!edge_var_.empty()) {
@@ -187,7 +195,15 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                     if (!path_var_.empty()) {
                         // Build path: stack vertices/edges + current edge + destination
                         PathValue pv;
-                        pv.elements.push_back(ValueStorage{rows[src_row][src_col_idx_]});
+                        const auto& src_val = rows[src_row][src_col_idx_];
+                        if (std::holds_alternative<VertexValue>(src_val)) {
+                            pv.elements.push_back(ValueStorage{src_val});
+                        } else {
+                            VertexValue src_vv;
+                            src_vv.id = src_id;
+                            src_vv.labels = co_await store_.getVertexLabels(src_id);
+                            pv.elements.push_back(ValueStorage{Value(std::move(src_vv))});
+                        }
                         for (size_t si = 1; si < stack.size(); ++si) {
                             EdgeValue ev;
                             ev.id = stack[si].incoming_edge_id;

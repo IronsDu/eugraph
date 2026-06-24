@@ -105,9 +105,8 @@ AsyncGenerator<RowBatch>
 | AllNodeScan | 扫描所有标签，去重，产出 VertexRef（拓扑） | scanVerticesByLabel × N |
 | LabelScan | 按标签 ID 扫描，产出 VertexRef（拓扑） | scanVerticesByLabel |
 | IndexScan | 等值或范围扫描，通过 IndexKeyCodec | scanVerticesByIndex / scanVerticesByIndexRange |
-| VertexLabelRead | Column Replacement：VertexRef → VertexValue（加载 labels） | getVertexLabels |
-| VertexPropertyRead | Column Replacement：填充 VertexValue 的 properties | getVertexProperties |
-| EdgePropertyRead | Column Replacement：EdgeKey → EdgeValue（加载属性） | getEdgeProperties |
+| ProjectionExtract | 融合点/边属性抽取 + Project 语义。7 种 ColumnSpec：Passthrough / LoadVertexProp / LoadEdgeProp / LoadVertexLabels / LoadEdgeType / ConstructVertex / ConstructEdge | getVertexLabels / getVertexProperty / getEdgeProperty 等 |
+| PathElementPropertyRead | Column Replacement：PathTopology → PathValue（全量加载元素属性和标签，仅用于 PathBuild 路径） | getVertexLabels / getVertexProperties / getEdgeProperties |
 | Expand | 嵌套循环：对每行输入扫描邻居边，产出 VertexRef / EdgeKey / VertexRef（拓扑） | scanEdges |
 | VarLenExpand | DFS + 显式栈 + 边唯一性回溯，产出 VertexRef（dst），PathValue（path），List\<EdgeValue\>（edge list） | scanEdges × hop_depth |
 | Filter | 纯计算，无 IO | 无 |

@@ -5,6 +5,8 @@
 #include "query/planner/bound_expression/bound_property_ref.hpp"
 #include "query/planner/bound_expression/bound_variable_ref.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
+#include "query/planner/logical_plan/operator/bound_create_edge_op.hpp"
+#include "query/planner/logical_plan/operator/bound_create_node_op.hpp"
 #include "query/planner/logical_plan/operator/bound_delete_op.hpp"
 #include "query/planner/logical_plan/operator/bound_filter_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
@@ -113,12 +115,19 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                     std::string fname = ptr->func_def ? ptr->func_def->name : "";
                     if (fname == "labels" && ptr->args.size() == 1) {
                         std::string var = varNameFromObject(ptr->args[0]);
-                        if (!var.empty())
+                        if (!var.empty()) {
+                            // labels(n) reads vertex.labels at eval time; the evaluator
+                            // needs a VertexValue column (LoadVertexLabels alone emits
+                            // List<String>, which labelsImpl cannot consume).
                             reqs[var].need_vertex_labels = true;
+                            reqs[var].need_whole_vertex = true;
+                        }
                     } else if (fname == "type" && ptr->args.size() == 1) {
                         std::string var = varNameFromObject(ptr->args[0]);
-                        if (!var.empty())
+                        if (!var.empty()) {
                             reqs[var].need_edge_type = true;
+                            reqs[var].need_whole_edge = true;
+                        }
                     } else if ((fname == "properties" || fname == "keys") && ptr->args.size() == 1) {
                         std::string var = varNameFromObject(ptr->args[0]);
                         if (!var.empty()) {
@@ -262,6 +271,15 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>>) {
                 if (v)
                     collectOpReqs(v->child, reqs);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
+                // CreateEdge's child subtree (e.g. Filter) may read source-variable
+                // properties (a.name = 'x'). Descend so those requirements reach
+                // the upstream scan / expand where ProjectionExtract can attach them.
+                if (v)
+                    collectOpReqs(v->child, reqs);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
+                if (v && v->child)
+                    collectOpReqs(*v->child, reqs);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
@@ -301,11 +319,17 @@ buildExtractionInfo(const binder::BoundLogicalOperator& /*root*/, const PlanRequ
     std::unordered_map<std::string, PropertyExtractionInfo> info;
     for (const auto& [var, r] : reqs) {
         // need_whole_vertex / need_whole_edge: extract's ConstructVertex/ConstructEdge
-        // column OVERWRITES the source column (same name, same index) — no rewrite
-        // needed for BoundColumnRef(var). And BoundDynamicPropertyRef is left intact
-        // (evaluator reads the constructed VertexValue at runtime).
-        if (r.need_whole_vertex || r.need_whole_edge)
+        // column OVERWRITES the source column in-place. Earlier comments assumed
+        // "same index" so no rewrite was needed; but earlier variables' property
+        // columns shift everyone downstream, so we still need to record base_col
+        // to update BoundColumnRef(var).column_index for direct variable refs
+        // (e.g. `WITH b`, `RETURN b`).
+        if (r.need_whole_vertex || r.need_whole_edge) {
+            PropertyExtractionInfo pi;
+            pi.base_col = 0; // Filled in by updateExtractionBaseCols
+            info[var] = std::move(pi);
             continue;
+        }
         if (r.vertex_props.empty() && r.edge_props.empty())
             continue;
         PropertyExtractionInfo pi;
@@ -411,6 +435,17 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
                 // Dynamic property ref — left intact. Evaluator reads from the
                 // constructed VertexValue/EdgeValue column at runtime.
                 return false;
+            } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
+                // Direct variable reference (e.g. `WITH b` or `RETURN b`):
+                // base_col may have shifted because ProjectionExtract appended
+                // property columns for earlier variables. Update column_index
+                // to point at the variable's physical source column.
+                auto it = info.find(val.name);
+                if (it != info.end() && it->second.base_col != val.column_index) {
+                    val.column_index = it->second.base_col;
+                    return true;
+                }
+                return false;
             }
             return false;
         },
@@ -467,9 +502,18 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
                     rewriteColumnIndices(v->left, info);
                     rewriteColumnIndices(v->right, info);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
+                // Descend so Filter / Project under CREATE (e.g. CREATE ... WHERE
+                // a.name = ...) get their BoundPropertyRef rewritten to the flat
+                // property columns emitted by ProjectionExtract.
+                if (v)
+                    rewriteColumnIndices(v->child, info);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
+                if (v && v->child)
+                    rewriteColumnIndices(*v->child, info);
             }
             // Leaves (Scan, LabelScan, Singleton, CorrelatedSource) and write ops
-            // (Create*, Set, Remove, Delete, Merge) are left unmodified.
+            // (Set, Remove, Delete, Merge) are left unmodified.
         },
         op);
 }
@@ -500,30 +544,77 @@ std::unordered_map<std::string, PropertyExtractionInfo> collectExtractionInfo(co
     return info;
 }
 
+/// Count how many columns ProjectionExtract will emit for a variable with the
+/// given requirement: 1 (source passthrough or Construct) + appended property/
+/// labels/type columns.
+static size_t columnCountFor(const VariableRequirement& r) {
+    size_t n = 1;
+    if (!r.need_whole_vertex && !r.need_whole_edge) {
+        n += r.vertex_props.size() + r.edge_props.size();
+        if (r.need_vertex_labels)
+            ++n;
+        if (r.need_edge_type)
+            ++n;
+    }
+    return n;
+}
+
 void updateBaseCols(const binder::BoundLogicalOperator& op,
-                    std::unordered_map<std::string, PropertyExtractionInfo>& info, uint32_t& col_count) {
+                    std::unordered_map<std::string, PropertyExtractionInfo>& info, const PlanRequirements& reqs,
+                    uint32_t& col_count) {
+    auto assignVar = [&](const std::string& var) {
+        auto it = info.find(var);
+        if (it != info.end())
+            it->second.base_col = col_count;
+        auto rit = reqs.find(var);
+        col_count += static_cast<uint32_t>(rit != reqs.end() ? columnCountFor(rit->second) : 1);
+    };
     std::visit(
         [&](const auto& v) {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
-                auto it = info.find(v.variable);
-                if (it != info.end())
-                    it->second.base_col = col_count;
-                col_count += 1;
+                assignVar(v.variable);
+            } else if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
+                // CorrelatedSource emits one column per correlated variable.
+                // In LeftJoin's right sub-plan, these columns occupy the leading
+                // physical positions; downstream variables (r, b in
+                // `(a)-[r]->(b)`) come after them. Without this accounting,
+                // base_col for those downstream vars would be too low.
+                col_count += static_cast<uint32_t>(v.variables.size());
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (v) {
-                    updateBaseCols(v->child, info, col_count);
-                    auto it_r = info.find(v->edge_variable);
-                    if (it_r != info.end())
-                        it_r->second.base_col = col_count;
+                    updateBaseCols(v->child, info, reqs, col_count);
                     if (!v->edge_variable.empty())
-                        col_count += 1;
-                    auto it_dst = info.find(v->dst_variable);
-                    if (it_dst != info.end())
-                        it_dst->second.base_col = col_count;
+                        assignVar(v->edge_variable);
                     if (!v->dst_variable.empty())
-                        col_count += 1;
+                        assignVar(v->dst_variable);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                // VarLenExpand outputs dst, optional path, optional edge list —
+                // all new columns appended after the child schema. Without this
+                // accounting, downstream vars get base_col=0 (default) and the
+                // BoundColumnRef rewrite would collapse them onto col 0.
+                if (v) {
+                    updateBaseCols(v->child, info, reqs, col_count);
+                    if (!v->dst_variable.empty())
+                        assignVar(v->dst_variable);
+                    if (!v->path_variable.empty())
+                        assignVar(v->path_variable);
+                    if (!v->edge_variable.empty())
+                        assignVar(v->edge_variable);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+                if (v) {
+                    updateBaseCols(v->left, info, reqs, col_count);
+                    updateBaseCols(v->right, info, reqs, col_count);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
+                // SemiJoin: only left child columns appear in the output schema;
+                // the right child is a correlated subplan with its own column space.
+                if (v)
+                    updateBaseCols(v->left, info, reqs, col_count);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>> ||
@@ -532,18 +623,37 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
                 if (v)
-                    updateBaseCols(v->child, info, col_count);
+                    updateBaseCols(v->child, info, reqs, col_count);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
+                if (v) {
+                    updateBaseCols(v->child, info, reqs, col_count);
+                    if (!v->variable.empty())
+                        assignVar(v->variable);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
+                if (v) {
+                    if (v->child)
+                        updateBaseCols(*v->child, info, reqs, col_count);
+                    if (!v->variable.empty())
+                        assignVar(v->variable);
+                }
             }
         },
         op);
 }
 
 void updateExtractionBaseCols(const binder::BoundLogicalOperator& op,
-                              std::unordered_map<std::string, PropertyExtractionInfo>& info) {
+                              std::unordered_map<std::string, PropertyExtractionInfo>& info,
+                              const PlanRequirements& reqs) {
     uint32_t col_count = 0;
-    updateBaseCols(op, info, col_count);
+    updateBaseCols(op, info, reqs, col_count);
 }
 
 bool rewriteExpression(binder::BoundExpression& expr,

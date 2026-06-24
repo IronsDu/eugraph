@@ -53,6 +53,8 @@ eugraph::VertexId extractVidFromColumn(const eugraph::Column& col, size_t row_id
     const auto& val = col.getValue(row_idx);
     if (std::holds_alternative<eugraph::VertexValue>(val))
         return std::get<eugraph::VertexValue>(val).id;
+    if (std::holds_alternative<eugraph::VertexRef>(val))
+        return std::get<eugraph::VertexRef>(val).id;
     return 0;
 }
 

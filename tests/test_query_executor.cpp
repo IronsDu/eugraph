@@ -5800,23 +5800,25 @@ protected:
 };
 
 TEST_F(PropertyExtractPlanTest, BasicVertexPropertyRead) {
-    // Old wrap pipeline: Project → VertexPropertyRead → LabelScan
-    expectPlanOrder("MATCH (n:Person) RETURN n.name, n.age", {"Project", "VertexPropertyRead", "Scan"});
+    // ProjectionExtract pipeline: Project → ProjectionExtract → LabelScan
+    expectPlanOrder("MATCH (n:Person) RETURN n.name, n.age", {"Project", "ProjectionExtract", "LabelScan"});
 }
 
 TEST_F(PropertyExtractPlanTest, FilterPropertyExtract) {
+    // ProjectionExtract pipeline: Project → Filter → ProjectionExtract → LabelScan
     expectPlanOrder("MATCH (n:Person) WHERE n.age > 30 RETURN n.name",
-                    {"Project", "Filter", "VertexPropertyRead", "Scan"});
+                    {"Project", "Filter", "ProjectionExtract", "LabelScan"});
 }
 
 TEST_F(PropertyExtractPlanTest, ExpandBothSidesPropertyExtract) {
+    // Two ProjectionExtract nodes: one wrapping Scan (src), one wrapping Expand (edge+dst).
     expectPlanOrder("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.city",
-                    {"Project", "VertexPropertyRead", "EdgePropertyRead", "Expand", "Scan"});
+                    {"Project", "ProjectionExtract", "Expand", "ProjectionExtract", "LabelScan"});
 }
 
 TEST_F(PropertyExtractPlanTest, EdgePropertyExtract) {
     expectPlanOrder("MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE r.since > 2020 RETURN a.name, r.since",
-                    {"Project", "Filter", "EdgePropertyRead", "Expand", "VertexPropertyRead", "Scan"});
+                    {"Project", "Filter", "ProjectionExtract", "Expand", "ProjectionExtract", "LabelScan"});
 }
 
 // Execution tests — verify results are correct.

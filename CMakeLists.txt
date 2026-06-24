@@ -188,10 +188,6 @@ add_library(eugraph_query_engine STATIC
     src/query/evaluator/eval_slice.cpp
     src/query/evaluator/eval_list_comprehension.cpp
     src/query/physical_plan/operator/edge_index_scan_physical_op.cpp
-    src/query/physical_plan/operator/edge_property_read_physical_op.cpp
-    src/query/physical_plan/operator/edge_property_extract_physical_op.cpp
-    src/query/physical_plan/operator/vertex_property_extract_physical_op.cpp
-    src/query/physical_plan/operator/path_property_extract_physical_op.cpp
     src/query/physical_plan/operator/projection_extract_physical_op.cpp
     src/query/physical_plan/operator/aggregate_physical_op.cpp
     src/query/physical_plan/operator/all_node_scan_physical_op.cpp

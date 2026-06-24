@@ -203,17 +203,32 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::ConstructEdge: {
-                    EdgeId eid = resolveEdgeId(*chunk, spec.source_col, row, rc.eid_col, rc.eid, rc.eid_label);
-                    if (eid == INVALID_EDGE_ID || rc.eid_label == INVALID_EDGE_LABEL_ID)
-                        break;
                     auto eit = rc.edge_obj.find(spec.source_col);
                     if (eit == rc.edge_obj.end()) {
+                        auto v = chunk->columns[spec.source_col].getValue(row);
                         EdgeValue ev;
-                        ev.id = eid;
-                        ev.label_id = rc.eid_label;
-                        auto props = co_await store_.getEdgeProperties(rc.eid_label, eid);
-                        if (props.has_value())
-                            ev.properties = std::move(*props);
+                        if (std::holds_alternative<EdgeKey>(v)) {
+                            const auto& ek = std::get<EdgeKey>(v);
+                            ev.id = ek.id;
+                            ev.src_id = ek.src_id;
+                            ev.dst_id = ek.dst_id;
+                            ev.label_id = ek.label_id;
+                            ev.seq = ek.seq;
+                        } else if (std::holds_alternative<EdgeValue>(v)) {
+                            ev = std::get<EdgeValue>(v);
+                        } else {
+                            break;
+                        }
+                        if (ev.id == INVALID_EDGE_ID || ev.label_id == INVALID_EDGE_LABEL_ID)
+                            break;
+                        if (!ev.properties.has_value()) {
+                            auto props = co_await store_.getEdgeProperties(ev.label_id, ev.id);
+                            if (props.has_value())
+                                ev.properties = std::move(*props);
+                        }
+                        rc.eid_col = spec.source_col;
+                        rc.eid = ev.id;
+                        rc.eid_label = ev.label_id;
                         eit = rc.edge_obj.emplace(spec.source_col, std::move(ev)).first;
                     }
                     output.columns[i].setValue(row, Value(eit->second));
