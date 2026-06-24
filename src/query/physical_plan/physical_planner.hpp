@@ -1,6 +1,7 @@
 #pragma once
 
 #include "query/dataset/row.hpp"
+#include "query/optimizer/column_rewrite.hpp"
 #include "query/physical_plan/physical_operator.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"
 #include "query/planner/bound_type.hpp"
@@ -30,6 +31,9 @@ struct PlanContext {
     std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs;
     function::EvalContext eval_ctx;
     bool use_property_extract = false;
+    /// Per-variable requirements collected from downstream operators.
+    /// Drives ProjectionExtractPhysicalOp spec generation.
+    optimizer::PlanRequirements requirements;
 };
 
 /// Result of planning an operator: the physical operator + its output schema + types.

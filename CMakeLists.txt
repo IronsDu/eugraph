@@ -192,6 +192,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/edge_property_extract_physical_op.cpp
     src/query/physical_plan/operator/vertex_property_extract_physical_op.cpp
     src/query/physical_plan/operator/path_property_extract_physical_op.cpp
+    src/query/physical_plan/operator/projection_extract_physical_op.cpp
     src/query/physical_plan/operator/aggregate_physical_op.cpp
     src/query/physical_plan/operator/all_node_scan_physical_op.cpp
     src/query/physical_plan/operator/alter_edge_label_physical_op.cpp

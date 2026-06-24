@@ -1,15 +1,36 @@
 #include "query/optimizer/column_rewrite.hpp"
 
+#include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
+#include "query/planner/bound_expression/bound_function_call.hpp"
 #include "query/planner/bound_expression/bound_property_ref.hpp"
+#include "query/planner/bound_expression/bound_variable_ref.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
+#include "query/planner/logical_plan/operator/bound_delete_op.hpp"
 #include "query/planner/logical_plan/operator/bound_filter_op.hpp"
+#include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
+#include "query/planner/logical_plan/operator/bound_remove_op.hpp"
+#include "query/planner/logical_plan/operator/bound_set_op.hpp"
 #include "query/planner/logical_plan/operator/bound_sort_op.hpp"
 
 namespace eugraph {
 namespace optimizer {
 
 namespace {
+
+/// Extract a variable name from an object expression (BoundVariableRef or
+/// BoundColumnRef). Also unwraps BoundLabelCast. Returns empty string if not extractable.
+std::string varNameFromObject(const binder::BoundExpression& obj) {
+    if (auto* vref = std::get_if<binder::BoundVariableRef>(&obj))
+        return vref->name;
+    if (auto* cref = std::get_if<binder::BoundColumnRef>(&obj))
+        return cref->name;
+    if (auto* lc = std::get_if<std::unique_ptr<binder::BoundLabelCast>>(&obj)) {
+        if (*lc)
+            return varNameFromObject((*lc)->object);
+    }
+    return "";
+}
 
 /// Find the offset of (lid, pid) in the extraction info's ordered prop list.
 /// Returns SIZE_MAX if not found.
@@ -21,6 +42,285 @@ size_t findPropOffset(const PropertyExtractionInfo& info, LabelId lid, uint16_t 
     return SIZE_MAX;
 }
 
+/// Walk a single BoundExpression and collect requirements into `reqs` keyed
+/// by variable name. Handles property refs, dynamic property refs, function
+/// calls (labels/type), and recurses into compound expressions.
+///
+/// `in_schema_changing_op` is true when the expression lives inside an operator
+/// that changes the output schema (Project / Aggregate). In that case property
+/// refs are conservatively routed through need_whole_vertex because the column
+/// rewrite pass cannot track indices across schema-changing boundaries.
+void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs, bool in_schema_changing_op) {
+    std::visit(
+        [&](const auto& ptr) {
+            using T = std::decay_t<decltype(ptr)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
+                if (!ptr)
+                    return;
+                std::string var = varNameFromObject(ptr->object);
+                if (var.empty())
+                    return;
+                // Determine whether the object is an edge variable. BoundPropertyRef
+                // uses the same LabelId type for both vertex labels and edge labels,
+                // so we look at the object's bound type to disambiguate.
+                bool is_edge = false;
+                if (auto* vref = std::get_if<binder::BoundVariableRef>(&ptr->object))
+                    is_edge = (vref->type.kind == binder::BoundTypeKind::EDGE);
+                else if (auto* cref = std::get_if<binder::BoundColumnRef>(&ptr->object))
+                    is_edge = (cref->type.kind == binder::BoundTypeKind::EDGE);
+                auto& vr = reqs[var];
+                if (is_edge) {
+                    if (in_schema_changing_op) {
+                        vr.need_whole_edge = true;
+                    } else {
+                        for (const auto& cand : ptr->candidates)
+                            vr.edge_props.emplace_back(EdgeLabelId{cand.label_id}, cand.prop_id);
+                    }
+                } else {
+                    if (in_schema_changing_op) {
+                        // Project/WITH/Aggregate rewrite schemas; the flat extract
+                        // column index visible at the topology source no longer
+                        // matches what this consumer sees. Route through the whole
+                        // object so the evaluator can resolve by name.
+                        vr.need_whole_vertex = true;
+                    } else {
+                        for (const auto& cand : ptr->candidates)
+                            vr.vertex_props.emplace_back(cand.label_id, cand.prop_id);
+                    }
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
+                if (!ptr)
+                    return;
+                std::string var = varNameFromObject(ptr->object);
+                if (var.empty())
+                    return;
+                // Dynamic property access requires the full object so that
+                // evalDynamicPropertyRef can scan labels + properties by name.
+                if (ptr->result_type.kind == binder::BoundTypeKind::EDGE)
+                    reqs[var].need_whole_edge = true;
+                else
+                    reqs[var].need_whole_vertex = true;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
+                if (ptr) {
+                    collectExprReqs(ptr->left, reqs, in_schema_changing_op);
+                    collectExprReqs(ptr->right, reqs, in_schema_changing_op);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
+                if (ptr)
+                    collectExprReqs(ptr->operand, reqs, in_schema_changing_op);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                if (ptr) {
+                    std::string fname = ptr->func_def ? ptr->func_def->name : "";
+                    if (fname == "labels" && ptr->args.size() == 1) {
+                        std::string var = varNameFromObject(ptr->args[0]);
+                        if (!var.empty())
+                            reqs[var].need_vertex_labels = true;
+                    } else if (fname == "type" && ptr->args.size() == 1) {
+                        std::string var = varNameFromObject(ptr->args[0]);
+                        if (!var.empty())
+                            reqs[var].need_edge_type = true;
+                    } else if ((fname == "properties" || fname == "keys") && ptr->args.size() == 1) {
+                        std::string var = varNameFromObject(ptr->args[0]);
+                        if (!var.empty()) {
+                            // Determine vertex vs edge from the argument's BoundType.
+                            bool is_edge = false;
+                            if (auto* vref = std::get_if<binder::BoundVariableRef>(&ptr->args[0]))
+                                is_edge = (vref->type.kind == binder::BoundTypeKind::EDGE);
+                            else if (auto* cref = std::get_if<binder::BoundColumnRef>(&ptr->args[0]))
+                                is_edge = (cref->type.kind == binder::BoundTypeKind::EDGE);
+                            if (is_edge)
+                                reqs[var].need_whole_edge = true;
+                            else
+                                reqs[var].need_whole_vertex = true;
+                        }
+                    }
+                    for (const auto& a : ptr->args)
+                        collectExprReqs(a, reqs, in_schema_changing_op);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
+                if (ptr)
+                    for (const auto& e : ptr->elements)
+                        collectExprReqs(e, reqs, in_schema_changing_op);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
+                if (ptr) {
+                    if (ptr->subject)
+                        collectExprReqs(*ptr->subject, reqs, in_schema_changing_op);
+                    for (const auto& [w, t] : ptr->when_thens) {
+                        collectExprReqs(w, reqs, in_schema_changing_op);
+                        collectExprReqs(t, reqs, in_schema_changing_op);
+                    }
+                    if (ptr->else_expr)
+                        collectExprReqs(*ptr->else_expr, reqs, in_schema_changing_op);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
+                if (ptr) {
+                    // n::Label requires the full vertex to scope properties.
+                    std::string var = varNameFromObject(ptr->object);
+                    if (!var.empty())
+                        reqs[var].need_whole_vertex = true;
+                    collectExprReqs(ptr->object, reqs, in_schema_changing_op);
+                }
+            }
+            // BoundColumnRef / BoundVariableRef / BoundLiteral / BoundParameter: leaf, no requirements.
+        },
+        expr);
+}
+
+/// Walk the BoundLogicalOperator tree and accumulate requirements. Stops at
+/// topology-producing operators (Scan/Expand/VarLenExpand) since their output
+/// variables' requirements are consumed here, not propagated further down.
+void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& reqs) {
+    std::visit(
+        [&](const auto& v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
+                // Leaf; nothing to collect from downstream.
+            } else if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
+                                 std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
+                // Leaf; no requirements.
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                if (v) {
+                    collectExprReqs(v->predicate, reqs, /*in_schema_changing_op=*/false);
+                    collectOpReqs(v->child, reqs);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                if (v) {
+                    // Project changes schema (selects/aliases columns). Route any
+                    // property ref inside it through need_whole_vertex instead of
+                    // appending flat columns, because the flat column index cannot
+                    // be tracked across the projection boundary.
+                    for (const auto& item : v->items) {
+                        if (auto* cref = std::get_if<binder::BoundColumnRef>(&item.expr)) {
+                            if (cref->type.kind == binder::BoundTypeKind::VERTEX && !cref->name.empty())
+                                reqs[cref->name].need_whole_vertex = true;
+                            else if (cref->type.kind == binder::BoundTypeKind::EDGE && !cref->name.empty())
+                                reqs[cref->name].need_whole_edge = true;
+                        }
+                        collectExprReqs(item.expr, reqs, /*in_schema_changing_op=*/true);
+                    }
+                    collectOpReqs(v->child, reqs);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                if (v) {
+                    for (const auto& item : v->items)
+                        collectExprReqs(item.expr, reqs, /*in_schema_changing_op=*/false);
+                    collectOpReqs(v->child, reqs);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
+                if (v) {
+                    for (const auto& k : v->group_keys)
+                        collectExprReqs(k, reqs, /*in_schema_changing_op=*/true);
+                    for (const auto& agg : v->aggregates)
+                        collectExprReqs(agg.argument, reqs, /*in_schema_changing_op=*/true);
+                    collectOpReqs(v->child, reqs);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                if (v)
+                    collectOpReqs(v->child, reqs);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                if (v)
+                    collectOpReqs(v->child, reqs);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
+                if (v)
+                    collectOpReqs(v->child, reqs);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>>) {
+                if (v) {
+                    for (const auto& item : v->items) {
+                        // SET n.x = ...: convenience mode requires vertex.labels to
+                        // resolve prop_id when item is not strong-typed.
+                        if (!item.target_variable.empty())
+                            reqs[item.target_variable].need_whole_vertex = true;
+                        if (item.value_expr)
+                            collectExprReqs(*item.value_expr, reqs, /*in_schema_changing_op=*/false);
+                    }
+                    collectOpReqs(v->child, reqs);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>>) {
+                if (v) {
+                    for (const auto& item : v->items) {
+                        if (!item.target_variable.empty())
+                            reqs[item.target_variable].need_whole_vertex = true;
+                    }
+                    collectOpReqs(v->child, reqs);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>>) {
+                if (v) {
+                    for (const auto& t : v->targets) {
+                        if (!t.variable_name.empty()) {
+                            if (t.kind == binder::BoundDeleteOp::TargetKind::EDGE)
+                                reqs[t.variable_name].need_whole_edge = true;
+                            else
+                                reqs[t.variable_name].need_whole_vertex = true;
+                        }
+                    }
+                    collectOpReqs(v->child, reqs);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>>) {
+                if (v)
+                    collectOpReqs(v->child, reqs);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+                if (v) {
+                    collectOpReqs(v->left, reqs);
+                    collectOpReqs(v->right, reqs);
+                }
+            }
+            // BoundCreateNodeOp / BoundCreateEdgeOp: write ops without property reads from input.
+        },
+        op);
+}
+
+/// De-duplicate vertex_props and edge_props in a VariableRequirement.
+void dedupeVarReqs(VariableRequirement& r) {
+    auto dedupe = [](auto& vec) {
+        std::sort(vec.begin(), vec.end());
+        vec.erase(std::unique(vec.begin(), vec.end()), vec.end());
+    };
+    dedupe(r.vertex_props);
+    dedupe(r.edge_props);
+}
+
+} // namespace
+
+PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& root) {
+    PlanRequirements reqs;
+    collectOpReqs(root, reqs);
+    for (auto& [var, r] : reqs)
+        dedupeVarReqs(r);
+    return reqs;
+}
+
+std::unordered_map<std::string, PropertyExtractionInfo>
+buildExtractionInfo(const binder::BoundLogicalOperator& /*root*/, const PlanRequirements& reqs) {
+    std::unordered_map<std::string, PropertyExtractionInfo> info;
+    for (const auto& [var, r] : reqs) {
+        // need_whole_vertex / need_whole_edge: extract's ConstructVertex/ConstructEdge
+        // column OVERWRITES the source column (same name, same index) — no rewrite
+        // needed for BoundColumnRef(var). And BoundDynamicPropertyRef is left intact
+        // (evaluator reads the constructed VertexValue at runtime).
+        if (r.need_whole_vertex || r.need_whole_edge)
+            continue;
+        if (r.vertex_props.empty() && r.edge_props.empty())
+            continue;
+        PropertyExtractionInfo pi;
+        pi.base_col = 0; // Filled in by updateExtractionBaseCols
+        pi.prop_order = r.vertex_props;
+        pi.edge_prop_order = r.edge_props;
+        info[var] = std::move(pi);
+    }
+    return info;
+}
+
+// ===== Existing helpers (kept for compatibility; used by RBO path) =====
+
+namespace {
+
 /// Rewrite a BoundExpression, replacing BoundPropertyRef with BoundColumnRef.
 bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::string, PropertyExtractionInfo>& info) {
     return std::visit(
@@ -29,15 +329,7 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
             if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
                 if (!val)
                     return false;
-                // Get variable name from the object expression.
-                std::string var;
-                if (auto* vref = std::get_if<binder::BoundVariableRef>(&val->object))
-                    var = vref->name;
-                else if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object)) {
-                    // ColumnRef → need to map column index to variable name.
-                    // For now, only handle VariableRef.
-                    return false;
-                }
+                std::string var = varNameFromObject(val->object);
                 if (var.empty())
                     return false;
 
@@ -45,15 +337,33 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
                 if (it == info.end())
                     return false;
 
-                // Find the property in the extraction list.
-                for (const auto& cand : val->candidates) {
-                    size_t offset = findPropOffset(it->second, cand.label_id, cand.prop_id);
-                    if (offset == SIZE_MAX)
-                        continue;
-                    // Replace this BoundPropertyRef with BoundColumnRef.
-                    uint32_t new_col = it->second.base_col + static_cast<uint32_t>(offset);
-                    expr = binder::BoundColumnRef{new_col, binder::BoundType::Any(), ""};
-                    return true;
+                bool is_edge = false;
+                if (auto* vref = std::get_if<binder::BoundVariableRef>(&val->object))
+                    is_edge = (vref->type.kind == binder::BoundTypeKind::EDGE);
+                else if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object))
+                    is_edge = (cref->type.kind == binder::BoundTypeKind::EDGE);
+
+                if (is_edge) {
+                    for (const auto& cand : val->candidates) {
+                        for (size_t ei = 0; ei < it->second.edge_prop_order.size(); ++ei) {
+                            const auto& ep = it->second.edge_prop_order[ei];
+                            if (EdgeLabelId{cand.label_id} == ep.first && cand.prop_id == ep.second) {
+                                size_t offset = 1 + it->second.prop_order.size() + ei;
+                                uint32_t new_col = it->second.base_col + static_cast<uint32_t>(offset);
+                                expr = binder::BoundColumnRef{new_col, cand.type, var};
+                                return true;
+                            }
+                        }
+                    }
+                } else {
+                    for (const auto& cand : val->candidates) {
+                        size_t offset = findPropOffset(it->second, cand.label_id, cand.prop_id);
+                        if (offset == SIZE_MAX)
+                            continue;
+                        uint32_t new_col = it->second.base_col + static_cast<uint32_t>(offset);
+                        expr = binder::BoundColumnRef{new_col, cand.type, var};
+                        return true;
+                    }
                 }
                 return false;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
@@ -98,7 +408,8 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
                     return false;
                 return rewriteExpr(val->object, info);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
-                // Dynamic property ref — need labels. Not a specific prop_id.
+                // Dynamic property ref — left intact. Evaluator reads from the
+                // constructed VertexValue/EdgeValue column at runtime.
                 return false;
             }
             return false;
@@ -106,16 +417,15 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
         expr);
 }
 
-/// Rewrite column indices in operators that have expressions.
 void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::string, PropertyExtractionInfo>& info) {
     std::visit(
         [&](auto& v) {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                if (v)
+                if (v) {
                     rewriteExpr(v->predicate, info);
-                if (v)
                     rewriteColumnIndices(v->child, info);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                 if (v) {
                     for (auto& item : v->items)
@@ -142,49 +452,28 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                 if (v)
                     rewriteColumnIndices(v->child, info);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                 if (v)
                     rewriteColumnIndices(v->child, info);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                if (v)
-                    rewriteColumnIndices(v->child, info);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
-                if (v)
-                    rewriteColumnIndices(v->child, info);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
-                if (v)
-                    rewriteColumnIndices(v->child, info);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
-                if (v)
-                    rewriteColumnIndices(v->child, info);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
-                if (v) {
-                    rewriteColumnIndices(v->left, info);
-                    rewriteColumnIndices(v->right, info);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
-                if (v) {
-                    rewriteColumnIndices(v->left, info);
-                    rewriteColumnIndices(v->right, info);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
-                if (v) {
-                    rewriteColumnIndices(v->left, info);
-                    rewriteColumnIndices(v->right, info);
-                }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
                     rewriteColumnIndices(v->left, info);
                     rewriteColumnIndices(v->right, info);
                 }
             }
-            // Leaves (Scan, LabelScan, Singleton, CorrelatedSource) and
-            // write ops (Create*, Set, Remove, Delete, Merge) are left unmodified.
+            // Leaves (Scan, LabelScan, Singleton, CorrelatedSource) and write ops
+            // (Create*, Set, Remove, Delete, Merge) are left unmodified.
         },
         op);
 }
 
-/// Walk ChosenPlan tree to collect property extraction info.
 void collectFromChosen(const ChosenPlan& chosen, std::unordered_map<std::string, PropertyExtractionInfo>& info,
                        uint32_t base_col) {
     if (chosen.tag == PhysicalOpTag::VertexPropertyExtract) {
@@ -211,7 +500,6 @@ std::unordered_map<std::string, PropertyExtractionInfo> collectExtractionInfo(co
     return info;
 }
 
-// Walk the materialized tree to update base_col for each variable.
 void updateBaseCols(const binder::BoundLogicalOperator& op,
                     std::unordered_map<std::string, PropertyExtractionInfo>& info, uint32_t& col_count) {
     std::visit(
@@ -236,31 +524,15 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                     if (!v->dst_variable.empty())
                         col_count += 1;
                 }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                if (v)
-                    updateBaseCols(v->child, info, col_count);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                if (v)
-                    updateBaseCols(v->child, info, col_count);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                if (v)
-                    updateBaseCols(v->child, info, col_count);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
-                if (v)
-                    updateBaseCols(v->child, info, col_count);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
-                if (v)
-                    updateBaseCols(v->child, info, col_count);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
-                if (v)
-                    updateBaseCols(v->child, info, col_count);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                if (v)
-                    updateBaseCols(v->child, info, col_count);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (v)
-                    updateBaseCols(v->child, info, col_count);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 if (v)
                     updateBaseCols(v->child, info, col_count);
             }
@@ -284,7 +556,6 @@ void rewriteColumnIndices(binder::BoundLogicalOperator& op,
     rewriteOp(op, info);
 }
 
-// Walk a BoundLogicalOperator tree to collect extraction info for the RBO path.
 void collectFromPlan(const binder::BoundLogicalOperator& op,
                      std::unordered_map<std::string, PropertyExtractionInfo>& info, uint32_t base_col) {
     std::visit(
@@ -333,31 +604,15 @@ void collectFromPlan(const binder::BoundLogicalOperator& op,
                     }
                     base_col = after_child;
                 }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                if (v)
-                    collectFromPlan(v->child, info, base_col);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                if (v)
-                    collectFromPlan(v->child, info, base_col);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                if (v)
-                    collectFromPlan(v->child, info, base_col);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
-                if (v)
-                    collectFromPlan(v->child, info, base_col);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
-                if (v)
-                    collectFromPlan(v->child, info, base_col);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
-                if (v)
-                    collectFromPlan(v->child, info, base_col);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                if (v)
-                    collectFromPlan(v->child, info, base_col);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (v)
-                    collectFromPlan(v->child, info, base_col);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 if (v)
                     collectFromPlan(v->child, info, base_col);
             }
@@ -388,19 +643,11 @@ void findWholeObj(const binder::BoundLogicalOperator& op, std::set<std::string>&
                     }
                     findWholeObj(v->child, result);
                 }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                if (v)
-                    findWholeObj(v->child, result);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                if (v)
-                    findWholeObj(v->child, result);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                if (v)
-                    findWholeObj(v->child, result);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (v)
-                    findWholeObj(v->child, result);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
                 if (v)
                     findWholeObj(v->child, result);
             }

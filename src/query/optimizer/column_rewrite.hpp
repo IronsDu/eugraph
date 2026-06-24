@@ -6,6 +6,8 @@
 #include "query/planner/bound_logical_plan.hpp"
 
 #include <cstdint>
+#include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -15,15 +17,14 @@ namespace optimizer {
 
 /// Rewrite pass that updates BoundPropertyRef nodes in a BoundLogicalOperator
 /// tree to BoundColumnRef nodes referencing flat columns emitted by
-/// PropertyExtract operators. This is needed because standalone
-/// PropertyExtractPhysicalOp APPENDS new columns (the binder assigned
-/// indices before optimization; without this pass, downstream operators
-/// reference stale indices).
+/// ProjectionExtractPhysicalOp. This is needed because the extract operator
+/// APPENDS new columns (the binder assigned indices before optimization;
+/// without this pass, downstream operators reference stale indices).
 ///
-/// Usage: call after materializeChosen, before planBoundOperator.
-///   auto extraction_info = collectExtractionInfo(chosen);
-///   auto materialized = materializeChosen(chosen);
-///   rewriteColumnIndices(materialized, extraction_info);
+/// Usage: call after collectPlanRequirements, before planBoundOperator.
+///   auto reqs = collectPlanRequirements(root);
+///   auto info = buildExtractionInfo(root, reqs);
+///   rewriteColumnIndices(root, info);
 
 struct PropertyExtractionInfo {
     /// Base column index of the source variable (before extraction).
@@ -32,7 +33,38 @@ struct PropertyExtractionInfo {
     /// Offset is 1 (skip source column) + cumulative props before this one.
     /// The absolute column index is base_col + offset.
     std::vector<std::pair<LabelId, uint16_t>> prop_order;
+    /// Per-property mapping for edge properties: (edge_label_id, prop_id).
+    /// Edge props are output right after vertex props (before labels/type columns).
+    /// Absolute column index = base_col + 1 + prop_order.size() + edge_index.
+    std::vector<std::pair<EdgeLabelId, uint16_t>> edge_prop_order;
 };
+
+/// Per-variable requirement collected by scanning downstream operators.
+/// Determines which ColumnSpec list ProjectionExtractPhysicalOp must emit.
+struct VariableRequirement {
+    /// RETURN n / SET n.x / REMOVE n.x / BoundDynamicPropertyRef on vertex:
+    /// extract must construct a full VertexValue column (covering the original
+    /// VertexRef column in-place).
+    bool need_whole_vertex = false;
+    /// RETURN r / BoundDynamicPropertyRef on edge: extract must construct a
+    /// full EdgeValue column in-place.
+    bool need_whole_edge = false;
+    /// labels(n) / n::Label: extract emits a List<String> column.
+    bool need_vertex_labels = false;
+    /// type(r): extract emits a String column with the edge type name.
+    bool need_edge_type = false;
+    /// (label_id, prop_id) list for vertex property access. De-duplicated.
+    std::vector<std::pair<LabelId, uint16_t>> vertex_props;
+    /// (edge_label_id, prop_id) list for edge property access. De-duplicated.
+    std::vector<std::pair<EdgeLabelId, uint16_t>> edge_props;
+
+    bool empty() const {
+        return !need_whole_vertex && !need_whole_edge && !need_vertex_labels && !need_edge_type &&
+               vertex_props.empty() && edge_props.empty();
+    }
+};
+
+using PlanRequirements = std::unordered_map<std::string, VariableRequirement>;
 
 /// Collect property extraction info from a ChosenPlan tree.
 /// Key: variable name. Value: base column index + ordered property list.
@@ -44,6 +76,20 @@ std::unordered_map<std::string, PropertyExtractionInfo> collectExtractionInfo(co
 /// Walks scan/expand operators and records per-variable property lists.
 std::unordered_map<std::string, PropertyExtractionInfo>
 collectExtractionFromPlan(const binder::BoundLogicalOperator& root, uint32_t base_col);
+
+/// Walk the entire plan and collect per-variable requirements from all
+/// downstream consumers (Project / Filter / Sort / Aggregate / Set / Remove /
+/// Delete / Merge). This is the top-level requirement collector used by
+/// planBound before any extraction decisions are made.
+PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& root);
+
+/// Convert PlanRequirements into PropertyExtractionInfo suitable for the
+/// existing rewriteColumnIndices pass. Only vertex_props are encoded for now;
+/// need_whole_vertex / need_vertex_labels / need_edge_type do not require
+/// BoundPropertyRef rewriting (they are handled by extract's construct/labels
+/// columns whose indices overlap with the source variable column).
+std::unordered_map<std::string, PropertyExtractionInfo> buildExtractionInfo(const binder::BoundLogicalOperator& root,
+                                                                            const PlanRequirements& reqs);
 
 /// Walk a BoundExpression and rewrite BoundPropertyRef → BoundColumnRef
 /// using the given extraction info. Returns true if any rewrite occurred.
