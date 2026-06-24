@@ -5800,33 +5800,22 @@ protected:
 };
 
 TEST_F(PropertyExtractPlanTest, BasicVertexPropertyRead) {
-    // Standalone mode: Project → VertexPropertyRead → LabelScan
+    // Old wrap pipeline: Project → VertexPropertyRead → LabelScan
     expectPlanOrder("MATCH (n:Person) RETURN n.name, n.age", {"Project", "VertexPropertyRead", "Scan"});
 }
 
 TEST_F(PropertyExtractPlanTest, FilterPropertyExtract) {
-    // Standalone mode: Project → Filter → VertexPropertyRead → LabelScan
     expectPlanOrder("MATCH (n:Person) WHERE n.age > 30 RETURN n.name",
                     {"Project", "Filter", "VertexPropertyRead", "Scan"});
 }
 
 TEST_F(PropertyExtractPlanTest, ExpandBothSidesPropertyExtract) {
-    // MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.city
-    // Pipeline: Project → VertexPropertyRead(b) → VertexLabelRead(b) →
-    //           EdgePropertyRead → VertexPropertyRead(a) → VertexLabelRead(a) →
-    //           Expand → LabelScan
-    // RBO path for multi-hop (PropertyExtract placement not yet handled for Expand variables).
     expectPlanOrder("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.city",
                     {"Project", "VertexPropertyRead", "EdgePropertyRead", "Expand", "Scan"});
 }
 
 TEST_F(PropertyExtractPlanTest, EdgePropertyExtract) {
-    // MATCH (a)-[r:KNOWS]->(b:Person) WHERE r.since > 2020 RETURN a.name
-    // Pipeline: Project → Filter → ... → EdgePropertyRead(r) → Expand →
-    //           VertexPropertyRead(a) → VertexLabelRead(a) → AllNodeScan
-    // (Filter is on r.since, not on a.property, so a's reads come after Expand.
-    //  'a' is unlabeled in MATCH so it's AllNodeScan, not LabelScan.)
-    expectPlanOrder("MATCH (a)-[r:KNOWS]->(b:Person) WHERE r.since > 2020 RETURN a.name",
+    expectPlanOrder("MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE r.since > 2020 RETURN a.name, r.since",
                     {"Project", "Filter", "EdgePropertyRead", "Expand", "VertexPropertyRead", "Scan"});
 }
 

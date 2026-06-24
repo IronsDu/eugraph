@@ -29,6 +29,7 @@ struct PlanContext {
     std::unordered_map<LabelId, LabelDef>& label_defs;
     std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs;
     function::EvalContext eval_ctx;
+    bool use_property_extract = false;
 };
 
 /// Result of planning an operator: the physical operator + its output schema + types.

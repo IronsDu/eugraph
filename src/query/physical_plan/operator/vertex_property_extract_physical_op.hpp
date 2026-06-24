@@ -16,24 +16,39 @@
 namespace eugraph {
 namespace compute {
 
-/// Batch property extractor for vertex variables. Takes a VertexRef column
-/// and appends flat typed columns (one per requested property) without
-/// constructing a VertexValue object.
+/// Unified vertex loader. Replaces VertexPropertyReadPhysicalOp and
+/// VertexLabelReadPhysicalOp.  The request array determines what to load:
+///
+///   LabelRequest   → List<String> column (vertex labels)
+///   PropRequest    → typed scalar column (single property)
+///   VertexRequest  → VertexValue column (full vertex: labels + all properties)
+///
+/// Input:  upstream columns, some carrying VertexRef / VertexValue
+/// Output: upstream columns + requested columns
 class VertexPropertyExtractPhysicalOp : public PhysicalOperator {
 public:
-    VertexPropertyExtractPhysicalOp(std::string variable, size_t col_idx,
-                                    std::unordered_map<LabelId, std::vector<uint16_t>> label_prop_ids,
-                                    IAsyncGraphDataStore& store, Schema input_schema,
+    struct LabelRequest {
+        size_t source_col;
+    };
+    struct PropRequest {
+        size_t source_col;
+        LabelId label_id;
+        uint16_t prop_id;
+    };
+    struct VertexRequest {
+        size_t source_col;
+    };
+
+    VertexPropertyExtractPhysicalOp(std::string variable, std::vector<LabelRequest> label_requests,
+                                    std::vector<PropRequest> prop_requests, std::vector<VertexRequest> vertex_requests,
+                                    IAsyncGraphDataStore& store,
+                                    std::unordered_map<LabelId, std::string> label_id_to_name, Schema input_schema,
                                     std::vector<binder::BoundType> output_types,
                                     std::unique_ptr<PhysicalOperator> child)
-        : variable_(std::move(variable)), col_idx_(col_idx), label_prop_ids_(std::move(label_prop_ids)), store_(store),
-          input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)) {
-        // Build a flattened prop list: (label_id, prop_id) for each extracted property.
-        for (const auto& [lid, pids] : label_prop_ids_) {
-            for (uint16_t pid : pids)
-                prop_list_.emplace_back(lid, pid);
-        }
-    }
+        : variable_(std::move(variable)), label_requests_(std::move(label_requests)),
+          prop_requests_(std::move(prop_requests)), vertex_requests_(std::move(vertex_requests)), store_(store),
+          label_id_to_name_(std::move(label_id_to_name)), input_schema_(std::move(input_schema)),
+          output_types_(std::move(output_types)), child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
@@ -46,10 +61,11 @@ public:
 
 private:
     std::string variable_;
-    size_t col_idx_;
-    std::unordered_map<LabelId, std::vector<uint16_t>> label_prop_ids_;
-    std::vector<std::pair<LabelId, uint16_t>> prop_list_;
+    std::vector<LabelRequest> label_requests_;
+    std::vector<PropRequest> prop_requests_;
+    std::vector<VertexRequest> vertex_requests_;
     IAsyncGraphDataStore& store_;
+    std::unordered_map<LabelId, std::string> label_id_to_name_;
     Schema input_schema_;
     std::vector<binder::BoundType> output_types_;
     std::unique_ptr<PhysicalOperator> child_;

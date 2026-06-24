@@ -27,17 +27,19 @@
 
 Scan/Expand 只产出拓扑类型（VertexRef / EdgeKey / PathTopology），需要什么再挂什么算子。
 
-> **实施状态（2026-06）**：分支 `feature/topology-semantic-split` 已完整实现。Scan/Expand 输出拓扑类型，wrap 管线（`wrapVertexLabelRead` / `wrapVertexPropertyRead` / `wrapEdgePropertyRead` / `wrapPathElementPropertyRead`）按需加载语义数据。
+> **实施状态（2026-06）**：
+> - `feature/topology-semantic-split`：拓扑类型输出 + 旧 wrap 管线 ✅
+> - `feature/lightweight-extract`：删除 `VertexLabelReadPhysicalOp`、`VertexPropertyReadPhysicalOp`，统一为 `VertexPropertyExtractPhysicalOp`（三种请求类型），standalone 模式暂未启用
 
-## 三、方案概要（已实施）
+## 三、方案概要
 
 - Scan 输出 `VertexRef{id}` — VERTEX_REF 类型，仅含 id
 - Expand 输出 `EdgeKey{id, src_id, dst_id, label_id, seq}` — 仅结构字段
-- `VertexLabelReadPhysicalOp` — 读 labels，将 VertexRef 原地升级为 VertexValue
-- `VertexPropertyReadPhysicalOp` — 读属性，将 VertexValue 的 properties 填充
+- `VertexPropertyExtractPhysicalOp` — 统一加载：labels（`List<String>`）、属性（scalar）、完整点（`VertexValue`）
+- 内联 `loadVertexLabelsInPlace` / `loadVertexPropertiesInPlace` — 原地升级（非 standalone 路径）
 - `EdgePropertyReadPhysicalOp` — 读边属性，将 EdgeKey 原地升级为 EdgeValue
 - `PathElementPropertyReadPhysicalOp` — 读路径元素属性和标签，将 PathTopology 升级为 PathValue
-- 所有 wrap 算子通过 **Column Replacement** 替换对应列，其他列 DICTIONARY 零拷贝透传
+- 通过 **Column::dict** / `std::move(chunk->columns)` 零拷贝直通
 - **不改 evaluator、不改 BoundPropertyRef、不改列索引**
 
 ## 四、最终架构（已实施）

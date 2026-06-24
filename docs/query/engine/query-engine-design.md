@@ -398,9 +398,9 @@ class PhysicalOperator {
 | `EdgeIndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `EdgeLabelId`, `prop_ids` | 输出 `VertexRef` / `EdgeKey` / `VertexRef` |
 | `ExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, Schema | 输出 `VertexRef` / `EdgeKey` / `VertexRef`（拓扑类型）。语义升级由 wrap 管线完成 |
 | `VarLenExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, `min_hops`, `max_hops`, Schema | DFS + 边唯一性。输出 `VertexRef`（dst）、`PathValue`（path 列）、`List<EdgeValue>`（edge list 列）。path 列内部已加载 labels |
-| `VertexLabelReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `anon_label_id` | 拓扑→语义升级：`VertexRef` → `VertexValue{id, labels}` |
-| `VertexPropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `label_prop_ids` | 属性加载：填充 `VertexValue` 的 `properties` map |
+| `VertexPropertyExtractPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `LabelRequest[]`, `PropRequest[]`, `VertexRequest[]` | 统一顶点加载：追加 `List<String>`（labels）/ 标量（属性）/ `VertexValue`（完整点）列 |
 | `EdgePropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `edge_prop_ids` | 拓扑→语义升级：`EdgeKey` → `EdgeValue{..., properties}` |
+| `EdgePropertyExtractPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `edge_prop_ids` | 追加扁平边属性列 |
 | `PathElementPropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx` | 拓扑→语义升级：`PathTopology` → `PathValue`（加载元素属性和标签） |
 | `FilterPhysicalOp` | `BoundExpression` 谓词, Schema | DICTIONARY 共享 child buffer |
 | `ProjectPhysicalOp` | `BoundExpression` 投影项列表 | FLAT columns |
@@ -428,7 +428,7 @@ class PhysicalOperator {
 
 **EdgeIndexScan**：由 `Filter(Expand)` 推导产生（单类型时）。边索引 value 包含邻接信息，可直接产出 src/dst/edge 列。
 
-**Expand**：对输入的每一行，调用 `scanEdges(src_id, dir, label_filter)`，每条边产生一行输出。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由 `VertexPropertyReadPhysicalOp` / `EdgePropertyReadPhysicalOp` 延迟加载（见 [延迟属性物化](deferred-property-loading.md)）。
+**Expand**：对输入的每一行，调用 `scanEdges(src_id, dir, label_filter)`，每条边产生一行输出。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由 `loadVertexPropertiesInPlace` / `EdgePropertyReadPhysicalOp` 延迟加载（见 [延迟属性物化](deferred-property-loading.md)）。
 
 **Filter**：`VectorizedEvaluator` 求值 BoundExpression 谓词，DICTIONARY 选择向量标记有效行。
 
