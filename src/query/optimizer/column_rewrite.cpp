@@ -183,7 +183,15 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
         [&](const auto& v) {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
-                // Leaf; nothing to collect from downstream.
+                // scans: fold binder-pushed-down label_prop_ids into vertex_props
+                // so dispatchProjectionExtract loads them. These originate from
+                // inline pattern predicates (MATCH (:L {p: ..})) and projection
+                // pushdown (RETURN n.p).
+                if (!v.variable.empty()) {
+                    for (const auto& [lid, pids] : v.label_prop_ids)
+                        for (uint16_t pid : pids)
+                            reqs[v.variable].vertex_props.emplace_back(lid, pid);
+                }
             } else if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
                                  std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
                 // Leaf; no requirements.
@@ -224,11 +232,28 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                     collectOpReqs(v->child, reqs);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                if (v)
+                if (v) {
+                    // Fold binder-pushed-down edge/dst prop ids into requirements.
+                    if (!v->edge_variable.empty() && !v->edge_prop_ids.empty() && !v->edge_label_ids.empty()) {
+                        for (uint16_t pid : v->edge_prop_ids)
+                            reqs[v->edge_variable].edge_props.emplace_back(v->edge_label_ids[0], pid);
+                    }
+                    if (!v->dst_variable.empty()) {
+                        for (const auto& [lid, pids] : v->dst_label_prop_ids)
+                            for (uint16_t pid : pids)
+                                reqs[v->dst_variable].vertex_props.emplace_back(lid, pid);
+                    }
                     collectOpReqs(v->child, reqs);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                if (v)
+                if (v) {
+                    if (!v->dst_variable.empty()) {
+                        for (const auto& [lid, pids] : v->dst_label_prop_ids)
+                            for (uint16_t pid : pids)
+                                reqs[v->dst_variable].vertex_props.emplace_back(lid, pid);
+                    }
                     collectOpReqs(v->child, reqs);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
@@ -269,8 +294,16 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                     collectOpReqs(v->child, reqs);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>>) {
-                if (v)
+                if (v) {
+                    // pre_bound variables come from the child pipeline and are read
+                    // as VertexValue by merge_physical_op (line ~1042). Mark them
+                    // so the child's ProjectionExtract constructs the full vertex.
+                    if (v->start_pre_bound && !v->start_var.empty())
+                        reqs[v->start_var].need_whole_vertex = true;
+                    if (v->has_relationship && v->end_pre_bound && !v->end_var.empty())
+                        reqs[v->end_var].need_whole_vertex = true;
                     collectOpReqs(v->child, reqs);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
                 // CreateEdge's child subtree (e.g. Filter) may read source-variable
                 // properties (a.name = 'x'). Descend so those requirements reach
