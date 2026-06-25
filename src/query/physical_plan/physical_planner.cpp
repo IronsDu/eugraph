@@ -1252,7 +1252,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result = std::make_unique<ExpandPhysicalOp>(
                         v.src_variable, v.dst_variable, v.edge_variable, std::move(label_filters), v.direction, store,
                         std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op),
-                        std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{});
+                        std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, v.dst_label_ids);
                     auto plan_result =
                         PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);

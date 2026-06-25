@@ -22,6 +22,7 @@ struct BoundVarLenExpandOp {
     int64_t min_hops;
     int64_t max_hops;
     std::unordered_map<LabelId, std::vector<uint16_t>> dst_label_prop_ids;
+    std::vector<LabelId> dst_label_ids;
     // P1: named path variable (p = (a)-[*1..3]->(b))
     std::string path_variable;
     uint32_t path_column_index = 0;

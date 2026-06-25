@@ -5679,6 +5679,30 @@ TEST_F(QueryExecutorTest, MergeVariableAlreadyBoundFails) {
     EXPECT_NE(result.error.find("VariableAlreadyBound"), std::string::npos);
 }
 
+// Reproduces TCK MatchWhere5 scenario: filter on property of expand dst
+// where the same property name exists on multiple labels.
+TEST_F(QueryExecutorTest, FilterOnExpandDstMultiLabel) {
+    auto root_id =
+        blockingWait(async_meta_->createLabel("Root", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
+    auto text_id =
+        blockingWait(async_meta_->createLabel("TextNode", {PropertyDef{0, "var", PropertyType::STRING, false, {}}}));
+    auto int_id =
+        blockingWait(async_meta_->createLabel("IntNode", {PropertyDef{0, "var", PropertyType::INT64, false, {}}}));
+    blockingWait(async_data_->createLabel(root_id));
+    blockingWait(async_data_->createLabel(text_id));
+    blockingWait(async_data_->createLabel(int_id));
+    blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    execSync(*executor_, "CREATE (root:Root {name: 'x'}), (child1:TextNode {var: 'text'}), (child2:IntNode {var: 0}) "
+                         "CREATE (root)-[:KNOWS]->(child1), (root)-[:KNOWS]->(child2)");
+
+    // Dst label constraint must filter destinations: only TextNode child matches.
+    auto r5 = execSync(*executor_, "MATCH (:Root)-->(i:TextNode) RETURN i");
+    ASSERT_TRUE(r5.error.empty()) << r5.error;
+    EXPECT_EQ(r5.rows.size(), 1u);
+}
+
 // ==================== PropertyExtract Plan Correctness Tests ====================
 
 // Verify that EXPLAIN shows PropertyExtract operators in the plan for

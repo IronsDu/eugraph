@@ -353,6 +353,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 varlen->src_column_index = start_col;
                 varlen->dst_variable = dst_var;
                 varlen->dst_column_index = dst_col;
+                varlen->dst_label_ids = dst_labels;
                 varlen->edge_label_ids = std::move(edge_label_ids);
                 varlen->direction = rel_pat.direction;
                 varlen->min_hops = min_hops;
@@ -457,6 +458,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             path_element_vars.push_back(dst_var);
             expand->dst_variable = dst_var;
             expand->dst_column_index = dst_col;
+            expand->dst_label_ids = dst_labels;
             expand->edge_label_ids = edge_label_ids;
             expand->direction = rel_pat.direction;
             expand->child = std::move(*current);
