@@ -142,6 +142,26 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                             else
                                 reqs[var].need_whole_vertex = true;
                         }
+                    } else if ((fname == "toInteger" || fname == "toFloat" || fname == "toBoolean" ||
+                                fname == "toString") &&
+                               ptr->args.size() == 1) {
+                        // Conversion functions throw TypeError on entity inputs
+                        // (VertexValue/EdgeValue). Without the full entity, the
+                        // argument arrives as VertexRef/EdgeKey and the function
+                        // silently returns NULL instead of raising the expected
+                        // error. Force full materialization.
+                        std::string var = varNameFromObject(ptr->args[0]);
+                        if (!var.empty()) {
+                            bool is_edge = false;
+                            if (auto* vref = std::get_if<binder::BoundVariableRef>(&ptr->args[0]))
+                                is_edge = (vref->type.kind == binder::BoundTypeKind::EDGE);
+                            else if (auto* cref = std::get_if<binder::BoundColumnRef>(&ptr->args[0]))
+                                is_edge = (cref->type.kind == binder::BoundTypeKind::EDGE);
+                            if (is_edge)
+                                reqs[var].need_whole_edge = true;
+                            else
+                                reqs[var].need_whole_vertex = true;
+                        }
                     }
                     for (const auto& a : ptr->args)
                         collectExprReqs(a, reqs, in_schema_changing_op);
