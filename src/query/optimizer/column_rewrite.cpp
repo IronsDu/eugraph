@@ -189,8 +189,29 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                         reqs[var].need_whole_vertex = true;
                     collectExprReqs(ptr->object, reqs, in_schema_changing_op);
                 }
+            } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
+                // Standalone variable reference (not consumed as the object of a
+                // BoundPropertyRef): the entity value will be inspected directly —
+                // e.g. placed in a list/map, compared, or passed to a function.
+                // Force materialization so VertexRef/EdgeKey becomes VertexValue/EdgeValue.
+                if (!ptr.name.empty()) {
+                    if (ptr.type.kind == binder::BoundTypeKind::EDGE)
+                        reqs[ptr.name].need_whole_edge = true;
+                    else if (ptr.type.kind == binder::BoundTypeKind::VERTEX)
+                        reqs[ptr.name].need_whole_vertex = true;
+                }
+            } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
+                // Standalone column reference (e.g. `WITH x ... RETURN x`): the
+                // entity will be inspected directly. Materialize so downstream
+                // sees VertexValue/EdgeValue.
+                if (!ptr.name.empty()) {
+                    if (ptr.type.kind == binder::BoundTypeKind::EDGE)
+                        reqs[ptr.name].need_whole_edge = true;
+                    else if (ptr.type.kind == binder::BoundTypeKind::VERTEX)
+                        reqs[ptr.name].need_whole_vertex = true;
+                }
             }
-            // BoundColumnRef / BoundVariableRef / BoundLiteral / BoundParameter: leaf, no requirements.
+            // BoundLiteral / BoundParameter: leaf, no requirements.
         },
         expr);
 }
