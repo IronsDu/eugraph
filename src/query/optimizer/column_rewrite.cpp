@@ -463,6 +463,18 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
                         return true;
                     }
                 }
+                // Flat-column rewrite failed (e.g. need_whole_vertex with empty
+                // prop_order). The BoundColumnRef inside the object still holds
+                // the binder-assigned column_index, which does not account for
+                // property columns appended by ProjectionExtract before this
+                // variable. Update it so evalPropertyRef can locate the
+                // ConstructVertex column at runtime.
+                if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object)) {
+                    if (it->second.base_col != cref->column_index) {
+                        cref->column_index = it->second.base_col;
+                        return true;
+                    }
+                }
                 return false;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
                 if (!val)
@@ -508,6 +520,22 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
                 // Dynamic property ref — left intact. Evaluator reads from the
                 // constructed VertexValue/EdgeValue column at runtime.
+                // Still update the BoundColumnRef inside the object so the
+                // evaluator can locate the constructed entity column.
+                if (val) {
+                    std::string var = varNameFromObject(val->object);
+                    if (!var.empty()) {
+                        auto it = info.find(var);
+                        if (it != info.end()) {
+                            if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object)) {
+                                if (it->second.base_col != cref->column_index) {
+                                    cref->column_index = it->second.base_col;
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
                 return false;
             } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
                 // Direct variable reference (e.g. `WITH b` or `RETURN b`):
