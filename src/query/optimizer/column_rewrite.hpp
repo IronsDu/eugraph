@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace eugraph {
@@ -29,6 +30,7 @@ namespace optimizer {
 struct PropertyExtractionInfo {
     /// Base column index of the source variable (before extraction).
     uint32_t base_col = 0;
+    uint32_t input_base_col = 0;
     /// Per-property mapping: (label_id, prop_id) → new column index offset.
     /// Offset is 1 (skip source column) + cumulative props before this one.
     /// The absolute column index is base_col + offset.
@@ -106,9 +108,21 @@ void rewriteColumnIndices(binder::BoundLogicalOperator& op,
 /// variables (e.g. edge variable at column 1 in Expand output).
 /// reqs is the full requirement map (including need_whole_*/labels/type) so
 /// the column counter can account for ALL columns ProjectionExtract appends.
+/// `project_resets` (optional out-param) records which variables each
+/// Project/Aggregate operator actually reset; pass the same map to
+/// rewriteColumnIndicesWithResets so the rewrite can distinguish a true schema
+/// reset from an inherited one in nested WITH/RETURN chains.
+using ProjectResetMap = std::unordered_map<const void*, std::unordered_set<std::string>>;
+
 void updateExtractionBaseCols(const binder::BoundLogicalOperator& op,
                               std::unordered_map<std::string, PropertyExtractionInfo>& info,
-                              const PlanRequirements& reqs);
+                              const PlanRequirements& reqs, ProjectResetMap* project_resets = nullptr);
+
+/// Like rewriteColumnIndices, but uses the per-Project reset map produced by
+/// updateExtractionBaseCols to correctly handle nested schema-changing ops.
+void rewriteColumnIndicesWithResets(binder::BoundLogicalOperator& op,
+                                    const std::unordered_map<std::string, PropertyExtractionInfo>& info,
+                                    const ProjectResetMap& project_resets);
 
 /// Walk the plan and find variables that need full objects (RETURN n, RETURN r).
 /// These variables must NOT use standalone PropertyExtract — they need VertexValue.

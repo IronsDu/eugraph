@@ -929,8 +929,9 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // need_whole_vertex / need_vertex_labels / need_edge_type are handled
     // by extract's construct/labels columns whose indices overlap the source.
     auto extraction_info = optimizer::buildExtractionInfo(bound_plan.root, ctx.requirements);
-    optimizer::updateExtractionBaseCols(bound_plan.root, extraction_info, ctx.requirements);
-    optimizer::rewriteColumnIndices(bound_plan.root, extraction_info);
+    optimizer::ProjectResetMap project_resets;
+    optimizer::updateExtractionBaseCols(bound_plan.root, extraction_info, ctx.requirements, &project_resets);
+    optimizer::rewriteColumnIndicesWithResets(bound_plan.root, extraction_info, project_resets);
 
     ctx.use_property_extract = true;
     Schema empty_schema;
@@ -1154,8 +1155,9 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     binder::BoundLogicalOperator materialized = materializeChosen(chosen);
     ctx.requirements = optimizer::collectPlanRequirements(materialized);
     auto extraction_info = optimizer::buildExtractionInfo(materialized, ctx.requirements);
-    optimizer::updateExtractionBaseCols(materialized, extraction_info, ctx.requirements);
-    optimizer::rewriteColumnIndices(materialized, extraction_info);
+    optimizer::ProjectResetMap project_resets;
+    optimizer::updateExtractionBaseCols(materialized, extraction_info, ctx.requirements, &project_resets);
+    optimizer::rewriteColumnIndicesWithResets(materialized, extraction_info, project_resets);
     ctx.use_property_extract = true;
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;

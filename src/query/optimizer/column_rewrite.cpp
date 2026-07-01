@@ -554,26 +554,54 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
         expr);
 }
 
-void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::string, PropertyExtractionInfo>& info) {
+void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::string, PropertyExtractionInfo>& info,
+               const ProjectResetMap* project_resets) {
     std::visit(
         [&](auto& v) {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (v) {
                     rewriteExpr(v->predicate, info);
-                    rewriteColumnIndices(v->child, info);
+                    rewriteOp(v->child, info, project_resets);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                 if (v) {
+                    // Project's items consume THIS Project's INPUT schema (= child's
+                    // output), and the child subtree operates on the same schema.
+                    // For variables RESET by THIS Project, info[var].base_col was
+                    // overwritten to the post-Project position; the producer position
+                    // was saved in input_base_col. Switch those vars back to their
+                    // producer positions for items + child descent. Variables NOT
+                    // reset by THIS Project (e.g. an outer WITH already reset them,
+                    // or they live entirely inside the child subtree) keep their
+                    // current base_col. The project_resets map lets us distinguish
+                    // a true reset from an inherited one (without it, nested
+                    // WITH/RETURN chains collapse all positions to the innermost
+                    // Project's input and the outer Project's items get mis-rewritten).
+                    auto child_info = info;
+                    bool this_resets = false;
+                    if (project_resets) {
+                        auto rit = project_resets->find(static_cast<const void*>(&*v));
+                        if (rit != project_resets->end()) {
+                            for (const auto& var : rit->second) {
+                                auto it = child_info.find(var);
+                                if (it != child_info.end() && it->second.base_col != it->second.input_base_col) {
+                                    it->second.base_col = it->second.input_base_col;
+                                    this_resets = true;
+                                }
+                            }
+                        }
+                    }
+                    auto& item_info = this_resets ? child_info : info;
                     for (auto& item : v->items)
-                        rewriteExpr(item.expr, info);
-                    rewriteColumnIndices(v->child, info);
+                        rewriteExpr(item.expr, item_info);
+                    rewriteOp(v->child, child_info, project_resets);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
                 if (v) {
                     for (auto& item : v->items)
                         rewriteExpr(item.expr, info);
-                    rewriteColumnIndices(v->child, info);
+                    rewriteOp(v->child, info, project_resets);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
                 if (v) {
@@ -581,38 +609,38 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
                         rewriteExpr(k, info);
                     for (auto& agg : v->aggregates)
                         rewriteExpr(agg.argument, info);
-                    rewriteColumnIndices(v->child, info);
+                    rewriteOp(v->child, info, project_resets);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (v)
-                    rewriteColumnIndices(v->child, info);
+                    rewriteOp(v->child, info, project_resets);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                 if (v)
-                    rewriteColumnIndices(v->child, info);
+                    rewriteOp(v->child, info, project_resets);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                 if (v)
-                    rewriteColumnIndices(v->child, info);
+                    rewriteOp(v->child, info, project_resets);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
-                    rewriteColumnIndices(v->left, info);
-                    rewriteColumnIndices(v->right, info);
+                    rewriteOp(v->left, info, project_resets);
+                    rewriteOp(v->right, info, project_resets);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
                 // Descend so Filter / Project under CREATE (e.g. CREATE ... WHERE
                 // a.name = ...) get their BoundPropertyRef rewritten to the flat
                 // property columns emitted by ProjectionExtract.
                 if (v)
-                    rewriteColumnIndices(v->child, info);
+                    rewriteOp(v->child, info, project_resets);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v && v->child)
-                    rewriteColumnIndices(*v->child, info);
+                    rewriteOp(*v->child, info, project_resets);
             }
             // Leaves (Scan, LabelScan, Singleton, CorrelatedSource) and write ops
             // (Set, Remove, Delete, Merge) are left unmodified.
@@ -661,13 +689,23 @@ static size_t columnCountFor(const VariableRequirement& r) {
     return n;
 }
 
+/// Tracks which variables each Project/Aggregate operator actually resets.
+/// Keyed by operator pointer. Used by rewriteOp to distinguish a true schema
+/// reset (which requires switching to producer-side positions for the child
+/// subtree) from an inherited reset (an inner Project already reset the var;
+/// the outer Project's items and child should keep using its own input
+/// positions).
+using ProjectResetMap = std::unordered_map<const void*, std::unordered_set<std::string>>;
+
 void updateBaseCols(const binder::BoundLogicalOperator& op,
                     std::unordered_map<std::string, PropertyExtractionInfo>& info, const PlanRequirements& reqs,
-                    uint32_t& col_count) {
+                    uint32_t& col_count, ProjectResetMap& project_resets) {
     auto assignVar = [&](const std::string& var) {
         auto it = info.find(var);
-        if (it != info.end())
+        if (it != info.end()) {
+            it->second.input_base_col = col_count;
             it->second.base_col = col_count;
+        }
         auto rit = reqs.find(var);
         col_count += static_cast<uint32_t>(rit != reqs.end() ? columnCountFor(rit->second) : 1);
     };
@@ -685,7 +723,7 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                 col_count += static_cast<uint32_t>(v.variables.size());
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (v) {
-                    updateBaseCols(v->child, info, reqs, col_count);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
                     if (!v->edge_variable.empty())
                         assignVar(v->edge_variable);
                     if (!v->dst_variable.empty())
@@ -697,7 +735,7 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                 // accounting, downstream vars get base_col=0 (default) and the
                 // BoundColumnRef rewrite would collapse them onto col 0.
                 if (v) {
-                    updateBaseCols(v->child, info, reqs, col_count);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
                     if (!v->dst_variable.empty())
                         assignVar(v->dst_variable);
                     if (!v->path_variable.empty())
@@ -709,40 +747,87 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
-                    updateBaseCols(v->left, info, reqs, col_count);
-                    updateBaseCols(v->right, info, reqs, col_count);
+                    updateBaseCols(v->left, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->right, info, reqs, col_count, project_resets);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
                 // SemiJoin: only left child columns appear in the output schema;
                 // the right child is a correlated subplan with its own column space.
                 if (v)
-                    updateBaseCols(v->left, info, reqs, col_count);
+                    updateBaseCols(v->left, info, reqs, col_count, project_resets);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                if (v) {
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    uint32_t out_idx = 0;
+                    for (const auto& item : v->items) {
+                        std::string var;
+                        if (auto* cref = std::get_if<binder::BoundColumnRef>(&item.expr))
+                            var = cref->name;
+                        else if (auto* vref = std::get_if<binder::BoundVariableRef>(&item.expr))
+                            var = vref->name;
+                        if (!var.empty()) {
+                            auto it = info.find(var);
+                            if (it != info.end() && it->second.base_col != out_idx) {
+                                it->second.input_base_col = it->second.base_col;
+                                it->second.base_col = out_idx;
+                                project_resets[&*v].insert(var);
+                            }
+                        }
+                        ++out_idx;
+                    }
+                    col_count = out_idx;
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
+                if (v) {
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    uint32_t out_idx = 0;
+                    for (const auto& k : v->group_keys) {
+                        std::string var;
+                        if (auto* cref = std::get_if<binder::BoundColumnRef>(&k))
+                            var = cref->name;
+                        else if (auto* vref = std::get_if<binder::BoundVariableRef>(&k))
+                            var = vref->name;
+                        if (!var.empty()) {
+                            auto it = info.find(var);
+                            if (it != info.end() && it->second.base_col != out_idx) {
+                                it->second.input_base_col = it->second.base_col;
+                                it->second.base_col = out_idx;
+                                project_resets[&*v].insert(var);
+                            }
+                        }
+                        ++out_idx;
+                    }
+                    col_count = static_cast<uint32_t>(v->group_keys.size() + v->aggregates.size());
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>>) {
                 if (v)
-                    updateBaseCols(v->child, info, reqs, col_count);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+                if (v) {
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    if (!v->variable.empty())
+                        assignVar(v->variable);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
                 if (v) {
-                    updateBaseCols(v->child, info, reqs, col_count);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
                     if (!v->variable.empty())
                         assignVar(v->variable);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v) {
                     if (v->child)
-                        updateBaseCols(*v->child, info, reqs, col_count);
+                        updateBaseCols(*v->child, info, reqs, col_count, project_resets);
                     if (!v->variable.empty())
                         assignVar(v->variable);
                 }
@@ -753,9 +838,11 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
 
 void updateExtractionBaseCols(const binder::BoundLogicalOperator& op,
                               std::unordered_map<std::string, PropertyExtractionInfo>& info,
-                              const PlanRequirements& reqs) {
+                              const PlanRequirements& reqs, ProjectResetMap* project_resets) {
     uint32_t col_count = 0;
-    updateBaseCols(op, info, reqs, col_count);
+    ProjectResetMap local_resets;
+    ProjectResetMap& resets = project_resets ? *project_resets : local_resets;
+    updateBaseCols(op, info, reqs, col_count, resets);
 }
 
 bool rewriteExpression(binder::BoundExpression& expr,
@@ -763,9 +850,16 @@ bool rewriteExpression(binder::BoundExpression& expr,
     return rewriteExpr(expr, info);
 }
 
+void rewriteColumnIndicesWithResets(binder::BoundLogicalOperator& op,
+                                    const std::unordered_map<std::string, PropertyExtractionInfo>& info,
+                                    const ProjectResetMap& project_resets) {
+    rewriteOp(op, info, &project_resets);
+}
+
 void rewriteColumnIndices(binder::BoundLogicalOperator& op,
                           const std::unordered_map<std::string, PropertyExtractionInfo>& info) {
-    rewriteOp(op, info);
+    ProjectResetMap empty_resets;
+    rewriteOp(op, info, &empty_resets);
 }
 
 void collectFromPlan(const binder::BoundLogicalOperator& op,

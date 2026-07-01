@@ -2770,6 +2770,67 @@ TEST_F(QueryExecutorWithTest, WithAsFirstClauseThenMatch) {
     ASSERT_EQ(result.rows.size(), 3u);
 }
 
+TEST_F(QueryExecutorWithTest, MultiWithAggregateThenFilterThenReturn) {
+    insertPersonWithEdges();
+
+    // Adapted from TCK With7 [2] Multiple WITHs using a predicate and aggregation:
+    //   MATCH (david {name:'David'})--(other)-->()
+    //   WITH other, count(*) AS foaf
+    //   WHERE foaf > 1
+    //   WITH other
+    //   WHERE other.name <> 'NotOther'
+    //   RETURN count(*)
+    // Data: Alice->Bob, Alice->Carol, Bob->Carol.
+    // First MATCH (a {name:'Alice'})--(o)-->(x): o=Bob(x=Carol), o=Carol(no x) — 1 row only.
+    auto result = execSync(*executor_, "MATCH (a {name: 'Alice'})--(other)-->() "
+                                       "WITH other, count(*) AS foaf "
+                                       "WHERE foaf > 0 "
+                                       "WITH other "
+                                       "WHERE other.name <> 'Bob' "
+                                       "RETURN count(*)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    // After WHERE other.name <> 'Bob' we keep only Carol if foaf > 0.
+    // Carol has foaf = 0 (no further out-edge) so she is filtered at WHERE foaf > 0.
+    // Therefore count(*) = 0.
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
+}
+
+TEST_F(QueryExecutorTest, PathReturnInlinePropPredicate) {
+    // TCK Match6 [2] Return a simple path:
+    //   MATCH p = (a {name: 'A'})-->(b) RETURN p
+    // The inline predicate on `a` (no label) is what was breaking in TCK.
+    auto setup = execSync(*executor_, "CREATE (a:Person {name: 'A'})-[:KNOWS]->(b:Person {name: 'B'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH p = (a {name: 'A'})-->(b) RETURN p");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.columns.size(), 1u);
+    EXPECT_EQ(result.columns[0], "p");
+}
+
+TEST_F(QueryExecutorTest, UnwindCreateReturnSkipLimit) {
+    // TCK Create6 [3] Skipping and limiting to a few results after creating nodes:
+    //   UNWIND [42, 42, 42, 42, 42] AS x
+    //   CREATE (n:N {num: x})
+    //   RETURN n.num AS num
+    //   SKIP 2 LIMIT 2
+
+    // Simpler reproduction: just UNWIND + CREATE + RETURN (no SKIP/LIMIT)
+    // Use predefined label/property (Person.name) to avoid auto-create complications.
+    auto r1 = execSync(*executor_, "UNWIND ['a', 'b', 'c'] AS x "
+                                   "CREATE (n:Person {name: x}) "
+                                   "RETURN n.name AS name");
+    std::cout << "[R1] error='" << r1.error << "' rows=" << r1.rows.size() << "\n";
+    for (size_t i = 0; i < r1.rows.size() && i < 3; ++i) {
+        std::cout << "[R1] row " << i << ": variant idx=" << r1.rows[i][0].index() << "\n";
+    }
+
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_EQ(r1.rows.size(), 3u);
+}
+
 TEST_F(QueryExecutorTest, VarLenExpandExact2Hops) {
     // KNOWS chain: 1->2->3->4, LIVES_IN: 1->5, 2->6
     insertMultiHopEdges();
@@ -2798,6 +2859,32 @@ TEST_F(QueryExecutorTest, VarLenExpandRange1To3) {
     EXPECT_EQ(result.rows.size(), 6u);
 }
 
+TEST_F(QueryExecutorTest, InlineFilterOnDynamicAnonProperty) {
+    auto setup = execSync(*executor_, "CREATE (:Person {tag: 'xyz'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (n:Person {tag: 'xyz'}) RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, WithWhereAfterExpandAnonPropFilter) {
+    // WithWhere5 pattern: inline anon-prop filter, Expand, WITH, WHERE
+    auto setup = execSync(*executor_, "CREATE (:Person {tag: 'xyz'})-[:KNOWS]->(:Person {tag: 'abc'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    // Step 1: verify the basic MATCH works
+    auto r1 = execSync(*executor_, "MATCH (a:Person {tag: 'xyz'})-->(b) RETURN b");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_GT(r1.rows.size(), 0u) << "Step 1: basic MATCH should find rows";
+
+    // Step 2: verify WITH + WHERE on anon-prop works
+    auto r2 = execSync(*executor_, "MATCH (a:Person {tag: 'xyz'})-->(b) "
+                                   "WITH b WHERE b.tag IS NOT NULL RETURN b");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_GT(r2.rows.size(), 0u) << "Step 2: WITH+WHERE should find rows";
+}
+
 TEST_F(QueryExecutorTest, VarLenExpandExact1Hop) {
     insertMultiHopEdges();
 
@@ -2805,6 +2892,93 @@ TEST_F(QueryExecutorTest, VarLenExpandExact1Hop) {
     auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1]->(b) RETURN a, b");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 3u); // 1->2, 2->3, 3->4
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandAfterExpandReturnsDstProperty) {
+    // Reproduces Match5 scenario 25: regular expand then varlen expand, with
+    // RETURN of the varlen destination's property. Previously the property
+    // came back as NULL because the column-rewrite mapping was wrong.
+    insertMultiHopEdges();
+
+    // Chain: (1)-[:KNOWS]->(2)-[:KNOWS*2]->(4)
+    //   First expand: 1 -> 2 (anonymous intermediate)
+    //   Varlen *2:    2 -> 3 -> 4 (destination = 4)
+    // c.name should be "name4"
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->()-[:KNOWS*2]->(c) RETURN c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name4");
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandMultiRowReturnsDstProperty) {
+    // Multi-row variant: two starting paths each producing a distinct c, with
+    // different c.name values. Catches row-mismatch bugs in ProjectionExtract
+    // caching (ConstructVertex keyed by source col but per-row).
+    insertMultiHopEdges();
+    // Extra vertex 7 with name, edge 5->7, so we have two distinct chains:
+    //   (1)-[:KNOWS]->(2)-[:KNOWS*2]->(4)   c=4, c.name="name4"
+    //   (2)-[:KNOWS]->(3)-[:KNOWS*2]->?     no 5-hop from 3, so empty
+    // The setup chain is 1->2->3->4. *2 from each source:
+    //   src=1 (a=1): 1->2 then *2 from 2: 2->3->4. c=4.
+    //   src=2 (a=2): 2->3 then *2 from 3: 3->4->? (no edge from 4). No match.
+    // So only 1 row total.
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b)-[:KNOWS*2]->(c) RETURN c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
+    if (!result.rows.empty() && !result.rows[0].empty()) {
+        EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name4");
+    }
+}
+
+TEST_F(QueryExecutorTest, TwoMatchVarLenExpandReturnsDstProperty) {
+    // Closer reproduction of Match5 scenario 25: two MATCH clauses where the
+    // first scans a label and the second uses the bound variable as the source
+    // of a regular expand followed by varlen.
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH (a:Person) "
+                                       "MATCH (a)-[:KNOWS]->()-[:KNOWS*2]->(c) "
+                                       "RETURN c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]))
+        << "actual variant idx=" << result.rows[0][0].index();
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name4");
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandMixedLabelChainReturnsDstProperty) {
+    // Multi-label variant: vertices 1, 2, 3 are Person, vertex 4 is City.
+    // All have `name` property. Varlen dst (c) ends at a City vertex.
+    // Reproduces the multi-label candidate-resolution path that Match5 exercises.
+    insertTestVertices(); // vertices 1..5 as Person{name=N}
+    // Re-label vertex 4 as City (with name="city4") to introduce a second label.
+    {
+        auto txn = sync_data_->beginTransaction();
+        std::vector<std::pair<LabelId, Properties>> lp = {
+            {CITY_LABEL, Properties{PropertyValue(std::string("city4"))}}};
+        ASSERT_TRUE(sync_data_->insertVertex(txn, 4, lp));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
+    // KNOWS chain: 1->2->3->4
+    {
+        auto txn = sync_data_->beginTransaction();
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 4, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
+    // c at end of *2 chain from anon (= vertex 2 after first expand from a=1):
+    //   2 -> 3 -> 4. c = 4 (City). c.name should resolve to "city4".
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->()-[:KNOWS*2]->(c) RETURN c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    if (!std::holds_alternative<std::string>(result.rows[0][0])) {
+        FAIL() << "expected string, got variant idx=" << result.rows[0][0].index();
+    }
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "city4");
 }
 
 TEST_F(QueryExecutorTest, VarLenExpandNoMatch) {
