@@ -556,6 +556,32 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
 
 void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::string, PropertyExtractionInfo>& info,
                const ProjectResetMap* project_resets) {
+    // Build the INPUT-scope view of `info` for a schema-changing operator:
+    // variables reset by THIS operator get base_col switched back to the
+    // producer-side position saved in input_base_col. Returns a copy only
+    // when a switch is actually needed; otherwise returns the original map
+    // unchanged so callers can pass it through without allocation.
+    auto buildInputScope =
+        [&project_resets](
+            const std::unordered_map<std::string, PropertyExtractionInfo>& base,
+            const void* op_ptr) -> std::pair<bool, std::unordered_map<std::string, PropertyExtractionInfo>> {
+        if (!project_resets)
+            return {false, base};
+        auto rit = project_resets->find(op_ptr);
+        if (rit == project_resets->end())
+            return {false, base};
+        auto copy = base;
+        bool changed = false;
+        for (const auto& var : rit->second) {
+            auto it = copy.find(var);
+            if (it != copy.end() && it->second.base_col != it->second.input_base_col) {
+                it->second.base_col = it->second.input_base_col;
+                changed = true;
+            }
+        }
+        return {changed, std::move(copy)};
+    };
+
     std::visit(
         [&](auto& v) {
             using T = std::decay_t<decltype(v)>;
@@ -566,36 +592,22 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                 if (v) {
-                    // Project's items consume THIS Project's INPUT schema (= child's
-                    // output), and the child subtree operates on the same schema.
-                    // For variables RESET by THIS Project, info[var].base_col was
-                    // overwritten to the post-Project position; the producer position
-                    // was saved in input_base_col. Switch those vars back to their
-                    // producer positions for items + child descent. Variables NOT
-                    // reset by THIS Project (e.g. an outer WITH already reset them,
-                    // or they live entirely inside the child subtree) keep their
-                    // current base_col. The project_resets map lets us distinguish
-                    // a true reset from an inherited one (without it, nested
-                    // WITH/RETURN chains collapse all positions to the innermost
-                    // Project's input and the outer Project's items get mis-rewritten).
-                    auto child_info = info;
-                    bool this_resets = false;
-                    if (project_resets) {
-                        auto rit = project_resets->find(static_cast<const void*>(&*v));
-                        if (rit != project_resets->end()) {
-                            for (const auto& var : rit->second) {
-                                auto it = child_info.find(var);
-                                if (it != child_info.end() && it->second.base_col != it->second.input_base_col) {
-                                    it->second.base_col = it->second.input_base_col;
-                                    this_resets = true;
-                                }
-                            }
-                        }
-                    }
-                    auto& item_info = this_resets ? child_info : info;
+                    // Project's items + child subtree consume THIS Project's INPUT
+                    // schema. Variables reset by THIS Project had their base_col
+                    // overwritten to the OUTPUT position; switch them back to the
+                    // producer position (saved in input_base_col) for the items
+                    // and the child descent. Variables NOT reset by THIS Project
+                    // (e.g. an ancestor WITH already reset them, or they live
+                    // entirely inside the child subtree) keep their current
+                    // base_col. The project_resets map lets us distinguish a true
+                    // reset from an inherited one (without it, nested WITH/RETURN
+                    // chains collapse all positions to the innermost Project's
+                    // input and the outer Project's items get mis-rewritten).
+                    auto [changed, scope] = buildInputScope(info, static_cast<const void*>(&*v));
+                    const auto& input_scope = changed ? scope : info;
                     for (auto& item : v->items)
-                        rewriteExpr(item.expr, item_info);
-                    rewriteOp(v->child, child_info, project_resets);
+                        rewriteExpr(item.expr, input_scope);
+                    rewriteOp(v->child, input_scope, project_resets);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
                 if (v) {
@@ -605,11 +617,19 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
                 if (v) {
+                    // Aggregate's group_keys and aggregate arguments consume the
+                    // INPUT schema, same as Project's items. Without this switch,
+                    // a group_key like BoundColumnRef(r) would be rewritten to the
+                    // post-Aggregate output position, but the runtime reads INPUT
+                    // columns — yielding the wrong variable. (Symmetric to the
+                    // ProjectOp branch above.)
+                    auto [changed, scope] = buildInputScope(info, static_cast<const void*>(&*v));
+                    const auto& input_scope = changed ? scope : info;
                     for (auto& k : v->group_keys)
-                        rewriteExpr(k, info);
+                        rewriteExpr(k, input_scope);
                     for (auto& agg : v->aggregates)
-                        rewriteExpr(agg.argument, info);
-                    rewriteOp(v->child, info, project_resets);
+                        rewriteExpr(agg.argument, input_scope);
+                    rewriteOp(v->child, input_scope, project_resets);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (v)
@@ -759,18 +779,26 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                 if (v) {
                     updateBaseCols(v->child, info, reqs, col_count, project_resets);
                     uint32_t out_idx = 0;
+                    std::unordered_set<std::string> reset_in_this_op;
                     for (const auto& item : v->items) {
                         std::string var;
                         if (auto* cref = std::get_if<binder::BoundColumnRef>(&item.expr))
                             var = cref->name;
                         else if (auto* vref = std::get_if<binder::BoundVariableRef>(&item.expr))
                             var = vref->name;
-                        if (!var.empty()) {
+                        // Skip duplicate resets within the same op: a variable
+                        // referenced by multiple items (e.g. `WITH b AS y, b AS z`)
+                        // has ONE producer position to remember; the second
+                        // iteration would otherwise clobber input_base_col with
+                        // the just-overwritten base_col (= first item's out_idx),
+                        // corrupting the producer position for the items' rewrite.
+                        if (!var.empty() && reset_in_this_op.find(var) == reset_in_this_op.end()) {
                             auto it = info.find(var);
                             if (it != info.end() && it->second.base_col != out_idx) {
                                 it->second.input_base_col = it->second.base_col;
                                 it->second.base_col = out_idx;
                                 project_resets[&*v].insert(var);
+                                reset_in_this_op.insert(var);
                             }
                         }
                         ++out_idx;
@@ -781,18 +809,20 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                 if (v) {
                     updateBaseCols(v->child, info, reqs, col_count, project_resets);
                     uint32_t out_idx = 0;
+                    std::unordered_set<std::string> reset_in_this_op;
                     for (const auto& k : v->group_keys) {
                         std::string var;
                         if (auto* cref = std::get_if<binder::BoundColumnRef>(&k))
                             var = cref->name;
                         else if (auto* vref = std::get_if<binder::BoundVariableRef>(&k))
                             var = vref->name;
-                        if (!var.empty()) {
+                        if (!var.empty() && reset_in_this_op.find(var) == reset_in_this_op.end()) {
                             auto it = info.find(var);
                             if (it != info.end() && it->second.base_col != out_idx) {
                                 it->second.input_base_col = it->second.base_col;
                                 it->second.base_col = out_idx;
                                 project_resets[&*v].insert(var);
+                                reset_in_this_op.insert(var);
                             }
                         }
                         ++out_idx;
