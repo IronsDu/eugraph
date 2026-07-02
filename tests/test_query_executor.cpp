@@ -3050,7 +3050,7 @@ TEST_F(QueryExecutorTest, MergeUndirectedCreate) {
                                    "MERGE (a)-[r:KNOWS]-(b) "
                                    "RETURN startNode(r).id AS s, endNode(r).id AS e");
     ASSERT_TRUE(sn.error.empty()) << sn.error;
-    ASSERT_EQ(sn.rows.size(), 1u) << sn.error;
+    ASSERT_EQ(sn.rows.size(), 1u) << "rows=" << sn.rows.size() << " err=" << sn.error;
     ASSERT_TRUE(std::holds_alternative<int64_t>(sn.rows[0][0]));
     ASSERT_TRUE(std::holds_alternative<int64_t>(sn.rows[0][1]));
     EXPECT_EQ(std::get<int64_t>(sn.rows[0][0]), 2);
