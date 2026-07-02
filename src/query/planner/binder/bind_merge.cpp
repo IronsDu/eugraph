@@ -304,7 +304,12 @@ std::optional<BoundLogicalOperator> Binder::bindMerge(const cypher::MergeClause&
         if (!edge_label_ids.empty()) {
             edge_label_id = edge_label_ids[0];
         }
-        if (!rel_pat.rel_types.empty() && !edge_label_id.has_value()) {
+        // Always thread the label name when declared in the pattern so that
+        // MergePhysicalOp can call addEdgeLabelProperties for runtime property
+        // registration (ON CREATE/MATCH SET on a label that was created without
+        // pre-registered properties — common in TCK where labels are auto-created
+        // without property defs).
+        if (!rel_pat.rel_types.empty()) {
             edge_label_name = rel_pat.rel_types[0];
         }
 

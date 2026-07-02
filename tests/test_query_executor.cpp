@@ -2885,6 +2885,62 @@ TEST_F(QueryExecutorTest, WithWhereAfterExpandAnonPropFilter) {
     ASSERT_GT(r2.rows.size(), 0u) << "Step 2: WITH+WHERE should find rows";
 }
 
+TEST_F(QueryExecutorTest, MergeOnCreateOnMatchSetDynamicEdgeProp) {
+    // Reproduces Merge8 scenario [1] with TCK semantics: TYPE edge label is
+    // created WITHOUT pre-registered 'name' property. ON CREATE/MATCH SET
+    // r.name must dynamically register the property so it persists for
+    // subsequent MATCH ... RETURN properties(r) reads.
+    auto type_id = blockingWait(async_meta_->createEdgeLabel("TYPE", {}));
+    ASSERT_NE(type_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(type_id));
+
+    auto a_id = blockingWait(async_meta_->createLabel("A", {}));
+    ASSERT_NE(a_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(a_id));
+    auto b_id = blockingWait(async_meta_->createLabel("B", {}));
+    ASSERT_NE(b_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(b_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(
+        *executor_, "CREATE (a:A {id: 1}), (b:B {id: 2}) CREATE (a)-[:TYPE]->(b) CREATE (:A {id: 3}), (:B {id: 4})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (a:A), (b:B) "
+                                       "MERGE (a)-[r:TYPE]->(b) "
+                                       "  ON CREATE SET r.name = 'Lola' "
+                                       "  ON MATCH SET r.name = 'RUN' "
+                                       "RETURN count(r)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 4);
+
+    // r.name: 3 ON CREATE → 'Lola', 1 ON MATCH → 'RUN'.
+    auto name_check = execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN r.name ORDER BY r.name");
+    ASSERT_TRUE(name_check.error.empty()) << name_check.error;
+    ASSERT_EQ(name_check.rows.size(), 4u);
+    std::vector<std::string> names;
+    for (const auto& r : name_check.rows) {
+        ASSERT_TRUE(std::holds_alternative<std::string>(r[0])) << "variant: " << r[0].index();
+        names.push_back(std::get<std::string>(r[0]));
+    }
+    EXPECT_EQ(names, (std::vector<std::string>{"Lola", "Lola", "Lola", "RUN"}));
+
+    // properties(r) map (TCK side-effects path).
+    auto pcheck = execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN id(r), properties(r)");
+    ASSERT_TRUE(pcheck.error.empty()) << pcheck.error;
+    ASSERT_EQ(pcheck.rows.size(), 4u);
+    int total_props = 0;
+    for (const auto& row : pcheck.rows) {
+        ASSERT_TRUE(std::holds_alternative<MapValue>(row[1]));
+        total_props += std::get<MapValue>(row[1]).entries.size();
+    }
+    EXPECT_EQ(total_props, 4);
+}
+
 TEST_F(QueryExecutorTest, VarLenExpandExact1Hop) {
     insertMultiHopEdges();
 

@@ -193,6 +193,12 @@ for each DataChunk from child:
 - `SET x += {k: v}` — map 合并（is_add_assign）
 - `SET x.prop = null` — 属性移除
 
+### 动态边属性注册（TCK 场景）
+
+TCK 通过 `ensureTypesForQuery` 自动建 label/edge_label 时**不注册属性定义**，运行时由 `ON CREATE SET r.name = ...` 触发动态注册。`MergePhysicalOp::registerPendingProps` 调用 `meta_.addEdgeLabelProperties(name, ...)`，但调用需 `edge_label_name_` 非空。
+
+绑定阶段早期实现里，`edge_label_name` 仅在 `edge_label_id` 缺失时被赋值（`!rel_pat.rel_types.empty() && !edge_label_id.has_value()`）——TCK 路径下 label 已在 catalog 中（id 存在），导致 name 留空，`addEdgeLabelProperties` 被跳过，SET 写入未被注册的 prop_id，后续 `properties(r)` 读不到。修复：始终把 `rel_pat.rel_types[0]` 透传给 `BoundMergeOp::edge_label_name`，物理算子据此调用 `addEdgeLabelProperties` 把 ON CREATE/MATCH SET 列出的属性名注册到 edge label，再回填 `edge_label_defs_` 缓存供 SET 与读路径查找 prop_id。
+
 ---
 
 ## 输出 Schema
