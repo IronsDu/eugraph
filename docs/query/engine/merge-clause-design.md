@@ -193,6 +193,12 @@ for each DataChunk from child:
 - `SET x += {k: v}` — map 合并（is_add_assign）
 - `SET x.prop = null` — 属性移除
 
+#### SET_PROPERTIES 的实体源（VertexValue / EdgeValue）
+
+`SET r = a`（a 为顶点或边变量）走 SET_PROPERTIES 分支，源值到达 `executeSetPropertiesItem` 时是 `VertexValue` / `EdgeValue`（由 `ProjectionExtractPhysicalOp` 物化为整实体），而非 `MapValue`。直接当作 map 写入会落到 `std::holds_alternative<MapValue>` 之外的分支，导致属性被静默丢弃。
+
+修复：在 `MergePhysicalOp::executeSetPropertiesItem` 中检测源值类型，若是 `VertexValue` / `EdgeValue`，调用辅助 `entityValueToMap` 按 `label_defs_` / `edge_label_defs_` 中已注册的 `PropertyDef` 把存储 `PropertyValue` 还原为命名 map；否则原样使用。然后走原有 `putVertexProperty` / `putEdgeProperty` 路径写入，确保后续 `properties(r)` / `keys(r)` 可见。
+
 ### 动态边属性注册（TCK 场景）
 
 TCK 通过 `ensureTypesForQuery` 自动建 label/edge_label 时**不注册属性定义**，运行时由 `ON CREATE SET r.name = ...` 触发动态注册。`MergePhysicalOp::registerPendingProps` 调用 `meta_.addEdgeLabelProperties(name, ...)`，但调用需 `edge_label_name_` 非空。

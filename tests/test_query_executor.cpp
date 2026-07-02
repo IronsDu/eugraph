@@ -2979,6 +2979,54 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicVertexProp) {
     EXPECT_TRUE(found_created);
 }
 
+TEST_F(QueryExecutorTest, MergeOnCreateSetEdgeFromNodeProperties) {
+    // Reproduces Merge6 scenario [6]: `ON CREATE SET r = a` should copy all
+    // properties from vertex a to edge r. Source value arrives as VertexValue,
+    // not MapValue — executeSetPropertiesItem must convert.
+    auto type_id = blockingWait(async_meta_->createEdgeLabel("TYPE", {}));
+    ASSERT_NE(type_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(type_id));
+
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto a_id = blockingWait(async_meta_->createLabel("A", {name_pd}));
+    ASSERT_NE(a_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(a_id));
+    auto b_id = blockingWait(async_meta_->createLabel("B", {name_pd}));
+    ASSERT_NE(b_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(b_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (:A {name: 'A'}), (:B {name: 'B'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto merge = execSync(*executor_, "MATCH (a {name: 'A'}), (b {name: 'B'}) "
+                                      "MERGE (a)-[r:TYPE]->(b) ON CREATE SET r = a");
+    ASSERT_TRUE(merge.error.empty()) << merge.error;
+
+    auto keys_check = execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN keys(r)");
+    ASSERT_TRUE(keys_check.error.empty()) << keys_check.error;
+    ASSERT_EQ(keys_check.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<ListValue>(keys_check.rows[0][0]))
+        << "variant index: " << keys_check.rows[0][0].index();
+    const auto& keys = std::get<ListValue>(keys_check.rows[0][0]);
+    EXPECT_EQ(keys.elements.size(), 1u);
+    if (!keys.elements.empty()) {
+        EXPECT_TRUE(std::holds_alternative<std::string>(keys.elements[0].value));
+        if (std::holds_alternative<std::string>(keys.elements[0].value))
+            EXPECT_EQ(std::get<std::string>(keys.elements[0].value), "name");
+    }
+
+    auto prop_check = execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN r.name");
+    ASSERT_TRUE(prop_check.error.empty()) << prop_check.error;
+    ASSERT_EQ(prop_check.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(prop_check.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(prop_check.rows[0][0]), "A");
+}
+
 TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicEdgePropKeys) {
     // Reproduces Merge6 scenario [3]: ON CREATE SET r.name on a dynamically
     // created edge label. The control query uses keys(r) inside a list

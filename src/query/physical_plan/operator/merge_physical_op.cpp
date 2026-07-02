@@ -4,6 +4,7 @@
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/function/scalar/graph_functions.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -87,6 +88,46 @@ eugraph::Direction toStoreDir(eugraph::cypher::RelationshipDirection dir) {
         return eugraph::Direction::BOTH;
     }
     return eugraph::Direction::OUT;
+}
+
+// Convert a VertexValue / EdgeValue to a MapValue keyed by property name.
+// Used by SET_PROPERTIES when the source expression is an entity reference
+// (e.g. `SET r = a` where a is a node) — Cypher semantics: copy all
+// properties from the source entity. Returns empty map for non-entity
+// inputs (caller falls through to the existing MapValue path).
+eugraph::MapValue entityValueToMap(const eugraph::Value& v,
+                                   const std::unordered_map<eugraph::LabelId, eugraph::LabelDef>& label_defs,
+                                   const std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef>& edge_defs) {
+    eugraph::MapValue mv;
+    if (std::holds_alternative<eugraph::VertexValue>(v)) {
+        const auto& vv = std::get<eugraph::VertexValue>(v);
+        for (const auto& [lid, props] : vv.properties) {
+            auto it = label_defs.find(lid);
+            if (it == label_defs.end())
+                continue;
+            for (const auto& pd : it->second.properties) {
+                if (pd.id < props.size() && props[pd.id].has_value())
+                    mv.entries.push_back(
+                        {pd.name,
+                         eugraph::ValueStorage{eugraph::function::scalar::propertyValueToRuntimeValue(*props[pd.id])}});
+            }
+        }
+    } else if (std::holds_alternative<eugraph::EdgeValue>(v)) {
+        const auto& ev = std::get<eugraph::EdgeValue>(v);
+        if (!ev.properties.has_value())
+            return mv;
+        auto it = edge_defs.find(ev.label_id);
+        if (it == edge_defs.end())
+            return mv;
+        const auto& props = *ev.properties;
+        for (const auto& pd : it->second.properties) {
+            if (pd.id < props.size() && props[pd.id].has_value())
+                mv.entries.push_back(
+                    {pd.name,
+                     eugraph::ValueStorage{eugraph::function::scalar::propertyValueToRuntimeValue(*props[pd.id])}});
+        }
+    }
+    return mv;
 }
 
 } // namespace
@@ -960,11 +1001,21 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
                                                                   VertexId end_vid, EdgeId edge_id) {
     if (!item.value || std::holds_alternative<std::monostate>(val))
         co_return;
+    // Cypher semantics: SET r = a (where a is an entity) copies all of a's
+    // properties to r. The evaluator returns a VertexValue / EdgeValue for
+    // entity sources; normalise to MapValue so the existing map-writer path
+    // handles both cases.
+    Value normalised;
+    if (std::holds_alternative<VertexValue>(val) || std::holds_alternative<EdgeValue>(val)) {
+        normalised = Value(entityValueToMap(val, label_defs_, edge_label_defs_));
+    } else {
+        normalised = val;
+    }
     // Edge target
     if (has_relationship_ && item.var_name == edge_var_ && edge_id != INVALID_EDGE_ID &&
-        std::holds_alternative<MapValue>(val)) {
+        std::holds_alternative<MapValue>(normalised)) {
         EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
-        const auto& mv = std::get<MapValue>(val);
+        const auto& mv = std::get<MapValue>(normalised);
         for (const auto& [k, vs] : mv.entries) {
             uint16_t pid = 0;
             bool found = false;
@@ -1002,8 +1053,8 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
         vid = start_vid;
     else if (has_relationship_ && item.var_name == end_var_)
         vid = end_vid;
-    if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValue>(val)) {
-        const auto& mv = std::get<MapValue>(val);
+    if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValue>(normalised)) {
+        const auto& mv = std::get<MapValue>(normalised);
         for (const auto& [k, vs] : mv.entries) {
             if (anon_label_id_ != INVALID_LABEL_ID) {
                 uint16_t pid = 0;
