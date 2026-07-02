@@ -373,6 +373,16 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
 
                         return BoundExpression(std::move(prop_ref));
                     }
+
+                    // obj is VERTEX but not a LabelCast / ColumnRef (e.g. function
+                    // call result like startNode(r)): use dynamic property ref so
+                    // the evaluator resolves the property name at runtime against
+                    // the VertexValue's labels.
+                    auto dyn_ref = std::make_unique<BoundDynamicPropertyRef>();
+                    dyn_ref->object = std::move(*obj);
+                    dyn_ref->property = ptr->property;
+                    dyn_ref->result_type = BoundType::Any();
+                    return BoundExpression(std::move(dyn_ref));
                 }
 
                 if (obj_type.kind == BoundTypeKind::EDGE) {

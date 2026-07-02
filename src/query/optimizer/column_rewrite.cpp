@@ -150,6 +150,13 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                             else
                                 reqs[var].need_whole_vertex = true;
                         }
+                    } else if ((fname == "startNode" || fname == "endNode") && ptr->args.size() == 1) {
+                        // startNode/endNode read EdgeValue.src_id / dst_id; force
+                        // full edge materialization (an int edge-id column would
+                        // otherwise arrive and the impl throws InvalidArgumentValue).
+                        std::string var = varNameFromObject(ptr->args[0]);
+                        if (!var.empty())
+                            reqs[var].need_whole_edge = true;
                     } else if ((fname == "toInteger" || fname == "toFloat" || fname == "toBoolean" ||
                                 fname == "toString") &&
                                ptr->args.size() == 1) {

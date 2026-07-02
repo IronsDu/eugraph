@@ -3027,6 +3027,40 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetEdgeFromNodeProperties) {
     EXPECT_EQ(std::get<std::string>(prop_check.rows[0][0]), "A");
 }
 
+TEST_F(QueryExecutorTest, MergeUndirectedCreate) {
+    // Reproduces Merge5 [11] simplified: UNDIRECTED MERGE creates edge.
+    // TODO: startNode(r).id from undirected MERGE returns vertex instead of edge
+    // column (MergePhysicalOp output schema issue). Test groundwork only.
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (a {id: 2}), (b {id: 1}) RETURN a, b");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto merge = execSync(*executor_,
+                          "MATCH (a {id: 2}), (b {id: 1}) "
+                          "MERGE (a)-[r:KNOWS]-(b) "
+                          "RETURN r");
+    ASSERT_TRUE(merge.error.empty()) << merge.error;
+    ASSERT_EQ(merge.rows.size(), 1u) << merge.error;
+}
+
+TEST_F(QueryExecutorTest, MergeUndirectedMatch) {
+    // Reproduces Merge5 [12]: pre-existing edge a(1)→b(2). Query MATCH a(2),b(1) MERGE (a)-[r:KNOWS]-(b) should match.
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (a {id: 1}), (b {id: 2}) "
+                                      "CREATE (a)-[:KNOWS]->(b)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto merge = execSync(*executor_, "MATCH (a {id: 2}), (b {id: 1}) "
+                                      "MERGE (a)-[r:KNOWS]-(b) "
+                                      "RETURN r");
+    ASSERT_TRUE(merge.error.empty()) << merge.error;
+    ASSERT_EQ(merge.rows.size(), 1u) << merge.error;
+}
+
 TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicEdgePropKeys) {
     // Reproduces Merge6 scenario [3]: ON CREATE SET r.name on a dynamically
     // created edge label. The control query uses keys(r) inside a list
