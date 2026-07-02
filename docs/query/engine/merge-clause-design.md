@@ -199,6 +199,12 @@ TCK 通过 `ensureTypesForQuery` 自动建 label/edge_label 时**不注册属性
 
 绑定阶段早期实现里，`edge_label_name` 仅在 `edge_label_id` 缺失时被赋值（`!rel_pat.rel_types.empty() && !edge_label_id.has_value()`）——TCK 路径下 label 已在 catalog 中（id 存在），导致 name 留空，`addEdgeLabelProperties` 被跳过，SET 写入未被注册的 prop_id，后续 `properties(r)` 读不到。修复：始终把 `rel_pat.rel_types[0]` 透传给 `BoundMergeOp::edge_label_name`，物理算子据此调用 `addEdgeLabelProperties` 把 ON CREATE/MATCH SET 列出的属性名注册到 edge label，再回填 `edge_label_defs_` 缓存供 SET 与读路径查找 prop_id。
 
+### 动态节点属性注册（TCK 场景）
+
+ON CREATE SET / ON MATCH SET 针对节点属性时（例如 `ON CREATE SET b.created = 1`），TCK 自动建的 label 同样不带属性定义。`executeSetPropertyItem` 走到"未在 search_labels 中找到 prop"分支时，原本会把属性写到 `__anon__` label。读路径只遍历节点实际拥有的 label，因此看不到 `__anon__` 下的属性，后续 `properties(b)` 返回空。
+
+修复：fallback 路径不再固定写 `__anon__`，而是从 `search_labels` 中选取第一个具体 label（剔除 INVALID 与 `__anon__`），调用 `meta_.addVertexLabelProperties(label_name, {{prop_name, ANY}})` 动态注册，回填 `label_defs_` 缓存后再用该具体 label 的 prop_id 写入。仅当节点确实没有任何具体 label 时才退回 `__anon__`。这同时保证 SET 立即生效以及后续读路径可见。
+
 ---
 
 ## 输出 Schema

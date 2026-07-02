@@ -880,18 +880,65 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertyItem(const SetPhysica
     }
     if (resolved_lid != INVALID_LABEL_ID) {
         co_await store_.putVertexProperty(target_vid, resolved_lid, resolved_pid, valueToPropertyValue(val));
-    } else if (anon_label_id_ != INVALID_LABEL_ID) {
-        uint16_t pid = 0;
-        auto def_it = label_defs_.find(anon_label_id_);
-        if (def_it != label_defs_.end()) {
-            for (const auto& pd : def_it->second.properties) {
-                if (pd.name == item.prop_name) {
-                    pid = pd.id;
-                    break;
-                }
+    } else {
+        // Property not declared on any concrete label of this vertex. Pick
+        // the first concrete label and dynamically register the property so
+        // the value is persisted under a label the vertex actually owns —
+        // otherwise the read path (which iterates vertex labels) won't see
+        // it. Falls back to __anon__ only if no concrete label exists.
+        LabelId fallback_lid = anon_label_id_;
+        for (auto lid : *search_labels) {
+            if (lid != INVALID_LABEL_ID && lid != anon_label_id_) {
+                fallback_lid = lid;
+                break;
             }
         }
-        co_await store_.putVertexProperty(target_vid, anon_label_id_, pid, valueToPropertyValue(val));
+        if (fallback_lid != INVALID_LABEL_ID) {
+            std::string label_name;
+            auto def_it = label_defs_.find(fallback_lid);
+            if (def_it != label_defs_.end())
+                label_name = def_it->second.name;
+            if (label_name.empty()) {
+                for (const auto& [name, id] : label_name_to_id_) {
+                    if (id == fallback_lid) {
+                        label_name = name;
+                        break;
+                    }
+                }
+            }
+            uint16_t pid = 0;
+            bool found = false;
+            if (!label_name.empty()) {
+                co_await meta_.addVertexLabelProperties(label_name, {{item.prop_name, PropertyType::ANY}});
+                auto updated = co_await meta_.getLabelDefById(fallback_lid);
+                if (updated) {
+                    label_defs_[fallback_lid] = std::move(*updated);
+                    for (const auto& pd : label_defs_[fallback_lid].properties) {
+                        if (pd.name == item.prop_name) {
+                            pid = pd.id;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!found && fallback_lid != anon_label_id_) {
+                // Could not register (e.g., missing label name); fall back to
+                // __anon__ so the SET at least persists somewhere.
+                fallback_lid = anon_label_id_;
+                pid = 0;
+                auto adef_it = label_defs_.find(anon_label_id_);
+                if (adef_it != label_defs_.end()) {
+                    for (const auto& pd : adef_it->second.properties) {
+                        if (pd.name == item.prop_name) {
+                            pid = pd.id;
+                            break;
+                        }
+                    }
+                }
+            }
+            co_await store_.putVertexProperty(target_vid, fallback_lid, pid, valueToPropertyValue(val));
+        }
     }
 }
 

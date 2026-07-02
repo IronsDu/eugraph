@@ -2941,6 +2941,44 @@ TEST_F(QueryExecutorTest, MergeOnCreateOnMatchSetDynamicEdgeProp) {
     EXPECT_EQ(total_props, 4);
 }
 
+TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicVertexProp) {
+    // Reproduces Merge6 scenario [1]: ON CREATE SET on end node with label
+    // created without pre-registered 'created' property. The SET must
+    // dynamically register the property with the vertex's concrete label so
+    // that subsequent properties(b) reads find it.
+    auto a_id = blockingWait(async_meta_->createLabel("A"));
+    ASSERT_NE(a_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(a_id));
+    auto b_id = blockingWait(async_meta_->createLabel("B"));
+    ASSERT_NE(b_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(b_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (:A), (:B)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (a:A), (b:B) MERGE (a)-[:KNOWS]->(b) ON CREATE SET b.created = 1");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    auto pcheck = execSync(*executor_, "MATCH (b:B) RETURN properties(b)");
+    ASSERT_TRUE(pcheck.error.empty()) << pcheck.error;
+    ASSERT_EQ(pcheck.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<MapValue>(pcheck.rows[0][0]));
+    const auto& mv = std::get<MapValue>(pcheck.rows[0][0]);
+    EXPECT_EQ(mv.entries.size(), 1u);
+    bool found_created = false;
+    for (const auto& [k, v] : mv.entries) {
+        if (k == "created") {
+            ASSERT_TRUE(std::holds_alternative<int64_t>(v.value));
+            EXPECT_EQ(std::get<int64_t>(v.value), 1);
+            found_created = true;
+        }
+    }
+    EXPECT_TRUE(found_created);
+}
+
 TEST_F(QueryExecutorTest, VarLenExpandExact1Hop) {
     insertMultiHopEdges();
 
