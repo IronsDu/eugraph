@@ -127,6 +127,13 @@ private:
                      const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
                      const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator);
 
+    /// Scan for ALL edges between src and dst that match the property filters.
+    /// Returns a vector of (edge_id, edge_label_id) — may be empty.
+    folly::coro::Task<std::vector<std::tuple<EdgeId, EdgeLabelId>>>
+    findAllMatchingEdges(VertexId src_vid, VertexId dst_vid,
+                         const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
+                         const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator);
+
     folly::coro::Task<std::tuple<EdgeId, EdgeLabelId>>
     createEdge(VertexId src_vid, VertexId dst_vid,
                const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,

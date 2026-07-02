@@ -23,6 +23,7 @@ struct BoundExpandOp {
     cypher::RelationshipDirection direction;
     std::vector<uint16_t> edge_prop_ids;
     std::unordered_map<LabelId, std::vector<uint16_t>> dst_label_prop_ids;
+    std::vector<LabelId> dst_label_ids;
     BoundLogicalOperator child;
 };
 

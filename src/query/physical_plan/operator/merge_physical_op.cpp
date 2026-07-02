@@ -4,6 +4,7 @@
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/function/scalar/graph_functions.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -87,6 +88,46 @@ eugraph::Direction toStoreDir(eugraph::cypher::RelationshipDirection dir) {
         return eugraph::Direction::BOTH;
     }
     return eugraph::Direction::OUT;
+}
+
+// Convert a VertexValue / EdgeValue to a MapValue keyed by property name.
+// Used by SET_PROPERTIES when the source expression is an entity reference
+// (e.g. `SET r = a` where a is a node) — Cypher semantics: copy all
+// properties from the source entity. Returns empty map for non-entity
+// inputs (caller falls through to the existing MapValue path).
+eugraph::MapValue entityValueToMap(const eugraph::Value& v,
+                                   const std::unordered_map<eugraph::LabelId, eugraph::LabelDef>& label_defs,
+                                   const std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef>& edge_defs) {
+    eugraph::MapValue mv;
+    if (std::holds_alternative<eugraph::VertexValue>(v)) {
+        const auto& vv = std::get<eugraph::VertexValue>(v);
+        for (const auto& [lid, props] : vv.properties) {
+            auto it = label_defs.find(lid);
+            if (it == label_defs.end())
+                continue;
+            for (const auto& pd : it->second.properties) {
+                if (pd.id < props.size() && props[pd.id].has_value())
+                    mv.entries.push_back(
+                        {pd.name,
+                         eugraph::ValueStorage{eugraph::function::scalar::propertyValueToRuntimeValue(*props[pd.id])}});
+            }
+        }
+    } else if (std::holds_alternative<eugraph::EdgeValue>(v)) {
+        const auto& ev = std::get<eugraph::EdgeValue>(v);
+        if (!ev.properties.has_value())
+            return mv;
+        auto it = edge_defs.find(ev.label_id);
+        if (it == edge_defs.end())
+            return mv;
+        const auto& props = *ev.properties;
+        for (const auto& pd : it->second.properties) {
+            if (pd.id < props.size() && props[pd.id].has_value())
+                mv.entries.push_back(
+                    {pd.name,
+                     eugraph::ValueStorage{eugraph::function::scalar::propertyValueToRuntimeValue(*props[pd.id])}});
+        }
+    }
+    return mv;
 }
 
 } // namespace
@@ -730,6 +771,70 @@ MergePhysicalOp::findMatchingEdge(VertexId src_vid, VertexId dst_vid,
     co_return std::nullopt;
 }
 
+folly::coro::Task<std::vector<std::tuple<EdgeId, EdgeLabelId>>>
+MergePhysicalOp::findAllMatchingEdges(VertexId src_vid, VertexId dst_vid,
+                                      const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
+                                      const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
+    EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
+
+    // Check created_edges set first
+    if (elid != INVALID_EDGE_LABEL_ID) {
+        MergeEdgeKey key{src_vid, dst_vid, elid};
+        auto it = created_edges_.find(key);
+        if (it != created_edges_.end()) {
+            co_return {{std::make_tuple(it->second, elid)}};
+        }
+    }
+
+    std::vector<std::tuple<EdgeId, EdgeLabelId>> results;
+    Direction store_dir = toStoreDir(direction_);
+
+    auto scanAndCollect = [&](Direction dir) -> folly::coro::Task<void> {
+        auto gen = store_.scanEdges(src_vid, dir, edge_label_id_);
+        while (auto batch = co_await gen.next()) {
+            for (const auto& entry : *batch) {
+                if (entry.neighbor_id != dst_vid)
+                    continue;
+
+                EdgeLabelId entry_label = entry.edge_label_id;
+                EdgeId eid = entry.edge_id;
+
+                if (!prop_filters.empty()) {
+                    auto props = co_await store_.getEdgeProperties(entry_label, eid);
+                    if (!props)
+                        continue;
+                    bool match = true;
+                    for (const auto& [prop_id, expr] : prop_filters) {
+                        Value expected = evaluateExpr(evaluator, expr, chunk, row_idx);
+                        if (prop_id < props->size() && (*props)[prop_id].has_value()) {
+                            if (!comparePropertyValue((*props)[prop_id].value(), expected)) {
+                                match = false;
+                                break;
+                            }
+                        } else if (!std::holds_alternative<std::monostate>(expected)) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (!match)
+                        continue;
+                }
+                results.emplace_back(eid, entry_label);
+            }
+        }
+    };
+
+    co_await scanAndCollect(store_dir);
+
+    // For UNDIRECTED, BOTH already covers both directions. Only scan the
+    // reverse when store_dir is a single direction (OUT or IN).
+    if (direction_ == cypher::RelationshipDirection::UNDIRECTED && store_dir != Direction::BOTH) {
+        co_await scanAndCollect(store_dir == Direction::OUT ? Direction::IN : Direction::OUT);
+    }
+
+    co_return results;
+}
+
 folly::coro::Task<std::tuple<EdgeId, EdgeLabelId>>
 MergePhysicalOp::createEdge(VertexId src_vid, VertexId dst_vid,
                             const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
@@ -880,18 +985,65 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertyItem(const SetPhysica
     }
     if (resolved_lid != INVALID_LABEL_ID) {
         co_await store_.putVertexProperty(target_vid, resolved_lid, resolved_pid, valueToPropertyValue(val));
-    } else if (anon_label_id_ != INVALID_LABEL_ID) {
-        uint16_t pid = 0;
-        auto def_it = label_defs_.find(anon_label_id_);
-        if (def_it != label_defs_.end()) {
-            for (const auto& pd : def_it->second.properties) {
-                if (pd.name == item.prop_name) {
-                    pid = pd.id;
-                    break;
-                }
+    } else {
+        // Property not declared on any concrete label of this vertex. Pick
+        // the first concrete label and dynamically register the property so
+        // the value is persisted under a label the vertex actually owns —
+        // otherwise the read path (which iterates vertex labels) won't see
+        // it. Falls back to __anon__ only if no concrete label exists.
+        LabelId fallback_lid = anon_label_id_;
+        for (auto lid : *search_labels) {
+            if (lid != INVALID_LABEL_ID && lid != anon_label_id_) {
+                fallback_lid = lid;
+                break;
             }
         }
-        co_await store_.putVertexProperty(target_vid, anon_label_id_, pid, valueToPropertyValue(val));
+        if (fallback_lid != INVALID_LABEL_ID) {
+            std::string label_name;
+            auto def_it = label_defs_.find(fallback_lid);
+            if (def_it != label_defs_.end())
+                label_name = def_it->second.name;
+            if (label_name.empty()) {
+                for (const auto& [name, id] : label_name_to_id_) {
+                    if (id == fallback_lid) {
+                        label_name = name;
+                        break;
+                    }
+                }
+            }
+            uint16_t pid = 0;
+            bool found = false;
+            if (!label_name.empty()) {
+                co_await meta_.addVertexLabelProperties(label_name, {{item.prop_name, PropertyType::ANY}});
+                auto updated = co_await meta_.getLabelDefById(fallback_lid);
+                if (updated) {
+                    label_defs_[fallback_lid] = std::move(*updated);
+                    for (const auto& pd : label_defs_[fallback_lid].properties) {
+                        if (pd.name == item.prop_name) {
+                            pid = pd.id;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!found && fallback_lid != anon_label_id_) {
+                // Could not register (e.g., missing label name); fall back to
+                // __anon__ so the SET at least persists somewhere.
+                fallback_lid = anon_label_id_;
+                pid = 0;
+                auto adef_it = label_defs_.find(anon_label_id_);
+                if (adef_it != label_defs_.end()) {
+                    for (const auto& pd : adef_it->second.properties) {
+                        if (pd.name == item.prop_name) {
+                            pid = pd.id;
+                            break;
+                        }
+                    }
+                }
+            }
+            co_await store_.putVertexProperty(target_vid, fallback_lid, pid, valueToPropertyValue(val));
+        }
     }
 }
 
@@ -913,11 +1065,21 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
                                                                   VertexId end_vid, EdgeId edge_id) {
     if (!item.value || std::holds_alternative<std::monostate>(val))
         co_return;
+    // Cypher semantics: SET r = a (where a is an entity) copies all of a's
+    // properties to r. The evaluator returns a VertexValue / EdgeValue for
+    // entity sources; normalise to MapValue so the existing map-writer path
+    // handles both cases.
+    Value normalised;
+    if (std::holds_alternative<VertexValue>(val) || std::holds_alternative<EdgeValue>(val)) {
+        normalised = Value(entityValueToMap(val, label_defs_, edge_label_defs_));
+    } else {
+        normalised = val;
+    }
     // Edge target
     if (has_relationship_ && item.var_name == edge_var_ && edge_id != INVALID_EDGE_ID &&
-        std::holds_alternative<MapValue>(val)) {
+        std::holds_alternative<MapValue>(normalised)) {
         EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
-        const auto& mv = std::get<MapValue>(val);
+        const auto& mv = std::get<MapValue>(normalised);
         for (const auto& [k, vs] : mv.entries) {
             uint16_t pid = 0;
             bool found = false;
@@ -955,8 +1117,8 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
         vid = start_vid;
     else if (has_relationship_ && item.var_name == end_var_)
         vid = end_vid;
-    if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValue>(val)) {
-        const auto& mv = std::get<MapValue>(val);
+    if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValue>(normalised)) {
+        const auto& mv = std::get<MapValue>(normalised);
         for (const auto& [k, vs] : mv.entries) {
             if (anon_label_id_ != INVALID_LABEL_ID) {
                 uint16_t pid = 0;
@@ -1006,6 +1168,25 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
     // Phase 2: register pending properties with __anon__
     co_await registerPendingProps(start_pending_props_, end_pending_props_, edge_pending_props_, on_create_items_,
                                   on_match_items_);
+
+    // After registration, convert edge pending props to prop_filters so that
+    // findMatchingEdge can use them for matching. Without this, pending props
+    // (e.g. list properties like {numbers: [42,43]}) are only used on CREATE
+    // but never on MATCH, so MERGE always creates a duplicate.
+    if (!edge_pending_props_.empty() && edge_label_id_.has_value()) {
+        auto def_it = edge_label_defs_.find(*edge_label_id_);
+        if (def_it != edge_label_defs_.end()) {
+            for (auto& [pname, pexpr] : edge_pending_props_) {
+                for (const auto& pd : def_it->second.properties) {
+                    if (pd.name == pname) {
+                        edge_prop_filters_.emplace_back(pd.id, std::move(pexpr));
+                        break;
+                    }
+                }
+            }
+            edge_pending_props_.clear();
+        }
+    }
 
     // Phase 3: per-row processing — yield one chunk per row
     auto child_gen = child_->executeChunk();
@@ -1094,160 +1275,263 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
 
                 spdlog::info("[MERGE] edge phase: start_vid={} end_vid={} edge_label_id_={}", start_vid, end_vid,
                              edge_label_id_.value_or(INVALID_EDGE_LABEL_ID));
-                auto found_edge =
-                    co_await findMatchingEdge(start_vid, end_vid, edge_prop_filters_, &*chunk, row, evaluator);
-                if (found_edge) {
-                    std::tie(edge_id, edge_label) = *found_edge;
-                    spdlog::info("[MERGE] found existing edge: eid={} label={}", edge_id, edge_label);
+                auto found_edges =
+                    co_await findAllMatchingEdges(start_vid, end_vid, edge_prop_filters_, &*chunk, row, evaluator);
+                std::vector<std::tuple<EdgeId, EdgeLabelId>> edges_to_emit;
+                if (!found_edges.empty()) {
+                    edges_to_emit = std::move(found_edges);
+                    spdlog::info("[MERGE] found {} existing edge(s)", edges_to_emit.size());
                 } else {
-                    std::tie(edge_id, edge_label) = co_await createEdge(start_vid, end_vid, edge_prop_filters_,
-                                                                        edge_pending_props_, &*chunk, row, evaluator);
+                    auto [eid, elabel] = co_await createEdge(start_vid, end_vid, edge_prop_filters_,
+                                                             edge_pending_props_, &*chunk, row, evaluator);
                     edge_created = true;
-                    spdlog::info("[MERGE] created edge: eid={} label={}", edge_id, edge_label);
+                    edges_to_emit.emplace_back(eid, elabel);
+                    spdlog::info("[MERGE] created edge: eid={} label={}", eid, elabel);
                 }
-            }
 
-            // Step 3: Execute ON CREATE/MATCH SET items
-            // Build a single-row merged chunk with both child + MERGE columns for SET evaluation
-            DataChunk merged;
-            merged.count = 1;
-            for (size_t c = 0; c < chunk->numColumns(); ++c) {
-                Column col = Column::flat(chunk->columns[c].type, 1);
-                col.setValue(0, chunk->getValue(c, row));
-                merged.columns.push_back(std::move(col));
-            }
-            if (!start_pre_bound_) {
-                Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
-                VertexValue vv;
-                vv.id = start_vid;
-                vv.labels = LabelIdSet(start_labels_.begin(), start_labels_.end());
-                col.setValue(0, Value(vv));
-                merged.columns.push_back(std::move(col));
-            }
-            if (has_relationship_) {
-                if (!end_pre_bound_) {
+                // Emit one output row per matching/created edge.
+                for (size_t ei = 0; ei < edges_to_emit.size(); ++ei) {
+                    std::tie(edge_id, edge_label) = edges_to_emit[ei];
+                    bool row_edge_created = edge_created && (ei == 0);
+                    bool any_created = start_created || end_created || row_edge_created;
+
+                    // Build a single-row merged chunk for SET evaluation
+                    DataChunk merged;
+                    merged.count = 1;
+                    for (size_t c = 0; c < chunk->numColumns(); ++c) {
+                        Column col = Column::flat(chunk->columns[c].type, 1);
+                        col.setValue(0, chunk->getValue(c, row));
+                        merged.columns.push_back(std::move(col));
+                    }
+                    if (!start_pre_bound_) {
+                        Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
+                        VertexValue vv;
+                        vv.id = start_vid;
+                        vv.labels = LabelIdSet(start_labels_.begin(), start_labels_.end());
+                        col.setValue(0, Value(vv));
+                        merged.columns.push_back(std::move(col));
+                    }
+                    if (has_relationship_) {
+                        if (!end_pre_bound_) {
+                            Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
+                            VertexValue vv;
+                            vv.id = end_vid;
+                            vv.labels = LabelIdSet(end_labels_.begin(), end_labels_.end());
+                            col.setValue(0, Value(vv));
+                            merged.columns.push_back(std::move(col));
+                        }
+                        {
+                            Column col = Column::flat(binder::BoundTypeKind::EDGE, 1);
+                            EdgeValue ev;
+                            ev.id = edge_id;
+                            ev.src_id = start_vid;
+                            ev.dst_id = end_vid;
+                            ev.label_id = edge_label;
+                            col.setValue(0, Value(ev));
+                            merged.columns.push_back(std::move(col));
+                        }
+                    }
+
+                    if (any_created && !on_create_items_.empty()) {
+                        co_await executeSetItems(on_create_items_, merged, evaluator, start_vid, end_vid, edge_id);
+                    } else if (!any_created && !on_match_items_.empty()) {
+                        co_await executeSetItems(on_match_items_, merged, evaluator, start_vid, end_vid, edge_id);
+                    }
+
+                    auto collectAddedLabels = [&](const std::vector<SetPhysicalOp::BoundSetItem>& set_items,
+                                                  const std::string& var_name) -> std::vector<LabelId> {
+                        std::vector<LabelId> added;
+                        for (const auto& item : set_items) {
+                            if (item.kind == cypher::SetItemKind::SET_LABELS && item.var_name == var_name &&
+                                item.resolved_label_id) {
+                                added.push_back(*item.resolved_label_id);
+                            }
+                        }
+                        return added;
+                    };
+                    const auto& applied_items = any_created ? on_create_items_ : on_match_items_;
+                    auto start_added = collectAddedLabels(applied_items, start_var_);
+                    auto end_added =
+                        has_relationship_ ? collectAddedLabels(applied_items, end_var_) : std::vector<LabelId>();
+
+                    // Fetch properties and build output chunk
+                    auto buildVertexValue =
+                        [&](VertexId vid, const std::vector<LabelId>& labels,
+                            const std::vector<LabelId>& extra_labels) -> folly::coro::Task<VertexValue> {
+                        VertexValue vv;
+                        vv.id = vid;
+                        vv.labels = LabelIdSet(labels.begin(), labels.end());
+                        for (auto lid : extra_labels)
+                            vv.labels->insert(lid);
+                        auto all_labels = labels;
+                        for (auto lid : extra_labels)
+                            all_labels.push_back(lid);
+                        for (auto lid : all_labels) {
+                            if (lid == INVALID_LABEL_ID)
+                                continue;
+                            auto props = co_await store_.getVertexProperties(vid, lid);
+                            if (props)
+                                vv.properties[lid] = std::move(*props);
+                        }
+                        if (anon_label_id_ != INVALID_LABEL_ID) {
+                            auto anon_props = co_await store_.getVertexProperties(vid, anon_label_id_);
+                            if (anon_props)
+                                vv.properties[anon_label_id_] = std::move(*anon_props);
+                        }
+                        co_return vv;
+                    };
+
+                    VertexValue start_vv;
+                    if (start_pre_bound_ && start_pre_vv)
+                        start_vv = *start_pre_vv;
+                    else if (!start_pre_bound_)
+                        start_vv = co_await buildVertexValue(start_vid, start_labels_, start_added);
+                    VertexValue end_vv;
+                    if (has_relationship_) {
+                        if (end_pre_bound_ && end_pre_vv)
+                            end_vv = *end_pre_vv;
+                        else if (!end_pre_bound_)
+                            end_vv = co_await buildVertexValue(end_vid, end_labels_, end_added);
+                    }
+
+                    DataChunk output;
+                    output.count = 1;
+                    for (size_t c = 0; c < chunk->numColumns(); ++c) {
+                        Column col = Column::flat(chunk->columns[c].type, 1);
+                        col.setValue(0, chunk->getValue(c, row));
+                        output.columns.push_back(std::move(col));
+                    }
+                    if (!start_pre_bound_) {
+                        Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
+                        col.setValue(0, Value(start_vv));
+                        output.columns.push_back(std::move(col));
+                    }
+                    if (has_relationship_) {
+                        if (!end_pre_bound_) {
+                            Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
+                            col.setValue(0, Value(end_vv));
+                            output.columns.push_back(std::move(col));
+                        }
+                        {
+                            Column col = Column::flat(binder::BoundTypeKind::EDGE, 1);
+                            EdgeValue ev;
+                            ev.id = edge_id;
+                            ev.src_id = start_vid;
+                            ev.dst_id = end_vid;
+                            ev.label_id = edge_label;
+                            // Load edge properties so RETURN r / properties(r) see them.
+                            if (edge_id != INVALID_EDGE_ID && edge_label != INVALID_EDGE_LABEL_ID) {
+                                auto edge_props = co_await store_.getEdgeProperties(edge_label, edge_id);
+                                if (edge_props)
+                                    ev.properties = std::move(*edge_props);
+                            }
+                            col.setValue(0, Value(ev));
+                            output.columns.push_back(std::move(col));
+                        }
+                        if (path_variable_.has_value()) {
+                            Column col = Column::flat(binder::BoundTypeKind::PATH, 1);
+                            PathValue pv;
+                            ValueStorage start_vs{Value(start_vv)};
+                            ValueStorage edge_vs{
+                                Value(EdgeValue{edge_id, start_vid, end_vid, edge_label, 0, std::nullopt})};
+                            ValueStorage end_vs{Value(end_vv)};
+                            pv.elements = {start_vs, edge_vs, end_vs};
+                            col.setValue(0, Value(pv));
+                            output.columns.push_back(std::move(col));
+                        }
+                    }
+                    co_yield std::move(output);
+                }
+            } else {
+                // Node-only MERGE: single output row (no multi-match for nodes)
+                EdgeId edge_id = INVALID_EDGE_ID;
+                EdgeLabelId edge_label = INVALID_EDGE_LABEL_ID;
+                bool any_created = start_created;
+
+                DataChunk merged;
+                merged.count = 1;
+                for (size_t c = 0; c < chunk->numColumns(); ++c) {
+                    Column col = Column::flat(chunk->columns[c].type, 1);
+                    col.setValue(0, chunk->getValue(c, row));
+                    merged.columns.push_back(std::move(col));
+                }
+                if (!start_pre_bound_) {
                     Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
                     VertexValue vv;
-                    vv.id = end_vid;
-                    vv.labels = LabelIdSet(end_labels_.begin(), end_labels_.end());
+                    vv.id = start_vid;
+                    vv.labels = LabelIdSet(start_labels_.begin(), start_labels_.end());
                     col.setValue(0, Value(vv));
                     merged.columns.push_back(std::move(col));
                 }
-                {
-                    Column col = Column::flat(binder::BoundTypeKind::EDGE, 1);
-                    EdgeValue ev;
-                    ev.id = edge_id;
-                    ev.src_id = start_vid;
-                    ev.dst_id = end_vid;
-                    ev.label_id = edge_label;
-                    col.setValue(0, Value(ev));
-                    merged.columns.push_back(std::move(col));
+
+                if (any_created && !on_create_items_.empty()) {
+                    co_await executeSetItems(on_create_items_, merged, evaluator, start_vid, INVALID_VERTEX_ID,
+                                             INVALID_EDGE_ID);
+                } else if (!any_created && !on_match_items_.empty()) {
+                    co_await executeSetItems(on_match_items_, merged, evaluator, start_vid, INVALID_VERTEX_ID,
+                                             INVALID_EDGE_ID);
                 }
-            }
 
-            bool any_created = start_created || end_created || edge_created;
-            if (any_created && !on_create_items_.empty()) {
-                co_await executeSetItems(on_create_items_, merged, evaluator, start_vid, end_vid, edge_id);
-            } else if (!any_created && !on_match_items_.empty()) {
-                co_await executeSetItems(on_match_items_, merged, evaluator, start_vid, end_vid, edge_id);
-            }
-
-            // Collect labels added by SET_LABELS items
-            auto collectAddedLabels = [&](const std::vector<SetPhysicalOp::BoundSetItem>& set_items,
-                                          const std::string& var_name) -> std::vector<LabelId> {
-                std::vector<LabelId> added;
-                for (const auto& item : set_items) {
-                    if (item.kind == cypher::SetItemKind::SET_LABELS && item.var_name == var_name &&
-                        item.resolved_label_id) {
-                        added.push_back(*item.resolved_label_id);
+                auto collectAddedLabels = [&](const std::vector<SetPhysicalOp::BoundSetItem>& set_items,
+                                              const std::string& var_name) -> std::vector<LabelId> {
+                    std::vector<LabelId> added;
+                    for (const auto& item : set_items) {
+                        if (item.kind == cypher::SetItemKind::SET_LABELS && item.var_name == var_name &&
+                            item.resolved_label_id) {
+                            added.push_back(*item.resolved_label_id);
+                        }
                     }
-                }
-                return added;
-            };
-            const auto& applied_items = any_created ? on_create_items_ : on_match_items_;
-            auto start_added = collectAddedLabels(applied_items, start_var_);
-            auto end_added = has_relationship_ ? collectAddedLabels(applied_items, end_var_) : std::vector<LabelId>();
+                    return added;
+                };
+                const auto& applied_items = any_created ? on_create_items_ : on_match_items_;
+                auto start_added = collectAddedLabels(applied_items, start_var_);
 
-            // Step 4: Fetch properties and build output chunk (one row)
-            // Must fetch AFTER SET items so ON CREATE/MATCH modifications are visible.
-            auto buildVertexValue = [&](VertexId vid, const std::vector<LabelId>& labels,
-                                        const std::vector<LabelId>& extra_labels) -> folly::coro::Task<VertexValue> {
-                VertexValue vv;
-                vv.id = vid;
-                vv.labels = LabelIdSet(labels.begin(), labels.end());
-                for (auto lid : extra_labels)
-                    vv.labels->insert(lid);
-                auto all_labels = labels;
-                for (auto lid : extra_labels)
-                    all_labels.push_back(lid);
-                for (auto lid : all_labels) {
-                    if (lid == INVALID_LABEL_ID)
-                        continue;
-                    auto props = co_await store_.getVertexProperties(vid, lid);
-                    if (props)
-                        vv.properties[lid] = std::move(*props);
-                }
-                if (anon_label_id_ != INVALID_LABEL_ID) {
-                    auto anon_props = co_await store_.getVertexProperties(vid, anon_label_id_);
-                    if (anon_props)
-                        vv.properties[anon_label_id_] = std::move(*anon_props);
-                }
-                co_return vv;
-            };
+                auto buildVertexValue =
+                    [&](VertexId vid, const std::vector<LabelId>& labels,
+                        const std::vector<LabelId>& extra_labels) -> folly::coro::Task<VertexValue> {
+                    VertexValue vv;
+                    vv.id = vid;
+                    vv.labels = LabelIdSet(labels.begin(), labels.end());
+                    for (auto lid : extra_labels)
+                        vv.labels->insert(lid);
+                    auto all_labels = labels;
+                    for (auto lid : extra_labels)
+                        all_labels.push_back(lid);
+                    for (auto lid : all_labels) {
+                        if (lid == INVALID_LABEL_ID)
+                            continue;
+                        auto props = co_await store_.getVertexProperties(vid, lid);
+                        if (props)
+                            vv.properties[lid] = std::move(*props);
+                    }
+                    if (anon_label_id_ != INVALID_LABEL_ID) {
+                        auto anon_props = co_await store_.getVertexProperties(vid, anon_label_id_);
+                        if (anon_props)
+                            vv.properties[anon_label_id_] = std::move(*anon_props);
+                    }
+                    co_return vv;
+                };
 
-            VertexValue start_vv;
-            if (start_pre_bound_ && start_pre_vv)
-                start_vv = *start_pre_vv;
-            else if (!start_pre_bound_)
-                start_vv = co_await buildVertexValue(start_vid, start_labels_, start_added);
-            VertexValue end_vv;
-            if (has_relationship_) {
-                if (end_pre_bound_ && end_pre_vv)
-                    end_vv = *end_pre_vv;
-                else if (!end_pre_bound_)
-                    end_vv = co_await buildVertexValue(end_vid, end_labels_, end_added);
-            }
+                VertexValue start_vv;
+                if (start_pre_bound_ && start_pre_vv)
+                    start_vv = *start_pre_vv;
+                else if (!start_pre_bound_)
+                    start_vv = co_await buildVertexValue(start_vid, start_labels_, start_added);
 
-            DataChunk output;
-            output.count = 1;
-            for (size_t c = 0; c < chunk->numColumns(); ++c) {
-                Column col = Column::flat(chunk->columns[c].type, 1);
-                col.setValue(0, chunk->getValue(c, row));
-                output.columns.push_back(std::move(col));
-            }
-            if (!start_pre_bound_) {
-                Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
-                col.setValue(0, Value(start_vv));
-                output.columns.push_back(std::move(col));
-            }
-            if (has_relationship_) {
-                if (!end_pre_bound_) {
+                DataChunk output;
+                output.count = 1;
+                for (size_t c = 0; c < chunk->numColumns(); ++c) {
+                    Column col = Column::flat(chunk->columns[c].type, 1);
+                    col.setValue(0, chunk->getValue(c, row));
+                    output.columns.push_back(std::move(col));
+                }
+                if (!start_pre_bound_) {
                     Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
-                    col.setValue(0, Value(end_vv));
+                    col.setValue(0, Value(start_vv));
                     output.columns.push_back(std::move(col));
                 }
-                {
-                    Column col = Column::flat(binder::BoundTypeKind::EDGE, 1);
-                    EdgeValue ev;
-                    ev.id = edge_id;
-                    ev.src_id = start_vid;
-                    ev.dst_id = end_vid;
-                    ev.label_id = edge_label;
-                    col.setValue(0, Value(ev));
-                    output.columns.push_back(std::move(col));
-                }
-                if (path_variable_.has_value()) {
-                    Column col = Column::flat(binder::BoundTypeKind::PATH, 1);
-                    PathValue pv;
-                    ValueStorage start_vs{Value(start_vv)};
-                    ValueStorage edge_vs{Value(EdgeValue{edge_id, start_vid, end_vid, edge_label, 0, std::nullopt})};
-                    ValueStorage end_vs{Value(end_vv)};
-                    pv.elements = {start_vs, edge_vs, end_vs};
-                    col.setValue(0, Value(pv));
-                    output.columns.push_back(std::move(col));
-                }
+                co_yield std::move(output);
             }
-            co_yield std::move(output);
         }
     }
 }

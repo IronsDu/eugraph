@@ -2,6 +2,10 @@
 
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
+#include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/meta/i_async_graph_meta_store.hpp"
+
+#include <folly/coro/BlockingWait.h>
 
 namespace eugraph {
 namespace compute {
@@ -214,9 +218,32 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
         Value ov = obj.column->getValue(i);
         Value r;
         if (std::holds_alternative<VertexValue>(ov)) {
-            const auto& vertex = std::get<VertexValue>(ov);
+            auto& vertex = const_cast<VertexValue&>(std::get<VertexValue>(ov));
             if (vertex.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
+            // Lazy-load labels and properties for bare VertexValues (e.g. from
+            // startNode/endNode which only set the internal id).
+            if (vertex.properties.empty() && eval_ctx_.store) {
+                if (!vertex.labels.has_value())
+                    vertex.labels = folly::coro::blockingWait(eval_ctx_.store->getVertexLabels(vertex.id));
+                if (vertex.labels.has_value()) {
+                    for (auto lid : *vertex.labels) {
+                        auto props = folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, lid));
+                        if (props)
+                            vertex.properties[lid] = std::move(*props);
+                    }
+                } else if (eval_ctx_.meta) {
+                    // If no labels, try loading properties from __anon__ label as fallback.
+                    auto anon_label =
+                        folly::coro::blockingWait(eval_ctx_.meta->getLabelDef(std::string(kAnonLabelName)));
+                    if (anon_label) {
+                        auto props =
+                            folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, anon_label->id));
+                        if (props)
+                            vertex.properties[anon_label->id] = std::move(*props);
+                    }
+                }
+            }
             for (const auto& [label_id, props_vec] : vertex.properties) {
                 const LabelDef* ldef = nullptr;
                 if (eval_ctx_.label_defs) {

@@ -152,6 +152,8 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .label_defs = ctx->label_defs,
         .edge_label_defs = ctx->edge_label_defs,
         .eval_ctx = {},
+        .use_property_extract = false,
+        .requirements = {},
     };
 
     plan_ctx.eval_ctx.catalog = ctx->catalog.get();

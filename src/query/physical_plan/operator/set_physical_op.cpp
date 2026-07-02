@@ -209,6 +209,11 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             if (anon_label_id_ != INVALID_LABEL_ID) {
                                 uint16_t anon_pid = co_await meta_.getOrCreateAnonPropId(
                                     item.prop_name, propertyValueToPropertyType(pv));
+                                // Ensure __anon__ is in the vertex's label set so subsequent
+                                // ConstructVertex / getVertexLabels picks up the property.
+                                if (!vertex.labels.has_value() ||
+                                    vertex.labels->find(anon_label_id_) == vertex.labels->end())
+                                    co_await store_.addVertexLabel(vid, anon_label_id_);
                                 co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, pv);
                                 ensureLabelDefProp(label_defs_, anon_label_id_, anon_pid, item.prop_name,
                                                    propertyValueToPropertyType(pv));
@@ -235,6 +240,16 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     // updated property without re-reading from the store.
                     if (written_at) {
                         VertexValue updated = vertex;
+                        // If we wrote to a label the vertex didn't have, mirror the
+                        // label addition in-memory so labels(...) / ConstructVertex
+                        // consumers downstream see it without re-reading the store.
+                        if (written_at->first == anon_label_id_ &&
+                            (!updated.labels.has_value() ||
+                             updated.labels->find(anon_label_id_) == updated.labels->end())) {
+                            if (!updated.labels.has_value())
+                                updated.labels = LabelIdSet{};
+                            updated.labels->insert(anon_label_id_);
+                        }
                         auto& props_vec = updated.properties[written_at->first];
                         if (props_vec.size() <= written_at->second)
                             props_vec.resize(written_at->second + 1);
@@ -309,9 +324,15 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             if (anon_label_id_ != INVALID_LABEL_ID) {
                                 uint16_t anon_pid =
                                     co_await meta_.getOrCreateAnonPropId(key, propertyValueToPropertyType(pv));
+                                if (!vertex.labels.has_value() ||
+                                    vertex.labels->find(anon_label_id_) == vertex.labels->end())
+                                    co_await store_.addVertexLabel(vid, anon_label_id_);
                                 co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, pv);
                                 ensureLabelDefProp(label_defs_, anon_label_id_, anon_pid, key,
                                                    propertyValueToPropertyType(pv));
+                                if (!updated_vertex.labels.has_value())
+                                    updated_vertex.labels = LabelIdSet{};
+                                updated_vertex.labels->insert(anon_label_id_);
                                 auto& props_vec = updated_vertex.properties[anon_label_id_];
                                 if (props_vec.size() <= anon_pid)
                                     props_vec.resize(anon_pid + 1);
