@@ -253,7 +253,7 @@ ON CREATE SET / ON MATCH SET 针对节点属性时（例如 `ON CREATE SET b.cre
 - ✅ **LIMIT 0 副作用**：`LimitPhysicalOp` LIMIT 0 正确消费子数据触发副作用，仅结果集为空。
 - **边扫描**：分支上 `MATCH ... CREATE` 边后，`ExpandPhysicalOp` 通过 `scanEdges` 扫描不到刚创建的边（`insertEdge` 未被调用，原因待查）。这是已有问题，非 MERGE 引入，但影响边 MERGE 的匹配阶段。
 - **ON MATCH SET 边属性不可见**：ON MATCH 分支中通过 `putEdgeProperty` 写入的边属性在后续 snapshot 查询中不可见（Bug J）。ON CREATE 分支正常。影响 7 个 TCK 场景。
-- **动态属性访问 `r[key]`**：edge 类型的动态属性访问未完整支持（Bug K）。影响 4 个 TCK 场景的控制查询。
+- **动态属性访问 `r[key]`（已修复）**：原本 `column_rewrite` 未识别 `BoundListComprehension` / `BoundAllExpr` 等，列表推导式和量词表达式内外部变量引用都不会触发 `need_whole_edge` / `need_whole_vertex`。表现：`RETURN keys(r)` 单独可用，但 `RETURN [key IN keys(r) | r[key]]` 因 `r` 未物化为 `EdgeValue` 而返回空。修复：`collectExprReqs` 递归进入 `list_expr / projection / where_pred`，并把循环变量名作为 `loop_var_skip` 传入，避免把循环变量误登记为 plan column 的 requirement。
 - **findMatchingEdge 只返回首条**：扫描边时不验证所有属性约束即返回（Bug L）。影响 1 个 TCK 场景。
 - **findMatchingNode 匹配不完整**：扫描标签表不过滤已删除节点（Bug M）。影响 3 个 TCK 场景。
 

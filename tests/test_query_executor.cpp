@@ -2979,6 +2979,51 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicVertexProp) {
     EXPECT_TRUE(found_created);
 }
 
+TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicEdgePropKeys) {
+    // Reproduces Merge6 scenario [3]: ON CREATE SET r.name on a dynamically
+    // created edge label. The control query uses keys(r) inside a list
+    // comprehension. column_rewrite must recurse into the comprehension's
+    // list_expr / projection so the edge variable gets fully materialised
+    // (otherwise keys(r) returns empty inside the comprehension).
+    auto type_id = blockingWait(async_meta_->createEdgeLabel("TYPE", {}));
+    ASSERT_NE(type_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(type_id));
+
+    auto a_id = blockingWait(async_meta_->createLabel("A", {}));
+    ASSERT_NE(a_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(a_id));
+    auto b_id = blockingWait(async_meta_->createLabel("B", {}));
+    ASSERT_NE(b_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(b_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (:A {name: 'A'}), (:B {name: 'B'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto merge = execSync(*executor_, "MATCH (a {name: 'A'}), (b {name: 'B'}) "
+                                      "MERGE (a)-[r:TYPE]->(b) ON CREATE SET r.name = 'foo'");
+    ASSERT_TRUE(merge.error.empty()) << merge.error;
+
+    // Full TCK control query: list comprehension over keys(r) with dynamic
+    // property access r[key]. Both keys(r) and r[key] must observe the
+    // materialised edge.
+    auto control =
+        execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN [key IN keys(r) | key + '->' + r[key]] AS keyValue");
+    ASSERT_TRUE(control.error.empty()) << control.error;
+    ASSERT_EQ(control.rows.size(), 1u) << "rows: " << control.rows.size();
+    ASSERT_TRUE(std::holds_alternative<ListValue>(control.rows[0][0]))
+        << "variant index: " << control.rows[0][0].index();
+    const auto& kv = std::get<ListValue>(control.rows[0][0]);
+    EXPECT_EQ(kv.elements.size(), 1u);
+    if (!kv.elements.empty()) {
+        const auto& v = kv.elements[0].value;
+        ASSERT_TRUE(std::holds_alternative<std::string>(v)) << "variant index: " << v.index();
+        EXPECT_EQ(std::get<std::string>(v), "name->foo");
+    }
+}
+
 TEST_F(QueryExecutorTest, VarLenExpandExact1Hop) {
     insertMultiHopEdges();
 

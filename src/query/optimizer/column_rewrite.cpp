@@ -3,6 +3,9 @@
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_function_call.hpp"
 #include "query/planner/bound_expression/bound_property_ref.hpp"
+#include "query/planner/bound_expression/bound_quantifier_expr.hpp"
+#include "query/planner/bound_expression/bound_slice.hpp"
+#include "query/planner/bound_expression/bound_subscript.hpp"
 #include "query/planner/bound_expression/bound_variable_ref.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
 #include "query/planner/logical_plan/operator/bound_create_edge_op.hpp"
@@ -52,7 +55,12 @@ size_t findPropOffset(const PropertyExtractionInfo& info, LabelId lid, uint16_t 
 /// that changes the output schema (Project / Aggregate). In that case property
 /// refs are conservatively routed through need_whole_vertex because the column
 /// rewrite pass cannot track indices across schema-changing boundaries.
-void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs, bool in_schema_changing_op) {
+///
+/// `loop_var_skip` is the loop variable name of an enclosing list comprehension
+/// / quantifier expression. References to that name resolve to a runtime scope,
+/// not a plan column, so they must not contribute to PlanRequirements.
+void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs, bool in_schema_changing_op,
+                     const std::string& loop_var_skip = "") {
     std::visit(
         [&](const auto& ptr) {
             using T = std::decay_t<decltype(ptr)>;
@@ -104,12 +112,12 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                     reqs[var].need_whole_vertex = true;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
                 if (ptr) {
-                    collectExprReqs(ptr->left, reqs, in_schema_changing_op);
-                    collectExprReqs(ptr->right, reqs, in_schema_changing_op);
+                    collectExprReqs(ptr->left, reqs, in_schema_changing_op, loop_var_skip);
+                    collectExprReqs(ptr->right, reqs, in_schema_changing_op, loop_var_skip);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
                 if (ptr)
-                    collectExprReqs(ptr->operand, reqs, in_schema_changing_op);
+                    collectExprReqs(ptr->operand, reqs, in_schema_changing_op, loop_var_skip);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
                 if (ptr) {
                     std::string fname = ptr->func_def ? ptr->func_def->name : "";
@@ -164,22 +172,22 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                         }
                     }
                     for (const auto& a : ptr->args)
-                        collectExprReqs(a, reqs, in_schema_changing_op);
+                        collectExprReqs(a, reqs, in_schema_changing_op, loop_var_skip);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
                 if (ptr)
                     for (const auto& e : ptr->elements)
-                        collectExprReqs(e, reqs, in_schema_changing_op);
+                        collectExprReqs(e, reqs, in_schema_changing_op, loop_var_skip);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
                 if (ptr) {
                     if (ptr->subject)
-                        collectExprReqs(*ptr->subject, reqs, in_schema_changing_op);
+                        collectExprReqs(*ptr->subject, reqs, in_schema_changing_op, loop_var_skip);
                     for (const auto& [w, t] : ptr->when_thens) {
-                        collectExprReqs(w, reqs, in_schema_changing_op);
-                        collectExprReqs(t, reqs, in_schema_changing_op);
+                        collectExprReqs(w, reqs, in_schema_changing_op, loop_var_skip);
+                        collectExprReqs(t, reqs, in_schema_changing_op, loop_var_skip);
                     }
                     if (ptr->else_expr)
-                        collectExprReqs(*ptr->else_expr, reqs, in_schema_changing_op);
+                        collectExprReqs(*ptr->else_expr, reqs, in_schema_changing_op, loop_var_skip);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
                 if (ptr) {
@@ -187,14 +195,48 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                     std::string var = varNameFromObject(ptr->object);
                     if (!var.empty())
                         reqs[var].need_whole_vertex = true;
-                    collectExprReqs(ptr->object, reqs, in_schema_changing_op);
+                    collectExprReqs(ptr->object, reqs, in_schema_changing_op, loop_var_skip);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
+                if (ptr) {
+                    collectExprReqs(ptr->list, reqs, in_schema_changing_op, loop_var_skip);
+                    collectExprReqs(ptr->index, reqs, in_schema_changing_op, loop_var_skip);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
+                if (ptr) {
+                    collectExprReqs(ptr->list, reqs, in_schema_changing_op, loop_var_skip);
+                    if (ptr->from)
+                        collectExprReqs(*ptr->from, reqs, in_schema_changing_op, loop_var_skip);
+                    if (ptr->to)
+                        collectExprReqs(*ptr->to, reqs, in_schema_changing_op, loop_var_skip);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundAnyExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundNoneExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSingleExpr>>) {
+                if (ptr) {
+                    // List comprehension and quantifier expressions introduce a
+                    // local loop variable that resolves to a runtime scope, not
+                    // to the plan's output columns. Pass that name as loop_var_skip
+                    // so references to it inside list_expr/where_pred/projection
+                    // don't get registered as plan-level requirements. Outer
+                    // variable references still propagate normally.
+                    collectExprReqs(ptr->list_expr, reqs, in_schema_changing_op, ptr->variable);
+                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>>) {
+                        collectExprReqs(ptr->projection, reqs, in_schema_changing_op, ptr->variable);
+                    }
+                    if (ptr->where_pred)
+                        collectExprReqs(*ptr->where_pred, reqs, in_schema_changing_op, ptr->variable);
                 }
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
                 // Standalone variable reference (not consumed as the object of a
                 // BoundPropertyRef): the entity value will be inspected directly —
                 // e.g. placed in a list/map, compared, or passed to a function.
                 // Force materialization so VertexRef/EdgeKey becomes VertexValue/EdgeValue.
-                if (!ptr.name.empty()) {
+                // Skip the loop variable of an enclosing list comprehension /
+                // quantifier — that name resolves to a runtime scope, not a plan column.
+                if (!ptr.name.empty() && ptr.name != loop_var_skip) {
                     if (ptr.type.kind == binder::BoundTypeKind::EDGE)
                         reqs[ptr.name].need_whole_edge = true;
                     else if (ptr.type.kind == binder::BoundTypeKind::VERTEX)
@@ -204,7 +246,7 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                 // Standalone column reference (e.g. `WITH x ... RETURN x`): the
                 // entity will be inspected directly. Materialize so downstream
                 // sees VertexValue/EdgeValue.
-                if (!ptr.name.empty()) {
+                if (!ptr.name.empty() && ptr.name != loop_var_skip) {
                     if (ptr.type.kind == binder::BoundTypeKind::EDGE)
                         reqs[ptr.name].need_whole_edge = true;
                     else if (ptr.type.kind == binder::BoundTypeKind::VERTEX)
