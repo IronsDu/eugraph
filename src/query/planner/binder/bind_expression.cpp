@@ -377,7 +377,8 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     // obj is VERTEX but not a LabelCast / ColumnRef (e.g. function
                     // call result like startNode(r)): use dynamic property ref so
                     // the evaluator resolves the property name at runtime against
-                    // the VertexValue's labels.
+                    // the VertexValue's labels. Lazy loading in evalDynamicPropertyRef
+                    // will populate bare VertexValues with actual properties.
                     auto dyn_ref = std::make_unique<BoundDynamicPropertyRef>();
                     dyn_ref->object = std::move(*obj);
                     dyn_ref->property = ptr->property;

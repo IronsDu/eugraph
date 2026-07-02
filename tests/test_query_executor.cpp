@@ -3028,21 +3028,33 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetEdgeFromNodeProperties) {
 }
 
 TEST_F(QueryExecutorTest, MergeUndirectedCreate) {
-    // Reproduces Merge5 [11] simplified: UNDIRECTED MERGE creates edge.
-    // TODO: startNode(r).id from undirected MERGE returns vertex instead of edge
-    // column (MergePhysicalOp output schema issue). Test groundwork only.
+    // Reproduces Merge5 [11]: UNDIRECTED MERGE should create edge startNode=a endNode=b
     compute::QueryExecutor::Config config;
     executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
 
     auto setup = execSync(*executor_, "CREATE (a {id: 2}), (b {id: 1}) RETURN a, b");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
 
-    auto merge = execSync(*executor_,
-                          "MATCH (a {id: 2}), (b {id: 1}) "
-                          "MERGE (a)-[r:KNOWS]-(b) "
-                          "RETURN r");
+    // First check that MERGE returns r as EdgeValue
+    auto merge = execSync(*executor_, "MATCH (a {id: 2}), (b {id: 1}) "
+                                      "MERGE (a)-[r:KNOWS]-(b) "
+                                      "RETURN r");
     ASSERT_TRUE(merge.error.empty()) << merge.error;
     ASSERT_EQ(merge.rows.size(), 1u) << merge.error;
+    EXPECT_TRUE(std::holds_alternative<EdgeValue>(merge.rows[0][0]))
+        << "r variant=" << merge.rows[0][0].index()
+        << " is_vertex=" << std::holds_alternative<VertexValue>(merge.rows[0][0]);
+
+    // Then check startNode(r).id works
+    auto sn = execSync(*executor_, "MATCH (a {id: 2}), (b {id: 1}) "
+                                   "MERGE (a)-[r:KNOWS]-(b) "
+                                   "RETURN startNode(r).id AS s, endNode(r).id AS e");
+    ASSERT_TRUE(sn.error.empty()) << sn.error;
+    ASSERT_EQ(sn.rows.size(), 1u) << sn.error;
+    ASSERT_TRUE(std::holds_alternative<int64_t>(sn.rows[0][0]));
+    ASSERT_TRUE(std::holds_alternative<int64_t>(sn.rows[0][1]));
+    EXPECT_EQ(std::get<int64_t>(sn.rows[0][0]), 2);
+    EXPECT_EQ(std::get<int64_t>(sn.rows[0][1]), 1);
 }
 
 TEST_F(QueryExecutorTest, MergeUndirectedMatch) {

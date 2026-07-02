@@ -918,6 +918,12 @@ PlanOperatorResult extractChildResult(std::variant<PlanOperatorResult, std::stri
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
 PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphDataStore& store,
                            IAsyncGraphMetaStore& meta, PlanContext& ctx) {
+    // Wire up evaluator context so that functions and property evaluators
+    // can load vertex/edge properties lazily (e.g. for startNode results).
+    ctx.eval_ctx.store = &store;
+    ctx.eval_ctx.meta = &meta;
+    ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
+
     // Phase 1: Scan the bound plan once to collect per-variable requirements
     // from every downstream consumer (Project / Filter / Sort / Aggregate /
     // Set / Remove / Delete / Merge). This drives ProjectionExtract spec

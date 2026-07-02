@@ -24,7 +24,8 @@ namespace optimizer {
 namespace {
 
 /// Extract a variable name from an object expression (BoundVariableRef or
-/// BoundColumnRef). Also unwraps BoundLabelCast. Returns empty string if not extractable.
+/// BoundColumnRef). Also unwraps BoundLabelCast and startNode/endNode function
+/// calls. Returns empty string if not extractable.
 std::string varNameFromObject(const binder::BoundExpression& obj) {
     if (auto* vref = std::get_if<binder::BoundVariableRef>(&obj))
         return vref->name;
@@ -33,6 +34,11 @@ std::string varNameFromObject(const binder::BoundExpression& obj) {
     if (auto* lc = std::get_if<std::unique_ptr<binder::BoundLabelCast>>(&obj)) {
         if (*lc)
             return varNameFromObject((*lc)->object);
+    }
+    if (auto* fc = std::get_if<std::unique_ptr<binder::BoundFunctionCall>>(&obj)) {
+        if (*fc && ((*fc)->func_def && ((*fc)->func_def->name == "startNode" || (*fc)->func_def->name == "endNode")) &&
+            !(*fc)->args.empty())
+            return varNameFromObject((*fc)->args[0]);
     }
     return "";
 }
@@ -102,14 +108,18 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                 if (!ptr)
                     return;
                 std::string var = varNameFromObject(ptr->object);
-                if (var.empty())
-                    return;
-                // Dynamic property access requires the full object so that
-                // evalDynamicPropertyRef can scan labels + properties by name.
-                if (ptr->result_type.kind == binder::BoundTypeKind::EDGE)
-                    reqs[var].need_whole_edge = true;
-                else
-                    reqs[var].need_whole_vertex = true;
+                if (!var.empty()) {
+                    // Dynamic property access requires the full object so that
+                    // evalDynamicPropertyRef can scan labels + properties by name.
+                    if (ptr->result_type.kind == binder::BoundTypeKind::EDGE)
+                        reqs[var].need_whole_edge = true;
+                    else
+                        reqs[var].need_whole_vertex = true;
+                }
+                // Recurse into the object expression so that nested function calls
+                // (e.g. startNode(r) inside startNode(r).id) can register their own
+                // requirements (need_whole_edge for the edge argument).
+                collectExprReqs(ptr->object, reqs, in_schema_changing_op, loop_var_skip);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
                 if (ptr) {
                     collectExprReqs(ptr->left, reqs, in_schema_changing_op, loop_var_skip);
@@ -572,18 +582,22 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
                 // Still update the BoundColumnRef inside the object so the
                 // evaluator can locate the constructed entity column.
                 if (val) {
-                    std::string var = varNameFromObject(val->object);
-                    if (!var.empty()) {
-                        auto it = info.find(var);
-                        if (it != info.end()) {
-                            if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object)) {
-                                if (it->second.base_col != cref->column_index) {
-                                    cref->column_index = it->second.base_col;
-                                    return true;
-                                }
+                    bool changed = false;
+                    // If the object itself is a ColumnRef, update it directly.
+                    if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object)) {
+                        std::string var = varNameFromObject(val->object);
+                        if (!var.empty()) {
+                            auto it = info.find(var);
+                            if (it != info.end() && it->second.base_col != cref->column_index) {
+                                cref->column_index = it->second.base_col;
+                                changed = true;
                             }
                         }
                     }
+                    // Recurse into the object expression so that nested column refs
+                    // (e.g. the edge argument inside startNode(r).id) are rewritten.
+                    changed |= rewriteExpr(val->object, info);
+                    return changed;
                 }
                 return false;
             } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
@@ -887,10 +901,23 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                                  std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>>) {
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>>) {
                 if (v)
                     updateBaseCols(v->child, info, reqs, col_count, project_resets);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>>) {
+                if (v) {
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    if (!v->start_var.empty() && !v->start_pre_bound)
+                        assignVar(v->start_var);
+                    if (v->has_relationship) {
+                        if (!v->end_var.empty() && !v->end_pre_bound)
+                            assignVar(v->end_var);
+                        if (!v->edge_var.empty())
+                            assignVar(v->edge_var);
+                        if (v->path_variable)
+                            assignVar(*v->path_variable);
+                    }
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 if (v) {
                     updateBaseCols(v->child, info, reqs, col_count, project_resets);
