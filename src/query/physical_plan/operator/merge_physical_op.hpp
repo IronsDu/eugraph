@@ -150,8 +150,7 @@ private:
     /// concrete label when not already declared. Extracted from executeSetPropertyItem
     /// to keep the coroutine frame size manageable and avoid a GCC 13 ICE.
     folly::coro::Task<void> resolveAndPutVertexProperty(VertexId target_vid, const SetPhysicalOp::BoundSetItem& item,
-                                                        const Value& val,
-                                                        const std::vector<LabelId>& search_labels);
+                                                        const Value& val, const std::vector<LabelId>& search_labels);
     /// Dynamically register `prop_name` on `fallback_lid` via the meta store
     /// and write the resolved (lid, pid) into out_lid / out_pid. Returns false
     /// if registration was not possible (caller should fall back to __anon__).

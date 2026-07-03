@@ -267,6 +267,25 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 }
             }
         found:;
+            // Fallback: if the cached LabelDef had no property definitions, try
+            // reloading from meta store (which may have been updated by DDL mid-query).
+            if (std::holds_alternative<std::monostate>(r) && eval_ctx_.meta) {
+                for (const auto& [label_id, props_vec] : vertex.properties) {
+                    if (props_vec.empty())
+                        continue;
+                    auto fresh_ldef = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(label_id));
+                    if (fresh_ldef) {
+                        for (const auto& pd : fresh_ldef->properties) {
+                            if (pd.name == ref.property && pd.id < props_vec.size() && props_vec[pd.id].has_value()) {
+                                r = pvToValue(*props_vec[pd.id]);
+                                break;
+                            }
+                        }
+                        if (!std::holds_alternative<std::monostate>(r))
+                            break;
+                    }
+                }
+            }
         } else if (std::holds_alternative<EdgeValue>(ov)) {
             const auto& edge = std::get<EdgeValue>(ov);
             if (edge.deleted)

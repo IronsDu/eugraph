@@ -68,6 +68,12 @@ protected:
         ASSERT_NE(KNOWS_LABEL, INVALID_EDGE_LABEL_ID);
         ASSERT_NE(LIVES_IN_LABEL, INVALID_EDGE_LABEL_ID);
 
+        // Register properties on labels so catalog/meta can resolve them at bind time.
+        // Without this, BoundDynamicPropertyRef is used as fallback and runtime
+        // evalDynamicPropertyRef fails when LabelDef.properties is empty.
+        blockingWait(async_meta_->addVertexLabelProperties("Person", {{"name", PropertyType::STRING}}));
+        blockingWait(async_meta_->addVertexLabelProperties("City", {{"name", PropertyType::STRING}}));
+
         // Create physical tables in data store
         blockingWait(async_data_->createLabel(PERSON_LABEL));
         blockingWait(async_data_->createLabel(CITY_LABEL));
@@ -3016,8 +3022,9 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetEdgeFromNodeProperties) {
     EXPECT_EQ(keys.elements.size(), 1u);
     if (!keys.elements.empty()) {
         EXPECT_TRUE(std::holds_alternative<std::string>(keys.elements[0].value));
-        if (std::holds_alternative<std::string>(keys.elements[0].value))
+        if (std::holds_alternative<std::string>(keys.elements[0].value)) {
             EXPECT_EQ(std::get<std::string>(keys.elements[0].value), "name");
+        }
     }
 
     auto prop_check = execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN r.name");
@@ -3203,15 +3210,30 @@ TEST_F(QueryExecutorTest, VarLenExpandMixedLabelChainReturnsDstProperty) {
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
     // c at end of *2 chain from anon (= vertex 2 after first expand from a=1):
-    //   2 -> 3 -> 4. c = 4 (City). c.name should resolve to "city4".
+    //   2 -> 3 -> 4. c = 4 has both Person.name="name4" and City.name="city4".
+    // Multi-candidate property resolution returns a ListValue with both.
     auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->()-[:KNOWS*2]->(c) RETURN c.name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     ASSERT_EQ(result.rows[0].size(), 1u);
-    if (!std::holds_alternative<std::string>(result.rows[0][0])) {
-        FAIL() << "expected string, got variant idx=" << result.rows[0][0].index();
+    ASSERT_TRUE(std::holds_alternative<ListValue>(result.rows[0][0]))
+        << "expected ListValue, got variant idx=" << result.rows[0][0].index();
+    {
+        const auto& lv = std::get<ListValue>(result.rows[0][0]);
+        EXPECT_EQ(lv.elements.size(), 2u);
+        bool has_name4 = false, has_city4 = false;
+        for (const auto& elem : lv.elements) {
+            if (std::holds_alternative<std::string>(elem.value)) {
+                const auto& s = std::get<std::string>(elem.value);
+                if (s == "name4")
+                    has_name4 = true;
+                if (s == "city4")
+                    has_city4 = true;
+            }
+        }
+        EXPECT_TRUE(has_name4) << "expected 'name4' in result list";
+        EXPECT_TRUE(has_city4) << "expected 'city4' in result list";
     }
-    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "city4");
 }
 
 TEST_F(QueryExecutorTest, VarLenExpandNoMatch) {

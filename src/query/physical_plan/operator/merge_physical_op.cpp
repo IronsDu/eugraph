@@ -1013,9 +1013,9 @@ folly::coro::Task<void> MergePhysicalOp::resolveAndPutVertexProperty(VertexId ta
     co_await store_.putVertexProperty(target_vid, final_lid, pid, valueToPropertyValue(val));
 }
 
-folly::coro::Task<bool>
-MergePhysicalOp::dynamicallyRegisterVertexProperty(LabelId fallback_lid, const std::string& prop_name,
-                                                   LabelId& out_lid, uint16_t& out_pid) {
+folly::coro::Task<bool> MergePhysicalOp::dynamicallyRegisterVertexProperty(LabelId fallback_lid,
+                                                                           const std::string& prop_name,
+                                                                           LabelId& out_lid, uint16_t& out_pid) {
     std::string label_name;
     auto def_it = label_defs_.find(fallback_lid);
     if (def_it != label_defs_.end())
