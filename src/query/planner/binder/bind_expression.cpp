@@ -337,13 +337,22 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                             return BoundExpression(std::move(dyn_ref));
                         }
 
-                        // Non-CREATE: scan ALL labels in the catalog
-                        LabelIdSet all_labels;
-                        for (const auto& [lid, ldef] : catalog_.allLabels()) {
-                            all_labels.insert(lid);
+                        // Non-CREATE: prefer source_labels if the variable has a label
+                        // constraint (e.g. MATCH (n:M)). This avoids creating spurious
+                        // multi-candidate BoundPropertyRef that pick up unrelated labels
+                        // and end up rewriting to a flat column the scan never populates.
+                        // For unlabeled variables (MATCH (n)), fall back to all labels so
+                        // multi-label vertices can still resolve properties by name.
+                        LabelIdSet search_labels;
+                        if (col_info && !col_info->source_labels.empty()) {
+                            search_labels.insert(col_info->source_labels.begin(), col_info->source_labels.end());
+                        } else {
+                            for (const auto& [lid, ldef] : catalog_.allLabels()) {
+                                search_labels.insert(lid);
+                            }
                         }
 
-                        auto candidates = catalog_.lookupPropertyAcrossLabels(all_labels, ptr->property);
+                        auto candidates = catalog_.lookupPropertyAcrossLabels(search_labels, ptr->property);
                         if (candidates.empty()) {
                             // Fallback: runtime property lookup by name
                             auto dyn_ref = std::make_unique<BoundDynamicPropertyRef>();

@@ -80,6 +80,13 @@ protected:
         blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
         blockingWait(async_data_->createEdgeLabel(LIVES_IN_LABEL));
 
+        // Reserve vertex/edge ID space for helpers that insert with explicit IDs
+        // (insertTestVertices uses vid 1..5, insertMultiHopEdges adds vid 6; edges 1..5).
+        // Without this, CREATE/MERGE would allocate vid=1 from next_vertex_id and
+        // insertVertex silently merges a second label onto the existing vertex 1.
+        blockingWait(async_meta_->nextVertexIdRange(100));
+        blockingWait(async_meta_->nextEdgeIdRange(100));
+
         executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
     }
 
