@@ -882,11 +882,25 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                         assignVar(v->edge_variable);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
                 if (v) {
                     updateBaseCols(v->left, info, reqs, col_count, project_resets);
                     updateBaseCols(v->right, info, reqs, col_count, project_resets);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
+                // UNION combines two subtrees that produce the SAME output schema.
+                // Each side must be laid out independently from the same starting
+                // col_count — otherwise the right side's variables get shifted by
+                // the left side's column count, and BoundColumnRef rewriting points
+                // at wrong columns.
+                if (v) {
+                    uint32_t start = col_count;
+                    updateBaseCols(v->left, info, reqs, col_count, project_resets);
+                    uint32_t left_count = col_count;
+                    col_count = start;
+                    updateBaseCols(v->right, info, reqs, col_count, project_resets);
+                    // Both sides should produce the same column count; keep left's.
+                    col_count = left_count;
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
                 // SemiJoin: only left child columns appear in the output schema;
