@@ -146,6 +146,19 @@ private:
 
     folly::coro::Task<void> executeSetPropertyItem(const SetPhysicalOp::BoundSetItem& item, const Value& val,
                                                    VertexId start_vid, VertexId end_vid, EdgeId edge_id);
+    /// Resolve (lid, pid) for a vertex property, dynamically registering it on a
+    /// concrete label when not already declared. Extracted from executeSetPropertyItem
+    /// to keep the coroutine frame size manageable and avoid a GCC 13 ICE.
+    folly::coro::Task<void> resolveAndPutVertexProperty(VertexId target_vid, const SetPhysicalOp::BoundSetItem& item,
+                                                        const Value& val,
+                                                        const std::vector<LabelId>& search_labels);
+    /// Dynamically register `prop_name` on `fallback_lid` via the meta store
+    /// and write the resolved (lid, pid) into out_lid / out_pid. Returns false
+    /// if registration was not possible (caller should fall back to __anon__).
+    /// Uses output parameters instead of returning a pair to avoid a GCC 13
+    /// coroutine ICE triggered by Task<std::pair<...>>.
+    folly::coro::Task<bool> dynamicallyRegisterVertexProperty(LabelId fallback_lid, const std::string& prop_name,
+                                                              LabelId& out_lid, uint16_t& out_pid);
     folly::coro::Task<void> executeSetLabelsItem(const SetPhysicalOp::BoundSetItem& item, VertexId start_vid,
                                                  VertexId end_vid);
     folly::coro::Task<void> executeSetPropertiesItem(const SetPhysicalOp::BoundSetItem& item, const Value& val,
