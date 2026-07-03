@@ -75,7 +75,7 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                 if (!ptr)
                     return;
                 std::string var = varNameFromObject(ptr->object);
-                if (var.empty())
+                if (var.empty() || var == loop_var_skip)
                     return;
                 // Determine whether the object is an edge variable. BoundPropertyRef
                 // uses the same LabelId type for both vertex labels and edge labels,
@@ -109,7 +109,7 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                 if (!ptr)
                     return;
                 std::string var = varNameFromObject(ptr->object);
-                if (!var.empty()) {
+                if (!var.empty() && var != loop_var_skip) {
                     // Dynamic property access requires the full object so that
                     // evalDynamicPropertyRef can scan labels + properties by name.
                     if (ptr->result_type.kind == binder::BoundTypeKind::EDGE)
@@ -132,8 +132,17 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
                 if (ptr) {
                     std::string fname = ptr->func_def ? ptr->func_def->name : "";
+                    // Function arg → variable requirement. Skip the enclosing
+                    // list-comprehension / quantifier loop variable: that name
+                    // resolves to a runtime scope, not a plan column, and
+                    // registering it here would leak it into PropertyExtractionInfo
+                    // and cause rewriteExpr to clobber the loop variable's
+                    // column_index.
+                    auto reqVarIfPlan = [&](const std::string& var) -> std::string {
+                        return (!var.empty() && var != loop_var_skip) ? var : std::string{};
+                    };
                     if (fname == "labels" && ptr->args.size() == 1) {
-                        std::string var = varNameFromObject(ptr->args[0]);
+                        std::string var = reqVarIfPlan(varNameFromObject(ptr->args[0]));
                         if (!var.empty()) {
                             // labels(n) reads vertex.labels at eval time; the evaluator
                             // needs a VertexValue column (LoadVertexLabels alone emits
@@ -142,13 +151,13 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                             reqs[var].need_whole_vertex = true;
                         }
                     } else if (fname == "type" && ptr->args.size() == 1) {
-                        std::string var = varNameFromObject(ptr->args[0]);
+                        std::string var = reqVarIfPlan(varNameFromObject(ptr->args[0]));
                         if (!var.empty()) {
                             reqs[var].need_edge_type = true;
                             reqs[var].need_whole_edge = true;
                         }
                     } else if ((fname == "properties" || fname == "keys") && ptr->args.size() == 1) {
-                        std::string var = varNameFromObject(ptr->args[0]);
+                        std::string var = reqVarIfPlan(varNameFromObject(ptr->args[0]));
                         if (!var.empty()) {
                             // Determine vertex vs edge from the argument's BoundType.
                             bool is_edge = false;
@@ -165,7 +174,7 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                         // startNode/endNode read EdgeValue.src_id / dst_id; force
                         // full edge materialization (an int edge-id column would
                         // otherwise arrive and the impl throws InvalidArgumentValue).
-                        std::string var = varNameFromObject(ptr->args[0]);
+                        std::string var = reqVarIfPlan(varNameFromObject(ptr->args[0]));
                         if (!var.empty())
                             reqs[var].need_whole_edge = true;
                     } else if ((fname == "toInteger" || fname == "toFloat" || fname == "toBoolean" ||
@@ -176,7 +185,7 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                         // argument arrives as VertexRef/EdgeKey and the function
                         // silently returns NULL instead of raising the expected
                         // error. Force full materialization.
-                        std::string var = varNameFromObject(ptr->args[0]);
+                        std::string var = reqVarIfPlan(varNameFromObject(ptr->args[0]));
                         if (!var.empty()) {
                             bool is_edge = false;
                             if (auto* vref = std::get_if<binder::BoundVariableRef>(&ptr->args[0]))
