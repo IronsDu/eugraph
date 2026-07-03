@@ -1029,6 +1029,7 @@ MergePhysicalOp::dynamicallyRegisterVertexProperty(LabelId fallback_lid, const s
         }
     }
     uint16_t pid = 0;
+    bool found = false;
     if (!label_name.empty()) {
         std::vector<std::pair<std::string, PropertyType>> props;
         props.emplace_back(prop_name, PropertyType::ANY);
@@ -1040,12 +1041,13 @@ MergePhysicalOp::dynamicallyRegisterVertexProperty(LabelId fallback_lid, const s
             for (size_t i = 0; i < props_vec.size(); ++i) {
                 if (props_vec[i].name == prop_name) {
                     pid = props_vec[i].id;
+                    found = true;
                     break;
                 }
             }
         }
     }
-    if (pid == 0 && fallback_lid != anon_label_id_) {
+    if (!found && fallback_lid != anon_label_id_) {
         fallback_lid = anon_label_id_;
         auto adef_it = label_defs_.find(anon_label_id_);
         if (adef_it != label_defs_.end()) {
@@ -1460,8 +1462,6 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 }
             } else {
                 // Node-only MERGE: single output row (no multi-match for nodes)
-                EdgeId edge_id = INVALID_EDGE_ID;
-                EdgeLabelId edge_label = INVALID_EDGE_LABEL_ID;
                 bool any_created = start_created;
 
                 DataChunk merged;
