@@ -2,6 +2,7 @@
 
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_function_call.hpp"
+#include "query/planner/bound_expression/bound_map.hpp"
 #include "query/planner/bound_expression/bound_property_ref.hpp"
 #include "query/planner/bound_expression/bound_quantifier_expr.hpp"
 #include "query/planner/bound_expression/bound_slice.hpp"
@@ -195,6 +196,10 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                 if (ptr)
                     for (const auto& e : ptr->elements)
                         collectExprReqs(e, reqs, in_schema_changing_op, loop_var_skip);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
+                if (ptr)
+                    for (const auto& [k, v] : ptr->entries)
+                        collectExprReqs(v, reqs, in_schema_changing_op, loop_var_skip);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
                 if (ptr) {
                     if (ptr->subject)
@@ -354,8 +359,16 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                     }
                     collectOpReqs(v->child, reqs);
                 }
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+                if (v) {
+                    // UNWIND list_expr references input-schema variables (e.g.
+                    // `UNWIND keys(n) AS x`). Without collecting from list_expr,
+                    // keys(n)/properties(n) never trigger need_whole_vertex and
+                    // the evaluator receives VertexRef instead of VertexValue.
+                    collectExprReqs(v->list_expr, reqs, /*in_schema_changing_op=*/false);
+                    collectOpReqs(v->child, reqs);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
@@ -559,6 +572,13 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
                 for (auto& e : val->elements)
                     changed |= rewriteExpr(e, info);
                 return changed;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
+                if (!val)
+                    return false;
+                bool changed = false;
+                for (auto& [k, v] : val->entries)
+                    changed |= rewriteExpr(v, info);
+                return changed;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
                 if (!val)
                     return false;
@@ -576,6 +596,34 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
                 if (!val)
                     return false;
                 return rewriteExpr(val->object, info);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
+                if (!val)
+                    return false;
+                bool changed = rewriteExpr(val->list, info);
+                changed |= rewriteExpr(val->index, info);
+                return changed;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
+                if (!val)
+                    return false;
+                bool changed = rewriteExpr(val->list, info);
+                if (val->from)
+                    changed |= rewriteExpr(*val->from, info);
+                if (val->to)
+                    changed |= rewriteExpr(*val->to, info);
+                return changed;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundAnyExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundNoneExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSingleExpr>>) {
+                if (!val)
+                    return false;
+                bool changed = rewriteExpr(val->list_expr, info);
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>>)
+                    changed |= rewriteExpr(val->projection, info);
+                if (val->where_pred)
+                    changed |= rewriteExpr(*val->where_pred, info);
+                return changed;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
                 // Dynamic property ref — left intact. Evaluator reads from the
                 // constructed VertexValue/EdgeValue column at runtime.
@@ -700,8 +748,15 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                 if (v)
                     rewriteOp(v->child, info, project_resets);
-            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+                if (v) {
+                    // list_expr references INPUT schema variables; rewrite
+                    // BoundColumnRef indices so they point at the ConstructVertex
+                    // / flat property columns emitted by upstream ProjectionExtract.
+                    rewriteExpr(v->list_expr, info);
+                    rewriteOp(v->child, info, project_resets);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
