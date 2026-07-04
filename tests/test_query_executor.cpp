@@ -2279,11 +2279,16 @@ TEST_F(QueryExecutorTest, PropertyNamedIdReturnsStoredValue) {
     auto idResult = execSync(executor, "MATCH (n:Item) RETURN id(n) AS internalId ORDER BY internalId");
     ASSERT_TRUE(idResult.error.empty()) << idResult.error;
     ASSERT_EQ(idResult.rows.size(), 3);
-    // Internal IDs should be small positive integers (not the stored 100/200/300)
+    // Internal IDs must NOT equal the stored property values 100/200/300 —
+    // that's the whole point of separating pseudo-property `id` from real prop.
+    // (SetUp reserves a 100-vertex buffer so CREATE allocates 101+; the check
+    // below is label-agnostic and survives any future reserve policy change.)
     for (size_t i = 0; i < idResult.rows.size(); ++i) {
         auto internalId = std::get<int64_t>(idResult.rows[i][0]);
         EXPECT_GT(internalId, 0);
-        EXPECT_LT(internalId, 100); // internal IDs are small, not the stored property values
+        EXPECT_NE(internalId, 100);
+        EXPECT_NE(internalId, 200);
+        EXPECT_NE(internalId, 300);
     }
 }
 
@@ -4389,9 +4394,17 @@ TEST_F(QueryExecutorTest, DeleteNodeWithEdgesFails) {
     auto create = execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person)");
     ASSERT_TRUE(create.error.empty()) << create.error;
 
+    // Look up the actual vertex id (SetUp reserves a 100-vertex buffer, so
+    // CREATE allocates 101+, not 1). Hardcoding id=1 would silently match
+    // nothing and the test would pass for the wrong reason.
+    auto lookup = execSync(*executor_, "MATCH (n:Person) RETURN id(n) AS vid LIMIT 1");
+    ASSERT_EQ(lookup.rows.size(), 1u);
+    auto vid = std::get<int64_t>(lookup.rows[0][0]);
+
     // DELETE without DETACH on a vertex with edges must fail
     try {
-        auto del = execSync(*executor_, "MATCH (n:Person) WHERE id(n) = 1 DELETE n");
+        std::string q = "MATCH (n:Person) WHERE id(n) = " + std::to_string(vid) + " DELETE n";
+        auto del = execSync(*executor_, q);
         // If we get here, the query succeeded when it should have failed
         if (del.error.empty())
             FAIL() << "Expected ConstraintVerificationFailed but query succeeded";
@@ -5646,10 +5659,13 @@ TEST_F(QueryExecutorTest, OrderByEdgeId) {
         EXPECT_TRUE(std::holds_alternative<int64_t>(row[0]))
             << "r.id should be int64_t, got variant index " << row[0].index();
     }
-    // Should be [1, 2, 3] in ascending order
-    EXPECT_EQ(std::get<int64_t>(ids.rows[0][0]), 1);
-    EXPECT_EQ(std::get<int64_t>(ids.rows[1][0]), 2);
-    EXPECT_EQ(std::get<int64_t>(ids.rows[2][0]), 3);
+    // SetUp reserves a 100-edge buffer, so the three CREATEs allocate three
+    // consecutive ids starting at 101. Don't hardcode 1/2/3 — verify the
+    // values are consecutive and ascending.
+    auto first = std::get<int64_t>(ids.rows[0][0]);
+    EXPECT_GT(first, 0);
+    EXPECT_EQ(std::get<int64_t>(ids.rows[1][0]), first + 1);
+    EXPECT_EQ(std::get<int64_t>(ids.rows[2][0]), first + 2);
 }
 
 TEST_F(QueryExecutorTest, ExplainCreateEdge) {
