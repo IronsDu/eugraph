@@ -30,7 +30,6 @@ namespace optimizer {
 struct PropertyExtractionInfo {
     /// Base column index of the source variable (before extraction).
     uint32_t base_col = 0;
-    uint32_t input_base_col = 0;
     /// Per-property mapping: (label_id, prop_id) → new column index offset.
     /// Offset is 1 (skip source column) + cumulative props before this one.
     /// The absolute column index is base_col + offset.
@@ -108,11 +107,13 @@ void rewriteColumnIndices(binder::BoundLogicalOperator& op,
 /// variables (e.g. edge variable at column 1 in Expand output).
 /// reqs is the full requirement map (including need_whole_*/labels/type) so
 /// the column counter can account for ALL columns ProjectionExtract appends.
-/// `project_resets` (optional out-param) records which variables each
-/// Project/Aggregate operator actually reset; pass the same map to
-/// rewriteColumnIndicesWithResets so the rewrite can distinguish a true schema
-/// reset from an inherited one in nested WITH/RETURN chains.
-using ProjectResetMap = std::unordered_map<const void*, std::unordered_set<std::string>>;
+/// `project_resets` (optional out-param) records, per Project/Aggregate
+/// operator, the variables it reset and the producer-side column position
+/// captured at the moment of reset (i.e. the variable's position in THAT
+/// operator's INPUT schema). Storing per-Project positions is necessary
+/// because nested schema-changing operators (WITH ... WITH ... RETURN) each
+/// see a different input schema for the same variable.
+using ProjectResetMap = std::unordered_map<const void*, std::unordered_map<std::string, uint32_t>>;
 
 void updateExtractionBaseCols(const binder::BoundLogicalOperator& op,
                               std::unordered_map<std::string, PropertyExtractionInfo>& info,

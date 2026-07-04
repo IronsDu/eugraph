@@ -678,9 +678,10 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
                const ProjectResetMap* project_resets) {
     // Build the INPUT-scope view of `info` for a schema-changing operator:
     // variables reset by THIS operator get base_col switched back to the
-    // producer-side position saved in input_base_col. Returns a copy only
-    // when a switch is actually needed; otherwise returns the original map
-    // unchanged so callers can pass it through without allocation.
+    // producer-side position captured at THIS operator's reset (stored in
+    // project_resets). Returns a copy only when a switch is actually needed;
+    // otherwise returns the original map unchanged so callers can pass it
+    // through without allocation.
     auto buildInputScope =
         [&project_resets](
             const std::unordered_map<std::string, PropertyExtractionInfo>& base,
@@ -692,10 +693,10 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
             return {false, base};
         auto copy = base;
         bool changed = false;
-        for (const auto& var : rit->second) {
+        for (const auto& [var, input_pos] : rit->second) {
             auto it = copy.find(var);
-            if (it != copy.end() && it->second.base_col != it->second.input_base_col) {
-                it->second.base_col = it->second.input_base_col;
+            if (it != copy.end() && it->second.base_col != input_pos) {
+                it->second.base_col = input_pos;
                 changed = true;
             }
         }
@@ -715,7 +716,7 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
                     // Project's items + child subtree consume THIS Project's INPUT
                     // schema. Variables reset by THIS Project had their base_col
                     // overwritten to the OUTPUT position; switch them back to the
-                    // producer position (saved in input_base_col) for the items
+                    // producer position (saved in project_resets) for the items
                     // and the child descent. Variables NOT reset by THIS Project
                     // (e.g. an ancestor WITH already reset them, or they live
                     // entirely inside the child subtree) keep their current
@@ -842,7 +843,7 @@ static size_t columnCountFor(const VariableRequirement& r) {
 /// subtree) from an inherited reset (an inner Project already reset the var;
 /// the outer Project's items and child should keep using its own input
 /// positions).
-using ProjectResetMap = std::unordered_map<const void*, std::unordered_set<std::string>>;
+using ProjectResetMap = std::unordered_map<const void*, std::unordered_map<std::string, uint32_t>>;
 
 void updateBaseCols(const binder::BoundLogicalOperator& op,
                     std::unordered_map<std::string, PropertyExtractionInfo>& info, const PlanRequirements& reqs,
@@ -850,7 +851,11 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
     auto assignVar = [&](const std::string& var) {
         auto it = info.find(var);
         if (it != info.end()) {
-            it->second.input_base_col = col_count;
+            // base_col tracks the variable's output-side position at this point
+            // in the traversal. Per-Project input positions are captured in
+            // project_resets at the moment of each reset (not in info), so
+            // sibling-subtree re-emission of an already-bound variable (e.g.
+            // LeftJoin's right sub-plan) does not corrupt upstream Projects.
             it->second.base_col = col_count;
         }
         auto rit = reqs.find(var);
@@ -930,15 +935,20 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                         // Skip duplicate resets within the same op: a variable
                         // referenced by multiple items (e.g. `WITH b AS y, b AS z`)
                         // has ONE producer position to remember; the second
-                        // iteration would otherwise clobber input_base_col with
-                        // the just-overwritten base_col (= first item's out_idx),
-                        // corrupting the producer position for the items' rewrite.
+                        // iteration would otherwise record the just-overwritten
+                        // base_col (= first item's out_idx) as THIS Project's
+                        // input position, corrupting the items' rewrite.
                         if (!var.empty() && reset_in_this_op.find(var) == reset_in_this_op.end()) {
                             auto it = info.find(var);
                             if (it != info.end() && it->second.base_col != out_idx) {
-                                it->second.input_base_col = it->second.base_col;
+                                // Capture THIS Project's input position for the
+                                // variable BEFORE overwriting base_col. Storing
+                                // per-Project (keyed by op pointer) lets nested
+                                // Projects each remember their own input schema
+                                // even when a sibling subtree (LeftJoin right)
+                                // advances base_col between resets.
+                                project_resets[&*v][var] = it->second.base_col;
                                 it->second.base_col = out_idx;
-                                project_resets[&*v].insert(var);
                                 reset_in_this_op.insert(var);
                             }
                         }
@@ -960,9 +970,8 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                         if (!var.empty() && reset_in_this_op.find(var) == reset_in_this_op.end()) {
                             auto it = info.find(var);
                             if (it != info.end() && it->second.base_col != out_idx) {
-                                it->second.input_base_col = it->second.base_col;
+                                project_resets[&*v][var] = it->second.base_col;
                                 it->second.base_col = out_idx;
-                                project_resets[&*v].insert(var);
                                 reset_in_this_op.insert(var);
                             }
                         }
