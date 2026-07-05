@@ -779,12 +779,14 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
                     rewriteOp(v->left, info, project_resets, left_join_cols);
-                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
-                        // The right sub-plan of LeftJoin has its OWN column space.
-                        // base_col in the shared info map includes the left column
-                        // count as an offset. Expressions inside the right sub-plan
-                        // (e.g. WHERE clause on OPTIONAL MATCH) see only the
-                        // sub-plan's columns, so adjust base_col to be
+                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
+                                  std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+                        // The right sub-plan of LeftJoin/BinaryJoin has its OWN
+                        // column space. base_col in the shared info map includes
+                        // the left column count as an offset. Expressions inside
+                        // the right sub-plan (e.g. WHERE clause on OPTIONAL MATCH,
+                        // or VarLenExpand's dispatched ProjectionExtract) see only
+                        // the sub-plan's columns, so adjust base_col to be
                         // sub-plan-local.
                         auto right_info = info;
                         if (left_join_cols) {
@@ -930,9 +932,10 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
                 if (v) {
                     updateBaseCols(v->left, info, reqs, col_count, project_resets, left_join_cols);
-                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
-                        left_join_cols[&*v] = col_count;
-                    }
+                    // Both BinaryJoin and LeftJoin combine left + right output columns,
+                    // so right-sub-plan base_col values include the left column count
+                    // as offset. Save it for the rewrite phase to subtract.
+                    left_join_cols[&*v] = col_count;
                     updateBaseCols(v->right, info, reqs, col_count, project_resets, left_join_cols);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
