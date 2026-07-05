@@ -100,6 +100,18 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     }
                     if (!ldef && eval_ctx_.catalog)
                         ldef = eval_ctx_.catalog->lookupLabel(lid);
+                    // Labels created dynamically during the session (e.g.
+                    // __anon__ for pending CREATE properties) may only exist
+                    // in the meta store, not in the snapshot loaded at query
+                    // start.  Fall back to the meta store so evalPropertyRef
+                    // can resolve property names stored under those labels.
+                    if (!ldef && eval_ctx_.meta) {
+                        auto loaded = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(lid));
+                        if (loaded) {
+                            auto& inserted = label_def_cache_.emplace_back(std::make_unique<LabelDef>(std::move(*loaded)));
+                            ldef = inserted.get();
+                        }
+                    }
                     if (!ldef)
                         continue;
                     for (const auto& pd : ldef->properties) {
@@ -253,6 +265,15 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 }
                 if (!ldef)
                     ldef = eval_ctx_.catalog->lookupLabel(label_id);
+                // Dynamic labels (e.g. __anon__) may only be in the meta store.
+                if (!ldef && eval_ctx_.meta) {
+                    auto loaded = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(label_id));
+                    if (loaded) {
+                        auto& inserted =
+                            label_def_cache_.emplace_back(std::make_unique<LabelDef>(std::move(*loaded)));
+                        ldef = inserted.get();
+                    }
+                }
                 if (!ldef)
                     continue;
                 for (const auto& pd : ldef->properties) {
