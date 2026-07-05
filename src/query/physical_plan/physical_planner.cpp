@@ -1160,6 +1160,9 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     // label_prop_ids on descendant scans/expands. We then reuse the same
     // requirement-collection + column-rewrite + ProjectionExtract pipeline
     // as planBound so both paths converge on the unified extract operator.
+    ctx.eval_ctx.store = &store;
+    ctx.eval_ctx.meta = &meta;
+    ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
     binder::BoundLogicalOperator materialized = materializeChosen(chosen);
     ctx.requirements = optimizer::collectPlanRequirements(materialized);
     auto extraction_info = optimizer::buildExtractionInfo(materialized, ctx.requirements);

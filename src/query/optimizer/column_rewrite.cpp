@@ -431,11 +431,22 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                 // CreateEdge's child subtree (e.g. Filter) may read source-variable
                 // properties (a.name = 'x'). Descend so those requirements reach
                 // the upstream scan / expand where ProjectionExtract can attach them.
-                if (v)
+                if (v) {
+                    for (const auto& [prop_name, expr] : v->pending_props)
+                        collectExprReqs(expr, reqs, /*in_schema_changing_op=*/false);
                     collectOpReqs(v->child, reqs);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
-                if (v && v->child)
-                    collectOpReqs(*v->child, reqs);
+                if (v) {
+                    // Property expressions in pending_props (e.g. d.name + 'X'
+                    // in CREATE (e:E {name: d.name + 'X'})) may reference
+                    // properties of input variables. Collect those requirements
+                    // so ProjectionExtract loads the source properties.
+                    for (const auto& [prop_name, expr] : v->pending_props)
+                        collectExprReqs(expr, reqs, /*in_schema_changing_op=*/false);
+                    if (v->child)
+                        collectOpReqs(*v->child, reqs);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
@@ -445,7 +456,6 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                     collectOpReqs(v->right, reqs);
                 }
             }
-            // BoundCreateNodeOp / BoundCreateEdgeOp: write ops without property reads from input.
         },
         op);
 }
