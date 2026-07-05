@@ -115,15 +115,24 @@ void rewriteColumnIndices(binder::BoundLogicalOperator& op,
 /// see a different input schema for the same variable.
 using ProjectResetMap = std::unordered_map<const void*, std::unordered_map<std::string, uint32_t>>;
 
+/// Tracks the left child's output column count for each LeftJoin operator.
+/// Used by rewriteOp to subtract the left-side offset from right-sub-plan
+/// base_col values, so expressions inside the right sub-plan reference
+/// correct sub-plan-local column indices.
+using LeftJoinColMap = std::unordered_map<const void*, uint32_t>;
+
 void updateExtractionBaseCols(const binder::BoundLogicalOperator& op,
                               std::unordered_map<std::string, PropertyExtractionInfo>& info,
-                              const PlanRequirements& reqs, ProjectResetMap* project_resets = nullptr);
+                              const PlanRequirements& reqs, ProjectResetMap* project_resets = nullptr,
+                              LeftJoinColMap* left_join_cols = nullptr);
 
-/// Like rewriteColumnIndices, but uses the per-Project reset map produced by
-/// updateExtractionBaseCols to correctly handle nested schema-changing ops.
+/// Like rewriteColumnIndices, but uses the per-Project reset map and
+/// per-LeftJoin column offset map to correctly handle nested schema-changing
+/// ops and LeftJoin sub-plan column spaces.
 void rewriteColumnIndicesWithResets(binder::BoundLogicalOperator& op,
                                     const std::unordered_map<std::string, PropertyExtractionInfo>& info,
-                                    const ProjectResetMap& project_resets);
+                                    const ProjectResetMap& project_resets,
+                                    const LeftJoinColMap* left_join_cols = nullptr);
 
 /// Walk the plan and find variables that need full objects (RETURN n, RETURN r).
 /// These variables must NOT use standalone PropertyExtract — they need VertexValue.

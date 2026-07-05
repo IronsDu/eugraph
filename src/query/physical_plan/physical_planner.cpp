@@ -936,8 +936,10 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // by extract's construct/labels columns whose indices overlap the source.
     auto extraction_info = optimizer::buildExtractionInfo(bound_plan.root, ctx.requirements);
     optimizer::ProjectResetMap project_resets;
-    optimizer::updateExtractionBaseCols(bound_plan.root, extraction_info, ctx.requirements, &project_resets);
-    optimizer::rewriteColumnIndicesWithResets(bound_plan.root, extraction_info, project_resets);
+    optimizer::LeftJoinColMap left_join_cols;
+    optimizer::updateExtractionBaseCols(bound_plan.root, extraction_info, ctx.requirements, &project_resets,
+                                        &left_join_cols);
+    optimizer::rewriteColumnIndicesWithResets(bound_plan.root, extraction_info, project_resets, &left_join_cols);
 
     ctx.use_property_extract = true;
     Schema empty_schema;

@@ -19,6 +19,7 @@
 #include "query/planner/logical_plan/operator/bound_set_op.hpp"
 #include "query/planner/logical_plan/operator/bound_sort_op.hpp"
 
+
 namespace eugraph {
 namespace optimizer {
 
@@ -675,7 +676,7 @@ bool rewriteExpr(binder::BoundExpression& expr, const std::unordered_map<std::st
 }
 
 void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::string, PropertyExtractionInfo>& info,
-               const ProjectResetMap* project_resets) {
+               const ProjectResetMap* project_resets, const LeftJoinColMap* left_join_cols = nullptr) {
     // Build the INPUT-scope view of `info` for a schema-changing operator:
     // variables reset by THIS operator get base_col switched back to the
     // producer-side position captured at THIS operator's reset (stored in
@@ -709,7 +710,7 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
             if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (v) {
                     rewriteExpr(v->predicate, info);
-                    rewriteOp(v->child, info, project_resets);
+                    rewriteOp(v->child, info, project_resets, left_join_cols);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                 if (v) {
@@ -728,13 +729,13 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
                     const auto& input_scope = changed ? scope : info;
                     for (auto& item : v->items)
                         rewriteExpr(item.expr, input_scope);
-                    rewriteOp(v->child, input_scope, project_resets);
+                    rewriteOp(v->child, input_scope, project_resets, left_join_cols);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
                 if (v) {
                     for (auto& item : v->items)
                         rewriteExpr(item.expr, info);
-                    rewriteOp(v->child, info, project_resets);
+                    rewriteOp(v->child, info, project_resets, left_join_cols);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
                 if (v) {
@@ -750,45 +751,66 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
                         rewriteExpr(k, input_scope);
                     for (auto& agg : v->aggregates)
                         rewriteExpr(agg.argument, input_scope);
-                    rewriteOp(v->child, input_scope, project_resets);
+                    rewriteOp(v->child, input_scope, project_resets, left_join_cols);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (v)
-                    rewriteOp(v->child, info, project_resets);
+                    rewriteOp(v->child, info, project_resets, left_join_cols);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                 if (v)
-                    rewriteOp(v->child, info, project_resets);
+                    rewriteOp(v->child, info, project_resets, left_join_cols);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 if (v) {
                     // list_expr references INPUT schema variables; rewrite
                     // BoundColumnRef indices so they point at the ConstructVertex
                     // / flat property columns emitted by upstream ProjectionExtract.
                     rewriteExpr(v->list_expr, info);
-                    rewriteOp(v->child, info, project_resets);
+                    rewriteOp(v->child, info, project_resets, left_join_cols);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                 if (v)
-                    rewriteOp(v->child, info, project_resets);
+                    rewriteOp(v->child, info, project_resets, left_join_cols);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
-                    rewriteOp(v->left, info, project_resets);
-                    rewriteOp(v->right, info, project_resets);
+                    rewriteOp(v->left, info, project_resets, left_join_cols);
+                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
+                        // The right sub-plan of LeftJoin has its OWN column space.
+                        // base_col in the shared info map includes the left column
+                        // count as an offset. Expressions inside the right sub-plan
+                        // (e.g. WHERE clause on OPTIONAL MATCH) see only the
+                        // sub-plan's columns, so adjust base_col to be
+                        // sub-plan-local.
+                        auto right_info = info;
+                        if (left_join_cols) {
+                            auto it = left_join_cols->find(&*v);
+                            if (it != left_join_cols->end()) {
+                                uint32_t offset = it->second;
+                                for (auto& [var, pei] : right_info) {
+                                    if (pei.base_col >= offset)
+                                        pei.base_col -= offset;
+                                }
+                            }
+                        }
+                        rewriteOp(v->right, right_info, project_resets, left_join_cols);
+                    } else {
+                        rewriteOp(v->right, info, project_resets, left_join_cols);
+                    }
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
                 // Descend so Filter / Project under CREATE (e.g. CREATE ... WHERE
                 // a.name = ...) get their BoundPropertyRef rewritten to the flat
                 // property columns emitted by ProjectionExtract.
                 if (v)
-                    rewriteOp(v->child, info, project_resets);
+                    rewriteOp(v->child, info, project_resets, left_join_cols);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v && v->child)
-                    rewriteOp(*v->child, info, project_resets);
+                    rewriteOp(*v->child, info, project_resets, left_join_cols);
             }
             // Leaves (Scan, LabelScan, Singleton, CorrelatedSource) and write ops
             // (Set, Remove, Delete, Merge) are left unmodified.
@@ -845,9 +867,18 @@ static size_t columnCountFor(const VariableRequirement& r) {
 /// positions).
 using ProjectResetMap = std::unordered_map<const void*, std::unordered_map<std::string, uint32_t>>;
 
+/// Tracks the left child's output column count for each LeftJoin operator.
+/// In updateBaseCols, the right sub-plan's base_col values include the left
+/// column count as an offset (because col_count advances through left before
+/// right). The physical right sub-plan execution sees only its own columns,
+/// so rewriteOp must subtract this offset when descending into the right
+/// sub-plan — otherwise BoundColumnRef column_index values point past the
+/// sub-plan's actual column count.
+using LeftJoinColMap = std::unordered_map<const void*, uint32_t>;
+
 void updateBaseCols(const binder::BoundLogicalOperator& op,
                     std::unordered_map<std::string, PropertyExtractionInfo>& info, const PlanRequirements& reqs,
-                    uint32_t& col_count, ProjectResetMap& project_resets) {
+                    uint32_t& col_count, ProjectResetMap& project_resets, LeftJoinColMap& left_join_cols) {
     auto assignVar = [&](const std::string& var) {
         auto it = info.find(var);
         if (it != info.end()) {
@@ -875,7 +906,7 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                 col_count += static_cast<uint32_t>(v.variables.size());
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (v) {
-                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets, left_join_cols);
                     if (!v->edge_variable.empty())
                         assignVar(v->edge_variable);
                     if (!v->dst_variable.empty())
@@ -887,7 +918,7 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                 // accounting, downstream vars get base_col=0 (default) and the
                 // BoundColumnRef rewrite would collapse them onto col 0.
                 if (v) {
-                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets, left_join_cols);
                     if (!v->dst_variable.empty())
                         assignVar(v->dst_variable);
                     if (!v->path_variable.empty())
@@ -898,8 +929,11 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
                 if (v) {
-                    updateBaseCols(v->left, info, reqs, col_count, project_resets);
-                    updateBaseCols(v->right, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->left, info, reqs, col_count, project_resets, left_join_cols);
+                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
+                        left_join_cols[&*v] = col_count;
+                    }
+                    updateBaseCols(v->right, info, reqs, col_count, project_resets, left_join_cols);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 // UNION combines two subtrees that produce the SAME output schema.
@@ -909,10 +943,10 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                 // at wrong columns.
                 if (v) {
                     uint32_t start = col_count;
-                    updateBaseCols(v->left, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->left, info, reqs, col_count, project_resets, left_join_cols);
                     uint32_t left_count = col_count;
                     col_count = start;
-                    updateBaseCols(v->right, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->right, info, reqs, col_count, project_resets, left_join_cols);
                     // Both sides should produce the same column count; keep left's.
                     col_count = left_count;
                 }
@@ -920,10 +954,10 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                 // SemiJoin: only left child columns appear in the output schema;
                 // the right child is a correlated subplan with its own column space.
                 if (v)
-                    updateBaseCols(v->left, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->left, info, reqs, col_count, project_resets, left_join_cols);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                 if (v) {
-                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets, left_join_cols);
                     uint32_t out_idx = 0;
                     std::unordered_set<std::string> reset_in_this_op;
                     for (const auto& item : v->items) {
@@ -958,7 +992,7 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
                 if (v) {
-                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets, left_join_cols);
                     uint32_t out_idx = 0;
                     std::unordered_set<std::string> reset_in_this_op;
                     for (const auto& k : v->group_keys) {
@@ -990,10 +1024,10 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                                  std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>>) {
                 if (v)
-                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets, left_join_cols);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>>) {
                 if (v) {
-                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets, left_join_cols);
                     if (!v->start_var.empty() && !v->start_pre_bound)
                         assignVar(v->start_var);
                     if (v->has_relationship) {
@@ -1007,20 +1041,20 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 if (v) {
-                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets, left_join_cols);
                     if (!v->variable.empty())
                         assignVar(v->variable);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
                 if (v) {
-                    updateBaseCols(v->child, info, reqs, col_count, project_resets);
+                    updateBaseCols(v->child, info, reqs, col_count, project_resets, left_join_cols);
                     if (!v->variable.empty())
                         assignVar(v->variable);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v) {
                     if (v->child)
-                        updateBaseCols(*v->child, info, reqs, col_count, project_resets);
+                        updateBaseCols(*v->child, info, reqs, col_count, project_resets, left_join_cols);
                     if (!v->variable.empty())
                         assignVar(v->variable);
                 }
@@ -1031,11 +1065,14 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
 
 void updateExtractionBaseCols(const binder::BoundLogicalOperator& op,
                               std::unordered_map<std::string, PropertyExtractionInfo>& info,
-                              const PlanRequirements& reqs, ProjectResetMap* project_resets) {
+                              const PlanRequirements& reqs, ProjectResetMap* project_resets,
+                              LeftJoinColMap* left_join_cols_out) {
     uint32_t col_count = 0;
     ProjectResetMap local_resets;
     ProjectResetMap& resets = project_resets ? *project_resets : local_resets;
-    updateBaseCols(op, info, reqs, col_count, resets);
+    LeftJoinColMap local_left_join_cols;
+    LeftJoinColMap& left_cols = left_join_cols_out ? *left_join_cols_out : local_left_join_cols;
+    updateBaseCols(op, info, reqs, col_count, resets, left_cols);
 }
 
 bool rewriteExpression(binder::BoundExpression& expr,
@@ -1045,14 +1082,15 @@ bool rewriteExpression(binder::BoundExpression& expr,
 
 void rewriteColumnIndicesWithResets(binder::BoundLogicalOperator& op,
                                     const std::unordered_map<std::string, PropertyExtractionInfo>& info,
-                                    const ProjectResetMap& project_resets) {
-    rewriteOp(op, info, &project_resets);
+                                    const ProjectResetMap& project_resets,
+                                    const LeftJoinColMap* left_join_cols) {
+    rewriteOp(op, info, &project_resets, left_join_cols);
 }
 
 void rewriteColumnIndices(binder::BoundLogicalOperator& op,
                           const std::unordered_map<std::string, PropertyExtractionInfo>& info) {
     ProjectResetMap empty_resets;
-    rewriteOp(op, info, &empty_resets);
+    rewriteOp(op, info, &empty_resets, nullptr);
 }
 
 void collectFromPlan(const binder::BoundLogicalOperator& op,
