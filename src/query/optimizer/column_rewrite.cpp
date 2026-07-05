@@ -425,6 +425,15 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                         reqs[v->start_var].need_whole_vertex = true;
                     if (v->has_relationship && v->end_pre_bound && !v->end_var.empty())
                         reqs[v->end_var].need_whole_vertex = true;
+                    // Property expressions in pending_props (e.g. person.bornIn
+                    // in MERGE (city:City {name: person.bornIn})) may reference
+                    // properties of input variables.
+                    for (const auto& [prop_name, expr] : v->start_pending_props)
+                        collectExprReqs(expr, reqs, /*in_schema_changing_op=*/false);
+                    for (const auto& [prop_name, expr] : v->edge_pending_props)
+                        collectExprReqs(expr, reqs, /*in_schema_changing_op=*/false);
+                    for (const auto& [prop_name, expr] : v->end_pending_props)
+                        collectExprReqs(expr, reqs, /*in_schema_changing_op=*/false);
                     collectOpReqs(v->child, reqs);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
@@ -790,7 +799,8 @@ void rewriteOp(binder::BoundLogicalOperator& op, const std::unordered_map<std::s
                 if (v) {
                     rewriteOp(v->left, info, project_resets, left_join_cols);
                     if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
-                                  std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
+                                  std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
+                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
                         // The right sub-plan of LeftJoin/BinaryJoin has its OWN
                         // column space. base_col in the shared info map includes
                         // the left column count as an offset. Expressions inside
@@ -966,8 +976,16 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
                 // SemiJoin: only left child columns appear in the output schema;
                 // the right child is a correlated subplan with its own column space.
-                if (v)
+                // Still traverse the right child so its variables get correct
+                // base_col values for the rewrite phase (expressions in the
+                // Filter/WHERE of EXISTS subqueries reference these variables).
+                if (v) {
                     updateBaseCols(v->left, info, reqs, col_count, project_resets, left_join_cols);
+                    left_join_cols[&*v] = col_count;
+                    uint32_t saved = col_count;
+                    updateBaseCols(v->right, info, reqs, col_count, project_resets, left_join_cols);
+                    col_count = saved;
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                 if (v) {
                     updateBaseCols(v->child, info, reqs, col_count, project_resets, left_join_cols);
