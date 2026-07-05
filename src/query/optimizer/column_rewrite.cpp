@@ -185,18 +185,21 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                         // (VertexValue/EdgeValue). Without the full entity, the
                         // argument arrives as VertexRef/EdgeKey and the function
                         // silently returns NULL instead of raising the expected
-                        // error. Force full materialization.
+                        // error. Force full materialization ONLY when the
+                        // argument is actually an entity type (not a scalar
+                        // like INT64 passed via WITH).
                         std::string var = reqVarIfPlan(varNameFromObject(ptr->args[0]));
                         if (!var.empty()) {
-                            bool is_edge = false;
+                            auto setReqForType = [&](binder::BoundTypeKind kind) {
+                                if (kind == binder::BoundTypeKind::EDGE)
+                                    reqs[var].need_whole_edge = true;
+                                else if (kind == binder::BoundTypeKind::VERTEX)
+                                    reqs[var].need_whole_vertex = true;
+                            };
                             if (auto* vref = std::get_if<binder::BoundVariableRef>(&ptr->args[0]))
-                                is_edge = (vref->type.kind == binder::BoundTypeKind::EDGE);
+                                setReqForType(vref->type.kind);
                             else if (auto* cref = std::get_if<binder::BoundColumnRef>(&ptr->args[0]))
-                                is_edge = (cref->type.kind == binder::BoundTypeKind::EDGE);
-                            if (is_edge)
-                                reqs[var].need_whole_edge = true;
-                            else
-                                reqs[var].need_whole_vertex = true;
+                                setReqForType(cref->type.kind);
                         }
                     }
                     for (const auto& a : ptr->args)
