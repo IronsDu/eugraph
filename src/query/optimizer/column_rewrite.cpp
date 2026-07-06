@@ -913,15 +913,6 @@ void updateBaseCols(const binder::BoundLogicalOperator& op,
             // sibling-subtree re-emission of an already-bound variable (e.g.
             // LeftJoin's right sub-plan) does not corrupt upstream Projects.
             it->second.base_col = col_count;
-        } else {
-            // Variable not yet in property-extraction info (e.g. a vertex
-            // or edge variable used only as a direct reference like
-            // RETURN foo without property access).  Insert an entry so
-            // rewriteExpr for BoundColumnRef can update its column_index
-            // to the physical position computed here.
-            PropertyExtractionInfo pei;
-            pei.base_col = col_count;
-            info[var] = std::move(pei);
         }
         auto rit = reqs.find(var);
         col_count += static_cast<uint32_t>(rit != reqs.end() ? columnCountFor(rit->second) : 1);
