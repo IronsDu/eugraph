@@ -426,7 +426,7 @@ class PhysicalOperator {
 
 **EdgeIndexScan**：由 `Filter(Expand)` 推导产生（单类型时）。边索引 value 包含邻接信息，可直接产出 src/dst/edge 列。
 
-**Expand**：对输入的每一行，调用 `scanEdges(src_id, dir, label_filter)`，每条边产生一行输出。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 统一延迟加载（见 [延迟属性物化](deferred-property-loading.md)）。
+**Expand**：对输入的每一行，调用 `scanEdges(src_id, dir, label_filter)`，每条边产生一行输出。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 统一延迟加载（见 [延迟属性物化](../demand-pull-lowering-design.md)）。
 
 **Filter**：`VectorizedEvaluator` 求值 BoundExpression 谓词，DICTIONARY 选择向量标记有效行。
 
@@ -651,5 +651,5 @@ using Schema = vector<string>;   // 列名列表
 - **LIMIT 不参与 DFS 剪枝**：DFS 先穷举当前 source vertex 的所有路径才输出，LIMIT 在后续 pipeline 截断。超级节点（100 条边）上 `[*2]` 会产生 ~10k 中间结果，此时 LIMIT 无法提前终止遍历。
 - **混合固定+varlen 链 + 命名路径**：`p = (a)-[:X]->(b)-[:Y*2..3]->(c)` 不支持（Binder 阶段拒绝）。
 - **边属性过滤仅支持字面常量**：`{prop: value}` 中 value 必须为字面量（int/string/bool/double），不支持表达式或变量引用。
-- **中间顶点属性加载**：DFS 构建 PathValue 时为所有顶点调用 `getVertexLabels()` 填充 `labels`（使 `nodes(p)` 结果能正确显示标签）。属性由下游 `PathElementPropertyReadPhysicalOp` 填充（当前全量加载，待优化为按需加载——见 [deferred-property-loading.md](deferred-property-loading.md) PathElementPropertyRead 小节）。终点 dst 的属性由 `ProjectionExtractPhysicalOp` 按需加载。
+- **中间顶点属性加载**：DFS 构建 PathValue 时为所有顶点调用 `getVertexLabels()` 填充 `labels`（使 `nodes(p)` 结果能正确显示标签）。属性由下游 `PathElementPropertyReadPhysicalOp` 填充（当前全量加载，待优化为按需加载——见 [Demand-Pull-Lowering 设计](../demand-pull-lowering-design.md) PathElementPropertyRead 小节）。终点 dst 的属性由 `ProjectionExtractPhysicalOp` 按需加载。
 - **多 MATCH + VarLenExpand 未实现**：当前不支持多条 MATCH 子句中包含变长邻接的组合（属于多 MATCH + JOIN 的通用待实现项）。

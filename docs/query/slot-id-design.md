@@ -375,42 +375,25 @@ RETURN count(*)
 - [x] `extractChildResult` / `finalizePlanResult` 传播 layout
 - [x] `makeSlotLayout()` 辅助函数
 
-### Phase 3：Binder 分配 SlotId（待实施）
-- [ ] Binder 中 `SlotAllocator` 全局分配
-- [ ] `makeColumnInfo` / `nextColumnIndex` 改为分配 SlotId + column_index
-- [ ] 需求收集阶段为每个属性追加列分配 SlotId
-- [ ] 为所有物理 Chunk 列（包括匿名中间列）分配内部 SlotId
+### Phase 3：Binder 分配 SlotId（✅ 已完成，实现路径不同）
+- [x] Binder 中 `SlotAllocator` 全局分配（`BindContext::slot_allocator`）
+- [x] `makeColumnInfo` / `allocateNamedSlot` 分配 SlotId
+- [x] Planner 通过 `AllocateSlotsInOp` + 预填充 `all_symbols` 为所有变量补充 SlotId
+- [x] 内部 SlotId 使用 `kInternalSlotFlag` 分区（`buildExtractionInfo` 分配 `nextInternal()`）
 
-### Phase 4：物理算子 init() 集成（待实施）
+### Phase 4：物理算子 compileExpressions 集成（✅ 已完成）
+- [x] 所有物理算子实现 `compileExpressions(child_layout)`
+- [x] `compileOperatorTree` 后序（bottom-up）遍历
+- [x] `ExpressionCompiler` 解析 `BoundColumnRef.slot_id → column_index`
 
-**关键：init() 必须是后序遍历（从叶到根）。**
+### Phase 5：column_rewrite 重构为 DPL 管线（✅ 已完成，方向不同）
 
-物理 Chunk 的列从叶节点（Scan）向根节点（RETURN）逐层追加——上游加了列，下游才能看到。父算子编译表达式时依赖子算子最终推导完毕的 `output_slot_layout`。
+原计划是"移除 column_rewrite"。实际选择了更彻底的方案：将 `column_rewrite.cpp` 重构为六阶段 Demand-Pull-Lowering 管线（参见 [demand-pull-lowering-design.md](demand-pull-lowering-design.md)），包含分配、需求收集、PEPlan 构建、别名透传、表达式 rewrite。旧 `updateExtractionBaseCols` / `project_resets` / `left_join_cols` 等机制已移除。
 
-```
-遍历顺序：
-  LabelScan.init()          ← 叶节点先 init，确定 output layout
-  ProjectionExtract.init()   ← 能看到 LabelScan 的 output layout
-  Filter.init()              ← 能看到 ProjectionExtract 的 output layout
-  ...
-  RETURN.init()             ← 根节点最后 init，能看到完整 layout
-```
-
-具体任务：
-- [ ] 每个物理算子的构造函数/init 中调用 ExpressionCompiler
-- [ ] FilterPhysicalOp：编译 predicate
-- [ ] ProjectPhysicalOp：编译每个 item，调用 `TupleSlotLayout::project()` 构建输出 Layout
-- [ ] SortPhysicalOp：编译 sort keys
-
-### Phase 5：移除 column_rewrite（待实施）
-- [ ] 从 planBound/planChosen 中移除 `updateExtractionBaseCols`、`rewriteColumnIndicesWithResets`
-- [ ] 移除 `project_resets`、`left_join_cols` 相关逻辑
-- [ ] 评估是否可以完全删除 `column_rewrite.cpp`
-
-### Phase 6：验证与清理（待实施）
-- [ ] 410 单元测试通过
-- [ ] TCK 全部回归通过（Match7、With7 修复）
-- [ ] 清理 `column_index` 旧字段（可选，或保留作为编译后的缓存）
+### Phase 6：验证与清理（✅ 已完成）
+- [x] 437 单元测试通过
+- [x] With7 / Match7 TCK 回归修复
+- [x] `column_index` 保留为编译后缓存（ExpressionCompiler 写入）
 
 ## 八、与旧架构的对照表
 
