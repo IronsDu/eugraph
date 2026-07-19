@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
 #include "query/parser/ast.hpp"
+#include "query/physical_plan/expression_compiler.hpp"
 #include "query/physical_plan/operator/set_physical_op.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
@@ -64,6 +65,28 @@ public:
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
     std::vector<const PhysicalOperator*> children() const override;
+
+    void compileExpressions(const TupleSlotLayout& input_layout) override {
+        ExpressionCompiler compiler(input_layout);
+        for (auto& [pid, expr] : start_prop_filters_)
+            compiler.compile(expr);
+        for (auto& [name, expr] : start_pending_props_)
+            compiler.compile(expr);
+        for (auto& [pid, expr] : edge_prop_filters_)
+            compiler.compile(expr);
+        for (auto& [name, expr] : edge_pending_props_)
+            compiler.compile(expr);
+        for (auto& [pid, expr] : end_prop_filters_)
+            compiler.compile(expr);
+        for (auto& [name, expr] : end_pending_props_)
+            compiler.compile(expr);
+        for (auto& item : on_create_items_)
+            if (item.value)
+                compiler.compile(*item.value);
+        for (auto& item : on_match_items_)
+            if (item.value)
+                compiler.compile(*item.value);
+    }
 
 private:
     // Pattern data
@@ -127,6 +150,13 @@ private:
                      const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
                      const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator);
 
+    /// Scan for ALL edges between src and dst that match the property filters.
+    /// Returns a vector of (edge_id, edge_label_id) — may be empty.
+    folly::coro::Task<std::vector<std::tuple<EdgeId, EdgeLabelId>>>
+    findAllMatchingEdges(VertexId src_vid, VertexId dst_vid,
+                         const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
+                         const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator);
+
     folly::coro::Task<std::tuple<EdgeId, EdgeLabelId>>
     createEdge(VertexId src_vid, VertexId dst_vid,
                const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
@@ -139,6 +169,18 @@ private:
 
     folly::coro::Task<void> executeSetPropertyItem(const SetPhysicalOp::BoundSetItem& item, const Value& val,
                                                    VertexId start_vid, VertexId end_vid, EdgeId edge_id);
+    /// Resolve (lid, pid) for a vertex property, dynamically registering it on a
+    /// concrete label when not already declared. Extracted from executeSetPropertyItem
+    /// to keep the coroutine frame size manageable and avoid a GCC 13 ICE.
+    folly::coro::Task<void> resolveAndPutVertexProperty(VertexId target_vid, const SetPhysicalOp::BoundSetItem& item,
+                                                        const Value& val, const std::vector<LabelId>& search_labels);
+    /// Dynamically register `prop_name` on `fallback_lid` via the meta store
+    /// and write the resolved (lid, pid) into out_lid / out_pid. Returns false
+    /// if registration was not possible (caller should fall back to __anon__).
+    /// Uses output parameters instead of returning a pair to avoid a GCC 13
+    /// coroutine ICE triggered by Task<std::pair<...>>.
+    folly::coro::Task<bool> dynamicallyRegisterVertexProperty(LabelId fallback_lid, const std::string& prop_name,
+                                                              LabelId& out_lid, uint16_t& out_pid);
     folly::coro::Task<void> executeSetLabelsItem(const SetPhysicalOp::BoundSetItem& item, VertexId start_vid,
                                                  VertexId end_vid);
     folly::coro::Task<void> executeSetPropertiesItem(const SetPhysicalOp::BoundSetItem& item, const Value& val,

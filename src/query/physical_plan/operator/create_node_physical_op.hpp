@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
+#include "query/physical_plan/expression_compiler.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
@@ -39,6 +40,15 @@ public:
         if (child_)
             return {child_.get()};
         return {};
+    }
+
+    void compileExpressions(const TupleSlotLayout& input_layout) override {
+        ExpressionCompiler compiler(input_layout);
+        for (auto& [lid, exprs] : label_prop_exprs_)
+            for (auto& [pid, expr] : exprs)
+                compiler.compile(expr);
+        for (auto& [name, expr] : pending_props_)
+            compiler.compile(expr);
     }
 
 private:

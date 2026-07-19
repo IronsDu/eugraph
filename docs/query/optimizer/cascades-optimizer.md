@@ -479,10 +479,11 @@ CBO 扩展需要增加 `E_GROUP` Task（探索子 Group 的所有等价表达式
 - `task.cpp` — `OInputsTask::perform` 改为物化感知：(1) 算 input required prop = `expr.required_input_mat[i]` ∪ `ctx.materializations`；(2) 先查 `getSatisfyingWinner(inputProp)`，若 input.optimized 仍无则调 `insertEnricherEnforcer` 试图插入 enforcer 包装 any-winner；(3) 注册 winner 前校验 `expr.output_mat` 满足 `ctx.materializations`（拓扑形叶子在要求物化的 context 下不再误注册 winner，由 enforcer 路径补救）；`OGroupTask::perform` 新增 case 4 分支：已 optimized 的 group 收到新 context 时对全部 physical_exprs 推 O_INPUTS（无 physical_exprs 时回退 O_EXPR）
 
 **当前限制（2026-06）**：
-- PropertyExtract 算子（Vertex/Edge/Path）已实现但未接入执行管线。`planChosen` 中通过 `hasPropertyExtract(chosen)` 判断是否激活 standalone 模式；当前 CBO 不产生 PropertyExtract 标签，因此仍走旧 wrap 管线。`PhysicalOpTag` 新增了 `VertexPropertyExtract`/`EdgePropertyExtract`/`PathPropertyExtract`。
-- Enricher（VertexEnrich/EdgeEnrich/PathEnrich）physical operator 尚未实现——当前由 RBO wrap 管线（wrapVertexLabelRead / wrapVertexPropertyRead / wrapEdgePropertyRead / wrapPathElementPropertyRead）原地升级拓扑类型。
-- `need_entire` 标志已添加到 MaterializationReq 中，用于 RETURN n/e/p 全对象物化判断。`insertEnricherEnforcer` 根据 `need_entire` 决定插入 PropertyExtract 还是 Enricher。
-- column_rewrite pass 已实现（`column_rewrite.cpp/hpp`），用于将 BoundPropertyRef 替换为 BoundColumnRef，配合 standalone PropertyExtractPhysicalOp 的列追加模式。
+- CBO standalone 模式（基于 `PhysicalOpTag::VertexPropertyExtract`/`EdgePropertyExtract`/`PathPropertyExtract` + `insertEnricherEnforcer`）已搭建但**未启用**——`planChosen` 中通过 `hasPropertyExtract(chosen)` 判断，当前 CBO 不产生这些标签。
+- 实际执行管线走 **RBO 路径**：`PhysicalPlanner::planBound` 中 `dispatchProjectionExtract` 从 `BoundLogicalPlan` 直接构建统一的 `ProjectionExtractPhysicalOp`（融合点/边属性抽取 + Project 语义，7 种 ColumnSpec）。旧的 `VertexPropertyExtractPhysicalOp` / `EdgePropertyExtractPhysicalOp` / `EdgePropertyReadPhysicalOp` 及对应 dispatch 函数已删除。
+- `PathElementPropertyReadPhysicalOp` 保留，仅用于 PathBuild 路径（PathTopology → PathValue 全量加载，待后续按需优化）。
+- `need_entire` 标志已添加到 MaterializationReq 中，用于 RETURN n/e/p 全对象物化判断。`insertEnricherEnforcer` 根据该标志决定插入哪种 Enricher——但此路径当前无激活，物化决策由 `collectPlanRequirements` 在 RBO 阶段完成。
+- column_rewrite pass 已实现（`column_rewrite.cpp/hpp`），将 BoundPropertyRef 重写为 BoundColumnRef，**并处理 BoundColumnRef 直通引用的列偏移**（ProjectionExtract 追加属位列后，源列下标发生偏移，需按 `PropertyExtractionInfo::base_col` 校正）。
 - `OInputsTask` 中 ASAN use-after-free 已修复（`localReqdProp` 引用在 `memo.addContext()` 后悬空，改为拷贝）。
 - `OExprTask` 中空 if-body 编译警告已修复。
 - 路径函数 `nodes()`/`relationships()`/`length()` 已支持 PathTopology 类型。

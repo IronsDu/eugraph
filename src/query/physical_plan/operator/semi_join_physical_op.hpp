@@ -38,6 +38,11 @@ public:
         return {left_.get(), right_.get()};
     }
 
+    void deriveOutputLayout(const TupleSlotLayout&) override {
+        // SemiJoin output = left columns only
+        slot_layout_ = left_->slotLayout();
+    }
+
 private:
     std::unique_ptr<PhysicalOperator> left_;
     std::unique_ptr<PhysicalOperator> right_;

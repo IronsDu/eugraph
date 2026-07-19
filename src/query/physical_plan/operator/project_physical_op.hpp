@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/physical_plan/expression_compiler.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 
@@ -35,6 +36,22 @@ public:
     }
     const std::vector<ProjectItem>& items() const {
         return items_;
+    }
+    std::vector<ProjectItem>& items() {
+        return items_;
+    }
+
+    void compileExpressions(const TupleSlotLayout& input_layout) override {
+        ExpressionCompiler compiler(input_layout);
+        for (auto& item : items_)
+            compiler.compile(item.expr);
+    }
+    void deriveOutputLayout(const TupleSlotLayout& input_layout) override {
+        // For WITH/RETURN: output slots come from the projected expressions.
+        // Each item contributes its output column's slot.
+        // For now, use the input layout unmodified (passthrough).
+        // TODO: build output layout from items' BoundColumnRef slot_ids.
+        slot_layout_ = input_layout;
     }
 
 private:

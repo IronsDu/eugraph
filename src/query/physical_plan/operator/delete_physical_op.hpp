@@ -23,6 +23,12 @@ public:
     struct DeleteTarget {
         TargetKind kind;
         std::string var_name;
+        /// Physical column holding the target's constructed VertexValue /
+        /// EdgeValue, resolved at plan time from the child's slot layout +
+        /// PEPlan (append-only ProjectionExtract puts the object in a separate
+        /// column from the source VertexRef/EdgeKey). -1 → fall back to
+        /// name-based lookup.
+        int object_col = -1;
     };
 
     DeletePhysicalOp(std::vector<DeleteTarget> targets, bool detach, Schema input_schema, IAsyncGraphDataStore& store,

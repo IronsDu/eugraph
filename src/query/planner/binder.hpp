@@ -76,6 +76,11 @@ private:
     const std::unordered_map<std::string, Value>& params_;
     BindContext ctx_;
     std::vector<std::string> errors_;
+
+public:
+    const BindContext& ctx() const {
+        return ctx_;
+    }
     uint32_t anon_id_ = 0;
 
     void error(const std::string& msg) {
@@ -160,6 +165,25 @@ private:
     std::optional<int64_t> bindSkipLimit(const cypher::Expression& expr, const char* clause_name);
     uint32_t nextColumnIndex() {
         return ctx_.next_column_index++;
+    }
+    /// Allocate the next globally-unique SlotId (survives sub-scope resets).
+    SlotId nextSlotId() {
+        return ctx_.slot_allocator.next();
+    }
+    /// Allocate a fresh SlotId for `name` and record it in the permanent
+    /// all_symbols map. Use this whenever a slot is bound to a user-visible
+    /// name so the planner can recover the slot even after a later WITH
+    /// scope reset drops the name from ctx_.symbols. Callers that reuse an
+    /// existing slot (e.g. carry-forward at scope reset) do not need this —
+    /// the original allocation already recorded it.
+    SlotId allocateNamedSlot(const std::string& name) {
+        SlotId sid = nextSlotId();
+        ctx_.all_symbols[name] = sid;
+        return sid;
+    }
+    /// Allocate both column_index and slot_id atomically.
+    std::pair<uint32_t, SlotId> nextColumnSlot() {
+        return {ctx_.next_column_index++, ctx_.slot_allocator.next()};
     }
     uint32_t nextAnonId() {
         return anon_id_++;

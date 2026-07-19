@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/parser/ast.hpp"
+#include "query/physical_plan/expression_compiler.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
@@ -31,6 +32,11 @@ public:
         std::optional<uint16_t> resolved_prop_id;
         bool strong_mode = false;
         bool is_add_assign = false;
+        /// Physical column holding the target's constructed VertexValue,
+        /// resolved at plan time (append-only ProjectionExtract keeps the
+        /// object in a column separate from the source VertexRef). -1 → fall
+        /// back to name-based lookup.
+        int object_col = -1;
     };
 
     SetPhysicalOp(std::vector<BoundSetItem> items, Schema input_schema, IAsyncGraphDataStore& store,
@@ -50,6 +56,14 @@ public:
     }
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
+    }
+
+    void compileExpressions(const TupleSlotLayout& input_layout) override {
+        ExpressionCompiler compiler(input_layout);
+        for (auto& item : items_) {
+            if (item.value)
+                compiler.compile(*item.value);
+        }
     }
 
 private:

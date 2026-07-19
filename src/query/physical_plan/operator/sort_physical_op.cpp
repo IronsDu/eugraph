@@ -65,7 +65,7 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
 
             bool less = false, greater = false;
             std::visit(
-                [&less, &greater](const auto& la, const auto& lb) {
+                [&less, &greater, &va, &vb](const auto& la, const auto& lb) {
                     using A = std::decay_t<decltype(la)>;
                     using B = std::decay_t<decltype(lb)>;
                     // NULL sorts after all non-NULL values (ascending).
@@ -98,6 +98,12 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
                             less = temporalLess(la, lb);
                             greater = temporalLess(lb, la);
                         }
+                    } else if constexpr (std::is_same_v<A, bool> && std::is_same_v<B, bool>) {
+                        less = !la && lb;
+                        greater = la && !lb;
+                    } else if constexpr (!std::is_same_v<A, B>) {
+                        less = va.index() < vb.index();
+                        greater = va.index() > vb.index();
                     }
                 },
                 va, vb);

@@ -353,6 +353,9 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 varlen->src_column_index = start_col;
                 varlen->dst_variable = dst_var;
                 varlen->dst_column_index = dst_col;
+                if (auto* dinfo = ctx_.lookup(dst_var))
+                    varlen->dst_slot_id = dinfo->slot_id;
+                varlen->dst_label_ids = dst_labels;
                 varlen->edge_label_ids = std::move(edge_label_ids);
                 varlen->direction = rel_pat.direction;
                 varlen->min_hops = min_hops;
@@ -387,6 +390,8 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     }
                     varlen->edge_variable = *edge_var;
                     varlen->edge_column_index = nextColumnIndex();
+                    if (auto* einfo = ctx_.lookup(*edge_var))
+                        varlen->edge_slot_id = einfo->slot_id;
                     ctx_.symbols[varlen->edge_variable] =
                         makeColumnInfo(varlen->edge_variable, BoundType::List(BoundType::Edge()));
                 }
@@ -450,13 +455,20 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             auto expand = std::make_unique<BoundExpandOp>();
             expand->src_variable = start_var;
             expand->src_column_index = start_col;
+            if (auto* sinfo = ctx_.lookup(start_var))
+                expand->src_slot_id = sinfo->slot_id;
             expand->edge_variable = edge_var;
             expand->edge_column_index = edge_col;
+            if (auto* einfo = ctx_.lookup(edge_var))
+                expand->edge_slot_id = einfo->slot_id;
 
             path_element_vars.push_back(edge_var);
             path_element_vars.push_back(dst_var);
             expand->dst_variable = dst_var;
             expand->dst_column_index = dst_col;
+            if (auto* dinfo = ctx_.lookup(dst_var))
+                expand->dst_slot_id = dinfo->slot_id;
+            expand->dst_label_ids = dst_labels;
             expand->edge_label_ids = edge_label_ids;
             expand->direction = rel_pat.direction;
             expand->child = std::move(*current);

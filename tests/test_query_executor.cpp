@@ -68,11 +68,24 @@ protected:
         ASSERT_NE(KNOWS_LABEL, INVALID_EDGE_LABEL_ID);
         ASSERT_NE(LIVES_IN_LABEL, INVALID_EDGE_LABEL_ID);
 
+        // Register properties on labels so catalog/meta can resolve them at bind time.
+        // Without this, BoundDynamicPropertyRef is used as fallback and runtime
+        // evalDynamicPropertyRef fails when LabelDef.properties is empty.
+        blockingWait(async_meta_->addVertexLabelProperties("Person", {{"name", PropertyType::STRING}}));
+        blockingWait(async_meta_->addVertexLabelProperties("City", {{"name", PropertyType::STRING}}));
+
         // Create physical tables in data store
         blockingWait(async_data_->createLabel(PERSON_LABEL));
         blockingWait(async_data_->createLabel(CITY_LABEL));
         blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
         blockingWait(async_data_->createEdgeLabel(LIVES_IN_LABEL));
+
+        // Reserve vertex/edge ID space for helpers that insert with explicit IDs
+        // (insertTestVertices uses vid 1..5, insertMultiHopEdges adds vid 6; edges 1..5).
+        // Without this, CREATE/MERGE would allocate vid=1 from next_vertex_id and
+        // insertVertex silently merges a second label onto the existing vertex 1.
+        blockingWait(async_meta_->nextVertexIdRange(100));
+        blockingWait(async_meta_->nextEdgeIdRange(100));
 
         executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
     }
@@ -149,14 +162,18 @@ ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
     result.columns = std::move(ctx->columns);
     auto gen = std::move(ctx->gen);
     blockingWait(co_invoke([&]() -> Task<void> {
-        while (auto chunk = co_await gen.next()) {
-            auto rows = chunk->toRows();
-            for (auto& row : rows) {
-                result.rows.push_back(std::move(row));
+        try {
+            while (auto chunk = co_await gen.next()) {
+                auto rows = chunk->toRows();
+                for (auto& row : rows) {
+                    result.rows.push_back(std::move(row));
+                }
             }
-        }
-        if (ctx->should_commit) {
-            co_await ctx->store.commitTran(ctx->txn);
+            if (ctx->should_commit) {
+                co_await ctx->store.commitTran(ctx->txn);
+            }
+        } catch (const std::exception& e) {
+            result.error = e.what();
         }
     }));
     return result;
@@ -2266,11 +2283,16 @@ TEST_F(QueryExecutorTest, PropertyNamedIdReturnsStoredValue) {
     auto idResult = execSync(executor, "MATCH (n:Item) RETURN id(n) AS internalId ORDER BY internalId");
     ASSERT_TRUE(idResult.error.empty()) << idResult.error;
     ASSERT_EQ(idResult.rows.size(), 3);
-    // Internal IDs should be small positive integers (not the stored 100/200/300)
+    // Internal IDs must NOT equal the stored property values 100/200/300 —
+    // that's the whole point of separating pseudo-property `id` from real prop.
+    // (SetUp reserves a 100-vertex buffer so CREATE allocates 101+; the check
+    // below is label-agnostic and survives any future reserve policy change.)
     for (size_t i = 0; i < idResult.rows.size(); ++i) {
         auto internalId = std::get<int64_t>(idResult.rows[i][0]);
         EXPECT_GT(internalId, 0);
-        EXPECT_LT(internalId, 100); // internal IDs are small, not the stored property values
+        EXPECT_NE(internalId, 100);
+        EXPECT_NE(internalId, 200);
+        EXPECT_NE(internalId, 300);
     }
 }
 
@@ -2770,6 +2792,67 @@ TEST_F(QueryExecutorWithTest, WithAsFirstClauseThenMatch) {
     ASSERT_EQ(result.rows.size(), 3u);
 }
 
+TEST_F(QueryExecutorWithTest, MultiWithAggregateThenFilterThenReturn) {
+    insertPersonWithEdges();
+
+    // Adapted from TCK With7 [2] Multiple WITHs using a predicate and aggregation:
+    //   MATCH (david {name:'David'})--(other)-->()
+    //   WITH other, count(*) AS foaf
+    //   WHERE foaf > 1
+    //   WITH other
+    //   WHERE other.name <> 'NotOther'
+    //   RETURN count(*)
+    // Data: Alice->Bob, Alice->Carol, Bob->Carol.
+    // First MATCH (a {name:'Alice'})--(o)-->(x): o=Bob(x=Carol), o=Carol(no x) — 1 row only.
+    auto result = execSync(*executor_, "MATCH (a {name: 'Alice'})--(other)-->() "
+                                       "WITH other, count(*) AS foaf "
+                                       "WHERE foaf > 0 "
+                                       "WITH other "
+                                       "WHERE other.name <> 'Bob' "
+                                       "RETURN count(*)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    // After WHERE other.name <> 'Bob' we keep only Carol if foaf > 0.
+    // Carol has foaf = 0 (no further out-edge) so she is filtered at WHERE foaf > 0.
+    // Therefore count(*) = 0.
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
+}
+
+TEST_F(QueryExecutorTest, PathReturnInlinePropPredicate) {
+    // TCK Match6 [2] Return a simple path:
+    //   MATCH p = (a {name: 'A'})-->(b) RETURN p
+    // The inline predicate on `a` (no label) is what was breaking in TCK.
+    auto setup = execSync(*executor_, "CREATE (a:Person {name: 'A'})-[:KNOWS]->(b:Person {name: 'B'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH p = (a {name: 'A'})-->(b) RETURN p");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.columns.size(), 1u);
+    EXPECT_EQ(result.columns[0], "p");
+}
+
+TEST_F(QueryExecutorTest, UnwindCreateReturnSkipLimit) {
+    // TCK Create6 [3] Skipping and limiting to a few results after creating nodes:
+    //   UNWIND [42, 42, 42, 42, 42] AS x
+    //   CREATE (n:N {num: x})
+    //   RETURN n.num AS num
+    //   SKIP 2 LIMIT 2
+
+    // Simpler reproduction: just UNWIND + CREATE + RETURN (no SKIP/LIMIT)
+    // Use predefined label/property (Person.name) to avoid auto-create complications.
+    auto r1 = execSync(*executor_, "UNWIND ['a', 'b', 'c'] AS x "
+                                   "CREATE (n:Person {name: x}) "
+                                   "RETURN n.name AS name");
+    std::cout << "[R1] error='" << r1.error << "' rows=" << r1.rows.size() << "\n";
+    for (size_t i = 0; i < r1.rows.size() && i < 3; ++i) {
+        std::cout << "[R1] row " << i << ": variant idx=" << r1.rows[i][0].index() << "\n";
+    }
+
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_EQ(r1.rows.size(), 3u);
+}
+
 TEST_F(QueryExecutorTest, VarLenExpandExact2Hops) {
     // KNOWS chain: 1->2->3->4, LIVES_IN: 1->5, 2->6
     insertMultiHopEdges();
@@ -2798,6 +2881,266 @@ TEST_F(QueryExecutorTest, VarLenExpandRange1To3) {
     EXPECT_EQ(result.rows.size(), 6u);
 }
 
+TEST_F(QueryExecutorTest, InlineFilterOnDynamicAnonProperty) {
+    auto setup = execSync(*executor_, "CREATE (:Person {tag: 'xyz'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (n:Person {tag: 'xyz'}) RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, WithWhereAfterExpandAnonPropFilter) {
+    // WithWhere5 pattern: inline anon-prop filter, Expand, WITH, WHERE
+    auto setup = execSync(*executor_, "CREATE (:Person {tag: 'xyz'})-[:KNOWS]->(:Person {tag: 'abc'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    // Step 1: verify the basic MATCH works
+    auto r1 = execSync(*executor_, "MATCH (a:Person {tag: 'xyz'})-->(b) RETURN b");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_GT(r1.rows.size(), 0u) << "Step 1: basic MATCH should find rows";
+
+    // Step 2: verify WITH + WHERE on anon-prop works
+    auto r2 = execSync(*executor_, "MATCH (a:Person {tag: 'xyz'})-->(b) "
+                                   "WITH b WHERE b.tag IS NOT NULL RETURN b");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_GT(r2.rows.size(), 0u) << "Step 2: WITH+WHERE should find rows";
+}
+
+TEST_F(QueryExecutorTest, MergeOnCreateOnMatchSetDynamicEdgeProp) {
+    // Reproduces Merge8 scenario [1] with TCK semantics: TYPE edge label is
+    // created WITHOUT pre-registered 'name' property. ON CREATE/MATCH SET
+    // r.name must dynamically register the property so it persists for
+    // subsequent MATCH ... RETURN properties(r) reads.
+    auto type_id = blockingWait(async_meta_->createEdgeLabel("TYPE", {}));
+    ASSERT_NE(type_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(type_id));
+
+    auto a_id = blockingWait(async_meta_->createLabel("A", {}));
+    ASSERT_NE(a_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(a_id));
+    auto b_id = blockingWait(async_meta_->createLabel("B", {}));
+    ASSERT_NE(b_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(b_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(
+        *executor_, "CREATE (a:A {id: 1}), (b:B {id: 2}) CREATE (a)-[:TYPE]->(b) CREATE (:A {id: 3}), (:B {id: 4})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (a:A), (b:B) "
+                                       "MERGE (a)-[r:TYPE]->(b) "
+                                       "  ON CREATE SET r.name = 'Lola' "
+                                       "  ON MATCH SET r.name = 'RUN' "
+                                       "RETURN count(r)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 4);
+
+    // r.name: 3 ON CREATE → 'Lola', 1 ON MATCH → 'RUN'.
+    auto name_check = execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN r.name ORDER BY r.name");
+    ASSERT_TRUE(name_check.error.empty()) << name_check.error;
+    ASSERT_EQ(name_check.rows.size(), 4u);
+    std::vector<std::string> names;
+    for (const auto& r : name_check.rows) {
+        ASSERT_TRUE(std::holds_alternative<std::string>(r[0])) << "variant: " << r[0].index();
+        names.push_back(std::get<std::string>(r[0]));
+    }
+    EXPECT_EQ(names, (std::vector<std::string>{"Lola", "Lola", "Lola", "RUN"}));
+
+    // properties(r) map (TCK side-effects path).
+    auto pcheck = execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN id(r), properties(r)");
+    ASSERT_TRUE(pcheck.error.empty()) << pcheck.error;
+    ASSERT_EQ(pcheck.rows.size(), 4u);
+    int total_props = 0;
+    for (const auto& row : pcheck.rows) {
+        ASSERT_TRUE(std::holds_alternative<MapValue>(row[1]));
+        total_props += std::get<MapValue>(row[1]).entries.size();
+    }
+    EXPECT_EQ(total_props, 4);
+}
+
+TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicVertexProp) {
+    // Reproduces Merge6 scenario [1]: ON CREATE SET on end node with label
+    // created without pre-registered 'created' property. The SET must
+    // dynamically register the property with the vertex's concrete label so
+    // that subsequent properties(b) reads find it.
+    auto a_id = blockingWait(async_meta_->createLabel("A"));
+    ASSERT_NE(a_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(a_id));
+    auto b_id = blockingWait(async_meta_->createLabel("B"));
+    ASSERT_NE(b_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(b_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (:A), (:B)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (a:A), (b:B) MERGE (a)-[:KNOWS]->(b) ON CREATE SET b.created = 1");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    auto pcheck = execSync(*executor_, "MATCH (b:B) RETURN properties(b)");
+    ASSERT_TRUE(pcheck.error.empty()) << pcheck.error;
+    ASSERT_EQ(pcheck.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<MapValue>(pcheck.rows[0][0]));
+    const auto& mv = std::get<MapValue>(pcheck.rows[0][0]);
+    EXPECT_EQ(mv.entries.size(), 1u);
+    bool found_created = false;
+    for (const auto& [k, v] : mv.entries) {
+        if (k == "created") {
+            ASSERT_TRUE(std::holds_alternative<int64_t>(v.value));
+            EXPECT_EQ(std::get<int64_t>(v.value), 1);
+            found_created = true;
+        }
+    }
+    EXPECT_TRUE(found_created);
+}
+
+TEST_F(QueryExecutorTest, MergeOnCreateSetEdgeFromNodeProperties) {
+    // Reproduces Merge6 scenario [6]: `ON CREATE SET r = a` should copy all
+    // properties from vertex a to edge r. Source value arrives as VertexValue,
+    // not MapValue — executeSetPropertiesItem must convert.
+    auto type_id = blockingWait(async_meta_->createEdgeLabel("TYPE", {}));
+    ASSERT_NE(type_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(type_id));
+
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto a_id = blockingWait(async_meta_->createLabel("A", {name_pd}));
+    ASSERT_NE(a_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(a_id));
+    auto b_id = blockingWait(async_meta_->createLabel("B", {name_pd}));
+    ASSERT_NE(b_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(b_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (:A {name: 'A'}), (:B {name: 'B'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto merge = execSync(*executor_, "MATCH (a {name: 'A'}), (b {name: 'B'}) "
+                                      "MERGE (a)-[r:TYPE]->(b) ON CREATE SET r = a");
+    ASSERT_TRUE(merge.error.empty()) << merge.error;
+
+    auto keys_check = execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN keys(r)");
+    ASSERT_TRUE(keys_check.error.empty()) << keys_check.error;
+    ASSERT_EQ(keys_check.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<ListValue>(keys_check.rows[0][0]))
+        << "variant index: " << keys_check.rows[0][0].index();
+    const auto& keys = std::get<ListValue>(keys_check.rows[0][0]);
+    EXPECT_EQ(keys.elements.size(), 1u);
+    if (!keys.elements.empty()) {
+        EXPECT_TRUE(std::holds_alternative<std::string>(keys.elements[0].value));
+        if (std::holds_alternative<std::string>(keys.elements[0].value)) {
+            EXPECT_EQ(std::get<std::string>(keys.elements[0].value), "name");
+        }
+    }
+
+    auto prop_check = execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN r.name");
+    ASSERT_TRUE(prop_check.error.empty()) << prop_check.error;
+    ASSERT_EQ(prop_check.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(prop_check.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(prop_check.rows[0][0]), "A");
+}
+
+TEST_F(QueryExecutorTest, MergeUndirectedCreate) {
+    // Reproduces Merge5 [11]: UNDIRECTED MERGE should create edge startNode=a endNode=b
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (a {id: 2}), (b {id: 1}) RETURN a, b");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    // First check that MERGE returns r as EdgeValue
+    auto merge = execSync(*executor_, "MATCH (a {id: 2}), (b {id: 1}) "
+                                      "MERGE (a)-[r:KNOWS]-(b) "
+                                      "RETURN r");
+    ASSERT_TRUE(merge.error.empty()) << merge.error;
+    ASSERT_EQ(merge.rows.size(), 1u) << merge.error;
+    EXPECT_TRUE(std::holds_alternative<EdgeValue>(merge.rows[0][0]))
+        << "r variant=" << merge.rows[0][0].index()
+        << " is_vertex=" << std::holds_alternative<VertexValue>(merge.rows[0][0]);
+
+    // Then check startNode(r).id works
+    auto sn = execSync(*executor_, "MATCH (a {id: 2}), (b {id: 1}) "
+                                   "MERGE (a)-[r:KNOWS]-(b) "
+                                   "RETURN startNode(r).id AS s, endNode(r).id AS e");
+    ASSERT_TRUE(sn.error.empty()) << sn.error;
+    ASSERT_EQ(sn.rows.size(), 1u) << "rows=" << sn.rows.size() << " err=" << sn.error;
+    ASSERT_TRUE(std::holds_alternative<int64_t>(sn.rows[0][0]));
+    ASSERT_TRUE(std::holds_alternative<int64_t>(sn.rows[0][1]));
+    EXPECT_EQ(std::get<int64_t>(sn.rows[0][0]), 2);
+    EXPECT_EQ(std::get<int64_t>(sn.rows[0][1]), 1);
+}
+
+TEST_F(QueryExecutorTest, MergeUndirectedMatch) {
+    // Reproduces Merge5 [12]: pre-existing edge a(1)→b(2). Query MATCH a(2),b(1) MERGE (a)-[r:KNOWS]-(b) should match.
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (a {id: 1}), (b {id: 2}) "
+                                      "CREATE (a)-[:KNOWS]->(b)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto merge = execSync(*executor_, "MATCH (a {id: 2}), (b {id: 1}) "
+                                      "MERGE (a)-[r:KNOWS]-(b) "
+                                      "RETURN r");
+    ASSERT_TRUE(merge.error.empty()) << merge.error;
+    ASSERT_EQ(merge.rows.size(), 1u) << merge.error;
+}
+
+TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicEdgePropKeys) {
+    // Reproduces Merge6 scenario [3]: ON CREATE SET r.name on a dynamically
+    // created edge label. The control query uses keys(r) inside a list
+    // comprehension. column_rewrite must recurse into the comprehension's
+    // list_expr / projection so the edge variable gets fully materialised
+    // (otherwise keys(r) returns empty inside the comprehension).
+    auto type_id = blockingWait(async_meta_->createEdgeLabel("TYPE", {}));
+    ASSERT_NE(type_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(type_id));
+
+    auto a_id = blockingWait(async_meta_->createLabel("A", {}));
+    ASSERT_NE(a_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(a_id));
+    auto b_id = blockingWait(async_meta_->createLabel("B", {}));
+    ASSERT_NE(b_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(b_id));
+
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (:A {name: 'A'}), (:B {name: 'B'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto merge = execSync(*executor_, "MATCH (a {name: 'A'}), (b {name: 'B'}) "
+                                      "MERGE (a)-[r:TYPE]->(b) ON CREATE SET r.name = 'foo'");
+    ASSERT_TRUE(merge.error.empty()) << merge.error;
+
+    // Full TCK control query: list comprehension over keys(r) with dynamic
+    // property access r[key]. Both keys(r) and r[key] must observe the
+    // materialised edge.
+    auto control =
+        execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN [key IN keys(r) | key + '->' + r[key]] AS keyValue");
+    ASSERT_TRUE(control.error.empty()) << control.error;
+    ASSERT_EQ(control.rows.size(), 1u) << "rows: " << control.rows.size();
+    ASSERT_TRUE(std::holds_alternative<ListValue>(control.rows[0][0]))
+        << "variant index: " << control.rows[0][0].index();
+    const auto& kv = std::get<ListValue>(control.rows[0][0]);
+    EXPECT_EQ(kv.elements.size(), 1u);
+    if (!kv.elements.empty()) {
+        const auto& v = kv.elements[0].value;
+        ASSERT_TRUE(std::holds_alternative<std::string>(v)) << "variant index: " << v.index();
+        EXPECT_EQ(std::get<std::string>(v), "name->foo");
+    }
+}
+
 TEST_F(QueryExecutorTest, VarLenExpandExact1Hop) {
     insertMultiHopEdges();
 
@@ -2805,6 +3148,108 @@ TEST_F(QueryExecutorTest, VarLenExpandExact1Hop) {
     auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS*1]->(b) RETURN a, b");
     ASSERT_TRUE(result.error.empty()) << result.error;
     EXPECT_EQ(result.rows.size(), 3u); // 1->2, 2->3, 3->4
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandAfterExpandReturnsDstProperty) {
+    // Reproduces Match5 scenario 25: regular expand then varlen expand, with
+    // RETURN of the varlen destination's property. Previously the property
+    // came back as NULL because the column-rewrite mapping was wrong.
+    insertMultiHopEdges();
+
+    // Chain: (1)-[:KNOWS]->(2)-[:KNOWS*2]->(4)
+    //   First expand: 1 -> 2 (anonymous intermediate)
+    //   Varlen *2:    2 -> 3 -> 4 (destination = 4)
+    // c.name should be "name4"
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->()-[:KNOWS*2]->(c) RETURN c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name4");
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandMultiRowReturnsDstProperty) {
+    // Multi-row variant: two starting paths each producing a distinct c, with
+    // different c.name values. Catches row-mismatch bugs in ProjectionExtract
+    // caching (ConstructVertex keyed by source col but per-row).
+    insertMultiHopEdges();
+    // Extra vertex 7 with name, edge 5->7, so we have two distinct chains:
+    //   (1)-[:KNOWS]->(2)-[:KNOWS*2]->(4)   c=4, c.name="name4"
+    //   (2)-[:KNOWS]->(3)-[:KNOWS*2]->?     no 5-hop from 3, so empty
+    // The setup chain is 1->2->3->4. *2 from each source:
+    //   src=1 (a=1): 1->2 then *2 from 2: 2->3->4. c=4.
+    //   src=2 (a=2): 2->3 then *2 from 3: 3->4->? (no edge from 4). No match.
+    // So only 1 row total.
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->(b)-[:KNOWS*2]->(c) RETURN c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
+    if (!result.rows.empty() && !result.rows[0].empty()) {
+        EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name4");
+    }
+}
+
+TEST_F(QueryExecutorTest, TwoMatchVarLenExpandReturnsDstProperty) {
+    // Closer reproduction of Match5 scenario 25: two MATCH clauses where the
+    // first scans a label and the second uses the bound variable as the source
+    // of a regular expand followed by varlen.
+    insertMultiHopEdges();
+    auto result = execSync(*executor_, "MATCH (a:Person) "
+                                       "MATCH (a)-[:KNOWS]->()-[:KNOWS*2]->(c) "
+                                       "RETURN c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]))
+        << "actual variant idx=" << result.rows[0][0].index();
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name4");
+}
+
+TEST_F(QueryExecutorTest, VarLenExpandMixedLabelChainReturnsDstProperty) {
+    // Multi-label variant: vertices 1, 2, 3 are Person, vertex 4 is City.
+    // All have `name` property. Varlen dst (c) ends at a City vertex.
+    // Reproduces the multi-label candidate-resolution path that Match5 exercises.
+    insertTestVertices(); // vertices 1..5 as Person{name=N}
+    // Re-label vertex 4 as City (with name="city4") to introduce a second label.
+    {
+        auto txn = sync_data_->beginTransaction();
+        std::vector<std::pair<LabelId, Properties>> lp = {
+            {CITY_LABEL, Properties{PropertyValue(std::string("city4"))}}};
+        ASSERT_TRUE(sync_data_->insertVertex(txn, 4, lp));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
+    // KNOWS chain: 1->2->3->4
+    {
+        auto txn = sync_data_->beginTransaction();
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 2, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 2, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 3, 4, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
+    // c at end of *2 chain from anon (= vertex 2 after first expand from a=1):
+    //   2 -> 3 -> 4. c = 4 has both Person.name="name4" and City.name="city4".
+    // Multi-candidate property resolution returns a ListValue with both.
+    auto result = execSync(*executor_, "MATCH (a:Person)-[:KNOWS]->()-[:KNOWS*2]->(c) RETURN c.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<ListValue>(result.rows[0][0]))
+        << "expected ListValue, got variant idx=" << result.rows[0][0].index();
+    {
+        const auto& lv = std::get<ListValue>(result.rows[0][0]);
+        EXPECT_EQ(lv.elements.size(), 2u);
+        bool has_name4 = false, has_city4 = false;
+        for (const auto& elem : lv.elements) {
+            if (std::holds_alternative<std::string>(elem.value)) {
+                const auto& s = std::get<std::string>(elem.value);
+                if (s == "name4")
+                    has_name4 = true;
+                if (s == "city4")
+                    has_city4 = true;
+            }
+        }
+        EXPECT_TRUE(has_name4) << "expected 'name4' in result list";
+        EXPECT_TRUE(has_city4) << "expected 'city4' in result list";
+    }
 }
 
 TEST_F(QueryExecutorTest, VarLenExpandNoMatch) {
@@ -3953,9 +4398,17 @@ TEST_F(QueryExecutorTest, DeleteNodeWithEdgesFails) {
     auto create = execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person)");
     ASSERT_TRUE(create.error.empty()) << create.error;
 
+    // Look up the actual vertex id (SetUp reserves a 100-vertex buffer, so
+    // CREATE allocates 101+, not 1). Hardcoding id=1 would silently match
+    // nothing and the test would pass for the wrong reason.
+    auto lookup = execSync(*executor_, "MATCH (n:Person) RETURN id(n) AS vid LIMIT 1");
+    ASSERT_EQ(lookup.rows.size(), 1u);
+    auto vid = std::get<int64_t>(lookup.rows[0][0]);
+
     // DELETE without DETACH on a vertex with edges must fail
     try {
-        auto del = execSync(*executor_, "MATCH (n:Person) WHERE id(n) = 1 DELETE n");
+        std::string q = "MATCH (n:Person) WHERE id(n) = " + std::to_string(vid) + " DELETE n";
+        auto del = execSync(*executor_, q);
         // If we get here, the query succeeded when it should have failed
         if (del.error.empty())
             FAIL() << "Expected ConstraintVerificationFailed but query succeeded";
@@ -5210,10 +5663,13 @@ TEST_F(QueryExecutorTest, OrderByEdgeId) {
         EXPECT_TRUE(std::holds_alternative<int64_t>(row[0]))
             << "r.id should be int64_t, got variant index " << row[0].index();
     }
-    // Should be [1, 2, 3] in ascending order
-    EXPECT_EQ(std::get<int64_t>(ids.rows[0][0]), 1);
-    EXPECT_EQ(std::get<int64_t>(ids.rows[1][0]), 2);
-    EXPECT_EQ(std::get<int64_t>(ids.rows[2][0]), 3);
+    // SetUp reserves a 100-edge buffer, so the three CREATEs allocate three
+    // consecutive ids starting at 101. Don't hardcode 1/2/3 — verify the
+    // values are consecutive and ascending.
+    auto first = std::get<int64_t>(ids.rows[0][0]);
+    EXPECT_GT(first, 0);
+    EXPECT_EQ(std::get<int64_t>(ids.rows[1][0]), first + 1);
+    EXPECT_EQ(std::get<int64_t>(ids.rows[2][0]), first + 2);
 }
 
 TEST_F(QueryExecutorTest, ExplainCreateEdge) {
@@ -5249,6 +5705,334 @@ TEST_F(QueryExecutorTest, UnlabeledNodeCreateAndMatchAllNodes) {
     auto r2 = execSync(*executor_, "MATCH (n) RETURN n");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
     ASSERT_EQ(r2.rows.size(), 1u) << "MATCH (n) should find 1 unlabeled node, got " << r2.rows.size();
+}
+
+TEST_F(QueryExecutorTest, BareUnlabeledNodeCreateAndMatchReturn) {
+    // Truly empty CREATE () — no labels, no properties. The vertex must
+    // still be persisted with __anon__ so AllNodeScan can find it.
+    auto r0 = execSync(*executor_, "CREATE ()");
+    ASSERT_TRUE(r0.error.empty()) << r0.error;
+
+    auto r_count = execSync(*executor_, "MATCH (n) RETURN count(n)");
+    ASSERT_TRUE(r_count.error.empty()) << r_count.error;
+    ASSERT_EQ(r_count.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r_count.rows[0][0]), 1);
+
+    auto r_ret = execSync(*executor_, "MATCH (n) RETURN n");
+    ASSERT_TRUE(r_ret.error.empty()) << r_ret.error;
+    ASSERT_EQ(r_ret.rows.size(), 1u) << "MATCH (n) RETURN n should return 1 bare unlabeled node";
+}
+
+TEST_F(QueryExecutorTest, WithAliasCreateUsesBoundNode) {
+    // TCK Create3 scenario [6]: aliasing a bound variable through WITH must
+    // resolve to the same node, not create a fresh one.
+    auto r0 = execSync(*executor_, "CREATE ()");
+    ASSERT_TRUE(r0.error.empty()) << r0.error;
+
+    auto r1 = execSync(*executor_, "MATCH (n) WITH n AS a CREATE (a)-[:T]->() RETURN a");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_EQ(r1.rows.size(), 1u);
+
+    auto r2 = execSync(*executor_, "MATCH ()-[:T]->() RETURN count(*) AS c");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    EXPECT_EQ(std::get<int64_t>(r2.rows[0][0]), 1);
+}
+
+TEST_F(QueryExecutorTest, TckCreate3Scenario6WithLabel) {
+    // Exact TCK Create3 [6] scenario shape — use Person (which exists in
+    // the unit-test setup) instead of X so we can exercise the same path
+    // without depending on label auto-creation.
+    auto r_setup = execSync(*executor_, "CREATE (:Person)");
+    ASSERT_TRUE(r_setup.error.empty()) << r_setup.error;
+
+    auto r_plan = execSync(*executor_, "EXPLAIN MATCH (n) WITH n AS a CREATE (a)-[:KNOWS]->() RETURN a");
+    ASSERT_TRUE(r_plan.error.empty()) << r_plan.error;
+    for (const auto& row : r_plan.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0])) {
+            std::cout << "PLAN6: " << std::get<std::string>(row[0]) << std::endl;
+        }
+    }
+
+    auto r = execSync(*executor_, "MATCH (n) WITH n AS a CREATE (a)-[:KNOWS]->() RETURN a");
+    ASSERT_TRUE(r.error.empty()) << r.error;
+    ASSERT_EQ(r.rows.size(), 1u) << "expected single aliased row";
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(r.rows[0][0]))
+        << "expected VertexValue, got variant " << r.rows[0][0].index();
+    const auto& vv = std::get<VertexValue>(r.rows[0][0]);
+    ASSERT_TRUE(vv.labels.has_value());
+    EXPECT_FALSE(vv.labels->empty()) << "returned vertex should carry Person label";
+
+    // +nodes=1, +relationships=1
+    auto r_nodes = execSync(*executor_, "MATCH (n) RETURN count(n) AS c");
+    ASSERT_TRUE(r_nodes.error.empty()) << r_nodes.error;
+    EXPECT_EQ(std::get<int64_t>(r_nodes.rows[0][0]), 2) << "expected 2 nodes total (Person + anon endpoint)";
+
+    auto r_rels = execSync(*executor_, "MATCH ()-[r:KNOWS]->() RETURN count(r) AS c");
+    ASSERT_TRUE(r_rels.error.empty()) << r_rels.error;
+    EXPECT_EQ(std::get<int64_t>(r_rels.rows[0][0]), 1) << "expected 1 KNOWS relationship";
+}
+
+TEST_F(QueryExecutorTest, TckUnwind1Scenario14UnwindWithMerge) {
+    // Exact TCK Unwind1 [14] scenario: UNWIND $props AS prop MERGE (p:Person
+    // {login: prop.login}) SET p.name = prop.name RETURN p.name, p.login
+    // Reproduces the regression where p.name comes back as null instead of
+    // the value just SET.
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    // Build $props = [{login: 'login1', name: 'name1'}, {login: 'login2', name: 'name2'}]
+    ListValue props;
+    for (auto& [login, name] :
+         std::vector<std::pair<std::string, std::string>>({{"login1", "name1"}, {"login2", "name2"}})) {
+        MapValue m;
+        m.entries.emplace_back("login", Value(login));
+        m.entries.emplace_back("name", Value(name));
+        props.elements.emplace_back(Value(std::move(m)));
+    }
+
+    auto ctx = blockingWait(executor_->prepareStream(
+        "UNWIND $props AS prop MERGE (p:Person {login: prop.login}) SET p.name = prop.name RETURN p.name, p.login",
+        {{"props", Value(std::move(props))}}));
+    ASSERT_TRUE(ctx->error.empty()) << ctx->error;
+
+    ExecutionResult result;
+    result.columns = std::move(ctx->columns);
+    auto gen = std::move(ctx->gen);
+    blockingWait(co_invoke([&]() -> Task<void> {
+        while (auto chunk = co_await gen.next()) {
+            auto rows = chunk->toRows();
+            for (auto& row : rows)
+                result.rows.push_back(std::move(row));
+        }
+        if (ctx->should_commit)
+            co_await ctx->store.commitTran(ctx->txn);
+    }));
+
+    ASSERT_EQ(result.rows.size(), 2u) << "expected 2 rows, got " << result.rows.size();
+    // Each row should be (name, login). Order may be any.
+    std::set<std::pair<std::string, std::string>> got;
+    for (auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 2u);
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[0])) << "p.name variant " << row[0].index();
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[1])) << "p.login variant " << row[1].index();
+        got.emplace(std::get<std::string>(row[0]), std::get<std::string>(row[1]));
+    }
+    EXPECT_EQ(got.count({"name1", "login1"}), 1u);
+    EXPECT_EQ(got.count({"name2", "login2"}), 1u);
+}
+
+TEST_F(QueryExecutorTest, TckGraph8Scenario1KeysOnNode) {
+    // TCK Graph8 [1]: MATCH (n) UNWIND keys(n) AS x RETURN DISTINCT x AS theProps
+    // Setup: CREATE ({name: 'Andres', surname: 'Lopez'}) on __anon__ label.
+    auto setup = execSync(*executor_, "CREATE ({name: 'Andres', surname: 'Lopez'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto debug_props = execSync(*executor_, "MATCH (n) RETURN properties(n) AS p");
+    std::cout << "DEBUG properties: rows=" << debug_props.rows.size() << std::endl;
+    for (auto& row : debug_props.rows) {
+        if (std::holds_alternative<MapValue>(row[0])) {
+            const auto& mv = std::get<MapValue>(row[0]);
+            std::cout << "  map entries: " << mv.entries.size() << std::endl;
+            for (const auto& [k, v] : mv.entries)
+                std::cout << "    " << k << std::endl;
+        }
+    }
+
+    auto debug_keys = execSync(*executor_, "MATCH (n) RETURN keys(n) AS k");
+    std::cout << "DEBUG keys: rows=" << debug_keys.rows.size() << std::endl;
+    for (auto& row : debug_keys.rows) {
+        if (std::holds_alternative<ListValue>(row[0])) {
+            const auto& lv = std::get<ListValue>(row[0]);
+            std::cout << "  list size: " << lv.elements.size() << std::endl;
+            for (const auto& el : lv.elements) {
+                if (std::holds_alternative<std::string>(el.value))
+                    std::cout << "    " << std::get<std::string>(el.value) << std::endl;
+            }
+        }
+    }
+
+    auto debug_unwind = execSync(*executor_, "MATCH (n) UNWIND keys(n) AS x RETURN x");
+    std::cout << "DEBUG unwind: rows=" << debug_unwind.rows.size() << " err=" << debug_unwind.error << std::endl;
+    for (auto& row : debug_unwind.rows) {
+        if (std::holds_alternative<std::string>(row[0]))
+            std::cout << "  x = " << std::get<std::string>(row[0]) << std::endl;
+        else
+            std::cout << "  x = variant " << row[0].index() << std::endl;
+    }
+
+    auto result = execSync(*executor_, "MATCH (n) UNWIND keys(n) AS x RETURN DISTINCT x AS theProps");
+    if (!result.error.empty()) {
+        std::cout << "ERROR: " << result.error << std::endl;
+    }
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u) << "expected 2 keys";
+    std::set<std::string> keys;
+    for (auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 1u);
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[0])) << "variant " << row[0].index();
+        keys.insert(std::get<std::string>(row[0]));
+    }
+    EXPECT_EQ(keys.count("name"), 1u);
+    EXPECT_EQ(keys.count("surname"), 1u);
+}
+
+TEST_F(QueryExecutorTest, TckReturn6Scenario12CountingPerGroup) {
+    // TCK Return6 [12]: MATCH (a:L)-[rel]->(b) RETURN a, count(*)
+    auto l_id = blockingWait(async_meta_->createLabel("L"));
+    ASSERT_NE(l_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(l_id));
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (a:L), (b1), (b2) CREATE (a)-[:A]->(b1), (a)-[:A]->(b2)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (a:L)-[rel]->(b) RETURN a, count(*)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u) << "expected 1 group";
+    ASSERT_EQ(result.rows[0].size(), 2u);
+    EXPECT_TRUE(std::holds_alternative<VertexValue>(result.rows[0][0]));
+    EXPECT_TRUE(std::holds_alternative<int64_t>(result.rows[0][1]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 2);
+}
+
+TEST_F(QueryExecutorTest, TckTypeConversion3Scenario6FailToFloatOnNode) {
+    // TCK TypeConversion3 [6]: list comprehension [x IN [1.0, n] | toFloat(x)]
+    // should raise TypeError at runtime (n is a node).
+    auto setup = execSync(*executor_, "CREATE ()-[:T]->()");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH p = (n)-[r:T]->() RETURN [x IN [1.0, n] | toFloat(x)] AS list");
+    // Expect an error (TypeError: InvalidArgumentValue)
+    EXPECT_FALSE(result.error.empty()) << "expected TypeError, got rows: " << result.rows.size();
+}
+
+// ==================== TCK regression investigation ====================
+
+TEST_F(QueryExecutorTest, TckDoubleAliasExistingNode) {
+    // Return6: RETURN a AS x, a AS y — double alias of same variable
+    auto x_id = blockingWait(async_meta_->createLabel("X"));
+    ASSERT_NE(x_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(x_id));
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (a:X)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto result = execSync(*executor_, "MATCH (a:X) RETURN a AS x, a AS y");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    if (result.error.empty()) {
+        ASSERT_EQ(result.rows.size(), 1u);
+        ASSERT_EQ(result.rows[0].size(), 2u);
+    }
+}
+
+TEST_F(QueryExecutorTest, TckDistinctInsideAggregation) {
+    // Aggregate6/7: count(DISTINCT x) or collect(DISTINCT x)
+    auto x_id = blockingWait(async_meta_->createLabel("X"));
+    ASSERT_NE(x_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(x_id));
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (:X {p:1}), (:X {p:2})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto result = execSync(*executor_, "MATCH (n:X) RETURN count(DISTINCT n.p) AS c");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    if (result.error.empty()) {
+        ASSERT_EQ(result.rows.size(), 1u);
+        ASSERT_EQ(result.rows[0].size(), 1u);
+        EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+    }
+}
+
+TEST_F(QueryExecutorTest, TckMixedRelPatterns) {
+    // Handling mixed relationship patterns: MATCH (a)-[r]->(b), (a)-[s:X]->(c)
+    auto y_id = blockingWait(async_meta_->createLabel("Y"));
+    ASSERT_NE(y_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(y_id));
+    auto r_id = blockingWait(async_meta_->createEdgeLabel("R"));
+    ASSERT_NE(r_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(r_id));
+    auto x_el_id = blockingWait(async_meta_->createEdgeLabel("X"));
+    ASSERT_NE(x_el_id, INVALID_EDGE_LABEL_ID);
+    blockingWait(async_data_->createEdgeLabel(x_el_id));
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (a:Y), (b), (c) CREATE (a)-[:R]->(b), (a)-[:X]->(c)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto result = execSync(*executor_, "MATCH (a:Y)-[r]->(b), (a)-[s:X]->(c) RETURN a, r, s, b, c");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    if (result.error.empty()) {
+        ASSERT_GE(result.rows.size(), 1u);
+    }
+}
+
+TEST_F(QueryExecutorTest, TckLabelsOnAnyType) {
+    // labels() should accept ANY-typed expression
+    auto z_id = blockingWait(async_meta_->createLabel("Z"));
+    ASSERT_NE(z_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(z_id));
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (:Z)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto result = execSync(*executor_, "MATCH (n:Z) UNWIND labels(n) AS lbl RETURN lbl");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    if (result.error.empty()) {
+        ASSERT_GE(result.rows.size(), 1u);
+        EXPECT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    }
+}
+
+TEST_F(QueryExecutorTest, TckProjectingListOfNodes) {
+    // Projecting list of nodes: RETURN collect(n)
+    auto p_id = blockingWait(async_meta_->createLabel("P"));
+    ASSERT_NE(p_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(p_id));
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE (:P), (:P)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto result = execSync(*executor_, "MATCH (n:P) RETURN collect(n) AS nodes");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    if (result.error.empty()) {
+        ASSERT_EQ(result.rows.size(), 1u);
+        ASSERT_EQ(result.rows[0].size(), 1u);
+        EXPECT_TRUE(std::holds_alternative<ListValue>(result.rows[0][0]));
+        EXPECT_EQ(std::get<ListValue>(result.rows[0][0]).elements.size(), 2u);
+    }
+}
+
+TEST_F(QueryExecutorTest, TckCreateAndDeleteSameQuery) {
+    // Delete4 [3]: MATCH () CREATE (n) DELETE n — net side effect must be 0.
+    // Regression guard for BoundScanOp missing slot_layout: when MATCH's
+    // layout was empty, CreateNode inherited the empty layout and appended n
+    // as column 0 of the *layout*, but physical column 1 of the chunk. DELETE
+    // then read column 0 (the anonymous VertexRef) and silently skipped.
+    compute::QueryExecutor::Config config;
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, config);
+
+    auto setup = execSync(*executor_, "CREATE ()");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto before_res = execSync(*executor_, "MATCH (n) RETURN count(n)");
+    ASSERT_TRUE(before_res.error.empty()) << before_res.error;
+    ASSERT_EQ(before_res.rows.size(), 1u);
+    int64_t before = std::get<int64_t>(before_res.rows[0][0]);
+    ASSERT_EQ(before, 1);
+
+    auto result = execSync(*executor_, "MATCH () CREATE (n) DELETE n");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
+
+    auto after_res = execSync(*executor_, "MATCH (n) RETURN count(n)");
+    ASSERT_TRUE(after_res.error.empty()) << after_res.error;
+    int64_t after = std::get<int64_t>(after_res.rows[0][0]);
+    EXPECT_EQ(after, before) << "Expected no side effects but node count changed";
 }
 
 TEST_F(QueryExecutorTest, UnlabeledNodeCreateAndMatchReturnProp) {
@@ -5679,6 +6463,327 @@ TEST_F(QueryExecutorTest, MergeVariableAlreadyBoundFails) {
     EXPECT_NE(result.error.find("VariableAlreadyBound"), std::string::npos);
 }
 
+// Reproduces TCK MatchWhere5 scenario: filter on property of expand dst
+// where the same property name exists on multiple labels.
+TEST_F(QueryExecutorTest, FilterOnExpandDstMultiLabel) {
+    auto root_id =
+        blockingWait(async_meta_->createLabel("Root", {PropertyDef{0, "name", PropertyType::STRING, false, {}}}));
+    auto text_id =
+        blockingWait(async_meta_->createLabel("TextNode", {PropertyDef{0, "var", PropertyType::STRING, false, {}}}));
+    auto int_id =
+        blockingWait(async_meta_->createLabel("IntNode", {PropertyDef{0, "var", PropertyType::INT64, false, {}}}));
+    blockingWait(async_data_->createLabel(root_id));
+    blockingWait(async_data_->createLabel(text_id));
+    blockingWait(async_data_->createLabel(int_id));
+    blockingWait(async_data_->createEdgeLabel(KNOWS_LABEL));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    execSync(*executor_, "CREATE (root:Root {name: 'x'}), (child1:TextNode {var: 'text'}), (child2:IntNode {var: 0}) "
+                         "CREATE (root)-[:KNOWS]->(child1), (root)-[:KNOWS]->(child2)");
+
+    // Dst label constraint must filter destinations: only TextNode child matches.
+    auto r5 = execSync(*executor_, "MATCH (:Root)-->(i:TextNode) RETURN i");
+    ASSERT_TRUE(r5.error.empty()) << r5.error;
+    EXPECT_EQ(r5.rows.size(), 1u);
+}
+
+// Repro for With7 scenario 1: bound endpoint + bound edge after WITH aliasing.
+// Was disabled pending scope-aware alias_map fix (§13.12.1). After fix landed,
+// the multi-layer WITH alias chain (a→b→a) no longer forms an alias_map cycle.
+TEST_F(QueryExecutorTest, TckWith7Scenario1BoundEndpoint) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->nextEdgeIdRange(200));
+    blockingWait(async_meta_->createLabel("A"));
+    blockingWait(async_meta_->createLabel("B"));
+    blockingWait(async_meta_->createEdgeLabel("REL"));
+    auto setup = execSync(*executor_, "CREATE (:A)-[:REL]->(:B)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (a:A)-[r:REL]->(b:B) "
+                                       "WITH a AS b, b AS tmp, r AS r "
+                                       "WITH b AS a, r "
+                                       "LIMIT 1 "
+                                       "MATCH (a)-[r]->(b) "
+                                       "RETURN a, r, b");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    ASSERT_EQ(result.rows.size(), 1u) << "Expected 1 row, got " << result.rows.size();
+    if (result.rows.size() == 1u) {
+        const auto& row = result.rows[0];
+        ASSERT_EQ(row.size(), 3u);
+        const auto& a_val = row[0];
+        ASSERT_TRUE(std::holds_alternative<VertexValue>(a_val));
+        EXPECT_EQ(std::get<VertexValue>(a_val).id, VertexId(301)) << "a should be original :A";
+        const auto& b_val = row[2];
+        ASSERT_TRUE(std::holds_alternative<VertexValue>(b_val)) << "b should be a vertex";
+        EXPECT_EQ(std::get<VertexValue>(b_val).id, VertexId(302))
+            << "b should be :B (vid 302) but got vid " << std::get<VertexValue>(b_val).id;
+    }
+}
+
+// Repro for With7 scenario 2: multiple WITHs with aggregation + predicate.
+TEST_F(QueryExecutorTest, TckWith7Scenario2MultipleWiths) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->nextEdgeIdRange(200));
+    auto setup = execSync(*executor_, "CREATE (a {name: 'David'}), (b {name: 'Other'}), "
+                                      "(c {name: 'NotOther'}), (d {name: 'NotOther2'}), "
+                                      "(a)-[:REL]->(b), (a)-[:REL]->(c), (a)-[:REL]->(d), "
+                                      "(b)-[:REL]->(), (b)-[:REL]->(), "
+                                      "(c)-[:REL]->(), (c)-[:REL]->(), "
+                                      "(d)-[:REL]->()");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (david {name: 'David'})--(otherPerson)-->() "
+                                       "WITH otherPerson, count(*) AS foaf "
+                                       "WHERE foaf > 1 "
+                                       "WITH otherPerson "
+                                       "WHERE otherPerson.name <> 'NotOther' "
+                                       "RETURN count(*)");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+}
+
+// Merge5 [16]: single-layer WITH aliasing (a, b) + MERGE consuming aliased endpoints.
+TEST_F(QueryExecutorTest, TckMerge5Scenario16AliasingExistingNodes1) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->nextEdgeIdRange(200));
+    blockingWait(async_meta_->createEdgeLabel("T"));
+    auto setup = execSync(*executor_, "CREATE ({id: 0})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (n) MATCH (m) "
+                                       "WITH n AS a, m AS b "
+                                       "MERGE (a)-[r:T]->(b) "
+                                       "RETURN a.id AS a, b.id AS b");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 0);
+}
+
+// Merge5 [17]: same shape as [16], different binder path through MERGE.
+TEST_F(QueryExecutorTest, TckMerge5Scenario17AliasingExistingNodes2) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->nextEdgeIdRange(200));
+    blockingWait(async_meta_->createEdgeLabel("T"));
+    auto setup = execSync(*executor_, "CREATE ({id: 0})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (n) MATCH (m) "
+                                       "WITH n AS a, m AS b "
+                                       "MERGE (a)-[r:T]->(b) "
+                                       "RETURN a.id + b.id AS s");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
+}
+
+// Merge5 [18]: double WITH aliasing (a→x, b→y) before MERGE.
+TEST_F(QueryExecutorTest, TckMerge5Scenario18DoubleAliasing1) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->nextEdgeIdRange(200));
+    blockingWait(async_meta_->createEdgeLabel("T"));
+    auto setup = execSync(*executor_, "CREATE ({id: 0})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (n) MATCH (m) "
+                                       "WITH n AS a, m AS b "
+                                       "MERGE (a)-[:T]->(b) "
+                                       "WITH a AS x, b AS y "
+                                       "MERGE (a) MERGE (b) MERGE (a)-[:T]->(b) "
+                                       "RETURN x.id AS x, y.id AS y");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 0);
+}
+
+// Merge5 [19]: double aliasing with fresh MERGE across two WITH clauses.
+// Mirrors openCypher TCK Merge5.feature [19]: `MERGE (c)` creates c, then
+// after a second WITH (`WITH a AS x`), `MERGE (c)` reuses the pre-bound c.
+TEST_F(QueryExecutorTest, TckMerge5Scenario19DoubleAliasing2) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->nextEdgeIdRange(200));
+    blockingWait(async_meta_->createEdgeLabel("T"));
+    auto setup = execSync(*executor_, "CREATE ({id: 0})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (n) "
+                                       "WITH n AS a "
+                                       "MERGE (c) "
+                                       "MERGE (a)-[:T]->(c) "
+                                       "WITH a AS x "
+                                       "MERGE (c) "
+                                       "MERGE (x)-[:T]->(c) "
+                                       "RETURN x.id AS x");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
+}
+
+// List12 [1]: collect + list comprehension over collected nodes + UNWIND.
+TEST_F(QueryExecutorTest, TckList12Scenario1CollectAndExtract) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->createLabel("Label1"));
+    auto setup = execSync(*executor_, "CREATE (:Label1 {name: 'original'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (a:Label1) "
+                                       "WITH collect(a) AS nodes "
+                                       "WITH nodes, [x IN nodes | x.name] AS oldNames "
+                                       "UNWIND nodes AS n "
+                                       "SET n.name = 'newName' "
+                                       "RETURN n.name, oldNames");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "newName");
+}
+
+// List12 [2]: collect + filter list comprehension over collected nodes.
+TEST_F(QueryExecutorTest, TckList12Scenario2CollectAndFilter) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->createLabel("Label1"));
+    auto setup = execSync(*executor_, "CREATE (:Label1 {name: 'original'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (a:Label1) "
+                                       "WITH collect(a) AS nodes "
+                                       "WITH nodes, [x IN nodes WHERE x.name = 'original'] AS filtered "
+                                       "UNWIND nodes AS n "
+                                       "RETURN n.name, size(filtered) AS cnt");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "original");
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 1);
+}
+
+// Repro for ReturnOrderBy2 scenario 3: Sort on aggregated function.
+TEST_F(QueryExecutorTest, TckReturnOrderBy2Scenario3) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->nextEdgeIdRange(200));
+    auto setup = execSync(*executor_, "CREATE ({division: 'A', age: 22}), "
+                                      "({division: 'B', age: 33}), "
+                                      "({division: 'B', age: 44}), "
+                                      "({division: 'C', age: 55})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (n) "
+                                       "RETURN n.division, max(n.age) "
+                                       "ORDER BY max(n.age)");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    ASSERT_EQ(result.rows.size(), 3u);
+    // Expect ascending by max(n.age): A=22, B=44, C=55
+    ASSERT_EQ(result.rows[0].size(), 2u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "A");
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 22);
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "B");
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][1]), 44);
+    EXPECT_EQ(std::get<std::string>(result.rows[2][0]), "C");
+    EXPECT_EQ(std::get<int64_t>(result.rows[2][1]), 55);
+}
+
+// Repro for ReturnOrderBy2 scenario 11: Aggregates ordered by arithmetics.
+TEST_F(QueryExecutorTest, TckReturnOrderBy2Scenario11) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->nextEdgeIdRange(200));
+    blockingWait(async_meta_->createLabel("A"));
+    blockingWait(async_meta_->createLabel("X"));
+    auto setup = execSync(*executor_, "CREATE (:A), (:X), (:X)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (a:A), (b:X) "
+                                       "RETURN count(a) * 10 + count(b) * 5 AS x "
+                                       "ORDER BY x");
+    EXPECT_TRUE(result.error.empty()) << "Error: " << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+}
+
+// Repro for Match5 scenario 25: var-len + standard chain in second MATCH.
+TEST_F(QueryExecutorTest, TckMap3Scenario5KeysInMap) {
+    // TCK Map3 [5]: keys() on a WITH-aliased literal map + IN. Demand
+    // collection must not mark a MAP-typed variable as needing whole-vertex
+    // construction — that would corrupt the column to null.
+    auto r2 = execSync(*executor_, "WITH {exists: 42} AS map RETURN keys(map) AS k");
+    EXPECT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<ListValue>(r2.rows[0][0]))
+        << "keys(map) should be a list, got variant idx=" << r2.rows[0][0].index();
+
+    auto r3 = execSync(*executor_, "WITH {exists: 42, notMissing: null} AS map "
+                                   "RETURN 'exists' IN keys(map) AS a, "
+                                   "'notMissing' IN keys(map) AS b, "
+                                   "'missing' IN keys(map) AS c");
+    EXPECT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 1u);
+    ASSERT_EQ(r3.rows[0].size(), 3u);
+    ASSERT_TRUE(std::holds_alternative<bool>(r3.rows[0][0]));
+    EXPECT_TRUE(std::get<bool>(r3.rows[0][0]));
+    ASSERT_TRUE(std::holds_alternative<bool>(r3.rows[0][1]));
+    EXPECT_TRUE(std::get<bool>(r3.rows[0][1]));
+    ASSERT_TRUE(std::holds_alternative<bool>(r3.rows[0][2]));
+    EXPECT_FALSE(std::get<bool>(r3.rows[0][2]));
+}
+
+TEST_F(QueryExecutorTest, TckMatch5Scenario25VarLenChainName) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->nextEdgeIdRange(200));
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto la = blockingWait(async_meta_->createLabel("A", {name_pd}));
+    blockingWait(async_data_->createLabel(la));
+    auto lb = blockingWait(async_meta_->createLabel("B", {name_pd}));
+    blockingWait(async_data_->createLabel(lb));
+    auto lc = blockingWait(async_meta_->createLabel("C", {name_pd}));
+    blockingWait(async_data_->createLabel(lc));
+    auto likes = blockingWait(async_meta_->createEdgeLabel("LIKES"));
+    blockingWait(async_data_->createEdgeLabel(likes));
+    auto setup = execSync(*executor_, "CREATE (a:A {name: 'a'}), (b:B {name: 'b'}), "
+                                      "(c1:C {name: 'c1'}), (c2:C {name: 'c2'}), "
+                                      "(a)-[:LIKES]->(b), "
+                                      "(b)-[:LIKES]->(c1), "
+                                      "(b)-[:LIKES]->(c2)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    // Var-len + standard relationship chains return real names (not null).
+    auto expectAllStrings = [](const ExecutionResult& r, size_t expected_rows, const char* what) {
+        EXPECT_TRUE(r.error.empty()) << what << " error: " << r.error;
+        ASSERT_EQ(r.rows.size(), expected_rows) << what;
+        for (const auto& row : r.rows) {
+            ASSERT_FALSE(row.empty()) << what;
+            EXPECT_TRUE(std::holds_alternative<std::string>(row[0]))
+                << what << ": expected string, got variant idx=" << row[0].index();
+        }
+    };
+
+    expectAllStrings(execSync(*executor_, "MATCH (a:A)-[:LIKES]->()-[:LIKES*1]->(c) RETURN c.name"), 2, "chain");
+    expectAllStrings(execSync(*executor_, "MATCH (a:A)-[:LIKES]->(b)-[:LIKES]->(c) RETURN c.name"), 2, "standard");
+    expectAllStrings(execSync(*executor_, "MATCH (a:A)-[:LIKES*2]->(c) RETURN c.name"), 2, "varlen");
+    expectAllStrings(execSync(*executor_, "MATCH (a:A) MATCH (a)-[:LIKES]->()-[:LIKES*1]->(c) RETURN c.name"), 2,
+                     "multi-match");
+
+    // The real TCK [25] failure mode: CREATE property expressions referencing a
+    // matched node's property (MATCH (d:D) CREATE (e:E {name: d.name + '0'})).
+    // Demand collection must cover BoundCreateNodeOp::label_properties, and
+    // CreateNodePhysicalOp must compile those expressions against the input
+    // layout — otherwise d.name evaluates to null.
+    auto create2 = execSync(*executor_, "MATCH (c1:C) "
+                                        "CREATE (x:B {name: c1.name + '0'})");
+    EXPECT_TRUE(create2.error.empty()) << "create error: " << create2.error;
+
+    auto r3 = execSync(*executor_, "MATCH (x:B) RETURN x.name");
+    EXPECT_TRUE(r3.error.empty()) << r3.error;
+    ASSERT_EQ(r3.rows.size(), 3u);
+    std::set<std::string> names;
+    for (const auto& row : r3.rows) {
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[0]))
+            << "created name should be string, got variant idx=" << row[0].index();
+        names.insert(std::get<std::string>(row[0]));
+    }
+    EXPECT_EQ(names, (std::set<std::string>{"b", "c10", "c20"}));
+}
+
 // ==================== PropertyExtract Plan Correctness Tests ====================
 
 // Verify that EXPLAIN shows PropertyExtract operators in the plan for
@@ -5800,23 +6905,25 @@ protected:
 };
 
 TEST_F(PropertyExtractPlanTest, BasicVertexPropertyRead) {
-    // Old wrap pipeline: Project → VertexPropertyRead → LabelScan
-    expectPlanOrder("MATCH (n:Person) RETURN n.name, n.age", {"Project", "VertexPropertyRead", "Scan"});
+    // ProjectionExtract pipeline: Project → ProjectionExtract → LabelScan
+    expectPlanOrder("MATCH (n:Person) RETURN n.name, n.age", {"Project", "ProjectionExtract", "LabelScan"});
 }
 
 TEST_F(PropertyExtractPlanTest, FilterPropertyExtract) {
+    // ProjectionExtract pipeline: Project → Filter → ProjectionExtract → LabelScan
     expectPlanOrder("MATCH (n:Person) WHERE n.age > 30 RETURN n.name",
-                    {"Project", "Filter", "VertexPropertyRead", "Scan"});
+                    {"Project", "Filter", "ProjectionExtract", "LabelScan"});
 }
 
 TEST_F(PropertyExtractPlanTest, ExpandBothSidesPropertyExtract) {
+    // Two ProjectionExtract nodes: one wrapping Scan (src), one wrapping Expand (edge+dst).
     expectPlanOrder("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.city",
-                    {"Project", "VertexPropertyRead", "EdgePropertyRead", "Expand", "Scan"});
+                    {"Project", "ProjectionExtract", "Expand", "ProjectionExtract", "LabelScan"});
 }
 
 TEST_F(PropertyExtractPlanTest, EdgePropertyExtract) {
     expectPlanOrder("MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE r.since > 2020 RETURN a.name, r.since",
-                    {"Project", "Filter", "EdgePropertyRead", "Expand", "VertexPropertyRead", "Scan"});
+                    {"Project", "Filter", "ProjectionExtract", "Expand", "ProjectionExtract", "LabelScan"});
 }
 
 // Execution tests — verify results are correct.
@@ -5861,4 +6968,70 @@ TEST_F(PropertyExtractPlanTest, ExecutePathLength) {
         execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN length(p) ORDER BY length(p)");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_GE(result.rows.size(), 2u);
+}
+
+// Verify ExpressionCompiler translates slot_id → column_index correctly.
+TEST(SlotLayoutTest, ExpressionCompilerResolvesSlotToColumn) {
+    // Layout: slot 7 at col 0, slot 3 at col 1, slot 9 at col 2
+    eugraph::compute::TupleSlotLayout layout;
+    layout.append(7);
+    layout.append(3);
+    layout.append(9);
+
+    eugraph::compute::ExpressionCompiler compiler(layout);
+
+    // BoundColumnRef with slot_id=3 should resolve to column_index=1
+    eugraph::binder::BoundExpression expr =
+        eugraph::binder::BoundColumnRef(999, eugraph::binder::BoundType::Any(), "test", 3);
+    compiler.compile(expr);
+    auto* cref = std::get_if<eugraph::binder::BoundColumnRef>(&expr);
+    ASSERT_NE(cref, nullptr);
+    EXPECT_EQ(cref->column_index, 1u);
+
+    // Slot not in layout: column_index unchanged
+    eugraph::binder::BoundExpression expr2 =
+        eugraph::binder::BoundColumnRef(50, eugraph::binder::BoundType::Any(), "u", 99);
+    compiler.compile(expr2);
+    auto* cref2 = std::get_if<eugraph::binder::BoundColumnRef>(&expr2);
+    ASSERT_NE(cref2, nullptr);
+    EXPECT_EQ(cref2->column_index, 50u); // unchanged
+}
+
+// Verify the SlotId partition: user slots and internal slots live in
+// disjoint ranges, and the SlotAllocator's next/nextInternal streams
+// never cross. See src/query/planner/slot_id.hpp and design doc §13.2-B.
+TEST(SlotLayoutTest, SlotAllocatorPartition) {
+    eugraph::binder::SlotAllocator alloc;
+
+    // Fresh allocator: user counter at 0, internal counter at the flag.
+    eugraph::binder::SlotId u1 = alloc.next();
+    eugraph::binder::SlotId u2 = alloc.next();
+    eugraph::binder::SlotId i1 = alloc.nextInternal();
+    eugraph::binder::SlotId i2 = alloc.nextInternal();
+
+    EXPECT_EQ(u1, 1u);
+    EXPECT_EQ(u2, 2u);
+    EXPECT_EQ(i1, eugraph::binder::kInternalSlotFlag + 1);
+    EXPECT_EQ(i2, eugraph::binder::kInternalSlotFlag + 2);
+
+    EXPECT_TRUE(eugraph::binder::isUserSlot(u1));
+    EXPECT_TRUE(eugraph::binder::isUserSlot(u2));
+    EXPECT_FALSE(eugraph::binder::isInternalSlot(u1));
+
+    EXPECT_TRUE(eugraph::binder::isInternalSlot(i1));
+    EXPECT_TRUE(eugraph::binder::isInternalSlot(i2));
+    EXPECT_FALSE(eugraph::binder::isUserSlot(i1));
+
+    EXPECT_FALSE(eugraph::binder::isUserSlot(eugraph::binder::INVALID_SLOT_ID));
+    EXPECT_FALSE(eugraph::binder::isInternalSlot(eugraph::binder::INVALID_SLOT_ID));
+
+    // seed() respects the partition: seeding a user value does NOT move
+    // the internal counter, and vice versa.
+    alloc.seed(100u);
+    EXPECT_EQ(alloc.next(), 101u);
+    EXPECT_EQ(alloc.nextInternal(), eugraph::binder::kInternalSlotFlag + 3);
+
+    alloc.seed(eugraph::binder::kInternalSlotFlag + 1000);
+    EXPECT_EQ(alloc.nextInternal(), eugraph::binder::kInternalSlotFlag + 1001);
+    EXPECT_EQ(alloc.next(), 102u);
 }

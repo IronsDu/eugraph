@@ -2,6 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "query/planner/bound_type.hpp"
+#include "query/planner/slot_id.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -18,6 +19,8 @@ struct ColumnInfo {
     BoundType type;
     /// Column index in the DataChunk (0-based).
     uint32_t column_index = 0;
+    /// Globally-unique logical slot (assigned by Binder, immutable).
+    SlotId slot_id = INVALID_SLOT_ID;
     /// For columns sourced from specific labels (e.g., multi-label nodes).
     std::vector<LabelId> source_labels;
     std::optional<uint16_t> source_prop_id;
@@ -40,17 +43,31 @@ struct PropertyRequirement {
 /// Binding context — shared state during AST traversal.
 struct BindContext {
     /// Map from variable name to column information.
+    /// Scope-local: WITH clauses reset this to just their outputs, so names
+    /// projected by an earlier WITH disappear here even though operators in
+    /// the bound tree (Aggregate output_names, Filter predicates) still
+    /// reference their original slot_id.
     std::unordered_map<std::string, ColumnInfo> symbols;
+    /// Permanent record of every name → slot_id allocation made during
+    /// binding. Survives scope resets so the planner can recover the
+    /// binder's slot for an out-of-scope name (e.g. an Aggregate output
+    /// hidden by a subsequent WITH) instead of allocating a conflicting
+    /// fresh slot. Last write wins — the binder reuses slots for the same
+    /// name across scopes, so this is consistent with its allocation model.
+    std::unordered_map<std::string, SlotId> all_symbols;
     /// Accumulated property requirements for projection pushdown.
     std::vector<PropertyRequirement> property_requirements;
     /// Ordered output columns from RETURN clause (populated by bindReturn).
     std::vector<ColumnInfo> return_columns;
     /// Next column index to assign.
     uint32_t next_column_index = 0;
+    /// Global SlotId allocator.  SlotIds survive sub-scope resets
+    /// (beginSubScope) — they are query-global, not scope-local.
+    SlotAllocator slot_allocator;
 
     /// Register a new variable in the symbol table. Returns the assigned column index.
     uint32_t registerVariable(const std::string& name, BoundType type) {
-        auto [it, inserted] = symbols.emplace(name, ColumnInfo{name, std::move(type), 0, {}, std::nullopt, false});
+        auto [it, inserted] = symbols.emplace(name, ColumnInfo{name, std::move(type), 0, 0, {}, std::nullopt, false});
         if (inserted) {
             // Assign column index only on first registration
             // (we use a separate pass to assign indices in order)

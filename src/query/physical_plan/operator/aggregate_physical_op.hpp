@@ -2,6 +2,7 @@
 
 #include "query/dataset/data_chunk.hpp"
 #include "query/function/function_def.hpp"
+#include "query/physical_plan/expression_compiler.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 
@@ -46,6 +47,23 @@ public:
     }
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
+    }
+
+    void compileExpressions(const TupleSlotLayout& input_layout) override {
+        ExpressionCompiler compiler(input_layout);
+        for (auto& k : group_keys_)
+            compiler.compile(k.expr);
+        for (auto& a : aggregates_)
+            compiler.compile(a.arg);
+    }
+    void deriveOutputLayout(const TupleSlotLayout& input_layout) override {
+        // Aggregate output = group_keys + aggregates (new slots for each).
+        // For now, use a fresh sequential layout since aggregate outputs
+        // are new columns.
+        TupleSlotLayout out;
+        for (size_t i = 0; i < group_keys_.size() + aggregates_.size(); ++i)
+            out.append(static_cast<uint32_t>(input_layout.size() + i + 1));
+        slot_layout_ = std::move(out);
     }
 
 private:

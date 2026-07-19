@@ -55,6 +55,33 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         }
     }
 
+    auto loadVertex = [&](VertexId vid) -> folly::coro::Task<VertexValue> {
+        VertexValue vv;
+        vv.id = vid;
+        auto labels = co_await store_.getVertexLabels(vid);
+        vv.labels = labels;
+        for (auto lid : labels) {
+            auto props = co_await store_.getVertexProperties(vid, lid);
+            if (props)
+                vv.properties[lid] = std::move(*props);
+        }
+        co_return vv;
+    };
+
+    auto loadEdge = [&](EdgeId eid, EdgeLabelId elid, VertexId src, VertexId dst,
+                        uint64_t seq) -> folly::coro::Task<EdgeValue> {
+        EdgeValue ev;
+        ev.id = eid;
+        ev.src_id = src;
+        ev.dst_id = dst;
+        ev.label_id = elid;
+        ev.seq = seq;
+        auto props = co_await store_.getEdgeProperties(elid, eid);
+        if (props)
+            ev.properties = std::move(*props);
+        co_return ev;
+    };
+
     while (auto chunk = co_await child_gen.next()) {
         auto rows = chunk->toRows();
         size_t input_cols = chunk->numColumns();
@@ -112,7 +139,12 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 identity_entry.dst_id = src_id;
                 if (!path_var_.empty()) {
                     PathValue pv;
-                    pv.elements.push_back(ValueStorage{rows[src_row][src_col_idx_]});
+                    const auto& src_val = rows[src_row][src_col_idx_];
+                    if (std::holds_alternative<VertexValue>(src_val)) {
+                        pv.elements.push_back(ValueStorage{src_val});
+                    } else {
+                        pv.elements.push_back(ValueStorage{Value(co_await loadVertex(src_id))});
+                    }
                     identity_entry.path = std::move(pv);
                 }
                 if (!edge_var_.empty()) {
@@ -187,31 +219,22 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                     if (!path_var_.empty()) {
                         // Build path: stack vertices/edges + current edge + destination
                         PathValue pv;
-                        pv.elements.push_back(ValueStorage{rows[src_row][src_col_idx_]});
+                        const auto& src_val = rows[src_row][src_col_idx_];
+                        if (std::holds_alternative<VertexValue>(src_val)) {
+                            pv.elements.push_back(ValueStorage{src_val});
+                        } else {
+                            pv.elements.push_back(ValueStorage{Value(co_await loadVertex(src_id))});
+                        }
                         for (size_t si = 1; si < stack.size(); ++si) {
-                            EdgeValue ev;
-                            ev.id = stack[si].incoming_edge_id;
-                            ev.src_id = stack[si - 1].vertex;
-                            ev.dst_id = stack[si].vertex;
-                            ev.label_id = stack[si].incoming_edge_label_id;
-                            ev.seq = stack[si].incoming_edge_seq;
-                            pv.elements.push_back(ValueStorage{Value(std::move(ev))});
-                            VertexValue vv;
-                            vv.id = stack[si].vertex;
-                            vv.labels = co_await store_.getVertexLabels(stack[si].vertex);
-                            pv.elements.push_back(ValueStorage{Value(std::move(vv))});
+                            pv.elements.push_back(ValueStorage{Value(co_await loadEdge(
+                                stack[si].incoming_edge_id, stack[si].incoming_edge_label_id, stack[si - 1].vertex,
+                                stack[si].vertex, stack[si].incoming_edge_seq))});
+                            pv.elements.push_back(ValueStorage{Value(co_await loadVertex(stack[si].vertex))});
                         }
                         // Add current edge and destination vertex
-                        EdgeValue ev;
-                        ev.id = edge.edge_id;
-                        ev.src_id = frame.vertex;
-                        ev.dst_id = edge.neighbor_id;
-                        ev.label_id = edge.edge_label_id;
-                        ev.seq = edge.seq;
-                        pv.elements.push_back(ValueStorage{Value(std::move(ev))});
-                        VertexValue dst_vv;
-                        dst_vv.id = edge.neighbor_id;
-                        dst_vv.labels = co_await store_.getVertexLabels(edge.neighbor_id);
+                        pv.elements.push_back(ValueStorage{Value(co_await loadEdge(
+                            edge.edge_id, edge.edge_label_id, frame.vertex, edge.neighbor_id, edge.seq))});
+                        VertexValue dst_vv = co_await loadVertex(edge.neighbor_id);
                         pv.elements.push_back(ValueStorage{Value(std::move(dst_vv))});
                         entry.path = std::move(pv);
                     }
@@ -219,21 +242,12 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                     if (!edge_var_.empty()) {
                         ListValue lv;
                         for (size_t si = 1; si < stack.size(); ++si) {
-                            EdgeValue ev;
-                            ev.id = stack[si].incoming_edge_id;
-                            ev.src_id = stack[si - 1].vertex;
-                            ev.dst_id = stack[si].vertex;
-                            ev.label_id = stack[si].incoming_edge_label_id;
-                            ev.seq = stack[si].incoming_edge_seq;
-                            lv.elements.push_back(ValueStorage{Value(std::move(ev))});
+                            lv.elements.push_back(ValueStorage{Value(co_await loadEdge(
+                                stack[si].incoming_edge_id, stack[si].incoming_edge_label_id, stack[si - 1].vertex,
+                                stack[si].vertex, stack[si].incoming_edge_seq))});
                         }
-                        EdgeValue ev;
-                        ev.id = edge.edge_id;
-                        ev.src_id = frame.vertex;
-                        ev.dst_id = edge.neighbor_id;
-                        ev.label_id = edge.edge_label_id;
-                        ev.seq = edge.seq;
-                        lv.elements.push_back(ValueStorage{Value(std::move(ev))});
+                        lv.elements.push_back(ValueStorage{Value(co_await loadEdge(
+                            edge.edge_id, edge.edge_label_id, frame.vertex, edge.neighbor_id, edge.seq))});
                         entry.edge_list = std::move(lv);
                     }
                     output_buffer.push_back(std::move(entry));

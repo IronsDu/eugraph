@@ -78,7 +78,6 @@ void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
         return;
     }
 
-    spdlog::info("[evalBinaryOp] op={} batch_fn={}", static_cast<int>(op.op), op.batch_fn ? "set" : "null");
     if (op.batch_fn) {
         op.batch_fn(*left.column, *right.column, result, count);
     }

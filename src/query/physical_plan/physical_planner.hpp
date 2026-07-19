@@ -1,7 +1,9 @@
 #pragma once
 
 #include "query/dataset/row.hpp"
+#include "query/optimizer/column_rewrite.hpp"
 #include "query/physical_plan/physical_operator.hpp"
+#include "query/physical_plan/slot_layout.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"
 #include "query/planner/bound_type.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
@@ -16,7 +18,7 @@
 namespace eugraph {
 namespace optimizer {
 struct ChosenPlan;
-struct PropertyExtractionInfo;
+struct PEPlan;
 } // namespace optimizer
 
 namespace compute {
@@ -29,14 +31,44 @@ struct PlanContext {
     std::unordered_map<LabelId, LabelDef>& label_defs;
     std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs;
     function::EvalContext eval_ctx;
-    bool use_property_extract = false;
+    /// Per-slot requirements collected from downstream operators.
+    /// Drives ProjectionExtractPhysicalOp spec generation.
+    optimizer::PlanRequirements requirements;
+    /// Per-canonical-slot extraction plan produced by buildExtractionInfo
+    /// (the Decide phase). dispatchProjectionExtract consumes this directly
+    /// so all PE-related decisions — slot allocation, Construct emit, prop
+    /// loads — live in one place.
+    optimizer::PEPlans extraction_info;
+    /// Maps variable name → globally-unique SlotId. Populated by
+    /// optimizer::allocateAllSlots at the start of planBound (covers all
+    /// variable names in the bound tree, including aliases).
+    optimizer::NameSlotMap var_slots;
+    /// Alias slot → canonical slot map. Built by collectAliasSlotMap.
+    optimizer::AliasSlotMap alias_map;
+    /// Slot allocator for ProjectionExtract-appended columns.
+    binder::SlotAllocator slot_allocator;
+    /// Fresh Expand bindings (name → planner slot) collected by
+    /// buildFreshExpandMap. dispatchProjectionExtract uses this to also
+    /// emit Construct columns for names that canonicalForName would
+    /// conflate with an alias chain (§6.2).
+    optimizer::NameSlotMap fresh_expands;
+
+    /// Read-only resolver over (var_slots, alias_map). All read-only query
+    /// paths should go through this — direct map access is reserved for the
+    /// lookup-or-allocate pattern in makeSlotLayout / Project per-item fallback
+    /// and for the allocateAllSlots / lowerAliasPassthrough writers.
+    optimizer::SlotResolver resolver() const {
+        return optimizer::SlotResolver(var_slots, alias_map);
+    }
 };
 
-/// Result of planning an operator: the physical operator + its output schema + types.
+/// Result of planning an operator: the physical operator + its output schema + types
+/// + logical slot layout (maps SlotId → physical column_index).
 struct PlanOperatorResult {
     std::unique_ptr<PhysicalOperator> op;
     Schema output_schema;
     std::vector<binder::BoundType> output_types;
+    TupleSlotLayout slot_layout;
 };
 
 /// Converts a BoundLogicalPlan into a tree of PhysicalOperator.

@@ -193,6 +193,24 @@ for each DataChunk from child:
 - `SET x += {k: v}` — map 合并（is_add_assign）
 - `SET x.prop = null` — 属性移除
 
+#### SET_PROPERTIES 的实体源（VertexValue / EdgeValue）
+
+`SET r = a`（a 为顶点或边变量）走 SET_PROPERTIES 分支，源值到达 `executeSetPropertiesItem` 时是 `VertexValue` / `EdgeValue`（由 `ProjectionExtractPhysicalOp` 物化为整实体），而非 `MapValue`。直接当作 map 写入会落到 `std::holds_alternative<MapValue>` 之外的分支，导致属性被静默丢弃。
+
+修复：在 `MergePhysicalOp::executeSetPropertiesItem` 中检测源值类型，若是 `VertexValue` / `EdgeValue`，调用辅助 `entityValueToMap` 按 `label_defs_` / `edge_label_defs_` 中已注册的 `PropertyDef` 把存储 `PropertyValue` 还原为命名 map；否则原样使用。然后走原有 `putVertexProperty` / `putEdgeProperty` 路径写入，确保后续 `properties(r)` / `keys(r)` 可见。
+
+### 动态边属性注册（TCK 场景）
+
+TCK 通过 `ensureTypesForQuery` 自动建 label/edge_label 时**不注册属性定义**，运行时由 `ON CREATE SET r.name = ...` 触发动态注册。`MergePhysicalOp::registerPendingProps` 调用 `meta_.addEdgeLabelProperties(name, ...)`，但调用需 `edge_label_name_` 非空。
+
+绑定阶段早期实现里，`edge_label_name` 仅在 `edge_label_id` 缺失时被赋值（`!rel_pat.rel_types.empty() && !edge_label_id.has_value()`）——TCK 路径下 label 已在 catalog 中（id 存在），导致 name 留空，`addEdgeLabelProperties` 被跳过，SET 写入未被注册的 prop_id，后续 `properties(r)` 读不到。修复：始终把 `rel_pat.rel_types[0]` 透传给 `BoundMergeOp::edge_label_name`，物理算子据此调用 `addEdgeLabelProperties` 把 ON CREATE/MATCH SET 列出的属性名注册到 edge label，再回填 `edge_label_defs_` 缓存供 SET 与读路径查找 prop_id。
+
+### 动态节点属性注册（TCK 场景）
+
+ON CREATE SET / ON MATCH SET 针对节点属性时（例如 `ON CREATE SET b.created = 1`），TCK 自动建的 label 同样不带属性定义。`executeSetPropertyItem` 走到"未在 search_labels 中找到 prop"分支时，原本会把属性写到 `__anon__` label。读路径只遍历节点实际拥有的 label，因此看不到 `__anon__` 下的属性，后续 `properties(b)` 返回空。
+
+修复：fallback 路径不再固定写 `__anon__`，而是从 `search_labels` 中选取第一个具体 label（剔除 INVALID 与 `__anon__`），调用 `meta_.addVertexLabelProperties(label_name, {{prop_name, ANY}})` 动态注册，回填 `label_defs_` 缓存后再用该具体 label 的 prop_id 写入。仅当节点确实没有任何具体 label 时才退回 `__anon__`。这同时保证 SET 立即生效以及后续读路径可见。
+
 ---
 
 ## 输出 Schema
@@ -241,7 +259,7 @@ for each DataChunk from child:
 - ✅ **LIMIT 0 副作用**：`LimitPhysicalOp` LIMIT 0 正确消费子数据触发副作用，仅结果集为空。
 - **边扫描**：分支上 `MATCH ... CREATE` 边后，`ExpandPhysicalOp` 通过 `scanEdges` 扫描不到刚创建的边（`insertEdge` 未被调用，原因待查）。这是已有问题，非 MERGE 引入，但影响边 MERGE 的匹配阶段。
 - **ON MATCH SET 边属性不可见**：ON MATCH 分支中通过 `putEdgeProperty` 写入的边属性在后续 snapshot 查询中不可见（Bug J）。ON CREATE 分支正常。影响 7 个 TCK 场景。
-- **动态属性访问 `r[key]`**：edge 类型的动态属性访问未完整支持（Bug K）。影响 4 个 TCK 场景的控制查询。
+- **动态属性访问 `r[key]`（已修复）**：原本 `column_rewrite` 未识别 `BoundListComprehension` / `BoundAllExpr` 等，列表推导式和量词表达式内外部变量引用都不会触发 `need_whole_edge` / `need_whole_vertex`。表现：`RETURN keys(r)` 单独可用，但 `RETURN [key IN keys(r) | r[key]]` 因 `r` 未物化为 `EdgeValue` 而返回空。修复：`collectExprReqs` 递归进入 `list_expr / projection / where_pred`，并把循环变量名作为 `loop_var_skip` 传入，避免把循环变量误登记为 plan column 的 requirement。
 - **findMatchingEdge 只返回首条**：扫描边时不验证所有属性约束即返回（Bug L）。影响 1 个 TCK 场景。
 - **findMatchingNode 匹配不完整**：扫描标签表不过滤已删除节点（Bug M）。影响 3 个 TCK 场景。
 

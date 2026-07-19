@@ -7,27 +7,28 @@
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/delete_physical_op.hpp"
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
-#include "query/physical_plan/operator/edge_property_extract_physical_op.hpp"
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
 #include "query/physical_plan/operator/merge_physical_op.hpp"
 #include "query/physical_plan/operator/path_element_property_read_physical_op.hpp"
+#include "query/physical_plan/operator/projection_extract_physical_op.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
 #include "query/physical_plan/operator/union_physical_op.hpp"
 #include "query/physical_plan/operator/unwind_physical_op.hpp"
 #include "query/physical_plan/operator/varlen_expand_physical_op.hpp"
-#include "query/physical_plan/operator/vertex_property_extract_physical_op.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
 #include <functional>
-#include <stdexcept>
+#include <set>
+
+#include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace compute {
 
 // ==================== Helpers ====================
 
-[[maybe_unused]] static binder::BoundType propertyTypeToBoundType(PropertyType pt) {
+static binder::BoundType propertyTypeToBoundType(PropertyType pt) {
     switch (pt) {
     case PropertyType::BOOL:
         return binder::BoundType::Bool();
@@ -58,483 +59,303 @@ namespace compute {
     }
 }
 
-[[maybe_unused]] static PlanOperatorResult
-dispatchVertexPropertyExtract(PlanOperatorResult&& child_result, const std::string& variable,
-                              const std::unordered_map<LabelId, std::vector<uint16_t>>& label_prop_ids,
-                              bool include_labels, IAsyncGraphDataStore& store,
-                              const std::unordered_map<LabelId, LabelDef>& label_defs) {
-    size_t col_idx = SIZE_MAX;
-    for (size_t i = child_result.output_schema.size(); i-- > 0;)
-        if (child_result.output_schema[i] == variable) {
-            col_idx = i;
-            break;
+/// Build a TupleSlotLayout from an output_schema + the var_slots map
+/// populated from the bound plan.  Uses the actual globally-unique
+/// slot_ids assigned by the Binder rather than sequential numbers.
+/// For anonymous ProjectionExtract columns (a.name, etc.), allocates
+/// fresh slot_ids from the planner's SlotAllocator and writes them back
+/// to ctx.var_slots so subsequent operators see the same slot_id for
+/// the same column name.
+static TupleSlotLayout makeSlotLayout(const Schema& output_schema, PlanContext& ctx) {
+    TupleSlotLayout layout;
+    for (size_t i = 0; i < output_schema.size(); ++i) {
+        auto it = ctx.var_slots.find(output_schema[i]);
+        binder::SlotId sid;
+        if (it != ctx.var_slots.end()) {
+            sid = it->second;
+        } else {
+            sid = ctx.slot_allocator.next();
+            ctx.var_slots[output_schema[i]] = sid;
         }
-    if (col_idx == SIZE_MAX)
-        return std::move(child_result);
-    if (!include_labels && label_prop_ids.empty())
+        layout.append(sid);
+    }
+    return layout;
+}
+
+/// Resolve the physical column that holds a mutation target's constructed
+/// VertexValue / EdgeValue. Append-only ProjectionExtract keeps the source
+/// VertexRef/EdgeKey in the variable's own column and appends the constructed
+/// object as a separate column (object_slot_id in the PEPlan). SET / REMOVE /
+/// DELETE need the object, so we resolve object_slot_id → column via the
+/// child's slot layout. Falls back to the variable's own slot when no PEPlan
+/// exists for the canonical slot (e.g. CREATE outputs a fully constructed
+/// VERTEX/EDGE column under the variable's own slot, so no append was needed).
+/// Returns -1 when the variable is unknown, letting the op fall back to
+/// name-based lookup. Emits spdlog::warn on the two bug-signal paths
+/// (PEPlan present but object_slot_id invalid; resolved slot missing from the
+/// child layout) so silent regressions of the append-only / mutation
+/// integration contract are observable.
+static int resolveMutationColumn(PlanContext& ctx, const TupleSlotLayout& layout, const std::string& var) {
+    auto resolver = ctx.resolver();
+    binder::SlotId target_slot = resolver.slotForName(var);
+    if (target_slot == binder::INVALID_SLOT_ID)
+        return -1;
+    binder::SlotId canon = resolver.canonicalOf(target_slot);
+    auto pe = ctx.extraction_info.find(canon);
+    if (pe != ctx.extraction_info.end()) {
+        if (pe->second.object_slot_id == binder::INVALID_SLOT_ID) {
+            spdlog::warn("[resolveMutationColumn] PEPlan for var '{}' (canonical slot {}) exists but "
+                         "object_slot_id is INVALID — mutation will fall back to the variable's own slot "
+                         "and likely read VertexRef instead of VertexValue",
+                         var, canon);
+        } else {
+            target_slot = pe->second.object_slot_id;
+        }
+    }
+    int col = layout.getColumnIndex(target_slot);
+    if (col < 0) {
+        spdlog::warn("[resolveMutationColumn] resolved slot {} for var '{}' is not present in the child "
+                     "slot layout (size {}) — mutation will fall back to name-based lookup and may no-op",
+                     target_slot, var, layout.size());
+    }
+    return col;
+}
+
+///   - need_whole_vertex  → Passthrough source + APPEND ConstructVertex column
+///   - need_whole_edge    → Passthrough source + APPEND ConstructEdge column
+///   - vertex_props(p)    → Passthrough source + APPEND LoadVertexProp column per p
+///   - edge_props(p)      → Passthrough source + APPEND LoadEdgeProp column per p
+///   - need_vertex_labels → Passthrough source + APPEND LoadVertexLabels column
+///   - need_edge_type     → Passthrough source + APPEND LoadEdgeType column
+///
+/// Per the demand-pull-lowering design: PE NEVER overwrites an upstream
+/// column. The source VertexRef / EdgeKey column is always preserved so
+/// topology-reading operators (Expand, etc.) keep working unchanged.
+///
+/// Slot ids for appended columns come straight from the PEPlan (allocated
+/// by buildExtractionInfo). Output column names are derived from the
+/// canonical slot id — no string naming convention, slot ids are the
+/// single source of truth.
+///
+/// Returns the input untouched when no PEPlan exists for any input column.
+static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_result, IAsyncGraphDataStore& store,
+                                                    PlanContext& ctx) {
+    const auto& info = ctx.extraction_info;
+    if (info.empty())
         return std::move(child_result);
 
-    std::vector<VertexPropertyExtractPhysicalOp::LabelRequest> label_requests;
-    std::vector<VertexPropertyExtractPhysicalOp::PropRequest> prop_requests;
-    Schema output_schema = child_result.output_schema;
-    auto output_types = child_result.output_types;
+    std::vector<ColumnSpec> specs;
+    Schema output_schema;
+    std::vector<binder::BoundType> output_types;
+    const size_t input_cols = child_result.output_schema.size();
 
-    std::unordered_map<LabelId, std::string> label_id_to_name;
-    if (include_labels) {
-        label_requests.push_back({col_idx});
-        output_schema.push_back(variable + ".labels");
-        output_types.push_back(binder::BoundType::List(binder::BoundType::String()));
-        for (const auto& [lid, ldef] : label_defs)
-            if (ldef.name != kAnonLabelName)
-                label_id_to_name[lid] = ldef.name;
+    std::unordered_map<LabelId, std::string> vertex_label_names;
+    for (const auto& [lid, ldef] : ctx.label_defs)
+        if (ldef.name != kAnonLabelName)
+            vertex_label_names[lid] = ldef.name;
+    std::unordered_map<EdgeLabelId, std::string> edge_label_names;
+    for (const auto& [elid, eldef] : ctx.edge_label_defs)
+        edge_label_names[elid] = eldef.name;
+
+    bool any_load = false;
+
+    auto slotForName = [&ctx](const std::string& name) -> binder::SlotId { return ctx.resolver().slotForName(name); };
+
+    /// Build a stable output name for an appended PE column. Slot id is
+    /// unique, so the name is purely diagnostic.
+    auto peName = [](binder::SlotId sid) { return std::string("__pe_") + std::to_string(sid); };
+
+    auto emitSpec = [&](ColumnSpec s) {
+        output_schema.push_back(s.output_name);
+        output_types.push_back(s.output_type);
+        specs.push_back(std::move(s));
+    };
+
+    // dedup across multiple PE calls in same pipeline — keyed by slot_id
+    std::set<binder::SlotId> emitted_slots;
+    for (const auto& s : child_result.output_schema) {
+        binder::SlotId sid = slotForName(s);
+        if (sid != binder::INVALID_SLOT_ID)
+            emitted_slots.insert(sid);
     }
 
-    for (const auto& [lid, pids] : label_prop_ids) {
-        auto def_it = label_defs.find(lid);
-        for (uint16_t pid : pids) {
-            std::string pn = std::to_string(pid);
+    for (size_t col = 0; col < input_cols; ++col) {
+        const std::string& var = child_result.output_schema[col];
+
+        // Always passthrough the source column. PE is append-only.
+        ColumnSpec pasm;
+        pasm.kind = ColumnSpec::Kind::Passthrough;
+        pasm.output_name = var;
+        pasm.output_type = child_result.output_types[col];
+        pasm.source_col = col;
+        binder::SlotId passthrough_slot = slotForName(var);
+        pasm.slot_id = passthrough_slot;
+        emitSpec(std::move(pasm));
+
+        if (passthrough_slot == binder::INVALID_SLOT_ID)
+            continue;
+        binder::SlotId canon = optimizer::getCanonicalSlot(ctx.alias_map, passthrough_slot);
+        auto it = info.find(canon);
+        if (it == info.end())
+            continue;
+        const auto& pi = it->second;
+
+        // Object column (Construct). Emitted iff Decide allocated a fresh
+        // slot (object_slot_id != source_slot_id). When source is already
+        // a constructed VERTEX/EDGE, Decide aliased object_slot_id to
+        // source_slot_id and we skip — the source column itself satisfies
+        // the whole-object demand.
+        if (pi.object_slot_id != binder::INVALID_SLOT_ID && pi.object_slot_id != pi.source_slot_id) {
+            if (!emitted_slots.count(pi.object_slot_id)) {
+                bool col_is_edge = child_result.output_types[col].kind == binder::BoundTypeKind::EDGE ||
+                                   child_result.output_types[col].kind == binder::BoundTypeKind::EDGE_KEY;
+                ColumnSpec s;
+                s.kind = col_is_edge ? ColumnSpec::Kind::ConstructEdge : ColumnSpec::Kind::ConstructVertex;
+                s.output_name = peName(pi.object_slot_id);
+                s.output_type = col_is_edge ? binder::BoundType::Edge() : binder::BoundType::Vertex();
+                s.source_col = col;
+                s.slot_id = pi.object_slot_id;
+                ctx.var_slots[s.output_name] = pi.object_slot_id;
+                emitSpec(std::move(s));
+                emitted_slots.insert(pi.object_slot_id);
+                any_load = true;
+            }
+        }
+
+        // Vertex prop loads — slot_ids come straight from PEPlan.
+        for (size_t i = 0; i < pi.prop_order.size(); ++i) {
+            auto [lid, pid] = pi.prop_order[i];
+            binder::SlotId pslot = pi.prop_slot_ids[i];
+            if (emitted_slots.count(pslot))
+                continue;
+            ColumnSpec s;
+            s.kind = ColumnSpec::Kind::LoadVertexProp;
+            s.label_id = lid;
+            s.prop_id = pid;
+            s.source_col = col;
+            s.output_name = peName(pslot);
+            s.slot_id = pslot;
             binder::BoundType pt = binder::BoundType::Any();
-            if (def_it != label_defs.end())
-                for (const auto& pd : def_it->second.properties)
+            auto def_it = ctx.label_defs.find(lid);
+            if (def_it != ctx.label_defs.end()) {
+                for (const auto& pd : def_it->second.properties) {
                     if (pd.id == pid) {
-                        pn = pd.name;
                         pt = propertyTypeToBoundType(pd.type);
                         break;
                     }
-            output_schema.push_back(variable + "." + pn);
-            output_types.push_back(pt);
-            prop_requests.push_back({col_idx, lid, pid});
+                }
+            }
+            s.output_type = pt;
+            ctx.var_slots[s.output_name] = pslot;
+            emitSpec(std::move(s));
+            emitted_slots.insert(pslot);
+            any_load = true;
         }
-    }
 
-    auto extract_op = std::make_unique<VertexPropertyExtractPhysicalOp>(
-        variable, std::move(label_requests), std::move(prop_requests),
-        std::vector<VertexPropertyExtractPhysicalOp::VertexRequest>{}, store, std::move(label_id_to_name),
-        Schema(child_result.output_schema), std::vector<binder::BoundType>(output_types), std::move(child_result.op));
-    return PlanOperatorResult{std::move(extract_op), std::move(output_schema), std::move(output_types)};
-}
-
-/// Create an EdgePropertyExtractPhysicalOp that appends flat edge property columns.
-[[maybe_unused]] static PlanOperatorResult
-dispatchEdgePropertyExtract(PlanOperatorResult&& child_result, const std::string& variable,
-                            const std::vector<uint16_t>& edge_prop_ids, EdgeLabelId edge_label_id,
-                            IAsyncGraphDataStore& store,
-                            const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs) {
-    if (variable.empty() || edge_prop_ids.empty())
-        return std::move(child_result);
-    size_t col_idx = SIZE_MAX;
-    for (size_t i = child_result.output_schema.size(); i-- > 0;)
-        if (child_result.output_schema[i] == variable) {
-            col_idx = i;
-            break;
+        // Edge prop loads.
+        for (size_t i = 0; i < pi.edge_prop_order.size(); ++i) {
+            auto [elid, pid] = pi.edge_prop_order[i];
+            binder::SlotId pslot = pi.edge_prop_slot_ids[i];
+            if (emitted_slots.count(pslot))
+                continue;
+            ColumnSpec s;
+            s.kind = ColumnSpec::Kind::LoadEdgeProp;
+            s.edge_label_id = elid;
+            s.prop_id = pid;
+            s.source_col = col;
+            s.output_name = peName(pslot);
+            s.slot_id = pslot;
+            binder::BoundType pt = binder::BoundType::Any();
+            auto def_it = ctx.edge_label_defs.find(elid);
+            if (def_it != ctx.edge_label_defs.end()) {
+                for (const auto& pd : def_it->second.properties) {
+                    if (pd.id == pid) {
+                        pt = propertyTypeToBoundType(pd.type);
+                        break;
+                    }
+                }
+            }
+            s.output_type = pt;
+            ctx.var_slots[s.output_name] = pslot;
+            emitSpec(std::move(s));
+            emitted_slots.insert(pslot);
+            any_load = true;
         }
-    if (col_idx == SIZE_MAX)
-        return std::move(child_result);
 
-    Schema output_schema = child_result.output_schema;
-    auto output_types = child_result.output_types;
-    auto def_it = edge_label_defs.find(edge_label_id);
-    for (uint16_t pid : edge_prop_ids) {
-        std::string pn = std::to_string(pid);
-        binder::BoundType pt = binder::BoundType::Any();
-        if (def_it != edge_label_defs.end()) {
-            for (const auto& pd : def_it->second.properties) {
-                if (pd.id == pid) {
-                    pn = pd.name;
-                    pt = propertyTypeToBoundType(pd.type);
-                    break;
+        // Vertex labels.
+        if (pi.labels_slot_id != binder::INVALID_SLOT_ID && !emitted_slots.count(pi.labels_slot_id)) {
+            ColumnSpec s;
+            s.kind = ColumnSpec::Kind::LoadVertexLabels;
+            s.output_name = peName(pi.labels_slot_id);
+            s.output_type = binder::BoundType::List(binder::BoundType::String());
+            s.source_col = col;
+            s.slot_id = pi.labels_slot_id;
+            ctx.var_slots[s.output_name] = pi.labels_slot_id;
+            emitSpec(std::move(s));
+            emitted_slots.insert(pi.labels_slot_id);
+            any_load = true;
+        }
+
+        // Edge type.
+        if (pi.type_slot_id != binder::INVALID_SLOT_ID && !emitted_slots.count(pi.type_slot_id)) {
+            ColumnSpec s;
+            s.kind = ColumnSpec::Kind::LoadEdgeType;
+            s.output_name = peName(pi.type_slot_id);
+            s.output_type = binder::BoundType::String();
+            s.source_col = col;
+            s.slot_id = pi.type_slot_id;
+            ctx.var_slots[s.output_name] = pi.type_slot_id;
+            emitSpec(std::move(s));
+            emitted_slots.insert(pi.type_slot_id);
+            any_load = true;
+        }
+
+        // If a descendant Expand reintroduced `var` as a fresh binding,
+        // the name-based slotForName above may have returned the alias-
+        // chain slot. The fresh slot has its own PEPlan (from
+        // collectPlanRequirements) — also emit a Construct column here
+        // so RETURN-level consumers get a fully constructed object from
+        // the correct source column (§6.2).
+        auto fresh_it = ctx.fresh_expands.find(var);
+        if (fresh_it != ctx.fresh_expands.end()) {
+            binder::SlotId fresh_slot = fresh_it->second;
+            binder::SlotId fresh_canon = optimizer::getCanonicalSlot(ctx.alias_map, fresh_slot);
+            if (fresh_canon != passthrough_slot && fresh_canon != binder::INVALID_SLOT_ID) {
+                auto fi = info.find(fresh_canon);
+                if (fi != info.end() && fi->second.object_slot_id != binder::INVALID_SLOT_ID &&
+                    fi->second.object_slot_id != fi->second.source_slot_id &&
+                    !emitted_slots.count(fi->second.object_slot_id)) {
+                    ColumnSpec s;
+                    s.kind = ColumnSpec::Kind::ConstructVertex;
+                    s.output_name = peName(fi->second.object_slot_id);
+                    s.output_type = binder::BoundType::Vertex();
+                    s.source_col = col;
+                    s.slot_id = fi->second.object_slot_id;
+                    ctx.var_slots[s.output_name] = fi->second.object_slot_id;
+                    emitSpec(std::move(s));
+                    emitted_slots.insert(fi->second.object_slot_id);
+                    any_load = true;
                 }
             }
         }
-        output_schema.push_back(variable + "." + pn);
-        output_types.push_back(pt);
     }
 
-    auto extract_op = std::make_unique<EdgePropertyExtractPhysicalOp>(
-        variable, col_idx, edge_prop_ids, store, Schema(child_result.output_schema),
-        std::vector<binder::BoundType>(output_types), std::move(child_result.op));
-    return PlanOperatorResult{std::move(extract_op), std::move(output_schema), std::move(output_types)};
-}
-
-// Returns true if the plan is safe for standalone extract.
-// - Single-scan only (no WITH/multi-MATCH) — extract appends columns
-// - Only labeled scans (no unlabeled AllNodeScan)
-// - No BoundDynamicPropertyRef
-// - At least one known (non-__anon__) property
-[[maybe_unused]] static bool canUsePropertyExtract(const binder::BoundLogicalOperator& op, PlanContext& ctx) {
-    std::function<bool(const binder::BoundExpression&)> exprHasDPR;
-    exprHasDPR = [&](const binder::BoundExpression& expr) -> bool {
-        return std::visit(
-            [&](const auto& ptr) -> bool {
-                using T = std::decay_t<decltype(ptr)>;
-                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>)
-                    return true;
-                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>)
-                    return exprHasDPR(ptr->left) || exprHasDPR(ptr->right);
-                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>)
-                    return exprHasDPR(ptr->operand);
-                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
-                    for (const auto& a : ptr->args)
-                        if (exprHasDPR(a))
-                            return true;
-                    return false;
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>)
-                    return exprHasDPR(ptr->object);
-                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
-                    for (const auto& e : ptr->elements)
-                        if (exprHasDPR(e))
-                            return true;
-                    return false;
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
-                    if (ptr->subject && exprHasDPR(*ptr->subject))
-                        return true;
-                    for (const auto& [w, t] : ptr->when_thens)
-                        if (exprHasDPR(w) || exprHasDPR(t))
-                            return true;
-                    if (ptr->else_expr && exprHasDPR(*ptr->else_expr))
-                        return true;
-                    return false;
-                }
-                return false;
-            },
-            expr);
-    };
-    std::function<bool(const binder::BoundLogicalOperator&)> opHasDPR;
-    opHasDPR = [&](const binder::BoundLogicalOperator& o) -> bool {
-        return std::visit(
-            [&](const auto& v) -> bool {
-                using T = std::decay_t<decltype(v)>;
-                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                    if (v) {
-                        if (exprHasDPR(v->predicate))
-                            return true;
-                        return opHasDPR(v->child);
-                    }
-                    return false;
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                    if (v) {
-                        for (auto& i : v->items)
-                            if (exprHasDPR(i.expr))
-                                return true;
-                        return opHasDPR(v->child);
-                    }
-                    return false;
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                    if (v) {
-                        for (auto& i : v->items)
-                            if (exprHasDPR(i.expr))
-                                return true;
-                        return opHasDPR(v->child);
-                    }
-                    return false;
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
-                    if (v) {
-                        for (auto& e : v->group_keys)
-                            if (exprHasDPR(e))
-                                return true;
-                        for (auto& a : v->aggregates)
-                            if (exprHasDPR(a.argument))
-                                return true;
-                        return opHasDPR(v->child);
-                    }
-                    return false;
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>> ||
-                                     std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>> ||
-                                     std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
-                                     std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>)
-                    return v && opHasDPR(v->child);
-                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
-                                   std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
-                                   std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>)
-                    return v && opHasDPR(v->child);
-                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>)
-                    return v && (opHasDPR(v->left) || opHasDPR(v->right));
-                else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
-                                   std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
-                                   std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>)
-                    return v && (opHasDPR(v->left) || opHasDPR(v->right));
-                return false;
-            },
-            o);
-    };
-    if (opHasDPR(op))
-        return false;
-
-    // Count scans — only single-scan queries are safe (no WITH/multi-MATCH)
-    int scan_count = 0;
-    bool has_unlabeled = false;
-    auto walk = [&](auto& self, const binder::BoundLogicalOperator& o) -> void {
-        std::visit(
-            [&](const auto& v) {
-                using T = std::decay_t<decltype(v)>;
-                if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
-                    ++scan_count;
-                    if (!v.label_prop_ids.empty())
-                        has_unlabeled = true;
-                } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
-                    ++scan_count;
-                } else if constexpr (std::is_same_v<T, binder::BoundBinaryJoinOp> ||
-                                     std::is_same_v<T, binder::BoundLeftJoinOp> ||
-                                     std::is_same_v<T, binder::BoundSemiJoinOp> ||
-                                     std::is_same_v<T, binder::BoundUnionOp>) {
-                    if (v) {
-                        self(self, v->left);
-                        self(self, v->right);
-                    }
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                    if (v)
-                        self(self, v->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                    if (v)
-                        self(self, v->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                    if (v)
-                        self(self, v->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                    if (v)
-                        self(self, v->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                    if (v)
-                        self(self, v->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                    if (v)
-                        self(self, v->child);
-                }
-            },
-            o);
-    };
-    // Also count ProjectOps — WITH creates extra ProjectOps that reference
-    // columns by index, which would be broken by extract column shifts.
-    int proj_count = 0;
-    auto countProj = [&](auto& self, const binder::BoundLogicalOperator& o) -> void {
-        std::visit(
-            [&](const auto& v) {
-                using T = std::decay_t<decltype(v)>;
-                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>)
-                    ++proj_count;
-                if constexpr (std::is_same_v<T, binder::BoundBinaryJoinOp> ||
-                              std::is_same_v<T, binder::BoundLeftJoinOp> ||
-                              std::is_same_v<T, binder::BoundSemiJoinOp> || std::is_same_v<T, binder::BoundUnionOp>) {
-                    if (v) {
-                        self(self, v->left);
-                        self(self, v->right);
-                    }
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
-                    if (v)
-                        self(self, v->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
-                    if (v)
-                        self(self, v->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
-                    if (v)
-                        self(self, v->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
-                    if (v)
-                        self(self, v->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
-                    if (v)
-                        self(self, v->child);
-                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
-                    if (v)
-                        self(self, v->child);
-                }
-            },
-            o);
-    };
-    countProj(countProj, op);
-
-    walk(walk, op);
-    if (scan_count != 1)
-        return false;
-    if (has_unlabeled)
-        return false;
-    // Only single-Project queries (no WITH): extra ProjectOps reference
-    // columns by index which would be shifted by extract.
-    if (proj_count > 1)
-        return false;
-
-    auto info = optimizer::collectExtractionFromPlan(op, 0);
-    if (info.empty())
-        return false;
-    for (const auto& [var, ext] : info) {
-        for (const auto& [lid, pid] : ext.prop_order) {
-            auto def_it = ctx.label_defs.find(lid);
-            if (def_it != ctx.label_defs.end() && def_it->second.name != kAnonLabelName)
-                return true;
-        }
-    }
-    return false;
-}
-
-// ==================== Deferred Property Loading Wrappers ====================
-
-/// Inline label loader for non-standalone path. Upgrades VertexRef→VertexValue
-/// in-place (preserves old wrap semantics for BoundDynamicPropertyRef / RETURN n).
-static PlanOperatorResult loadVertexLabelsInPlace(PlanOperatorResult&& child_result, const std::string& variable,
-                                                  IAsyncGraphDataStore& store) {
-    if (variable.empty())
-        return std::move(child_result);
-    size_t col_idx = SIZE_MAX;
-    for (size_t i = child_result.output_schema.size(); i-- > 0;)
-        if (child_result.output_schema[i] == variable) {
-            col_idx = i;
-            break;
-        }
-    if (col_idx == SIZE_MAX)
+    if (!any_load)
         return std::move(child_result);
 
-    auto output_types = std::vector<binder::BoundType>(child_result.output_types);
-    output_types[col_idx] = binder::BoundType::Vertex();
-
-    struct LabelReadOp : PhysicalOperator {
-        size_t ci;
-        IAsyncGraphDataStore& s;
-        std::vector<binder::BoundType> ot;
-        std::unique_ptr<PhysicalOperator> ch;
-        LabelReadOp(size_t c, IAsyncGraphDataStore& st, std::vector<binder::BoundType> o,
-                    std::unique_ptr<PhysicalOperator> chld)
-            : ci(c), s(st), ot(std::move(o)), ch(std::move(chld)) {}
-        folly::coro::AsyncGenerator<RowBatch> execute() override {
-            return executeViaChunk();
-        }
-        folly::coro::AsyncGenerator<DataChunk> executeChunk() override {
-            auto g = ch->executeChunk();
-            while (auto ck = co_await g.next()) {
-                size_t n = ck->numRows();
-                auto en = Column::flat(binder::BoundTypeKind::VERTEX, n);
-                for (size_t r = 0; r < n; ++r) {
-                    auto v = ck->columns[ci].getValue(r);
-                    VertexValue vv;
-                    if (std::holds_alternative<VertexRef>(v))
-                        vv.id = std::get<VertexRef>(v).id;
-                    else if (std::holds_alternative<VertexValue>(v))
-                        vv = std::get<VertexValue>(v);
-                    else
-                        continue;
-                    auto lbs = co_await s.getVertexLabels(vv.id);
-                    lbs.erase(INVALID_LABEL_ID);
-                    vv.labels = std::move(lbs);
-                    en.setValue(r, Value(std::move(vv)));
-                }
-                DataChunk out;
-                out.columns = std::move(ck->columns);
-                out.columns[ci] = std::move(en);
-                out.count = n;
-                co_yield std::move(out);
-            }
-        }
-        std::string toString() const override {
-            return "VertexLabelRead";
-        }
-        std::vector<const PhysicalOperator*> children() const override {
-            return {ch.get()};
-        }
-    };
-    auto ot_copy = std::vector<binder::BoundType>(output_types);
-    auto op = std::make_unique<LabelReadOp>(col_idx, store, std::move(output_types), std::move(child_result.op));
-    return PlanOperatorResult{std::move(op), std::move(child_result.output_schema), std::move(ot_copy)};
-}
-
-/// Inline property loader for non-standalone path. Loads properties into
-/// VertexValue in-place (preserves old wrap semantics for BoundPropertyRef).
-[[maybe_unused]] static PlanOperatorResult
-loadVertexPropertiesInPlace(PlanOperatorResult&& child_result, const std::string& variable,
-                            const std::unordered_map<LabelId, std::vector<uint16_t>>& label_prop_ids,
-                            IAsyncGraphDataStore& store) {
-    if (variable.empty() || label_prop_ids.empty())
-        return std::move(child_result);
-    size_t col_idx = SIZE_MAX;
-    for (size_t i = child_result.output_schema.size(); i-- > 0;)
-        if (child_result.output_schema[i] == variable) {
-            col_idx = i;
-            break;
-        }
-    if (col_idx == SIZE_MAX)
-        return std::move(child_result);
-
-    auto ot = std::vector<binder::BoundType>(child_result.output_types);
-    ot[col_idx] = binder::BoundType::Vertex();
-
-    struct PropReadOp : PhysicalOperator {
-        size_t ci;
-        std::unordered_map<LabelId, std::vector<uint16_t>> lp;
-        IAsyncGraphDataStore& s;
-        std::vector<binder::BoundType> ot;
-        std::unique_ptr<PhysicalOperator> ch;
-        PropReadOp(size_t c, std::unordered_map<LabelId, std::vector<uint16_t>> l, IAsyncGraphDataStore& st,
-                   std::vector<binder::BoundType> o, std::unique_ptr<PhysicalOperator> chld)
-            : ci(c), lp(std::move(l)), s(st), ot(std::move(o)), ch(std::move(chld)) {}
-        folly::coro::AsyncGenerator<RowBatch> execute() override {
-            return executeViaChunk();
-        }
-        folly::coro::AsyncGenerator<DataChunk> executeChunk() override {
-            auto g = ch->executeChunk();
-            while (auto ck = co_await g.next()) {
-                size_t n = ck->numRows();
-                auto en = Column::flat(binder::BoundTypeKind::VERTEX, n);
-                for (size_t r = 0; r < n; ++r) {
-                    auto v = ck->columns[ci].getValue(r);
-                    VertexValue vv;
-                    if (std::holds_alternative<VertexRef>(v))
-                        vv.id = std::get<VertexRef>(v).id;
-                    else if (std::holds_alternative<VertexValue>(v))
-                        vv = std::get<VertexValue>(v);
-                    else
-                        continue;
-                    for (const auto& [lid, pids] : lp) {
-                        auto ps = co_await s.getVertexProperties(vv.id, lid, pids);
-                        if (ps)
-                            vv.properties[lid] = std::move(*ps);
-                    }
-                    en.setValue(r, Value(std::move(vv)));
-                }
-                DataChunk out;
-                out.columns = std::move(ck->columns);
-                out.columns[ci] = std::move(en);
-                out.count = n;
-                co_yield std::move(out);
-            }
-        }
-        std::string toString() const override {
-            return "VertexPropertyRead";
-        }
-        std::vector<const PhysicalOperator*> children() const override {
-            return {ch.get()};
-        }
-    };
-    auto ot_copy = std::vector<binder::BoundType>(ot);
-    auto op = std::make_unique<PropReadOp>(col_idx, label_prop_ids, store, std::move(ot), std::move(child_result.op));
-    return PlanOperatorResult{std::move(op), std::move(child_result.output_schema), std::move(ot_copy)};
-}
-
-static PlanOperatorResult wrapEdgePropertyRead(PlanOperatorResult&& child_result, const std::string& variable,
-                                               const std::vector<uint16_t>& edge_prop_ids,
-                                               IAsyncGraphDataStore& store) {
-    // For the EdgeKey→EdgeValue topology upgrade, always wrap even when no
-    // properties were requested.  Operators like DELETE/REMOVE still need a
-    // semantic EdgeValue to extract the edge id / label.  The underlying
-    // EdgePropertyReadPhysicalOp handles empty edge_prop_ids gracefully.
-    if (variable.empty())
-        return std::move(child_result);
-    size_t col_idx = SIZE_MAX;
-    for (size_t i = child_result.output_schema.size(); i-- > 0;) {
-        if (child_result.output_schema[i] == variable) {
-            col_idx = i;
-            break;
-        }
-    }
-    if (col_idx == SIZE_MAX)
-        return std::move(child_result);
-    // Phase D: upgrade output type from topology (EDGE_KEY) to semantic (EDGE).
-    auto epr_output_types = std::vector<binder::BoundType>(child_result.output_types);
-    epr_output_types[col_idx] = binder::BoundType::Edge();
-    child_result.output_types[col_idx] = binder::BoundType::Edge();
-    auto read_op = std::make_unique<EdgePropertyReadPhysicalOp>(
-        variable, col_idx, edge_prop_ids, store, Schema(child_result.output_schema), std::move(epr_output_types),
+    auto op = std::make_unique<ProjectionExtractPhysicalOp>(
+        std::move(specs), store, std::move(vertex_label_names), std::move(edge_label_names),
+        Schema(child_result.output_schema), std::vector<binder::BoundType>(child_result.output_types),
         std::move(child_result.op));
-    return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
-                              std::move(child_result.output_types)};
+    // NB: build the layout in a local BEFORE moving output_schema into the
+    // result. A braced-init-list evaluates left-to-right, so passing
+    // makeSlotLayout(output_schema) after std::move(output_schema) would read
+    // a moved-from (empty) schema.
+    TupleSlotLayout pe_layout = makeSlotLayout(output_schema, ctx);
+    return PlanOperatorResult{std::move(op), std::move(output_schema), std::move(output_types), std::move(pe_layout)};
 }
+
+// ==================== Path Element Property Read ====================
 
 static PlanOperatorResult wrapPathElementPropertyRead(PlanOperatorResult&& child_result,
                                                       const std::string& path_variable, IAsyncGraphDataStore& store) {
@@ -557,7 +378,7 @@ static PlanOperatorResult wrapPathElementPropertyRead(PlanOperatorResult&& child
         path_variable, col_idx, store, Schema(child_result.output_schema), std::move(ppr_output_types),
         std::move(child_result.op));
     return PlanOperatorResult{std::move(read_op), std::move(child_result.output_schema),
-                              std::move(child_result.output_types)};
+                              std::move(child_result.output_types), std::move(child_result.slot_layout)};
 }
 
 // ==================== Column Index Remapping for CrossProduct ====================
@@ -867,11 +688,9 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                 std::move(composite_start), std::move(composite_end), std::move(output_types), store, ctx.label_defs);
         }
 
-        auto plan_result =
-            PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types)};
-        plan_result = loadVertexLabelsInPlace(std::move(plan_result), scan_op.variable, store);
-        plan_result =
-            loadVertexPropertiesInPlace(std::move(plan_result), scan_op.variable, scan_op.label_prop_ids, store);
+        auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                              std::move(result_output_types), TupleSlotLayout{}};
+        plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
         return plan_result;
     }
     return std::nullopt;
@@ -979,7 +798,8 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
                 std::move(output_types), store, ctx.edge_label_defs);
         }
 
-        return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types)};
+        return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(result_output_types),
+                                  TupleSlotLayout{}};
     }
     return std::nullopt;
 }
@@ -987,34 +807,113 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
 // ==================== Bound Plan Pipeline ====================
 
 namespace {
-std::unique_ptr<PhysicalOperator> finalizePlanResult(PlanOperatorResult&& result) {
-    if (!result.op)
-        return nullptr;
-    result.op->setOutputSchema(std::move(result.output_schema), std::move(result.output_types));
-    return std::move(result.op);
-}
-
 PlanOperatorResult extractChildResult(std::variant<PlanOperatorResult, std::string>&& child_result) {
     auto cr = std::move(std::get<PlanOperatorResult>(child_result));
     if (cr.op) {
         cr.op->setOutputSchema(Schema(cr.output_schema), std::vector<binder::BoundType>(cr.output_types));
+        cr.op->setSlotLayout(TupleSlotLayout(cr.slot_layout));
     }
     return cr;
 }
 
+/// Also propagate the slot layout from the result to the physical operator.
+static std::unique_ptr<PhysicalOperator> finalizePlanResult(PlanOperatorResult&& result) {
+    if (!result.op)
+        return nullptr;
+    result.op->setOutputSchema(std::move(result.output_schema), std::move(result.output_types));
+    result.op->setSlotLayout(std::move(result.slot_layout));
+    return std::move(result.op);
+}
+
 } // namespace
+
+/// Bottom-up (post-order) compilation: visit children first so each
+/// operator can use its child's output layout to resolve its own
+/// BoundColumnRef slot_ids → column_indices.
+static void compileOperatorTree(PhysicalOperator* op, PlanContext& ctx) {
+    if (!op)
+        return;
+    for (auto* child : op->children())
+        compileOperatorTree(const_cast<PhysicalOperator*>(child), ctx);
+    const auto& children = op->children();
+    if (!children.empty() && children[0]) {
+        TupleSlotLayout child_layout = children[0]->slotLayout();
+        const auto& child_schema = children[0]->outputSchema();
+        // Build/repair child_layout so it has one slot per output_schema entry.
+        // Some operators (Expand, PathBuild, CreateNode, ...) append columns
+        // but the inherited slot_layout doesn't include slots for them —
+        // compileExpressions would then fail to resolve BoundColumnRef.slot_id
+        // for those columns. Fall back to name-based layout whenever the
+        // child's slot count doesn't match its schema size.
+        if (child_layout.size() != child_schema.size() && !child_schema.empty())
+            child_layout = makeSlotLayout(child_schema, ctx);
+        op->compileExpressions(child_layout);
+        // Only derive output layout if the planner didn't set one explicitly
+        // (e.g. Project / PE / Aggregate set theirs via makeSlotLayout on
+        // their own output_schema; overwriting would clobber appended-column
+        // slots and misalign downstream column_index resolution).
+        if (op->slotLayout().size() == 0)
+            op->deriveOutputLayout(child_layout);
+    }
+}
 
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
 PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphDataStore& store,
                            IAsyncGraphMetaStore& meta, PlanContext& ctx) {
-    ctx.use_property_extract = false; //(bound_plan.root, ctx);
+    // Wire up evaluator context so that functions and property evaluators
+    // can load vertex/edge properties lazily (e.g. for startNode results).
+    ctx.eval_ctx.store = &store;
+    ctx.eval_ctx.meta = &meta;
+    ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
+
+    // Phase 0: Allocate slot_ids for every variable name (incl. aliases) so
+    // subsequent passes can resolve names synchronously. Also build the alias
+    // slot map (alias_slot → canonical_slot) by scanning Project items of the
+    // form `BoundVariableRef(X) AS Y`.
+    optimizer::allocateAllSlots(bound_plan.root, ctx.var_slots, ctx.slot_allocator);
+    ctx.alias_map = optimizer::collectAliasSlotMap(bound_plan.root, ctx.var_slots);
+
+    // Collect fresh Expand bindings (dst/edge_slot_id == INVALID) so
+    // requirements and source-type collection can add PEPlans for names
+    // that canonicalForName would otherwise conflate with an alias chain
+    // (§6.2).
+    ctx.fresh_expands = optimizer::buildFreshExpandMap(bound_plan.root);
+    const auto& fresh_expands = ctx.fresh_expands;
+
+    // Phase 1: Scan the bound plan once to collect per-slot requirements
+    // from every downstream consumer (Project / Filter / Sort / Aggregate /
+    // Set / Remove / Delete / Merge). Variable references are canonicalized
+    // through alias_map before keying the result.
+    ctx.requirements =
+        optimizer::collectPlanRequirements(bound_plan.root, ctx.resolver(), &fresh_expands);
+
+    // Phase 2 (Decide): Allocate slot_ids for every appended PE column.
+    // source_types tells the Decide phase which source columns are already
+    // constructed objects (VERTEX/EDGE) so it can skip allocating a redundant
+    // $obj slot — dispatchProjectionExtract then skips the matching Construct.
+    auto source_types = optimizer::collectSourceTypes(bound_plan.root, ctx.resolver(), &fresh_expands);
+    ctx.extraction_info =
+        optimizer::buildExtractionInfo(ctx.requirements, source_types, ctx.resolver(), ctx.slot_allocator);
+
+    // Phase 3 (Alias passthrough): For each Project item of the form
+    // `BoundVariableRef(X) AS Y`, propagate X's derived PE columns through Y
+    // so downstream consumers of Y can reference them via the alias slot.
+    optimizer::lowerAliasPassthrough(bound_plan.root, ctx.extraction_info, ctx.var_slots, ctx.alias_map,
+                                     ctx.slot_allocator);
+
+    // Phase 4 (Lower): Rewrite BoundPropertyRef → BoundColumnRef using the
+    // slot_ids allocated above. No base_col / ProjectResetMap machinery —
+    // slot_ids are stable across schema-changing operators.
+    optimizer::rewriteColumnIndices(bound_plan.root, ctx.extraction_info, ctx.resolver());
+
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(bound_plan.root, store, meta, ctx, empty_schema, empty_types);
-    ctx.use_property_extract = false;
     if (std::holds_alternative<std::string>(result))
         return std::get<std::string>(result);
-    return finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
+    auto phys_op = finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
+    compileOperatorTree(phys_op.get(), ctx);
+    return phys_op;
 }
 
 namespace {
@@ -1022,10 +921,10 @@ namespace {
 // Recursive helper: walk the materialized BoundLogicalOperator tree and
 // merge the Enricher's materialization requirements into the descendant
 // scan/expand that produces `var`. This "lowers" the Enricher into the
-// RBO-style label_prop_ids / dst_label_prop_ids / edge_prop_ids so the
-// existing wrapVertexPropertyRead / wrapEdgePropertyRead in planBoundOperator
-// can do the heavy lifting. A proper runtime Enricher operator would make
-// this function obsolete (Phase E).
+// RBO-style label_prop_ids / dst_label_prop_ids / edge_prop_ids so
+// collectPlanRequirements picks them up and dispatchProjectionExtract
+// generates the corresponding ColumnSpec array. A proper runtime Enricher
+// operator would make this function obsolete (Phase E).
 void applyEnrichInPlace(binder::BoundLogicalOperator& op, const std::string& var,
                         const optimizer::MaterializationReq& req);
 
@@ -1223,20 +1122,31 @@ void applyEnrichInPlace(binder::BoundLogicalOperator& op, const std::string& var
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
 PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphDataStore& store,
                             IAsyncGraphMetaStore& meta, PlanContext& ctx) {
-    // PropertyExtract/Enricher tags are lowered to label_prop_ids by
-    // materializeChosen. The old wrap pipeline (wrapVertexPropertyRead etc.)
-    // handles the actual property loading in-place, preserving column layout.
-    // Standalone PropertyExtractPhysicalOp operators (flat columnar) will be
-    // enabled once per-operator column index mapping is implemented.
+    // CBO path: materializeChosen lowers PropertyExtract/Enricher tags into
+    // label_prop_ids on descendant scans/expands. We then reuse the same
+    // requirement-collection + column-rewrite + ProjectionExtract pipeline
+    // as planBound so both paths converge on the unified extract operator.
+    ctx.eval_ctx.store = &store;
+    ctx.eval_ctx.meta = &meta;
+    ctx.eval_ctx.edge_label_defs = &ctx.edge_label_defs;
     binder::BoundLogicalOperator materialized = materializeChosen(chosen);
-    ctx.use_property_extract = false; //
+    optimizer::allocateAllSlots(materialized, ctx.var_slots, ctx.slot_allocator);
+    ctx.alias_map = optimizer::collectAliasSlotMap(materialized, ctx.var_slots);
+    ctx.requirements = optimizer::collectPlanRequirements(materialized, ctx.resolver());
+    auto source_types = optimizer::collectSourceTypes(materialized, ctx.resolver());
+    ctx.extraction_info =
+        optimizer::buildExtractionInfo(ctx.requirements, source_types, ctx.resolver(), ctx.slot_allocator);
+    optimizer::lowerAliasPassthrough(materialized, ctx.extraction_info, ctx.var_slots, ctx.alias_map,
+                                     ctx.slot_allocator);
+    optimizer::rewriteColumnIndices(materialized, ctx.extraction_info, ctx.resolver());
     Schema empty_schema;
     std::vector<binder::BoundType> empty_types;
     auto result = planBoundOperator(materialized, store, meta, ctx, empty_schema, empty_types);
-    ctx.use_property_extract = false;
     if (std::holds_alternative<std::string>(result))
         return std::get<std::string>(result);
-    return finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
+    auto phys_op = finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
+    compileOperatorTree(phys_op.get(), ctx);
+    return phys_op;
 }
 
 std::variant<PlanOperatorResult, std::string>
@@ -1261,13 +1171,17 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 Schema output_schema;
                 std::vector<binder::BoundType> output_types;
                 auto result = std::make_unique<SingletonPhysicalOp>(std::vector<binder::BoundType>(output_types));
-                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                TupleSlotLayout layout = makeSlotLayout(output_schema, ctx);
+                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                                          std::move(layout)};
             } else if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
                 Schema output_schema = val.variables;
                 std::vector<binder::BoundType> output_types = val.types;
                 auto result = std::make_unique<CorrelatedSourcePhysicalOp>(std::vector<std::string>(val.variables),
                                                                            std::vector<binder::BoundType>(val.types));
-                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                TupleSlotLayout layout = makeSlotLayout(output_schema, ctx);
+                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                                          std::move(layout)};
             } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
                 Schema output_schema;
                 std::vector<binder::BoundType> output_types;
@@ -1278,11 +1192,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 auto result = std::make_unique<AllNodeScanPhysicalOp>(
                     val.variable, std::vector<binder::BoundType>(output_types), store, ctx.label_name_to_id,
                     ctx.label_defs, anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
-                auto plan_result =
-                    PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
-                plan_result = loadVertexLabelsInPlace(std::move(plan_result), val.variable, store);
-                plan_result =
-                    loadVertexPropertiesInPlace(std::move(plan_result), val.variable, val.label_prop_ids, store);
+                TupleSlotLayout scan_layout = makeSlotLayout(output_schema, ctx);
+                auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                      std::move(output_types), std::move(scan_layout)};
+                plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                 return plan_result;
             } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
                 Schema output_schema;
@@ -1294,22 +1207,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 auto result = std::make_unique<LabelScanPhysicalOp>(
                     val.variable, val.label_ids, std::vector<binder::BoundType>(output_types), store, ctx.label_defs,
                     anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
-                auto plan_result =
-                    PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
-                if (ctx.use_property_extract) {
-                    // Extract adds decorative label+property columns;
-                    // in-place loading preserves old wrap semantics for RETURN n etc.
-                    plan_result = loadVertexLabelsInPlace(std::move(plan_result), val.variable, store);
-                    plan_result =
-                        loadVertexPropertiesInPlace(std::move(plan_result), val.variable, val.label_prop_ids, store);
-                    plan_result =
-                        dispatchVertexPropertyExtract(std::move(plan_result), val.variable, val.label_prop_ids,
-                                                      /*include_labels=*/false, store, ctx.label_defs);
-                } else {
-                    plan_result = loadVertexLabelsInPlace(std::move(plan_result), val.variable, store);
-                    plan_result =
-                        loadVertexPropertiesInPlace(std::move(plan_result), val.variable, val.label_prop_ids, store);
-                }
+                TupleSlotLayout scan_layout = makeSlotLayout(output_schema, ctx);
+                auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                      std::move(output_types), std::move(scan_layout)};
+                plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                 return plan_result;
             } else {
                 using Elem = typename T::element_type;
@@ -1341,17 +1242,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result = std::make_unique<ExpandPhysicalOp>(
                         v.src_variable, v.dst_variable, v.edge_variable, std::move(label_filters), v.direction, store,
                         std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op),
-                        std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{});
-                    auto plan_result =
-                        PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
-                    plan_result = wrapEdgePropertyRead(std::move(plan_result), v.edge_variable, v.edge_prop_ids, store);
-                    if (ctx.use_property_extract && !v.edge_prop_ids.empty() && !v.edge_label_ids.empty())
-                        plan_result =
-                            dispatchEdgePropertyExtract(std::move(plan_result), v.edge_variable, v.edge_prop_ids,
-                                                        v.edge_label_ids[0], store, ctx.edge_label_defs);
-                    plan_result = loadVertexLabelsInPlace(std::move(plan_result), v.dst_variable, store);
-                    plan_result = loadVertexPropertiesInPlace(std::move(plan_result), v.dst_variable,
-                                                              v.dst_label_prop_ids, store);
+                        std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, v.dst_label_ids);
+                    auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                          std::move(output_types), TupleSlotLayout{}};
+                    plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundVarLenExpandOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
@@ -1384,13 +1278,11 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         store, std::move(child_schema), std::vector<binder::BoundType>(output_types),
                         std::move(child_op), std::unordered_map<LabelId, std::vector<uint16_t>>{}, v.path_variable,
                         v.edge_variable, v.edge_prop_filters);
-                    auto plan_result =
-                        PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
-                    // Phase D: VarLenExpand now outputs VertexRef for dst; load labels here.
-                    plan_result = loadVertexLabelsInPlace(std::move(plan_result), v.dst_variable, store);
-                    plan_result = loadVertexPropertiesInPlace(std::move(plan_result), v.dst_variable,
-                                                              v.dst_label_prop_ids, store);
-                    plan_result = wrapPathElementPropertyRead(std::move(plan_result), v.path_variable, store);
+                    auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                          std::move(output_types), TupleSlotLayout{}};
+                    // Phase D: VarLenExpand outputs VertexRef for dst; ProjectionExtract
+                    // upgrades it (or appends property columns) per downstream requirements.
+                    plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
                     // ── Index scan optimization: Filter(LabelScan) → IndexScan ──
@@ -1440,7 +1332,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         std::make_unique<FilterPhysicalOp>(std::move(v.predicate), cr.output_schema, std::move(cr.op));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
-                                              std::move(cr.output_types)};
+                                              std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundProjectOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -1460,10 +1352,42 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         output_types.push_back(std::move(item.result_type));
                     }
 
+                    // Build the output layout from the pass-computed
+                    // items[i].output_slot. This keeps the physical layout
+                    // consistent with the data each rewritten item emits:
+                    // a forwarded graph variable is promoted to its object
+                    // slot, so the output column must be labelled with that
+                    // slot for downstream covering references to resolve.
+                    // Per-item fallback: items the pass didn't touch
+                    // (output_slot == INVALID_SLOT_ID) fall back to name-based
+                    // assignment, while items with a valid output_slot keep
+                    // it. Mixing the two in one Project is legal — the pass
+                    // may leave a scalar alias untouched while promoting a
+                    // sibling graph variable.
+                    TupleSlotLayout proj_layout;
+                    for (size_t i = 0; i < output_schema.size(); ++i) {
+                        binder::SlotId sid = v.items[i].output_slot;
+                        if (sid == binder::INVALID_SLOT_ID) {
+                            auto it = ctx.var_slots.find(output_schema[i]);
+                            sid = it != ctx.var_slots.end() ? it->second : ctx.slot_allocator.next();
+                            ctx.var_slots[output_schema[i]] = sid;
+                        }
+                        proj_layout.append(sid);
+                    }
+
                     auto result = std::make_unique<ProjectPhysicalOp>(std::move(items), std::move(cr.output_schema),
                                                                       std::move(child_op));
                     result->setEvalContext(ctx.eval_ctx);
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                          std::move(output_types), std::move(proj_layout)};
+                    // Note: we deliberately do NOT run dispatchProjectionExtract
+                    // after Project. Pre-Project PE already appended Construct /
+                    // property columns against the topology source; Project's
+                    // items reference those object slots directly, so the alias
+                    // output column carries the constructed VertexValue / EdgeValue.
+                    // Re-running PE here would re-emit Construct for the alias
+                    // and produce duplicate output columns.
+                    return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundAggregateOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -1516,7 +1440,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         std::make_unique<AggregatePhysicalOp>(std::move(group_keys), std::move(aggregates),
                                                               std::move(child_op), std::move(output_type_kinds));
                     result->setEvalContext(ctx.eval_ctx);
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    TupleSlotLayout agg_layout = makeSlotLayout(output_schema, ctx);
+                    auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                          std::move(output_types), std::move(agg_layout)};
+                    // PE after Aggregate: group-key variables that downstream
+                    // inspects (e.g. RETURN x after WITH ... GROUP BY) need
+                    // PE columns built against Aggregate's output schema.
+                    plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
+                    return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSortOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -1534,7 +1465,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result = std::make_unique<SortPhysicalOp>(std::move(sort_items), std::move(cr.op));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
-                                              std::move(cr.output_types)};
+                                              std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSkipOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -1542,7 +1473,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto cr = extractChildResult(std::move(child_result));
                     auto result = std::make_unique<SkipPhysicalOp>(v.count, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
-                                              std::move(cr.output_types)};
+                                              std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundLimitOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -1550,7 +1481,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto cr = extractChildResult(std::move(child_result));
                     auto result = std::make_unique<LimitPhysicalOp>(v.count, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
-                                              std::move(cr.output_types)};
+                                              std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundDistinctOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -1558,7 +1489,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto cr = extractChildResult(std::move(child_result));
                     auto result = std::make_unique<DistinctPhysicalOp>(std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
-                                              std::move(cr.output_types)};
+                                              std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundPathBuildOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -1575,8 +1506,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result = std::make_unique<PathBuildPhysicalOp>(
                         v.path_variable, v.element_variables, std::move(child_schema),
                         std::vector<binder::BoundType>(output_types), std::move(child_op));
-                    auto plan_result =
-                        PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    TupleSlotLayout path_layout = makeSlotLayout(output_schema, ctx);
+                    auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                          std::move(output_types), std::move(path_layout)};
                     // Phase D: PathBuild produces PathTopology; upgrade to PathValue for RETURN output.
                     plan_result = wrapPathElementPropertyRead(std::move(plan_result), v.path_variable, store);
                     return plan_result;
@@ -1596,6 +1528,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     std::unique_ptr<PhysicalOperator> child;
                     Schema child_schema;
                     std::vector<binder::BoundType> child_types;
+                    TupleSlotLayout child_layout;
                     if (v.child) {
                         auto child_result = planBoundOperator(*v.child, store, meta, ctx, input_schema, input_types);
                         if (std::holds_alternative<std::string>(child_result))
@@ -1604,6 +1537,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         child = std::move(cr.op);
                         child_schema = std::move(cr.output_schema);
                         child_types = std::move(cr.output_types);
+                        child_layout = std::move(cr.slot_layout);
                     }
 
                     // No AlterVertexLabelPhysicalOp — pending_props go to __anon__ via CreateNodePhysicalOp
@@ -1619,7 +1553,20 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         node_schema.push_back(v.variable);
                         output_types.push_back(binder::BoundType::Vertex());
                     }
-                    return PlanOperatorResult{std::move(result), std::move(node_schema), std::move(output_types)};
+                    // Inherit child slot layout so upstream Project's slot remapping
+                    // (e.g. alias → object_slot_id) stays consistent. Only append the
+                    // new vertex column's slot. Using makeSlotLayout here would re-resolve
+                    // names via var_slots and lose any alias/internal-slot remapping.
+                    TupleSlotLayout node_layout = std::move(child_layout);
+                    if (!v.variable.empty()) {
+                        auto it = ctx.var_slots.find(v.variable);
+                        binder::SlotId sid = it != ctx.var_slots.end() ? it->second : ctx.slot_allocator.next();
+                        if (it == ctx.var_slots.end())
+                            ctx.var_slots[v.variable] = sid;
+                        node_layout.append(sid);
+                    }
+                    return PlanOperatorResult{std::move(result), std::move(node_schema), std::move(output_types),
+                                              std::move(node_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundCreateEdgeOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -1675,12 +1622,27 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         edge_schema.push_back(v.variable);
                         edge_types.push_back(binder::BoundType::Edge());
                     }
-                    return PlanOperatorResult{std::move(result), std::move(edge_schema), std::move(edge_types)};
+                    // Inherit child slot layout (see CreateNode branch for rationale).
+                    TupleSlotLayout edge_layout = std::move(child_cr.slot_layout);
+                    if (!v.variable.empty()) {
+                        auto it = ctx.var_slots.find(v.variable);
+                        binder::SlotId sid = it != ctx.var_slots.end() ? it->second : ctx.slot_allocator.next();
+                        if (it == ctx.var_slots.end())
+                            ctx.var_slots[v.variable] = sid;
+                        edge_layout.append(sid);
+                    }
+                    return PlanOperatorResult{std::move(result), std::move(edge_schema), std::move(edge_types),
+                                              std::move(edge_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSetOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
+                    cr = extractChildResult(
+                        dispatchProjectionExtract(PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema),
+                                                                      std::move(cr.output_types),
+                                                                      std::move(cr.slot_layout)},
+                                                   store, ctx));
 
                     std::vector<SetPhysicalOp::BoundSetItem> items;
                     for (auto& si : v.items) {
@@ -1697,6 +1659,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             break;
                         }
                         bsi.var_name = si.target_variable;
+                        bsi.object_col = resolveMutationColumn(ctx, cr.slot_layout, si.target_variable);
                         bsi.prop_name = si.prop_name;
                         bsi.strong_mode = si.strong_mode;
                         bsi.is_add_assign = si.is_add_assign;
@@ -1720,12 +1683,17 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                                         ctx.label_name_to_id, anon_id, std::move(cr.op));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
-                                              std::move(cr.output_types)};
+                                              std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundRemoveOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
+                    cr = extractChildResult(
+                        dispatchProjectionExtract(PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema),
+                                                                      std::move(cr.output_types),
+                                                                      std::move(cr.slot_layout)},
+                                                   store, ctx));
 
                     std::vector<RemovePhysicalOp::BoundRemoveItem> items;
                     for (auto& ri : v.items) {
@@ -1734,6 +1702,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                        ? RemovePhysicalOp::BoundRemoveItem::Kind::LABEL
                                        : RemovePhysicalOp::BoundRemoveItem::Kind::PROPERTY;
                         bri.var_name = ri.target_variable;
+                        bri.object_col = resolveMutationColumn(ctx, cr.slot_layout, ri.target_variable);
                         bri.name = ri.prop_name;
                         bri.strong_mode = ri.strong_mode;
                         bri.resolved_label_id = ri.label_id;
@@ -1745,12 +1714,17 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                                                      ctx.label_defs, ctx.label_name_to_id, anon_id,
                                                                      ctx.edge_label_defs, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
-                                              std::move(cr.output_types)};
+                                              std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundDeleteOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
+                    cr = extractChildResult(
+                        dispatchProjectionExtract(PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema),
+                                                                      std::move(cr.output_types),
+                                                                      std::move(cr.slot_layout)},
+                                                   store, ctx));
 
                     std::vector<DeletePhysicalOp::DeleteTarget> targets;
                     for (auto& dt : v.targets) {
@@ -1759,13 +1733,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                           ? DeletePhysicalOp::TargetKind::VERTEX
                                           : DeletePhysicalOp::TargetKind::EDGE;
                         target.var_name = dt.variable_name;
+                        target.object_col = resolveMutationColumn(ctx, cr.slot_layout, dt.variable_name);
                         targets.push_back(std::move(target));
                     }
 
                     auto result = std::make_unique<DeletePhysicalOp>(std::move(targets), v.detach, cr.output_schema,
                                                                      store, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
-                                              std::move(cr.output_types)};
+                                              std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundUnwindOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
@@ -1775,15 +1750,24 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto child_schema = std::move(cr.output_schema);
                     auto output_types = std::move(cr.output_types);
 
+                    // The unwind variable is appended AFTER all child columns
+                    // (which may include PE-appended columns not present at
+                    // bind time). The binder's variable_column_index is stale
+                    // in the presence of PE — use the actual child column count
+                    // as the new column's physical index.
+                    uint32_t unwind_col_index = static_cast<uint32_t>(child_schema.size());
+
                     Schema output_schema = child_schema;
                     output_schema.push_back(v.variable);
                     output_types.push_back(binder::BoundType::Any());
 
                     auto result = std::make_unique<UnwindPhysicalOp>(
-                        std::move(v.list_expr), v.variable_column_index, binder::BoundType::Any(),
-                        std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op));
+                        std::move(v.list_expr), unwind_col_index, binder::BoundType::Any(), std::move(child_schema),
+                        std::vector<binder::BoundType>(output_types), std::move(child_op));
                     result->setEvalContext(ctx.eval_ctx);
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    TupleSlotLayout unwind_layout = makeSlotLayout(output_schema, ctx);
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                                              std::move(unwind_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundUnionOp>) {
                     auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(left_result))
@@ -1809,10 +1793,11 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         // UNION (without ALL) requires deduplication
                         auto distinct = std::make_unique<DistinctPhysicalOp>(std::move(result));
                         return PlanOperatorResult{std::move(distinct), std::move(lr.output_schema),
-                                                  std::move(output_types)};
+                                                  std::move(output_types), std::move(lr.slot_layout)};
                     }
 
-                    return PlanOperatorResult{std::move(result), std::move(lr.output_schema), std::move(output_types)};
+                    return PlanOperatorResult{std::move(result), std::move(lr.output_schema), std::move(output_types),
+                                              std::move(lr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundBinaryJoinOp>) {
                     auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(left_result))
@@ -1838,11 +1823,22 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto output_types = lr.output_types;
                     output_types.insert(output_types.end(), rr.output_types.begin(), rr.output_types.end());
 
+                    // Output layout = concat of children's slot_layouts. We
+                    // must inherit the children's actual output slots — Project
+                    // rewrites raise `WITH a` from source slot to object slot
+                    // (covering), so rebuilding from var_slots here would
+                    // produce a stale slot for "a" and downstream refs (which
+                    // point at the object slot) would fail column resolution.
+                    TupleSlotLayout xprod_layout;
+                    xprod_layout.merge(lr.slot_layout);
+                    xprod_layout.merge(rr.slot_layout);
+
                     auto result = std::make_unique<CrossProductPhysicalOp>(
                         std::move(lr.op), std::move(rr.op), std::move(lr.output_schema), std::move(rr.output_schema),
                         std::vector<binder::BoundType>(output_types));
                     result->setEvalContext(ctx.eval_ctx);
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                                              std::move(xprod_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundSemiJoinOp>) {
                     auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(left_result))
@@ -1884,7 +1880,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result = std::make_unique<SemiJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), correlated,
                                                                        std::move(left_corr_cols), v.anti);
                     return PlanOperatorResult{std::move(result), std::move(lr.output_schema),
-                                              std::move(lr.output_types)};
+                                              std::move(lr.output_types), std::move(lr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundLeftJoinOp>) {
                     auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(left_result))
@@ -1928,15 +1924,29 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         left_corr_cols.push_back(left_col);
                     }
 
+                    // Output layout = concat of children's slot_layouts (see
+                    // BinaryJoin note on why we must inherit, not rebuild).
+                    TupleSlotLayout ljoin_layout;
+                    ljoin_layout.merge(lr.slot_layout);
+                    ljoin_layout.merge(rr.slot_layout);
+
                     auto result =
                         std::make_unique<LeftJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), correlated,
                                                              std::move(left_corr_cols), std::move(rr.output_types));
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                                              std::move(ljoin_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundMergeOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
+                    // Insert PE so mutation ops receive ConstructVertex/Edge
+                    // columns for graph variables upstream.
+                    cr = extractChildResult(
+                        dispatchProjectionExtract(PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema),
+                                                                      std::move(cr.output_types),
+                                                                      std::move(cr.slot_layout)},
+                                                   store, ctx));
                     auto child_op = std::move(cr.op);
                     auto child_schema = std::move(cr.output_schema);
                     auto output_types = std::move(cr.output_types);
@@ -1957,6 +1967,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                 break;
                             }
                             bsi.var_name = si.target_variable;
+                            bsi.object_col = resolveMutationColumn(ctx, cr.slot_layout, si.target_variable);
                             bsi.prop_name = si.prop_name;
                             bsi.strong_mode = si.strong_mode;
                             bsi.is_add_assign = si.is_add_assign;
@@ -2010,7 +2021,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         store, meta, ctx.label_defs, ctx.label_name_to_id, ctx.edge_label_defs,
                         ctx.edge_label_name_to_id, std::move(child_op));
                     result->setEvalContext(ctx.eval_ctx);
-                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types)};
+                    TupleSlotLayout merge_layout = makeSlotLayout(output_schema, ctx);
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                                              std::move(merge_layout)};
                 } else {
                     return std::string("Unknown bound logical operator type");
                 }
