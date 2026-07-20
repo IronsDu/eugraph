@@ -37,7 +37,7 @@
 - 变长路径基数阈值触发的尽早物化
 
 > **详见**：
-> - [../projection-extract-design.md](../projection-extract-design.md) — `ProjectionExtractPhysicalOp` 的具体设计、7 种 ColumnSpec、`PlanRequirements` 收集规则、`column_rewrite` 的 `BoundColumnRef` 校正等
+> - [projection-extract-design.md](projection-extract-design.md) — `ProjectionExtractPhysicalOp` 的具体设计、7 种 ColumnSpec、`PlanRequirements` 收集规则、`column_rewrite` 的 `BoundColumnRef` 校正等
 > - [cascades-optimizer.md](../optimizer/cascades-optimizer.md) — CBO standalone 模式的未启用状态
 > - 下文"共性架构问题"、"第二轮审计"、"剩余未解决问题"等章节中关于**列裁剪、批量 I/O、Merge `evaluateExpr`** 的诊断仍然有效，是后续优化方向。
 
@@ -463,7 +463,7 @@ map<string, PathRequirement> path_reqs;
 
 ### 5. ProjectionExtractPhysicalOp（✅ 已实现）
 
-**概括**：融合点/边属性抽取 + Project 语义的统一算子。详见 [../projection-extract-design.md](../projection-extract-design.md)。
+**概括**：融合点/边属性抽取 + Project 语义的统一算子。详见 [projection-extract-design.md](projection-extract-design.md)。
 
 ```
 ColumnSpec 7 种 Kind：
@@ -1012,11 +1012,11 @@ Project        → name
 
 解析失败时退化为 `BoundDynamicPropertyRef`，此时需 `need_labels = true`。VertexEnrich 负责加载，SET/REMOVE 算子自身不加载 labels。
 
-### VarLenExpand 内部需要 labels 做 DFS（与 `../projection-extract-design.md` 协调）
+### VarLenExpand 内部需要 labels 做 DFS（与 `projection-extract-design.md` 协调）
 
 当前 `VarLenExpandPhysicalOp` 在 DFS 路径构建时需要目标顶点的 labels（用于判断路径是否合法）。这部分 labels 的使用是**算子内部**的，不输出到下游列。
 
-**解法**：VarLenExpand 内部保持当前行为——DFS 期间按需获取 labels（这是算子自身逻辑需要，不是 over-fetching）。但输出列（src、dst、path）不再携带 labels——那些由 Enricher 按需补齐。`../projection-extract-design.md` 中已经描述了这个方向。
+**解法**：VarLenExpand 内部保持当前行为——DFS 期间按需获取 labels（这是算子自身逻辑需要，不是 over-fetching）。但输出列（src、dst、path）不再携带 labels——那些由 Enricher 按需补齐。`projection-extract-design.md` 中已经描述了这个方向。
 
 ### Cascades 优化器的 Filter pushdown 与 Enricher 位置（与 `cascades-optimizer.md` 协调）
 
@@ -1065,7 +1065,7 @@ co_await getVertexPropertiesBatch(vector<pair<VertexId, LabelId>> queries, vecto
 
 ### PlanContext 需携带需求映射
 
-> 已实现：`collectPlanRequirements` 从 `BoundLogicalPlan` 根遍历，结果存于 `PlanRequirements`（包含 `vertex_reqs` / `edge_reqs` / `path_reqs`）。`dispatchProjectionExtract` 查询此映射构建 `ColumnSpec` 数组。详见 [../projection-extract-design.md](../projection-extract-design.md)。
+> 已实现：`collectPlanRequirements` 从 `BoundLogicalPlan` 根遍历，结果存于 `PlanRequirements`（包含 `vertex_reqs` / `edge_reqs` / `path_reqs`）。`dispatchProjectionExtract` 查询此映射构建 `ColumnSpec` 数组。详见 [projection-extract-design.md](projection-extract-design.md)。
 
 ---
 
