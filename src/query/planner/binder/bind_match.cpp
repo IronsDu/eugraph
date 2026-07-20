@@ -295,11 +295,10 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                           std::to_string(min_hops) + ")");
                     return std::nullopt;
                 }
-                if (max_hops >= 0 && max_hops < min_hops) {
-                    error("Variable-length maximum hops (" + std::to_string(max_hops) + ") must be >= minimum (" +
-                          std::to_string(min_hops) + ")");
-                    return std::nullopt;
-                }
+                // Variable-length paths with max_hops < min_hops (empty
+                // interval, e.g. *2..1) are valid — they match zero rows.
+                // The VarLenExpandPhysicalOp DFS loop naturally handles
+                // this by never executing a single iteration.
 
                 // Bind edge types. Non-existent edge types produce an empty
                 // label list, causing the expand to match zero rows — correct

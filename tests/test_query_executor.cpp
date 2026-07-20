@@ -6784,6 +6784,59 @@ TEST_F(QueryExecutorTest, TckMatch5Scenario25VarLenChainName) {
     EXPECT_EQ(names, (std::set<std::string>{"b", "c10", "c20"}));
 }
 
+// Var-len empty interval: queries with min>max (e.g. *2..1) should return 0 rows
+// without throwing an error. These are valid per openCypher and should produce
+// empty results, not RuntimeError.
+TEST_F(QueryExecutorTest, VarLenEmptyIntervalReturnsZeroRows) {
+    PropertyDef name_pd;
+    name_pd.name = "name";
+    name_pd.type = PropertyType::STRING;
+    auto la = blockingWait(async_meta_->createLabel("A", {name_pd}));
+    blockingWait(async_data_->createLabel(la));
+    auto lb = blockingWait(async_meta_->createLabel("B", {name_pd}));
+    blockingWait(async_data_->createLabel(lb));
+    auto likes = blockingWait(async_meta_->createEdgeLabel("LIKES"));
+    blockingWait(async_data_->createEdgeLabel(likes));
+
+    // Create chain: a1->b1, a2->b2
+    auto setup = execSync(*executor_,
+                          "CREATE (a1:A {name: 'a1'}), (a2:A {name: 'a2'}), "
+                          "(b1:B {name: 'b1'}), (b2:B {name: 'b2'}), "
+                          "(a1)-[:LIKES]->(b1), (a2)-[:LIKES]->(b2)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    // [11] *2..1 — empty interval (min > max)
+    {
+        auto r = execSync(*executor_, "MATCH (a:A)-[:LIKES*2..1]->(c) RETURN c.name");
+        ASSERT_TRUE(r.error.empty()) << r.error;
+        EXPECT_EQ(r.rows.size(), 0u);
+    }
+    // [12] *1..0 — empty interval (min > max)
+    {
+        auto r = execSync(*executor_, "MATCH (a:A)-[:LIKES*1..0]->(c) RETURN c.name");
+        ASSERT_TRUE(r.error.empty()) << r.error;
+        EXPECT_EQ(r.rows.size(), 0u);
+    }
+    // [13] *..0 — upper bound = 0 with default min=1 → empty
+    {
+        auto r = execSync(*executor_, "MATCH (a:A)-[:LIKES*..0]->(c) RETURN c.name");
+        ASSERT_TRUE(r.error.empty()) << r.error;
+        EXPECT_EQ(r.rows.size(), 0u);
+    }
+    // Regression: *..1 still returns real matches
+    {
+        auto r = execSync(*executor_, "MATCH (a:A)-[:LIKES*..1]->(c) RETURN c.name");
+        ASSERT_TRUE(r.error.empty()) << r.error;
+        EXPECT_EQ(r.rows.size(), 2u);
+    }
+    // Regression: *1.. (unbounded) still works
+    {
+        auto r = execSync(*executor_, "MATCH (a:A)-[:LIKES*1..]->(c) RETURN c.name");
+        ASSERT_TRUE(r.error.empty()) << r.error;
+        EXPECT_EQ(r.rows.size(), 2u);
+    }
+}
+
 // ==================== PropertyExtract Plan Correctness Tests ====================
 
 // Verify that EXPLAIN shows PropertyExtract operators in the plan for
