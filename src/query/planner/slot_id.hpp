@@ -25,7 +25,7 @@ constexpr SlotId INVALID_SLOT_ID = 0;
 /// can use isUserSlot() / isInternalSlot() rather than relying on the
 /// `__pe_*` / `__fwd_*` name prefixes.
 ///
-/// See docs/query/demand-pull-lowering-design.md §13.2-B.
+/// See docs/query/projection-extract-design.md §13.2-B.
 constexpr SlotId kInternalSlotFlag = 0x80000000U; // bit 31
 
 constexpr bool isInternalSlot(SlotId s) {

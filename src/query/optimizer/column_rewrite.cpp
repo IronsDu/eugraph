@@ -1281,8 +1281,7 @@ void lowerAliasPassthroughOp(binder::BoundLogicalOperator& op, const PEPlans& pl
                             if (auto* bcr = std::get_if<binder::BoundColumnRef>(&v->items[i].expr))
                                 bcr->slot_id = fresh_expand;
                             else if (auto* bvr = std::get_if<binder::BoundVariableRef>(&v->items[i].expr))
-                                v->items[i].expr =
-                                    binder::BoundColumnRef{0, bvr->type, bvr->name, fresh_expand};
+                                v->items[i].expr = binder::BoundColumnRef{0, bvr->type, bvr->name, fresh_expand};
                         }
                         continue;
                     }
@@ -1424,7 +1423,7 @@ NameSlotMap buildFreshExpandMap(const binder::BoundLogicalOperator& root) {
             [&](const auto& v) {
                 using T = std::decay_t<decltype(v)>;
                 if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>> ||
-                             std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                              std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
                     if (v) {
                         if (v->planner_edge_slot_id != binder::INVALID_SLOT_ID)
                             fresh[v->edge_variable] = v->planner_edge_slot_id;

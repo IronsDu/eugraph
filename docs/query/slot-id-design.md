@@ -388,7 +388,7 @@ RETURN count(*)
 
 ### Phase 5：column_rewrite 重构为 DPL 管线（✅ 已完成，方向不同）
 
-原计划是"移除 column_rewrite"。实际选择了更彻底的方案：将 `column_rewrite.cpp` 重构为六阶段 Demand-Pull-Lowering 管线（参见 [demand-pull-lowering-design.md](demand-pull-lowering-design.md)），包含分配、需求收集、PEPlan 构建、别名透传、表达式 rewrite。旧 `updateExtractionBaseCols` / `project_resets` / `left_join_cols` 等机制已移除。
+原计划是"移除 column_rewrite"。实际选择了更彻底的方案：将 `column_rewrite.cpp` 重构为六阶段 Demand-Pull-Lowering 管线（参见 [projection-extract-design.md](projection-extract-design.md)），包含分配、需求收集、PEPlan 构建、别名透传、表达式 rewrite。旧 `updateExtractionBaseCols` / `project_resets` / `left_join_cols` 等机制已移除。
 
 ### Phase 6：验证与清理（✅ 已完成）
 - [x] 437 单元测试通过

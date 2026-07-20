@@ -884,8 +884,7 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // from every downstream consumer (Project / Filter / Sort / Aggregate /
     // Set / Remove / Delete / Merge). Variable references are canonicalized
     // through alias_map before keying the result.
-    ctx.requirements =
-        optimizer::collectPlanRequirements(bound_plan.root, ctx.resolver(), &fresh_expands);
+    ctx.requirements = optimizer::collectPlanRequirements(bound_plan.root, ctx.resolver(), &fresh_expands);
 
     // Phase 2 (Decide): Allocate slot_ids for every appended PE column.
     // source_types tells the Decide phase which source columns are already
@@ -1638,11 +1637,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
-                    cr = extractChildResult(
-                        dispatchProjectionExtract(PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema),
-                                                                      std::move(cr.output_types),
-                                                                      std::move(cr.slot_layout)},
-                                                   store, ctx));
+                    cr = extractChildResult(dispatchProjectionExtract(
+                        PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema), std::move(cr.output_types),
+                                           std::move(cr.slot_layout)},
+                        store, ctx));
 
                     std::vector<SetPhysicalOp::BoundSetItem> items;
                     for (auto& si : v.items) {
@@ -1689,11 +1687,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
-                    cr = extractChildResult(
-                        dispatchProjectionExtract(PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema),
-                                                                      std::move(cr.output_types),
-                                                                      std::move(cr.slot_layout)},
-                                                   store, ctx));
+                    cr = extractChildResult(dispatchProjectionExtract(
+                        PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema), std::move(cr.output_types),
+                                           std::move(cr.slot_layout)},
+                        store, ctx));
 
                     std::vector<RemovePhysicalOp::BoundRemoveItem> items;
                     for (auto& ri : v.items) {
@@ -1720,11 +1717,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
-                    cr = extractChildResult(
-                        dispatchProjectionExtract(PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema),
-                                                                      std::move(cr.output_types),
-                                                                      std::move(cr.slot_layout)},
-                                                   store, ctx));
+                    cr = extractChildResult(dispatchProjectionExtract(
+                        PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema), std::move(cr.output_types),
+                                           std::move(cr.slot_layout)},
+                        store, ctx));
 
                     std::vector<DeletePhysicalOp::DeleteTarget> targets;
                     for (auto& dt : v.targets) {
@@ -1942,11 +1938,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto cr = extractChildResult(std::move(child_result));
                     // Insert PE so mutation ops receive ConstructVertex/Edge
                     // columns for graph variables upstream.
-                    cr = extractChildResult(
-                        dispatchProjectionExtract(PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema),
-                                                                      std::move(cr.output_types),
-                                                                      std::move(cr.slot_layout)},
-                                                   store, ctx));
+                    cr = extractChildResult(dispatchProjectionExtract(
+                        PlanOperatorResult{std::move(cr.op), std::move(cr.output_schema), std::move(cr.output_types),
+                                           std::move(cr.slot_layout)},
+                        store, ctx));
                     auto child_op = std::move(cr.op);
                     auto child_schema = std::move(cr.output_schema);
                     auto output_types = std::move(cr.output_types);

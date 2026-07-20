@@ -16,7 +16,7 @@ namespace optimizer {
 /// Rewrite pass that lowers graph semantics (BoundPropertyRef / standalone
 /// variable refs) into slot-based references resolvable at runtime via
 /// TupleSlotLayout. Implements the Demand-Pull + Expression Lowering design
-/// (see docs/query/demand-pull-lowering-design.md).
+/// (see docs/query/projection-extract-design.md).
 ///
 /// Pipeline:
 ///   0. allocateAllSlots       — ensure every variable name (incl. aliases)
