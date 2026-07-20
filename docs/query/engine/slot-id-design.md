@@ -173,8 +173,6 @@ struct BoundColumnRef {
 };
 ```
 
-过渡期两字段共存。最终 `column_index` 可以退化为仅在物理算子使用，逻辑层只用 `slot_id`。
-
 ## 四、完整执行流程
 
 以如下 Cypher 为例：
@@ -306,17 +304,6 @@ SlotId 在 Binder 编译期分配，不在物理规划期分配。原因：
 **这条定理在当前架构下是自动满足的**——Binder 的 column_index 分配已经覆盖了所有物理列。这里把它显式声明为定理，是为了防止未来引入新的"没有 Binder 变量的物理列"场景（如某种临时 Join key 列）时破坏 Layout 对齐。
 
 在 SlotId 架构下，`LoadVertexProp` 追加的扁平属性列会被 `ConstructVertex`（就地替换，不增列）取代，因此不再有"Binder 不知情的追加列"。Layout 长度与物理 Chunk 长度天然一致。
-
-### 5.3 过渡方案：slot_id 与 column_index 共存
-
-在过渡期，`BoundColumnRef` 同时持有 `slot_id` 和 `column_index`：
-
-```
-Binder 阶段：设置 slot_id（全局唯一），column_index 可以是 binder 旧列号或 0
-Planner 阶段：不修改表达式（与旧架构的关键区别！）
-Init 阶段：ExpressionCompiler 用 TupleSlotLayout 翻译 slot_id → column_index
-Runtime：只读 column_index（与旧架构兼容，无需改 evaluator）
-```
 
 ## 六、解决当前剩余 Bug
 

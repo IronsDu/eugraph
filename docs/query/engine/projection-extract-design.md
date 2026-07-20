@@ -316,4 +316,4 @@ ProjectPhysicalOp(items=[BoundColumnRef(SLOT_N_NAME)])
 | `src/query/physical_plan/expression_compiler.hpp` | `ExpressionCompiler`：slot→column 编译 |
 | `src/query/planner/slot_id.hpp` | `SlotId`、`SlotAllocator`（用户/内部双区间） |
 | `docs/query/engine/slot-id-design.md` | SlotId 系统设计 |
-| `docs/query/engine/physical-operator-audit.md` | 算子历史设计稿 + 实施现状 |
+| `docs/query/engine/physical-operator-audit.md` | 物理算子职责审计 |

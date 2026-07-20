@@ -1,49 +1,21 @@
 # 物理算子职责审计
 
-> **文档定位**：本文是 2026-06 之前的"理想物理算子架构"设计稿，描述了 Extract / Enricher 多算子分工的设计方向。**实际实现采取了不同的路径**——见下方"实施现状"。
->
-> 本文档保留下来的目的是：(1) 记录拓扑/语义类型分离的设计推理；(2) 作为后续进一步拆分 `ProjectionExtractPhysicalOp` 的参考；(3) 列裁剪、需求反向传播、CBO 等仍未落地的方向的设计输入。文中提到的 `VertexPropertyExtractPhysicalOp` / `EdgePropertyExtractPhysicalOp` / `PathPropertyExtractPhysicalOp` / `EdgeEnricherPhysicalOp` 等**单个算子均未在主分支实现**，已统一收敛到 `ProjectionExtractPhysicalOp`。
+> **文档定位**：记录拓扑/语义类型分离的设计推理，审计各物理算子的列传递浪费，以及仍未落地的优化方向（列裁剪、批量 I/O、CBO）。
 
-## 实施现状（2026-06，分支 `feature/projection-extract-op`）
+当前架构已采用统一的 **`ProjectionExtractPhysicalOp`**（7 种 `ColumnSpec`）实现按需属性加载：
 
-主分支已落地的方案与本文第一稿的"多 Extract + Enricher"设计不同——采用了**统一的 `ProjectionExtractPhysicalOp`**：
+- `LoadVertexProp` / `LoadEdgeProp` / `LoadVertexLabels` / `LoadEdgeType` — 追加扁平列
+- `ConstructVertex` / `ConstructEdge` — 原地构造 VertexValue / EdgeValue
+- `Passthrough` — 直通列
 
-| 设计稿提案 | 实际实现 |
-|-----------|---------|
-| `VertexPropertyExtractPhysicalOp`（追加扁平列） | 合并到 `ProjectionExtractPhysicalOp`（`LoadVertexProp` / `LoadVertexLabels` spec） |
-| `EdgePropertyExtractPhysicalOp` | 合并到 `ProjectionExtractPhysicalOp`（`LoadEdgeProp` / `LoadEdgeType` spec） |
-| `VertexEnricherPhysicalOp`（原地替换为 VertexValue） | 合并到 `ProjectionExtractPhysicalOp`（`ConstructVertex` spec） |
-| `EdgeEnricherPhysicalOp` | 合并到 `ProjectionExtractPhysicalOp`（`ConstructEdge` spec） |
-| `PathPropertyExtract` / `PathEnricher` | 未实现，保留 `PathElementPropertyReadPhysicalOp`（全量加载） |
-| RBO + CBO 双轨 | 仅 RBO（`dispatchProjectionExtract` 直接构建算子）。CBO standalone 模式基础设施已搭建但未启用 |
-| `dispatchVertexPropertyExtract` / `dispatchEdgePropertyExtract` / `canUsePropertyExtract` | 已删除，统一为 `dispatchProjectionExtract` |
-| 内联 `loadVertexLabelsInPlace` / `loadVertexPropertiesInPlace` | 已删除 |
-
-**已落地能力**：
-- 类型系统（`VertexRef` / `EdgeKey` / `PathTopology`）✅
-- `Scan` / `Expand` / `VarLenExpand` 输出拓扑类型 ✅
-- `ProjectionExtractPhysicalOp`：7 种 `ColumnSpec`（`Passthrough` / `LoadVertexProp` / `LoadEdgeProp` / `LoadVertexLabels` / `LoadEdgeType` / `ConstructVertex` / `ConstructEdge`）✅
-- `PlanRequirements` 需求收集（从 `BoundLogicalPlan` 根遍历）✅
-- `column_rewrite` pass：`BoundPropertyRef` → `BoundColumnRef`，并校正 `BoundColumnRef` 直通引用的列偏移 ✅
-- 拓扑/语义类型对齐：`CorrelatedSource` 按运行时值推导列 kind；`Project` 对 `BoundColumnRef` 用源列类型；`updateBaseCols` 覆盖 `BoundCorrelatedSourceOp` / `BoundVarLenExpandOp` ✅
-- 394/394 单元测试通过，ASAN 零报错
-
-**未落地（仍为设计目标）**：
-- 列裁剪 pass（Sort / PathBuild / CrossProduct / Merge `evaluateExpr` 的全列物化问题）
-- 批量 I/O API（`getVertexLabelsBatch` 等）
-- `PathEnricher` / `PathPropertyExtract`（按需加载路径元素属性）
-- CBO standalone 模式启用
-- 通用 `ExpressionVisitor` 提取
-- 变长路径基数阈值触发的尽早物化
+`Scan` / `Expand` / `VarLenExpand` 输出轻量拓扑类型（`VertexRef` / `EdgeKey` / `PathTopology`），labels 与属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 统一加载。拓扑/语义类型分离的核心收益是：无需完整顶点的查询不再构造完整顶点。
 
 > **详见**：
-> - [projection-extract-design.md](projection-extract-design.md) — `ProjectionExtractPhysicalOp` 的具体设计、7 种 ColumnSpec、`PlanRequirements` 收集规则、`column_rewrite` 的 `BoundColumnRef` 校正等
-> - [cascades-optimizer.md](../optimizer/cascades-optimizer.md) — CBO standalone 模式的未启用状态
+> - [projection-extract-design.md](projection-extract-design.md) — `ProjectionExtractPhysicalOp` 具体设计、7 种 ColumnSpec、PlanRequirements 收集规则、column_rewrite
+> - [cascades-optimizer.md](../optimizer/cascades-optimizer.md) — CBO standalone 模式
 > - 下文"共性架构问题"、"第二轮审计"、"剩余未解决问题"等章节中关于**列裁剪、批量 I/O、Merge `evaluateExpr`** 的诊断仍然有效，是后续优化方向。
 
----
-
-## 总览（原设计稿）
+## 总览
 
 当前架构中，物理算子"自给自足"——扫描全量数据、无条件加载标签和属性、全列透传。根因是**规划阶段没有把下游需求传递给上游算子**。每个算子不知道下游实际需要什么，只能做最坏假设。
 
@@ -420,8 +392,6 @@ map<string, PathRequirement> path_reqs;
 
 ## 各算子现状与理想职责
 
-> **说明**：本节描述的是设计稿提案中的算子分工。实际实现已统一为 `ProjectionExtractPhysicalOp`，详见本文档顶部的"实施现状"。下方涉及"`VertexPropertyExtractPhysicalOp`"、"内联 `loadVertexLabelsInPlace`"等表述均为历史提案，**不代表当前代码状态**。
-
 ### 1. AllNodeScanPhysicalOp
 
 **当前状态**：输出 `VertexRef`（拓扑类型）。流式扫描，不再构造 `VertexValue`。labels 与属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 加载（`LoadVertexLabels` / `LoadVertexProp` / `ConstructVertex` spec）。
@@ -732,113 +702,6 @@ binder 中多处复制 visitor 模板：`hasAggregate`、`expressionReferencesVa
 
 ---
 
-## 实施路线
-
-依赖关系：**P1 → P2 → P2.5/P3/P4 可并行 → P5 → P6 → P7**。每个 Phase 结束时的验证门禁：编译通过 + 相关单元测试通过 + EXPLAIN 输出符合预期。
-
-> **当前进度（2026-06）**：P1 ~ P4 基本完成（类型系统、拓扑阶段输出、PropertyExtract 算子、物理规划器集成）。P5（完整接入）部分完成——RBO wrap 管线已工作，CBO standalone 模式未启用。P6（批量 I/O）和 P7（清理旧算子）尚未开始。
-
-### P1 — 类型系统 + 基础设施 ✅ 已完成
-
-引入新拓扑类型及其在 Column/Value/BoundType 系统中的完整支持。DataChunk 新增列替换接口。
-
-**涉及文件**：
-- `common/types/graph_types.hpp` — 新增 `VertexRef { VertexId id; }`、`EdgeKey { EdgeId id; VertexId src_id, dst_id; EdgeLabelId label_id; uint32_t seq; }`、`PathTopology` struct
-- `query/planner/bound_type.hpp` — 新增 `BoundTypeKind::VERTEX_REF`、`EDGE_KEY`、`PATH_TOPOLOGY`
-- `query/dataset/row.hpp` — Value variant 新增对应类型
-- `query/dataset/data_chunk.hpp` — ColumnBuffer 新增对应 vector 类型；新增 `replaceColumn(col_idx, new_vector)` 接口
-- 所有物理算子 `toString()` 更新（新类型可打印）
-
-### P2 — 需求传递模型 ✅ 基本完成（Columbia Cascades 集成）
-
-> 实现位置：`PhysicalPlanner::planBound()`。不涉及 `Binder` 或 `LogicalOptimizer`。
-
-**阶段 1**：自底向上构建初始纯拓扑物理计划（无 Enricher）。
-
-**阶段 2**：自顶向下 DFS 反向传播需求。关键算子行为：
-- Project/Filter/Sort 向 ctx 注入其引用的变量需求
-- **Expand/VarLenExpand 实施就地截断**——消费并擦除 ctx 中产出变量（dst/edge/path）的需求，只将 src 的需求继续下传
-- Scan 消费所有累积需求
-
-**阶段 3**：Visitor 回溯时动态改写算子树——在变量首次被语义引用的位置下方注入 per-variable Enricher。遵循三个机制 + 四个盲区修正：
-1. **就地截断**：变量生命周期终结处清除 ctx 记录，防泄漏
-2. **精准分割**：两个属性引用之间存在 Expand 阻隔则拆分为独立 Enricher，否则合并
-3. **编译期内联**：`WHERE id(a) = const` 转为 IndexScan，CONSTANT 列的 Enricher 可规划期消除
-4. **物化去重**：维护 `enriched_vars` 状态位，多分支共享变量不重复 Enrich（盲区 1）
-5. **基数截断**：变长路径预估基数超阈值时触发尽早物化（盲区 2）
-6. **选择率排序**：轻量 CBO 按 selectivity 升序排列 (Enricher, Filter) 对（盲区 3）
-7. **依赖提升**：跨变量属性依赖强制 Enricher 前置于产出变量的 Expand（盲区 4）
-8. **Join 节点需求合并**：多子节点算子处，各分支对共享变量的需求取并集后再统一传播（盲区 5）
-
-**涉及文件**：
-- 新建 `query/planner/requirement_types.hpp` — `VertexRequirement`、`EdgeRequirement`、`PathRequirement` 结构体
-- `bind_projection.cpp` — 扩展 `applyProjectionPushdown`：不仅收集 prop_ids，还收集 `need_labels`、`need_type`
-- `physical_planner.cpp` — 实现三阶段规划；PlanContext 持有需求映射；Visitor 回溯改写
-
-### P2.5 — 算子内存复用（Zero-Allocation）
-
-每个算子在首次 `executeChunk()` 时分配 `DataChunk output_` 作为成员变量，后续调用原地覆写复用。避免每次 next() 都 new Vector 内存。
-
-**涉及文件**：
-- `physical_operator_base.hpp` — 基类增加 `output_chunk_` 成员，`allocateOutput()` / `resetOutput()` helper
-- 所有 `*_physical_op.cpp` — 首次分配后复用
-
-### P3 — PropertyExtract + Enricher 算子 ✅ 算子已实现，Enricher 未实现
-
-**P3a — PropertyExtract 系列（优先，覆盖 90% 查询）**：
-- 新建 `vertex_property_extract_physical_op.cpp/hpp` — 输入 VertexRef，追加扁平列，两阶段 I/O
-- 新建 `edge_property_extract_physical_op.cpp/hpp` — 输入 EdgeKey，追加扁平列
-- 新建 `path_property_extract_physical_op.cpp/hpp` — 输入 PathTopology，追加扁平列，展平去重批量 I/O
-
-**P3b — Enricher 系列（仅 RETURN n/e/p 时使用）**：
-- 新建 `vertex_enricher_physical_op.cpp/hpp` — 合并 LabelRead + PropertyRead，输出 VertexValue，两阶段 I/O
-- 新建 `edge_enricher_physical_op.cpp/hpp` — 输出 EdgeValue，合并 EdgePropertyRead + type name 解析
-- 新建 `path_enricher_physical_op.cpp/hpp` — 输出 PathValue，展平去重批量 I/O
-
-### P4 — Scan/Expand 输出拓扑类型 ✅ 已完成
-
-**涉及文件**：
-- `all_node_scan_physical_op.cpp` — 输出 VERTEX_REF，bitmap 流式去重
-- `label_scan_physical_op.cpp` — 输出 VERTEX_REF，删除 labels 填充
-- `expand_physical_op.cpp` — 输出 VERTEX_REF / EDGE_KEY / VERTEX_REF；**主动 CONSTANT 提升**：检测到所有输出行共享同一源顶点时，源端列改用 `Column::constant()` 替代 DICTIONARY
-- `varlen_expand_physical_op.cpp` — 输出 VERTEX_REF / VERTEX_REF / PATH_TOPOLOGY；同上 CONSTANT 提升
-- `edge_index_scan_physical_op.cpp` — 输出 VERTEX_REF / EDGE_KEY / VERTEX_REF，删除 getVertexLabels
-
-### P5 — Planner 集成 ✅ 已完成（RBO 路径）
-
-**涉及文件**：
-- `physical_planner.cpp`：
-  - `dispatchProjectionExtract` 从 `BoundLogicalPlan` 根遍历收集 `PlanRequirements`，为每个变量构建 `ColumnSpec` 数组并插入 `ProjectionExtractPhysicalOp`
-  - 5 处原 inline loader（Scan × 3 + IndexScan + Expand dst + VarLenExpand dst）全部替换为 `dispatchProjectionExtract`
-  - `wrapPathElementPropertyRead` 保留用于 PathBuild 路径（PathTopology → PathValue 全量加载）
-- `column_rewrite.cpp`：
-  - `BoundPropertyRef` 重写为 `BoundColumnRef` 指向 ProjectionExtract 输出列
-  - 新增 `BoundColumnRef` 直通引用的列偏移校正（按 `PropertyExtractionInfo::base_col`）
-  - `buildExtractionInfo` 为 `need_whole_vertex/edge` 变量建立条目
-  - `updateBaseCols` 覆盖 `BoundCorrelatedSourceOp` / `BoundVarLenExpandOp` 的列数累加
-- CBO standalone 模式（基于 `insertEnricherEnforcer` + `PhysicalOpTag::VertexPropertyExtract` 等标签）已搭建但未启用
-
-### P6 — 批量 I/O
-
-**涉及文件**：
-- `i_sync_graph_data_store.hpp`、`sync_graph_data_store.cpp` — 新增 `getVertexLabelsBatch`、`getVertexPropertiesBatch`、`getEdgePropertiesBatch`
-- `i_async_graph_data_store.hpp`、`async_graph_data_store.cpp` — 新增对应 batch 接口，单次 IO 调度
-- Enricher 算子改用 batch API。批量接口支持 chunk-level slicing（如 `folly::collectAllWindowed`），防止单次 1024+ 大批量瞬间过载底层 WT 缓存/页锁
-
-### P7 — 清理 + 优化 🔄 部分完成
-
-**涉及文件**：
-- ✅ 已删除：`VertexLabelReadPhysicalOp`、`VertexPropertyReadPhysicalOp`、`EdgePropertyReadPhysicalOp`、`VertexPropertyExtractPhysicalOp`、`EdgePropertyExtractPhysicalOp`
-- ✅ 已删除：内联 `loadVertexLabelsInPlace` / `loadVertexPropertiesInPlace` 及对应 dispatch 函数
-- ✅ 上述算子统一收敛为 `ProjectionExtractPhysicalOp`（7 种 `ColumnSpec`）
-- 保留：`PathElementPropertyReadPhysicalOp`（仅用于 PathBuild 路径，待后续按需优化）
-- 待办：binder 扩展属性解析（强模式 `(label_id, prop_id)` 解析，减少 `BoundDynamicPropertyRef` 退化）
-- 待办：提取通用 `ExpressionVisitor` 基类
-- 待办：更新 `FilterPushdownRule`（Filter 不能穿透 `ProjectionExtractPhysicalOp`）
-- 待办：列裁剪 pass（Sort / PathBuild / CrossProduct / Merge `evaluateExpr` 的全列物化问题，见"第二轮审计"）
-
----
-
 ## 第二轮审计：Sort、PathBuild、Merge evaluateExpr、CrossProduct 的列传递浪费
 
 以下是对 6 个算子的补充审计。Aggregate 和 Project 已确认无浪费，其余 4 个存在显著问题。
@@ -1071,7 +934,7 @@ co_await getVertexPropertiesBatch(vector<pair<VertexId, LabelId>> queries, vecto
 
 ## 与剩余 TCK 失败的兼容性分析
 
-当前有 436 个 TCK 场景失败（不含 71 个未定义）。以下是逐类评估本文架构是否能支撑修复它们。
+以下逐类评估本文架构是否能支撑修复它们。
 
 ### 不会干扰，直接兼容
 
@@ -1362,6 +1225,6 @@ TC-29  MATCH (a)-[:knows]->(b)-[:works_at]->(c),
 | 优化 | 理由 |
 |------|------|
 | **I/O 调度器 io_uring + 排序合并** | 工程量大，需改造整个 IO 栈。当前协程+线程池已够用，等 batch API 落地后 profiling 发现瓶颈再动 |
-| **向量化 Hash Join（Radix Partitioning）** | 全新算子，正交于当前拓扑/语义分离重构。CrossProduct/SemiJoin 在列裁剪后输入列极窄，暂时够用 |
+| **向量化 Hash Join（Radix Partitioning）** | 全新算子，正交于当前拓扑/语义分离重构。CrossProduct/SemiJoin 在列裁剪后输入列极窄 |
 | **顶点属性与边存储在同一 Page** | 当前 `vprop_{id}` 和 `edge_index` 是独立 WT 表，修改 layout 涉及 KV 编码重构和迁移，风险高 |
-| **通用 ExpressionVisitor 提取** | binder 中多处复制 visitor 模板（`hasAggregate`、`expressionReferencesVariable`、`walkAndReplaceAggCalls`、`collectColumnNames`）。正交于拓扑/语义分离，留到 P7 清理阶段处理 |
+| **通用 ExpressionVisitor 提取** | binder 中多处复制 visitor 模板（`hasAggregate`、`expressionReferencesVariable`、`walkAndReplaceAggCalls`、`collectColumnNames`）。正交于拓扑/语义分离 |

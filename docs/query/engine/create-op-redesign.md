@@ -1,7 +1,7 @@
 # CreateNode/CreateEdge 算子重构设计
 
 > 分支: `fix/temporal-property-roundtrip`
-> 状态: **已实现**（2026-05-29）
+> 状态: 已实现
 > 关联: [temporal-property-roundtrip-design.md](temporal-property-roundtrip-design.md)
 
 ---

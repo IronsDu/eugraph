@@ -572,7 +572,7 @@ using Schema = vector<string>;   // 列名列表
 - `RETURN *` 变量展开
 - DDL 异步执行（DdlWorker 后台线程）
 - 崩溃恢复（索引 DDL 状态恢复）
-- `properties(vertex/edge)` / `keys(map)` 函数 ✅ 已实现（`MapValue` 类型 + `BoundType::MAP`，2026-05-23）
+- `properties(vertex/edge)` / `keys(map)` 函数 ✅ 已实现
 - **`properties(Edge)` + 普通 Expand**：✅ 已通过 `ProjectionExtractPhysicalOp`（LoadEdgeProp / ConstructEdge spec）实现边属性延迟加载，`properties(r)` 对定长 `(a)-[r:TYPE]->(b)` 中的边正常工作。
 - **MapValue RPC 序列化**：`MapValue` 序列化为 JSON 字符串通过 `ResultValue::map_json`（Thrift union 字段 9）传输。需注意：修改 `proto/eugraph.thrift` 后运行 `thrift1 --gen mstch_cpp2 -o src/ proto/eugraph.thrift` 重新生成代码，并用 `sed 's|"proto/gen-cpp2/|"gen-cpp2/|g'` 修正 include 路径。
 - **`properties()` 触发全属性加载**：Binder 遇到 `properties(n)`（Vertex 参数）时，通过 `BindContext::addPropertyRequirement` 请求所有已知 Label 的全部属性 ID。此策略在单标签场景下开销可接受，多标签/宽表场景需后续优化为按需加载。
@@ -583,7 +583,7 @@ using Schema = vector<string>;   // 列名列表
 
 **动机**：当前边属性存储在独立的边属性表中。变长查询的逐跳属性过滤（如 `[:REL*1..5 {status: 'active'}]`）每跳都需要额外 IO 回查属性。如果高频过滤属性直接存储在邻接 KV 的 value 中，可以消除随机 IO。
 
-**现状**：变长查询暂时使用额外 IO 回查方式完成属性过滤。此优化需存储层配合，优先级低于变长查询核心功能。
+**现状**：变长查询通过额外 IO 回查方式完成属性过滤。此优化需存储层配合，优先级低于变长查询核心功能。
 
 ---
 
