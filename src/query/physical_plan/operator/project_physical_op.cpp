@@ -37,6 +37,15 @@ folly::coro::AsyncGenerator<DataChunk> ProjectPhysicalOp::executeChunk() {
                 if ((*prop)->candidates.size() > 1)
                     col_kind = binder::BoundTypeKind::ANY;
             }
+            // For BoundColumnRef, the binder type may be the semantic form
+            // (e.g. VERTEX) while the source column actually holds the topology
+            // form (e.g. VERTEX_REF). Use the source column's type so setValue
+            // doesn't silently drop the value.
+            if (auto* ref = std::get_if<binder::BoundColumnRef>(&item.expr)) {
+                if (ref->column_index < chunk->columns.size()) {
+                    col_kind = chunk->columns[ref->column_index].type;
+                }
+            }
             auto& out_col = output.addColumn(col_kind);
             out_col.reserve(n);
             evaluator.evaluate(item.expr, *chunk, out_col);

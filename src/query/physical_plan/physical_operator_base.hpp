@@ -3,6 +3,7 @@
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
+#include "query/physical_plan/slot_layout.hpp"
 #include "query/planner/bound_type.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
@@ -50,8 +51,27 @@ public:
         eval_ctx_ = ctx;
     }
 
+    void setSlotLayout(TupleSlotLayout layout) {
+        slot_layout_ = std::move(layout);
+    }
+    const TupleSlotLayout& slotLayout() const {
+        return slot_layout_;
+    }
+
+    /// Compile expressions using the input layout from the child operator.
+    /// Called after the physical tree is built, bottom-up (child before
+    /// parent).  Each operator resolves its BoundColumnRef slot_ids to
+    /// physical column_indices using the child's output layout.
+    virtual void compileExpressions(const TupleSlotLayout& /*input_layout*/) {}
+    /// After compilation, derive and store this operator's output layout.
+    /// Default: same as input (passthrough).  Project / Aggregate override.
+    virtual void deriveOutputLayout(const TupleSlotLayout& input_layout) {
+        slot_layout_ = input_layout;
+    }
+
 protected:
     function::EvalContext eval_ctx_;
+    TupleSlotLayout slot_layout_;
 
     /// Bridge for upgraded operators: wraps executeChunk() output as RowBatch.
     /// Use for the legacy execute() override:

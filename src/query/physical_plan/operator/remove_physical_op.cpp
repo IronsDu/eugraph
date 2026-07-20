@@ -27,7 +27,7 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
         for (const auto& item : items_) {
             if (item.var_name.empty())
                 continue;
-            int col = findColumn(input_schema_, item.var_name);
+            int col = item.object_col >= 0 ? item.object_col : findColumn(input_schema_, item.var_name);
             if (col < 0 || static_cast<size_t>(col) >= chunk->numColumns())
                 continue;
             auto& column = chunk->columns[static_cast<size_t>(col)];
@@ -45,7 +45,7 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                 if (item.var_name.empty())
                     continue;
 
-                int col = findColumn(input_schema_, item.var_name);
+                int col = item.object_col >= 0 ? item.object_col : findColumn(input_schema_, item.var_name);
                 if (col < 0 || static_cast<size_t>(col) >= chunk->numColumns())
                     continue;
 

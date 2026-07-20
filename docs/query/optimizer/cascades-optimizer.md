@@ -466,42 +466,16 @@ CBO 扩展需要增加 `E_GROUP` Task（探索子 Group 的所有等价表达式
 
 把 Columbia 的 Enforcer 模式接入 Cascades，让优化器能在代价搜索过程中识别"拓扑形 → 语义形"的属性升级需求并按需插入 Enricher enforcer。这是物理算子审计 (`docs/query/engine/physical-operator-audit.md`) 中 demand-driven Enricher 设计的优化器侧基础。
 
-**当前状态（2026-06）**：数据结构、RequirementCollector、O_INPUTS 的物化感知路径、Memo 的 enforcer 插入 API 全部就位，804/804 单元测试通过。`need_entire` 标志已添加到 MaterializationReq 中用于 RETURN n/e/p 全对象物化判断。column_rewrite pass 已实现（`column_rewrite.cpp/hpp`）。ASAN use-after-free 问题已修复（OInputsTask 中 `localReqdProp` 引用在 `memo.addContext()` 后悬空）。
+**当前状态**：数据结构、RequirementCollector、O_INPUTS 的物化感知路径、Memo 的 enforcer 插入 API 全部就位。
 
-**已完成的改动（补充 2026-06 新增）**：
-- 新增 `materialization_req.hpp` — `MaterializationReq{need_labels, need_props}` + `merge`/`intersect`/`satisfies`/`totalPropertyCount`；`VarRequirements = map<string, MaterializationReq>`；`mergeVarRequirements`/`satisfiesVarRequirements` 自由函数
-- 新增 `requirement_collector.{hpp,cpp}` — `collectExprRequirements` 走 BoundExpression 树识别 `BoundPropertyRef`（强类型，emit `need_props[label]={prop}`）/ `BoundDynamicPropertyRef`（弱类型，emit `need_labels`）/ `BoundLabelCast` / `labels()` 函数调用；`collectOpRequirements` 走 BoundLogicalOperator 树，**仅收集本算子自身表达式的需求**（不递归子树），用于后续 impl rule 声明 `required_input_mat`
-- `cbo.hpp` — `PhysProp` 新增 `VarRequirements materializations_` + `setMaterializations`/`hasMaterializations`/`materializations`/`satisfies(provider, required)`；`isAny()` 改为同时检查 sort 与 materializations；operator==/!= 覆盖 materializations
-- `cost_model.{hpp,cpp}` — `PhysicalOpTag` 新增 `VertexEnrich`/`EdgeEnrich`/`PathEnrich`；`findLocalCost` 新增 Enricher case（粗粒度 = input cardinality，待 LogProp 携带物化宽度后精化）
-- `physical_expr.{hpp,cpp}` — `PhysicalExpr` 新增 `enrich_variable`（Enricher 目标变量名）/ `output_mat`（本算子提供的物化）/ `required_input_mat`（per-input 声明，下标=child position）；`hashPhysicalExpr`/`equalPhysicalExpr`/`clonePhysicalExpr` 全部覆盖新字段
-- `chosen_plan.hpp` — `ChosenPlan` 新增 `enrich_variable`/`enrich_output`，供 `PhysicalPlanner::planChosen` 识别 Enricher 节点
-- `memo.{hpp,cpp}` — `Group` 新增 `requirements_`/`requirements_valid_` + `setRequirements`/`requirements`/`requirementsValid`；`Memo::copyIn` 在创建新 group 时调用 `collectOpRequirements` 自动填充；新增 `Group::getSatisfyingWinner`（最便宜的满足 prop 的 done winner）；新增 `Memo::insertEnricherEnforcer(g, req_mat)` 按 LogProp.columns 推断变量类型（Vertex/Edge/Path），per-variable 插入对应 Enricher 物理 GroupExpr（child_groups=[g]）；`PhysProp::dump` 输出 mat{...}；`extractChosen` 改用 `getSatisfyingWinner` + 递归时按算子 `required_input_mat[i]` ∪ `parent_mat` 计算子节点 prop
-- `task.cpp` — `OInputsTask::perform` 改为物化感知：(1) 算 input required prop = `expr.required_input_mat[i]` ∪ `ctx.materializations`；(2) 先查 `getSatisfyingWinner(inputProp)`，若 input.optimized 仍无则调 `insertEnricherEnforcer` 试图插入 enforcer 包装 any-winner；(3) 注册 winner 前校验 `expr.output_mat` 满足 `ctx.materializations`（拓扑形叶子在要求物化的 context 下不再误注册 winner，由 enforcer 路径补救）；`OGroupTask::perform` 新增 case 4 分支：已 optimized 的 group 收到新 context 时对全部 physical_exprs 推 O_INPUTS（无 physical_exprs 时回退 O_EXPR）
+**CBO standalone 模式未启用**：基于 `PhysicalOpTag` + `insertEnricherEnforcer` 的 CBO 路径已搭建但未激活，实际执行管线走 **RBO 路径**（`PhysicalPlanner::planBound` 中 `dispatchProjectionExtract` 直接构建统一的 `ProjectionExtractPhysicalOp`）。
 
-**当前限制（2026-06）**：
-- PropertyExtract 算子（Vertex/Edge/Path）已实现但未接入执行管线。`planChosen` 中通过 `hasPropertyExtract(chosen)` 判断是否激活 standalone 模式；当前 CBO 不产生 PropertyExtract 标签，因此仍走旧 wrap 管线。`PhysicalOpTag` 新增了 `VertexPropertyExtract`/`EdgePropertyExtract`/`PathPropertyExtract`。
-- Enricher（VertexEnrich/EdgeEnrich/PathEnrich）physical operator 尚未实现——当前由 RBO wrap 管线（wrapVertexLabelRead / wrapVertexPropertyRead / wrapEdgePropertyRead / wrapPathElementPropertyRead）原地升级拓扑类型。
-- `need_entire` 标志已添加到 MaterializationReq 中，用于 RETURN n/e/p 全对象物化判断。`insertEnricherEnforcer` 根据 `need_entire` 决定插入 PropertyExtract 还是 Enricher。
-- column_rewrite pass 已实现（`column_rewrite.cpp/hpp`），用于将 BoundPropertyRef 替换为 BoundColumnRef，配合 standalone PropertyExtractPhysicalOp 的列追加模式。
-- `OInputsTask` 中 ASAN use-after-free 已修复（`localReqdProp` 引用在 `memo.addContext()` 后悬空，改为拷贝）。
-- `OExprTask` 中空 if-body 编译警告已修复。
-- 路径函数 `nodes()`/`relationships()`/`length()` 已支持 PathTopology 类型。
-
-**测试覆盖**（`tests/test_optimizer.cpp`，共 82 例）：
-- 原有 61 例全部保留
-- 新增 `MaterializationReqTest.*` 5 例（empty/merge/satisfies/intersect/VarRequirements 辅助函数）
-- 新增 `PhysPropTest.*` 4 例（any/hasMaterializations/satisfies/sort+mat 复合/dump）
-- 新增 `RequirementCollectorTest.*` 4 例（强 PropertyRef、动态 PropertyRef、BinaryOp 递归、Filter own-requirements 不含子树）
-- 新增 `MemoRequirementsTest.CopyInPopulatesRequirementsField` — 验证 copyIn 自动填充
-- 新增 `EnricherEnforcerTest.*` 2 例（无 any-winner 时返回 INVALID、getSatisfyingWinner 选最便宜）
-- 新增 `PhysicalExprTest.*` 2 例（hash/eq 包含 enricher 字段、clone 保留）
-- 新增 `CostModelTest.EnricherCostProportionalToInputCardinality` — 三个 Enricher tag 等价且 > 0
-
-**下一步（Phase C）**：
-1. 在 `rules/impl/` 各 impl rule 的 `substitute` 中填充 `required_input_mat[0]` = `group.requirements()`（该算子自身声明）
-2. 让 Scan/Expand 等 impl rule 的 `output_mat` 默认为空（拓扑形），以便 enforcer 路径在父算子要求物化时自动插入 Enricher
-3. 实现真正的 `VertexEnrich`/`EdgeEnrich`/`PathEnrich` 物理 operator（runtime 侧），由 `PhysicalPlanner::planChosen` 在识别到对应 tag 时构建
-4. `findLocalCost` Enricher 公式精化（input_card × (1 + total_prop_count + has_labels)）
+**关键组件**：
+- `materialization_req.hpp` — `MaterializationReq{need_labels, need_props}` + `merge`/`intersect`/`satisfies`
+- `requirement_collector.{hpp,cpp}` — 从 BoundExpression/BoundLogicalOperator 树收集物化需求
+- `cbo.hpp` — `PhysProp` 新增 `VarRequirements materializations_`，`satisfies(provider, required)` 语义
+- `memo.{hpp,cpp}` — `Group::requirements` 自动填充，`getSatisfyingWinner` 选择满足 prop 的最优 winner
+- `task.cpp` — `OInputsTask` 物化感知：按 `required_input_mat` ∪ context materializations 选择 child winner
 
 ### 已知 Columbia 框架差距（待办，非正确性 bug）
 

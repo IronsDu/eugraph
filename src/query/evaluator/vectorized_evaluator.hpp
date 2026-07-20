@@ -45,6 +45,9 @@ private:
     // Temporary storage for recursive sub-expression evaluation.
     std::deque<Column> temp_columns_;
     function::EvalContext eval_ctx_;
+    // Cache for LabelDefs loaded from meta store at runtime for dynamically
+    // created labels (e.g. __anon__) that are not in the static snapshot.
+    mutable std::vector<std::unique_ptr<LabelDef>> label_def_cache_;
 
     /// Evaluate an expression and return a reference to the result column.
     struct EvalResult {

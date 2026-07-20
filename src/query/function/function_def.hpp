@@ -12,6 +12,11 @@
 #include <vector>
 
 namespace eugraph {
+
+// Forward declarations for evaluator store access (lazy property loading).
+class IAsyncGraphDataStore;
+class IAsyncGraphMetaStore;
+
 namespace catalog {
 class Catalog;
 }
@@ -30,6 +35,12 @@ struct EvalContext {
     const catalog::Catalog* catalog = nullptr;
     /// Live label definitions, updated by DDL operators mid-query.
     const std::unordered_map<LabelId, LabelDef>* label_defs = nullptr;
+    /// Live edge label definitions, updated by DDL operators mid-query.
+    const std::unordered_map<EdgeLabelId, EdgeLabelDef>* edge_label_defs = nullptr;
+    /// Data store for lazy property loading (e.g. startNode result vertices).
+    class IAsyncGraphDataStore* store = nullptr;
+    /// Meta store for label lookups during lazy loading.
+    class IAsyncGraphMetaStore* meta = nullptr;
 };
 
 /// Scalar function execution callback: takes argument values and context, returns result.

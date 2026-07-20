@@ -28,6 +28,11 @@ public:
         std::optional<LabelId> resolved_label_id;
         std::optional<uint16_t> resolved_prop_id;
         bool strong_mode = false;
+        /// Physical column holding the target's constructed VertexValue,
+        /// resolved at plan time (append-only ProjectionExtract keeps the
+        /// object in a column separate from the source VertexRef). -1 → fall
+        /// back to name-based lookup.
+        int object_col = -1;
     };
 
     RemovePhysicalOp(std::vector<BoundRemoveItem> items, Schema input_schema, IAsyncGraphDataStore& store,

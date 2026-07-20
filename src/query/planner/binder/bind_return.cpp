@@ -152,7 +152,7 @@ static void walkAndReplaceAggCalls(binder::BoundExpression& expr,
                     auto ret_type = out_aggs.back().result_type;
                     out_aggs.back().alias = anon_name;
                     uint32_t col_idx = static_cast<uint32_t>(group_keys_size + out_aggs.size() - 1);
-                    expr = binder::BoundColumnRef{col_idx, std::move(ret_type), std::move(anon_name)};
+                    expr = binder::BoundColumnRef{col_idx, std::move(ret_type), std::move(anon_name), INVALID_SLOT_ID};
                     return; // MUST return: ptr is now a dangling reference
                 } else {
                     // Non-aggregate function: recurse into args.
@@ -227,7 +227,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                   [](const ColumnInfo* a, const ColumnInfo* b) { return a->column_index < b->column_index; });
         for (const auto* col_info : sorted_symbols) {
             auto bound_expr = std::make_optional<BoundExpression>(
-                BoundColumnRef(col_info->column_index, col_info->type, col_info->name));
+                BoundColumnRef(col_info->column_index, col_info->type, col_info->name, col_info->slot_id));
             BoundProjectOp::ProjectItem proj_item;
             proj_item.expr = std::move(*bound_expr);
             proj_item.alias = col_info->name;
@@ -302,30 +302,19 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         // column, and the scalar part (+3) is handled by a downstream ProjectOp.
         auto agg = std::make_unique<BoundAggregateOp>();
 
-        // Items for the downstream ProjectOp (complex aggregate expressions
-        // that were rewritten to reference anonymous columns).
+        // Items for the downstream ProjectOp — one per user-visible RETURN
+        // item (group keys, simple aggregates, complex aggregate expressions).
+        // A ProjectOp is ALWAYS built above the AggregateOp so that the
+        // post-Aggregate ProjectionExtract's appended `__pe_*` columns (used to
+        // construct graph-variable objects for whole-object demand) do not
+        // leak into the user-visible output. The Project's items redirect
+        // graph-variable refs to their `__pe_*` slots via the column-rewrite
+        // pass.
         struct ProjItem {
             binder::BoundExpression expr;
             std::string alias;
         };
         std::vector<ProjItem> proj_items;
-
-        // First pass: detect whether any item is a *complex* aggregate
-        // (an expression containing an aggregate but not a bare aggregate call).
-        // Only then do we need a ProjectOp above the AggregateOp; otherwise the
-        // AggregateOp's output schema is already the final result and adding
-        // a ProjectOp would drop non-aggregate columns (group keys).
-        bool has_complex_agg = false;
-        for (const auto& item : ret.items) {
-            if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
-                if (fc && *fc && isAggregateFunctionName((*fc)->name))
-                    continue; // bare aggregate call → simple
-            }
-            if (hasAggregate(item.expr)) {
-                has_complex_agg = true;
-                break;
-            }
-        }
 
         // Column index tracker for anonymous aggregate columns.
         uint32_t anon_idx = 0;
@@ -366,20 +355,26 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                 info.name = alias;
                 info.type = BoundType::clone(agg->aggregates.back().result_type);
                 info.column_index = static_cast<uint32_t>(agg->group_keys.size() + agg->aggregates.size() - 1);
+                // Allocate (or reuse) a slot_id so the passthrough
+                // ProjectItem's BoundColumnRef resolves against the physical
+                // TupleSlotLayout. Without this, the slot defaults to
+                // INVALID_SLOT_ID and ExpressionCompiler cannot map it to a
+                // column index — the binder's stale column_index then points
+                // at the wrong column.
+                auto existing = ctx_.symbols.find(alias);
+                if (existing != ctx_.symbols.end() && existing->second.slot_id != INVALID_SLOT_ID)
+                    info.slot_id = existing->second.slot_id;
+                else
+                    info.slot_id = allocateNamedSlot(alias);
                 ctx_.symbols[alias] = std::move(info);
 
-                // When a sibling item is a complex aggregate expression, the
-                // ProjectOp path is taken and we need this simple aggregate's
-                // column re-exposed as a passthrough ProjectItem so it survives
-                // the projection. In pure-simple-aggregate returns there is no
-                // ProjectOp and the AggregateOp output is the final result, so
-                // adding a passthrough here would incorrectly drop the group
-                // keys from the output schema.
-                if (has_complex_agg) {
-                    binder::BoundExpression passthrough =
-                        binder::BoundColumnRef{info.column_index, BoundType::clone(info.type), alias};
-                    proj_items.push_back({std::move(passthrough), alias});
-                }
+                // Re-expose the simple aggregate as a passthrough ProjectItem
+                // so it survives the top-level projection. Without this, the
+                // top-level ProjectOp would drop the simple aggregate column.
+                binder::BoundExpression passthrough =
+                    binder::BoundColumnRef{ctx_.symbols[alias].column_index, BoundType::clone(ctx_.symbols[alias].type),
+                                           alias, ctx_.symbols[alias].slot_id};
+                proj_items.push_back({std::move(passthrough), alias});
             } else if (hasAggregate(item.expr)) {
                 // Complex expression containing aggregates: e.g., RETURN count(a) + 3.
                 // Walk the bound expression, extract each aggregate call into
@@ -414,7 +409,30 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                 info.name = alias;
                 info.type = getBoundExprType(agg->group_keys.back());
                 info.column_index = static_cast<uint32_t>(agg->group_keys.size() - 1);
-                ctx_.symbols[alias] = std::move(info);
+                // Preserve the existing slot_id when the alias matches an
+                // already-bound variable (e.g. group key `a` reuses the slot
+                // from MATCH). Otherwise allocate a fresh slot so downstream
+                // refs resolve correctly through the TupleSlotLayout.
+                auto existing = ctx_.symbols.find(alias);
+                if (existing != ctx_.symbols.end() && existing->second.slot_id != INVALID_SLOT_ID) {
+                    info.slot_id = existing->second.slot_id;
+                    info.source_labels = existing->second.source_labels;
+                    info.source_prop_id = existing->second.source_prop_id;
+                    info.strong_typed = existing->second.strong_typed;
+                } else {
+                    info.slot_id = allocateNamedSlot(alias);
+                }
+                ctx_.symbols[alias] = info;
+
+                // Re-expose the group key as a passthrough ProjectItem so it
+                // survives the top-level projection. When the group key is a
+                // graph variable (VERTEX/EDGE), the ProjectItem's BoundColumnRef
+                // is redirected to the `__pe_*` slot by the column-rewrite pass
+                // so the user-visible value is the constructed VertexValue /
+                // EdgeValue rather than the topology-stage reference.
+                binder::BoundExpression passthrough =
+                    binder::BoundColumnRef{info.column_index, BoundType::clone(info.type), alias, info.slot_id};
+                proj_items.push_back({std::move(passthrough), alias});
             }
         }
 
@@ -435,52 +453,94 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             }
         }
 
+        // Always build a ProjectOp above AggregateOp. The Project's items are
+        // the user-visible RETURN items (group keys + simple aggregates +
+        // complex aggregate expressions). Internal `__agg_*` columns and
+        // post-Aggregate PE's `__pe_*` columns are filtered out by not being
+        // referenced in any ProjectItem.
         BoundLogicalOperator current;
-        if (!proj_items.empty()) {
-            // Build ProjectOp above AggregateOp for complex aggregate expressions.
-            auto proj = std::make_unique<BoundProjectOp>();
-            for (auto& pi : proj_items) {
-                BoundProjectOp::ProjectItem pi_item;
-                pi_item.expr = std::move(pi.expr);
-                pi_item.alias = std::move(pi.alias);
-                pi_item.result_type = getBoundExprType(pi_item.expr);
-                proj->items.push_back(std::move(pi_item));
+        auto proj = std::make_unique<BoundProjectOp>();
+        for (auto& pi : proj_items) {
+            BoundProjectOp::ProjectItem pi_item;
+            pi_item.expr = std::move(pi.expr);
+            pi_item.alias = std::move(pi.alias);
+            pi_item.result_type = getBoundExprType(pi_item.expr);
+            proj->items.push_back(std::move(pi_item));
 
-                ColumnInfo out_info;
-                out_info.name = proj->items.back().alias;
-                out_info.type = proj->items.back().result_type;
-                out_info.column_index = static_cast<uint32_t>(proj->items.size() - 1);
-                ctx_.return_columns.push_back(std::move(out_info));
+            const auto& pushed = proj->items.back();
+            ColumnInfo out_info;
+            out_info.name = pushed.alias;
+            out_info.type = pushed.result_type;
+            out_info.column_index = static_cast<uint32_t>(proj->items.size() - 1);
+            ctx_.return_columns.push_back(out_info);
+
+            // Register the alias in the binder symbol table pointing at the
+            // ProjectOp's output column. Without this, downstream clauses
+            // (Sort / Skip / Limit / DISTINCT) that reference the alias (e.g.,
+            // `RETURN count(a)+1 AS x ORDER BY x`) cannot resolve it — the
+            // complex-aggregate branch above only registers internal `__agg_*`
+            // columns. For simple aggregates the entry already exists pointing
+            // at the Aggregate column index, which equals the ProjectOp column
+            // index (passthrough), so overwriting is a no-op there.
+            auto existing = ctx_.symbols.find(pushed.alias);
+            if (existing != ctx_.symbols.end() && existing->second.slot_id != INVALID_SLOT_ID) {
+                existing->second.column_index = out_info.column_index;
+                existing->second.type = BoundType::clone(out_info.type);
+            } else {
+                ColumnInfo sym_info;
+                sym_info.name = pushed.alias;
+                sym_info.type = BoundType::clone(out_info.type);
+                sym_info.column_index = out_info.column_index;
+                sym_info.slot_id = allocateNamedSlot(pushed.alias);
+                ctx_.symbols[pushed.alias] = std::move(sym_info);
             }
-            proj->child = std::move(agg);
-            current = std::move(proj);
-        } else {
-            // No complex expressions: AggregateOp output is the final result.
-            for (size_t i = 0; i < agg->output_names.size(); ++i) {
-                ColumnInfo out_info;
-                out_info.name = agg->output_names[i];
-                out_info.column_index = static_cast<uint32_t>(i);
-                if (i < agg->group_keys.size())
-                    out_info.type = getBoundExprType(agg->group_keys[i]);
-                else
-                    out_info.type = BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
-                ctx_.return_columns.push_back(std::move(out_info));
-            }
-            current = std::move(agg);
         }
+        proj->child = std::move(agg);
+        current = std::move(proj);
 
         // ORDER BY, SKIP, LIMIT, DISTINCT
 
         if (ret.order_by) {
             auto sort = std::make_unique<BoundSortOp>();
             for (const auto& si : ret.order_by->items) {
-                auto bound_key = bindExpression(si.expr);
-                if (!bound_key)
-                    continue;
-                BoundSortOp::SortItem sort_item;
-                sort_item.expr = std::move(*bound_key);
-                sort_item.direction = si.direction;
-                sort->items.push_back(std::move(sort_item));
+                // Sort sits above the top-level Project, so its input is the
+                // Project's output (group keys + aggregates). Re-binding the
+                // raw AST expression (e.g. `max(n.age)`) would create a fresh
+                // aggregate that the runtime evaluator cannot compute on
+                // post-aggregate rows. Resolve ORDER BY against the Project's
+                // output columns instead: if the expression matches a RETURN
+                // item (by AST string), emit a BoundColumnRef to that column.
+                std::string ob_key_str = cypher::expressionToString(si.expr);
+                std::optional<BoundExpression> resolved;
+                for (size_t i = 0; i < ret.items.size(); ++i) {
+                    std::string item_str = cypher::expressionToString(ret.items[i].expr);
+                    bool match = (item_str == ob_key_str);
+                    if (!match && ret.items[i].alias && *ret.items[i].alias == ob_key_str)
+                        match = true;
+                    if (!match)
+                        continue;
+                    std::string alias = ret.items[i].alias ? *ret.items[i].alias : item_str;
+                    auto sym_it = ctx_.symbols.find(alias);
+                    if (sym_it != ctx_.symbols.end()) {
+                        const auto& info = sym_it->second;
+                        resolved = BoundColumnRef{info.column_index, BoundType::clone(info.type), alias, info.slot_id};
+                    }
+                    break;
+                }
+                if (resolved) {
+                    BoundSortOp::SortItem sort_item;
+                    sort_item.expr = std::move(*resolved);
+                    sort_item.direction = si.direction;
+                    sort->items.push_back(std::move(sort_item));
+                } else {
+                    auto bound_key = bindExpression(si.expr);
+                    if (!bound_key)
+                        continue;
+                    BoundSortOp::SortItem sort_item;
+                    sort_item.expr = std::move(*bound_key);
+                    sort_item.direction = si.direction;
+                    sort->items.push_back(std::move(sort_item));
+                }
             }
             sort->child = std::move(current);
             current = std::move(sort);
@@ -718,8 +778,8 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 // AggregateOp output is the final result and adding a
                 // passthrough would drop group keys from the schema.
                 if (has_complex_agg) {
-                    binder::BoundExpression passthrough =
-                        binder::BoundColumnRef{col_idx, BoundType::clone(agg->aggregates.back().result_type), alias};
+                    binder::BoundExpression passthrough = binder::BoundColumnRef{
+                        col_idx, BoundType::clone(agg->aggregates.back().result_type), alias, INVALID_SLOT_ID};
                     proj_items.push_back({std::move(passthrough), alias});
                 }
             } else if (hasAggregate(item.expr)) {
@@ -842,11 +902,22 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         info.name = with_outputs[i].first;
         info.type = BoundType::clone(with_outputs[i].second);
         info.column_index = static_cast<uint32_t>(i);
+        // Allocate (or reuse) a slot_id so downstream BoundColumnRef.slot_id
+        // resolves against the physical TupleSlotLayout. Without this, the
+        // slot defaults to INVALID_SLOT_ID and ExpressionCompiler cannot map
+        // it to a column index — the binder's stale column_index then points
+        // at the wrong column.
         auto existing = ctx_.symbols.find(with_outputs[i].first);
         if (existing != ctx_.symbols.end()) {
             info.source_labels = existing->second.source_labels;
             info.source_prop_id = existing->second.source_prop_id;
             info.strong_typed = existing->second.strong_typed;
+            if (existing->second.slot_id != INVALID_SLOT_ID)
+                info.slot_id = existing->second.slot_id;
+            else
+                info.slot_id = allocateNamedSlot(with_outputs[i].first);
+        } else {
+            info.slot_id = allocateNamedSlot(with_outputs[i].first);
         }
         ctx_.symbols[with_outputs[i].first] = std::move(info);
     }
@@ -922,12 +993,13 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         info.name = with_outputs[i].first;
         info.type = std::move(with_outputs[i].second);
         info.column_index = static_cast<uint32_t>(i);
-        // Carry forward metadata if this variable was known before WITH.
+        // Carry forward metadata and slot_id if this variable was known before WITH.
         auto it = old_symbols.find(with_outputs[i].first);
         if (it != old_symbols.end()) {
             info.source_labels = it->second.source_labels;
             info.source_prop_id = it->second.source_prop_id;
             info.strong_typed = it->second.strong_typed;
+            info.slot_id = it->second.slot_id;
         }
         ctx_.symbols[with_outputs[i].first] = std::move(info);
     }

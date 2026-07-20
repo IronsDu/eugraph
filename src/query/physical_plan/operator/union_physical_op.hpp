@@ -16,6 +16,11 @@ public:
     std::string toString() const override;
     std::vector<const PhysicalOperator*> children() const override;
 
+    void deriveOutputLayout(const TupleSlotLayout&) override {
+        // Both sides produce the same schema; use left as output.
+        slot_layout_ = left_->slotLayout();
+    }
+
     folly::coro::AsyncGenerator<RowBatch> execute() override;
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
 

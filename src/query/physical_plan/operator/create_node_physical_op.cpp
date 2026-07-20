@@ -1,9 +1,9 @@
 #include "query/physical_plan/operator/create_node_physical_op.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
-#include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/physical_plan/operator/property_value_convert.hpp"
 #include <spdlog/spdlog.h>
 
 namespace {
@@ -13,73 +13,6 @@ eugraph::LabelId getAnonLabelId(const std::unordered_map<eugraph::LabelId, eugra
             return lid;
     }
     return eugraph::INVALID_LABEL_ID;
-}
-
-eugraph::PropertyValue valueToPropertyValue(const eugraph::Value& v) {
-    if (std::holds_alternative<bool>(v))
-        return std::get<bool>(v);
-    if (std::holds_alternative<int64_t>(v))
-        return std::get<int64_t>(v);
-    if (std::holds_alternative<double>(v))
-        return std::get<double>(v);
-    if (std::holds_alternative<std::string>(v))
-        return std::get<std::string>(v);
-    if (std::holds_alternative<eugraph::DateTimeValue>(v))
-        return std::get<eugraph::DateTimeValue>(v);
-    if (std::holds_alternative<eugraph::TimeValue>(v))
-        return std::get<eugraph::TimeValue>(v);
-    if (std::holds_alternative<eugraph::DurationValue>(v))
-        return std::get<eugraph::DurationValue>(v);
-    if (std::holds_alternative<eugraph::ListValue>(v)) {
-        const auto& lv = std::get<eugraph::ListValue>(v);
-        if (lv.elements.empty())
-            return eugraph::PropertyValue{};
-        const auto& first = lv.elements[0].value;
-        if (std::holds_alternative<int64_t>(first)) {
-            std::vector<int64_t> arr;
-            for (const auto& e : lv.elements)
-                if (std::holds_alternative<int64_t>(e.value))
-                    arr.push_back(std::get<int64_t>(e.value));
-            if (arr.size() == lv.elements.size())
-                return arr;
-        } else if (std::holds_alternative<double>(first)) {
-            std::vector<double> arr;
-            for (const auto& e : lv.elements)
-                if (std::holds_alternative<double>(e.value))
-                    arr.push_back(std::get<double>(e.value));
-            if (arr.size() == lv.elements.size())
-                return arr;
-        } else if (std::holds_alternative<std::string>(first)) {
-            std::vector<std::string> arr;
-            for (const auto& e : lv.elements)
-                if (std::holds_alternative<std::string>(e.value))
-                    arr.push_back(std::get<std::string>(e.value));
-            if (arr.size() == lv.elements.size())
-                return arr;
-        } else if (std::holds_alternative<eugraph::DateTimeValue>(first)) {
-            std::vector<eugraph::DateTimeValue> arr;
-            for (const auto& e : lv.elements)
-                if (std::holds_alternative<eugraph::DateTimeValue>(e.value))
-                    arr.push_back(std::get<eugraph::DateTimeValue>(e.value));
-            if (arr.size() == lv.elements.size())
-                return arr;
-        } else if (std::holds_alternative<eugraph::TimeValue>(first)) {
-            std::vector<eugraph::TimeValue> arr;
-            for (const auto& e : lv.elements)
-                if (std::holds_alternative<eugraph::TimeValue>(e.value))
-                    arr.push_back(std::get<eugraph::TimeValue>(e.value));
-            if (arr.size() == lv.elements.size())
-                return arr;
-        } else if (std::holds_alternative<eugraph::DurationValue>(first)) {
-            std::vector<eugraph::DurationValue> arr;
-            for (const auto& e : lv.elements)
-                if (std::holds_alternative<eugraph::DurationValue>(e.value))
-                    arr.push_back(std::get<eugraph::DurationValue>(e.value));
-            if (arr.size() == lv.elements.size())
-                return arr;
-        }
-    }
-    return eugraph::PropertyValue{};
 }
 
 eugraph::Value evaluateExpr(eugraph::compute::VectorizedEvaluator& evaluator,
@@ -142,8 +75,11 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
         co_await store_.createLabel(lid);
     }
 
-    // Phase 1b: __anon__ attribute lightweight registration (only once)
-    if (!anon_registered_ && !pending_props_.empty()) {
+    // Phase 1b: __anon__ attribute lightweight registration (only once).
+    // Triggers on either pending props (label-free property bag) or a fully
+    // bare CREATE () — the latter still needs __anon__ so the vertex has at
+    // least one label-reverse key and is discoverable by AllNodeScan.
+    if (!anon_registered_ && (!pending_props_.empty() || label_ids_.empty())) {
         LabelId anon_lid = getAnonLabelId(label_defs_);
         if (anon_lid == INVALID_LABEL_ID) {
             // Auto-create __anon__ label if it doesn't exist
@@ -163,6 +99,13 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
             auto updated_def = co_await meta_.getLabelDefById(anon_lid);
             if (updated_def) {
                 label_defs_[anon_lid] = std::move(*updated_def);
+            }
+            // Bare CREATE () with no labels and no props: still assign __anon__
+            // so the vertex is persisted with a label-reverse key and becomes
+            // discoverable by AllNodeScan / getVertexLabels.
+            if (label_ids_.empty()) {
+                label_ids_.push_back(anon_lid);
+                co_await store_.createLabel(anon_lid);
             }
         }
         anon_registered_ = true;

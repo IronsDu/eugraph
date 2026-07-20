@@ -33,7 +33,15 @@ bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_n
                   " but used as node");
             return false;
         }
-        col_idx = nextColumnIndex();
+        // When the variable is already bound, reuse its column_index and slot_id
+        // instead of allocating a new one.  This prevents the binder from
+        // overwriting the WITH-passed variable and lets ExpressionCompiler
+        // resolve the correct column position downstream.
+        if (existing) {
+            col_idx = existing->column_index;
+        } else {
+            col_idx = nextColumnIndex();
+        }
     }
 
     label_ids.clear();
@@ -49,7 +57,7 @@ bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_n
         }
     }
 
-    if (!var_name.empty() && !skip_register) {
+    if (!var_name.empty() && !skip_register && !ctx_.lookup(var_name)) {
         ctx_.symbols[var_name] = makeColumnInfo(var_name, BoundType::Vertex(), label_ids);
     }
 
@@ -69,7 +77,10 @@ bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std
               " but used as relationship");
         return false;
     }
-    col_idx = nextColumnIndex();
+    if (existing)
+        col_idx = existing->column_index;
+    else
+        col_idx = nextColumnIndex();
 
     edge_label_ids.clear();
     if (!rel.rel_types.empty()) {
@@ -84,7 +95,7 @@ bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std
         }
     }
 
-    if (!var_name.empty()) {
+    if (!var_name.empty() && !ctx_.lookup(var_name)) {
         ctx_.symbols[var_name] = makeColumnInfo(var_name, BoundType::Edge());
     }
 
@@ -130,6 +141,7 @@ ColumnInfo Binder::makeColumnInfo(const std::string& name, BoundType type, std::
     info.name = name;
     info.type = std::move(type);
     info.column_index = ctx_.next_column_index > 0 ? ctx_.next_column_index - 1 : 0;
+    info.slot_id = allocateNamedSlot(name);
     info.source_labels = std::move(source_labels);
     info.source_prop_id = source_prop_id;
     info.strong_typed = strong_typed;

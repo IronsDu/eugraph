@@ -39,6 +39,14 @@ public:
         return {left_.get(), right_.get()};
     }
 
+    void deriveOutputLayout(const TupleSlotLayout& input_layout) override {
+        // LeftJoin output = left columns + right columns.
+        // Merge both children's output layouts.
+        slot_layout_ = left_->slotLayout();
+        slot_layout_.merge(right_->slotLayout());
+        (void)input_layout;
+    }
+
 private:
     std::unique_ptr<PhysicalOperator> left_;
     std::unique_ptr<PhysicalOperator> right_;

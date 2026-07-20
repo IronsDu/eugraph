@@ -46,7 +46,7 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
             for (const auto& target : targets_) {
                 if (target.kind != TargetKind::EDGE)
                     continue;
-                int col = findColumn(input_schema_, target.var_name);
+                int col = target.object_col >= 0 ? target.object_col : findColumn(input_schema_, target.var_name);
                 if (col < 0 || static_cast<size_t>(col) >= chunk->numColumns())
                     continue;
                 Value val = chunk->getValue(static_cast<size_t>(col), row_idx);
@@ -63,7 +63,7 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
             for (const auto& target : targets_) {
                 if (target.kind != TargetKind::VERTEX)
                     continue;
-                int col = findColumn(input_schema_, target.var_name);
+                int col = target.object_col >= 0 ? target.object_col : findColumn(input_schema_, target.var_name);
                 if (col < 0 || static_cast<size_t>(col) >= chunk->numColumns())
                     continue;
                 Value val = chunk->getValue(static_cast<size_t>(col), row_idx);

@@ -120,7 +120,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     error("UndefinedVariable: Variable '" + ptr->name + "' not defined");
                     return std::nullopt;
                 }
-                return BoundExpression(BoundColumnRef(col->column_index, col->type, ptr->name));
+                return BoundExpression(BoundColumnRef(col->column_index, col->type, ptr->name, col->slot_id));
             } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
                 return bindExpression(ptr->inner);
             } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
@@ -373,6 +373,17 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
 
                         return BoundExpression(std::move(prop_ref));
                     }
+
+                    // obj is VERTEX but not a LabelCast / ColumnRef (e.g. function
+                    // call result like startNode(r)): use dynamic property ref so
+                    // the evaluator resolves the property name at runtime against
+                    // the VertexValue's labels. Lazy loading in evalDynamicPropertyRef
+                    // will populate bare VertexValues with actual properties.
+                    auto dyn_ref = std::make_unique<BoundDynamicPropertyRef>();
+                    dyn_ref->object = std::move(*obj);
+                    dyn_ref->property = ptr->property;
+                    dyn_ref->result_type = BoundType::Any();
+                    return BoundExpression(std::move(dyn_ref));
                 }
 
                 if (obj_type.kind == BoundTypeKind::EDGE) {

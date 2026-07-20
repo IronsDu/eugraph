@@ -37,7 +37,7 @@ Cypher 查询文本
     → PhysicalPlanner::planBound: BoundLogicalPlan → PhysicalOperator 树
         ├── tryBoundIndexScan: Filter(LabelScan) + 可索引谓词 → IndexScanPhysicalOp
         ├── tryBoundEdgeIndexScan: Filter(Expand) + 可索引谓词 → EdgeIndexScanPhysicalOp
-        ├── 延迟属性物化：Scan/Expand 后自动插入 VertexLabelRead / VertexPropertyRead / EdgePropertyRead
+        ├── 延迟属性物化：Scan/Expand 后通过 dispatchProjectionExtract 插入 ProjectionExtractPhysicalOp（融合点/边属性抽取 + Project 语义）
         └── ID 解析，存储引用绑定
     → QueryExecutor: 协程管道执行 (Pull-based 火山模型，AsyncGenerator<DataChunk>)
 ```
@@ -398,10 +398,8 @@ class PhysicalOperator {
 | `EdgeIndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `EdgeLabelId`, `prop_ids` | 输出 `VertexRef` / `EdgeKey` / `VertexRef` |
 | `ExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, Schema | 输出 `VertexRef` / `EdgeKey` / `VertexRef`（拓扑类型）。语义升级由 wrap 管线完成 |
 | `VarLenExpandPhysicalOp` | `IAsyncGraphDataStore&`, `optional<vector<EdgeLabelId>>`, `min_hops`, `max_hops`, Schema | DFS + 边唯一性。输出 `VertexRef`（dst）、`PathValue`（path 列）、`List<EdgeValue>`（edge list 列）。path 列内部已加载 labels |
-| `VertexPropertyExtractPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `LabelRequest[]`, `PropRequest[]`, `VertexRequest[]` | 统一顶点加载：追加 `List<String>`（labels）/ 标量（属性）/ `VertexValue`（完整点）列 |
-| `EdgePropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `edge_prop_ids` | 拓扑→语义升级：`EdgeKey` → `EdgeValue{..., properties}` |
-| `EdgePropertyExtractPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx`, `edge_prop_ids` | 追加扁平边属性列 |
-| `PathElementPropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx` | 拓扑→语义升级：`PathTopology` → `PathValue`（加载元素属性和标签） |
+| `ProjectionExtractPhysicalOp` | `IAsyncGraphDataStore&`, `ColumnSpec[]`, label 名映射 | 融合点/边属性抽取 + Project 语义。7 种 ColumnSpec：Passthrough / LoadVertexProp / LoadEdgeProp / LoadVertexLabels / LoadEdgeType / ConstructVertex / ConstructEdge。替代旧的 VertexPropertyExtract / EdgePropertyExtract / EdgePropertyRead 三个算子 |
+| `PathElementPropertyReadPhysicalOp` | `IAsyncGraphDataStore&`, 变量名, `col_idx` | 拓扑→语义升级：`PathTopology` → `PathValue`（加载元素属性和标签）。仅保留用于 PathBuild 路径，当前全量加载，待按需优化 |
 | `FilterPhysicalOp` | `BoundExpression` 谓词, Schema | DICTIONARY 共享 child buffer |
 | `ProjectPhysicalOp` | `BoundExpression` 投影项列表 | FLAT columns |
 | `AggregatePhysicalOp` | `FunctionDef*` 聚合, `BoundExpression` 分组键 | FLAT output |
@@ -428,7 +426,7 @@ class PhysicalOperator {
 
 **EdgeIndexScan**：由 `Filter(Expand)` 推导产生（单类型时）。边索引 value 包含邻接信息，可直接产出 src/dst/edge 列。
 
-**Expand**：对输入的每一行，调用 `scanEdges(src_id, dir, label_filter)`，每条边产生一行输出。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由 `loadVertexPropertiesInPlace` / `EdgePropertyReadPhysicalOp` 延迟加载（见 [延迟属性物化](deferred-property-loading.md)）。
+**Expand**：对输入的每一行，调用 `scanEdges(src_id, dir, label_filter)`，每条边产生一行输出。输入列以 DICTIONARY 形式共享给子算子。dst 顶点和边的属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 统一延迟加载（见 [延迟属性物化](projection-extract-design.md)）。
 
 **Filter**：`VectorizedEvaluator` 求值 BoundExpression 谓词，DICTIONARY 选择向量标记有效行。
 
@@ -574,8 +572,8 @@ using Schema = vector<string>;   // 列名列表
 - `RETURN *` 变量展开
 - DDL 异步执行（DdlWorker 后台线程）
 - 崩溃恢复（索引 DDL 状态恢复）
-- `properties(vertex/edge)` / `keys(map)` 函数 ✅ 已实现（`MapValue` 类型 + `BoundType::MAP`，2026-05-23）
-- **`properties(Edge)` + 普通 Expand**：✅ 已通过 `EdgePropertyReadPhysicalOp` 实现边属性延迟加载，`properties(r)` 对定长 `(a)-[r:TYPE]->(b)` 中的边正常工作。
+- `properties(vertex/edge)` / `keys(map)` 函数 ✅ 已实现
+- **`properties(Edge)` + 普通 Expand**：✅ 已通过 `ProjectionExtractPhysicalOp`（LoadEdgeProp / ConstructEdge spec）实现边属性延迟加载，`properties(r)` 对定长 `(a)-[r:TYPE]->(b)` 中的边正常工作。
 - **MapValue RPC 序列化**：`MapValue` 序列化为 JSON 字符串通过 `ResultValue::map_json`（Thrift union 字段 9）传输。需注意：修改 `proto/eugraph.thrift` 后运行 `thrift1 --gen mstch_cpp2 -o src/ proto/eugraph.thrift` 重新生成代码，并用 `sed 's|"proto/gen-cpp2/|"gen-cpp2/|g'` 修正 include 路径。
 - **`properties()` 触发全属性加载**：Binder 遇到 `properties(n)`（Vertex 参数）时，通过 `BindContext::addPropertyRequirement` 请求所有已知 Label 的全部属性 ID。此策略在单标签场景下开销可接受，多标签/宽表场景需后续优化为按需加载。
 
@@ -585,7 +583,7 @@ using Schema = vector<string>;   // 列名列表
 
 **动机**：当前边属性存储在独立的边属性表中。变长查询的逐跳属性过滤（如 `[:REL*1..5 {status: 'active'}]`）每跳都需要额外 IO 回查属性。如果高频过滤属性直接存储在邻接 KV 的 value 中，可以消除随机 IO。
 
-**现状**：变长查询暂时使用额外 IO 回查方式完成属性过滤。此优化需存储层配合，优先级低于变长查询核心功能。
+**现状**：变长查询通过额外 IO 回查方式完成属性过滤。此优化需存储层配合，优先级低于变长查询核心功能。
 
 ---
 
@@ -653,5 +651,5 @@ using Schema = vector<string>;   // 列名列表
 - **LIMIT 不参与 DFS 剪枝**：DFS 先穷举当前 source vertex 的所有路径才输出，LIMIT 在后续 pipeline 截断。超级节点（100 条边）上 `[*2]` 会产生 ~10k 中间结果，此时 LIMIT 无法提前终止遍历。
 - **混合固定+varlen 链 + 命名路径**：`p = (a)-[:X]->(b)-[:Y*2..3]->(c)` 不支持（Binder 阶段拒绝）。
 - **边属性过滤仅支持字面常量**：`{prop: value}` 中 value 必须为字面量（int/string/bool/double），不支持表达式或变量引用。
-- **中间顶点属性加载**：DFS 构建 PathValue 时为所有顶点调用 `getVertexLabels()` 填充 `labels`（使 `nodes(p)` 结果能正确显示标签）。属性由下游 `PathElementPropertyReadPhysicalOp` 填充（当前全量加载，待优化为按需加载——见 [deferred-property-loading.md](deferred-property-loading.md) PathElementPropertyRead 小节）。
+- **中间顶点属性加载**：DFS 构建 PathValue 时为所有顶点调用 `getVertexLabels()` 填充 `labels`（使 `nodes(p)` 结果能正确显示标签）。属性由下游 `PathElementPropertyReadPhysicalOp` 填充（当前全量加载，待优化为按需加载——见 [ProjectionExtract 按需属性物化设计](projection-extract-design.md) PathElementPropertyRead 小节）。终点 dst 的属性由 `ProjectionExtractPhysicalOp` 按需加载。
 - **多 MATCH + VarLenExpand 未实现**：当前不支持多条 MATCH 子句中包含变长邻接的组合（属于多 MATCH + JOIN 的通用待实现项）。

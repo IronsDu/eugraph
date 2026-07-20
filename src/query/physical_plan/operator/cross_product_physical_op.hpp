@@ -33,6 +33,11 @@ public:
         return {left_.get(), right_.get()};
     }
 
+    void deriveOutputLayout(const TupleSlotLayout&) override {
+        slot_layout_ = left_->slotLayout();
+        slot_layout_.merge(right_->slotLayout());
+    }
+
 private:
     std::unique_ptr<PhysicalOperator> left_;
     std::unique_ptr<PhysicalOperator> right_;

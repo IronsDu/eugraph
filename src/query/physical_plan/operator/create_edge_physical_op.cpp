@@ -1,32 +1,14 @@
 #include "query/physical_plan/operator/create_edge_physical_op.hpp"
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
-#include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/physical_plan/operator/property_value_convert.hpp"
 #include "storage/kv/value_codec.hpp"
 
 #include <spdlog/spdlog.h>
 
 namespace {
-eugraph::PropertyValue valueToPropertyValue(const eugraph::Value& v) {
-    if (std::holds_alternative<bool>(v))
-        return std::get<bool>(v);
-    if (std::holds_alternative<int64_t>(v))
-        return std::get<int64_t>(v);
-    if (std::holds_alternative<double>(v))
-        return std::get<double>(v);
-    if (std::holds_alternative<std::string>(v))
-        return std::get<std::string>(v);
-    if (std::holds_alternative<eugraph::DateTimeValue>(v))
-        return std::get<eugraph::DateTimeValue>(v);
-    if (std::holds_alternative<eugraph::TimeValue>(v))
-        return std::get<eugraph::TimeValue>(v);
-    if (std::holds_alternative<eugraph::DurationValue>(v))
-        return std::get<eugraph::DurationValue>(v);
-    return eugraph::PropertyValue{};
-}
-
 eugraph::Value evaluateExpr(eugraph::compute::VectorizedEvaluator& evaluator,
                             const eugraph::binder::BoundExpression& expr, const eugraph::DataChunk* chunk,
                             size_t row_idx) {
@@ -53,6 +35,8 @@ eugraph::VertexId extractVidFromColumn(const eugraph::Column& col, size_t row_id
     const auto& val = col.getValue(row_idx);
     if (std::holds_alternative<eugraph::VertexValue>(val))
         return std::get<eugraph::VertexValue>(val).id;
+    if (std::holds_alternative<eugraph::VertexRef>(val))
+        return std::get<eugraph::VertexRef>(val).id;
     return 0;
 }
 

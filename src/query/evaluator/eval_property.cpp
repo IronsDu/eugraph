@@ -2,6 +2,10 @@
 
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
+#include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/meta/i_async_graph_meta_store.hpp"
+
+#include <folly/coro/BlockingWait.h>
 
 namespace eugraph {
 namespace compute {
@@ -96,6 +100,19 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     }
                     if (!ldef && eval_ctx_.catalog)
                         ldef = eval_ctx_.catalog->lookupLabel(lid);
+                    // Labels created dynamically during the session (e.g.
+                    // __anon__ for pending CREATE properties) may only exist
+                    // in the meta store, not in the snapshot loaded at query
+                    // start.  Fall back to the meta store so evalPropertyRef
+                    // can resolve property names stored under those labels.
+                    if (!ldef && eval_ctx_.meta) {
+                        auto loaded = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(lid));
+                        if (loaded) {
+                            auto& inserted =
+                                label_def_cache_.emplace_back(std::make_unique<LabelDef>(std::move(*loaded)));
+                            ldef = inserted.get();
+                        }
+                    }
                     if (!ldef)
                         continue;
                     for (const auto& pd : ldef->properties) {
@@ -118,6 +135,32 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 for (auto& v : found)
                     lv.elements.push_back(ValueStorage{std::move(v)});
                 r = Value(std::move(lv));
+            }
+        } else if (std::holds_alternative<VertexRef>(ov)) {
+            const auto& vref = std::get<VertexRef>(ov);
+            // Structural field access on topology-form vertex (n.id).
+            // The whole-vertex object hasn't been constructed (no PEPlan
+            // requested it), so handle the cheap structural reads here.
+            if (ref.candidates.empty() && !ref.property_name.empty()) {
+                if (ref.property_name == "id") {
+                    r = Value(static_cast<int64_t>(vref.id));
+                }
+            }
+        } else if (std::holds_alternative<EdgeKey>(ov)) {
+            const auto& ek = std::get<EdgeKey>(ov);
+            // Structural field access on topology-form edge (r.id, r.src_id,
+            // r.dst_id, r.label_id). Avoids forcing ConstructEdge when only
+            // the structural id is needed.
+            if (ref.candidates.empty() && !ref.property_name.empty()) {
+                if (ref.property_name == "id") {
+                    r = Value(static_cast<int64_t>(ek.id));
+                } else if (ref.property_name == "src_id") {
+                    r = Value(static_cast<int64_t>(ek.src_id));
+                } else if (ref.property_name == "dst_id") {
+                    r = Value(static_cast<int64_t>(ek.dst_id));
+                } else if (ref.property_name == "label_id") {
+                    r = Value(static_cast<int64_t>(ek.label_id));
+                }
             }
         } else if (std::holds_alternative<EdgeValue>(ov)) {
             const auto& edge = std::get<EdgeValue>(ov);
@@ -214,9 +257,32 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
         Value ov = obj.column->getValue(i);
         Value r;
         if (std::holds_alternative<VertexValue>(ov)) {
-            const auto& vertex = std::get<VertexValue>(ov);
+            auto& vertex = const_cast<VertexValue&>(std::get<VertexValue>(ov));
             if (vertex.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
+            // Lazy-load labels and properties for bare VertexValues (e.g. from
+            // startNode/endNode which only set the internal id).
+            if (vertex.properties.empty() && eval_ctx_.store) {
+                if (!vertex.labels.has_value())
+                    vertex.labels = folly::coro::blockingWait(eval_ctx_.store->getVertexLabels(vertex.id));
+                if (vertex.labels.has_value()) {
+                    for (auto lid : *vertex.labels) {
+                        auto props = folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, lid));
+                        if (props)
+                            vertex.properties[lid] = std::move(*props);
+                    }
+                } else if (eval_ctx_.meta) {
+                    // If no labels, try loading properties from __anon__ label as fallback.
+                    auto anon_label =
+                        folly::coro::blockingWait(eval_ctx_.meta->getLabelDef(std::string(kAnonLabelName)));
+                    if (anon_label) {
+                        auto props =
+                            folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, anon_label->id));
+                        if (props)
+                            vertex.properties[anon_label->id] = std::move(*props);
+                    }
+                }
+            }
             for (const auto& [label_id, props_vec] : vertex.properties) {
                 const LabelDef* ldef = nullptr;
                 if (eval_ctx_.label_defs) {
@@ -226,6 +292,14 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 }
                 if (!ldef)
                     ldef = eval_ctx_.catalog->lookupLabel(label_id);
+                // Dynamic labels (e.g. __anon__) may only be in the meta store.
+                if (!ldef && eval_ctx_.meta) {
+                    auto loaded = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(label_id));
+                    if (loaded) {
+                        auto& inserted = label_def_cache_.emplace_back(std::make_unique<LabelDef>(std::move(*loaded)));
+                        ldef = inserted.get();
+                    }
+                }
                 if (!ldef)
                     continue;
                 for (const auto& pd : ldef->properties) {
@@ -240,6 +314,25 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 }
             }
         found:;
+            // Fallback: if the cached LabelDef had no property definitions, try
+            // reloading from meta store (which may have been updated by DDL mid-query).
+            if (std::holds_alternative<std::monostate>(r) && eval_ctx_.meta) {
+                for (const auto& [label_id, props_vec] : vertex.properties) {
+                    if (props_vec.empty())
+                        continue;
+                    auto fresh_ldef = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(label_id));
+                    if (fresh_ldef) {
+                        for (const auto& pd : fresh_ldef->properties) {
+                            if (pd.name == ref.property && pd.id < props_vec.size() && props_vec[pd.id].has_value()) {
+                                r = pvToValue(*props_vec[pd.id]);
+                                break;
+                            }
+                        }
+                        if (!std::holds_alternative<std::monostate>(r))
+                            break;
+                    }
+                }
+            }
         } else if (std::holds_alternative<EdgeValue>(ov)) {
             const auto& edge = std::get<EdgeValue>(ov);
             if (edge.deleted)

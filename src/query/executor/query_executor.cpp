@@ -152,10 +152,39 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .label_defs = ctx->label_defs,
         .edge_label_defs = ctx->edge_label_defs,
         .eval_ctx = {},
+        .requirements = {},
+        .extraction_info = {},
+        .var_slots = {},
+        .alias_map = {},
+        .slot_allocator = {},
+        .fresh_expands = {},
     };
 
     plan_ctx.eval_ctx.catalog = ctx->catalog.get();
     plan_ctx.eval_ctx.label_defs = &ctx->label_defs;
+
+    // Populate variable → SlotId mapping from the Binder's symbol table.
+    // This covers ALL variables (including intermediate anon edges/nodes),
+    // not just the RETURN-level output schema.
+    for (const auto& [name, info] : binder.ctx().symbols) {
+        if (info.slot_id != binder::INVALID_SLOT_ID)
+            plan_ctx.var_slots[name] = info.slot_id;
+    }
+    // Also seed from the binder's permanent record. WITH clauses narrow
+    // ctx().symbols to just their outputs, dropping variables projected by
+    // earlier WITHs (e.g. `WITH x, count(*) AS foaf ... WITH x ...` drops
+    // `foaf`). Operators in the bound tree (Aggregate output_names, Filter
+    // predicates) still reference those slots, so the planner must know
+    // them — otherwise allocateAllSlots / makeSlotLayout allocate a fresh
+    // slot for the dropped name and the predicate's BoundColumnRef.slot_id
+    // no longer matches the layout.
+    for (const auto& [name, sid] : binder.ctx().all_symbols) {
+        if (sid != binder::INVALID_SLOT_ID)
+            plan_ctx.var_slots[name] = sid;
+    }
+    // Seed the planner's slot allocator to continue after the binder's slots.
+    // Start from the next slot after the binder's allocation.
+    plan_ctx.slot_allocator.seed(binder.ctx().slot_allocator.current());
 
     // 2.5. Logical optimization
     optimizer::LogicalOptimizer logical_optimizer;

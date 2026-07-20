@@ -2,6 +2,7 @@
 
 #include "query/dataset/data_chunk.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/physical_plan/expression_compiler.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 
@@ -31,6 +32,11 @@ public:
     }
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
+    }
+
+    void compileExpressions(const TupleSlotLayout& input_layout) override {
+        ExpressionCompiler compiler(input_layout);
+        compiler.compile(list_expr_);
     }
 
 private:

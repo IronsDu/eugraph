@@ -615,6 +615,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->direction = val->direction;
                 c->edge_prop_ids = val->edge_prop_ids;
                 c->dst_label_prop_ids = val->dst_label_prop_ids;
+                c->dst_label_ids = val->dst_label_ids;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
                 auto c = std::make_unique<binder::BoundSkipOp>();
@@ -652,6 +653,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->min_hops = val->min_hops;
                 c->max_hops = val->max_hops;
                 c->dst_label_prop_ids = val->dst_label_prop_ids;
+                c->dst_label_ids = val->dst_label_ids;
                 c->path_variable = val->path_variable;
                 c->path_column_index = val->path_column_index;
                 c->path_handled_by_varlen = val->path_handled_by_varlen;
@@ -700,6 +702,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                     ci.expr = cloneBoundExpression(item.expr);
                     ci.alias = item.alias;
                     ci.result_type = item.result_type;
+                    ci.output_slot = item.output_slot;
                     c->items.push_back(std::move(ci));
                 }
                 return c;
