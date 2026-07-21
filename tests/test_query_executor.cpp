@@ -7144,3 +7144,83 @@ TEST_F(QueryExecutorTest, PathFormatCheck) {
         }
     }
 }
+
+TEST_F(QueryExecutorTest, WithStarPassthrough) {
+    // Verify that WITH * passes through all variables in scope
+    auto result = execSync(*executor_, "CREATE (:Person {name: '42'})");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    // WITH * after label scan
+    auto rows = execSync(*executor_, "MATCH (p:Person) WITH * RETURN p.name").rows;
+    ASSERT_GE(rows.size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<std::string>(rows[0][0]));
+
+    // WITH * RETURN *
+    auto rows2 = execSync(*executor_, "MATCH (p:Person { name: '42' }) WITH * RETURN *").rows;
+    ASSERT_GE(rows2.size(), 1u);
+
+    // WITH * after all-node scan
+    auto rows3 = execSync(*executor_, "MATCH (n) WITH * RETURN n").rows;
+    ASSERT_GE(rows3.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, TypeConversionToIntegerOnNodePropertyXProd) {
+    // Reproduce openCypher TCK TypeConversion2 [7]:
+    // MATCH (p:Person { name: '42' }) WITH * MATCH (n) RETURN toInteger(n.name)
+    auto result = execSync(*executor_, "CREATE (:Person {name: '42'})");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    auto rows = execSync(*executor_, "MATCH (p:Person { name: '42' }) "
+                                     "WITH * "
+                                     "MATCH (n) "
+                                     "RETURN toInteger(n.name) AS name")
+                    .rows;
+    ASSERT_GE(rows.size(), 1u);
+    auto val = rows[0][0];
+    ASSERT_TRUE(std::holds_alternative<int64_t>(val)) << "Expected int64_t but got type index " << val.index();
+    EXPECT_EQ(std::get<int64_t>(val), 42);
+}
+
+TEST_F(QueryExecutorTest, TypeConversionToFloatOnNodePropertyXProd) {
+    // Reproduce openCypher TCK TypeConversion3 [5]:
+    // CREATE (:Movie {rating: 4}), then MATCH (m:Movie { rating: 4 }) WITH * MATCH (n) RETURN toFloat(n.rating)
+    auto movie_id = blockingWait(async_meta_->createLabel("Movie"));
+    ASSERT_NE(movie_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(movie_id));
+    blockingWait(async_meta_->addVertexLabelProperties("Movie", {{"rating", PropertyType::INT64}}));
+    blockingWait(async_meta_->nextVertexIdRange(10));
+
+    auto result = execSync(*executor_, "CREATE (:Movie {rating: 4})");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    auto rows = execSync(*executor_, "MATCH (m:Movie { rating: 4 }) "
+                                     "WITH * "
+                                     "MATCH (n) "
+                                     "RETURN toFloat(n.rating) AS float")
+                    .rows;
+    ASSERT_GE(rows.size(), 1u);
+    auto val = rows[0][0];
+    ASSERT_TRUE(std::holds_alternative<double>(val)) << "Expected double but got type index " << val.index();
+    EXPECT_DOUBLE_EQ(std::get<double>(val), 4.0);
+}
+
+TEST_F(QueryExecutorTest, TypeConversionToStringOnNodePropertyXProd) {
+    // Reproduce openCypher TCK TypeConversion4 [7]:
+    // CREATE (:Movie {rating: 4}), then MATCH (m:Movie { rating: 4 }) WITH * MATCH (n) RETURN toString(n.rating)
+    auto movie_id = blockingWait(async_meta_->createLabel("Movie"));
+    ASSERT_NE(movie_id, INVALID_LABEL_ID);
+    blockingWait(async_data_->createLabel(movie_id));
+    blockingWait(async_meta_->addVertexLabelProperties("Movie", {{"rating", PropertyType::INT64}}));
+    blockingWait(async_meta_->nextVertexIdRange(10));
+
+    auto result = execSync(*executor_, "CREATE (:Movie {rating: 4})");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    auto rows = execSync(*executor_, "MATCH (m:Movie { rating: 4 }) "
+                                     "WITH * "
+                                     "MATCH (n) "
+                                     "RETURN toString(n.rating)")
+                    .rows;
+    ASSERT_GE(rows.size(), 1u);
+    auto val = rows[0][0];
+    ASSERT_TRUE(std::holds_alternative<std::string>(val)) << "Expected string but got type index " << val.index();
+    EXPECT_EQ(std::get<std::string>(val), "4");
+}

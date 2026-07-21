@@ -90,8 +90,7 @@ def build_scenario_map(step_data, feature_dir):
         feat = step.get('feature', '')
         if feat:
             # Normalize to relative path vs feature_dir
-            if os.path.isabs(feat):
-                feat = os.path.relpath(feat, feature_dir)
+            feat = os.path.relpath(feat, feature_dir)
             scenario_to_feature[sc] = feat
     return scenario_to_feature
 
@@ -147,6 +146,9 @@ def main():
                              line.strip())
                 if m:
                     raw = re.sub(r'\s+', ' ', m.group(2).strip())
+                    # Skip Scenario Outline template lines (contain <placeholder>)
+                    if '<' in raw and '>' in raw:
+                        continue
                     sc_name = f'[{m.group(1)}] {raw}'
                     all_file_scenarios[sc_name] = rel
     base_names = set()
@@ -345,19 +347,6 @@ def main():
                     if s['status'] == 'UNDEFINED'
                     and uc_name in scenario_to_feature.get(s['scenario'], ''))
         w(f"| {uc_name} | {t} | **{p}** | {f} | {undef} |")
-
-    w("")
-    w("---")
-    w("")
-    w("## 剩余主要问题")
-    w("")
-    w("1. **WITH ORDER BY 排序表达式**（~40+ step failures）：percentileDisc/Cont、"
-      "多列排序、list排序、类型一致性排序")
-    w("2. **路径展示**（Match6 19 scenarios）：路径序列化格式未包含正确标签/属性/关系类型")
-    w("3. **WITH 变量遮蔽/DISTINCT**（~15 scenarios）：别名重定义、WHERE子句变量解析")
-    w("4. **Pattern Comprehension / EXISTS**（~30 scenarios）：特性未完整实现")
-    w("5. **CREATE/SET/DELETE 副作用计数**：副作用追踪器细节")
-    w("6. **Match 可变长/无向模式**（~60 scenarios）：OPTIONAL MATCH bound node、无向固定长路径")
 
     result = "\n".join(out) + "\n"
 

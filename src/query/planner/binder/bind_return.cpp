@@ -868,27 +868,47 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
 
         // Simple projection
         auto proj = std::make_unique<BoundProjectOp>();
-        for (const auto& item : wc.items) {
-            auto bound_expr = bindExpression(item.expr);
-            if (!bound_expr)
-                continue;
-
-            // Detect whole-variable pass-through to add property requirements
-            if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
-                auto& col_ref = std::get<BoundColumnRef>(*bound_expr);
-                if (col_ref.type.kind == BoundTypeKind::VERTEX) {
-                    addAllPropertiesForVariable(col_ref.name);
-                }
+        if (wc.return_all && wc.items.empty()) {
+            // WITH *: pass through all variables from current scope.
+            // Mirrors bindReturn's RETURN * handler (line 220-242).
+            std::vector<const ColumnInfo*> sorted_symbols;
+            for (const auto& [name, col_info] : ctx_.symbols)
+                sorted_symbols.push_back(&col_info);
+            std::sort(sorted_symbols.begin(), sorted_symbols.end(),
+                      [](const ColumnInfo* a, const ColumnInfo* b) { return a->column_index < b->column_index; });
+            for (const auto* col_info : sorted_symbols) {
+                auto bound_expr =
+                    BoundColumnRef(col_info->column_index, col_info->type, col_info->name, col_info->slot_id);
+                BoundProjectOp::ProjectItem proj_item;
+                proj_item.expr = std::move(bound_expr);
+                proj_item.alias = col_info->name;
+                proj_item.result_type = getBoundExprType(proj_item.expr);
+                proj_item.input_slot = col_info->slot_id;
+                proj->items.push_back(std::move(proj_item));
+                with_outputs.emplace_back(col_info->name, proj_item.result_type);
             }
+        } else
+            for (const auto& item : wc.items) {
+                auto bound_expr = bindExpression(item.expr);
+                if (!bound_expr)
+                    continue;
 
-            std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
-            BoundProjectOp::ProjectItem proj_item;
-            proj_item.expr = std::move(*bound_expr);
-            proj_item.alias = alias;
-            proj_item.result_type = getBoundExprType(proj_item.expr);
-            proj->items.push_back(std::move(proj_item));
-            with_outputs.emplace_back(alias, proj_item.result_type);
-        }
+                // Detect whole-variable pass-through to add property requirements
+                if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
+                    auto& col_ref = std::get<BoundColumnRef>(*bound_expr);
+                    if (col_ref.type.kind == BoundTypeKind::VERTEX) {
+                        addAllPropertiesForVariable(col_ref.name);
+                    }
+                }
+
+                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                BoundProjectOp::ProjectItem proj_item;
+                proj_item.expr = std::move(*bound_expr);
+                proj_item.alias = alias;
+                proj_item.result_type = getBoundExprType(proj_item.expr);
+                proj->items.push_back(std::move(proj_item));
+                with_outputs.emplace_back(alias, proj_item.result_type);
+            }
         proj->child = std::move(child);
         current = std::move(proj);
     }
