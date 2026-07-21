@@ -1,7 +1,7 @@
 # TCK 测试结果报告
 
 **日期**: 2026-07-21
-**分支**: feature/path-display-fix
+**分支**: fix/with-star-passthrough
 **构建**: build/tests/tck/tck_tests
 
 ---
@@ -10,16 +10,16 @@
 
 | 指标 | 数量 |
 |------|------|
-| 场景总数 | 3909 |
+| 场景总数 | 3898 |
 | └ 已执行 | 3878 |
-| 场景通过 | **3466** |
-| 场景失败 | 362 |
-| 场景跳过/未定义 | 50 |
-| AST跳过（未执行） | 31 |
-| 步骤总数 | 15475 |
-| 步骤通过 | 15113 |
-| 步骤失败 | 362 |
-| 步骤跳过 | 0 |
+| 场景通过 | **3470** |
+| 场景失败 | 356 |
+| 场景跳过/未定义 | 52 |
+| AST跳过（未执行） | 20 |
+| 步骤总数 | 15479 |
+| 步骤通过 | 15103 |
+| 步骤失败 | 356 |
+| 步骤跳过 | 20 |
 
 ---
 
@@ -38,12 +38,12 @@
 | Precedence | 121 | **121** | 0 | 0 | 0.0% | ✅ |
 | Graph | 61 | **61** | 0 | 0 | 0.0% | ✅ |
 | Quantifier | 604 | **604** | 0 | 0 | 0.0% | ✅ |
+| TypeConversion | 47 | **47** | 0 | 0 | 0.0% | ✅ |
 | Comparison | 72 | **72** | 0 | 0 | 0.0% | ✅ |
 | ExistentialSubqueries | 10 | **2** | 8 | 0 | 80.0% | EXISTS 子查询 |
 | Pattern | 50 | **16** | 34 | 0 | 68.0% | 模式子查询未完善 |
 | Aggregation | 35 | **17** | 18 | 0 | 51.4% | percentileDisc/Cont 函数未实现 |
-| TypeConversion | 51 | **44** | 3 | 4 | 5.9% | 跨积 MATCH 预存问题 |
-| List | 189 | **181** | 4 | 4 | 2.1% | Pattern comprehension 未实现 |
+| List | 185 | **181** | 4 | 0 | 2.2% | Pattern comprehension 未实现 |
 | Temporal | 1004 | **1003** | 1 | 0 | 0.1% |  |
 
 ## 子句类
@@ -56,16 +56,16 @@
 | WITH WHERE | 8 | **4** | 4 | 0 | 50.0% | WHERE子句变量解析 |
 | WITH Skip Limit | 6 | **3** | 3 | 0 | 50.0% | SKIP/LIMIT与WITH的交互 |
 | Set | 53 | **27** | 26 | 0 | 49.1% | SET属性/标签副作用计数 |
-| Create | 78 | **46** | 32 | 0 | 41.0% | 创建模式副作用计数 |
+| Create | 78 | **48** | 30 | 0 | 38.5% | 创建模式副作用计数 |
 | RETURN | 63 | **43** | 20 | 0 | 31.7% | 列名生成、投影、DISTINCT |
 | RETURN ORDER BY | 35 | **24** | 11 | 0 | 31.4% | ORDER BY表达式格式 |
 | Delete | 41 | **29** | 12 | 0 | 29.3% | 表达式DELETE、路径DELETE、无向匹配 |
-| WITH ORDER BY | 296 | **207** | 85 | 4 | 28.7% | ORDER BY 变量遮蔽、别名解析 |
+| WITH ORDER BY | 293 | **207** | 85 | 1 | 29.0% | ORDER BY 变量遮蔽、别名解析 |
 | RETURN Skip Limit | 28 | **20** | 8 | 0 | 28.6% | SKIP/LIMIT参数类型 |
 | Unwind | 14 | **11** | 3 | 0 | 21.4% | UNWIND类型边界 |
-| Match | 404 | **342** | 62 | 0 | 15.3% | 变量作用域、路径模式、OPTIONAL MATCH |
+| Match | 404 | **343** | 61 | 0 | 15.1% | 变量作用域、路径模式、OPTIONAL MATCH |
 | MERGE | 75 | **70** | 5 | 0 | 6.7% | ON MATCH/CREATE副作用、路径变量、属性比较 |
-| CALL | 52 | **2** | 0 | 50 | 0.0% | CALL子句未实现（远期目标） |
+| CALL | 52 | **0** | 0 | 52 | 0.0% | CALL子句未实现（远期目标） |
 
 ## useCases
 
@@ -73,14 +73,3 @@
 |------|--------|------|------|--------|
 | countingSubgraphMatches | 11 | **4** | 7 | 0 |
 | triadicSelection | 0 | **0** | 0 | 0 |
-
----
-
-## 剩余主要问题
-
-1. **WITH ORDER BY 排序表达式**（~40+ step failures）：percentileDisc/Cont、多列排序、list排序、类型一致性排序
-2. **路径展示**（Match6 19 scenarios）：路径序列化格式未包含正确标签/属性/关系类型
-3. **WITH 变量遮蔽/DISTINCT**（~15 scenarios）：别名重定义、WHERE子句变量解析
-4. **Pattern Comprehension / EXISTS**（~30 scenarios）：特性未完整实现
-5. **CREATE/SET/DELETE 副作用计数**：副作用追踪器细节
-6. **Match 可变长/无向模式**（~60 scenarios）：OPTIONAL MATCH bound node、无向固定长路径
