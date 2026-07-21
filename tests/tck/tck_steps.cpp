@@ -50,11 +50,13 @@ bool gScenarioWasSkipped = false;
 // Step-level tracking
 struct StepRecord {
     std::string scenario_name;
+    std::string feature; // feature file path from scenario.uri
     int step_index;
     std::string step_text;
     std::string status; // "PASSED", "FAILED", or "SKIPPED"
 };
 std::vector<StepRecord> gStepRecords;
+std::map<std::string, int> gScenarioNameCount; // dedup example rows of Scenario Outline
 std::string gCurrentStepText;
 std::vector<std::pair<std::string, std::string>> gPendingSteps; // (step_text, status)
 int gStepIndex = 0;
@@ -182,6 +184,7 @@ HOOK_AFTER_ALL() {
         for (const auto& r : gStepRecords) {
             nlohmann::json entry;
             entry["scenario"] = r.scenario_name;
+            entry["feature"] = r.feature;
             entry["index"] = r.step_index;
             entry["step"] = r.step_text;
             entry["status"] = r.status;
@@ -229,6 +232,21 @@ HOOK_AFTER_SCENARIO() {
         scenario_name = context.Get<std::string>("scenario.name");
     }
 
+    // Distinguish example rows of Scenario Outlines by appending a suffix
+    // for duplicate names (openCypher TCK Outline names don't include
+    // example placeholder values, so pickle.name is identical for all rows).
+    int& cnt = gScenarioNameCount[scenario_name];
+    cnt++;
+    if (cnt > 1) {
+        scenario_name += " [ex #" + std::to_string(cnt) + "]";
+    }
+
+    // Read feature file path from context
+    std::string feature;
+    if (context.Contains("scenario.uri")) {
+        feature = context.Get<std::string>("scenario.uri");
+    }
+
     if (gScenarioWasSkipped) {
         gSkippedScenarios.push_back(scenario_name);
     } else if (gScenarioHadFailure) {
@@ -239,7 +257,8 @@ HOOK_AFTER_SCENARIO() {
 
     // Flush pending steps with scenario name
     for (size_t i = 0; i < gPendingSteps.size(); ++i) {
-        gStepRecords.push_back({scenario_name, static_cast<int>(i), gPendingSteps[i].first, gPendingSteps[i].second});
+        gStepRecords.push_back(
+            {scenario_name, feature, static_cast<int>(i), gPendingSteps[i].first, gPendingSteps[i].second});
     }
     gPendingSteps.clear();
 
