@@ -43,6 +43,27 @@ python3 tests/tck/run_tck.py \
   --features third_party/openCypher/tck/features/clauses/call/Call1.feature
 ```
 
+### 生成详细分类报告
+
+`run_tck.py` 生成的 `--report` 是简要汇总。生成**按类别（表达式、子句、useCases）详细分类**的报告使用 `scripts/gen_tck_report.py`：
+
+```bash
+# 先运行 TCK 得到 step-results JSON
+python3 tests/tck/run_tck.py \
+  --server-bin build/eugraph-server \
+  --tck-bin build/tests/tck/tck_tests \
+  --features build/tests/tck/features \
+  --step-results-file build/tck-step-results.json
+
+# 再生成详细分类报告
+python3 scripts/gen_tck_report.py \
+  --step-results build/tck-step-results.json \
+  --features build/tests/tck/features \
+  --output docs/tests/tck-results.md
+```
+
+生成的报告包含：表达式类（Literals、List、Aggregation 等 18 项）、子句类（Match、WITH、MERGE、Create 等 16 项）、useCases、与 DPL 基线对比。
+
 ### 生成报告并对比基线
 
 ```bash
@@ -156,6 +177,7 @@ Server 输出写入 `/tmp/eugraph_tck_server.log`。如果 server 崩溃，`run_
 | `tests/tck/tck_context.hpp` | TCK 上下文头文件 |
 | `tests/tck/tck_types.hpp` | 数据类型定义（SideEffects, TckCell 等） |
 | `tests/tck/CMakeLists.txt` | 构建配置（ccr_ext ExternalProject + CTest 注册） |
+| `scripts/gen_tck_report.py` | 生成详细分类 TCK 报告（按表达式/子句/useCases 分类） |
 | `scripts/compare_tck.py` | 独立脚本：直接对比两个 cucumber 文本报告 |
 | `third_party/openCypher/tck/features/` | openCypher TCK feature 文件（git submodule） |
 | `docs/tests/tck-results.md` | 测试结果分类报告 |
