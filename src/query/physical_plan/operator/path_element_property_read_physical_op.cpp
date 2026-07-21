@@ -32,14 +32,11 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
                     ve.value = VertexValue{pt.vertex_ids[j], {}, {}, false};
                     pv.elements.push_back(std::move(ve));
                     if (j < pt.edge_ids.size()) {
+                        VertexId src = j < pt.edge_src_ids.size() ? pt.edge_src_ids[j] : pt.vertex_ids[j];
+                        VertexId dst = j < pt.edge_dst_ids.size() ? pt.edge_dst_ids[j] : pt.vertex_ids[j + 1];
                         ValueStorage ee;
-                        ee.value = EdgeValue{pt.edge_ids[j],
-                                             pt.vertex_ids[j],
-                                             pt.vertex_ids[j + 1],
-                                             pt.edge_label_ids[j],
-                                             pt.seqs[j],
-                                             std::nullopt,
-                                             false};
+                        ee.value =
+                            EdgeValue{pt.edge_ids[j], src, dst, pt.edge_label_ids[j], pt.seqs[j], std::nullopt, false};
                         pv.elements.push_back(std::move(ee));
                     }
                 }

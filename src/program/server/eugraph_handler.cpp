@@ -175,6 +175,98 @@ namespace {
 // suppresses scientific notation without exposing floating-point noise.
 using eugraph::thrift_fmt::formatDouble;
 
+/// Append a property value in Cypher literal format (single-quoted strings,
+/// used for path display). Only differs from appendJsonValue for string values.
+void appendCypherValue(std::ostringstream& oss, const PropertyValue& pv) {
+    if (std::holds_alternative<bool>(pv)) {
+        oss << (std::get<bool>(pv) ? "true" : "false");
+    } else if (std::holds_alternative<int64_t>(pv)) {
+        oss << std::get<int64_t>(pv);
+    } else if (std::holds_alternative<double>(pv)) {
+        oss << formatDouble(std::get<double>(pv));
+    } else if (std::holds_alternative<std::string>(pv)) {
+        oss << '\'';
+        for (char c : std::get<std::string>(pv)) {
+            switch (c) {
+            case '\'':
+                oss << "\\'";
+                break;
+            case '\\':
+                oss << "\\\\";
+                break;
+            case '\n':
+                oss << "\\n";
+                break;
+            case '\r':
+                oss << "\\r";
+                break;
+            case '\t':
+                oss << "\\t";
+                break;
+            default:
+                oss << c;
+                break;
+            }
+        }
+        oss << '\'';
+    } else if (std::holds_alternative<std::vector<int64_t>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<int64_t>>(pv)) {
+            if (!first)
+                oss << ", ";
+            oss << x;
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<double>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<double>>(pv)) {
+            if (!first)
+                oss << ", ";
+            oss << formatDouble(x);
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<std::string>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& s : std::get<std::vector<std::string>>(pv)) {
+            if (!first)
+                oss << ", ";
+            oss << '\'' << s << '\'';
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<DateTimeValue>(pv)) {
+        oss << '\'' << temporalToString(std::get<DateTimeValue>(pv)) << '\'';
+    } else if (std::holds_alternative<TimeValue>(pv)) {
+        oss << '\'' << temporalToString(std::get<TimeValue>(pv)) << '\'';
+    } else if (std::holds_alternative<DurationValue>(pv)) {
+        oss << '\'' << temporalToString(std::get<DurationValue>(pv)) << '\'';
+    } else if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<DateTimeValue>>(pv))
+            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToString(x) << '\'';
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<TimeValue>>(pv))
+            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToString(x) << '\'';
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<DurationValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<DurationValue>>(pv))
+            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToString(x) << '\'';
+        oss << ']';
+    }
+    // null / unsupported: skip
+}
+
 void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
     if (std::holds_alternative<bool>(pv)) {
         oss << (std::get<bool>(pv) ? "true" : "false");
@@ -372,20 +464,25 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
     } else if (std::holds_alternative<PathValue>(val)) {
         auto& p = std::get<PathValue>(val);
         std::ostringstream oss;
+        oss << "<";
         for (size_t i = 0; i < p.elements.size(); ++i) {
             const auto& elem = p.elements[i].value;
             if (std::holds_alternative<VertexValue>(elem)) {
                 auto& v = std::get<VertexValue>(elem);
+                // Find the first user-visible label (skip __anon__).
                 oss << "(";
+                std::optional<LabelId> display_lid;
                 if (v.labels.has_value() && !v.labels->empty()) {
                     for (LabelId lid : *v.labels) {
                         auto it = label_defs.find(lid);
-                        if (it != label_defs.end()) {
+                        if (it != label_defs.end() && it->second.name != kAnonLabelName) {
                             oss << ":" << it->second.name;
+                            display_lid = lid;
                             break;
                         }
                     }
                 }
+                // Show properties (keyed by labels, incl. __anon__ props).
                 bool first_prop = true;
                 if (v.labels.has_value()) {
                     for (LabelId lid : *v.labels) {
@@ -400,13 +497,13 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                                 const auto& pv = prop_it->second[pd.id];
                                 if (pv.has_value()) {
                                     if (first_prop) {
-                                        oss << " {";
+                                        oss << (display_lid.has_value() ? " {" : "{");
                                         first_prop = false;
                                     } else {
                                         oss << ", ";
                                     }
                                     oss << pd.name << ": ";
-                                    appendJsonValue(oss, *pv);
+                                    appendCypherValue(oss, *pv);
                                 }
                             }
                         }
@@ -431,10 +528,28 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                 auto elit = edge_label_defs.find(e.label_id);
                 if (elit != edge_label_defs.end()) {
                     oss << ":" << elit->second.name;
+                    // Show edge properties
+                    if (e.properties.has_value() && !e.properties->empty()) {
+                        bool first_eprop = true;
+                        for (const auto& pd : elit->second.properties) {
+                            if (pd.id < e.properties->size()) {
+                                const auto& pv = (*e.properties)[pd.id];
+                                if (pv.has_value()) {
+                                    oss << (first_eprop ? " {" : ", ");
+                                    first_eprop = false;
+                                    oss << pd.name << ": ";
+                                    appendCypherValue(oss, *pv);
+                                }
+                            }
+                        }
+                        if (!first_eprop)
+                            oss << "}";
+                    }
                 }
                 oss << (outgoing ? "]->" : "]-");
             }
         }
+        oss << ">";
         rv.set_path_json(oss.str());
     } else if (std::holds_alternative<DateTimeValue>(val)) {
         rv.set_string_val(temporalToString(std::get<DateTimeValue>(val)));

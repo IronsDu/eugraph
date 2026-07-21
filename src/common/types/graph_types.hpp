@@ -260,6 +260,8 @@ struct PathTopology {
     std::vector<EdgeId> edge_ids;
     std::vector<EdgeLabelId> edge_label_ids;
     std::vector<uint32_t> seqs;
+    std::vector<VertexId> edge_src_ids;
+    std::vector<VertexId> edge_dst_ids;
 
     size_t hopCount() const {
         return edge_ids.size();

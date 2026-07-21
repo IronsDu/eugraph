@@ -6799,10 +6799,9 @@ TEST_F(QueryExecutorTest, VarLenEmptyIntervalReturnsZeroRows) {
     blockingWait(async_data_->createEdgeLabel(likes));
 
     // Create chain: a1->b1, a2->b2
-    auto setup = execSync(*executor_,
-                          "CREATE (a1:A {name: 'a1'}), (a2:A {name: 'a2'}), "
-                          "(b1:B {name: 'b1'}), (b2:B {name: 'b2'}), "
-                          "(a1)-[:LIKES]->(b1), (a2)-[:LIKES]->(b2)");
+    auto setup = execSync(*executor_, "CREATE (a1:A {name: 'a1'}), (a2:A {name: 'a2'}), "
+                                      "(b1:B {name: 'b1'}), (b2:B {name: 'b2'}), "
+                                      "(a1)-[:LIKES]->(b1), (a2)-[:LIKES]->(b2)");
     ASSERT_TRUE(setup.error.empty()) << setup.error;
 
     // [11] *2..1 — empty interval (min > max)
@@ -7087,4 +7086,61 @@ TEST(SlotLayoutTest, SlotAllocatorPartition) {
     alloc.seed(eugraph::binder::kInternalSlotFlag + 1000);
     EXPECT_EQ(alloc.nextInternal(), eugraph::binder::kInternalSlotFlag + 1001);
     EXPECT_EQ(alloc.next(), 102u);
+}
+
+// Quick path format check — run with:
+//   ./build/query_executor_tests --gtest_filter='*PathFormatCheck*'
+TEST_F(QueryExecutorTest, PathFormatCheck) {
+    blockingWait(async_meta_->nextVertexIdRange(200));
+    blockingWait(async_meta_->nextEdgeIdRange(200));
+    blockingWait(async_meta_->createLabel("A"));
+    blockingWait(async_meta_->createLabel("B"));
+    blockingWait(async_meta_->createEdgeLabel("KNOWS"));
+    auto setup = execSync(*executor_, "CREATE (:A {name: 'A'})-[:KNOWS]->(:B {name: 'B'})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    // Zero-length named path: MATCH p = (a:A) RETURN p
+    auto r1 = execSync(*executor_, "MATCH p = (a:A {name: 'A'}) RETURN p");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    if (r1.rows.size() > 0 && std::holds_alternative<PathValue>(r1.rows[0][0])) {
+        auto& pv = std::get<PathValue>(r1.rows[0][0]);
+        std::cerr << "PathFormatCheck: elements=" << pv.elements.size() << "\n";
+        for (size_t i = 0; i < pv.elements.size(); ++i) {
+            const auto& elem = pv.elements[i].value;
+            if (std::holds_alternative<VertexValue>(elem)) {
+                auto& v = std::get<VertexValue>(elem);
+                std::cerr << "  V[" << i << "] id=" << v.id << " labels.has=" << v.labels.has_value();
+                if (v.labels.has_value())
+                    std::cerr << " labels(" << v.labels->size() << ")";
+                std::cerr << " props.empty=" << v.properties.empty() << "\n";
+            } else if (std::holds_alternative<EdgeValue>(elem)) {
+                auto& e = std::get<EdgeValue>(elem);
+                std::cerr << "  E[" << i << "] id=" << e.id << " src=" << e.src_id << " dst=" << e.dst_id
+                          << " label=" << e.label_id << "\n";
+            }
+        }
+    } else {
+        std::cerr << "PathFormatCheck: no PathValue (rows=" << r1.rows.size() << ")\n";
+    }
+
+    // Simple path: MATCH p = (a)-->(b) RETURN p
+    auto r2 = execSync(*executor_, "MATCH p = (a:A {name: 'A'})-->(b) RETURN p");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    if (r2.rows.size() > 0 && std::holds_alternative<PathValue>(r2.rows[0][0])) {
+        auto& pv = std::get<PathValue>(r2.rows[0][0]);
+        std::cerr << "PathFormatCheck simple: elements=" << pv.elements.size() << "\n";
+        for (size_t i = 0; i < pv.elements.size(); ++i) {
+            const auto& elem = pv.elements[i].value;
+            if (std::holds_alternative<VertexValue>(elem)) {
+                auto& v = std::get<VertexValue>(elem);
+                std::cerr << "  V[" << i << "] id=" << v.id << " labels.has=" << v.labels.has_value();
+                if (v.labels.has_value())
+                    std::cerr << " labels(" << v.labels->size() << ")";
+                std::cerr << " props.empty=" << v.properties.empty() << "\n";
+            } else if (std::holds_alternative<EdgeValue>(elem)) {
+                auto& e = std::get<EdgeValue>(elem);
+                std::cerr << "  E[" << i << "] id=" << e.id << " label=" << e.label_id << "\n";
+            }
+        }
+    }
 }

@@ -39,11 +39,15 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
                         pt.edge_ids.push_back(ek.id);
                         pt.edge_label_ids.push_back(ek.label_id);
                         pt.seqs.push_back(ek.seq);
+                        pt.edge_src_ids.push_back(ek.src_id);
+                        pt.edge_dst_ids.push_back(ek.dst_id);
                     } else if (std::holds_alternative<EdgeValue>(val)) {
                         const auto& ev = std::get<EdgeValue>(val);
                         pt.edge_ids.push_back(ev.id);
                         pt.edge_label_ids.push_back(ev.label_id);
                         pt.seqs.push_back(ev.seq);
+                        pt.edge_src_ids.push_back(ev.src_id);
+                        pt.edge_dst_ids.push_back(ev.dst_id);
                     }
                 }
             }
