@@ -123,6 +123,121 @@ static bool hasAggregate(const cypher::Expression& expr) {
         expr);
 }
 
+// Detect ambiguous aggregation in ORDER BY expressions of aggregating
+// queries: mixing aggregate and non-aggregate operands at the same BinaryOp
+// level, where the non-aggregate side is itself a complex BinaryOp expression.
+// e.g. `me.age + you.age + count(*)` → ADD(ADD(me.age, you.age), count(*))
+// has a non-aggregate BinaryOp left and aggregate right → ambiguous.
+// Simple non-aggregates (Variable, Literal, Parameter, PropertyAccess) mixed
+// with aggregates are allowed (e.g. `age + count(*)`, `1 + avg(x)`).
+// Caller must first confirm the expression contains an aggregate.
+static bool isAmbiguousAggregationExpr(const cypher::Expression& expr) {
+    auto* bin = std::get_if<std::unique_ptr<cypher::BinaryOp>>(&expr);
+    if (!bin || !*bin)
+        return false;
+    bool left_has_agg = hasAggregate((*bin)->left);
+    bool right_has_agg = hasAggregate((*bin)->right);
+    if (left_has_agg != right_has_agg) {
+        const auto& non_agg = left_has_agg ? (*bin)->right : (*bin)->left;
+        // Ambiguous only when the non-aggregate side is a complex BinaryOp
+        // (e.g. `me.age + you.age`). Simple expressions are allowed.
+        if (std::get_if<std::unique_ptr<cypher::BinaryOp>>(&non_agg))
+            return true;
+    }
+    return isAmbiguousAggregationExpr((*bin)->left) || isAmbiguousAggregationExpr((*bin)->right);
+}
+
+// Collect all variable names appearing anywhere in an expression.
+static void collectAllVariables(const cypher::Expression& expr, std::set<std::string>& vars) {
+    std::visit(
+        [&](const auto& ptr) {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if (!ptr)
+                return;
+            if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                vars.insert(ptr->name);
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                collectAllVariables(ptr->left, vars);
+                collectAllVariables(ptr->right, vars);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                collectAllVariables(ptr->operand, vars);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                collectAllVariables(ptr->object, vars);
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    collectAllVariables(arg, vars);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                collectAllVariables(ptr->inner, vars);
+            }
+        },
+        expr);
+}
+
+// Validate ORDER BY expression for aggregating WITH.  Rules:
+// - Aggregate calls matching a projection aggregate (by expression string) → OK
+// - Aggregate calls NOT matching → arguments' variables must be projected names
+// - Non-aggregate expressions matching a grouping key expression → OK
+// - Other Variables → must be projected names, else UndefinedVariable
+// Returns false and sets err_var on failure.
+static bool validateAggOrderByExpr(const cypher::Expression& expr, const std::set<std::string>& projection_aggs,
+                                   const std::set<std::string>& grouping_key_exprs,
+                                   const std::set<std::string>& projected_names, std::string& err_var) {
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if (!ptr)
+                return true;
+
+            if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                if (isAggregateFunctionName(ptr->name)) {
+                    if (projection_aggs.count(cypher::expressionToString(expr)))
+                        return true;
+                    // Non-matching aggregate: arguments must use projected names only
+                    for (const auto& arg : ptr->args) {
+                        std::set<std::string> vars;
+                        collectAllVariables(arg, vars);
+                        for (const auto& v : vars) {
+                            if (!projected_names.count(v)) {
+                                err_var = v;
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                }
+                for (const auto& arg : ptr->args)
+                    if (!validateAggOrderByExpr(arg, projection_aggs, grouping_key_exprs, projected_names, err_var))
+                        return false;
+                return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                if (projected_names.count(ptr->name))
+                    return true;
+                err_var = ptr->name;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                if (grouping_key_exprs.count(cypher::expressionToString(expr)))
+                    return true;
+                return validateAggOrderByExpr(ptr->left, projection_aggs, grouping_key_exprs, projected_names,
+                                              err_var) &&
+                       validateAggOrderByExpr(ptr->right, projection_aggs, grouping_key_exprs, projected_names,
+                                              err_var);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return validateAggOrderByExpr(ptr->operand, projection_aggs, grouping_key_exprs, projected_names,
+                                              err_var);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                if (grouping_key_exprs.count(cypher::expressionToString(expr)))
+                    return true;
+                return validateAggOrderByExpr(ptr->object, projection_aggs, grouping_key_exprs, projected_names,
+                                              err_var);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                return validateAggOrderByExpr(ptr->inner, projection_aggs, grouping_key_exprs, projected_names,
+                                              err_var);
+            }
+            return true; // Literals, parameters, etc.
+        },
+        expr);
+}
+
 // ==================== Aggregate Extraction & Replacement ====================
 
 /// Walk a BoundExpression tree, replacing every aggregate BoundFunctionCall with
@@ -909,7 +1024,47 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 proj->items.push_back(std::move(proj_item));
                 with_outputs.emplace_back(alias, proj_item.result_type);
             }
-        proj->child = std::move(child);
+
+        // ORDER BY for non-aggregating WITH: bind Sort expressions against
+        // the input scope (ctx_.symbols still holds the previous scope here)
+        // and place Sort BEFORE Project so ORDER BY can reference variables
+        // not included in the projection.
+        // Projected-alias references are transparently substituted by
+        // populating order_by_alias_subs_ (see bind_expression.cpp).
+        if (wc.order_by) {
+            // Reject aggregate functions in ORDER BY of non-aggregating WITH.
+            for (const auto& si : wc.order_by->items) {
+                if (hasAggregate(si.expr)) {
+                    error("SyntaxError: InvalidAggregation: Cannot use aggregate functions in "
+                          "ORDER BY of a non-aggregating WITH clause");
+                    return std::nullopt;
+                }
+            }
+            // Populate alias substitutions so bindExpression re-binds projected
+            // aliases to their original expressions (resolving against input scope).
+            order_by_alias_subs_.clear();
+            if (!wc.return_all) {
+                for (const auto& item : wc.items) {
+                    std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                    order_by_alias_subs_[alias] = &item.expr;
+                }
+            }
+            auto sort = std::make_unique<BoundSortOp>();
+            for (const auto& si : wc.order_by->items) {
+                auto bound_key = bindExpression(si.expr);
+                if (!bound_key)
+                    continue;
+                BoundSortOp::SortItem sort_item;
+                sort_item.expr = std::move(*bound_key);
+                sort_item.direction = si.direction;
+                sort->items.push_back(std::move(sort_item));
+            }
+            order_by_alias_subs_.clear();
+            sort->child = std::move(child);
+            proj->child = std::move(sort);
+        } else {
+            proj->child = std::move(child);
+        }
         current = std::move(proj);
     }
 
@@ -951,17 +1106,41 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         current = std::move(*where_op);
     }
 
-    // ORDER BY
-    if (wc.order_by) {
-        if (!has_aggregate) {
-            for (const auto& si : wc.order_by->items) {
-                if (hasAggregate(si.expr)) {
-                    error("SyntaxError: InvalidAggregation: Cannot use aggregate functions in "
-                          "ORDER BY of a non-aggregating WITH clause");
-                    return std::nullopt;
-                }
+    // ORDER BY for aggregating WITH.  (Non-aggregating WITH handles ORDER BY
+    // inside the projection branch above, placing Sort before Project so that
+    // input-scope variables remain visible.)
+    if (wc.order_by && has_aggregate) {
+        // Build validation sets from the projection.
+        std::set<std::string> projection_aggs;
+        std::set<std::string> grouping_key_exprs;
+        std::set<std::string> projected_names;
+        for (const auto& item : wc.items) {
+            std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            projected_names.insert(alias);
+            if (hasAggregate(item.expr)) {
+                projection_aggs.insert(cypher::expressionToString(item.expr));
+            } else {
+                grouping_key_exprs.insert(cypher::expressionToString(item.expr));
             }
         }
+
+        for (const auto& si : wc.order_by->items) {
+            // [20] AmbiguousAggregationExpression
+            if (hasAggregate(si.expr) && isAmbiguousAggregationExpr(si.expr)) {
+                error("SyntaxError: AmbiguousAggregationExpression: ORDER BY expression mixes "
+                      "aggregate and non-aggregate operations");
+                return std::nullopt;
+            }
+            // [13][14][19] UndefinedVariable
+            std::string err_var;
+            if (!validateAggOrderByExpr(si.expr, projection_aggs, grouping_key_exprs, projected_names, err_var)) {
+                error("SyntaxError: UndefinedVariable: Variable '" + err_var +
+                      "' not defined in "
+                      "aggregating WITH scope");
+                return std::nullopt;
+            }
+        }
+
         auto sort = std::make_unique<BoundSortOp>();
         for (const auto& si : wc.order_by->items) {
             auto bound_key = bindExpression(si.expr);

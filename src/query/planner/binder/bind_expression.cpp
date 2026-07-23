@@ -115,6 +115,20 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     },
                     ptr->value));
             } else if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                // Non-aggregating WITH ORDER BY: if this variable matches a
+                // projected alias, re-bind the original projection expression
+                // so the alias value is computed from the input scope (Sort is
+                // placed before Project). Temporarily remove the alias to
+                // avoid infinite recursion when the expression references the
+                // same name from the input scope (shadowing).
+                auto subsIt = order_by_alias_subs_.find(ptr->name);
+                if (subsIt != order_by_alias_subs_.end()) {
+                    const auto* orig = subsIt->second;
+                    order_by_alias_subs_.erase(subsIt);
+                    auto result = bindExpression(*orig);
+                    order_by_alias_subs_[ptr->name] = orig;
+                    return result;
+                }
                 auto* col = ctx_.lookup(ptr->name);
                 if (!col) {
                     error("UndefinedVariable: Variable '" + ptr->name + "' not defined");

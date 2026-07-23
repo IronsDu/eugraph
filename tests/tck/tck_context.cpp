@@ -458,6 +458,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "UnexpectedSyntax";
                 } else if (errMsg.find("InvalidAggregation") != std::string::npos) {
                     lastErrorDetail = "InvalidAggregation";
+                } else if (errMsg.find("AmbiguousAggregationExpression") != std::string::npos) {
+                    lastErrorDetail = "AmbiguousAggregationExpression";
                 } else if (errMsg.find("EntityNotFound") != std::string::npos) {
                     lastErrorDetail = "DeletedEntityAccess";
                 } else if (errMsg.find("Function not found") != std::string::npos) {
@@ -547,6 +549,8 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "UnexpectedSyntax";
         } else if (errMsg.find("InvalidAggregation") != std::string::npos) {
             lastErrorDetail = "InvalidAggregation";
+        } else if (errMsg.find("AmbiguousAggregationExpression") != std::string::npos) {
+            lastErrorDetail = "AmbiguousAggregationExpression";
         } else {
             lastErrorDetail = errMsg;
         }

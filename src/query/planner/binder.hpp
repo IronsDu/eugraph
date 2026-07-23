@@ -83,6 +83,13 @@ public:
     }
     uint32_t anon_id_ = 0;
 
+    /// Alias substitutions for non-aggregating WITH ORDER BY binding.
+    /// Maps projected alias name → original projection AST expression.
+    /// When bindExpression encounters a Variable matching an alias, it
+    /// re-binds the original expression against the input scope so ORDER BY
+    /// sees the projected value even though Sort is placed before Project.
+    std::unordered_map<std::string, const cypher::Expression*> order_by_alias_subs_;
+
     void error(const std::string& msg) {
         errors_.push_back(msg);
     }
