@@ -6,6 +6,9 @@ namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> LabelScanPhysicalOp::executeChunk() {
+    if (label_ids_.empty())
+        co_return; // all specified labels were nonexistent → zero rows
+
     bool multi_label = label_ids_.size() > 1;
     LabelId scan_label = label_ids_[0];
     auto gen = store_.scanVerticesByLabel(scan_label);

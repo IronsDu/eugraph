@@ -2,6 +2,7 @@
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/function/compare_ops.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -62,59 +63,10 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
         for (size_t i = 0; i < sort_items_.size(); ++i) {
             const Value& va = all_keys[a][i];
             const Value& vb = all_keys[b][i];
-
-            bool less = false, greater = false;
-            std::visit(
-                [&less, &greater, &va, &vb](const auto& la, const auto& lb) {
-                    using A = std::decay_t<decltype(la)>;
-                    using B = std::decay_t<decltype(lb)>;
-                    // NULL sorts after all non-NULL values (ascending).
-                    // When both are NULL they compare equal.
-                    if constexpr (std::is_same_v<A, std::monostate> || std::is_same_v<B, std::monostate>) {
-                        if constexpr (std::is_same_v<A, std::monostate> && std::is_same_v<B, std::monostate>) {
-                            less = false;
-                            greater = false;
-                        } else if constexpr (std::is_same_v<A, std::monostate>) {
-                            // la is NULL, lb is not → NULL > non-NULL → la > lb
-                            greater = true;
-                        } else {
-                            // lb is NULL → lb > la → la < lb
-                            less = true;
-                        }
-                    } else if constexpr ((std::is_same_v<A, int64_t> && std::is_same_v<B, int64_t>) ||
-                                         (std::is_same_v<A, double> && std::is_same_v<B, double>)) {
-                        less = la < lb;
-                        greater = la > lb;
-                    } else if constexpr (std::is_same_v<A, std::string> && std::is_same_v<B, std::string>) {
-                        less = la < lb;
-                        greater = la > lb;
-                    } else if constexpr (std::is_same_v<A, DateTimeValue> && std::is_same_v<B, DateTimeValue>) {
-                        if (la.kind == lb.kind) {
-                            less = temporalLess(la, lb);
-                            greater = temporalLess(lb, la);
-                        }
-                    } else if constexpr (std::is_same_v<A, TimeValue> && std::is_same_v<B, TimeValue>) {
-                        if (la.kind == lb.kind) {
-                            less = temporalLess(la, lb);
-                            greater = temporalLess(lb, la);
-                        }
-                    } else if constexpr (std::is_same_v<A, bool> && std::is_same_v<B, bool>) {
-                        less = !la && lb;
-                        greater = la && !lb;
-                    } else if constexpr (!std::is_same_v<A, B>) {
-                        less = va.index() < vb.index();
-                        greater = va.index() > vb.index();
-                    }
-                },
-                va, vb);
-
-            if (!sort_items_[i].ascending) {
-                std::swap(less, greater);
-            }
-            if (less)
-                return true;
-            if (greater)
-                return false;
+            int cmp = cypherCompareValues(va, vb);
+            if (cmp == 0)
+                continue;
+            return sort_items_[i].ascending ? (cmp < 0) : (cmp > 0);
         }
         return false;
     });

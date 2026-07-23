@@ -20,28 +20,25 @@ static std::string formatPropValue(const nlohmann::json& value) {
         return "'" + value.get<std::string>() + "'";
     if (value.is_number_integer())
         return std::to_string(value.get<int64_t>());
-    if (value.is_number_float()) {
-        double dv = value.get<double>();
-        if (std::isnan(dv))
-            return "NaN";
-        if (std::isinf(dv))
-            return dv > 0 ? "Infinity" : "-Infinity";
-        std::ostringstream dss;
-        dss << std::setprecision(std::numeric_limits<double>::digits10) << dv;
-        auto s = dss.str();
-        if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos)
-            s += ".0";
-        return s;
-    }
+    if (value.is_number_float())
+        return formatDouble(value.get<double>());
     if (value.is_boolean())
         return value.get<bool>() ? "true" : "false";
     if (value.is_null())
         return "null";
+    if (value.is_array())
+        return formatJsonArray(value);
     return value.dump();
 }
 
 static void collectProps(const nlohmann::json& src, std::vector<std::pair<std::string, std::string>>& props) {
-    if (src.contains("properties") && src["properties"].is_object()) {
+    // Support both ordered array-of-pairs format (new) and legacy object format.
+    if (src.contains("properties") && src["properties"].is_array()) {
+        for (const auto& pair : src["properties"]) {
+            if (pair.is_array() && pair.size() >= 1)
+                props.emplace_back(pair[0].get<std::string>(), pair.size() >= 2 ? formatPropValue(pair[1]) : "null");
+        }
+    } else if (src.contains("properties") && src["properties"].is_object()) {
         for (auto& [key, value] : src["properties"].items())
             props.emplace_back(key, formatPropValue(value));
     }

@@ -116,8 +116,10 @@ TEST_F(VertexSerializationTest, SerializesProperties) {
     ASSERT_EQ(result.getType(), thrift::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
-    EXPECT_NE(json.find("\"name\":\"ABCDEF\""), std::string::npos) << "Should contain name property, got: " << json;
-    EXPECT_NE(json.find("\"age\":30"), std::string::npos) << "Should contain age property, got: " << json;
+    // Properties are serialized as ordered [key, value] pairs (not a JSON object)
+    // to preserve insertion order — see eugraph_handler.cpp:411-436.
+    EXPECT_NE(json.find("[\"name\",\"ABCDEF\"]"), std::string::npos) << "Should contain name property, got: " << json;
+    EXPECT_NE(json.find("[\"age\",30]"), std::string::npos) << "Should contain age property, got: " << json;
 }
 
 TEST_F(VertexSerializationTest, VertexWithoutLabels) {

@@ -1,4 +1,5 @@
 #include "query/function/batch_ops.hpp"
+#include "query/function/compare_ops.hpp"
 
 #include "common/types/temporal_value.hpp"
 
@@ -447,8 +448,14 @@ void genericModBatch(const Column& left, const Column& right, Column& result, si
                 if (pair) {                                                                                            \
                     bool cmp = pair->first op pair->second;                                                            \
                     result.setValue(i, Value(cmp));                                                                    \
-                } else                                                                                                 \
-                    result.setNull(i);                                                                                 \
+                } else {                                                                                               \
+                    if (compute::cypherTypeCategory(lv) != compute::cypherTypeCategory(rv)) {                          \
+                        result.setNull(i);                                                                             \
+                    } else {                                                                                           \
+                        int order = compute::cypherCompareValues(lv, rv);                                              \
+                        result.setValue(i, Value(order op 0));                                                         \
+                    }                                                                                                  \
+                }                                                                                                      \
             }                                                                                                          \
         }                                                                                                              \
     }
