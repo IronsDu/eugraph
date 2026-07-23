@@ -1247,6 +1247,41 @@ static std::string preprocessIntegerLiterals(const std::string& input) {
             }
             continue;
         }
+        // When '-' immediately follows an expression-end character and is
+        // immediately followed by a digit, it's binary subtraction.  Insert a
+        // space after '-' so the lexer's DIGIT rule (SUB? Digits) does not
+        // consume '-digit' as one token, which would leave two adjacent atoms
+        // with no binary operator.
+        //
+        // We do NOT look past whitespace because that can't distinguish
+        // keyword-prefixed unary minus (RETURN -5, WHERE -5) from true
+        // binary subtraction (5 -3) — both are preceded by alphanumeric
+        // characters after skipping whitespace.  The space-before-minus case
+        // (e.g. "5 -3") is a less common formatting that remains unfixed.
+        //
+        // Must NOT insert space when '-' is part of a construct that requires
+        // a single DIGIT token: range literals (*1..-5), parameters ($-5),
+        // and float exponent notation (1.0e-5, 1E-5).
+        if (c == '-' && i + 1 < input.size() && isdigit(static_cast<unsigned char>(input[i + 1]))) {
+            bool is_binary_sub = false;
+            if (i > 0) {
+                char prev = input[i - 1];
+                if (prev == '.' || prev == '$') {
+                    // range literal (..-5) or parameter ($-5) — must stay as DIGIT
+                } else if ((prev == 'e' || prev == 'E') && i >= 2 &&
+                           isdigit(static_cast<unsigned char>(input[i - 2]))) {
+                    // float exponent (1.0e-5) — must stay as single FLOAT token
+                } else if (isalnum(static_cast<unsigned char>(prev)) || prev == '_' || prev == ')' || prev == ']') {
+                    is_binary_sub = true;
+                }
+            }
+            if (is_binary_sub) {
+                result += "- ";
+                ++i;
+                continue;
+            }
+        }
+
         // Check for hex/oct prefix: optional '-' then '0' then 'x'/'X' or 'o'/'O'
         bool negative = (c == '-' && i + 1 < input.size() && input[i + 1] == '0');
         size_t start = negative ? i + 1 : i;

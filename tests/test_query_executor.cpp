@@ -6333,7 +6333,8 @@ TEST_F(QueryExecutorTest, MultiLabelMatchSingleLabelSubset) {
 
 TEST_F(QueryExecutorTest, MultiLabelMatchNonexistentLabel) {
     auto result = execSync(*executor_, "MATCH (n:Person:Nonexistent) RETURN n");
-    EXPECT_FALSE(result.error.empty()) << "Should report label not found";
+    EXPECT_TRUE(result.error.empty()) << "Non-existent label should silently return 0 rows: " << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
 }
 
 TEST_F(QueryExecutorTest, MultiLabelCreateWithExpand) {

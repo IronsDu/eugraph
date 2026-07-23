@@ -91,12 +91,20 @@ inline std::string formatDouble(double d) {
         s = s_m10; // fallback
 
     // If defaultfloat produced scientific notation, try fixed as well.
-    // Prefer fixed decimal unless it is excessively long (>20 chars),
-    // matching Cypher TCK expectation for human-readable ranges.
+    // Prefer fixed decimal for the Cypher TCK display format.  Use a
+    // small epsilon for the round-trip check: the double `d` came from
+    // a property store that may use a different binary representation
+    // than the same literal re-parsed by stod().  0.00002 is the
+    // poster child for this edge case.
     if (s.find('e') != std::string::npos || s.find('E') != std::string::npos) {
         std::string fixed = try_fixed(d);
-        if (fixed.size() <= 20 && std::stod(fixed) == d)
-            return fixed;
+        if (fixed.size() <= 25) {
+            double back = std::stod(fixed);
+            double eps = std::max(std::abs(d), std::abs(back));
+            eps = std::max(eps, std::numeric_limits<double>::min()) * 1e-12;
+            if (std::abs(d - back) <= eps)
+                return fixed;
+        }
     }
 
     if (s.find('.') == std::string::npos && s.find('e') == std::string::npos && s.find('E') == std::string::npos)

@@ -953,6 +953,15 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
 
     // ORDER BY
     if (wc.order_by) {
+        if (!has_aggregate) {
+            for (const auto& si : wc.order_by->items) {
+                if (hasAggregate(si.expr)) {
+                    error("SyntaxError: InvalidAggregation: Cannot use aggregate functions in "
+                          "ORDER BY of a non-aggregating WITH clause");
+                    return std::nullopt;
+                }
+            }
+        }
         auto sort = std::make_unique<BoundSortOp>();
         for (const auto& si : wc.order_by->items) {
             auto bound_key = bindExpression(si.expr);

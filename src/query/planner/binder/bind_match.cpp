@@ -195,7 +195,9 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         // Create scan operator (or reuse parent for correlated MATCH)
         if (correlated) {
             current = std::move(*parent);
-        } else if (!start_labels.empty()) {
+        } else if (!start_labels.empty() || !element.node.labels.empty()) {
+            // Create a LabelScan: either with resolved labels, or with empty
+            // label_ids when all specified labels are nonexistent (→ zero rows).
             BoundLabelScanOp scan;
             scan.variable = start_var;
             scan.column_index = start_col;

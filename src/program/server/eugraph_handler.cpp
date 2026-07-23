@@ -410,7 +410,10 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         }
         // Serialize properties into a "properties" sub-object (Neo4j-style)
         // so user property names never collide with metadata keys like "id".
-        oss << ",\"properties\":{";
+        // Use an ordered array of [key, value] pairs rather than a JSON
+        // object so convertVertexJson can preserve the handler's insertion
+        // order (property registration order = CREATE statement order).
+        oss << ",\"properties\":[";
         bool first_prop = true;
         for (const auto& [lid, props] : v.properties) {
             auto it = label_defs.find(lid);
@@ -422,15 +425,16 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                     if (pv.has_value()) {
                         if (!first_prop)
                             oss << ',';
-                        oss << '"' << pd.name << "\":";
+                        oss << "[\"" << pd.name << "\",";
                         appendJsonValue(oss, *pv);
+                        oss << ']';
                         first_prop = false;
                     }
                 }
             }
         }
-        oss << '}';
-        oss << '}';
+        oss << ']'; // close properties array
+        oss << '}'; // close outer object
         rv.set_vertex_json(oss.str());
     } else if (std::holds_alternative<EdgeValue>(val)) {
         auto& e = std::get<EdgeValue>(val);

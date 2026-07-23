@@ -48,10 +48,8 @@ bool Binder::bindNodePattern(const cypher::NodePattern& node, std::string& var_n
     if (!node.labels.empty()) {
         for (const auto& label_name : node.labels) {
             LabelId lid = catalog_.labelNameToId(label_name);
-            if (lid == INVALID_LABEL_ID) {
-                error("Label '" + label_name + "' does not exist");
-                return false;
-            }
+            if (lid == INVALID_LABEL_ID)
+                continue; // nonexistent label → skip, consistent with edge label behavior
             if (std::find(label_ids.begin(), label_ids.end(), lid) == label_ids.end())
                 label_ids.push_back(lid);
         }
