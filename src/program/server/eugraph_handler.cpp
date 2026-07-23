@@ -29,12 +29,18 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
                     eugraph::server::EuGraphHandler& handler, int64_t t0) {
     size_t total_rows = 0;
     while (auto chunk = co_await ctx->gen.next()) {
+        // The first chunk triggers query execution which may dynamically
+        // register properties (e.g. MERGE ON CREATE SET). Use the
+        // StreamContext's label_defs which are updated during execution,
+        // not the snapshot taken at prepare time.
+        auto& live_labels = ctx->label_defs;
+        auto& live_edges = ctx->edge_label_defs;
         eugraph::thrift::ResultRowBatch thrift_batch;
         auto rows = chunk->toRows();
         for (auto& row : rows) {
             eugraph::thrift::ResultRow row_resp;
             for (auto& val : row) {
-                row_resp.values()->push_back(handler.valueToThrift(val, label_defs, edge_label_defs));
+                row_resp.values()->push_back(handler.valueToThrift(val, live_labels, live_edges));
             }
             thrift_batch.rows()->push_back(std::move(row_resp));
         }
@@ -409,28 +415,33 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
             oss << ']';
         }
         // Serialize properties into a "properties" sub-object (Neo4j-style)
-        // so user property names never collide with metadata keys like "id".
-        // Use an ordered array of [key, value] pairs rather than a JSON
-        // object so convertVertexJson can preserve the handler's insertion
-        // order (property registration order = CREATE statement order).
+        // Iterate Properties vector by index so dynamically-registered
+        // properties are found even when label_defs is stale.
         oss << ",\"properties\":[";
         bool first_prop = true;
         for (const auto& [lid, props] : v.properties) {
-            auto it = label_defs.find(lid);
-            if (it == label_defs.end())
-                continue;
-            for (const auto& pd : it->second.properties) {
-                if (pd.id < props.size()) {
-                    const auto& pv = props[pd.id];
-                    if (pv.has_value()) {
-                        if (!first_prop)
-                            oss << ',';
-                        oss << "[\"" << pd.name << "\",";
-                        appendJsonValue(oss, *pv);
-                        oss << ']';
-                        first_prop = false;
+            auto def_it = label_defs.find(lid);
+            for (size_t pidx = 0; pidx < props.size(); ++pidx) {
+                const auto& pv = props[pidx];
+                if (!pv.has_value())
+                    continue;
+                std::string pname;
+                if (def_it != label_defs.end()) {
+                    for (const auto& pd : def_it->second.properties) {
+                        if (pd.id == pidx) {
+                            pname = pd.name;
+                            break;
+                        }
                     }
                 }
+                if (pname.empty())
+                    pname = "prop" + std::to_string(pidx);
+                if (!first_prop)
+                    oss << ',';
+                oss << "[\"" << pname << "\",";
+                appendJsonValue(oss, *pv);
+                oss << ']';
+                first_prop = false;
             }
         }
         oss << ']'; // close properties array
@@ -487,29 +498,39 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                     }
                 }
                 // Show properties (keyed by labels, incl. __anon__ props).
+                // Iterate Properties vector by index so dynamically-registered
+                // properties are found even when label_defs is stale.
                 bool first_prop = true;
                 if (v.labels.has_value()) {
                     for (LabelId lid : *v.labels) {
-                        auto it = label_defs.find(lid);
-                        if (it == label_defs.end())
-                            continue;
+                        auto def_it = label_defs.find(lid);
                         auto prop_it = v.properties.find(lid);
                         if (prop_it == v.properties.end())
                             continue;
-                        for (const auto& pd : it->second.properties) {
-                            if (pd.id < prop_it->second.size()) {
-                                const auto& pv = prop_it->second[pd.id];
-                                if (pv.has_value()) {
-                                    if (first_prop) {
-                                        oss << (display_lid.has_value() ? " {" : "{");
-                                        first_prop = false;
-                                    } else {
-                                        oss << ", ";
+                        for (size_t pidx = 0; pidx < prop_it->second.size(); ++pidx) {
+                            const auto& pv = prop_it->second[pidx];
+                            if (!pv.has_value())
+                                continue;
+                            // Resolve property name from label_defs (or use generic name)
+                            std::string pname;
+                            if (def_it != label_defs.end()) {
+                                for (const auto& pd : def_it->second.properties) {
+                                    if (pd.id == pidx) {
+                                        pname = pd.name;
+                                        break;
                                     }
-                                    oss << pd.name << ": ";
-                                    appendCypherValue(oss, *pv);
                                 }
                             }
+                            if (pname.empty())
+                                pname = "prop" + std::to_string(pidx);
+                            if (first_prop) {
+                                oss << (display_lid.has_value() ? " {" : "{");
+                                first_prop = false;
+                            } else {
+                                oss << ", ";
+                            }
+                            oss << pname << ": ";
+                            appendCypherValue(oss, *pv);
                         }
                     }
                 }
