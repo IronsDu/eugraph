@@ -153,7 +153,10 @@ def main():
                     all_file_scenarios[sc_name] = rel
     base_names = set()
     for s in step_data:
+        # Normalise spaces to match feature-file names that may have extra
+        # whitespace (e.g. "Scenario: [18]  Handle …" in WithOrderBy4).
         base = re.sub(r' \[ex #\d+\]$', '', s['scenario'])
+        base = re.sub(r'\s+', ' ', base)
         base_names.add(base)
     ast_skipped_scenarios = set()
     for sc, rel in all_file_scenarios.items():
