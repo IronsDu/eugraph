@@ -336,8 +336,12 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         // Build a simple projection over all symbols, ordered by column index
         auto proj = std::make_unique<BoundProjectOp>();
         std::vector<const ColumnInfo*> sorted_symbols;
-        for (const auto& [name, col_info] : ctx_.symbols)
+        for (const auto& [name, col_info] : ctx_.symbols) {
+            // Skip anonymous internal variables (edges/nodes).
+            if (name.starts_with("__anon_"))
+                continue;
             sorted_symbols.push_back(&col_info);
+        }
         std::sort(sorted_symbols.begin(), sorted_symbols.end(),
                   [](const ColumnInfo* a, const ColumnInfo* b) { return a->column_index < b->column_index; });
         for (const auto* col_info : sorted_symbols) {
@@ -831,9 +835,49 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     // Collect output names and types for scope reset
     std::vector<std::pair<std::string, BoundType>> with_outputs;
 
+    // ── Semantic checks (applies to both aggregating and non-aggregating WITH) ──
+
+    // Check for duplicate aliases (With4 [4]).
+    {
+        std::set<std::string> seen;
+        for (const auto& item : wc.items) {
+            std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            if (!seen.insert(alias).second) {
+                error("SyntaxError: ColumnNameConflict: duplicate column alias '" + alias + "' in WITH");
+                return std::nullopt;
+            }
+        }
+    }
+
+    // Check that expressions need explicit aliases (With4 [5]).
+    for (const auto& item : wc.items) {
+        if (item.alias)
+            continue;
+        if (std::holds_alternative<std::unique_ptr<cypher::Variable>>(item.expr))
+            continue;
+        error("SyntaxError: NoExpressionAlias: expression in WITH must be aliased "
+              "(use AS <name>)");
+        return std::nullopt;
+    }
+
     BoundLogicalOperator current;
 
     if (has_aggregate) {
+        // Check for AmbiguousAggregationExpression (With6 [8][9]):
+        // expressions that mix aggregate functions with non-aggregate
+        // operands without proper grouping.
+        for (const auto& item : wc.items) {
+            if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
+                if (fc && *fc && isAggregateFunctionName((*fc)->name))
+                    continue; // simple aggregate — ok
+            }
+            if (hasAggregate(item.expr)) {
+                error("SyntaxError: AmbiguousAggregationExpression: expression mixes "
+                      "aggregate and non-aggregate operations");
+                return std::nullopt;
+            }
+        }
+
         auto agg = std::make_unique<BoundAggregateOp>();
 
         struct ProjItem {
@@ -958,6 +1002,31 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             current = std::move(agg);
         }
     } else {
+        // ── Semantic checks for non-aggregating WITH ──
+
+        // Check for duplicate aliases (With4 [4]).
+        {
+            std::set<std::string> seen;
+            for (const auto& item : wc.items) {
+                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                if (!seen.insert(alias).second) {
+                    error("SyntaxError: ColumnNameConflict: duplicate column alias '" + alias + "' in WITH");
+                    return std::nullopt;
+                }
+            }
+        }
+
+        // Check that expressions need explicit aliases (With4 [5]).
+        for (const auto& item : wc.items) {
+            if (item.alias)
+                continue;
+            if (std::holds_alternative<std::unique_ptr<cypher::Variable>>(item.expr))
+                continue;
+            error("SyntaxError: NoExpressionAlias: expression in WITH must be aliased "
+                  "(use AS <name>)");
+            return std::nullopt;
+        }
+
         // Compute projected aliases upfront (without binding expressions,
         // just extracting alias names from the AST) so we can check whether
         // WHERE references them.
@@ -987,8 +1056,11 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             // WITH *: pass through all variables from current scope.
             // Mirrors bindReturn's RETURN * handler (line 220-242).
             std::vector<const ColumnInfo*> sorted_symbols;
-            for (const auto& [name, col_info] : ctx_.symbols)
+            for (const auto& [name, col_info] : ctx_.symbols) {
+                if (name.starts_with("__anon_"))
+                    continue;
                 sorted_symbols.push_back(&col_info);
+            }
             std::sort(sorted_symbols.begin(), sorted_symbols.end(),
                       [](const ColumnInfo* a, const ColumnInfo* b) { return a->column_index < b->column_index; });
             for (const auto* col_info : sorted_symbols) {
