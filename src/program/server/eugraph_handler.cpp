@@ -24,8 +24,8 @@ int64_t nowMs() {
 
 folly::coro::AsyncGenerator<eugraph::thrift::ResultRowBatch&&>
 makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
-                    std::unordered_map<eugraph::LabelId, eugraph::LabelDef> label_defs,
-                    std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
+                    std::unordered_map<eugraph::LabelId, eugraph::LabelDef> /*label_defs*/,
+                    std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> /*edge_label_defs*/,
                     eugraph::server::EuGraphHandler& handler, int64_t t0) {
     size_t total_rows = 0;
     while (auto chunk = co_await ctx->gen.next()) {

@@ -831,7 +831,7 @@ MergePhysicalOp::createEdge(VertexId src_vid, VertexId dst_vid,
         }
     }
 
-    bool ok = co_await store_.insertEdge(eid, src_vid, dst_vid, effective_elid, 0, props);
+    bool ok = co_await store_.insertEdge(eid, src_vid, dst_vid, effective_elid, eid, props);
     if (!ok) {
         spdlog::warn("MergePhysicalOp: insertEdge failed for eid={} src={} dst={} label={}", eid, src_vid, dst_vid,
                      effective_elid);
