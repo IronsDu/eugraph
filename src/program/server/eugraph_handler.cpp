@@ -44,7 +44,10 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
                     for (const auto& pd : def.properties) {
                         bool found = false;
                         for (const auto& epd : existing.properties) {
-                            if (epd.id == pd.id) { found = true; break; }
+                            if (epd.id == pd.id) {
+                                found = true;
+                                break;
+                            }
                         }
                         if (!found)
                             existing.properties.push_back(pd);
@@ -59,7 +62,10 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
                     for (const auto& pd : def.properties) {
                         bool found = false;
                         for (const auto& epd : existing.properties) {
-                            if (epd.id == pd.id) { found = true; break; }
+                            if (epd.id == pd.id) {
+                                found = true;
+                                break;
+                            }
                         }
                         if (!found)
                             existing.properties.push_back(pd);
