@@ -337,8 +337,8 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         auto proj = std::make_unique<BoundProjectOp>();
         std::vector<const ColumnInfo*> sorted_symbols;
         for (const auto& [name, col_info] : ctx_.symbols) {
-            // Skip anonymous internal variables (edges/nodes).
-            if (name.starts_with("__anon_"))
+            // Skip anonymous internal edge variables (__anon_edge_N).
+            if (name.starts_with("__anon_edge_"))
                 continue;
             sorted_symbols.push_back(&col_info);
         }
@@ -835,9 +835,9 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     // Collect output names and types for scope reset
     std::vector<std::pair<std::string, BoundType>> with_outputs;
 
-    // ── Semantic checks (applies to both aggregating and non-aggregating WITH) ──
+    // ── Semantic checks ──
 
-    // Check for duplicate aliases (With4 [4]).
+    // Check for duplicate aliases (applies to both aggregating and non-aggregating WITH).
     {
         std::set<std::string> seen;
         for (const auto& item : wc.items) {
@@ -847,17 +847,6 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 return std::nullopt;
             }
         }
-    }
-
-    // Check that expressions need explicit aliases (With4 [5]).
-    for (const auto& item : wc.items) {
-        if (item.alias)
-            continue;
-        if (std::holds_alternative<std::unique_ptr<cypher::Variable>>(item.expr))
-            continue;
-        error("SyntaxError: NoExpressionAlias: expression in WITH must be aliased "
-              "(use AS <name>)");
-        return std::nullopt;
     }
 
     BoundLogicalOperator current;
@@ -871,6 +860,9 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 if (fc && *fc && isAggregateFunctionName((*fc)->name))
                     continue; // simple aggregate — ok
             }
+            // List comprehension wraps its internal aggregate — valid.
+            if (std::holds_alternative<std::unique_ptr<cypher::ListComprehension>>(item.expr))
+                continue;
             if (hasAggregate(item.expr)) {
                 error("SyntaxError: AmbiguousAggregationExpression: expression mixes "
                       "aggregate and non-aggregate operations");
@@ -1002,20 +994,6 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             current = std::move(agg);
         }
     } else {
-        // ── Semantic checks for non-aggregating WITH ──
-
-        // Check for duplicate aliases (With4 [4]).
-        {
-            std::set<std::string> seen;
-            for (const auto& item : wc.items) {
-                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
-                if (!seen.insert(alias).second) {
-                    error("SyntaxError: ColumnNameConflict: duplicate column alias '" + alias + "' in WITH");
-                    return std::nullopt;
-                }
-            }
-        }
-
         // Check that expressions need explicit aliases (With4 [5]).
         for (const auto& item : wc.items) {
             if (item.alias)
