@@ -170,11 +170,14 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         std::vector<LabelId> start_labels;
         std::vector<uint16_t> start_prop_ids;
 
+        // Anonymous MATCH () after a preceding clause: treat as a fresh
+        // all-nodes scan; the cross product is created in binder.cpp
+        // (CREATE3 [3]).
+        if (correlated && !element.node.variable) {
+            correlated = false;
+        }
+
         if (correlated) {
-            if (!element.node.variable) {
-                error("MATCH after WITH requires a named start variable");
-                return std::nullopt;
-            }
             auto* col = ctx_.lookup(*element.node.variable);
             if (!col) {
                 error("MATCH after WITH on unrelated variable '" + *element.node.variable + "' is not yet supported");
@@ -196,8 +199,6 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         if (correlated) {
             current = std::move(*parent);
         } else if (!start_labels.empty() || !element.node.labels.empty()) {
-            // Create a LabelScan: either with resolved labels, or with empty
-            // label_ids when all specified labels are nonexistent (→ zero rows).
             BoundLabelScanOp scan;
             scan.variable = start_var;
             scan.column_index = start_col;

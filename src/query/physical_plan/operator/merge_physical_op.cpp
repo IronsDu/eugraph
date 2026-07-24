@@ -831,7 +831,7 @@ MergePhysicalOp::createEdge(VertexId src_vid, VertexId dst_vid,
         }
     }
 
-    bool ok = co_await store_.insertEdge(eid, src_vid, dst_vid, effective_elid, 0, props);
+    bool ok = co_await store_.insertEdge(eid, src_vid, dst_vid, effective_elid, eid, props);
     if (!ok) {
         spdlog::warn("MergePhysicalOp: insertEdge failed for eid={} src={} dst={} label={}", eid, src_vid, dst_vid,
                      effective_elid);
@@ -1192,6 +1192,49 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 }
             }
 
+            // Helper: enrich a newly created vertex's properties from in-memory
+            // filter/pending data. We cannot rely on getVertexProperties here
+            // because insertVertex writes may not be visible within the same
+            // snapshot (WiredTiger snapshot isolation).
+            auto enrichCreatedVertex =
+                [&](VertexValue& vv, const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
+                    const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
+                    const DataChunk* chunk_ptr, size_t row_idx) -> void {
+                if (anon_label_id_ == INVALID_LABEL_ID)
+                    return;
+                Properties anon_props;
+                for (const auto& [prop_id, expr] : prop_filters) {
+                    Value v = evaluateExpr(evaluator, expr, chunk_ptr, row_idx);
+                    if (!std::holds_alternative<std::monostate>(v)) {
+                        if (anon_props.size() <= prop_id)
+                            anon_props.resize(prop_id + 1);
+                        anon_props[prop_id] = valueToPropertyValue(v);
+                    }
+                }
+                for (const auto& [prop_name, expr] : pending_props) {
+                    Value v = evaluateExpr(evaluator, expr, chunk_ptr, row_idx);
+                    if (!std::holds_alternative<std::monostate>(v)) {
+                        uint16_t pid = 0;
+                        auto anon_it = label_defs_.find(anon_label_id_);
+                        if (anon_it != label_defs_.end()) {
+                            for (const auto& pd : anon_it->second.properties) {
+                                if (pd.name == prop_name) {
+                                    pid = pd.id;
+                                    break;
+                                }
+                            }
+                        }
+                        if (anon_props.size() <= pid)
+                            anon_props.resize(pid + 1);
+                        anon_props[pid] = valueToPropertyValue(v);
+                    }
+                }
+                if (!anon_props.empty()) {
+                    vv.properties[anon_label_id_] = std::move(anon_props);
+                    vv.labels->insert(anon_label_id_);
+                }
+            };
+
             // Step 1: Find or create start node
             VertexId start_vid = INVALID_VERTEX_ID;
             std::optional<VertexValue> start_pre_vv;
@@ -1349,8 +1392,10 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                         }
                         if (anon_label_id_ != INVALID_LABEL_ID) {
                             auto anon_props = co_await store_.getVertexProperties(vid, anon_label_id_);
-                            if (anon_props)
+                            if (anon_props) {
                                 vv.properties[anon_label_id_] = std::move(*anon_props);
+                                vv.labels->insert(anon_label_id_);
+                            }
                         }
                         co_return vv;
                     };
@@ -1360,12 +1405,18 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                         start_vv = *start_pre_vv;
                     else if (!start_pre_bound_)
                         start_vv = co_await buildVertexValue(start_vid, start_labels_, start_added);
+
+                    if (start_created)
+                        enrichCreatedVertex(start_vv, start_prop_filters_, start_pending_props_, &*chunk, row);
+
                     VertexValue end_vv;
                     if (has_relationship_) {
                         if (end_pre_bound_ && end_pre_vv)
                             end_vv = *end_pre_vv;
                         else if (!end_pre_bound_)
                             end_vv = co_await buildVertexValue(end_vid, end_labels_, end_added);
+                        if (end_created)
+                            enrichCreatedVertex(end_vv, end_prop_filters_, end_pending_props_, &*chunk, row);
                     }
 
                     DataChunk output;
@@ -1478,8 +1529,10 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     }
                     if (anon_label_id_ != INVALID_LABEL_ID) {
                         auto anon_props = co_await store_.getVertexProperties(vid, anon_label_id_);
-                        if (anon_props)
+                        if (anon_props) {
                             vv.properties[anon_label_id_] = std::move(*anon_props);
+                            vv.labels->insert(anon_label_id_);
+                        }
                     }
                     co_return vv;
                 };
@@ -1489,6 +1542,9 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     start_vv = *start_pre_vv;
                 else if (!start_pre_bound_)
                     start_vv = co_await buildVertexValue(start_vid, start_labels_, start_added);
+
+                if (start_created)
+                    enrichCreatedVertex(start_vv, start_prop_filters_, start_pending_props_, &*chunk, row);
 
                 DataChunk output;
                 output.count = 1;
@@ -1500,6 +1556,14 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 if (!start_pre_bound_) {
                     Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
                     col.setValue(0, Value(start_vv));
+                    output.columns.push_back(std::move(col));
+                }
+                if (path_variable_.has_value()) {
+                    Column col = Column::flat(binder::BoundTypeKind::PATH, 1);
+                    PathValue pv;
+                    ValueStorage start_vs{Value(start_vv)};
+                    pv.elements = {start_vs};
+                    col.setValue(0, Value(pv));
                     output.columns.push_back(std::move(col));
                 }
                 co_yield std::move(output);

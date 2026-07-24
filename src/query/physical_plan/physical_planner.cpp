@@ -2001,10 +2001,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             output_schema.push_back(v.edge_var);
                             output_types.push_back(binder::BoundType::Edge());
                         }
-                        if (v.path_variable) {
-                            output_schema.push_back(*v.path_variable);
-                            output_types.push_back(binder::BoundType::Path());
-                        }
+                    }
+                    if (v.path_variable) {
+                        output_schema.push_back(*v.path_variable);
+                        output_types.push_back(binder::BoundType::Path());
                     }
 
                     auto result = std::make_unique<MergePhysicalOp>(
