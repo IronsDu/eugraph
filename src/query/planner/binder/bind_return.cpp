@@ -620,6 +620,32 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         // ORDER BY, SKIP, LIMIT, DISTINCT
 
         if (ret.order_by) {
+            // Validate ORDER BY for aggregating RETURN (same rules as bindWith).
+            std::set<std::string> projection_aggs;
+            std::set<std::string> grouping_key_exprs;
+            std::set<std::string> projected_names;
+            for (const auto& item : ret.items) {
+                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                projected_names.insert(alias);
+                if (hasAggregate(item.expr))
+                    projection_aggs.insert(cypher::expressionToString(item.expr));
+                else
+                    grouping_key_exprs.insert(cypher::expressionToString(item.expr));
+            }
+            for (const auto& si : ret.order_by->items) {
+                if (hasAggregate(si.expr) && isAmbiguousAggregationExpr(si.expr)) {
+                    error("SyntaxError: AmbiguousAggregationExpression: ORDER BY expression mixes "
+                          "aggregate and non-aggregate operations");
+                    return std::nullopt;
+                }
+                std::string err_var;
+                if (!validateAggOrderByExpr(si.expr, projection_aggs, grouping_key_exprs, projected_names, err_var)) {
+                    error("SyntaxError: UndefinedVariable: Variable '" + err_var +
+                          "' not defined in aggregating RETURN scope");
+                    return std::nullopt;
+                }
+            }
+
             auto sort = std::make_unique<BoundSortOp>();
             for (const auto& si : ret.order_by->items) {
                 // Sort sits above the top-level Project, so its input is the
@@ -1035,7 +1061,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             // Mirrors bindReturn's RETURN * handler (line 220-242).
             std::vector<const ColumnInfo*> sorted_symbols;
             for (const auto& [name, col_info] : ctx_.symbols) {
-                if (name.starts_with("__anon_"))
+                if (name.starts_with("__anon_edge_"))
                     continue;
                 sorted_symbols.push_back(&col_info);
             }
