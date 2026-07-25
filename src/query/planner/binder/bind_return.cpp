@@ -173,6 +173,58 @@ static void collectAllVariables(const cypher::Expression& expr, std::set<std::st
         expr);
 }
 
+// Collect variables from expressions OUTSIDE aggregate function calls.
+// Variables inside aggregate calls (e.g. `n` in `collect(n)`) are skipped
+// because they are properly aggregated.
+static void collectNonAggregateVariables(const cypher::Expression& expr, std::set<std::string>& vars,
+                                         const std::set<std::string>& grouping_key_strs) {
+    std::visit(
+        [&](const auto& ptr) {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if (!ptr)
+                return;
+            if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                if (isAggregateFunctionName(ptr->name))
+                    return; // aggregate call: skip variables inside
+                for (const auto& arg : ptr->args)
+                    collectNonAggregateVariables(arg, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                vars.insert(ptr->name);
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                collectNonAggregateVariables(ptr->left, vars, grouping_key_strs);
+                collectNonAggregateVariables(ptr->right, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                collectNonAggregateVariables(ptr->operand, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                collectNonAggregateVariables(ptr->object, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                collectNonAggregateVariables(ptr->inner, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements)
+                    collectNonAggregateVariables(e, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries)
+                    collectNonAggregateVariables(v, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                if (ptr->projection)
+                    collectNonAggregateVariables(*ptr->projection, vars, grouping_key_strs);
+                if (ptr->where_pred)
+                    collectNonAggregateVariables(*ptr->where_pred, vars, grouping_key_strs);
+                // Don't collect the loop variable
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject)
+                    collectNonAggregateVariables(*ptr->subject, vars, grouping_key_strs);
+                for (const auto& [w, t] : ptr->when_thens) {
+                    collectNonAggregateVariables(w, vars, grouping_key_strs);
+                    collectNonAggregateVariables(t, vars, grouping_key_strs);
+                }
+                if (ptr->else_expr)
+                    collectNonAggregateVariables(*ptr->else_expr, vars, grouping_key_strs);
+            }
+        },
+        expr);
+}
+
 // Validate ORDER BY expression for aggregating WITH.  Rules:
 // - Aggregate calls matching a projection aggregate (by expression string) → OK
 // - Aggregate calls NOT matching → arguments' variables must be projected names
@@ -878,9 +930,16 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     BoundLogicalOperator current;
 
     if (has_aggregate) {
+        // Build the set of grouping key expressions (items without aggregate).
+        std::set<std::string> grouping_key_strs;
+        for (const auto& item : wc.items) {
+            if (!hasAggregate(item.expr))
+                grouping_key_strs.insert(cypher::expressionToString(item.expr));
+        }
+
         // Check for AmbiguousAggregationExpression (With6 [8][9]):
-        // expressions that mix aggregate functions with non-aggregate
-        // operands without proper grouping.
+        // expressions that mix aggregate with non-aggregate operands
+        // that are NOT already established as grouping keys.
         for (const auto& item : wc.items) {
             if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
                 if (fc && *fc && isAggregateFunctionName((*fc)->name))
@@ -890,9 +949,20 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             if (std::holds_alternative<std::unique_ptr<cypher::ListComprehension>>(item.expr))
                 continue;
             if (hasAggregate(item.expr)) {
-                error("SyntaxError: AmbiguousAggregationExpression: expression mixes "
-                      "aggregate and non-aggregate operations");
-                return std::nullopt;
+                // Gather all variables in the expression, then check whether
+                // any non-aggregate-path variable is NOT a grouping key.
+                // Variables that appear only inside aggregate function
+                // arguments are fine (they are aggregated).
+                std::set<std::string> non_agg_vars;
+                collectNonAggregateVariables(item.expr, non_agg_vars, grouping_key_strs);
+                // Check each non-aggregate variable against grouping keys.
+                for (const auto& v : non_agg_vars) {
+                    if (!grouping_key_strs.count(v)) {
+                        error("SyntaxError: AmbiguousAggregationExpression: expression mixes "
+                              "aggregate and non-aggregate operations");
+                        return std::nullopt;
+                    }
+                }
             }
         }
 
