@@ -117,7 +117,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
         }
 
         if (ok)
-            ok = co_await store_.insertEdge(eid, src, dst, effective_label_id, 0, props);
+            ok = co_await store_.insertEdge(eid, src, dst, effective_label_id, eid, props);
 
         if (ok && edge_label_def) {
             for (const auto& idx : edge_label_def->indexes) {

@@ -173,6 +173,58 @@ static void collectAllVariables(const cypher::Expression& expr, std::set<std::st
         expr);
 }
 
+// Collect variables from expressions OUTSIDE aggregate function calls.
+// Variables inside aggregate calls (e.g. `n` in `collect(n)`) are skipped
+// because they are properly aggregated.
+static void collectNonAggregateVariables(const cypher::Expression& expr, std::set<std::string>& vars,
+                                         const std::set<std::string>& grouping_key_strs) {
+    std::visit(
+        [&](const auto& ptr) {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if (!ptr)
+                return;
+            if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                if (isAggregateFunctionName(ptr->name))
+                    return; // aggregate call: skip variables inside
+                for (const auto& arg : ptr->args)
+                    collectNonAggregateVariables(arg, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                vars.insert(ptr->name);
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                collectNonAggregateVariables(ptr->left, vars, grouping_key_strs);
+                collectNonAggregateVariables(ptr->right, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                collectNonAggregateVariables(ptr->operand, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                collectNonAggregateVariables(ptr->object, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                collectNonAggregateVariables(ptr->inner, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements)
+                    collectNonAggregateVariables(e, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries)
+                    collectNonAggregateVariables(v, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                if (ptr->projection)
+                    collectNonAggregateVariables(*ptr->projection, vars, grouping_key_strs);
+                if (ptr->where_pred)
+                    collectNonAggregateVariables(*ptr->where_pred, vars, grouping_key_strs);
+                // Don't collect the loop variable
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject)
+                    collectNonAggregateVariables(*ptr->subject, vars, grouping_key_strs);
+                for (const auto& [w, t] : ptr->when_thens) {
+                    collectNonAggregateVariables(w, vars, grouping_key_strs);
+                    collectNonAggregateVariables(t, vars, grouping_key_strs);
+                }
+                if (ptr->else_expr)
+                    collectNonAggregateVariables(*ptr->else_expr, vars, grouping_key_strs);
+            }
+        },
+        expr);
+}
+
 // Validate ORDER BY expression for aggregating WITH.  Rules:
 // - Aggregate calls matching a projection aggregate (by expression string) → OK
 // - Aggregate calls NOT matching → arguments' variables must be projected names
@@ -336,8 +388,12 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         // Build a simple projection over all symbols, ordered by column index
         auto proj = std::make_unique<BoundProjectOp>();
         std::vector<const ColumnInfo*> sorted_symbols;
-        for (const auto& [name, col_info] : ctx_.symbols)
+        for (const auto& [name, col_info] : ctx_.symbols) {
+            // Skip anonymous internal edge variables (__anon_edge_N).
+            if (name.starts_with("__anon_edge_"))
+                continue;
             sorted_symbols.push_back(&col_info);
+        }
         std::sort(sorted_symbols.begin(), sorted_symbols.end(),
                   [](const ColumnInfo* a, const ColumnInfo* b) { return a->column_index < b->column_index; });
         for (const auto* col_info : sorted_symbols) {
@@ -616,6 +672,32 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         // ORDER BY, SKIP, LIMIT, DISTINCT
 
         if (ret.order_by) {
+            // Validate ORDER BY for aggregating RETURN (same rules as bindWith).
+            std::set<std::string> projection_aggs;
+            std::set<std::string> grouping_key_exprs;
+            std::set<std::string> projected_names;
+            for (const auto& item : ret.items) {
+                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                projected_names.insert(alias);
+                if (hasAggregate(item.expr))
+                    projection_aggs.insert(cypher::expressionToString(item.expr));
+                else
+                    grouping_key_exprs.insert(cypher::expressionToString(item.expr));
+            }
+            for (const auto& si : ret.order_by->items) {
+                if (hasAggregate(si.expr) && isAmbiguousAggregationExpr(si.expr)) {
+                    error("SyntaxError: AmbiguousAggregationExpression: ORDER BY expression mixes "
+                          "aggregate and non-aggregate operations");
+                    return std::nullopt;
+                }
+                std::string err_var;
+                if (!validateAggOrderByExpr(si.expr, projection_aggs, grouping_key_exprs, projected_names, err_var)) {
+                    error("SyntaxError: UndefinedVariable: Variable '" + err_var +
+                          "' not defined in aggregating RETURN scope");
+                    return std::nullopt;
+                }
+            }
+
             auto sort = std::make_unique<BoundSortOp>();
             for (const auto& si : ret.order_by->items) {
                 // Sort sits above the top-level Project, so its input is the
@@ -831,9 +913,59 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     // Collect output names and types for scope reset
     std::vector<std::pair<std::string, BoundType>> with_outputs;
 
+    // ── Semantic checks ──
+
+    // Check for duplicate aliases (applies to both aggregating and non-aggregating WITH).
+    {
+        std::set<std::string> seen;
+        for (const auto& item : wc.items) {
+            std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            if (!seen.insert(alias).second) {
+                error("SyntaxError: ColumnNameConflict: duplicate column alias '" + alias + "' in WITH");
+                return std::nullopt;
+            }
+        }
+    }
+
     BoundLogicalOperator current;
 
     if (has_aggregate) {
+        // Build the set of grouping key expressions (items without aggregate).
+        std::set<std::string> grouping_key_strs;
+        for (const auto& item : wc.items) {
+            if (!hasAggregate(item.expr))
+                grouping_key_strs.insert(cypher::expressionToString(item.expr));
+        }
+
+        // Check for AmbiguousAggregationExpression (With6 [8][9]):
+        // expressions that mix aggregate with non-aggregate operands
+        // that are NOT already established as grouping keys.
+        for (const auto& item : wc.items) {
+            if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
+                if (fc && *fc && isAggregateFunctionName((*fc)->name))
+                    continue; // simple aggregate — ok
+            }
+            // List comprehension wraps its internal aggregate — valid.
+            if (std::holds_alternative<std::unique_ptr<cypher::ListComprehension>>(item.expr))
+                continue;
+            if (hasAggregate(item.expr)) {
+                // Gather all variables in the expression, then check whether
+                // any non-aggregate-path variable is NOT a grouping key.
+                // Variables that appear only inside aggregate function
+                // arguments are fine (they are aggregated).
+                std::set<std::string> non_agg_vars;
+                collectNonAggregateVariables(item.expr, non_agg_vars, grouping_key_strs);
+                // Check each non-aggregate variable against grouping keys.
+                for (const auto& v : non_agg_vars) {
+                    if (!grouping_key_strs.count(v)) {
+                        error("SyntaxError: AmbiguousAggregationExpression: expression mixes "
+                              "aggregate and non-aggregate operations");
+                        return std::nullopt;
+                    }
+                }
+            }
+        }
+
         auto agg = std::make_unique<BoundAggregateOp>();
 
         struct ProjItem {
@@ -958,6 +1090,17 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             current = std::move(agg);
         }
     } else {
+        // Check that expressions need explicit aliases (With4 [5]).
+        for (const auto& item : wc.items) {
+            if (item.alias)
+                continue;
+            if (std::holds_alternative<std::unique_ptr<cypher::Variable>>(item.expr))
+                continue;
+            error("SyntaxError: NoExpressionAlias: expression in WITH must be aliased "
+                  "(use AS <name>)");
+            return std::nullopt;
+        }
+
         // Compute projected aliases upfront (without binding expressions,
         // just extracting alias names from the AST) so we can check whether
         // WHERE references them.
@@ -987,8 +1130,11 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             // WITH *: pass through all variables from current scope.
             // Mirrors bindReturn's RETURN * handler (line 220-242).
             std::vector<const ColumnInfo*> sorted_symbols;
-            for (const auto& [name, col_info] : ctx_.symbols)
+            for (const auto& [name, col_info] : ctx_.symbols) {
+                if (name.starts_with("__anon_edge_"))
+                    continue;
                 sorted_symbols.push_back(&col_info);
+            }
             std::sort(sorted_symbols.begin(), sorted_symbols.end(),
                       [](const ColumnInfo* a, const ColumnInfo* b) { return a->column_index < b->column_index; });
             for (const auto* col_info : sorted_symbols) {

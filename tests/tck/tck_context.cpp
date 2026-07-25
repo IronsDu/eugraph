@@ -456,6 +456,10 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "InvalidNumberLiteral";
                 } else if (errMsg.find("UnexpectedSyntax") != std::string::npos) {
                     lastErrorDetail = "UnexpectedSyntax";
+                } else if (errMsg.find("ColumnNameConflict") != std::string::npos) {
+                    lastErrorDetail = "ColumnNameConflict";
+                } else if (errMsg.find("NoExpressionAlias") != std::string::npos) {
+                    lastErrorDetail = "NoExpressionAlias";
                 } else if (errMsg.find("InvalidAggregation") != std::string::npos) {
                     lastErrorDetail = "InvalidAggregation";
                 } else if (errMsg.find("AmbiguousAggregationExpression") != std::string::npos) {
@@ -503,6 +507,14 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "InvalidClauseComposition";
         } else if (errMsg.find("InvalidDelete") != std::string::npos) {
             lastErrorDetail = "InvalidDelete";
+        } else if (errMsg.find("ColumnNameConflict") != std::string::npos) {
+            lastErrorDetail = "ColumnNameConflict";
+        } else if (errMsg.find("NoExpressionAlias") != std::string::npos) {
+            lastErrorDetail = "NoExpressionAlias";
+        } else if (errMsg.find("AmbiguousAggregationExpression") != std::string::npos) {
+            lastErrorDetail = "AmbiguousAggregationExpression";
+        } else if (errMsg.find("InvalidAggregation") != std::string::npos) {
+            lastErrorDetail = "InvalidAggregation";
         } else if (errMsg.find("EntityNotFound") != std::string::npos) {
             lastErrorDetail = "DeletedEntityAccess";
         } else if (errMsg.find("Function not found") != std::string::npos) {

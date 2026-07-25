@@ -416,6 +416,11 @@ std::optional<BoundLogicalOperator> Binder::bindMerge(const cypher::MergeClause&
     merge_op->on_match_items = std::move(on_match_items);
     merge_op->child = std::move(*child);
 
+    // Register path variable in scope so RETURN / WHERE can reference it
+    if (pp.variable) {
+        ctx_.symbols[*pp.variable] = makeColumnInfo(*pp.variable, BoundType::Path());
+    }
+
     return merge_op;
 }
 

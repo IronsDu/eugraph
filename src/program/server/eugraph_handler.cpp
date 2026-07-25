@@ -28,7 +28,51 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
                     std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
                     eugraph::server::EuGraphHandler& handler, int64_t t0) {
     size_t total_rows = 0;
+    bool labels_merged = false;
     while (auto chunk = co_await ctx->gen.next()) {
+        // The first chunk triggers query execution which may dynamically
+        // register properties (e.g. MERGE ON CREATE SET). Merge any new
+        // entries from the StreamContext's label_defs that execution
+        // may have added.
+        if (!labels_merged) {
+            labels_merged = true;
+            for (const auto& [lid, def] : ctx->label_defs) {
+                if (!label_defs.count(lid))
+                    label_defs[lid] = def;
+                else if (!def.properties.empty()) {
+                    auto& existing = label_defs[lid];
+                    for (const auto& pd : def.properties) {
+                        bool found = false;
+                        for (const auto& epd : existing.properties) {
+                            if (epd.id == pd.id) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found)
+                            existing.properties.push_back(pd);
+                    }
+                }
+            }
+            for (const auto& [eid, def] : ctx->edge_label_defs) {
+                if (!edge_label_defs.count(eid))
+                    edge_label_defs[eid] = def;
+                else if (!def.properties.empty()) {
+                    auto& existing = edge_label_defs[eid];
+                    for (const auto& pd : def.properties) {
+                        bool found = false;
+                        for (const auto& epd : existing.properties) {
+                            if (epd.id == pd.id) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found)
+                            existing.properties.push_back(pd);
+                    }
+                }
+            }
+        }
         eugraph::thrift::ResultRowBatch thrift_batch;
         auto rows = chunk->toRows();
         for (auto& row : rows) {
