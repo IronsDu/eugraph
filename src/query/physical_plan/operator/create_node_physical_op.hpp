@@ -18,6 +18,8 @@
 namespace eugraph {
 namespace compute {
 
+class VectorizedEvaluator;
+
 class CreateNodePhysicalOp : public PhysicalOperator {
 public:
     using PropExprs = std::vector<std::pair<uint16_t, binder::BoundExpression>>;
@@ -53,6 +55,8 @@ public:
     }
 
 private:
+    std::vector<std::pair<LabelId, Properties>> buildLabelProps(VectorizedEvaluator& evaluator, const DataChunk* chunk,
+                                                                size_t row_idx);
     folly::coro::Task<bool> insertVertex(VertexId vid, const std::vector<std::pair<LabelId, Properties>>& label_props);
 
     std::string variable_;

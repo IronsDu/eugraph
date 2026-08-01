@@ -207,72 +207,13 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
         anon_registered_ = true;
     }
 
-    // Lambda: build per-label Properties vectors
-    auto buildLabelProps = [&](const DataChunk* chunk, size_t row_idx) -> std::vector<std::pair<LabelId, Properties>> {
-        std::vector<std::pair<LabelId, Properties>> result;
-
-        for (auto lid : label_ids_) {
-            if (lid == INVALID_LABEL_ID)
-                continue;
-            Properties props;
-
-            for (const auto& [expr_lid, exprs] : label_prop_exprs_) {
-                if (expr_lid != lid)
-                    continue;
-                for (const auto& [pid, expr] : exprs) {
-                    Value v = evaluateExpr(evaluator, expr, chunk, row_idx);
-                    if (!std::holds_alternative<std::monostate>(v)) {
-                        if (props.size() <= pid)
-                            props.resize(pid + 1);
-                        props[pid] = valueToPropertyValue(v);
-                    }
-                }
-            }
-
-            for (const auto& [plid, pid, expr] : resolved_pending_) {
-                if (plid != lid)
-                    continue;
-                Value v = evaluateExpr(evaluator, expr, chunk, row_idx);
-                if (!std::holds_alternative<std::monostate>(v)) {
-                    if (props.size() <= pid)
-                        props.resize(pid + 1);
-                    props[pid] = valueToPropertyValue(v);
-                }
-            }
-
-            result.emplace_back(lid, std::move(props));
-        }
-
-        // Build __anon__ label properties if any resolved pending props exist
-        if (!resolved_pending_.empty()) {
-            LabelId anon_lid = getAnonLabelId(label_defs_);
-            if (anon_lid != INVALID_LABEL_ID) {
-                Properties anon_props;
-                for (const auto& [plid, pid, expr] : resolved_pending_) {
-                    if (plid != anon_lid)
-                        continue;
-                    Value v = evaluateExpr(evaluator, expr, chunk, row_idx);
-                    if (!std::holds_alternative<std::monostate>(v)) {
-                        if (anon_props.size() <= pid)
-                            anon_props.resize(pid + 1);
-                        anon_props[pid] = valueToPropertyValue(v);
-                    }
-                }
-                if (!anon_props.empty())
-                    result.emplace_back(anon_lid, std::move(anon_props));
-            }
-        }
-
-        return result;
-    };
-
     // Phase 2: per-row creation
     if (child_) {
         auto child_gen = child_->executeChunk();
         while (auto chunk = co_await child_gen.next()) {
             for (size_t row = 0; row < chunk->count; ++row) {
                 VertexId vid = co_await meta_.nextVertexId();
-                auto label_props = buildLabelProps(&*chunk, row);
+                auto label_props = buildLabelProps(evaluator, &*chunk, row);
 
                 bool ok = co_await insertVertex(vid, label_props);
                 if (ok) {
@@ -300,7 +241,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
     } else {
         // Standalone: create one vertex, no child columns
         VertexId vid = co_await meta_.nextVertexId();
-        auto label_props = buildLabelProps(nullptr, 0);
+        auto label_props = buildLabelProps(evaluator, nullptr, 0);
         bool ok = co_await insertVertex(vid, label_props);
         if (ok) {
             VertexValue vv;
@@ -317,6 +258,64 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
             co_yield std::move(output);
         }
     }
+}
+
+std::vector<std::pair<LabelId, Properties>>
+CreateNodePhysicalOp::buildLabelProps(VectorizedEvaluator& evaluator, const DataChunk* chunk, size_t row_idx) {
+    std::vector<std::pair<LabelId, Properties>> result;
+
+    for (auto lid : label_ids_) {
+        if (lid == INVALID_LABEL_ID)
+            continue;
+        Properties props;
+
+        for (const auto& [expr_lid, exprs] : label_prop_exprs_) {
+            if (expr_lid != lid)
+                continue;
+            for (const auto& [pid, expr] : exprs) {
+                Value v = evaluateExpr(evaluator, expr, chunk, row_idx);
+                if (!std::holds_alternative<std::monostate>(v)) {
+                    if (props.size() <= pid)
+                        props.resize(pid + 1);
+                    props[pid] = valueToPropertyValue(v);
+                }
+            }
+        }
+
+        for (const auto& [plid, pid, expr] : resolved_pending_) {
+            if (plid != lid)
+                continue;
+            Value v = evaluateExpr(evaluator, expr, chunk, row_idx);
+            if (!std::holds_alternative<std::monostate>(v)) {
+                if (props.size() <= pid)
+                    props.resize(pid + 1);
+                props[pid] = valueToPropertyValue(v);
+            }
+        }
+
+        result.emplace_back(lid, std::move(props));
+    }
+
+    if (!resolved_pending_.empty()) {
+        LabelId anon_lid = getAnonLabelId(label_defs_);
+        if (anon_lid != INVALID_LABEL_ID) {
+            Properties anon_props;
+            for (const auto& [plid, pid, expr] : resolved_pending_) {
+                if (plid != anon_lid)
+                    continue;
+                Value v = evaluateExpr(evaluator, expr, chunk, row_idx);
+                if (!std::holds_alternative<std::monostate>(v)) {
+                    if (anon_props.size() <= pid)
+                        anon_props.resize(pid + 1);
+                    anon_props[pid] = valueToPropertyValue(v);
+                }
+            }
+            if (!anon_props.empty())
+                result.emplace_back(anon_lid, std::move(anon_props));
+        }
+    }
+
+    return result;
 }
 
 folly::coro::Task<bool>
