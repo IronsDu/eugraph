@@ -1849,8 +1849,27 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         return std::get<std::string>(right_result);
                     auto rr = extractChildResult(std::move(right_result));
 
-                    // Find the CorrelatedSourcePhysicalOp leaf in the right sub-plan.
-                    // It must be the unique leaf node of the EXISTS sub-plan.
+                    // Non-correlated EXISTS: the right sub-plan has no correlation
+                    // to the left. Use a cross-product with right limited to 1
+                    // row: if right produces any row, left rows pass through;
+                    // if right produces no rows, the cross product is empty.
+                    if (v.correlation.empty()) {
+                        auto limit = std::make_unique<LimitPhysicalOp>(1, std::move(rr.op));
+                        limit->setEvalContext(ctx.eval_ctx);
+
+                        TupleSlotLayout layout = lr.slot_layout;
+                        layout.merge(rr.slot_layout);
+
+                        auto cross = std::make_unique<CrossProductPhysicalOp>(
+                            std::move(lr.op), std::move(limit), std::move(lr.output_schema),
+                            std::move(rr.output_schema), std::move(lr.output_types));
+                        cross->setEvalContext(ctx.eval_ctx);
+
+                        return PlanOperatorResult{std::move(cross), std::move(lr.output_schema),
+                                                  std::move(lr.output_types), std::move(layout)};
+                    }
+
+                    // Correlated EXISTS: find CorrelatedSourcePhysicalOp in right sub-plan.
                     std::function<CorrelatedSourcePhysicalOp*(PhysicalOperator*)> findCorrelatedSource =
                         [&](PhysicalOperator* node) -> CorrelatedSourcePhysicalOp* {
                         if (auto* cs = dynamic_cast<CorrelatedSourcePhysicalOp*>(node))
@@ -1866,11 +1885,21 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (!correlated)
                         return std::string("SemiJoin: CorrelatedSourcePhysicalOp not found in right sub-plan");
 
-                    // Build left correlation column indices from the mapping
+                    // Resolve each left slot_id to its physical column position
+                    // in the left's TupleSlotLayout. SlotIds are used (not
+                    // column_index) because ProjectionExtract may have appended
+                    // columns, breaking the column_index == physical position
+                    // assumption.
                     std::vector<uint32_t> left_corr_cols;
                     left_corr_cols.reserve(v.correlation.size());
-                    for (const auto& [left_col, _] : v.correlation) {
-                        left_corr_cols.push_back(left_col);
+                    for (const auto& [left_slot, _] : v.correlation) {
+                        int pos = lr.slot_layout.getColumnIndex(left_slot);
+                        if (pos < 0) {
+                            return std::string("SemiJoin: left slot " + std::to_string(left_slot) +
+                                               " not found in left slot layout (size " +
+                                               std::to_string(lr.slot_layout.size()) + ")");
+                        }
+                        left_corr_cols.push_back(static_cast<uint32_t>(pos));
                     }
 
                     auto result = std::make_unique<SemiJoinPhysicalOp>(std::move(lr.op), std::move(rr.op), correlated,

@@ -11,11 +11,9 @@ folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executeChunk() {
             continue;
 
         size_t n_left = left_chunk->count;
-        // Build bool mask: true = row has a match in the right sub-plan
         std::vector<bool> matched(n_left, false);
 
         for (size_t i = 0; i < n_left; ++i) {
-            // Extract correlated values from the left row
             std::vector<Value> corr_values;
             corr_values.reserve(left_correlation_cols_.size());
             for (uint32_t col_idx : left_correlation_cols_) {
@@ -23,10 +21,10 @@ folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executeChunk() {
             }
             correlated_source_->setValues(std::move(corr_values));
 
-            // Re-execute the right sub-plan with the new correlated values
             auto right_gen = right_->executeChunk();
             auto right_chunk = co_await right_gen.next();
-            if (right_chunk && right_chunk->numRows() > 0) {
+            size_t right_rows = right_chunk ? right_chunk->numRows() : 0;
+            if (right_chunk && right_rows > 0) {
                 matched[i] = true;
             }
         }

@@ -4155,6 +4155,17 @@ TEST_F(QueryExecutorTest, ExistsInReturnError) {
     EXPECT_FALSE(result.error.empty());
 }
 
+// ── Bare pattern predicate with two outer-correlated nodes (Pattern1 [12]) ──
+
+TEST_F(QueryExecutorTest, PatternPredicateTwoNodes) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    // Cross-product of all 5 persons; only the 4 edges should match.
+    auto result = execSync(*executor_, "MATCH (n), (m) WHERE (n)-[:KNOWS]->(m) RETURN n, m");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // Alice→Bob, Alice→Charlie, Bob→David, Charlie→David
+    ASSERT_EQ(result.rows.size(), 4u);
+}
+
 // ── MapValue / properties() / keys() ──
 
 TEST_F(QueryExecutorTest, PropertiesVertex) {

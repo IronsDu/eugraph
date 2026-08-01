@@ -108,7 +108,17 @@ WHERE EXISTS { (n)-[:KNOWS]->(:Person) }
 RETURN n
 ```
 
-**实现方式**：EXISTS 内部模式编译为独立物理计划子树（SemiJoinPhysicalOp），通过 `CorrelatedSourcePhysicalOp` 注入外部关联变量值。`NOT EXISTS` 转换为 AntiSemiJoin。
+**裸模式谓词（Bare Pattern Predicate）**：WHERE 子句中的 `(n)-[]->()` 等链式模式会被解析器重写为 `EXISTS { ... }`，等价于显式 EXISTS。匿名起点 `(n)-[]->()` 与具名两节点 `(n)-[]->(m)` 均支持。所有命名变量必须在外层作用域已绑定，否则报 `UndefinedVariable`；纯节点 `(n)` 不构成合法谓词，报 `InvalidArgumentType`。
+
+```cypher
+-- 裸模式谓词（等价于 EXISTS）
+MATCH (n) WHERE (n)-[:KNOWS]->() RETURN n
+
+-- 两节点关联（n 与 m 都来自外层 MATCH）
+MATCH (n), (m) WHERE (n)-[:KNOWS]->(m) RETURN n, m
+```
+
+**实现方式**：EXISTS 内部模式编译为独立物理计划子树（SemiJoinPhysicalOp），通过 `CorrelatedSourcePhysicalOp` 注入外部关联变量值。`NOT EXISTS` 转换为 AntiSemiJoin。两节点关联场景下，终点变量在子计划内重命名为 `__exists_dst_<n>`，外层值通过 `__exists_saved_<n>` 透传，Expand 后用 EQ 过滤实现端到端匹配。
 
 **当前支持**：
 
@@ -118,9 +128,15 @@ RETURN n
 | `EXISTS { pattern WHERE ... }` | 已实现 |
 | `NOT EXISTS { ... }` | 已实现 |
 | 多 EXISTS AND 组合 | 已实现 |
+| 裸模式谓词 `WHERE (n)-[]->()` | 已实现 |
+| 两节点关联 `WHERE (n)-[]->(m)` | 已实现 |
+| 拒绝 RETURN/WITH 投影中的裸模式 | 已实现（`UnexpectedSyntax`） |
+| 拒绝纯节点 `WHERE (n)` | 已实现（`InvalidArgumentType`） |
 | 单跳 / 多跳展开 | 已实现 |
 | 无向展开 `-[...]-` | 已实现 |
 | EXISTS 内部属性过滤（`WHERE m.name = ...`） | 部分（属性下推有已知问题） |
+| 多 EXISTS OR 组合（`EXISTS1 OR EXISTS2`） | 未实现（需要标量 EXISTS / MarkJoin） |
+| 变长模式谓词 `WHERE (n)-[:REL*]-()` | 未实现 |
 | `EXISTS { MATCH ... RETURN ... }`（完整子查询） | 未实现 |
 | 嵌套 EXISTS | 未实现 |
 | EXISTS 在 RETURN/CASE 等非 WHERE 上下文 | 未实现 |

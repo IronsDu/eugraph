@@ -204,6 +204,11 @@ struct SliceExpr {
 struct ExistsExpr {
     std::vector<PatternPart> patterns;
     std::optional<Expression> where_pred;
+    /// True when this ExistsExpr was synthesized from a bare pattern predicate
+    /// (e.g. `WHERE (n)-[]->()`) rather than an explicit `EXISTS { ... }`.
+    /// Bare predicates require every named variable to be bound in the outer
+    /// scope; explicit EXISTS may introduce fresh local variables.
+    bool is_bare_predicate = false;
 };
 
 // ==================== Quantifier Expressions ====================

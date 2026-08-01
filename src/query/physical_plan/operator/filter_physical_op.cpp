@@ -1,5 +1,4 @@
 #include "query/physical_plan/operator/filter_physical_op.hpp"
-#include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace compute {
