@@ -1,5 +1,6 @@
 #include "query/planner/binder.hpp"
 
+#include "query/function/batch_ops.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
@@ -667,55 +668,207 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         return std::nullopt;
     }
 
-    // Determine correlation before saving context: first pattern node variable
-    // must exist in outer scope.
+    // Determine correlation before saving context.
     const auto& first_node = exists.patterns[0].element.node;
-    if (!first_node.variable) {
-        error("EXISTS subquery pattern must have a named start variable");
-        return std::nullopt;
+    std::string start_var_name;
+    if (first_node.variable.has_value()) {
+        start_var_name = *first_node.variable;
+    } else {
+        start_var_name = "__anon_exists_start_" + std::to_string(nextAnonId());
     }
 
-    auto* outer_col = ctx_.lookup(*first_node.variable);
-    if (!outer_col) {
-        error("EXISTS subquery start variable '" + *first_node.variable +
-              "' must reference an outer variable (non-correlated EXISTS not yet supported)");
-        return std::nullopt;
+    bool is_correlated = false;
+    ColumnInfo saved_outer_info;
+    SlotId outer_slot = INVALID_SLOT_ID;
+    if (auto* outer_col = ctx_.lookup(start_var_name)) {
+        is_correlated = true;
+        outer_slot = outer_col->slot_id;
+        saved_outer_info = *outer_col;
     }
-
-    uint32_t outer_idx = outer_col->column_index;
-    ColumnInfo saved_outer_info = *outer_col; // copy before resetting
 
     // Save outer binding context
     auto saved_ctx = ctx_.save();
 
+    // Validate: all named variables in the pattern must exist in the outer
+    // scope. Bare patterns like (n)-[r]->(a) where `a` or `r` are new should
+    // raise UndefinedVariable (Pattern1 [10]).
+    // Also, a bare node without a chain (e.g. (n)) is not a valid pattern
+    // predicate — raise InvalidArgumentType (Pattern1 [11]).
+    //
+    // This strictness applies only to *bare* pattern predicates — explicit
+    // `EXISTS { ... }` subqueries may introduce fresh local variables.
+    if (exists.is_bare_predicate) {
+        for (const auto& pp : exists.patterns) {
+            if (pp.element.chain.empty()) {
+                error("InvalidArgumentType: bare node pattern is not a valid predicate");
+                return std::nullopt;
+            }
+            auto checkVar = [&](const std::optional<std::string>& var) {
+                if (var.has_value() && !saved_ctx.symbols.count(*var)) {
+                    error("UndefinedVariable: variable '" + *var + "' not defined in pattern predicate");
+                    return false;
+                }
+                return true;
+            };
+            if (!checkVar(pp.element.node.variable))
+                return std::nullopt;
+            for (const auto& [rel_pat, node_pat] : pp.element.chain) {
+                if (!checkVar(rel_pat.variable))
+                    return std::nullopt;
+                if (!checkVar(node_pat.variable))
+                    return std::nullopt;
+            }
+        }
+    }
+
     // Reset to independent sub-scope
     ctx_.beginSubScope();
 
-    // Register correlated variable in sub-scope (preserving metadata from outer scope)
-    ColumnInfo sub_info = saved_outer_info;
-    sub_info.column_index = nextColumnIndex();
-    uint32_t sub_idx = sub_info.column_index;
-    ctx_.symbols[*first_node.variable] = sub_info;
-    correlation.emplace_back(outer_idx, sub_idx);
+    // Register the start variable in sub-scope.
+    uint32_t sub_idx;
+    SlotId sub_slot = INVALID_SLOT_ID;
+    if (is_correlated) {
+        ColumnInfo sub_info = saved_outer_info;
+        sub_info.column_index = nextColumnIndex();
+        // Reuse the outer variable's slot_id rather than allocating a new one:
+        // allocateNamedSlot would overwrite ctx_.all_symbols[start_var_name]
+        // and break the left side's makeSlotLayout, which still needs the
+        // original slot to find the column in the left TupleSlotLayout.
+        sub_idx = sub_info.column_index;
+        sub_slot = sub_info.slot_id;
+        ctx_.symbols[start_var_name] = sub_info;
+        correlation.emplace_back(outer_slot, sub_slot);
+    } else {
+        sub_idx = nextColumnIndex();
+        ctx_.symbols[start_var_name] = makeColumnInfo(start_var_name, BoundType::Vertex());
+    }
 
-    // Also check for additional correlated variables in the WHERE predicate
-    // (any outer variable referenced in the WHERE must also be correlated)
-    // For Phase 1, only the start node is handled as correlated.
+    // Track saved (reference) columns for correlated chain nodes.
+    // These hold the original correlated value so we can filter after
+    // the Expand overwrites the destination column.
+    struct SavedCorr {
+        std::string orig_var;    // user-facing chain var (e.g. "m")
+        std::string sub_dst_var; // fresh name in sub-plan (e.g. "__exists_dst_1")
+        std::string saved_var;   // fresh name for saved outer value (e.g. "__exists_saved_1")
+        uint32_t saved_col;
+        SlotId saved_slot;
+        SlotId sub_dst_slot;
+    };
+    std::vector<SavedCorr> saved_chain_corrs;
 
-    // Create the correlated source leaf operator
-    BoundCorrelatedSourceOp source;
-    source.variables.push_back(*first_node.variable);
-    source.types.push_back(BoundType::Vertex());
-    source.column_indices.push_back(sub_idx);
+    // For chain nodes that reference outer-scope variables (e.g. `(n)-[]->(m)`
+    // where both `n` and `m` are from the outer scope), allocate fresh names
+    // and slots inside the sub-plan. Reusing the outer var's name would make
+    // Expand's output schema contain the name twice (passthrough + dst) and
+    // makeSlotLayout would collapse them onto the same slot, breaking the
+    // post-Expand equality filter.
+    uint32_t chain_counter = 0;
+    for (const auto& pp : exists.patterns) {
+        for (auto& [rel_pat, node_pat] : pp.element.chain) {
+            if (!node_pat.variable.has_value())
+                continue;
+            const auto& chain_var = *node_pat.variable;
+            if (chain_var == start_var_name)
+                continue;
+            auto it = saved_ctx.symbols.find(chain_var);
+            if (it == saved_ctx.symbols.end())
+                continue;
+
+            const auto& chain_outer = it->second;
+            ++chain_counter;
+
+            // Fresh name for the destination that Expand writes to. This name
+            // is registered in ctx_.symbols (so bindNodePattern reuses the
+            // column/slot and the post-Expand filter can reference it) but is
+            // NOT added to correlation or to the source's output_schema —
+            // otherwise Expand's output_schema would contain the name twice
+            // (passthrough + dst) and makeSlotLayout would collapse them onto
+            // the same slot, breaking the filter.
+            std::string sub_dst_var = "__exists_dst_" + std::to_string(chain_counter);
+            uint32_t sub_dst_col = nextColumnIndex();
+            SlotId sub_dst_slot = allocateNamedSlot(sub_dst_var);
+            ColumnInfo sub_dst_info;
+            sub_dst_info.name = sub_dst_var;
+            sub_dst_info.type = chain_outer.type;
+            sub_dst_info.column_index = sub_dst_col;
+            sub_dst_info.slot_id = sub_dst_slot;
+            sub_dst_info.source_labels = chain_outer.source_labels;
+            ctx_.symbols[sub_dst_var] = sub_dst_info;
+
+            // Fresh name + slot for the saved outer value (preserved across
+            // Expand). This IS correlated so the SemiJoin injects the outer
+            // value into the source's output.
+            std::string saved_var = "__exists_saved_" + std::to_string(chain_counter);
+            uint32_t saved_col = nextColumnIndex();
+            SlotId saved_slot = allocateNamedSlot(saved_var);
+            ColumnInfo saved_info;
+            saved_info.name = saved_var;
+            saved_info.type = chain_outer.type;
+            saved_info.column_index = saved_col;
+            saved_info.slot_id = saved_slot;
+            saved_info.source_labels = chain_outer.source_labels;
+            ctx_.symbols[saved_var] = saved_info;
+            correlation.emplace_back(chain_outer.slot_id, saved_slot);
+
+            saved_chain_corrs.push_back({chain_var, sub_dst_var, saved_var, saved_col, saved_slot, sub_dst_slot});
+        }
+    }
+
+    // Create the source leaf operator
+    BoundLogicalOperator source_op;
+    if (is_correlated || !correlation.empty()) {
+        BoundCorrelatedSourceOp source;
+        // Collect correlated variables in the same order as correlation pairs.
+        // Each (outer_slot, sub_slot) pair maps to a symbol in ctx_.symbols;
+        // find it by slot_id and emit its name + type.
+        //
+        // The runtime Value injected by SemiJoin is the topology-stage form
+        // (VertexRef / EdgeKey) — what the left side actually stores in its
+        // VertexRef / EdgeKey columns. The declared variable type (VERTEX /
+        // EDGE) is the semantic stage, but emitting that here would make PE
+        // create VERTEX-typed passthrough columns and then setValue(VertexRef)
+        // on a VERTEX column silently drops the value. Emit the topology
+        // counterpart so the source's output_types matches the actual value
+        // kind; PE can still upgrade to VERTEX via Construct specs.
+        for (const auto& [outer_slot, sub_slot] : correlation) {
+            for (const auto& [name, info] : ctx_.symbols) {
+                if (sub_slot == info.slot_id) {
+                    source.variables.push_back(name);
+                    BoundType topo = BoundType::clone(info.type);
+                    BoundTypeKind tk = topologyCounterpart(info.type.kind);
+                    if (tk != info.type.kind) {
+                        topo.kind = tk;
+                    }
+                    source.types.push_back(std::move(topo));
+                    source.column_indices.push_back(info.column_index);
+                    break;
+                }
+            }
+        }
+        source_op = std::move(source);
+    } else {
+        BoundScanOp scan;
+        scan.variable = start_var_name;
+        scan.column_index = sub_idx;
+        source_op = std::move(scan);
+    }
 
     // Deep-clone the EXISTS patterns into a synthetic MatchClause.
     // (Expression contains unique_ptr and cannot be trivially copied.)
+    // For correlated chain nodes, the dst variable is rewritten to the fresh
+    // sub-plan name (sub_dst_var) so Expand writes to a dedicated slot.
+    std::unordered_map<std::string, std::string> chain_var_rewrite;
+    for (const auto& sc : saved_chain_corrs)
+        chain_var_rewrite[sc.orig_var] = sc.sub_dst_var;
+
     cypher::MatchClause synthetic_match;
     synthetic_match.patterns.reserve(exists.patterns.size());
     for (const auto& pp : exists.patterns) {
         cypher::PatternPart cloned_pp;
         cloned_pp.variable = pp.variable;
-        cloned_pp.element.node.variable = pp.element.node.variable;
+        // Use the resolved start variable name (auto-generated for anonymous nodes).
+        cloned_pp.element.node.variable =
+            pp.element.node.variable.has_value() ? pp.element.node.variable : std::make_optional(start_var_name);
         cloned_pp.element.node.labels = pp.element.node.labels;
         if (pp.element.node.properties) {
             cloned_pp.element.node.properties = cypher::PropertiesMap{};
@@ -738,7 +891,15 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                 }
             }
             cypher::NodePattern cloned_node;
-            cloned_node.variable = node_pat.variable;
+            // Rewrite chain var to the fresh sub-plan name when correlated,
+            // so Expand writes to a slot distinct from the saved outer value.
+            if (node_pat.variable.has_value()) {
+                auto rw = chain_var_rewrite.find(*node_pat.variable);
+                if (rw != chain_var_rewrite.end())
+                    cloned_node.variable = rw->second;
+                else
+                    cloned_node.variable = node_pat.variable;
+            }
             cloned_node.labels = node_pat.labels;
             if (node_pat.properties) {
                 cloned_node.properties = cypher::PropertiesMap{};
@@ -754,11 +915,47 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         synthetic_match.where_pred = cloneExpression(*exists.where_pred);
     }
 
-    // Bind the sub-plan with the correlated source as parent
-    BoundLogicalOperator parent_op = std::move(source);
-    auto sub_plan = bindMatch(synthetic_match, std::move(parent_op), false);
+    // Bind the sub-plan with the source as parent
+    auto sub_plan = bindMatch(synthetic_match, std::move(source_op), false);
     if (!sub_plan)
         return std::nullopt;
+
+    // For correlated chain nodes: filter the expanded dst against the saved
+    // outer value (Pattern1 [12]-[18]). The dst was rewritten to sub_dst_var,
+    // which has its own slot; the saved outer value lives in saved_var.
+    //
+    // The reference type is VERTEX_REF (not VERTEX) on purpose: the source
+    // emits topology-stage VertexRef values and Expand writes a topology-stage
+    // VertexRef into the dst column. Declaring VERTEX would make PE allocate
+    // Construct slots for both columns and rewriteColumnIndices would retarget
+    // the slot_id to those Construct columns, but the runtime EQ on the
+    // resulting VertexValues misbehaves (likely because the evaluator's
+    // genericEqBatch path has subtle issues with VERTEX columns). Comparing
+    // the VertexRef ids directly avoids the Construct altogether and matches
+    // the topology-stage semantics of the data.
+    for (const auto& sc : saved_chain_corrs) {
+        auto dst_it = ctx_.symbols.find(sc.sub_dst_var);
+        if (dst_it == ctx_.symbols.end())
+            continue;
+        uint32_t dst_col = dst_it->second.column_index;
+        SlotId dst_slot = dst_it->second.slot_id;
+
+        BoundExpression left_ref =
+            BoundExpression(BoundColumnRef(dst_col, BoundType::VertexRef(), sc.sub_dst_var, dst_slot));
+        BoundExpression right_ref =
+            BoundExpression(BoundColumnRef(sc.saved_col, BoundType::VertexRef(), sc.saved_var, sc.saved_slot));
+        auto eq = std::make_unique<BoundBinaryOp>();
+        eq->op = cypher::BinaryOperator::EQ;
+        eq->left = std::move(left_ref);
+        eq->right = std::move(right_ref);
+        eq->result_type = BoundType::Bool();
+        eq->batch_fn = function::resolveBinaryBatchFn(eq->op, BoundTypeKind::VERTEX_REF, BoundTypeKind::VERTEX_REF);
+
+        BoundFilterOp filter;
+        filter.predicate = BoundExpression(std::move(eq));
+        filter.child = std::move(*sub_plan);
+        sub_plan = std::make_unique<BoundFilterOp>(std::move(filter));
+    }
 
     // Restore outer binding context
     ctx_.restore(saved_ctx);
@@ -807,7 +1004,11 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
 
     if (correlated) {
         // ── Correlated OPTIONAL MATCH ──
-        // Similar to bindExistsSubPlan: create a CorrelatedSource sub-plan
+        // Similar to bindExistsSubPlan: create a CorrelatedSource sub-plan.
+        // Note: LeftJoin correlation uses column indices (not SlotIds) because
+        // a WITH projection between the outer scan and OPTIONAL MATCH forwards
+        // graph variables under their PEPlan object_slot, breaking slot-based
+        // lookup while column_index remains valid (Project preserves order).
         uint32_t outer_idx = outer_col->column_index;
         ColumnInfo saved_outer_info = *outer_col;
 

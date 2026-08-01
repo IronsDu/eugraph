@@ -233,10 +233,10 @@ public:
     }
 
 private:
-    // Tracks whether we are inside a function call argument list, where
-    // a bare pattern expression is a syntax error. In other contexts
-    // (e.g. WHERE clause) a bare pattern is a valid pattern predicate.
-    bool in_function_args_ = false;
+    // Tracks contexts where a bare pattern expression is a syntax error:
+    // function call arguments, RETURN/WITH projection items, etc. In other
+    // contexts (e.g. WHERE clause) a bare pattern is a valid pattern predicate.
+    bool disallow_bare_pattern_ = false;
 
     // === Query ===
 
@@ -721,14 +721,16 @@ private:
         if (ctx->subqueryExist())
             return buildExistsExpr(ctx->subqueryExist());
         if (ctx->relationshipsChainPattern()) {
-            // A bare pattern is valid as a pattern predicate (e.g. WHERE
-            // clause) but invalid as a value expression (e.g. inside a
-            // function call like `size(...)`). We only reject it when
-            // inside function arguments; elsewhere the pattern falls
-            // through to makeVariable and the binder rejects it with
-            // UndefinedVariable.
-            if (in_function_args_)
+            if (disallow_bare_pattern_)
                 throw std::invalid_argument("UnexpectedSyntax: pattern expression is not allowed in this context");
+            // Build an EXISTS subquery expression from the bare pattern predicate.
+            // e.g. `(n)-[]->()` in WHERE becomes equivalent to `EXISTS { (n)-[]->() }`.
+            auto ex = std::make_unique<ExistsExpr>();
+            ex->is_bare_predicate = true;
+            PatternPart pp;
+            pp.element = buildPatternElemFromChain(ctx->relationshipsChainPattern());
+            ex->patterns.push_back(std::move(pp));
+            return Expression(std::move(ex));
         }
 
         // ANTLR's adaptive prediction may route numeric literals (emitted as ID tokens)
@@ -901,10 +903,10 @@ private:
         fn->name = buildInvocationName(ctx->invocationName());
         fn->distinct = (ctx->DISTINCT() != nullptr);
         if (ctx->expressionChain()) {
-            bool saved = in_function_args_;
-            in_function_args_ = true;
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = true;
             fn->args = buildExprChain(ctx->expressionChain());
-            in_function_args_ = saved;
+            disallow_bare_pattern_ = saved;
         }
         return Expression(std::move(fn));
     }
@@ -1058,6 +1060,8 @@ private:
         if (items->MULT()) {
             ret->return_all = true;
         } else {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = true;
             for (auto* item : items->projectionItem()) {
                 ReturnItem ri;
                 ri.expr = buildExpression(item->expression());
@@ -1065,6 +1069,7 @@ private:
                     ri.alias = item->symbol()->getText();
                 ret->items.push_back(std::move(ri));
             }
+            disallow_bare_pattern_ = saved;
         }
         if (ctx->orderSt())
             ret->order_by = buildOrderBy(ctx->orderSt());
@@ -1082,6 +1087,8 @@ private:
         if (items->MULT()) {
             w->return_all = true;
         } else {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = true;
             for (auto* item : items->projectionItem()) {
                 ReturnItem ri;
                 ri.expr = buildExpression(item->expression());
@@ -1089,6 +1096,7 @@ private:
                     ri.alias = item->symbol()->getText();
                 w->items.push_back(std::move(ri));
             }
+            disallow_bare_pattern_ = saved;
         }
         if (ctx->orderSt())
             w->order_by = buildOrderBy(ctx->orderSt());

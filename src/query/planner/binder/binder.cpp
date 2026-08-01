@@ -298,6 +298,16 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
     if (!bound_pred)
         return std::nullopt;
 
+    // WHERE predicate must be boolean. A bare node/edge variable like
+    // `WHERE (n)` or `WHERE n` resolves to a vertex column and is not a
+    // valid predicate — reject at compile time as InvalidArgumentType.
+    if (auto* ref = std::get_if<BoundColumnRef>(&*bound_pred)) {
+        if (ref->type.kind != BoundTypeKind::BOOL && ref->type.kind != BoundTypeKind::ANY) {
+            error("InvalidArgumentType: bare node pattern is not a valid predicate");
+            return std::nullopt;
+        }
+    }
+
     // Collect property requirements from WHERE predicate so that
     // scan operators fetch the properties needed for filter evaluation.
     // Without this, filters after cross-joins fail when no RETURN
