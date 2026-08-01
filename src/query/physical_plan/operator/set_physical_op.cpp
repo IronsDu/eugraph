@@ -92,7 +92,8 @@ PropertyValue valueToPropertyValue(const Value& v) {
             if (arr.size() == lv.elements.size())
                 return arr;
         } else if (std::holds_alternative<MapValue>(first)) {
-            throw std::runtime_error("TypeError: InvalidPropertyType: list of maps is not supported as a property value");
+            throw std::runtime_error(
+                "TypeError: InvalidPropertyType: list of maps is not supported as a property value");
         }
     }
     return PropertyValue{};
@@ -281,8 +282,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             }
                             if (entry_pid == UINT16_MAX) {
                                 PropertyValue pv_reg = valueToPropertyValue(entry_val);
-                                co_await meta_.addEdgeLabelProperties(
-                                    eldef.name, {{key, propertyValueToPropertyType(pv_reg)}});
+                                co_await meta_.addEdgeLabelProperties(eldef.name,
+                                                                      {{key, propertyValueToPropertyType(pv_reg)}});
                                 auto updated = co_await meta_.getEdgeLabelDefById(elid);
                                 if (updated) {
                                     edge_label_defs_[elid] = std::move(*updated);
@@ -330,7 +331,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         auto new_lid = co_await meta_.createLabel(item.label, {});
                         if (new_lid != INVALID_LABEL_ID) {
                             co_await store_.createLabel(new_lid);
-                            const_cast<std::unordered_map<std::string, LabelId>&>(label_name_to_id_)[item.label] = new_lid;
+                            const_cast<std::unordered_map<std::string, LabelId>&>(label_name_to_id_)[item.label] =
+                                new_lid;
                             LabelDef def;
                             def.id = new_lid;
                             def.name = item.label;
@@ -439,8 +441,7 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                 auto def_it = label_defs_.find(target_lid);
                                 if (def_it != label_defs_.end()) {
                                     co_await meta_.addVertexLabelProperties(
-                                        def_it->second.name,
-                                        {{item.prop_name, propertyValueToPropertyType(pv)}});
+                                        def_it->second.name, {{item.prop_name, propertyValueToPropertyType(pv)}});
                                     auto updated = co_await meta_.getLabelDefById(target_lid);
                                     uint16_t new_pid = UINT16_MAX;
                                     if (updated) {
@@ -626,8 +627,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             if (target_lid != INVALID_LABEL_ID) {
                                 auto def_it = label_defs_.find(target_lid);
                                 if (def_it != label_defs_.end()) {
-                                    co_await meta_.addVertexLabelProperties(
-                                        def_it->second.name, {{key, propertyValueToPropertyType(pv)}});
+                                    co_await meta_.addVertexLabelProperties(def_it->second.name,
+                                                                            {{key, propertyValueToPropertyType(pv)}});
                                     auto updated = co_await meta_.getLabelDefById(target_lid);
                                     uint16_t new_pid = UINT16_MAX;
                                     if (updated) {

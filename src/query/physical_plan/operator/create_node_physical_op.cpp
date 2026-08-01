@@ -129,8 +129,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
                     }
                     if (existing_pid == UINT16_MAX) {
                         // Determine type from expression at runtime — defer to ANY for now.
-                        co_await meta_.addVertexLabelProperties(ld_ptr->name,
-                                                                {{prop_name, PropertyType::ANY}});
+                        co_await meta_.addVertexLabelProperties(ld_ptr->name, {{prop_name, PropertyType::ANY}});
                         auto updated = co_await meta_.getLabelDefById(lid);
                         if (updated) {
                             label_defs_[lid] = std::move(*updated);

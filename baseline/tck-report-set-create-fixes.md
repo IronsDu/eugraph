@@ -1,53 +1,75 @@
-## TCK Report — Set/Create TCK Fixes
+# TCK 测试结果报告
 
-**Branch:** `feature/set-create-tck-fixes`
-**Baseline:** 3018/3897 scenarios (77%) → **Current: 3635/3878 scenarios (94%)**
+**日期**: 2026-08-01
+**分支**: feature/set-create-tck-fixes
+**构建**: build/tests/tck/tck_tests
 
-### Set+Create Summary
+---
 
-| Suite | Scenarios | Passed | Pct |
-|-------|-----------|--------|-----|
-| Set1 | 11 | **11** | 100% |
-| Set2 | 3 | **3** | 100% |
-| Set3 | 8 | **8** | 100% |
-| Set4 | 5 | **5** | 100% |
-| Set5 | 5 | **5** | 100% |
-| Set6 | 21 | **21** | 100% |
-| Create1 | 20 | **20** | 100% |
-| Create2 | 24 | **24** | 100% |
-| Create3 | 13 | 12 | 92% |
-| Create4 | 2 | **2** | 100% |
-| Create5 | 5 | **5** | 100% |
-| Create6 | 14 | 12 | 86% |
-| **Total** | **131** | **128** | **97%** |
+## 总体结果
 
-### Remaining Failures (3 scenarios, all pre-existing)
+| 指标 | 数量 |
+|------|------|
+| 场景总数 | 3897 |
+| └ 已执行 | 3878 |
+| 场景通过 | **3583** |
+| 场景失败 | 243 |
+| 场景跳过/未定义 | 52 |
+| AST跳过（未执行） | 19 |
+| 步骤总数 | 15601 |
+| 步骤通过 | 15338 |
+| 步骤失败 | 243 |
+| 步骤跳过 | 20 |
 
-| Scenario | Issue |
-|----------|-------|
-| Create3[3] | MATCH-CREATE-WITH-CREATE Cartesian product count (12 vs 10) |
-| Create6[3] | SKIP/LIMIT short-circuits CREATE side effects |
-| Create6[10] | SKIP/LIMIT short-circuits CREATE side effects |
+---
 
-### Changes in This Branch
+## 表达式类
 
-1. **mutation_mirror.hpp** — In-memory VertexValue/EdgeValue mirroring for mutation operators
-2. **SET null 语义** — SET n.p=null ≡ REMOVE; SET += map 中 null 值移除
-3. **CREATE 守卫** — VariableAlreadyBound (MATCH vs CREATE-reuse vs cross-clause reuse)
-4. **SET 边支持** — SetPhysicalOp 完整 EdgeValue 处理 (SET_PROPERTY / SET_PROPERTIES)
-5. **CREATE 边属性 RETURN** — EdgeValue 运行时属性回退解析
-6. **SET 多标签** — SET n:Foo:Bar 发射多个单标签 SetItem
-7. **CREATE 标签自动创建** — CREATE (:NewLabel) 运行时自动创建标签
-8. **属性归属修复** — SET/CREATE 新属性挂到用户标签而非 __anon__
-9. **边属性 id 冲突** — 用户属性 "id" 优先于结构字段
-10. **RETURN */WITH * 排序** — VERTEX 先于 EDGE (Neo4j 惯例)
-11. **错误类型映射** — RequiresDirectedRelationship / InvalidPropertyType
-12. **双向箭头解析** — `<-[:TYPE]->` 视为 UNDIRECTED
+| 类别 | 场景数 | 通过 | 失败 | 跳过 | 失败率 | 主要问题 |
+|------|--------|------|------|------|--------|---------|
+| Literals | 131 | **131** | 0 | 0 | 0.0% | ✅ |
+| Conditional | 13 | **13** | 0 | 0 | 0.0% | ✅ |
+| Boolean | 150 | **150** | 0 | 0 | 0.0% | ✅ |
+| Null | 44 | **44** | 0 | 0 | 0.0% | ✅ |
+| Path | 7 | **7** | 0 | 0 | 0.0% | ✅ |
+| Mathematical | 6 | **6** | 0 | 0 | 0.0% | ✅ |
+| String | 32 | **32** | 0 | 0 | 0.0% | ✅ |
+| Precedence | 121 | **121** | 0 | 0 | 0.0% | ✅ |
+| Temporal | 1004 | **1004** | 0 | 0 | 0.0% | ✅ |
+| Quantifier | 604 | **604** | 0 | 0 | 0.0% | ✅ |
+| Comparison | 72 | **72** | 0 | 0 | 0.0% | ✅ |
+| ExistentialSubqueries | 10 | **2** | 8 | 0 | 80.0% | EXISTS 子查询 |
+| Aggregation | 35 | **17** | 18 | 0 | 51.4% | percentileDisc/Cont 函数未实现 |
+| TypeConversion | 47 | **25** | 22 | 0 | 46.8% | 跨积 MATCH 预存问题 |
+| Pattern | 50 | **35** | 15 | 0 | 30.0% | 模式子查询未完善 |
+| List | 185 | **151** | 34 | 0 | 18.4% | Pattern comprehension 未实现 |
+| Graph | 61 | **55** | 6 | 0 | 9.8% |  |
+| Map | 44 | **43** | 1 | 0 | 2.3% |  |
 
-### Full TCK
+## 子句类
 
-| Metric | Before | After |
-|--------|--------|-------|
-| Scenarios passed | 3018 | **3635** |
-| Scenarios failed | 808 | **243** |
-| Pass rate | 77% | **94%** |
+| 类别 | 场景数 | 通过 | 失败 | 跳过 | 失败率 | 主要问题 |
+|------|--------|------|------|------|--------|---------|
+| WITH ORDER BY | 292 | **292** | 0 | 0 | 0.0% | ✅ |
+| Set | 53 | **53** | 0 | 0 | 0.0% | ✅ |
+| Union | 5 | **5** | 0 | 0 | 0.0% | ✅ |
+| WITH WHERE | 8 | **4** | 4 | 0 | 50.0% | WHERE子句变量解析 |
+| WITH | 26 | **18** | 8 | 0 | 30.8% | 变量遮蔽、DISTINCT、WHERE |
+| RETURN Skip Limit | 28 | **20** | 8 | 0 | 28.6% | SKIP/LIMIT参数类型 |
+| Remove | 33 | **24** | 9 | 0 | 27.3% | REMOVE副作用 |
+| Delete | 41 | **30** | 11 | 0 | 26.8% | 表达式DELETE、路径DELETE、无向匹配 |
+| RETURN | 63 | **47** | 16 | 0 | 25.4% | 列名生成、投影、DISTINCT |
+| Unwind | 14 | **11** | 3 | 0 | 21.4% | UNWIND类型边界 |
+| RETURN ORDER BY | 35 | **29** | 6 | 0 | 17.1% | ORDER BY表达式格式 |
+| WITH Skip Limit | 6 | **5** | 1 | 0 | 16.7% | SKIP/LIMIT与WITH的交互 |
+| Match | 404 | **345** | 59 | 0 | 14.6% | 变量作用域、路径模式、OPTIONAL MATCH |
+| Create | 78 | **75** | 3 | 0 | 3.8% | 创建模式副作用计数 |
+| MERGE | 75 | **73** | 2 | 0 | 2.7% | ON MATCH/CREATE副作用、路径变量、属性比较 |
+| CALL | 52 | **0** | 0 | 52 | 0.0% | CALL子句未实现（远期目标） |
+
+## useCases
+
+| 类别 | 场景数 | 通过 | 失败 | 未定义 |
+|------|--------|------|------|--------|
+| countingSubgraphMatches | 11 | **4** | 7 | 0 |
+| triadicSelection | 0 | **0** | 0 | 0 |

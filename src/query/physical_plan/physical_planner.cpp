@@ -1680,8 +1680,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     }
 
                     auto result = std::make_unique<SetPhysicalOp>(std::move(items), cr.output_schema, store, meta,
-                                                                   ctx.label_defs, ctx.edge_label_defs,
-                                                                   ctx.label_name_to_id, anon_id, std::move(cr.op));
+                                                                  ctx.label_defs, ctx.edge_label_defs,
+                                                                  ctx.label_name_to_id, anon_id, std::move(cr.op));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types), std::move(cr.slot_layout)};

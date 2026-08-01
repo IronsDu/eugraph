@@ -45,8 +45,8 @@ public:
                   const std::unordered_map<std::string, LabelId>& label_name_to_id, LabelId anon_label_id,
                   std::unique_ptr<PhysicalOperator> child)
         : items_(std::move(items)), input_schema_(std::move(input_schema)), store_(store), meta_(meta),
-          label_defs_(label_defs), edge_label_defs_(edge_label_defs),
-          label_name_to_id_(label_name_to_id), anon_label_id_(anon_label_id), child_(std::move(child)) {}
+          label_defs_(label_defs), edge_label_defs_(edge_label_defs), label_name_to_id_(label_name_to_id),
+          anon_label_id_(anon_label_id), child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();

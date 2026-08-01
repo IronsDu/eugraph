@@ -395,18 +395,20 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             sorted_symbols.push_back(&col_info);
         }
         // VERTEX before EDGE before others (Neo4j convention for RETURN *).
-        std::sort(sorted_symbols.begin(), sorted_symbols.end(),
-                  [](const ColumnInfo* a, const ColumnInfo* b) {
-                      auto typeRank = [](BoundTypeKind k) {
-                          if (k == BoundTypeKind::VERTEX) return 0;
-                          if (k == BoundTypeKind::EDGE) return 1;
-                          return 2;
-                      };
-                      int ra = typeRank(a->type.kind);
-                      int rb = typeRank(b->type.kind);
-                      if (ra != rb) return ra < rb;
-                      return a->column_index < b->column_index;
-                  });
+        std::sort(sorted_symbols.begin(), sorted_symbols.end(), [](const ColumnInfo* a, const ColumnInfo* b) {
+            auto typeRank = [](BoundTypeKind k) {
+                if (k == BoundTypeKind::VERTEX)
+                    return 0;
+                if (k == BoundTypeKind::EDGE)
+                    return 1;
+                return 2;
+            };
+            int ra = typeRank(a->type.kind);
+            int rb = typeRank(b->type.kind);
+            if (ra != rb)
+                return ra < rb;
+            return a->column_index < b->column_index;
+        });
         for (const auto* col_info : sorted_symbols) {
             auto bound_expr = std::make_optional<BoundExpression>(
                 BoundColumnRef(col_info->column_index, col_info->type, col_info->name, col_info->slot_id));
@@ -1147,18 +1149,20 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 sorted_symbols.push_back(&col_info);
             }
             // VERTEX before EDGE before others (Neo4j convention for WITH *).
-            std::sort(sorted_symbols.begin(), sorted_symbols.end(),
-                      [](const ColumnInfo* a, const ColumnInfo* b) {
-                          auto typeRank = [](BoundTypeKind k) {
-                              if (k == BoundTypeKind::VERTEX) return 0;
-                              if (k == BoundTypeKind::EDGE) return 1;
-                              return 2;
-                          };
-                          int ra = typeRank(a->type.kind);
-                          int rb = typeRank(b->type.kind);
-                          if (ra != rb) return ra < rb;
-                          return a->column_index < b->column_index;
-                      });
+            std::sort(sorted_symbols.begin(), sorted_symbols.end(), [](const ColumnInfo* a, const ColumnInfo* b) {
+                auto typeRank = [](BoundTypeKind k) {
+                    if (k == BoundTypeKind::VERTEX)
+                        return 0;
+                    if (k == BoundTypeKind::EDGE)
+                        return 1;
+                    return 2;
+                };
+                int ra = typeRank(a->type.kind);
+                int rb = typeRank(b->type.kind);
+                if (ra != rb)
+                    return ra < rb;
+                return a->column_index < b->column_index;
+            });
             for (const auto* col_info : sorted_symbols) {
                 auto bound_expr =
                     BoundColumnRef(col_info->column_index, col_info->type, col_info->name, col_info->slot_id);

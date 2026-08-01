@@ -94,8 +94,7 @@ bool validateCreatePattern(const cypher::PatternElement& element, Binder& binder
         if (intra_clause_vars.count(var_opt) || prior_create_vars.count(var_opt)) {
             // Created by another CREATE — reuse is OK, labels/props are not.
             if (!node_pat.labels.empty() || node_pat.properties.has_value()) {
-                binder.error("VariableAlreadyBound: variable '" + var_opt +
-                             "' is already defined in this scope");
+                binder.error("VariableAlreadyBound: variable '" + var_opt + "' is already defined in this scope");
                 return false;
             }
             return true;
@@ -103,8 +102,7 @@ bool validateCreatePattern(const cypher::PatternElement& element, Binder& binder
         // Bound by MATCH/WITH — allowed only as edge endpoint (has_chain).
         if (has_chain)
             return true;
-        binder.error("VariableAlreadyBound: variable '" + var_opt +
-                     "' is already defined in this scope");
+        binder.error("VariableAlreadyBound: variable '" + var_opt + "' is already defined in this scope");
         return false;
     };
 
@@ -118,8 +116,7 @@ bool validateCreatePattern(const cypher::PatternElement& element, Binder& binder
             return false;
         }
         if (rel_pat.variable.has_value() && binder.lookupVariable(*rel_pat.variable)) {
-            binder.error("VariableAlreadyBound: variable '" + *rel_pat.variable +
-                         "' is already defined in this scope");
+            binder.error("VariableAlreadyBound: variable '" + *rel_pat.variable + "' is already defined in this scope");
             return false;
         }
         if (rel_pat.rel_types.size() != 1) {
@@ -172,8 +169,8 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
             auto create_node = std::make_unique<BoundCreateNodeOp>();
             create_node->variable = start_var;
             create_node->label_names = element.node.labels;
-            spdlog::info("[Binder] BoundCreateNodeOp start node var='{}', label_names.size()={}",
-                         start_var, create_node->label_names.size());
+            spdlog::info("[Binder] BoundCreateNodeOp start node var='{}', label_names.size()={}", start_var,
+                         create_node->label_names.size());
             if (start_labels.empty()) {
                 auto anon_id = catalog_.getAnonLabelId();
                 if (anon_id != INVALID_LABEL_ID)
