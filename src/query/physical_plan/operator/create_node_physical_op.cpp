@@ -266,78 +266,6 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
         return result;
     };
 
-    // Lambda: check unique constraints and insert a single vertex
-    auto insertVertex = [&](VertexId vid,
-                            const std::vector<std::pair<LabelId, Properties>>& label_props) -> folly::coro::Task<bool> {
-        bool ok = true;
-        if (!label_defs_.empty()) {
-            for (const auto& [label_id, props] : label_props) {
-                auto def_it = label_defs_.find(label_id);
-                if (def_it == label_defs_.end())
-                    continue;
-                for (const auto& idx : def_it->second.indexes) {
-                    if (!idx.unique)
-                        continue;
-                    if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
-                        continue;
-                    std::vector<PropertyValue> values;
-                    bool allPresent = true;
-                    for (auto prop_id : idx.prop_ids) {
-                        if (prop_id < props.size() && props[prop_id].has_value()) {
-                            values.push_back(props[prop_id].value());
-                        } else {
-                            allPresent = false;
-                            break;
-                        }
-                    }
-                    if (!allPresent)
-                        continue;
-                    auto table = idx.prop_ids.size() == 1 ? vidxTable(label_id, idx.prop_ids[0])
-                                                          : vidxCompositeTable(label_id, idx.prop_ids);
-                    bool constraint_ok = co_await store_.checkUniqueConstraint(table, values);
-                    if (!constraint_ok) {
-                        spdlog::warn("Unique index constraint violated on index '{}'", idx.name);
-                        ok = false;
-                        break;
-                    }
-                }
-                if (!ok)
-                    break;
-            }
-        }
-
-        if (ok)
-            ok = co_await store_.insertVertex(vid, label_props);
-
-        if (ok && !label_defs_.empty()) {
-            for (const auto& [label_id, props] : label_props) {
-                auto def_it = label_defs_.find(label_id);
-                if (def_it == label_defs_.end())
-                    continue;
-                for (const auto& idx : def_it->second.indexes) {
-                    if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
-                        continue;
-                    std::vector<PropertyValue> values;
-                    bool allPresent = true;
-                    for (auto prop_id : idx.prop_ids) {
-                        if (prop_id < props.size() && props[prop_id].has_value()) {
-                            values.push_back(props[prop_id].value());
-                        } else {
-                            allPresent = false;
-                            break;
-                        }
-                    }
-                    if (!allPresent)
-                        continue;
-                    auto table = idx.prop_ids.size() == 1 ? vidxTable(label_id, idx.prop_ids[0])
-                                                          : vidxCompositeTable(label_id, idx.prop_ids);
-                    co_await store_.insertIndexEntry(table, values, vid);
-                }
-            }
-        }
-        co_return ok;
-    };
-
     // Phase 2: per-row creation
     if (child_) {
         auto child_gen = child_->executeChunk();
@@ -389,6 +317,77 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
             co_yield std::move(output);
         }
     }
+}
+
+folly::coro::Task<bool>
+CreateNodePhysicalOp::insertVertex(VertexId vid, const std::vector<std::pair<LabelId, Properties>>& label_props) {
+    bool ok = true;
+    if (!label_defs_.empty()) {
+        for (const auto& [label_id, props] : label_props) {
+            auto def_it = label_defs_.find(label_id);
+            if (def_it == label_defs_.end())
+                continue;
+            for (const auto& idx : def_it->second.indexes) {
+                if (!idx.unique)
+                    continue;
+                if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
+                    continue;
+                std::vector<PropertyValue> values;
+                bool allPresent = true;
+                for (auto prop_id : idx.prop_ids) {
+                    if (prop_id < props.size() && props[prop_id].has_value()) {
+                        values.push_back(props[prop_id].value());
+                    } else {
+                        allPresent = false;
+                        break;
+                    }
+                }
+                if (!allPresent)
+                    continue;
+                auto table = idx.prop_ids.size() == 1 ? vidxTable(label_id, idx.prop_ids[0])
+                                                      : vidxCompositeTable(label_id, idx.prop_ids);
+                bool constraint_ok = co_await store_.checkUniqueConstraint(table, values);
+                if (!constraint_ok) {
+                    spdlog::warn("Unique index constraint violated on index '{}'", idx.name);
+                    ok = false;
+                    break;
+                }
+            }
+            if (!ok)
+                break;
+        }
+    }
+
+    if (ok)
+        ok = co_await store_.insertVertex(vid, label_props);
+
+    if (ok && !label_defs_.empty()) {
+        for (const auto& [label_id, props] : label_props) {
+            auto def_it = label_defs_.find(label_id);
+            if (def_it == label_defs_.end())
+                continue;
+            for (const auto& idx : def_it->second.indexes) {
+                if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
+                    continue;
+                std::vector<PropertyValue> values;
+                bool allPresent = true;
+                for (auto prop_id : idx.prop_ids) {
+                    if (prop_id < props.size() && props[prop_id].has_value()) {
+                        values.push_back(props[prop_id].value());
+                    } else {
+                        allPresent = false;
+                        break;
+                    }
+                }
+                if (!allPresent)
+                    continue;
+                auto table = idx.prop_ids.size() == 1 ? vidxTable(label_id, idx.prop_ids[0])
+                                                      : vidxCompositeTable(label_id, idx.prop_ids);
+                co_await store_.insertIndexEntry(table, values, vid);
+            }
+        }
+    }
+    co_return ok;
 }
 
 } // namespace compute

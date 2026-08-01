@@ -53,6 +53,8 @@ public:
     }
 
 private:
+    folly::coro::Task<bool> insertVertex(VertexId vid, const std::vector<std::pair<LabelId, Properties>>& label_props);
+
     std::string variable_;
     std::vector<LabelId> label_ids_;
     std::vector<std::pair<LabelId, PropExprs>> label_prop_exprs_;
