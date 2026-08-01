@@ -794,6 +794,63 @@ TEST_F(QueryExecutorTest, CreateEdgeReturnsId) {
     EXPECT_GT(std::get<EdgeValue>(expand.rows[0][0]).id, 0);
 }
 
+TEST_F(QueryExecutorTest, CreateEdgeReturnProperty) {
+    // Create2 [14]: CREATE ()-[r:R {num: 42}]->() RETURN r.num AS num
+    auto result = execSync(*executor_, "CREATE ()-[r:R {num: 42}]->() RETURN r.num AS num");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    if (!result.rows.empty() && !result.rows[0].empty()) {
+        const auto& v = result.rows[0][0];
+        if (std::holds_alternative<int64_t>(v))
+            EXPECT_EQ(std::get<int64_t>(v), 42);
+        else
+            FAIL() << "Expected int64_t(42), got: " << v.index();
+    }
+}
+
+TEST_F(QueryExecutorTest, SetEdgePropertyViaParen) {
+    // Set1 [4]: MATCH ()-[r:REL]->() SET (r).name = 'neo4j' RETURN r
+    execSync(*executor_, "CREATE ()-[:REL]->()");
+    auto result = execSync(*executor_, "MATCH ()-[r:REL]->() SET (r).name = 'neo4j' RETURN r");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, SetPropertiesAddAssignNullRemoves) {
+    // Set5 [4]: MATCH (n:Person {name: 'A'}) SET n += {name: null} RETURN n
+    // Note: original TCK scenario uses label X which is auto-registered in TCK
+    // runtime. We use Person (pre-registered) to isolate the SET += null logic.
+    execSync(*executor_, "CREATE (n:Person {name: 'A', name2: 'B'}) RETURN n");
+    auto result = execSync(*executor_, "MATCH (n:Person {name: 'A'}) SET n += {name: null} RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+}
+
+TEST_F(QueryExecutorTest, CreateNodeAutoCreatesLabel) {
+    // Phase 11: CREATE (:NewLabel {p: 1}) should auto-create NewLabel and
+    // store p under NewLabel (not __anon__).
+    auto setup = execSync(*executor_, "CREATE (:Z {p: 1}) RETURN 1");
+    ASSERT_TRUE(setup.error.empty()) << "setup: " << setup.error;
+    auto match = execSync(*executor_, "MATCH (n:Z) RETURN n.p");
+    ASSERT_TRUE(match.error.empty()) << "match: " << match.error;
+    ASSERT_EQ(match.rows.size(), 1u) << "Z should have 1 node";
+    if (!match.rows.empty() && !match.rows[0].empty()) {
+        const auto& v = match.rows[0][0];
+        if (std::holds_alternative<int64_t>(v))
+            EXPECT_EQ(std::get<int64_t>(v), 1);
+        else
+            ADD_FAILURE() << "Expected int64_t(1), got type index " << v.index();
+    }
+}
+
+TEST_F(QueryExecutorTest, SetEdgePropertyNullRemoves) {
+    // Set2 [3]: MATCH ()-[r]->() SET r.property1 = null RETURN r
+    execSync(*executor_, "CREATE ()-[:REL {property1: 12, property2: 24}]->()");
+    auto result = execSync(*executor_, "MATCH ()-[r]->() SET r.property1 = null RETURN r");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+}
+
 TEST_F(QueryExecutorTest, CreateEdgeVerifyInStore) {
     execSync(*executor_, "CREATE (a:Person)-[:KNOWS]->(b:Person)");
 

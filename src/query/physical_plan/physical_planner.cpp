@@ -1512,6 +1512,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = wrapPathElementPropertyRead(std::move(plan_result), v.path_variable, store);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundCreateNodeOp>) {
+                    spdlog::info("[Planner] BoundCreateNodeOp: var='{}', label_ids.size()={}, "
+                                 "label_names.size()={}, pending_props.size()={}",
+                                 v.variable, v.label_ids.size(), v.label_names.size(), v.pending_props.size());
                     std::vector<LabelId> label_ids = v.label_ids;
                     // Pass BoundExpressions to the operator for runtime evaluation.
                     std::vector<std::pair<LabelId, std::vector<std::pair<uint16_t, binder::BoundExpression>>>>
@@ -1543,7 +1546,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     auto result = std::make_unique<CreateNodePhysicalOp>(
                         v.variable, std::move(label_ids), std::move(label_prop_exprs), store, meta, std::move(child),
-                        ctx.label_defs, std::move(v.pending_props));
+                        ctx.label_defs, std::move(v.pending_props), std::move(v.label_names));
                     result->setEvalContext(ctx.eval_ctx);
                     // Output schema: child columns + vertex column
                     Schema node_schema = child_schema;
@@ -1676,9 +1679,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         items.push_back(std::move(bsi));
                     }
 
-                    auto result =
-                        std::make_unique<SetPhysicalOp>(std::move(items), cr.output_schema, store, meta, ctx.label_defs,
-                                                        ctx.label_name_to_id, anon_id, std::move(cr.op));
+                    auto result = std::make_unique<SetPhysicalOp>(std::move(items), cr.output_schema, store, meta,
+                                                                   ctx.label_defs, ctx.edge_label_defs,
+                                                                   ctx.label_name_to_id, anon_id, std::move(cr.op));
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types), std::move(cr.slot_layout)};

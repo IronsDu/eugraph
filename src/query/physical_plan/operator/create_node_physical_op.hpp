@@ -26,10 +26,11 @@ public:
                          std::vector<std::pair<LabelId, PropExprs>> label_prop_exprs, IAsyncGraphDataStore& store,
                          IAsyncGraphMetaStore& meta, std::unique_ptr<PhysicalOperator> child,
                          std::unordered_map<LabelId, LabelDef>& label_defs,
-                         std::vector<std::pair<std::string, binder::BoundExpression>> pending_props = {})
+                         std::vector<std::pair<std::string, binder::BoundExpression>> pending_props = {},
+                         std::vector<std::string> label_names = {})
         : variable_(std::move(variable)), label_ids_(std::move(label_ids)),
           label_prop_exprs_(std::move(label_prop_exprs)), store_(store), meta_(meta), child_(std::move(child)),
-          label_defs_(label_defs), pending_props_(std::move(pending_props)) {}
+          label_defs_(label_defs), pending_props_(std::move(pending_props)), label_names_(std::move(label_names)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
@@ -60,7 +61,9 @@ private:
     std::unique_ptr<PhysicalOperator> child_;
     std::unordered_map<LabelId, LabelDef>& label_defs_;
     std::vector<std::pair<std::string, binder::BoundExpression>> pending_props_;
+    std::vector<std::string> label_names_;
 
+    std::atomic<bool> label_names_resolved_{false};
     bool anon_registered_ = false;
     std::vector<std::tuple<LabelId, uint16_t, binder::BoundExpression>> resolved_pending_;
 };

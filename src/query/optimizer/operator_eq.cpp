@@ -412,6 +412,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->label_ids != bv->label_ids)
                     return false;
+                if (av->label_names != bv->label_names)
+                    return false;
                 if (av->label_properties.size() != bv->label_properties.size())
                     return false;
                 for (size_t i = 0; i < av->label_properties.size(); ++i) {

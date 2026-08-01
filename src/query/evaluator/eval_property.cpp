@@ -166,16 +166,48 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             const auto& edge = std::get<EdgeValue>(ov);
             if (edge.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
-            // Structural fields (r.id, r.src_id, r.dst_id, r.label_id)
+            // When the property wasn't resolved at bind time (candidates empty),
+            // look it up by name at runtime. User-defined properties take
+            // precedence over structural fields — otherwise a user property
+            // named "id" would always be shadowed by the internal edge id.
             if (ref.candidates.empty() && !ref.property_name.empty()) {
-                if (ref.property_name == "id") {
-                    r = Value(static_cast<int64_t>(edge.id));
-                } else if (ref.property_name == "src_id") {
-                    r = Value(static_cast<int64_t>(edge.src_id));
-                } else if (ref.property_name == "dst_id") {
-                    r = Value(static_cast<int64_t>(edge.dst_id));
-                } else if (ref.property_name == "label_id") {
-                    r = Value(static_cast<int64_t>(edge.label_id));
+                bool resolved = false;
+                if (edge.properties.has_value()) {
+                    const EdgeLabelDef* eldef = nullptr;
+                    if (eval_ctx_.catalog)
+                        eldef = eval_ctx_.catalog->lookupEdgeLabel(edge.label_id);
+                    if (!eldef && eval_ctx_.meta) {
+                        auto loaded = folly::coro::blockingWait(eval_ctx_.meta->getEdgeLabelDefById(edge.label_id));
+                        if (loaded) {
+                            auto& inserted =
+                                edge_label_def_cache_.emplace_back(std::make_unique<EdgeLabelDef>(std::move(*loaded)));
+                            eldef = inserted.get();
+                        }
+                    }
+                    if (eldef) {
+                        for (const auto& pd : eldef->properties) {
+                            if (pd.name == ref.property_name && pd.id < edge.properties->size()) {
+                                const auto& pv = (*edge.properties)[pd.id];
+                                if (pv.has_value()) {
+                                    r = pvToValue(*pv);
+                                    resolved = true;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Fall back to structural fields only if no user property matches.
+                if (!resolved) {
+                    if (ref.property_name == "id") {
+                        r = Value(static_cast<int64_t>(edge.id));
+                    } else if (ref.property_name == "src_id") {
+                        r = Value(static_cast<int64_t>(edge.src_id));
+                    } else if (ref.property_name == "dst_id") {
+                        r = Value(static_cast<int64_t>(edge.dst_id));
+                    } else if (ref.property_name == "label_id") {
+                        r = Value(static_cast<int64_t>(edge.label_id));
+                    }
                 }
             } else if (edge.properties.has_value()) {
                 for (const auto& candidate : ref.candidates) {

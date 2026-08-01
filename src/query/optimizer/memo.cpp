@@ -727,6 +727,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 auto c = std::make_unique<binder::BoundCreateNodeOp>();
                 c->variable = val->variable;
                 c->label_ids = val->label_ids;
+                c->label_names = val->label_names;
                 for (const auto& [label_id, props] : val->label_properties) {
                     std::vector<std::pair<uint16_t, binder::BoundExpression>> cloned_props;
                     for (const auto& [prop_id, expr] : props)

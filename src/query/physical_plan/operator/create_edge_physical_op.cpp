@@ -218,6 +218,8 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
                 ev.dst_id = dst;
                 ev.label_id = effective_label_id;
                 ev.seq = 0;
+                if (!props.empty())
+                    ev.properties = props;
 
                 Column edge_col = Column::flat(binder::BoundTypeKind::EDGE, 1);
                 edge_col.setValue(0, Value(std::move(ev)));
