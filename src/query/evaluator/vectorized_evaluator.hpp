@@ -50,6 +50,7 @@ private:
     // created labels (e.g. __anon__) that are not in the static snapshot.
     mutable std::vector<std::unique_ptr<LabelDef>> label_def_cache_;
     mutable std::vector<std::unique_ptr<EdgeLabelDef>> edge_label_def_cache_;
+    mutable LabelId anon_label_id_cached_ = INVALID_LABEL_ID;
 
     /// Evaluate an expression and return a reference to the result column.
     struct EvalResult {

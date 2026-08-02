@@ -303,15 +303,25 @@ void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                         if (props)
                             vertex.properties[lid] = std::move(*props);
                     }
-                } else if (eval_ctx_.meta) {
-                    // If no labels, try loading properties from __anon__ label as fallback.
-                    auto anon_label =
-                        folly::coro::blockingWait(eval_ctx_.meta->getLabelDef(std::string(kAnonLabelName)));
-                    if (anon_label) {
+                }
+                // 总是补查 __anon__：REMOVE LABEL 把属性迁移到 __anon__ 后，
+                // vertex 可能 (a) 已无任何用户标签，或 (b) 还有其它标签但属性
+                // 副本在 __anon__。两种情况都需要 __anon__ 旁路才能读到属性。
+                if (eval_ctx_.meta && !vertex.properties.count(anon_label_id_cached_)) {
+                    LabelId anon_lid = anon_label_id_cached_;
+                    if (anon_lid == INVALID_LABEL_ID) {
+                        auto anon_def =
+                            folly::coro::blockingWait(eval_ctx_.meta->getLabelDef(std::string(kAnonLabelName)));
+                        if (anon_def) {
+                            anon_lid = anon_def->id;
+                            anon_label_id_cached_ = anon_lid;
+                        }
+                    }
+                    if (anon_lid != INVALID_LABEL_ID) {
                         auto props =
-                            folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, anon_label->id));
+                            folly::coro::blockingWait(eval_ctx_.store->getVertexProperties(vertex.id, anon_lid));
                         if (props)
-                            vertex.properties[anon_label->id] = std::move(*props);
+                            vertex.properties[anon_lid] = std::move(*props);
                     }
                 }
             }

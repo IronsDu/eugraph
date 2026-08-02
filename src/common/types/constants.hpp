@@ -12,6 +12,9 @@ namespace eugraph {
 constexpr const char* TABLE_LABEL_REVERSE = "table:label_reverse";
 constexpr const char* TABLE_EDGE_INDEX = "table:edge_index";
 constexpr const char* TABLE_METADATA = "table:metadata";
+// 全局 vertex 主表：记录所有存活 vertex 的 vid（含无标签 vertex）。
+// 历史上由 TABLE_PK_REVERSE 担任，被 #34 移除后无标签 vertex 对 MATCH (n) 不可见。
+constexpr const char* TABLE_VERTEX_EXISTENCE = "table:vertex_existence";
 
 // 按 label_id 分表（dropLabel 时 drop）
 inline std::string labelFwdTable(LabelId id) {

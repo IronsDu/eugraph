@@ -65,6 +65,19 @@ VertexId KeyCodec::decodeLabelForwardKey(std::string_view key) {
     return decodeU64BE(key, 0);
 }
 
+// ==================== Vertex Existence ====================
+
+std::string KeyCodec::encodeVertexExistenceKey(VertexId vertex_id) {
+    std::string key;
+    key.reserve(8);
+    encodeU64BE(key, vertex_id);
+    return key;
+}
+
+VertexId KeyCodec::decodeVertexExistenceKey(std::string_view key) {
+    return decodeU64BE(key, 0);
+}
+
 // ==================== Vertex Property Storage ====================
 
 std::string KeyCodec::encodeVPropKey(VertexId vertex_id, uint16_t prop_id) {

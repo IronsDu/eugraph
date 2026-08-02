@@ -150,9 +150,14 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
     const size_t input_cols = child_result.output_schema.size();
 
     std::unordered_map<LabelId, std::string> vertex_label_names;
-    for (const auto& [lid, ldef] : ctx.label_defs)
-        if (ldef.name != kAnonLabelName)
-            vertex_label_names[lid] = ldef.name;
+    LabelId anon_label_id = INVALID_LABEL_ID;
+    for (const auto& [lid, ldef] : ctx.label_defs) {
+        if (ldef.name == kAnonLabelName) {
+            anon_label_id = lid;
+            continue;
+        }
+        vertex_label_names[lid] = ldef.name;
+    }
     std::unordered_map<EdgeLabelId, std::string> edge_label_names;
     for (const auto& [elid, eldef] : ctx.edge_label_defs)
         edge_label_names[elid] = eldef.name;
@@ -346,7 +351,7 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
     auto op = std::make_unique<ProjectionExtractPhysicalOp>(
         std::move(specs), store, std::move(vertex_label_names), std::move(edge_label_names),
         Schema(child_result.output_schema), std::vector<binder::BoundType>(child_result.output_types),
-        std::move(child_result.op));
+        std::move(child_result.op), anon_label_id);
     // NB: build the layout in a local BEFORE moving output_schema into the
     // result. A braced-init-list evaluates left-to-right, so passing
     // makeSlotLayout(output_schema) after std::move(output_schema) would read
@@ -1710,7 +1715,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         items.push_back(std::move(bri));
                     }
 
-                    auto result = std::make_unique<RemovePhysicalOp>(std::move(items), cr.output_schema, store,
+                    auto result = std::make_unique<RemovePhysicalOp>(std::move(items), cr.output_schema, store, meta,
                                                                      ctx.label_defs, ctx.label_name_to_id, anon_id,
                                                                      ctx.edge_label_defs, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),

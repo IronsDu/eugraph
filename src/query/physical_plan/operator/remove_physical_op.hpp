@@ -4,6 +4,7 @@
 #include "query/dataset/data_chunk.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
+#include "storage/meta/i_async_graph_meta_store.hpp"
 
 #include <folly/coro/AsyncGenerator.h>
 
@@ -36,13 +37,13 @@ public:
     };
 
     RemovePhysicalOp(std::vector<BoundRemoveItem> items, Schema input_schema, IAsyncGraphDataStore& store,
-                     const std::unordered_map<LabelId, LabelDef>& label_defs,
+                     IAsyncGraphMetaStore& meta, const std::unordered_map<LabelId, LabelDef>& label_defs,
                      const std::unordered_map<std::string, LabelId>& label_name_to_id, LabelId anon_label_id,
                      const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs,
                      std::unique_ptr<PhysicalOperator> child)
-        : items_(std::move(items)), input_schema_(std::move(input_schema)), store_(store), label_defs_(label_defs),
-          label_name_to_id_(label_name_to_id), anon_label_id_(anon_label_id), edge_label_defs_(edge_label_defs),
-          child_(std::move(child)) {}
+        : items_(std::move(items)), input_schema_(std::move(input_schema)), store_(store), meta_(meta),
+          label_defs_(label_defs), label_name_to_id_(label_name_to_id), anon_label_id_(anon_label_id),
+          edge_label_defs_(edge_label_defs), child_(std::move(child)) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
@@ -59,6 +60,7 @@ private:
     std::vector<BoundRemoveItem> items_;
     Schema input_schema_;
     IAsyncGraphDataStore& store_;
+    IAsyncGraphMetaStore& meta_;
     const std::unordered_map<LabelId, LabelDef>& label_defs_;
     const std::unordered_map<std::string, LabelId>& label_name_to_id_;
     LabelId anon_label_id_;

@@ -65,6 +65,9 @@ public:
                              const std::function<bool(VertexId)>& callback) override;
     std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphTxnHandle txn, LabelId label_id) override;
 
+    // All-Vertex Scan (含无标签 vertex)
+    void scanAllVertices(GraphTxnHandle txn, const std::function<bool(VertexId)>& callback) override;
+
     // Edge
     bool insertEdge(GraphTxnHandle txn, EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,
                     uint64_t seq, const Properties& props) override;
