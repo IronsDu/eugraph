@@ -57,13 +57,7 @@ std::string CreateNodePhysicalOp::toString() const {
     return "CreateNode(variable=" + variable_ + ", labels=[" + s + "])";
 }
 
-folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
-    VectorizedEvaluator evaluator(eval_ctx_);
-
-    spdlog::info("[CreateNode] executeChunk: label_names.size()={}, label_ids.size()={}, "
-                 "pending_props.size()={}",
-                 label_names_.size(), label_ids_.size(), pending_props_.size());
-
+folly::coro::Task<void> CreateNodePhysicalOp::prepare_() {
     // Phase 0: Auto-create labels that were specified in the AST but were not
     // in the catalog snapshot at bind time (e.g. CREATE (:NewLabel {...})).
     // Mirrors how CreateEdgePhysicalOp auto-creates edge labels via label_name.
@@ -206,6 +200,18 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
         }
         anon_registered_ = true;
     }
+
+    co_return;
+}
+
+folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
+    VectorizedEvaluator evaluator(eval_ctx_);
+
+    spdlog::info("[CreateNode] executeChunk: label_names.size()={}, label_ids.size()={}, "
+                 "pending_props.size()={}",
+                 label_names_.size(), label_ids_.size(), pending_props_.size());
+
+    co_await prepare_();
 
     // Phase 2: per-row creation
     if (child_) {

@@ -55,6 +55,7 @@ public:
     }
 
 private:
+    folly::coro::Task<void> prepare_();
     std::vector<std::pair<LabelId, Properties>> buildLabelProps(VectorizedEvaluator& evaluator, const DataChunk* chunk,
                                                                 size_t row_idx);
     folly::coro::Task<bool> insertVertex(VertexId vid, const std::vector<std::pair<LabelId, Properties>>& label_props);
