@@ -970,7 +970,11 @@ private:
 
     RelationshipPattern buildRelPattern(AP::RelationshipPatternContext* ctx) {
         RelationshipPattern rp;
-        if (ctx->LT())
+        // When both arrows are present (e.g. <-[:TYPE]->), treat as undirected
+        // so the binder can reject it with RequiresDirectedRelationship.
+        if (ctx->LT() && ctx->GT())
+            rp.direction = RelationshipDirection::UNDIRECTED;
+        else if (ctx->LT())
             rp.direction = RelationshipDirection::RIGHT_TO_LEFT;
         else if (ctx->GT())
             rp.direction = RelationshipDirection::LEFT_TO_RIGHT;
@@ -1124,13 +1128,21 @@ private:
     std::vector<SetItem> buildSetItems(AP::SetStContext* ctx) {
         std::vector<SetItem> items;
         for (auto* si : ctx->setItem()) {
-            SetItem item;
+            // SET n:Foo:Bar — emit one SetItem per label so the rest of the
+            // pipeline (binder, physical op) can stay single-label.
             if (si->symbol() && si->nodeLabels()) {
-                item.kind = SetItemKind::SET_LABELS;
-                item.target = makeVariable(si->symbol()->getText());
-                for (auto* n : si->nodeLabels()->name())
+                std::string sym = si->symbol()->getText();
+                for (auto* n : si->nodeLabels()->name()) {
+                    SetItem item;
+                    item.kind = SetItemKind::SET_LABELS;
+                    item.target = makeVariable(sym);
                     item.label = n->getText();
-            } else if (si->symbol() && (si->ASSIGN() || si->ADD_ASSIGN())) {
+                    items.push_back(std::move(item));
+                }
+                continue;
+            }
+            SetItem item;
+            if (si->symbol() && (si->ASSIGN() || si->ADD_ASSIGN())) {
                 item.kind = SetItemKind::SET_PROPERTIES;
                 item.target = makeVariable(si->symbol()->getText());
                 item.value = buildExpression(si->expression());

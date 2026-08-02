@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace eugraph {
@@ -76,6 +77,11 @@ private:
     const std::unordered_map<std::string, Value>& params_;
     BindContext ctx_;
     std::vector<std::string> errors_;
+    /// Variables created by (prior) CREATE clauses within the same query.
+    /// Used by validateCreatePattern to distinguish MATCH-bound variables
+    /// (which cannot be re-created) from CREATE-created variables (which
+    /// can be reused without labels/props by subsequent CREATEs).
+    std::unordered_set<std::string> create_scope_vars_;
 
 public:
     const BindContext& ctx() const {

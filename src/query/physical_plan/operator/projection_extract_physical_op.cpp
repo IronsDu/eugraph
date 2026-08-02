@@ -205,6 +205,15 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                                 labels.erase(INVALID_LABEL_ID);
                                 rc.labels.emplace(spec.source_col, std::move(labels));
                             }
+                            // REMOVE n:L 把属性迁移到 __anon__ 后，vertex 的 labels
+                            // 集合里没有 __anon__（迁移只写存储、不动 label 关联），
+                            // 上面的 vv.properties 因此不会包含 __anon__ 下的副本。
+                            // 这里补查一次，保证 properties(n) 能看到迁移后的属性。
+                            if (anon_label_id_ != INVALID_LABEL_ID && vv.properties.count(anon_label_id_) == 0) {
+                                auto anon_props = co_await store_.getVertexProperties(vv.id, anon_label_id_);
+                                if (anon_props.has_value())
+                                    vv.properties[anon_label_id_] = std::move(*anon_props);
+                            }
                             vit = rc.vertex_obj.emplace(spec.source_col, std::move(vv)).first;
                         } else {
                             VertexId vid = resolveVertexId(*chunk, spec.source_col, row, rc.vid_col, rc.vid);
@@ -219,6 +228,12 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                                 auto props = co_await store_.getVertexProperties(vid, lid);
                                 if (props.has_value())
                                     vv.properties[lid] = std::move(*props);
+                            }
+                            // 同上：补查 __anon__ 下的迁移属性。
+                            if (anon_label_id_ != INVALID_LABEL_ID && vv.properties.count(anon_label_id_) == 0) {
+                                auto anon_props = co_await store_.getVertexProperties(vid, anon_label_id_);
+                                if (anon_props.has_value())
+                                    vv.properties[anon_label_id_] = std::move(*anon_props);
                             }
                             rc.labels.emplace(spec.source_col, std::move(labels));
                             vit = rc.vertex_obj.emplace(spec.source_col, std::move(vv)).first;

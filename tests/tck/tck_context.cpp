@@ -18,6 +18,9 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
     if (errMsg.find("MapElementAccessByNonString") != std::string::npos) {
         errorType = "TypeError";
         errorPhase = "runtime";
+    } else if (errMsg.find("InvalidPropertyType") != std::string::npos) {
+        errorType = "TypeError";
+        errorPhase = "runtime";
     } else if (errMsg.find("TypeError:") != std::string::npos) {
         errorType = "TypeError";
         errorPhase = "compile time";
@@ -38,6 +41,7 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
                errMsg.find("DifferentColumnsInUnion") != std::string::npos ||
                errMsg.find("InvalidClauseComposition") != std::string::npos ||
                errMsg.find("NoSingleRelationshipType") != std::string::npos ||
+               errMsg.find("RequiresDirectedRelationship") != std::string::npos ||
                errMsg.find("CreatingVarLength") != std::string::npos ||
                errMsg.find("InvalidParameterUse") != std::string::npos) {
         errorType = "SyntaxError";
@@ -426,6 +430,10 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "VariableAlreadyBound";
                 } else if (errMsg.find("VariableTypeConflict") != std::string::npos) {
                     lastErrorDetail = "VariableTypeConflict";
+                } else if (errMsg.find("RequiresDirectedRelationship") != std::string::npos) {
+                    lastErrorDetail = "RequiresDirectedRelationship";
+                } else if (errMsg.find("InvalidPropertyType") != std::string::npos) {
+                    lastErrorDetail = "InvalidPropertyType";
                 } else if (errMsg.find("must be a non-negative integer") != std::string::npos) {
                     lastErrorDetail = "NegativeIntegerArgument";
                 } else if (errMsg.find("must be a constant expression") != std::string::npos) {
@@ -501,6 +509,10 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "VariableAlreadyBound";
         } else if (errMsg.find("VariableTypeConflict") != std::string::npos) {
             lastErrorDetail = "VariableTypeConflict";
+        } else if (errMsg.find("RequiresDirectedRelationship") != std::string::npos) {
+            lastErrorDetail = "RequiresDirectedRelationship";
+        } else if (errMsg.find("InvalidPropertyType") != std::string::npos) {
+            lastErrorDetail = "InvalidPropertyType";
         } else if (errMsg.find("DifferentColumnsInUnion") != std::string::npos) {
             lastErrorDetail = "DifferentColumnsInUnion";
         } else if (errMsg.find("InvalidClauseComposition") != std::string::npos) {
@@ -866,7 +878,10 @@ void TckContext::ensureTypesForQuery(const std::string& query) {
     connectRpc();
 
     // Extract label names: pattern (:<LabelName>  or  :<LabelName>)
-    std::set<std::string> labels;
+    // Preserve declaration order so labels() and RETURN output match the
+    // order in which labels first appear in the query (Neo4j convention).
+    std::vector<std::string> labels;
+    std::unordered_set<std::string> seen_labels;
     std::regex labelRe(R"(:([A-Za-z_][A-Za-z0-9_]*))");
     auto begin = std::sregex_iterator(query.begin(), query.end(), labelRe);
     auto end = std::sregex_iterator();
@@ -878,16 +893,19 @@ void TckContext::ensureTypesForQuery(const std::string& query) {
             name == "expr" || name == "idx" || name == "n1" || name == "n2" || name == "n3") {
             continue;
         }
-        labels.insert(name);
+        if (seen_labels.insert(name).second)
+            labels.push_back(name);
     }
 
     // Extract edge type names: pattern -[:TYPE]->
-    std::set<std::string> edgeTypes;
+    std::vector<std::string> edgeTypes;
+    std::unordered_set<std::string> seen_edges;
     std::regex edgeRe(R"(\[:([A-Za-z_][A-Za-z0-9_]*))");
     auto ebegin = std::sregex_iterator(query.begin(), query.end(), edgeRe);
     for (auto it = ebegin; it != end; ++it) {
         std::string name = (*it)[1].str();
-        edgeTypes.insert(name);
+        if (seen_edges.insert(name).second)
+            edgeTypes.push_back(name);
     }
 
     // Also match patterns like (n:Label) where n is a known variable and Label is the label name

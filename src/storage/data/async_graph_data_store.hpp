@@ -10,6 +10,7 @@
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -157,6 +158,28 @@ public:
             if (batch.empty()) {
                 co_return;
             }
+            co_yield std::move(batch);
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<VertexId>> scanAllVertices() override {
+        // sync scanAllVertices 没有游标接口，每次调用都会从头扫描。
+        // 因此这里一次性收集全部 vid，再分批 yield，避免外层 while 重扫导致死循环。
+        std::vector<VertexId> all;
+        auto txn = txn_;
+        co_await io_.dispatchVoid([&]() {
+            store_.scanAllVertices(txn, [&](VertexId vid) {
+                all.push_back(vid);
+                return true;
+            });
+        });
+        constexpr size_t BATCH = 1024;
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch;
+            batch.reserve(end - i);
+            for (size_t j = i; j < end; ++j)
+                batch.push_back(all[j]);
             co_yield std::move(batch);
         }
     }

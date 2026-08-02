@@ -115,6 +115,8 @@ public:
                                      const std::function<bool(VertexId)>& callback) = 0;
     virtual std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphTxnHandle txn, LabelId label_id) = 0;
 
+    virtual void scanAllVertices(GraphTxnHandle txn, const std::function<bool(VertexId)>& callback) = 0;
+
     // ==================== Edge ====================
 
     virtual bool insertEdge(GraphTxnHandle txn, EdgeId eid, VertexId src_id, VertexId dst_id, EdgeLabelId label_id,

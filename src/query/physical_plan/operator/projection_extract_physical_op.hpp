@@ -83,10 +83,11 @@ public:
     ProjectionExtractPhysicalOp(std::vector<ColumnSpec> specs, IAsyncGraphDataStore& store,
                                 std::unordered_map<LabelId, std::string> vertex_label_names,
                                 std::unordered_map<EdgeLabelId, std::string> edge_label_names, Schema input_schema,
-                                std::vector<binder::BoundType> output_types, std::unique_ptr<PhysicalOperator> child)
+                                std::vector<binder::BoundType> output_types, std::unique_ptr<PhysicalOperator> child,
+                                LabelId anon_label_id = INVALID_LABEL_ID)
         : specs_(std::move(specs)), store_(store), vertex_label_names_(std::move(vertex_label_names)),
           edge_label_names_(std::move(edge_label_names)), input_schema_(std::move(input_schema)),
-          output_types_(std::move(output_types)), child_(std::move(child)) {}
+          output_types_(std::move(output_types)), child_(std::move(child)), anon_label_id_(anon_label_id) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
@@ -105,6 +106,11 @@ private:
     Schema input_schema_;
     std::vector<binder::BoundType> output_types_;
     std::unique_ptr<PhysicalOperator> child_;
+    /// __anon__ label id — properties migrated here by REMOVE n:L must be
+    /// polled even when the vertex no longer carries __anon__ in its label
+    /// set (REMOVE only severs the label association; it does not erase the
+    /// __anon__ property rows).
+    LabelId anon_label_id_ = INVALID_LABEL_ID;
 };
 
 } // namespace compute

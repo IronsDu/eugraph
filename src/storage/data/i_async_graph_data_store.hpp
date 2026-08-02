@@ -96,6 +96,7 @@ public:
 
     // Vertex Scan
     virtual folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByLabel(LabelId label_id) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<VertexId>> scanAllVertices() = 0;
 
     // Edge Scan
     virtual folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>

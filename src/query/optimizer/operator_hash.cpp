@@ -424,6 +424,8 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = hashBytes(seed, val->variable);
                 for (auto l : val->label_ids)
                     seed = combine(seed, static_cast<uint64_t>(l));
+                for (const auto& n : val->label_names)
+                    seed = hashBytes(seed, n);
                 for (const auto& [lid, props] : val->label_properties) {
                     seed = combine(seed, static_cast<uint64_t>(lid));
                     for (const auto& [pid, expr] : props) {

@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 #include "common/types/temporal_value.hpp"
 #include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/physical_plan/operator/mutation_mirror.hpp"
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
@@ -90,6 +91,9 @@ PropertyValue valueToPropertyValue(const Value& v) {
                     arr.push_back(std::get<DurationValue>(e.value));
             if (arr.size() == lv.elements.size())
                 return arr;
+        } else if (std::holds_alternative<MapValue>(first)) {
+            throw std::runtime_error(
+                "TypeError: InvalidPropertyType: list of maps is not supported as a property value");
         }
     }
     return PropertyValue{};
@@ -125,7 +129,7 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
             }
         }
 
-        // Ensure vertex columns are writable (FLAT) before mutation.
+        // Ensure vertex/edge columns are writable (FLAT) before mutation.
         // DICTIONARY columns share data with other operators and are read-only;
         // CONSTANT columns have a single shared value.
         for (const auto& item : items_) {
@@ -135,12 +139,12 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
             if (col < 0 || static_cast<size_t>(col) >= chunk->numColumns())
                 continue;
             auto& column = chunk->columns[static_cast<size_t>(col)];
-            if (column.type != binder::BoundTypeKind::VERTEX)
+            if (column.type != binder::BoundTypeKind::VERTEX && column.type != binder::BoundTypeKind::EDGE)
                 continue;
             if (column.form == VectorForm::FLAT)
                 continue;
             // Copy into a new FLAT column
-            auto new_col = Column::flat(binder::BoundTypeKind::VERTEX, n);
+            auto new_col = Column::flat(column.type, n);
             for (size_t i = 0; i < n; ++i)
                 new_col.setValue(i, column.getValue(i));
             column = std::move(new_col);
@@ -157,6 +161,162 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     continue;
 
                 Value val = chunk->getValue(static_cast<size_t>(col), row_idx);
+
+                // Edge handling: SET on edges. SET_LABELS does not apply (edges
+                // have a single label), so it is silently skipped.
+                if (std::holds_alternative<EdgeValue>(val)) {
+                    if (item.kind == cypher::SetItemKind::SET_LABELS)
+                        continue;
+
+                    EdgeValue edge = std::get<EdgeValue>(val);
+                    EdgeId eid = edge.id;
+                    EdgeLabelId elid = edge.label_id;
+
+                    auto def_it = edge_label_defs_.find(elid);
+                    if (def_it == edge_label_defs_.end()) {
+                        auto loaded = co_await meta_.getEdgeLabelDefById(elid);
+                        if (!loaded)
+                            continue;
+                        edge_label_defs_[elid] = std::move(*loaded);
+                        def_it = edge_label_defs_.find(elid);
+                    }
+                    const EdgeLabelDef& eldef = def_it->second;
+
+                    if (item.kind == cypher::SetItemKind::SET_PROPERTY) {
+                        if (item.prop_name.empty() || !item.value.has_value())
+                            continue;
+                        Value v = value_results[idx][row_idx];
+
+                        // Resolve (or dynamically register) prop_id by name
+                        uint16_t pid = UINT16_MAX;
+                        for (const auto& pd : eldef.properties) {
+                            if (pd.name == item.prop_name) {
+                                pid = pd.id;
+                                break;
+                            }
+                        }
+                        if (pid == UINT16_MAX) {
+                            PropertyValue pv_init = valueToPropertyValue(v);
+                            std::vector<std::pair<std::string, PropertyType>> prop_defs_init;
+                            prop_defs_init.emplace_back(item.prop_name, propertyValueToPropertyType(pv_init));
+                            co_await meta_.addEdgeLabelProperties(eldef.name, prop_defs_init);
+                            auto updated = co_await meta_.getEdgeLabelDefById(elid);
+                            if (updated) {
+                                edge_label_defs_[elid] = std::move(*updated);
+                                for (const auto& pd : edge_label_defs_[elid].properties) {
+                                    if (pd.name == item.prop_name) {
+                                        pid = pd.id;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (pid == UINT16_MAX)
+                                continue;
+                        }
+
+                        if (std::holds_alternative<std::monostate>(v)) {
+                            // Cypher null semantics: SET r.p = null ≡ REMOVE r.p
+                            co_await store_.deleteEdgeProperty(eid, elid, pid);
+                            if (edge.properties.has_value() && edge.properties->size() > pid)
+                                (*edge.properties)[pid].reset();
+                        } else {
+                            PropertyValue pv = valueToPropertyValue(v);
+                            co_await store_.putEdgeProperty(eid, elid, pid, pv);
+                            if (!edge.properties.has_value())
+                                edge.properties = Properties{};
+                            if (edge.properties->size() <= pid)
+                                edge.properties->resize(pid + 1);
+                            (*edge.properties)[pid] = pv;
+                        }
+                        mirrorEdgeToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(edge));
+                        continue;
+                    }
+
+                    if (item.kind == cypher::SetItemKind::SET_PROPERTIES) {
+                        if (!item.value.has_value())
+                            continue;
+                        Value v = value_results[idx][row_idx];
+                        if (!std::holds_alternative<MapValue>(v))
+                            continue;
+                        const auto& mv = std::get<MapValue>(v);
+                        bool modified = false;
+
+                        // '=' mode: delete all existing edge properties first
+                        if (!item.is_add_assign) {
+                            for (const auto& pd : eldef.properties) {
+                                co_await store_.deleteEdgeProperty(eid, elid, pd.id);
+                            }
+                            if (edge.properties.has_value())
+                                edge.properties->clear();
+                            modified = true;
+                        }
+
+                        for (const auto& [key, vs_entry] : mv.entries) {
+                            Value entry_val = vs_entry.value;
+                            // null: += → REMOVE; = → skip (already cleared)
+                            if (std::holds_alternative<std::monostate>(entry_val)) {
+                                if (item.is_add_assign) {
+                                    uint16_t null_pid = UINT16_MAX;
+                                    for (const auto& pd : eldef.properties) {
+                                        if (pd.name == key) {
+                                            null_pid = pd.id;
+                                            break;
+                                        }
+                                    }
+                                    if (null_pid != UINT16_MAX) {
+                                        co_await store_.deleteEdgeProperty(eid, elid, null_pid);
+                                        if (edge.properties.has_value() && edge.properties->size() > null_pid)
+                                            (*edge.properties)[null_pid].reset();
+                                        modified = true;
+                                    }
+                                }
+                                continue;
+                            }
+
+                            // Resolve (or dynamically register) prop_id
+                            uint16_t entry_pid = UINT16_MAX;
+                            for (const auto& pd : eldef.properties) {
+                                if (pd.name == key) {
+                                    entry_pid = pd.id;
+                                    break;
+                                }
+                            }
+                            if (entry_pid == UINT16_MAX) {
+                                PropertyValue pv_reg = valueToPropertyValue(entry_val);
+                                std::vector<std::pair<std::string, PropertyType>> prop_defs_reg;
+                                prop_defs_reg.emplace_back(key, propertyValueToPropertyType(pv_reg));
+                                co_await meta_.addEdgeLabelProperties(eldef.name, prop_defs_reg);
+                                auto updated = co_await meta_.getEdgeLabelDefById(elid);
+                                if (updated) {
+                                    edge_label_defs_[elid] = std::move(*updated);
+                                    for (const auto& pd : edge_label_defs_[elid].properties) {
+                                        if (pd.name == key) {
+                                            entry_pid = pd.id;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (entry_pid == UINT16_MAX)
+                                    continue;
+                            }
+
+                            PropertyValue pv = valueToPropertyValue(entry_val);
+                            co_await store_.putEdgeProperty(eid, elid, entry_pid, pv);
+                            if (!edge.properties.has_value())
+                                edge.properties = Properties{};
+                            if (edge.properties->size() <= entry_pid)
+                                edge.properties->resize(entry_pid + 1);
+                            (*edge.properties)[entry_pid] = pv;
+                            modified = true;
+                        }
+
+                        if (modified)
+                            mirrorEdgeToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(edge));
+                        continue;
+                    }
+                    continue;
+                }
+
                 if (!std::holds_alternative<VertexValue>(val))
                     continue;
 
@@ -165,14 +325,75 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
 
                 if (item.kind == cypher::SetItemKind::SET_LABELS) {
                     auto lit = label_name_to_id_.find(item.label);
+                    spdlog::info("[SetPhysicalOp] SET_LABELS label='{}' found_in_map={}", item.label,
+                                 lit != label_name_to_id_.end());
+                    if (lit == label_name_to_id_.end()) {
+                        // Auto-create the label dynamically so SET n:NewLabel works
+                        // without prior definition (mirrors CREATE (:NewLabel) Phase 0).
+                        auto new_lid = co_await meta_.createLabel(item.label, {});
+                        if (new_lid != INVALID_LABEL_ID) {
+                            co_await store_.createLabel(new_lid);
+                            const_cast<std::unordered_map<std::string, LabelId>&>(label_name_to_id_)[item.label] =
+                                new_lid;
+                            LabelDef def;
+                            def.id = new_lid;
+                            def.name = item.label;
+                            label_defs_[new_lid] = std::move(def);
+                            lit = label_name_to_id_.find(item.label);
+                        }
+                    }
                     if (lit == label_name_to_id_.end())
                         continue;
                     co_await store_.addVertexLabel(vid, lit->second);
+                    VertexValue updated = vertex;
+                    if (!updated.labels.has_value())
+                        updated.labels = LabelIdSet{};
+                    updated.labels->insert(lit->second);
+                    mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(updated));
                 } else if (item.kind == cypher::SetItemKind::SET_PROPERTY) {
                     if (item.prop_name.empty() || !item.value.has_value())
                         continue;
 
                     Value v = value_results[idx][row_idx];
+
+                    // Cypher null semantics: SET n.p = null ≡ REMOVE n.p
+                    if (std::holds_alternative<std::monostate>(v)) {
+                        std::optional<std::pair<LabelId, uint16_t>> removed_at;
+                        if (item.strong_mode && item.resolved_label_id && item.resolved_prop_id) {
+                            co_await store_.deleteVertexProperty(vid, *item.resolved_label_id, *item.resolved_prop_id);
+                            removed_at = std::make_pair(*item.resolved_label_id, *item.resolved_prop_id);
+                        } else {
+                            std::vector<std::pair<LabelId, uint16_t>> matches;
+                            if (vertex.labels.has_value()) {
+                                for (LabelId lid : *vertex.labels) {
+                                    auto def_it = label_defs_.find(lid);
+                                    if (def_it == label_defs_.end())
+                                        continue;
+                                    for (const auto& pd : def_it->second.properties) {
+                                        if (pd.name == item.prop_name) {
+                                            matches.emplace_back(lid, pd.id);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (matches.size() == 1) {
+                                co_await store_.deleteVertexProperty(vid, matches[0].first, matches[0].second);
+                                removed_at = matches[0];
+                            }
+                            // 0 matches: no-op (REMOVE on non-existent is no-op)
+                            // >1 matches: ambiguous, no-op (consistent with non-null path)
+                        }
+                        if (removed_at) {
+                            VertexValue updated = vertex;
+                            auto it = updated.properties.find(removed_at->first);
+                            if (it != updated.properties.end() && it->second.size() > removed_at->second)
+                                it->second[removed_at->second].reset();
+                            mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(updated));
+                        }
+                        continue;
+                    }
+
                     PropertyValue pv = valueToPropertyValue(v);
 
                     // Determine which (label_id, prop_id) the value is written to,
@@ -205,12 +426,45 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             co_await store_.putVertexProperty(vid, matches[0].first, matches[0].second, pv);
                             written_at = matches[0];
                         } else if (matches.empty()) {
-                            // No match in actual labels: write to __anon__ via lightweight allocation
-                            if (anon_label_id_ != INVALID_LABEL_ID) {
+                            // No match in actual labels: register on the first user label
+                            // (skip __anon__) so the new property shares the vertex's
+                            // primary label rather than being shunted to __anon__.
+                            // Falls back to __anon__ only when the vertex has no user labels.
+                            LabelId target_lid = INVALID_LABEL_ID;
+                            if (vertex.labels.has_value()) {
+                                for (LabelId lid : *vertex.labels) {
+                                    if (lid == anon_label_id_)
+                                        continue;
+                                    target_lid = lid;
+                                    break;
+                                }
+                            }
+                            if (target_lid != INVALID_LABEL_ID) {
+                                auto def_it = label_defs_.find(target_lid);
+                                if (def_it != label_defs_.end()) {
+                                    std::vector<std::pair<std::string, PropertyType>> prop_defs_new;
+                                    prop_defs_new.emplace_back(item.prop_name, propertyValueToPropertyType(pv));
+                                    co_await meta_.addVertexLabelProperties(def_it->second.name, prop_defs_new);
+                                    auto updated = co_await meta_.getLabelDefById(target_lid);
+                                    uint16_t new_pid = UINT16_MAX;
+                                    if (updated) {
+                                        label_defs_[target_lid] = std::move(*updated);
+                                        for (const auto& pd : label_defs_[target_lid].properties) {
+                                            if (pd.name == item.prop_name) {
+                                                new_pid = pd.id;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (new_pid != UINT16_MAX) {
+                                        co_await store_.putVertexProperty(vid, target_lid, new_pid, pv);
+                                        written_at = std::make_pair(target_lid, new_pid);
+                                    }
+                                }
+                            } else if (anon_label_id_ != INVALID_LABEL_ID) {
+                                // Vertex has no user labels: write to __anon__.
                                 uint16_t anon_pid = co_await meta_.getOrCreateAnonPropId(
                                     item.prop_name, propertyValueToPropertyType(pv));
-                                // Ensure __anon__ is in the vertex's label set so subsequent
-                                // ConstructVertex / getVertexLabels picks up the property.
                                 if (!vertex.labels.has_value() ||
                                     vertex.labels->find(anon_label_id_) == vertex.labels->end())
                                     co_await store_.addVertexLabel(vid, anon_label_id_);
@@ -254,7 +508,7 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         if (props_vec.size() <= written_at->second)
                             props_vec.resize(written_at->second + 1);
                         props_vec[written_at->second] = pv;
-                        chunk->setValue(static_cast<size_t>(col), row_idx, Value(std::move(updated)));
+                        mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(updated));
                     }
                 } else if (item.kind == cypher::SetItemKind::SET_PROPERTIES) {
                     if (!item.value.has_value())
@@ -293,9 +547,49 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     // Write each map entry via convenience mode resolution
                     for (const auto& [key, vs] : mv.entries) {
                         Value entry_val = vs.value;
-                        // null map values remove the property
-                        if (std::holds_alternative<std::monostate>(entry_val))
+                        // null 处理（openCypher 规范）：
+                        //   += 模式: 显式 REMOVE 该属性
+                        //   =  模式: 跳过写入（前面 delete-all 已清空所有旧属性，
+                        //           跳过 = 该 key 不存在，与规范一致）
+                        if (std::holds_alternative<std::monostate>(entry_val)) {
+                            if (item.is_add_assign) {
+                                std::vector<std::pair<LabelId, uint16_t>> matches;
+                                if (vertex.labels.has_value()) {
+                                    for (LabelId lid : *vertex.labels) {
+                                        auto def_it = label_defs_.find(lid);
+                                        if (def_it == label_defs_.end())
+                                            continue;
+                                        for (const auto& pd : def_it->second.properties) {
+                                            if (pd.name == key) {
+                                                matches.emplace_back(lid, pd.id);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                // 也检查 __anon__ 标签下是否定义了该属性
+                                if (anon_label_id_ != INVALID_LABEL_ID) {
+                                    auto anon_it = label_defs_.find(anon_label_id_);
+                                    if (anon_it != label_defs_.end()) {
+                                        for (const auto& pd : anon_it->second.properties) {
+                                            if (pd.name == key) {
+                                                matches.emplace_back(anon_label_id_, pd.id);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (matches.size() == 1) {
+                                    co_await store_.deleteVertexProperty(vid, matches[0].first, matches[0].second);
+                                    auto& props_vec = updated_vertex.properties[matches[0].first];
+                                    if (props_vec.size() > matches[0].second)
+                                        props_vec[matches[0].second].reset();
+                                    vertex_modified = true;
+                                }
+                                // 0 matches: no-op; >1 matches: ambiguous, no-op
+                            }
                             continue;
+                        }
                         PropertyValue pv = valueToPropertyValue(entry_val);
 
                         std::vector<std::pair<LabelId, uint16_t>> matches;
@@ -321,7 +615,45 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             props_vec[matches[0].second] = pv;
                             vertex_modified = true;
                         } else if (matches.empty()) {
-                            if (anon_label_id_ != INVALID_LABEL_ID) {
+                            // Register on the first user label (skip __anon__) so the new
+                            // property shares the vertex's primary label. Falls back to
+                            // __anon__ only when the vertex has no user labels.
+                            LabelId target_lid = INVALID_LABEL_ID;
+                            if (vertex.labels.has_value()) {
+                                for (LabelId lid : *vertex.labels) {
+                                    if (lid == anon_label_id_)
+                                        continue;
+                                    target_lid = lid;
+                                    break;
+                                }
+                            }
+                            if (target_lid != INVALID_LABEL_ID) {
+                                auto def_it = label_defs_.find(target_lid);
+                                if (def_it != label_defs_.end()) {
+                                    std::vector<std::pair<std::string, PropertyType>> prop_defs_key;
+                                    prop_defs_key.emplace_back(key, propertyValueToPropertyType(pv));
+                                    co_await meta_.addVertexLabelProperties(def_it->second.name, prop_defs_key);
+                                    auto updated = co_await meta_.getLabelDefById(target_lid);
+                                    uint16_t new_pid = UINT16_MAX;
+                                    if (updated) {
+                                        label_defs_[target_lid] = std::move(*updated);
+                                        for (const auto& pd : label_defs_[target_lid].properties) {
+                                            if (pd.name == key) {
+                                                new_pid = pd.id;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (new_pid != UINT16_MAX) {
+                                        co_await store_.putVertexProperty(vid, target_lid, new_pid, pv);
+                                        auto& props_vec = updated_vertex.properties[target_lid];
+                                        if (props_vec.size() <= new_pid)
+                                            props_vec.resize(new_pid + 1);
+                                        props_vec[new_pid] = pv;
+                                        vertex_modified = true;
+                                    }
+                                }
+                            } else if (anon_label_id_ != INVALID_LABEL_ID) {
                                 uint16_t anon_pid =
                                     co_await meta_.getOrCreateAnonPropId(key, propertyValueToPropertyType(pv));
                                 if (!vertex.labels.has_value() ||
@@ -356,7 +688,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
 
                     // Write updated vertex back to chunk so RETURN sees the mutated state
                     if (vertex_modified)
-                        chunk->setValue(static_cast<size_t>(col), row_idx, Value(std::move(updated_vertex)));
+                        mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx,
+                                                    std::move(updated_vertex));
                 }
             }
         }

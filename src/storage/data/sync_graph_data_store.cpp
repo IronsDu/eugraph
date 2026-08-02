@@ -47,7 +47,8 @@ bool SyncGraphDataStore::open(const std::string& db_path) {
         return false;
 
     if (!ensureGlobalTable(defaultSession_.get(), TABLE_LABEL_REVERSE) ||
-        !ensureGlobalTable(defaultSession_.get(), TABLE_EDGE_INDEX)) {
+        !ensureGlobalTable(defaultSession_.get(), TABLE_EDGE_INDEX) ||
+        !ensureGlobalTable(defaultSession_.get(), TABLE_VERTEX_EXISTENCE)) {
         close();
         return false;
     }
@@ -264,6 +265,10 @@ bool SyncGraphDataStore::insertVertex(GraphTxnHandle txn, VertexId vid,
     if (!session)
         return false;
 
+    auto ve_key = KeyCodec::encodeVertexExistenceKey(vid);
+    if (!tablePut(session, TABLE_VERTEX_EXISTENCE, ve_key, {}))
+        return false;
+
     for (const auto& [label_id, props] : label_props) {
         if (label_id == INVALID_LABEL_ID)
             continue;
@@ -304,6 +309,8 @@ bool SyncGraphDataStore::deleteVertex(GraphTxnHandle txn, VertexId vid) {
             return true;
         });
     }
+
+    tableDel(session, TABLE_VERTEX_EXISTENCE, KeyCodec::encodeVertexExistenceKey(vid));
 
     return true;
 }
@@ -438,6 +445,19 @@ void SyncGraphDataStore::scanVerticesByLabel(GraphTxnHandle txn, LabelId label_i
 
     tableScan(session, labelFwdTable(label_id), {}, [&](std::string_view key, std::string_view) {
         VertexId vid = KeyCodec::decodeLabelForwardKey(key);
+        return callback(vid);
+    });
+}
+
+// ==================== All-Vertex Scan ====================
+
+void SyncGraphDataStore::scanAllVertices(GraphTxnHandle txn, const std::function<bool(VertexId)>& callback) {
+    auto session = getSession(txn);
+    if (!session)
+        return;
+
+    tableScan(session, TABLE_VERTEX_EXISTENCE, {}, [&](std::string_view key, std::string_view) {
+        VertexId vid = KeyCodec::decodeVertexExistenceKey(key);
         return callback(vid);
     });
 }

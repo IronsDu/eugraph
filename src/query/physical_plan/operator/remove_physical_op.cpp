@@ -63,6 +63,33 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                         auto lit = label_name_to_id_.find(item.name);
                         if (lit == label_name_to_id_.end())
                             continue;
+                        // Cypher 语义：属性归属 vertex 而非 label。removeVertexLabel
+                        // 内部会清空 vpropTable(label_id) 下属于该 vertex 的属性。无论
+                        // 此 label 是不是最后一个，都要先把它的属性副本迁到 __anon__，
+                        // 否则 REMOVE n:L1:L3 这种"部分移除"也会丢失属性（多 label
+                        // CREATE 时属性只挂在第一个 label 下，参见 bind_mutation 的
+                        // pending_props re-resolution）。
+                        if (anon_label_id_ != INVALID_LABEL_ID && anon_label_id_ != lit->second) {
+                            auto src_def_it = label_defs_.find(lit->second);
+                            auto src_props_it = updated.properties.find(lit->second);
+                            if (src_def_it != label_defs_.end() && src_props_it != updated.properties.end()) {
+                                const auto& src_def = src_def_it->second;
+                                Properties& anon_props = updated.properties[anon_label_id_];
+                                for (const auto& pd : src_def.properties) {
+                                    if (pd.id >= src_props_it->second.size())
+                                        continue;
+                                    const auto& pv = src_props_it->second[pd.id];
+                                    if (!pv.has_value())
+                                        continue;
+                                    uint16_t anon_pid =
+                                        co_await meta_.getOrCreateAnonPropId(pd.name, PropertyType::ANY);
+                                    co_await store_.putVertexProperty(vid, anon_label_id_, anon_pid, *pv);
+                                    if (anon_props.size() <= anon_pid)
+                                        anon_props.resize(anon_pid + 1);
+                                    anon_props[anon_pid] = pv;
+                                }
+                            }
+                        }
                         co_await store_.removeVertexLabel(vid, lit->second);
                         if (updated.labels.has_value()) {
                             updated.labels->erase(lit->second);

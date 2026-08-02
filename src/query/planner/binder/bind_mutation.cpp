@@ -2,6 +2,9 @@
 
 #include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
 
+#include <spdlog/spdlog.h>
+#include <unordered_set>
+
 namespace eugraph {
 namespace binder {
 
@@ -66,13 +69,85 @@ bindCreateNodeProperties(const cypher::NodePattern& node, const std::vector<Labe
 
 // ==================== CREATE Binding ====================
 
+namespace {
+
+/// Cypher 语义守卫：检查 CREATE pattern element 是否满足语义约束。
+/// 与 bind_merge.cpp 中 bindMerge 的守卫保持错误码与措辞一致（VariableAlreadyBound /
+/// CreatingVarLength / NoSingleRelationshipType / RequiresDirectedRelationship）。
+/// @p intra_clause_vars  当前 CREATE 子句中已创建的变量（允许复用但不能加 labels/props）
+/// @p prior_create_vars  之前 CREATE 子句创建的变量（允许复用但不能加 labels/props）
+bool validateCreatePattern(const cypher::PatternElement& element, Binder& binder,
+                           const std::unordered_set<std::string>& intra_clause_vars,
+                           const std::unordered_set<std::string>& prior_create_vars) {
+    // Helper: check a variable for re-creation.
+    // - Variables from MATCH/WITH: only allowed as edge endpoints in a chain;
+    //   bare re-creation (no chain) is VariableAlreadyBound.
+    // - Variables from prior CREATEs: reuse is OK without labels/props; adding
+    //   labels/props is VariableAlreadyBound.
+    auto checkNodeVar = [&](const cypher::NodePattern& node_pat, bool has_chain) {
+        if (!node_pat.variable)
+            return true;
+        const auto& var_opt = *node_pat.variable;
+        auto* sym = binder.lookupVariable(var_opt);
+        if (!sym)
+            return true;
+        if (intra_clause_vars.count(var_opt) || prior_create_vars.count(var_opt)) {
+            // Created by another CREATE — reuse is OK, labels/props are not.
+            if (!node_pat.labels.empty() || node_pat.properties.has_value()) {
+                binder.error("VariableAlreadyBound: variable '" + var_opt + "' is already defined in this scope");
+                return false;
+            }
+            return true;
+        }
+        // Bound by MATCH/WITH — allowed only as edge endpoint (has_chain).
+        if (has_chain)
+            return true;
+        binder.error("VariableAlreadyBound: variable '" + var_opt + "' is already defined in this scope");
+        return false;
+    };
+
+    bool has_chain = !element.chain.empty();
+    if (!checkNodeVar(element.node, has_chain))
+        return false;
+
+    for (const auto& [rel_pat, node_pat] : element.chain) {
+        if (rel_pat.range.has_value()) {
+            binder.error("CreatingVarLength: CREATE does not support variable-length relationships");
+            return false;
+        }
+        if (rel_pat.variable.has_value() && binder.lookupVariable(*rel_pat.variable)) {
+            binder.error("VariableAlreadyBound: variable '" + *rel_pat.variable + "' is already defined in this scope");
+            return false;
+        }
+        if (rel_pat.rel_types.size() != 1) {
+            binder.error("NoSingleRelationshipType: CREATE requires exactly one relationship type");
+            return false;
+        }
+        if (rel_pat.direction == cypher::RelationshipDirection::UNDIRECTED) {
+            binder.error("RequiresDirectedRelationship: CREATE requires a directed relationship");
+            return false;
+        }
+        // End node in chain: always a "has_chain" context (it's part of a path)
+        if (!checkNodeVar(node_pat, true))
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
 std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClause& create,
                                                        std::optional<BoundLogicalOperator> child) {
     std::optional<BoundLogicalOperator> current;
+    std::unordered_set<std::string> intra_clause_vars;
 
     for (size_t pi = 0; pi < create.patterns.size(); ++pi) {
         const auto& pp = create.patterns[pi];
         const auto& element = pp.element;
+
+        // 语义守卫
+        if (!validateCreatePattern(element, *this, intra_clause_vars, create_scope_vars_))
+            return std::nullopt;
 
         // Create start node
         std::string start_var;
@@ -93,6 +168,9 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
         } else {
             auto create_node = std::make_unique<BoundCreateNodeOp>();
             create_node->variable = start_var;
+            create_node->label_names = element.node.labels;
+            spdlog::info("[Binder] BoundCreateNodeOp start node var='{}', label_names.size()={}", start_var,
+                         create_node->label_names.size());
             if (start_labels.empty()) {
                 auto anon_id = catalog_.getAnonLabelId();
                 if (anon_id != INVALID_LABEL_ID)
@@ -117,6 +195,8 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
                 create_node->child = std::move(*current);
             }
             current = std::move(create_node);
+            intra_clause_vars.insert(start_var);
+            create_scope_vars_.insert(start_var);
         }
 
         // Mark as CREATE variable so property resolution uses source_labels
@@ -152,8 +232,17 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
             create_edge->label_name = (!rel_pat.rel_types.empty() && edge_label_ids.empty())
                                           ? std::make_optional(rel_pat.rel_types[0])
                                           : std::nullopt;
-            create_edge->src_variable = start_var;
-            create_edge->dst_variable = dst_var;
+            // 按关系方向赋值 src/dst 变量：
+            //   LEFT_TO_RIGHT (a-[]->b): start -> dst
+            //   RIGHT_TO_LEFT (a<-[]-b): dst  -> start
+            //   UNDIRECTED 已由 validateCreatePattern 拦截
+            if (rel_pat.direction == cypher::RelationshipDirection::RIGHT_TO_LEFT) {
+                create_edge->src_variable = dst_var;
+                create_edge->dst_variable = start_var;
+            } else {
+                create_edge->src_variable = start_var;
+                create_edge->dst_variable = dst_var;
+            }
             if (rel_pat.properties) {
                 for (const auto& [prop_name, prop_expr] : rel_pat.properties->entries) {
                     auto bound_val = bindExpression(prop_expr);
@@ -178,8 +267,11 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
                 create_edge->child = std::move(*current);
             } else {
                 // Create target node
+                intra_clause_vars.insert(dst_var);
+                create_scope_vars_.insert(dst_var);
                 auto create_dst = std::make_unique<BoundCreateNodeOp>();
                 create_dst->variable = dst_var;
+                create_dst->label_names = node_pat.labels;
                 if (dst_labels.empty()) {
                     auto anon_id = catalog_.getAnonLabelId();
                     if (anon_id != INVALID_LABEL_ID)
@@ -203,6 +295,8 @@ std::optional<BoundLogicalOperator> Binder::bindCreate(const cypher::CreateClaus
                 create_edge->child = std::move(dst_node_op);
             }
             current = std::move(create_edge);
+            intra_clause_vars.insert(edge_var);
+            create_scope_vars_.insert(edge_var);
 
             start_var = dst_var;
         }
@@ -229,11 +323,18 @@ std::optional<BoundLogicalOperator> Binder::bindSet(const cypher::SetClause& set
                 [&](const auto& ptr) {
                     using Elem = typename std::decay_t<decltype(ptr)>::element_type;
                     if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
-                        // Try to extract variable from object
-                        if (auto* var = std::get_if<std::unique_ptr<cypher::Variable>>(&ptr->object)) {
+                        // 剥离 ParenExpr 包装（处理 `(n).p` 形式）。stripParens 是死代码，
+                        // ParenExpr 会到达 binder，这里手动展开一层。
+                        const cypher::Expression* obj = &ptr->object;
+                        while (auto* paren = std::get_if<std::unique_ptr<cypher::ParenExpr>>(obj)) {
+                            if (!*paren)
+                                return;
+                            obj = &(*paren)->inner;
+                        }
+                        if (auto* var = std::get_if<std::unique_ptr<cypher::Variable>>(obj)) {
                             var_name = (*var)->name;
                             prop_name = ptr->property;
-                        } else if (auto* lc = std::get_if<std::unique_ptr<cypher::LabelCastExpr>>(&ptr->object)) {
+                        } else if (auto* lc = std::get_if<std::unique_ptr<cypher::LabelCastExpr>>(obj)) {
                             if (auto* v = std::get_if<std::unique_ptr<cypher::Variable>>(&(*lc)->object)) {
                                 var_name = (*v)->name;
                                 label_name = (*lc)->label;
