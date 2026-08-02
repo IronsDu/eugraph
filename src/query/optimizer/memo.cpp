@@ -713,7 +713,8 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 for (const auto& agg : val->aggregates) {
                     typename binder::BoundAggregateOp::AggregateItem ca;
                     ca.function_name = agg.function_name;
-                    ca.argument = cloneBoundExpression(agg.argument);
+                    for (const auto& arg : agg.arguments)
+                        ca.arguments.push_back(cloneBoundExpression(arg));
                     ca.alias = agg.alias;
                     ca.result_type = agg.result_type;
                     ca.func_def = agg.func_def;

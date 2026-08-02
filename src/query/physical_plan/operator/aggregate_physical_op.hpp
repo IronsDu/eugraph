@@ -24,7 +24,7 @@ public:
 
     struct AggregateExpr {
         const function::FunctionDef* func_def = nullptr;
-        binder::BoundExpression arg;
+        std::vector<binder::BoundExpression> arguments;
         bool distinct;
         std::string name;
         bool is_internal = false; // accumulated but not output (inner aggregate of complex expression)
@@ -54,7 +54,8 @@ public:
         for (auto& k : group_keys_)
             compiler.compile(k.expr);
         for (auto& a : aggregates_)
-            compiler.compile(a.arg);
+            for (auto& arg : a.arguments)
+                compiler.compile(arg);
     }
     void deriveOutputLayout(const TupleSlotLayout& input_layout) override {
         // Aggregate output = group_keys + aggregates (new slots for each).

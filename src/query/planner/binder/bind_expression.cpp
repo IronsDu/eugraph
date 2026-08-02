@@ -19,7 +19,8 @@ bool isTemporalType(BoundTypeKind k) {
 
 bool isAggregateFunctionName(const std::string& name) {
     return name == "count" || name == "sum" || name == "avg" || name == "min" || name == "max" || name == "collect" ||
-           name == "percentile_cont" || name == "percentile_disc" || name == "st_dev" || name == "st_dev_p";
+           name == "percentile_cont" || name == "percentile_disc" || name == "percentileCont" ||
+           name == "percentileDisc" || name == "st_dev" || name == "st_dev_p";
 }
 
 // Detect aggregate function calls inside a Cypher expression subtree.

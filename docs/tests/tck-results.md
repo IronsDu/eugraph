@@ -42,7 +42,7 @@
 | TypeConversion | 47 | **47** | 0 | 0 | 0.0% | ✅ |
 | Comparison | 72 | **72** | 0 | 0 | 0.0% | ✅ |
 | ExistentialSubqueries | 10 | **2** | 8 | 0 | 80.0% | EXISTS 子查询 |
-| Aggregation | 35 | **17** | 18 | 0 | 51.4% | percentileDisc/Cont 函数未实现 |
+| Aggregation | 35 | **29** | 6 | 0 | 17.1% | 5 个 baseline 失败（Counting loops / Distinct / max-min list/mixed）；scenario [5] 因 pattern comprehension 未实现而 skip |
 | Pattern | 50 | **35** | 15 | 0 | 30.0% | 模式子查询未完善 |
 | List | 185 | **181** | 4 | 0 | 2.2% | Pattern comprehension 未实现 |
 

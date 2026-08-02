@@ -331,7 +331,8 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     seed = combine(seed, hashBoundExpression(gk));
                 for (const auto& a : val->aggregates) {
                     seed = hashBytes(seed, a.function_name);
-                    seed = combine(seed, hashBoundExpression(a.argument));
+                    for (const auto& arg : a.arguments)
+                        seed = combine(seed, hashBoundExpression(arg));
                     seed = hashBytes(seed, a.alias);
                     seed = hashBoundType(seed, a.result_type);
                     seed = hashScalar(seed, reinterpret_cast<uintptr_t>(a.func_def));

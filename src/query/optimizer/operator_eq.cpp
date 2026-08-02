@@ -299,8 +299,11 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     const auto& y = bv->aggregates[i];
                     if (x.function_name != y.function_name)
                         return false;
-                    if (!equalBoundExpression(x.argument, y.argument))
+                    if (x.arguments.size() != y.arguments.size())
                         return false;
+                    for (size_t k = 0; k < x.arguments.size(); ++k)
+                        if (!equalBoundExpression(x.arguments[k], y.arguments[k]))
+                            return false;
                     if (x.alias != y.alias)
                         return false;
                     if (!eqBoundType(x.result_type, y.result_type))

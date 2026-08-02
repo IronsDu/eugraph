@@ -36,8 +36,10 @@ bool ColumnResolver::resolveOperator(BoundLogicalOperator& op, const BindContext
                         return false;
                 }
                 for (auto& agg : val->aggregates) {
-                    if (!resolveExpression(agg.argument, ctx, errors))
-                        return false;
+                    for (auto& arg : agg.arguments) {
+                        if (!resolveExpression(arg, ctx, errors))
+                            return false;
+                    }
                 }
                 return resolveOperator(val->child, ctx, errors);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundSortOp>>) {

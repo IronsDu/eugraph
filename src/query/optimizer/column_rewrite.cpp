@@ -338,7 +338,8 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                     for (auto& k : v->group_keys)
                         ensureSlotsInExpr(k, name_to_slot, alloc);
                     for (auto& agg : v->aggregates)
-                        ensureSlotsInExpr(agg.argument, name_to_slot, alloc);
+                        for (auto& arg : agg.arguments)
+                            ensureSlotsInExpr(arg, name_to_slot, alloc);
                     for (const auto& name : v->output_names)
                         if (!name.empty())
                             ensureSlot(name_to_slot, alloc, name);
@@ -700,7 +701,8 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                     for (const auto& k : v->group_keys)
                         collectExprReqs(k, reqs, resolver);
                     for (const auto& agg : v->aggregates)
-                        collectExprReqs(agg.argument, reqs, resolver);
+                        for (const auto& arg : agg.arguments)
+                            collectExprReqs(arg, reqs, resolver);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (v) {
@@ -1075,7 +1077,8 @@ void rewriteOp(binder::BoundLogicalOperator& op, const PEPlans& plans, const Slo
                     for (auto& k : v->group_keys)
                         rewriteExpr(k, plans, resolver);
                     for (auto& agg : v->aggregates)
-                        rewriteExpr(agg.argument, plans, resolver);
+                        for (auto& arg : agg.arguments)
+                            rewriteExpr(arg, plans, resolver);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 if (v)
