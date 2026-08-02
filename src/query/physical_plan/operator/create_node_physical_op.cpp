@@ -37,6 +37,15 @@ eugraph::Value evaluateExpr(eugraph::compute::VectorizedEvaluator& evaluator,
     return result_col.getValue(0);
 }
 
+uint16_t findPropertyId_(const eugraph::LabelDef& def, const std::string& prop_name) {
+    for (const auto& pd : def.properties) {
+        if (pd.name == prop_name) {
+            return pd.id;
+        }
+    }
+    return UINT16_MAX;
+}
+
 } // namespace
 
 namespace eugraph {
@@ -57,150 +66,184 @@ std::string CreateNodePhysicalOp::toString() const {
     return "CreateNode(variable=" + variable_ + ", labels=[" + s + "])";
 }
 
+void CreateNodePhysicalOp::appendPropExpr_(LabelId lid, uint16_t pid, binder::BoundExpression expr) {
+    // Non-coroutine helper. BoundExpression is a variant of unique_ptrs;
+    // keeping temporaries of it inside a coroutine frame triggers
+    // GCC 13 ICE under -fsanitize=undefined (build_special_member_call at
+    // cp/call.cc:11096). Do the move/insertion here, from a normal stack
+    // frame, where GCC has no trouble.
+    PropExprs single;
+    single.emplace_back(pid, std::move(expr));
+    label_prop_exprs_.emplace_back(lid, std::move(single));
+}
+
 folly::coro::Task<void> CreateNodePhysicalOp::prepare_() {
+    // Thin dispatcher: each phase lives in its own coroutine so GCC 13's
+    // coroutine-frame emission never sees a function with too much state.
+    co_await prepareLabels_();
+    co_await ensureTables_();
+    co_await prepareAnon_();
+    co_return;
+}
+
+folly::coro::Task<void> CreateNodePhysicalOp::loadLabelDef_(LabelId lid) {
+    // Single-purpose helper: the optional<LabelDef> return value of
+    // getLabelDefById is the most complex local we deal with. Pinning it
+    // inside this tiny coroutine keeps it out of every caller's frame.
+    if (lid == INVALID_LABEL_ID) {
+        co_return;
+    }
+    auto def = co_await meta_.getLabelDefById(lid);
+    if (def) {
+        label_defs_[lid] = std::move(*def);
+    }
+    co_return;
+}
+
+folly::coro::Task<void> CreateNodePhysicalOp::createOrGetLabel_(const std::string& name, LabelId& out_lid) {
+    auto existing = co_await meta_.getLabelId(name);
+    if (existing) {
+        out_lid = *existing;
+        co_return;
+    }
+    LabelId lid = co_await meta_.createLabel(name, {});
+    if (lid != INVALID_LABEL_ID) {
+        co_await store_.createLabel(lid);
+        co_await loadLabelDef_(lid);
+    }
+    out_lid = lid;
+    co_return;
+}
+
+folly::coro::Task<void> CreateNodePhysicalOp::registerPropOnLabel_(const std::string& label_name,
+                                                                   const std::string& prop_name) {
+    // Isolate the temporary vector<pair<string, PropertyType>> inside its own
+    // coroutine frame — letting it live in the caller's frame triggers the
+    // GCC 13 build_special_member_call ICE.
+    std::vector<std::pair<std::string, PropertyType>> prop_defs;
+    prop_defs.emplace_back(prop_name, PropertyType::ANY);
+    co_await meta_.addVertexLabelProperties(label_name, prop_defs);
+    co_return;
+}
+
+folly::coro::Task<void> CreateNodePhysicalOp::resolvePropOnLabel_(LabelId lid, const std::string& prop_name,
+                                                                  LabelId& out_lid, uint16_t& out_pid) {
+    out_lid = INVALID_LABEL_ID;
+    out_pid = UINT16_MAX;
+    uint16_t pid = findPropertyId_(label_defs_[lid], prop_name);
+    if (pid == UINT16_MAX) {
+        co_await registerPropOnLabel_(label_defs_[lid].name, prop_name);
+        co_await loadLabelDef_(lid);
+        pid = findPropertyId_(label_defs_[lid], prop_name);
+    }
+    if (pid != UINT16_MAX) {
+        out_lid = lid;
+        out_pid = pid;
+    }
+    co_return;
+}
+
+folly::coro::Task<void> CreateNodePhysicalOp::prepareLabels_() {
     // Phase 0: Auto-create labels that were specified in the AST but were not
-    // in the catalog snapshot at bind time (e.g. CREATE (:NewLabel {...})).
-    // Mirrors how CreateEdgePhysicalOp auto-creates edge labels via label_name.
-    // We do this BEFORE property binding so pending_props can resolve to the
-    // newly created label.
-    if (!label_names_.empty() && label_names_resolved_.exchange(true)) {
-        // Already resolved on a prior chunk — skip.
-    } else if (!label_names_.empty()) {
-        spdlog::info("[CreateNode] Phase 0: auto-creating labels (label_names.size()={}, "
-                     "label_ids.size()={}, pending_props.size()={})",
-                     label_names_.size(), label_ids_.size(), pending_props_.size());
-        std::vector<LabelId> resolved_ids;
-        for (const auto& name : label_names_) {
-            auto existing = co_await meta_.getLabelId(name);
-            LabelId lid = INVALID_LABEL_ID;
-            if (existing) {
-                lid = *existing;
-            } else {
-                lid = co_await meta_.createLabel(name, {});
-            }
-            if (lid == INVALID_LABEL_ID)
-                continue;
-            // Ensure data table exists and def is loaded.
-            co_await store_.createLabel(lid);
-            auto def = co_await meta_.getLabelDefById(lid);
-            if (def)
-                label_defs_[lid] = std::move(*def);
+    // in the catalog snapshot at bind time.
+    if (label_names_.empty() || label_names_resolved_.exchange(true)) {
+        co_return;
+    }
+    spdlog::info("[CreateNode] Phase 0: auto-creating labels (label_names.size()={}, "
+                 "label_ids.size()={}, pending_props.size()={})",
+                 label_names_.size(), label_ids_.size(), pending_props_.size());
+    std::vector<LabelId> resolved_ids;
+    for (const auto& name : label_names_) {
+        LabelId lid = INVALID_LABEL_ID;
+        co_await createOrGetLabel_(name, lid);
+        if (lid != INVALID_LABEL_ID) {
             resolved_ids.push_back(lid);
         }
-        // Replace the placeholder anon id with the freshly created label IDs,
-        // but only if the binder had fallen back to anon (i.e. label_ids_
-        // contained exactly the anon id because no labels were resolved).
-        if (!resolved_ids.empty() && label_ids_.size() == 1) {
-            auto it = label_defs_.find(label_ids_[0]);
-            bool was_anon = (it != label_defs_.end() && it->second.name == kAnonLabelName);
-            if (was_anon) {
-                label_ids_.clear();
-            }
-        }
-        for (auto lid : resolved_ids) {
-            if (std::find(label_ids_.begin(), label_ids_.end(), lid) == label_ids_.end())
-                label_ids_.push_back(lid);
-        }
-
-        // Re-resolve pending_props against the newly created labels so they
-        // attach to the actual label rather than __anon__. We register each
-        // property on every resolved label (single-label CREATE — the common
-        // case — sees one label; multi-label would register on all).
-        if (!resolved_ids.empty() && !pending_props_.empty()) {
-            spdlog::info("[CreateNode] Phase 0b: re-resolving {} pending props against {} new labels",
-                         pending_props_.size(), resolved_ids.size());
-            std::vector<std::pair<std::string, binder::BoundExpression>> still_pending;
-            for (auto& [prop_name, expr] : pending_props_) {
-                for (auto lid : resolved_ids) {
-                    auto* ld_ptr = &label_defs_[lid];
-                    // Check if property already exists on this label
-                    uint16_t existing_pid = UINT16_MAX;
-                    for (const auto& pd : ld_ptr->properties) {
-                        if (pd.name == prop_name) {
-                            existing_pid = pd.id;
-                            break;
-                        }
-                    }
-                    if (existing_pid == UINT16_MAX) {
-                        // Determine type from expression at runtime — defer to ANY for now.
-                        co_await meta_.addVertexLabelProperties(ld_ptr->name, {{prop_name, PropertyType::ANY}});
-                        auto updated = co_await meta_.getLabelDefById(lid);
-                        if (updated) {
-                            label_defs_[lid] = std::move(*updated);
-                            ld_ptr = &label_defs_[lid];
-                            for (const auto& pd : ld_ptr->properties) {
-                                if (pd.name == prop_name) {
-                                    existing_pid = pd.id;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if (existing_pid != UINT16_MAX) {
-                        PropExprs single;
-                        single.emplace_back(existing_pid, std::move(expr));
-                        label_prop_exprs_.emplace_back(lid, std::move(single));
-                    } else {
-                        still_pending.emplace_back(prop_name, std::move(expr));
-                    }
-                    break; // each prop_name registers once
-                }
-            }
-            pending_props_ = std::move(still_pending);
+    }
+    if (!resolved_ids.empty() && label_ids_.size() == 1) {
+        auto it = label_defs_.find(label_ids_[0]);
+        bool was_anon = (it != label_defs_.end() && it->second.name == kAnonLabelName);
+        if (was_anon) {
+            label_ids_.clear();
         }
     }
+    for (auto lid : resolved_ids) {
+        if (std::find(label_ids_.begin(), label_ids_.end(), lid) == label_ids_.end())
+            label_ids_.push_back(lid);
+    }
 
+    // Phase 0b: re-resolve pending_props in place — no still_pending buffer.
+    if (resolved_ids.empty() || pending_props_.empty()) {
+        co_return;
+    }
+    spdlog::info("[CreateNode] Phase 0b: re-resolving {} pending props against {} new labels", pending_props_.size(),
+                 resolved_ids.size());
+    size_t write_idx = 0;
+    for (size_t read_idx = 0; read_idx < pending_props_.size(); ++read_idx) {
+        const std::string& prop_name = pending_props_[read_idx].first;
+        LabelId chosen_lid = INVALID_LABEL_ID;
+        uint16_t chosen_pid = UINT16_MAX;
+        for (auto lid : resolved_ids) {
+            LabelId resolved_lid = INVALID_LABEL_ID;
+            uint16_t resolved_pid = UINT16_MAX;
+            co_await resolvePropOnLabel_(lid, prop_name, resolved_lid, resolved_pid);
+            if (resolved_lid != INVALID_LABEL_ID) {
+                chosen_lid = resolved_lid;
+                chosen_pid = resolved_pid;
+                break;
+            }
+        }
+        if (chosen_lid != INVALID_LABEL_ID) {
+            appendPropExpr_(chosen_lid, chosen_pid, std::move(pending_props_[read_idx].second));
+        } else {
+            if (write_idx != read_idx) {
+                pending_props_[write_idx] = std::move(pending_props_[read_idx]);
+            }
+            ++write_idx;
+        }
+    }
+    pending_props_.resize(write_idx);
+    co_return;
+}
+
+folly::coro::Task<void> CreateNodePhysicalOp::ensureTables_() {
     // Phase 1: ensure all label data tables exist
     for (auto lid : label_ids_) {
         if (lid == INVALID_LABEL_ID)
             continue;
-        auto it = label_defs_.find(lid);
-        if (it == label_defs_.end()) {
-            auto def = co_await meta_.getLabelDefById(lid);
-            if (def) {
-                label_defs_[lid] = std::move(*def);
-            }
+        if (label_defs_.find(lid) == label_defs_.end()) {
+            co_await loadLabelDef_(lid);
         }
-        // Ensure data table exists
         co_await store_.createLabel(lid);
     }
+    co_return;
+}
 
+folly::coro::Task<void> CreateNodePhysicalOp::prepareAnon_() {
     // Phase 1b: __anon__ attribute lightweight registration (only once).
-    // Triggers on either pending props (label-free property bag) or a fully
-    // bare CREATE () — the latter still needs __anon__ so the vertex has at
-    // least one label-reverse key and is discoverable by AllNodeScan.
-    if (!anon_registered_ && (!pending_props_.empty() || label_ids_.empty())) {
-        LabelId anon_lid = getAnonLabelId(label_defs_);
-        if (anon_lid == INVALID_LABEL_ID) {
-            // Auto-create __anon__ label if it doesn't exist
-            anon_lid = co_await meta_.createLabel(std::string(kAnonLabelName), {});
-            if (anon_lid != INVALID_LABEL_ID) {
-                co_await store_.createLabel(anon_lid);
-                auto def = co_await meta_.getLabelDefById(anon_lid);
-                if (def)
-                    label_defs_[anon_lid] = std::move(*def);
-            }
-        }
-        if (anon_lid != INVALID_LABEL_ID) {
-            for (auto& [prop_name, expr] : pending_props_) {
-                uint16_t pid = co_await meta_.getOrCreateAnonPropId(prop_name, PropertyType::ANY);
-                resolved_pending_.emplace_back(anon_lid, pid, std::move(expr));
-            }
-            auto updated_def = co_await meta_.getLabelDefById(anon_lid);
-            if (updated_def) {
-                label_defs_[anon_lid] = std::move(*updated_def);
-            }
-            // Bare CREATE () with no labels and no props: still assign __anon__
-            // so the vertex is persisted with a label-reverse key and becomes
-            // discoverable by AllNodeScan / getVertexLabels.
-            if (label_ids_.empty()) {
-                label_ids_.push_back(anon_lid);
-                co_await store_.createLabel(anon_lid);
-            }
-        }
-        anon_registered_ = true;
+    if (anon_registered_ || (pending_props_.empty() && !label_ids_.empty())) {
+        co_return;
     }
-
+    LabelId anon_lid = getAnonLabelId(label_defs_);
+    if (anon_lid == INVALID_LABEL_ID) {
+        anon_lid = co_await meta_.createLabel(std::string(kAnonLabelName), {});
+        if (anon_lid != INVALID_LABEL_ID) {
+            co_await store_.createLabel(anon_lid);
+            co_await loadLabelDef_(anon_lid);
+        }
+    }
+    if (anon_lid != INVALID_LABEL_ID) {
+        for (auto& [prop_name, expr] : pending_props_) {
+            uint16_t pid = co_await meta_.getOrCreateAnonPropId(prop_name, PropertyType::ANY);
+            resolved_pending_.emplace_back(anon_lid, pid, std::move(expr));
+        }
+        co_await loadLabelDef_(anon_lid);
+        if (label_ids_.empty()) {
+            label_ids_.push_back(anon_lid);
+            co_await store_.createLabel(anon_lid);
+        }
+    }
+    anon_registered_ = true;
     co_return;
 }
 
