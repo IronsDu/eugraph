@@ -197,8 +197,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         }
                         if (pid == UINT16_MAX) {
                             PropertyValue pv_init = valueToPropertyValue(v);
-                            co_await meta_.addEdgeLabelProperties(
-                                eldef.name, {{item.prop_name, propertyValueToPropertyType(pv_init)}});
+                            std::vector<std::pair<std::string, PropertyType>> prop_defs_init;
+                            prop_defs_init.emplace_back(item.prop_name, propertyValueToPropertyType(pv_init));
+                            co_await meta_.addEdgeLabelProperties(eldef.name, prop_defs_init);
                             auto updated = co_await meta_.getEdgeLabelDefById(elid);
                             if (updated) {
                                 edge_label_defs_[elid] = std::move(*updated);
@@ -282,8 +283,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             }
                             if (entry_pid == UINT16_MAX) {
                                 PropertyValue pv_reg = valueToPropertyValue(entry_val);
-                                co_await meta_.addEdgeLabelProperties(eldef.name,
-                                                                      {{key, propertyValueToPropertyType(pv_reg)}});
+                                std::vector<std::pair<std::string, PropertyType>> prop_defs_reg;
+                                prop_defs_reg.emplace_back(key, propertyValueToPropertyType(pv_reg));
+                                co_await meta_.addEdgeLabelProperties(eldef.name, prop_defs_reg);
                                 auto updated = co_await meta_.getEdgeLabelDefById(elid);
                                 if (updated) {
                                     edge_label_defs_[elid] = std::move(*updated);
@@ -440,8 +442,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             if (target_lid != INVALID_LABEL_ID) {
                                 auto def_it = label_defs_.find(target_lid);
                                 if (def_it != label_defs_.end()) {
-                                    co_await meta_.addVertexLabelProperties(
-                                        def_it->second.name, {{item.prop_name, propertyValueToPropertyType(pv)}});
+                                    std::vector<std::pair<std::string, PropertyType>> prop_defs_new;
+                                    prop_defs_new.emplace_back(item.prop_name, propertyValueToPropertyType(pv));
+                                    co_await meta_.addVertexLabelProperties(def_it->second.name, prop_defs_new);
                                     auto updated = co_await meta_.getLabelDefById(target_lid);
                                     uint16_t new_pid = UINT16_MAX;
                                     if (updated) {
@@ -627,8 +630,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             if (target_lid != INVALID_LABEL_ID) {
                                 auto def_it = label_defs_.find(target_lid);
                                 if (def_it != label_defs_.end()) {
-                                    co_await meta_.addVertexLabelProperties(def_it->second.name,
-                                                                            {{key, propertyValueToPropertyType(pv)}});
+                                    std::vector<std::pair<std::string, PropertyType>> prop_defs_key;
+                                    prop_defs_key.emplace_back(key, propertyValueToPropertyType(pv));
+                                    co_await meta_.addVertexLabelProperties(def_it->second.name, prop_defs_key);
                                     auto updated = co_await meta_.getLabelDefById(target_lid);
                                     uint16_t new_pid = UINT16_MAX;
                                     if (updated) {
