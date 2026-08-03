@@ -555,6 +555,8 @@ inline std::string expressionToString(const Expression& expr) {
                 return opStr + expressionToString(ptr->operand);
             } else if constexpr (std::is_same_v<OpType, FunctionCall>) {
                 std::string r = ptr->name + "(";
+                if (ptr->distinct)
+                    r += "DISTINCT ";
                 if (ptr->args.empty() && ptr->name == "count") {
                     r += "*";
                 } else {
