@@ -94,10 +94,14 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
 
                 // count(*) accepts monostate (null) literal; skip nulls for other aggregates.
                 // count(*) is detected by variadic flag + literal null in arguments[0].
+                // collect() is the exception — it must include nulls in its
+                // output list (Pattern2 [4]). DISTINCT always skips nulls
+                // (Aggregation8 [3][4]) regardless of the function's keeps_nulls flag.
                 bool is_count_star = (agg.func_def->has_variadic_args && !agg.arguments.empty() &&
                                       std::holds_alternative<binder::BoundLiteral>(agg.arguments[0]) &&
                                       isNull(std::get<binder::BoundLiteral>(agg.arguments[0]).value));
-                if (!is_count_star && !vals.empty() && isNull(vals[0]))
+                if (!is_count_star && !vals.empty() && isNull(vals[0]) &&
+                    !(agg.func_def->keeps_nulls && !agg.distinct))
                     continue;
 
                 // DISTINCT dedup before update: keyed on the first argument (the value).

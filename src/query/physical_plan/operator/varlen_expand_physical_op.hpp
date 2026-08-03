@@ -21,23 +21,16 @@ namespace eugraph {
 namespace compute {
 
 struct EdgeVisitKey {
-    VertexId src_id;
-    EdgeLabelId edge_label_id;
-    VertexId dst_id;
-    uint64_t seq;
+    EdgeId edge_id;
 
     bool operator==(const EdgeVisitKey& o) const noexcept {
-        return src_id == o.src_id && edge_label_id == o.edge_label_id && dst_id == o.dst_id && seq == o.seq;
+        return edge_id == o.edge_id;
     }
 };
 
 struct EdgeVisitKeyHash {
     size_t operator()(const EdgeVisitKey& k) const noexcept {
-        size_t h = k.src_id;
-        h ^= std::hash<uint64_t>{}(k.edge_label_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        h ^= std::hash<uint64_t>{}(k.dst_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        h ^= std::hash<uint64_t>{}(k.seq) + 0x9e3779b9 + (h << 6) + (h >> 2);
-        return h;
+        return std::hash<EdgeId>{}(k.edge_id);
     }
 };
 

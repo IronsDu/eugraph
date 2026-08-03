@@ -14,6 +14,7 @@
 #include "query/planner/logical_plan/operator/bound_delete_op.hpp"
 #include "query/planner/logical_plan/operator/bound_filter_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_set_op.hpp"
@@ -122,6 +123,7 @@ template <typename OpRef, typename Visit> void forEachChild(OpRef&& op, Visit&& 
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
                     visit(v->left);
@@ -440,6 +442,18 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                 if (v) {
                     allocateSlotsInOp(v->left, name_to_slot, alloc);
                     allocateSlotsInOp(v->right, name_to_slot, alloc);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                if (v) {
+                    allocateSlotsInOp(v->left, name_to_slot, alloc);
+                    allocateSlotsInOp(v->right, name_to_slot, alloc);
+                    // Output list columns: register each output slot under its
+                    // internal name so downstream rewrites can resolve refs to
+                    // the precomputed list column.
+                    for (auto& out : v->outputs) {
+                        if (out.slot_id != binder::INVALID_SLOT_ID && !out.name.empty())
+                            name_to_slot[out.name] = out.slot_id;
+                    }
                 }
             }
         },
@@ -1045,6 +1059,14 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 val.slot_id = target;
                 val.column_index = target;
                 return true;
+            } else if constexpr (std::is_same_v<T, binder::BoundPatternComprehension>) {
+                // Hoisting left a placeholder pointing at the precomputed
+                // list column. Rewrite it to a BoundColumnRef so the evaluator
+                // treats it as an ordinary column read.
+                if (val.output_slot == binder::INVALID_SLOT_ID)
+                    return false;
+                expr = binder::BoundColumnRef{0, val.result_type, val.output_name, val.output_slot};
+                return true;
             }
             // Variants with only recursion (no leaf rewrite) fall through;
             // their children are visited by forEachSubExpr below.
@@ -1407,6 +1429,7 @@ void collectAliasSlotMapOp(const binder::BoundLogicalOperator& op, AliasSlotMap&
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (v) {
                     collectAliasSlotMapOp(v->left, alias_map, name_to_slot);

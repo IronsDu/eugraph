@@ -19,6 +19,7 @@
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
@@ -84,6 +85,15 @@ bool equalBoundExpression(const binder::BoundExpression& a, const binder::BoundE
                 return av.name == bv.name && eqBoundType(av.type, bv.type);
             } else if constexpr (std::is_same_v<T, binder::BoundParameter>) {
                 return av.name == bv.name && eqBoundType(av.expected_type, bv.expected_type);
+            } else if constexpr (std::is_same_v<T, binder::BoundPatternComprehension>) {
+                if (av.output_slot != bv.output_slot)
+                    return false;
+                if (av.output_name != bv.output_name)
+                    return false;
+                if (!eqBoundType(av.result_type, bv.result_type))
+                    return false;
+                // ast pointer identity — same AST node means same expression
+                return av.ast == bv.ast;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
                 if (!av || !bv)
                     return !av && !bv;
@@ -548,6 +558,22 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->correlation != bv->correlation)
                     return false;
                 return av->anti == bv->anti;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                if (!av || !bv)
+                    return !av && !bv;
+                if (av->correlation != bv->correlation)
+                    return false;
+                if (av->outputs.size() != bv->outputs.size())
+                    return false;
+                for (size_t i = 0; i < av->outputs.size(); ++i) {
+                    if (av->outputs[i].slot_id != bv->outputs[i].slot_id)
+                        return false;
+                    if (av->outputs[i].name != bv->outputs[i].name)
+                        return false;
+                    if (!eqBoundType(av->outputs[i].element_type, bv->outputs[i].element_type))
+                        return false;
+                }
+                return true;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (!av || !bv)
                     return !av && !bv;

@@ -28,6 +28,7 @@
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
@@ -198,6 +199,10 @@ void collectFromExpr(const binder::BoundExpression& expr, VarRequirements& dst, 
                 collectFromExpr(val->list_expr, dst, catalog);
                 if (val->where_pred)
                     collectFromExpr(*val->where_pred, dst, catalog);
+            } else if constexpr (std::is_same_v<T, binder::BoundPatternComprehension>) {
+                // After hoisting this placeholder points at a precomputed
+                // list column; before rewrite it carries no property access.
+                return;
             }
         },
         expr);
@@ -299,6 +304,11 @@ VarRequirements collectOpRequirements(const binder::BoundLogicalOperator& op, co
                 mergeVarRequirements(dst, collectOpRequirements(val->left, catalog));
                 mergeVarRequirements(dst, collectOpRequirements(val->right, catalog));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
+                if (!val)
+                    return;
+                mergeVarRequirements(dst, collectOpRequirements(val->left, catalog));
+                mergeVarRequirements(dst, collectOpRequirements(val->right, catalog));
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 if (!val)
                     return;
                 mergeVarRequirements(dst, collectOpRequirements(val->left, catalog));

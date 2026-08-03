@@ -80,6 +80,16 @@ struct FunctionDef {
     AggUpdateFn agg_update;
     AggFinalizeFn agg_finalize;
 
+    /// True if this aggregate should receive null values instead of having
+    /// them filtered out by the physical operator before agg_update is called.
+    /// collect() is the canonical example: per openCypher TCK (Pattern2 [4]),
+    /// collect must include nulls so that [(n)-->() | m.prop] produces [null]
+    /// when a matched element lacks the projected property. Aggregates that
+    /// compute over values (count, sum, avg, min, max) leave this false so
+    /// the standard null-skipping path applies. DISTINCT always filters
+    /// nulls regardless of this flag (Aggregation8 [3][4]).
+    bool keeps_nulls = false;
+
     /// Unique key for overload resolution: name + arg_types
     std::string signatureKey() const {
         std::string key = name + "(";

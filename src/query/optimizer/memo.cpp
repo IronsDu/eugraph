@@ -29,6 +29,7 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 // Binary operators have left/right, not a single child — skip
             } else {
@@ -56,6 +57,7 @@ int getChildCount(const binder::BoundLogicalOperator& op) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 return 2;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
@@ -134,6 +136,7 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                     return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
@@ -174,6 +177,14 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
             child_groups.push_back(copyIn(left));
             auto right = std::move(lj->right);
             lj->right = binder::BoundScanOp{};
+            child_groups.push_back(copyIn(right));
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(op)) {
+            auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(op);
+            auto left = std::move(pc->left);
+            pc->left = binder::BoundScanOp{};
+            child_groups.push_back(copyIn(left));
+            auto right = std::move(pc->right);
+            pc->right = binder::BoundScanOp{};
             child_groups.push_back(copyIn(right));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundUnionOp>>(op)) {
             auto& uo = std::get<std::unique_ptr<binder::BoundUnionOp>>(op);
@@ -248,6 +259,10 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
             auto& uo = std::get<std::unique_ptr<binder::BoundUnionOp>>(result);
             uo->left = copyOut(expr.child_groups[0]);
             uo->right = copyOut(expr.child_groups[1]);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result)) {
+            auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result);
+            pc->left = copyOut(expr.child_groups[0]);
+            pc->right = copyOut(expr.child_groups[1]);
         }
     }
 
@@ -290,6 +305,10 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid, const PhysProp& pro
                 auto& uo = std::get<std::unique_ptr<binder::BoundUnionOp>>(result);
                 uo->left = copyOut(expr.child_groups[0], PhysProp{});
                 uo->right = copyOut(expr.child_groups[1], PhysProp{});
+            } else if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result)) {
+                auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result);
+                pc->left = copyOut(expr.child_groups[0], PhysProp{});
+                pc->right = copyOut(expr.child_groups[1], PhysProp{});
             }
         }
         return result;
@@ -680,6 +699,17 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 auto c = std::make_unique<binder::BoundUnionOp>();
                 c->all = val->all;
                 return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                auto c = std::make_unique<binder::BoundPatternComprehensionApplyOp>();
+                c->correlation = val->correlation;
+                for (const auto& out : val->outputs) {
+                    binder::BoundPatternComprehensionApplyOp::Output co;
+                    co.slot_id = out.slot_id;
+                    co.name = out.name;
+                    co.element_type = out.element_type;
+                    c->outputs.push_back(std::move(co));
+                }
+                return c;
             }
             // Operators with BoundExpression — clone expressions, skip child
             else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
@@ -818,7 +848,9 @@ binder::BoundExpression cloneBoundExpression(const binder::BoundExpression& expr
             using T = std::decay_t<decltype(val)>;
             // Value types: trivially copyable
             if constexpr (std::is_same_v<T, binder::BoundLiteral> || std::is_same_v<T, binder::BoundColumnRef> ||
-                          std::is_same_v<T, binder::BoundVariableRef> || std::is_same_v<T, binder::BoundParameter>) {
+                          std::is_same_v<T, binder::BoundVariableRef> || std::is_same_v<T, binder::BoundParameter> ||
+                          std::is_same_v<T, binder::BoundPatternComprehension>) {
+                // ast pointer is non-owning — shallow copy is safe.
                 return val;
             }
             // unique_ptr types that need deep cloning for nested BoundExpressions

@@ -2,9 +2,6 @@
 #include "common/types/graph_types.hpp"
 #include "query/dataset/row.hpp"
 
-#include <algorithm>
-#include <unordered_set>
-
 namespace eugraph {
 namespace compute {
 
@@ -46,6 +43,12 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
     } else if (direction_ == cypher::RelationshipDirection::UNDIRECTED) {
         dir = Direction::BOTH;
     }
+    // For UNDIRECTED, we split BOTH into OUT then IN scans so each EdgeKey
+    // carries the physical src/dst of the stored edge. Scanning both lists
+    // in one call (Direction::BOTH) merges entries without per-edge
+    // direction info, forcing Expand to guess and producing wrong path
+    // rendering (<-[:T]- vs -[:T]->) for undirected traversals.
+    bool split_undirected = (dir == Direction::BOTH);
 
     std::vector<std::optional<EdgeLabelId>> scan_filters;
     if (!label_filters_.has_value()) {
@@ -69,15 +72,11 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             EdgeLabelId edge_label_id;
             uint64_t seq;
             // For UNDIRECTED split: true when the edge was found via the OUT
-            // adjacency list (physical src = current vertex, dst = neighbor);
-            // false when found via IN (physical src = neighbor, dst = current).
+            // adjacency list (physical src = liker, dst = neighbor); false
+            // when found via IN (physical src = neighbor, dst = liker).
             bool physical_out = true;
         };
         std::vector<EdgeEntry> edges;
-
-        // For UNDIRECTED, split BOTH into OUT then IN scans so each EdgeKey
-        // carries the correct physical src/dst of the stored edge.
-        bool split_undirected = (dir == Direction::BOTH);
 
         auto scanOneDirection = [&](VertexId src_id, size_t src_row, Direction scan_dir) -> folly::coro::Task<void> {
             for (const auto& label_filter : scan_filters) {
@@ -122,52 +121,10 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 continue;
 
             if (split_undirected) {
-                size_t before_out = edges.size();
                 co_await scanOneDirection(src_id, src_row, Direction::OUT);
-                // For self-loops the same edge appears in both OUT and IN
-                // adjacency. Track seen edge ids from the current row's OUT
-                // scan only — cross-row dedup would incorrectly discard
-                // undirected matches from different source vertices.
-                std::unordered_set<EdgeId> seen;
-                for (size_t i = before_out; i < edges.size(); ++i)
-                    seen.insert(edges[i].edge_id);
-                size_t before_in = edges.size();
                 co_await scanOneDirection(src_id, src_row, Direction::IN);
-                // Remove self-loop duplicates added by the IN scan.
-                edges.erase(std::remove_if(edges.begin() + static_cast<long>(before_in), edges.end(),
-                                           [&seen](const EdgeEntry& e) {
-                                               if (seen.count(e.edge_id))
-                                                   return true;
-                                               seen.insert(e.edge_id);
-                                               return false;
-                                           }),
-                            edges.end());
             } else {
-                // Inline the scan loop directly for directed queries to avoid
-                // allocating a folly::coro::Task per source vertex. On large
-                // graphs (e.g. 7251 nodes in Return6 TCK stress test) the extra
-                // coroutine frames overflow the ASAN fake stack.
-                for (const auto& label_filter : scan_filters) {
-                    auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
-                    while (auto edge_batch = co_await edge_gen.next()) {
-                        for (const auto& entry : *edge_batch) {
-                            if (!dst_label_ids_.empty()) {
-                                auto labels = co_await store_.getVertexLabels(entry.neighbor_id);
-                                bool ok = true;
-                                for (LabelId need : dst_label_ids_) {
-                                    if (labels.find(need) == labels.end()) {
-                                        ok = false;
-                                        break;
-                                    }
-                                }
-                                if (!ok)
-                                    continue;
-                            }
-                            edges.push_back(
-                                {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, true});
-                        }
-                    }
-                }
+                co_await scanOneDirection(src_id, src_row, dir);
             }
         }
 
@@ -225,8 +182,11 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     else if (std::holds_alternative<VertexRef>(val))
                         sid = std::get<VertexRef>(val).id;
                 }
-                // EdgeKey src/dst must reflect the physically stored edge
-                // direction so path rendering is correct for undirected traversals.
+                // EdgeKey.src_id / dst_id must reflect the physically stored
+                // edge direction so path rendering (`<-[:T]-` vs `-[:T]->`)
+                // is correct for undirected traversals. For Direction::IN
+                // hits during an UNDIRECTED scan, the physical src is the
+                // neighbor and the physical dst is the current vertex.
                 VertexId physical_src = edges[i].physical_out ? sid : edges[i].dst_id;
                 VertexId physical_dst = edges[i].physical_out ? edges[i].dst_id : sid;
                 EdgeKey ek{edges[i].edge_id, physical_src, physical_dst, edges[i].edge_label_id,

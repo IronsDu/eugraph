@@ -5,6 +5,7 @@
 #include "query/planner/bound_expression/bound_expression_fwd.hpp"
 #include "query/planner/bound_logical_plan_fwd.hpp"
 #include "query/planner/bound_type.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
 
 #include <string>
 #include <vector>
@@ -82,6 +83,8 @@ private:
     LogProp deriveBinaryJoin(const binder::BoundBinaryJoinOp& op, const LogProp& left, const LogProp& right) const;
     LogProp deriveLeftJoin(const binder::BoundLeftJoinOp& op, const LogProp& left, const LogProp& right) const;
     LogProp deriveSemiJoin(const binder::BoundSemiJoinOp& op, const LogProp& left, const LogProp& right) const;
+    LogProp derivePatternComprehensionApply(const binder::BoundPatternComprehensionApplyOp& op, const LogProp& left,
+                                            const LogProp& /*right*/) const;
     LogProp deriveUnion(const binder::BoundUnionOp& op, const LogProp& left, const LogProp& right) const;
     LogProp derivePassthrough(const LogProp& input) const;
 

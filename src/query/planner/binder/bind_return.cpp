@@ -123,6 +123,190 @@ static bool hasAggregate(const cypher::Expression& expr) {
         expr);
 }
 
+// ==================== Pattern Comprehension Hoisting ====================
+
+// Walk a Cypher AST and collect pointers to every PatternComprehension node.
+// Used to drive the hoisting pass that turns each comprehension into a
+// BoundPatternComprehensionApplyOp stacked above the input child.
+static void collectPatternComprehensionsAST(const cypher::Expression& expr,
+                                            std::vector<const cypher::PatternComprehension*>& out) {
+    std::visit(
+        [&](const auto& ptr) {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                out.push_back(ptr.get());
+                // The projection / where_pred could in turn contain nested
+                // pattern comprehensions; recurse to be safe.
+                if (ptr->projection)
+                    collectPatternComprehensionsAST(*ptr->projection, out);
+                if (ptr->where_pred)
+                    collectPatternComprehensionsAST(*ptr->where_pred, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                collectPatternComprehensionsAST(ptr->left, out);
+                collectPatternComprehensionsAST(ptr->right, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                collectPatternComprehensionsAST(ptr->operand, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    collectPatternComprehensionsAST(arg, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                collectPatternComprehensionsAST(ptr->object, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                collectPatternComprehensionsAST(ptr->list, out);
+                collectPatternComprehensionsAST(ptr->index, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                collectPatternComprehensionsAST(ptr->list, out);
+                if (ptr->from)
+                    collectPatternComprehensionsAST(*ptr->from, out);
+                if (ptr->to)
+                    collectPatternComprehensionsAST(*ptr->to, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject)
+                    collectPatternComprehensionsAST(*ptr->subject, out);
+                for (const auto& [w, t] : ptr->when_thens) {
+                    collectPatternComprehensionsAST(w, out);
+                    collectPatternComprehensionsAST(t, out);
+                }
+                if (ptr->else_expr)
+                    collectPatternComprehensionsAST(*ptr->else_expr, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements)
+                    collectPatternComprehensionsAST(e, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries)
+                    collectPatternComprehensionsAST(v, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
+                                 std::is_same_v<Elem, cypher::NoneExpr> || std::is_same_v<Elem, cypher::SingleExpr>) {
+                collectPatternComprehensionsAST(ptr->list_expr, out);
+                if (ptr->where_pred)
+                    collectPatternComprehensionsAST(*ptr->where_pred, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                collectPatternComprehensionsAST(ptr->list_expr, out);
+                if (ptr->where_pred)
+                    collectPatternComprehensionsAST(*ptr->where_pred, out);
+                if (ptr->projection)
+                    collectPatternComprehensionsAST(*ptr->projection, out);
+            }
+        },
+        expr);
+}
+
+// Patch every BoundPatternComprehension placeholder in a bound expression
+// tree with the slot/name/type it should resolve to. The placeholder was
+// created with only an AST pointer; the hoisting pass later learned where
+// the corresponding Apply op emits its list column. We mutate in place
+// because the placeholder is a value-type variant member.
+static void patchPatternComprehensionPlaceholders(
+    binder::BoundExpression& expr,
+    const std::unordered_map<const cypher::PatternComprehension*,
+                             std::tuple<binder::SlotId, std::string, binder::BoundType>>& patch_map) {
+    std::visit(
+        [&](auto& ptr) {
+            using T = std::decay_t<decltype(ptr)>;
+            if constexpr (std::is_same_v<T, binder::BoundPatternComprehension>) {
+                auto it = patch_map.find(ptr.ast);
+                if (it != patch_map.end()) {
+                    ptr.output_slot = std::get<0>(it->second);
+                    ptr.output_name = std::get<1>(it->second);
+                    ptr.result_type = std::move(std::get<2>(it->second));
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
+                patchPatternComprehensionPlaceholders(ptr->left, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->right, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
+                patchPatternComprehensionPlaceholders(ptr->operand, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                for (auto& arg : ptr->args)
+                    patchPatternComprehensionPlaceholders(arg, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
+                patchPatternComprehensionPlaceholders(ptr->object, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
+                patchPatternComprehensionPlaceholders(ptr->object, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
+                for (auto& elem : ptr->elements)
+                    patchPatternComprehensionPlaceholders(elem, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
+                for (auto& [k, v] : ptr->entries)
+                    patchPatternComprehensionPlaceholders(v, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
+                if (ptr->subject)
+                    patchPatternComprehensionPlaceholders(*ptr->subject, patch_map);
+                for (auto& [w, t] : ptr->when_thens) {
+                    patchPatternComprehensionPlaceholders(w, patch_map);
+                    patchPatternComprehensionPlaceholders(t, patch_map);
+                }
+                if (ptr->else_expr)
+                    patchPatternComprehensionPlaceholders(*ptr->else_expr, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
+                patchPatternComprehensionPlaceholders(ptr->list, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->index, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
+                patchPatternComprehensionPlaceholders(ptr->list, patch_map);
+                if (ptr->from)
+                    patchPatternComprehensionPlaceholders(*ptr->from, patch_map);
+                if (ptr->to)
+                    patchPatternComprehensionPlaceholders(*ptr->to, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundAnyExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundNoneExpr>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSingleExpr>>) {
+                patchPatternComprehensionPlaceholders(ptr->list_expr, patch_map);
+                if (ptr->where_pred)
+                    patchPatternComprehensionPlaceholders(*ptr->where_pred, patch_map);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>>) {
+                patchPatternComprehensionPlaceholders(ptr->list_expr, patch_map);
+                if (ptr->where_pred)
+                    patchPatternComprehensionPlaceholders(*ptr->where_pred, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->projection, patch_map);
+            }
+        },
+        expr);
+}
+
+// Hoist every PatternComprehension referenced from `items` (and optionally
+// `order_by_items`) above `child` as a stack of BoundPatternComprehensionApplyOp
+// nodes. Returns the new top operator and fills `patch_map` so the caller can
+// subsequently rewrite the placeholders in bound projection expressions.
+//
+// `Item` must have `.expr` of type cypher::Expression. We accept a generic
+// template so the same helper serves RETURN items and WITH items.
+template <typename Item>
+bool hoistPatternComprehensions(
+    Binder& binder, BoundLogicalOperator& child, const std::vector<Item>& items,
+    const std::vector<cypher::OrderBy::SortItem>* order_by_items,
+    std::unordered_map<const cypher::PatternComprehension*, std::tuple<binder::SlotId, std::string, binder::BoundType>>&
+        patch_map) {
+    std::vector<const cypher::PatternComprehension*> pc_asts;
+    for (const auto& item : items)
+        collectPatternComprehensionsAST(item.expr, pc_asts);
+    if (order_by_items) {
+        for (const auto& si : *order_by_items)
+            collectPatternComprehensionsAST(si.expr, pc_asts);
+    }
+    if (pc_asts.empty())
+        return true;
+
+    // Dedupe by pointer (same AST node referenced twice would otherwise hoist
+    // twice; TCK never does this, but cheap to guard).
+    std::set<const cypher::PatternComprehension*> seen;
+    for (const auto* pc : pc_asts) {
+        if (!seen.insert(pc).second)
+            continue;
+        std::vector<std::pair<binder::SlotId, binder::SlotId>> corr;
+        binder::SlotId out_slot = binder::INVALID_SLOT_ID;
+        std::string out_name;
+        binder::BoundType out_elem_type;
+        auto apply_op = binder.bindPatternComprehension(*pc, std::move(child), corr, out_slot, out_name, out_elem_type);
+        if (!apply_op) {
+            return false;
+        }
+        child = std::move(*apply_op);
+        patch_map[pc] = std::make_tuple(out_slot, out_name, binder::BoundType::List(out_elem_type));
+    }
+    return true;
+}
+
 // Detect ambiguous aggregation in ORDER BY expressions of aggregating
 // queries: mixing aggregate and non-aggregate operands at the same BinaryOp
 // level, where the non-aggregate side is itself a complex BinaryOp expression.
@@ -479,6 +663,24 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         }
     }
 
+    // ── Pattern comprehension hoisting ──
+    // Stack one BoundPatternComprehensionApplyOp per PatternComprehension AST
+    // node above `child` so each list result is precomputed as a column before
+    // any projection / aggregate sees it. The patch_map lets later-bound
+    // projection expressions rewrite their BoundPatternComprehension
+    // placeholders into BoundColumnRef via column_rewrite.cpp.
+    std::unordered_map<const cypher::PatternComprehension*, std::tuple<binder::SlotId, std::string, binder::BoundType>>
+        pc_patch_map;
+    {
+        std::vector<const cypher::PatternComprehension*> pc_asts;
+        for (const auto& item : ret.items)
+            collectPatternComprehensionsAST(item.expr, pc_asts);
+    }
+    if (!hoistPatternComprehensions(*this, child, ret.items, ret.order_by ? &ret.order_by->items : nullptr,
+                                    pc_patch_map)) {
+        return std::nullopt;
+    }
+
     if (has_aggregate) {
         // ── Aggregate + Project strategy ──
         // AggregateOp handles only simple aggregate functions, outputting them
@@ -520,6 +722,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
                 continue;
+            patchPatternComprehensionPlaceholders(*bound_expr, pc_patch_map);
 
             if (is_simple_agg) {
                 // Top-level aggregate function: e.g., RETURN count(a).
@@ -789,6 +992,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         auto bound_expr = bindExpression(item.expr);
         if (!bound_expr)
             continue;
+        patchPatternComprehensionPlaceholders(*bound_expr, pc_patch_map);
 
         // Detect whole-variable return (e.g., RETURN n) to add all property requirements
         if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
@@ -921,6 +1125,14 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         }
     }
 
+    // ── Pattern comprehension hoisting ── (see bindReturn for rationale)
+    std::unordered_map<const cypher::PatternComprehension*, std::tuple<binder::SlotId, std::string, binder::BoundType>>
+        wc_pc_patch_map;
+    if (!hoistPatternComprehensions(*this, child, wc.items, wc.order_by ? &wc.order_by->items : nullptr,
+                                    wc_pc_patch_map)) {
+        return std::nullopt;
+    }
+
     // Tracks whether WHERE references a projected variable; used to decide
     // filter placement (before vs after projection).
     bool where_has_projected_ref = false;
@@ -1018,6 +1230,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
                 continue;
+            patchPatternComprehensionPlaceholders(*bound_expr, wc_pc_patch_map);
 
             if (is_simple_agg) {
                 BoundAggregateOp::AggregateItem agg_item;
@@ -1182,6 +1395,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 auto bound_expr = bindExpression(item.expr);
                 if (!bound_expr)
                     continue;
+                patchPatternComprehensionPlaceholders(*bound_expr, wc_pc_patch_map);
 
                 // Detect whole-variable pass-through to add property requirements
                 if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
