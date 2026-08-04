@@ -286,6 +286,28 @@ target_link_libraries(eugraph_thrift PUBLIC
     Folly::folly
 )
 
+# ==================== Bolt Protocol (Neo4j protocol support) ====================
+
+add_library(eugraph_bolt STATIC
+    src/bolt/packstream/encoder.cpp
+    src/bolt/packstream/decoder.cpp
+    src/bolt/bolt_session.cpp
+    src/bolt/bolt_value_mapping.cpp
+    src/bolt/bolt_server.cpp
+)
+
+target_include_directories(eugraph_bolt PUBLIC
+    "${PROJECT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(eugraph_bolt PUBLIC
+    eugraph_query_engine
+    eugraph_shell_lib
+    Folly::folly
+    Folly::folly_deps
+    spdlog::spdlog
+)
+
 # ==================== Thrift formatting (shared by shell & TCK) ====================
 
 add_library(eugraph_thrift_fmt STATIC
@@ -306,6 +328,7 @@ add_library(eugraph_shell_lib STATIC
     src/program/shell/shell_repl.cpp
     src/program/shell/rpc_client.cpp
     src/program/server/eugraph_handler.cpp
+    src/server/graph_service.cpp
     src/storage/graph_manager.cpp
     third_party/linenoise/linenoise.c
 )
@@ -338,6 +361,7 @@ target_include_directories(eugraph-server PRIVATE
 
 target_link_libraries(eugraph-server PRIVATE
     eugraph_shell_lib
+    eugraph_bolt
     eugraph_query_engine
     eugraph_metadata
     eugraph_thrift
@@ -732,8 +756,64 @@ if(EUGRAPH_BUILD_TESTS)
     add_dependencies(vertex_serialization_tests wiredtiger_ext)
     gtest_add_tests(TARGET vertex_serialization_tests)
 
+    # PackStream codec tests
+    add_executable(packstream_tests
+        tests/test_packstream.cpp
+    )
+
+    target_include_directories(packstream_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+    )
+
+    target_link_libraries(packstream_tests PRIVATE
+        eugraph_bolt
+        GTest::gtest
+        GTest::gtest_main
+    )
+
+    gtest_add_tests(TARGET packstream_tests)
+
+    # Bolt value mapping tests
+    add_executable(bolt_values_tests
+        tests/test_bolt_values.cpp
+    )
+
+    target_include_directories(bolt_values_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+    )
+
+    target_link_libraries(bolt_values_tests PRIVATE
+        eugraph_bolt
+        GTest::gtest
+        GTest::gtest_main
+    )
+
+    gtest_add_tests(TARGET bolt_values_tests)
+
     # TCK tests (Cucumber BDD for openCypher TCK) — requires eugraph-server built
     if(NOT DEFINED SKIP_TCK_TESTS)
         add_subdirectory(tests/tck)
+    endif()
+
+    # Bolt Python integration tests — requires eugraph-server, neo4j, pytest
+    if(NOT DEFINED SKIP_BOLT_INTEGRATION_TESTS)
+        find_program(PYTEST_EXECUTABLE pytest)
+        if(PYTEST_EXECUTABLE)
+            set(BOLT_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_bolt_integration.py")
+            add_test(NAME bolt_integration_tests
+                COMMAND ${CMAKE_COMMAND}
+                    -D "SERVER=$<TARGET_FILE:eugraph-server>"
+                    -D "PYTEST=${PYTEST_EXECUTABLE}"
+                    -D "TEST_SCRIPT=${BOLT_TEST_SCRIPT}"
+                    -P "${PROJECT_SOURCE_DIR}/cmake/run_bolt_tests.cmake"
+                WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+            )
+            set_tests_properties(bolt_integration_tests PROPERTIES
+                TIMEOUT 120
+                LABELS "bolt;integration"
+            )
+        else()
+            message(STATUS "pytest not found — skipping Bolt integration tests")
+        endif()
     endif()
 endif()
