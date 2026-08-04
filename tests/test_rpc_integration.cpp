@@ -6,6 +6,7 @@
 #include "program/server/eugraph_handler.hpp"
 #include "program/shell/rpc_client.hpp"
 #include "query/executor/query_executor.hpp"
+#include "server/graph_service.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/graph_manager.hpp"
@@ -57,6 +58,7 @@ class RpcIntegrationTest : public ::testing::Test {
 protected:
     std::string db_path_;
     std::shared_ptr<GraphManager> graph_manager_;
+    std::shared_ptr<server::GraphService> graph_service_;
     std::shared_ptr<server::EuGraphHandler> handler_;
 
     // Real RPC server and client
@@ -70,7 +72,8 @@ protected:
         graph_manager_ = std::make_shared<GraphManager>();
         ASSERT_TRUE(graph_manager_->init(db_path_, 2, 2));
 
-        handler_ = std::make_shared<server::EuGraphHandler>(*graph_manager_);
+        graph_service_ = std::make_shared<server::GraphService>(*graph_manager_);
+        handler_ = std::make_shared<server::EuGraphHandler>(*graph_service_);
 
         // Start real fbthrift server via ScopedServerInterfaceThread
         // Use a config callback to set the IO thread pool as handler executor
