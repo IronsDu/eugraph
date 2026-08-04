@@ -9,15 +9,6 @@ using PS = packstream::PackStreamValueStorage;
 using PSMap = std::unordered_map<std::string, packstream::PackStreamValueStorage>;
 using PSList = std::vector<packstream::PackStreamValueStorage>;
 
-namespace {
-
-packstream::Value decodeOne(const std::vector<uint8_t>& buf) {
-    packstream::Decoder dec(buf.data(), buf.size());
-    return dec.decode();
-}
-
-} // namespace
-
 class BoltValueMappingTest : public ::testing::Test {
 protected:
     std::unordered_map<LabelId, LabelDef> label_defs_;
@@ -29,8 +20,8 @@ protected:
         personDef.id = 1;
         personDef.name = "Person";
         personDef.properties = {
-            {0, "name", PropertyType::STRING},
-            {1, "age", PropertyType::INT64},
+            PropertyDef{0, "name", PropertyType::STRING, false, std::nullopt},
+            PropertyDef{1, "age", PropertyType::INT64, false, std::nullopt},
         };
         label_defs_[1] = std::move(personDef);
 
@@ -39,7 +30,7 @@ protected:
         knowsDef.id = 10;
         knowsDef.name = "KNOWS";
         knowsDef.properties = {
-            {0, "since", PropertyType::INT64},
+            PropertyDef{0, "since", PropertyType::INT64, false, std::nullopt},
         };
         edge_label_defs_[10] = std::move(knowsDef);
     }
