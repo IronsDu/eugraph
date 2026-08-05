@@ -311,6 +311,21 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
     }
 
     try {
+        // Handle CALL db.ping() — cypher-shell sends this as a health check.
+        // The binder does not support CallClause yet, so intercept it here.
+        if (msg.query == "CALL db.ping()") {
+            stream_ctx_ = nullptr;
+            std::unordered_map<std::string, packstream::Value> meta;
+            meta["fields"] = std::vector<packstream::PackStreamValueStorage>{};
+            meta["t_first"] = static_cast<int64_t>(0);
+            if (state_ == SessionState::TX_READY) {
+                state_ = SessionState::TX_STREAMING;
+            } else {
+                state_ = SessionState::STREAMING;
+            }
+            co_return makeSuccess(meta);
+        }
+
         auto exec_ctx = co_await service_.executeCypher(msg.query, params, "default");
 
         stream_ctx_ = std::move(exec_ctx.ctx);
@@ -348,8 +363,15 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
     }
 
     if (!stream_ctx_) {
-        state_ = SessionState::FAILED;
-        co_return makeFailure("DatabaseError", "No active stream");
+        // No stream context (e.g., CALL db.ping()): return SUCCESS with no records.
+        if (state_ == SessionState::TX_STREAMING) {
+            state_ = SessionState::TX_READY;
+        } else {
+            state_ = SessionState::READY;
+        }
+        std::unordered_map<std::string, packstream::Value> meta;
+        meta["type"] = std::string{"r"};
+        co_return makeSuccess(meta);
     }
 
     // We build a pre-chunked response: each RECORD and the final SUCCESS
