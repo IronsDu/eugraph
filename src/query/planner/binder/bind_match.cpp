@@ -1218,7 +1218,7 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
     BoundAggregateOp::AggregateItem agg_item;
     agg_item.func_def = collect_fn;
     agg_item.function_name = "collect";
-    agg_item.argument = BoundExpression(BoundColumnRef(0, out_element_type, "__pc_proj", INVALID_SLOT_ID));
+    agg_item.arguments.push_back(BoundExpression(BoundColumnRef(0, out_element_type, "__pc_proj", INVALID_SLOT_ID)));
     agg_item.alias = "__pc_list";
     agg_item.result_type = BoundType::List(out_element_type);
     agg_item.is_internal = false; // must be visible — PCApply reads this column directly
