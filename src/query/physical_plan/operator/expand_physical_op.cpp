@@ -122,15 +122,18 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 continue;
 
             if (split_undirected) {
+                size_t before_out = edges.size();
                 co_await scanOneDirection(src_id, src_row, Direction::OUT);
                 // For self-loops the same edge appears in both OUT and IN
-                // adjacency. Track seen edge ids to avoid double-counting.
+                // adjacency. Track seen edge ids from the current row's OUT
+                // scan only — cross-row dedup would incorrectly discard
+                // undirected matches from different source vertices.
                 std::unordered_set<EdgeId> seen;
-                for (const auto& e : edges)
-                    seen.insert(e.edge_id);
+                for (size_t i = before_out; i < edges.size(); ++i)
+                    seen.insert(edges[i].edge_id);
                 size_t before_in = edges.size();
                 co_await scanOneDirection(src_id, src_row, Direction::IN);
-                // Remove duplicates added by the IN scan.
+                // Remove self-loop duplicates added by the IN scan.
                 edges.erase(std::remove_if(edges.begin() + static_cast<long>(before_in), edges.end(),
                                            [&seen](const EdgeEntry& e) {
                                                if (seen.count(e.edge_id))
