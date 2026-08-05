@@ -143,7 +143,31 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                            }),
                             edges.end());
             } else {
-                co_await scanOneDirection(src_id, src_row, dir);
+                // Inline the scan loop directly for directed queries to avoid
+                // allocating a folly::coro::Task per source vertex. On large
+                // graphs (e.g. 7251 nodes in Return6 TCK stress test) the extra
+                // coroutine frames overflow the ASAN fake stack.
+                for (const auto& label_filter : scan_filters) {
+                    auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
+                    while (auto edge_batch = co_await edge_gen.next()) {
+                        for (const auto& entry : *edge_batch) {
+                            if (!dst_label_ids_.empty()) {
+                                auto labels = co_await store_.getVertexLabels(entry.neighbor_id);
+                                bool ok = true;
+                                for (LabelId need : dst_label_ids_) {
+                                    if (labels.find(need) == labels.end()) {
+                                        ok = false;
+                                        break;
+                                    }
+                                }
+                                if (!ok)
+                                    continue;
+                            }
+                            edges.push_back(
+                                {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, true});
+                        }
+                    }
+                }
             }
         }
 

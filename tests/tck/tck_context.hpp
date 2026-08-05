@@ -143,14 +143,23 @@ struct TckContext {
     // Compute side effects by comparing before/after snapshots
     SideEffects computeSideEffects(const GraphSnapshot& before, const GraphSnapshot& after) {
         SideEffects se;
-        // Nodes: use ID sets for accurate add/remove
-        for (auto id : after.nodeIds) {
-            if (!before.nodeIds.count(id))
-                se.nodes++;
-        }
-        for (auto id : before.nodeIds) {
-            if (!after.nodeIds.count(id))
-                se.removed_nodes++;
+        // Nodes: prefer ID sets when available, fall back to count delta
+        bool hasNodeIds = !before.nodeIds.empty() || !after.nodeIds.empty();
+        if (hasNodeIds) {
+            for (auto id : after.nodeIds) {
+                if (!before.nodeIds.count(id))
+                    se.nodes++;
+            }
+            for (auto id : before.nodeIds) {
+                if (!after.nodeIds.count(id))
+                    se.removed_nodes++;
+            }
+        } else {
+            int64_t node_delta = after.nodeCount - before.nodeCount;
+            if (node_delta >= 0)
+                se.nodes = node_delta;
+            else
+                se.removed_nodes = -node_delta;
         }
         // Edges: prefer ID sets when available, fall back to count delta
         bool hasEdgeIds = !before.edgeIds.empty() || !after.edgeIds.empty();
