@@ -699,42 +699,46 @@ GraphSnapshot TckContext::takeSnapshot() {
 
     snap.propertyCount = vprop_count + eprop_count;
 
-    // Collect node IDs for add/remove detection
-    try {
-        auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN id(n)", graphName);
-        std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
-            if (batch.hasValue()) {
-                for (const auto& row : *batch->rows()) {
-                    if (row.values()->size() > 0) {
-                        const auto& v = (*row.values())[0];
-                        if (v.getType() == thrift::ResultValue::Type::int_val) {
-                            snap.nodeIds.insert(v.get_int_val());
+    // Collect node IDs for add/remove detection.
+    // Skip on large graphs (>1000 nodes): streaming all IDs through Thrift
+    // serialisation can crash the server (Return6 [4] with 7251 nodes).
+    if (snap.nodeCount <= 1000) {
+        try {
+            auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN id(n)", graphName);
+            std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
+                if (batch.hasValue()) {
+                    for (const auto& row : *batch->rows()) {
+                        if (row.values()->size() > 0) {
+                            const auto& v = (*row.values())[0];
+                            if (v.getType() == thrift::ResultValue::Type::int_val) {
+                                snap.nodeIds.insert(v.get_int_val());
+                            }
                         }
                     }
                 }
-            }
-        });
-    } catch (...) {}
+            });
+        } catch (...) {}
+    }
 
-    // Collect edge IDs for add/remove detection
-    // Note: id(r) may not work for edges in all cases, so use count-based delta
-    // for edges while keeping ID-based tracking for nodes.
-    // edgeIds will be populated if id(r) works, otherwise left empty.
-    try {
-        auto [meta, stream] = rpc->executeCypher("MATCH ()-[r]->() RETURN id(r)", graphName);
-        std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
-            if (batch.hasValue()) {
-                for (const auto& row : *batch->rows()) {
-                    if (row.values()->size() > 0) {
-                        const auto& v = (*row.values())[0];
-                        if (v.getType() == thrift::ResultValue::Type::int_val) {
-                            snap.edgeIds.insert(v.get_int_val());
+    // Collect edge IDs for add/remove detection.
+    // Same large-graph skip as for node IDs above.
+    if (snap.edgeCount <= 1000) {
+        try {
+            auto [meta, stream] = rpc->executeCypher("MATCH ()-[r]->() RETURN id(r)", graphName);
+            std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
+                if (batch.hasValue()) {
+                    for (const auto& row : *batch->rows()) {
+                        if (row.values()->size() > 0) {
+                            const auto& v = (*row.values())[0];
+                            if (v.getType() == thrift::ResultValue::Type::int_val) {
+                                snap.edgeIds.insert(v.get_int_val());
+                            }
                         }
                     }
                 }
-            }
-        });
-    } catch (...) {}
+            });
+        } catch (...) {}
+    }
 
     // Collect per-property state for accurate add/remove/modify counting.
     // For each element, fetch (id, properties-map) and parse the map into

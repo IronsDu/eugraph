@@ -53,8 +53,10 @@ using BatchScalarFn =
 /// Aggregate state factory.
 using AggInitFn = std::function<std::unique_ptr<AggStateBase>()>;
 
-/// Accumulate one value into aggregate state.
-using AggUpdateFn = std::function<void(AggStateBase&, const Value&)>;
+/// Accumulate one row's arguments into aggregate state. Multi-arg aggregates
+/// (e.g. percentileDisc(value, p)) receive all args; single-arg aggregates
+/// read args[0].
+using AggUpdateFn = std::function<void(AggStateBase&, const std::vector<Value>&)>;
 
 /// Produce final aggregate result from state.
 using AggFinalizeFn = std::function<Value(const AggStateBase&)>;

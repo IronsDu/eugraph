@@ -476,7 +476,8 @@ static void remapChildOps(binder::BoundLogicalOperator& op, uint32_t offset) {
                 for (auto& expr : val->group_keys)
                     remapExprColumnIndices(expr, offset);
                 for (auto& item : val->aggregates)
-                    remapExprColumnIndices(item.argument, offset);
+                    for (auto& arg : item.arguments)
+                        remapExprColumnIndices(arg, offset);
                 remapLogicalOpColumnIndices(val->child, offset);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
                 remapLogicalOpColumnIndices(val->left, offset);
@@ -1412,7 +1413,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         auto& ai = v.aggregates[i];
                         AggregatePhysicalOp::AggregateExpr ae;
                         ae.func_def = ai.func_def;
-                        ae.arg = std::move(ai.argument);
+                        ae.arguments = std::move(ai.arguments);
                         ae.distinct = ai.distinct;
                         ae.is_internal = ai.is_internal;
                         if (v.group_keys.size() + i < v.output_names.size())

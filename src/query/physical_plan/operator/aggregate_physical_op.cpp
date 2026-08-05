@@ -44,17 +44,20 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
         // Evaluate aggregate argument expressions vectorized.
         // Skip complex aggregates (func_def==null && !is_internal):
         // they are evaluated during output with substitution.
-        std::vector<std::vector<Value>> chunk_agg_vals(aggregates_.size());
+        // chunk_arg_vals[a] = per-row vector of evaluated arguments.
+        std::vector<std::vector<std::vector<Value>>> chunk_arg_vals(aggregates_.size());
         for (size_t a = 0; a < aggregates_.size(); ++a) {
             if (!aggregates_[a].func_def && !aggregates_[a].is_internal) {
-                chunk_agg_vals[a].resize(n); // placeholder
+                chunk_arg_vals[a].resize(n); // placeholder
                 continue;
             }
-            auto col = Column::flat(binder::BoundTypeKind::ANY, n);
-            evaluator.evaluate(aggregates_[a].arg, *chunk, col);
-            chunk_agg_vals[a].reserve(n);
-            for (size_t r = 0; r < n; ++r)
-                chunk_agg_vals[a].push_back(col.getValue(r));
+            chunk_arg_vals[a].assign(n, std::vector<Value>(aggregates_[a].arguments.size()));
+            for (size_t ai = 0; ai < aggregates_[a].arguments.size(); ++ai) {
+                auto col = Column::flat(binder::BoundTypeKind::ANY, n);
+                evaluator.evaluate(aggregates_[a].arguments[ai], *chunk, col);
+                for (size_t r = 0; r < n; ++r)
+                    chunk_arg_vals[a][r][ai] = col.getValue(r);
+            }
         }
 
         // Aggregate each row.
@@ -87,22 +90,24 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                 if (!agg.func_def || !agg.func_def->agg_update || !state.agg_states[i])
                     continue;
 
-                Value v = std::move(chunk_agg_vals[i][r]);
+                std::vector<Value> vals = std::move(chunk_arg_vals[i][r]);
 
                 // count(*) accepts monostate (null) literal; skip nulls for other aggregates.
-                bool is_count_star =
-                    (agg.func_def->has_variadic_args && std::holds_alternative<binder::BoundLiteral>(agg.arg) &&
-                     isNull(std::get<binder::BoundLiteral>(agg.arg).value));
-                if (!is_count_star && isNull(v))
+                // count(*) is detected by variadic flag + literal null in arguments[0].
+                bool is_count_star = (agg.func_def->has_variadic_args && !agg.arguments.empty() &&
+                                      std::holds_alternative<binder::BoundLiteral>(agg.arguments[0]) &&
+                                      isNull(std::get<binder::BoundLiteral>(agg.arguments[0]).value));
+                if (!is_count_star && !vals.empty() && isNull(vals[0]))
                     continue;
 
-                // DISTINCT dedup before update.
+                // DISTINCT dedup before update: keyed on the first argument (the value).
                 if (agg.distinct) {
-                    if (!state.distinct_sets[i].insert(v).second)
+                    Value dedup_key = vals.empty() ? Value{} : vals[0];
+                    if (!state.distinct_sets[i].insert(dedup_key).second)
                         continue;
                 }
 
-                agg.func_def->agg_update(*state.agg_states[i], v);
+                agg.func_def->agg_update(*state.agg_states[i], vals);
             }
         }
     }
@@ -159,7 +164,7 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                 VectorizedEvaluator out_eval(eval_ctx_);
                 out_eval.aggregate_substitutions = &subs;
                 auto result_col = Column::flat(binder::BoundTypeKind::ANY, 1);
-                out_eval.evaluate(agg.arg, eval_chunk, result_col);
+                out_eval.evaluate(agg.arguments[0], eval_chunk, result_col);
                 output.columns[col_idx].setValue(row_idx, result_col.getValue(0));
             } else {
                 output.columns[col_idx].setNull(row_idx);
@@ -202,7 +207,7 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                 VectorizedEvaluator out_eval(eval_ctx_);
                 out_eval.aggregate_substitutions = &subs;
                 auto result_col = Column::flat(binder::BoundTypeKind::ANY, 1);
-                out_eval.evaluate(agg.arg, eval_chunk, result_col);
+                out_eval.evaluate(agg.arguments[0], eval_chunk, result_col);
                 output.columns[out_idx].setValue(0, result_col.getValue(0));
             } else {
                 output.columns[out_idx].setNull(0);

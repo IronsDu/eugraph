@@ -68,7 +68,8 @@ static bool expressionReferencesVariableImpl(const cypher::Expression& expr, con
 
 static bool isAggregateFunctionName(const std::string& name) {
     return name == "count" || name == "sum" || name == "avg" || name == "min" || name == "max" || name == "collect" ||
-           name == "percentile_cont" || name == "percentile_disc" || name == "st_dev" || name == "st_dev_p";
+           name == "percentile_cont" || name == "percentile_disc" || name == "percentileCont" ||
+           name == "percentileDisc" || name == "st_dev" || name == "st_dev_p";
 }
 
 static bool hasAggregate(const cypher::Expression& expr) {
@@ -76,8 +77,7 @@ static bool hasAggregate(const cypher::Expression& expr) {
         [](const auto& ptr) -> bool {
             using Elem = typename std::decay_t<decltype(ptr)>::element_type;
             if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
-                if (ptr->name == "count" || ptr->name == "sum" || ptr->name == "avg" || ptr->name == "min" ||
-                    ptr->name == "max" || ptr->name == "collect")
+                if (isAggregateFunctionName(ptr->name))
                     return true;
                 for (const auto& arg : ptr->args)
                     if (hasAggregate(arg))
@@ -308,8 +308,9 @@ static void walkAndReplaceAggCalls(binder::BoundExpression& expr,
                     item.func_def = ptr->func_def;
                     item.distinct = ptr->distinct;
                     item.result_type = ptr->return_type;
-                    if (!ptr->args.empty())
-                        item.argument = std::move(ptr->args[0]);
+                    item.function_name = ptr->func_def->name;
+                    for (auto& arg : ptr->args)
+                        item.arguments.push_back(std::move(arg));
                     out_aggs.push_back(std::move(item));
 
                     // Replace this node with a BoundColumnRef pointing at the new
@@ -527,10 +528,11 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                 if (std::holds_alternative<std::unique_ptr<BoundFunctionCall>>(*bound_expr)) {
                     auto& bfc = std::get<std::unique_ptr<BoundFunctionCall>>(*bound_expr);
                     agg_item.func_def = bfc->func_def;
+                    agg_item.function_name = bfc->func_def->name;
                     agg_item.distinct = bfc->distinct;
                     agg_item.result_type = bfc->return_type;
-                    if (!bfc->args.empty())
-                        agg_item.argument = std::move(bfc->args[0]);
+                    for (auto& arg : bfc->args)
+                        agg_item.arguments.push_back(std::move(arg));
                 }
                 agg->aggregates.push_back(std::move(agg_item));
                 agg->output_names.push_back(alias);
@@ -1023,10 +1025,11 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 if (std::holds_alternative<std::unique_ptr<BoundFunctionCall>>(*bound_expr)) {
                     auto& fc = std::get<std::unique_ptr<BoundFunctionCall>>(*bound_expr);
                     agg_item.func_def = fc->func_def;
+                    agg_item.function_name = fc->func_def->name;
                     agg_item.distinct = fc->distinct;
                     agg_item.result_type = fc->return_type;
-                    if (!fc->args.empty())
-                        agg_item.argument = std::move(fc->args[0]);
+                    for (auto& arg : fc->args)
+                        agg_item.arguments.push_back(std::move(arg));
                 }
                 agg->aggregates.push_back(std::move(agg_item));
                 agg->output_names.push_back(alias);

@@ -254,7 +254,8 @@ VarRequirements collectOpRequirements(const binder::BoundLogicalOperator& op, co
                 for (const auto& k : val->group_keys)
                     collectExprRequirements(k, dst, catalog);
                 for (const auto& agg : val->aggregates)
-                    collectExprRequirements(agg.argument, dst, catalog);
+                    for (const auto& arg : agg.arguments)
+                        collectExprRequirements(arg, dst, catalog);
                 mergeVarRequirements(dst, collectOpRequirements(val->child, catalog));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
                 if (!val)

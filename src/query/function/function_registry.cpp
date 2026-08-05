@@ -1,12 +1,11 @@
 #include "query/function/function_registry.hpp"
 
-#include <climits>
-
 #include "query/function/aggregate/avg_function.hpp"
 #include "query/function/aggregate/collect_function.hpp"
 #include "query/function/aggregate/count_function.hpp"
 #include "query/function/aggregate/min_function.hpp"
 #include "query/function/aggregate/min_function.hpp" // also provides MaxState
+#include "query/function/aggregate/percentile_function.hpp"
 #include "query/function/aggregate/sum_function.hpp"
 #include "query/function/scalar/coalesce_function.hpp"
 #include "query/function/scalar/conversion_functions.hpp"
@@ -1174,7 +1173,13 @@ void FunctionRegistry::registerAggregateBuiltins() {
          {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::CountState>(); },
-         [](AggStateBase& s, const Value& v) { static_cast<aggregate::CountState&>(s).add(v); },
+         [](AggStateBase& s, const std::vector<Value>& args) {
+             auto& cs = static_cast<aggregate::CountState&>(s);
+             if (args.empty())
+                 ++cs.value;
+             else
+                 cs.add(args[0]);
+         },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::CountState&>(s).finalize(); }});
 
     // sum(Int64) -> Int64
@@ -1187,7 +1192,9 @@ void FunctionRegistry::registerAggregateBuiltins() {
          {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::Int64SumState>(); },
-         [](AggStateBase& s, const Value& v) { static_cast<aggregate::Int64SumState&>(s).add(v); },
+         [](AggStateBase& s, const std::vector<Value>& args) {
+             static_cast<aggregate::Int64SumState&>(s).add(args[0]);
+         },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::Int64SumState&>(s).finalize(); }});
     // sum(Double) -> Double
     functions_["sum"].push_back(
@@ -1199,7 +1206,9 @@ void FunctionRegistry::registerAggregateBuiltins() {
          {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::DoubleSumState>(); },
-         [](AggStateBase& s, const Value& v) { static_cast<aggregate::DoubleSumState&>(s).add(v); },
+         [](AggStateBase& s, const std::vector<Value>& args) {
+             static_cast<aggregate::DoubleSumState&>(s).add(args[0]);
+         },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::DoubleSumState&>(s).finalize(); }});
 
     // avg(Int64) -> Double (avg always returns double)
@@ -1212,7 +1221,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::AvgState>(); },
-         [](AggStateBase& s, const Value& v) { static_cast<aggregate::AvgState&>(s).add(v); },
+         [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::AvgState&>(s).add(args[0]); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::AvgState&>(s).finalize(); }});
     // avg(Double) -> Double
     functions_["avg"].push_back(
@@ -1224,7 +1233,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::AvgState>(); },
-         [](AggStateBase& s, const Value& v) { static_cast<aggregate::AvgState&>(s).add(v); },
+         [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::AvgState&>(s).add(args[0]); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::AvgState&>(s).finalize(); }});
 
     // min(Any) -> Any
@@ -1237,7 +1246,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::MinState>(); },
-         [](AggStateBase& s, const Value& v) { static_cast<aggregate::MinState&>(s).add(v); },
+         [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::MinState&>(s).add(args[0]); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::MinState&>(s).finalize(); }});
 
     // max(Any) -> Any
@@ -1250,7 +1259,7 @@ void FunctionRegistry::registerAggregateBuiltins() {
          {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::MaxState>(); },
-         [](AggStateBase& s, const Value& v) { static_cast<aggregate::MaxState&>(s).add(v); },
+         [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::MaxState&>(s).add(args[0]); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::MaxState&>(s).finalize(); }});
 
     // collect(Any) -> List<Any>
@@ -1263,8 +1272,82 @@ void FunctionRegistry::registerAggregateBuiltins() {
          {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::CollectState>(); },
-         [](AggStateBase& s, const Value& v) { static_cast<aggregate::CollectState&>(s).add(v); },
+         [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::CollectState&>(s).add(args[0]); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::CollectState&>(s).finalize(); }});
+
+    // percentileDisc(Double, Double) -> Double
+    functions_["percentileDisc"].push_back(
+        {"percentileDisc",
+         {BoundType::Double(), BoundType::Double()},
+         BoundType::Double(),
+         true,
+         false,
+         {},
+         {},
+         []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::PercentileDiscState>(); },
+         [](AggStateBase& s, const std::vector<Value>& args) {
+             auto& st = static_cast<aggregate::PercentileDiscState&>(s);
+             st.capturePercentile(args[1]);
+             st.addValue(args[0]);
+         },
+         [](const AggStateBase& s) -> Value {
+             return static_cast<const aggregate::PercentileDiscState&>(s).finalize();
+         }});
+    // percentileDisc(Int64, Double) -> Int64
+    functions_["percentileDisc"].push_back(
+        {"percentileDisc",
+         {BoundType::Int64(), BoundType::Double()},
+         BoundType::Int64(),
+         true,
+         false,
+         {},
+         {},
+         []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::PercentileDiscState>(); },
+         [](AggStateBase& s, const std::vector<Value>& args) {
+             auto& st = static_cast<aggregate::PercentileDiscState&>(s);
+             st.capturePercentile(args[1]);
+             st.addValue(args[0]);
+         },
+         [](const AggStateBase& s) -> Value {
+             return static_cast<const aggregate::PercentileDiscState&>(s).finalize();
+         }});
+
+    // percentileCont(Double, Double) -> Double
+    functions_["percentileCont"].push_back(
+        {"percentileCont",
+         {BoundType::Double(), BoundType::Double()},
+         BoundType::Double(),
+         true,
+         false,
+         {},
+         {},
+         []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::PercentileContState>(); },
+         [](AggStateBase& s, const std::vector<Value>& args) {
+             auto& st = static_cast<aggregate::PercentileContState&>(s);
+             st.capturePercentile(args[1]);
+             st.addValue(args[0]);
+         },
+         [](const AggStateBase& s) -> Value {
+             return static_cast<const aggregate::PercentileContState&>(s).finalize();
+         }});
+    // percentileCont(Int64, Double) -> Double
+    functions_["percentileCont"].push_back(
+        {"percentileCont",
+         {BoundType::Int64(), BoundType::Double()},
+         BoundType::Double(),
+         true,
+         false,
+         {},
+         {},
+         []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::PercentileContState>(); },
+         [](AggStateBase& s, const std::vector<Value>& args) {
+             auto& st = static_cast<aggregate::PercentileContState&>(s);
+             st.capturePercentile(args[1]);
+             st.addValue(args[0]);
+         },
+         [](const AggStateBase& s) -> Value {
+             return static_cast<const aggregate::PercentileContState&>(s).finalize();
+         }});
 }
 
 void FunctionRegistry::registerFunction(FunctionDef def) {

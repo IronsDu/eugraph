@@ -14,7 +14,10 @@ namespace binder {
 struct BoundAggregateOp {
     struct AggregateItem {
         std::string function_name;
-        BoundExpression argument;
+        /// Aggregate call arguments. Single-arg aggregates (count/sum/avg/min/
+        /// max/collect) use args[0]; multi-arg aggregates (percentileDisc/
+        /// percentileCont) use args[0]=value, args[1]=percentile.
+        std::vector<BoundExpression> arguments;
         std::string alias;
         BoundType result_type;
         const function::FunctionDef* func_def;

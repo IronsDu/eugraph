@@ -122,7 +122,7 @@ struct FunctionDef {
 
     // 聚合函数回调（状态工厂 + 累积 + 终结）
     using AggInitFn     = function<unique_ptr<AggStateBase>()>;
-    using AggUpdateFn   = function<void(AggStateBase&, const Value&)>;
+    using AggUpdateFn   = function<void(AggStateBase&, const vector<Value>&)>;
     using AggFinalizeFn = function<Value(const AggStateBase&)>;
     AggInitFn agg_init;
     AggUpdateFn agg_update;
@@ -162,6 +162,12 @@ class FunctionRegistry {
 | `min(Any)` | Any | Any | 是 | `MinState` |
 | `max(Any)` | Any | Any | 是 | `MaxState` |
 | `collect(Any)` | Any | List\<Any\> | 是 | `CollectState` |
+| `percentileDisc(Int64, Double)` | Int64, Double | Int64 | 是 | `PercentileDiscState` |
+| `percentileDisc(Double, Double)` | Double, Double | Double | 是 | `PercentileDiscState` |
+| `percentileCont(Int64, Double)` | Int64, Double | Double | 是 | `PercentileContState` |
+| `percentileCont(Double, Double)` | Double, Double | Double | 是 | `PercentileContState` |
+
+> 注：聚合函数 `agg_update` 接收参数向量（`const std::vector<Value>&`），以支持 `percentileDisc(value, p)` 这类多参数聚合。单参数聚合（count/sum/avg/min/max/collect）从 `args[0]` 取值。
 
 聚合状态类（`src/query/function/aggregate/`）继承 `AggStateBase`，提供 `add()` 和 `finalize()` 方法。
 
