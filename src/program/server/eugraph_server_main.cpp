@@ -1,5 +1,7 @@
+#include "bolt/bolt_server.hpp"
 #include "gen-cpp2/EuGraphService.h"
 #include "program/server/eugraph_handler.hpp"
+#include "server/graph_service.hpp"
 #include "storage/graph_manager.hpp"
 
 #include <thrift/lib/cpp2/server/ThriftServer.h>
@@ -7,6 +9,7 @@
 #include <folly/init/Init.h>
 #include <spdlog/spdlog.h>
 
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -18,6 +21,7 @@ using namespace eugraph::compute;
 
 struct ServerConfig {
     int port = 9090;
+    int bolt_port = 7687;
     std::string data_dir = "./eugraph-data";
     int compute_threads = 4;
     int io_threads = 4;
@@ -33,10 +37,13 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
             config.data_dir = argv[++i];
         } else if ((arg == "--threads" || arg == "-t") && i + 1 < argc) {
             config.compute_threads = std::atoi(argv[++i]);
+        } else if ((arg == "--bolt-port") && i + 1 < argc) {
+            config.bolt_port = std::atoi(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: eugraph-server [options]\n"
                       << "Options:\n"
                       << "  --port, -p <port>        Server port (default: 9090)\n"
+                      << "  --bolt-port <port>      Bolt protocol port (default: 7687, 0 to disable)\n"
                       << "  --data-dir, -d <path>    Data directory (default: ./eugraph-data)\n"
                       << "  --threads, -t <count>    Compute threads (default: 4)\n"
                       << "  --help, -h               Show this help\n";
@@ -63,7 +70,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    auto handler = std::make_shared<server::EuGraphHandler>(*graph_manager);
+    auto graph_service = std::make_shared<server::GraphService>(*graph_manager);
+    auto handler = std::make_shared<server::EuGraphHandler>(*graph_service);
 
     auto server = std::make_shared<apache::thrift::ThriftServer>();
     server->setPort(config.port);
@@ -82,9 +90,20 @@ int main(int argc, char* argv[]) {
     spdlog::info("EuGraph server initialized successfully");
     spdlog::info("Listening on port {}...", config.port);
 
+    // Start Bolt protocol server (if enabled)
+    std::unique_ptr<bolt::BoltServer> bolt_server;
+    if (config.bolt_port > 0) {
+        bolt_server = std::make_unique<bolt::BoltServer>(*graph_service, static_cast<uint16_t>(config.bolt_port));
+        bolt_server->start();
+        spdlog::info("Bolt server listening on port {}...", config.bolt_port);
+    }
+
     server->serve();
 
     spdlog::info("Shutting down...");
+    if (bolt_server) {
+        bolt_server->stop();
+    }
     graph_manager->shutdown();
     spdlog::info("Bye.");
 

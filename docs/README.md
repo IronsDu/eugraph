@@ -69,6 +69,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 多图/图管理 | [storage/multi-graph.md] | `src/storage/catalog/`, `src/storage/graph_manager.hpp` |
 | 修改类型系统 | [architecture/type-definitions.md], [storage/kv-encoding.md] | `src/common/types/` |
 | 添加/修改 RPC 接口 | [service/rpc-service.md] | `proto/eugraph.thrift`, `src/program/server/` |
+| Neo4j Bolt 协议支持 | [service/neo4j-bolt-protocol.md] | `src/bolt/`, `src/server/graph_service.*` |
 | 修改 Shell 交互 | [program/design/server-shell-design.md] | `src/program/shell/` |
 | 添加二级索引 | [storage/index_design.md], [storage/kv-encoding.md] | `src/storage/` |
 | 数据导入/CSV 加载 | [program/usage/loader.md], [program/design/loader-design.md] | `src/program/loader/` |
@@ -141,6 +142,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [RPC 服务层](service/rpc-service.md) | fbthrift Handler、流式执行协议、Value/Thrift 转换、RPC 客户端 |
+| [Neo4j Bolt 协议](service/neo4j-bolt-protocol.md) | Bolt v5.1 协议支持、PackStream 编解码、Neo4j 驱动兼容 |
 
 ## 可执行程序
 

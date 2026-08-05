@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 #include "program/server/eugraph_handler.hpp"
 #include "query/dataset/row.hpp"
+#include "server/graph_service.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/graph_manager.hpp"
@@ -34,6 +35,7 @@ class VertexSerializationTest : public ::testing::Test {
 protected:
     std::string db_path_;
     std::unique_ptr<GraphManager> graph_manager_;
+    std::unique_ptr<GraphService> graph_service_;
     std::unique_ptr<EuGraphHandler> handler_;
 
     void SetUp() override {
@@ -42,7 +44,8 @@ protected:
 
         graph_manager_ = std::make_unique<GraphManager>();
         ASSERT_TRUE(graph_manager_->init(db_path_, 1, 1));
-        handler_ = std::make_unique<EuGraphHandler>(*graph_manager_);
+        graph_service_ = std::make_unique<GraphService>(*graph_manager_);
+        handler_ = std::make_unique<EuGraphHandler>(*graph_service_);
     }
 
     void TearDown() override {

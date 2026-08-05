@@ -1,0 +1,322 @@
+"""
+Integration tests for EuGraph Bolt protocol support.
+
+Uses the official neo4j Python driver to test Bolt protocol connectivity,
+query execution, and type handling.
+
+Prerequisites:
+    pip install neo4j pytest
+
+Usage:
+    # Start EuGraph server first:
+    eugraph-server --bolt-port 7687
+
+    # Then run tests:
+    pytest tests/bolt/test_bolt_integration.py -v
+
+    # Or with a custom port:
+    EUGRAPH_BOLT_PORT=17687 pytest tests/bolt/test_bolt_integration.py -v
+"""
+
+import os
+import sys
+
+import pytest
+
+# Skip all tests if neo4j driver is not available
+neo4j = pytest.importorskip("neo4j")
+
+
+def get_bolt_url():
+    port = os.environ.get("EUGRAPH_BOLT_PORT", "7687")
+    return f"bolt://localhost:{port}"
+
+
+# ---------------------------------------------------------------------------
+# Connection tests
+# ---------------------------------------------------------------------------
+
+
+class TestConnection:
+    """Test Bolt handshake and basic connectivity."""
+
+    def test_verify_connectivity(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            driver.verify_connectivity()
+        finally:
+            driver.close()
+
+    def test_session_hello(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN 1 AS n")
+                records = list(result)
+                assert len(records) == 1
+                assert records[0]["n"] == 1
+        finally:
+            driver.close()
+
+
+# ---------------------------------------------------------------------------
+# CRUD tests
+# ---------------------------------------------------------------------------
+
+
+class TestCRUD:
+    """Test basic CRUD operations via Cypher over Bolt."""
+
+    @pytest.mark.xfail(reason="Query engine: MATCH does not support parameter as node predicate")
+    def test_create_and_match_node(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                # Create a node
+                session.run(
+                    "CREATE (n:Person {name: $name, age: $age})",
+                    name="Alice",
+                    age=30,
+                )
+                # Match it back
+                result = session.run(
+                    "MATCH (n:Person {name: $name}) RETURN n.name, n.age",
+                    name="Alice",
+                )
+                records = list(result)
+                assert len(records) == 1
+                assert records[0]["n.name"] == "Alice"
+                assert records[0]["n.age"] == 30
+        finally:
+            driver.close()
+
+    @pytest.mark.xfail(reason="Query engine: MATCH does not support parameter as node predicate")
+    def test_create_and_match_edge(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                session.run(
+                    "CREATE (a:Person {name: $a_name}) "
+                    "CREATE (b:Person {name: $b_name}) "
+                    "CREATE (a)-[:KNOWS {since: 2020}]->(b)",
+                    a_name="Alice",
+                    b_name="Bob",
+                )
+                result = session.run(
+                    "MATCH (a:Person {name: $a_name})-[r:KNOWS]->(b:Person {name: $b_name}) "
+                    "RETURN a.name, b.name, r.since",
+                    a_name="Alice",
+                    b_name="Bob",
+                )
+                records = list(result)
+                assert len(records) == 1
+                assert records[0]["a.name"] == "Alice"
+                assert records[0]["b.name"] == "Bob"
+                assert records[0]["r.since"] == 2020
+        finally:
+            driver.close()
+
+
+# ---------------------------------------------------------------------------
+# Type handling tests
+# ---------------------------------------------------------------------------
+
+
+class TestTypes:
+    """Test that various Cypher types round-trip correctly over Bolt."""
+
+    def test_null_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN null AS v")
+                records = list(result)
+                assert len(records) == 1
+                assert records[0]["v"] is None
+        finally:
+            driver.close()
+
+    def test_string_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN 'hello' AS v")
+                records = list(result)
+                assert records[0]["v"] == "hello"
+        finally:
+            driver.close()
+
+    def test_integer_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN 42 AS v")
+                records = list(result)
+                assert records[0]["v"] == 42
+        finally:
+            driver.close()
+
+    def test_float_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN 3.14 AS v")
+                records = list(result)
+                assert records[0]["v"] == 3.14
+        finally:
+            driver.close()
+
+    def test_boolean_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN true AS v")
+                records = list(result)
+                assert records[0]["v"] is True
+        finally:
+            driver.close()
+
+    def test_list_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN [1, 2, 3] AS v")
+                records = list(result)
+                assert records[0]["v"] == [1, 2, 3]
+        finally:
+            driver.close()
+
+    def test_map_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN {name: 'Alice', age: 30} AS v")
+                records = list(result)
+                assert records[0]["v"] == {"name": "Alice", "age": 30}
+        finally:
+            driver.close()
+
+
+# ---------------------------------------------------------------------------
+# Parameterized query tests
+# ---------------------------------------------------------------------------
+
+
+class TestParameters:
+    """Test parameter passing over Bolt."""
+
+    def test_string_param(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run(
+                    "RETURN $name AS v",
+                    name="Alice",
+                )
+                records = list(result)
+                assert records[0]["v"] == "Alice"
+        finally:
+            driver.close()
+
+    def test_integer_param(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run(
+                    "RETURN $n AS v",
+                    n=42,
+                )
+                records = list(result)
+                assert records[0]["v"] == 42
+        finally:
+            driver.close()
+
+    def test_float_param(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run(
+                    "RETURN $x AS v",
+                    x=3.14,
+                )
+                records = list(result)
+                assert records[0]["v"] == 3.14
+        finally:
+            driver.close()
+
+    def test_list_param(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run(
+                    "RETURN $items AS v",
+                    items=[1, 2, 3],
+                )
+                records = list(result)
+                assert records[0]["v"] == [1, 2, 3]
+        finally:
+            driver.close()
+
+    def test_map_param(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run(
+                    "RETURN $props AS v",
+                    props={"name": "Alice", "age": 30},
+                )
+                records = list(result)
+                assert records[0]["v"] == {"name": "Alice", "age": 30}
+        finally:
+            driver.close()
+
+
+# ---------------------------------------------------------------------------
+# Transaction tests
+# ---------------------------------------------------------------------------
+
+
+class TestTransactions:
+    """Test explicit transactions (BEGIN/COMMIT/ROLLBACK)."""
+
+    @pytest.mark.xfail(reason="Query engine: explicit transaction commit does not persist data")
+    def test_explicit_commit(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                tx = session.begin_transaction()
+                tx.run("CREATE (n:TxTest {val: 1})")
+                tx.commit()
+
+                result = session.run(
+                    "MATCH (n:TxTest {val: 1}) RETURN n.val"
+                )
+                records = list(result)
+                assert len(records) == 1
+                assert records[0]["n.val"] == 1
+        finally:
+            driver.close()
+
+    def test_explicit_rollback(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                tx = session.begin_transaction()
+                tx.run("CREATE (n:TxTest {val: 999})")
+                tx.rollback()
+
+                result = session.run(
+                    "MATCH (n:TxTest {val: 999}) RETURN count(n) AS cnt"
+                )
+                records = list(result)
+                assert records[0]["cnt"] == 0
+        finally:
+            driver.close()
+
+
+# ---------------------------------------------------------------------------
+# Main (for running without pytest)
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

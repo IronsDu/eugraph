@@ -2,7 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "gen-cpp2/EuGraphService.h"
-#include "storage/graph_manager.hpp"
+#include "server/graph_service.hpp"
 
 #include <folly/coro/Task.h>
 
@@ -13,7 +13,7 @@ namespace server {
 
 class EuGraphHandler : public apache::thrift::ServiceHandler<thrift::EuGraphService> {
 public:
-    explicit EuGraphHandler(GraphManager& graph_manager) : graph_manager_(graph_manager) {}
+    explicit EuGraphHandler(GraphService& graph_service) : graph_service_(graph_service) {}
 
     // Graph management
     folly::coro::Task<std::unique_ptr<thrift::GraphInfo>> co_createGraph(std::unique_ptr<std::string> name) override;
@@ -62,9 +62,7 @@ private:
     static PropertyDef toPropertyDef(const thrift::PropertyDefThrift& req, uint16_t id);
     static PropertyValue thriftToPropertyValue(const thrift::PropertyValueThrift& v);
 
-    GraphInstance* resolveGraph(const std::string& graph_name);
-
-    GraphManager& graph_manager_;
+    GraphService& graph_service_;
 };
 
 } // namespace server
