@@ -427,22 +427,165 @@ cmake -DSKIP_BOLT_INTEGRATION_TESTS=ON ..
 
 > **注意**：Bolt 集成测试需要在构建机器上安装 `neo4j` 和 `pytest` Python 包。
 
-## 待完成功能（按优先级）
+## 手工验证测试（cypher-shell）
 
-### 高优先级
-1. **时间类型标准编码** — 将 DateTime/Time/Duration 从字符串改为 Bolt 标准结构体编码（0x44-0x66）
-2. **多 chunk 消息** — 实现 `processMessage()` 中的 chunk 累积逻辑，支持 >64KB 消息
-3. **ROUTE 消息** — 支持 `neo4j://` 协议（集群/路由驱动连接）
+| 操作 | 状态 | 说明 |
+|------|------|------|
+| `RETURN 1 AS n` | 通过 | 基本查询 |
+| `RETURN "hello"` / `3.14` / `true` | 通过 | 标量类型往返 |
+| `RETURN [1,2,3]` / `{k: "v"}` | 通过 | 集合类型往返 |
+| `CREATE (n:Person {name: $name})` | 通过 | 参数化创建节点 |
+| `MATCH (n:Person) RETURN n` | 通过 | 无过滤匹配 |
+| `CREATE (a)-[:KNOWS]->(b)` | 通过 | 创建关系 |
+| `MATCH (a)-[r]->(b) RETURN a, type(r), b` | 通过 | 路径查询 |
+| `RETURN count(n)` / `avg(n.age)` | 通过 | 聚合函数 |
+| `ORDER BY` | 通过 | 排序 |
+| MATCH 属性过滤（参数化） | 失败 | `MATCH ... {name: $name}` 不支持参数化谓词 |
+| 显式事务 BEGIN→CREATE→COMMIT | 失败 | 事务提交后数据不跨 session 持久化 |
 
-### 中优先级
-4. **Bookmark 因果一致性** — 实现真正的 bookmark 生成与传播
-5. **认证机制** — 实现基本认证（BASIC auth scheme）
-6. **空间类型** — 在类型系统中添加 Point2D/Point3D 类型及映射
+## 已知问题与待改进项
 
-### 低优先级
-7. **TELEMETRY 消息** — v5.1 规范要求的遥测
-8. **NOOP 消息** — 长连接保活
-9. **LOGOFF 会话清理** — 实际资源释放
+> 最后更新：2026-08-05
+
+### 问题 1：Binder 不支持 CallClause（已绕过，未根治）
+
+**严重程度**：高 | **影响范围**：cypher-shell、所有 neo4j 5.x 驱动
+
+**现象**：cypher-shell 启动时发送 `CALL db.ping()` 健康检查，binder 报 `Clause type not yet supported in binder`，导致客户端连接后无法执行任何查询。
+
+**临时绕过**：在 `bolt_session.cpp` 的 `handleRun` 方法中拦截 `CALL db.ping()` 调用，直接返回空 SUCCESS 响应。同时修改 `handlePull` 兼容空流（`stream_ctx_ == nullptr`）。
+
+**根本修复**：binder 需要支持 `CallClause`。`CallClause` 已在 AST 中定义（`src/query/parser/ast.hpp:373`），但 binder 的 `bindClause` 方法（`src/query/planner/binder/binder.cpp:179`）不处理该类型。
+
+| Cypher 语句 | 需求 |
+|------------|------|
+| `CALL db.ping()` | neo4j 驱动健康检查，必须返回 `{success: true}` |
+| `CALL db.schema.visualization()` | cypher-shell 自动补全 |
+| `CALL db.<proc>(args)` | 通用存储过程调用 |
+
+### 问题 2：Bolt 层硬编码路由到默认图
+
+**严重程度**：高 | **影响范围**：多数据库场景
+
+**现象**：所有 Bolt 连接的查询都固定路由到 `"default"` 图名称。`BoltSession::handleRun()` 中写死：
+
+```cpp
+auto exec_ctx = co_await service_.executeCypher(msg.query, params, "default");
+```
+
+neo4j 驱动在 HELLO 消息中传递的 `db` 字段（如 `bolt://host:7687/mydb`）被接收但未使用。
+
+| 子任务 | 说明 |
+|--------|------|
+| 解析 HELLO 消息的 `db` 字段 | `bolt_session.cpp` handleHello 已有 fields map，提取 `db` 键 |
+| 维护当前图名 | 在 `BoltSession` 中添加 `current_db_` 成员，默认为 `"default"` |
+| 路由 RUN 查询到对应图 | 将 `current_db_` 传入 `service_.executeCypher()` |
+
+### 问题 3：缺少 Cypher DDL 数据库管理语句
+
+**严重程度**：高 | **影响范围**：数据库生命周期管理
+
+**现象**：EuGraph 内部有图管理 API（`GraphService::createGraph/dropGraph/listGraphs`），但未通过 Cypher 语法暴露。用户创建/删除数据库必须使用 `eugraph-shell`（Thrift RPC）。
+
+需要支持的 Neo4j 兼容语句：
+
+| Cypher DDL | 对应内部 API | 优先级 |
+|-----------|-------------|--------|
+| `CREATE DATABASE <name>` | `GraphService::createGraph(name)` | 高 |
+| `DROP DATABASE <name>` | `GraphService::dropGraph(name)` | 高 |
+| `SHOW DATABASES` | `GraphService::listGraphs()` | 高 |
+| `SHOW DATABASE <name>` | `GraphService::listGraphs()` + filter | 中 |
+| `USE <graph>` | 当前 session 切换图 | 高 |
+
+### 问题 4：MATCH 不支持参数化谓词
+
+**严重程度**：中 | **影响范围**：所有带过滤条件的 MATCH 查询
+
+**现象**：
+```cypher
+MATCH (n:Person {name: $name}) RETURN n   -- 失败
+MATCH (n:Person {name: "Alice"}) RETURN n -- 通过
+```
+错误信息：`InvalidParameterUse: MATCH does not support parameter as node predicate`
+
+**影响测试**（标记为 xfail）：
+- `TestCRUD::test_create_and_match_node`
+- `TestCRUD::test_create_and_match_edge`
+
+**修复方向**：`src/query/planner/binder/bind_match.cpp` — MATCH 绑定阶段需要支持参数化属性比较。
+
+### 问题 5：显式事务 COMMIT 数据不可见
+
+**严重程度**：中 | **影响范围**：需要事务保证的写操作
+
+**现象**：
+```cypher
+:BEGIN
+CREATE (n:TxTest {val: 1});
+:COMMIT
+MATCH (n:TxTest {val: 1}) RETURN n;  -- 返回 0 行
+```
+
+**影响测试**（标记为 xfail）：`TestTransactions::test_explicit_commit`
+
+**修复方向**：`src/bolt/bolt_session.cpp` — `handleCommit` 目前只发送 SUCCESS，未确保事务写入对后续查询可见。可能需要检查底层存储的事务隔离/提交机制。
+
+### 问题 6：时间类型序列化为非标准字符串
+
+**严重程度**：中 | **影响范围**：使用时间类型的查询
+
+**现象**：`DateTimeValue`、`TimeValue`、`DurationValue` 通过 `temporalToString()` 转为字符串发送。neo4j 驱动按 struct tag（0x44-0x66）识别时间类型，字符串格式无法还原为原生时间对象。
+
+详见上文"时间类型"章节。
+
+### 问题 7：多 chunk 消息不支持
+
+**严重程度**：中 | **影响范围**：大消息场景
+
+**现象**：`bolt_server.cpp` 的消息读取器显式跳过非零终止符 chunk，超过 64KB 的查询或参数被静默丢弃。
+
+```cpp
+// bolt_server.cpp:165
+if (term != 0) {
+    spdlog::warn("[bolt] multi-chunk message not yet supported, skipping");
+    read_buf_->trimStart(needed);
+    continue;
+}
+```
+
+### 低优先级问题
+
+| # | 问题 | 说明 |
+|---|------|------|
+| 8 | **ROUTE 消息缺失** | `neo4j://` 协议连接失败，集群驱动不可用 |
+| 9 | **无认证机制** | LOGON 接受任何凭据，生产不可用 |
+| 10 | **Bookmark 是空字符串** | handleCommit 返回 `"bookmark": ""`，无因果一致性 |
+| 11 | **空间类型缺失** | 类型系统无 Point2D/Point3D，不可能暴露给驱动 |
+| 12 | **TELEMETRY/NOOP 缺失** | v5.1 规范要求的遥测和保活未实现 |
+| 13 | **LOGOFF 无实际清理** | 返回 SUCCESS 但不释放资源 |
+| 14 | **STRUCT_32 未实现** | PackStream 解码器只支持到 struct16 (>65535 字段的结构体不工作) |
+
+## 改进路线图（建议）
+
+### 第 1 批（核心可用性）
+1. **[Binder] 支持 CallClause** — 根治 CALL db.ping() 及存储过程
+2. **[Bolt] 多数据库路由** — 解析 HELLO db 字段，路由到对应图
+3. **[Cypher] CREATE/DROP/SHOW DATABASES + USE** — DDL 语法支持
+
+### 第 2 批（查询能力）
+4. **[Binder] MATCH 参数化谓词** — 修复 2 个 xfail 测试
+5. **[事务] COMMIT 持久化** — 修复 1 个 xfail 测试
+6. **[类型] 时间类型标准编码** — DateTime/Time/Duration 的 Bolt 结构体输出
+
+### 第 3 批（生产加固）
+7. **多 chunk 消息** — 支持 >64KB 查询/参数
+8. **基本认证** — BASIC auth scheme
+9. **因果一致性** — Bookmark 生成与验证
+
+### 第 4 批（完整协议）
+10. **ROUTE 消息** — 集群/路由驱动支持
+11. **空间类型** — Point 类型系统 + Bolt 编码
+12. **TELEMETRY/NOOP** — 规范合规
 
 ## 参考
 
