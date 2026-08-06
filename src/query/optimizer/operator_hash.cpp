@@ -19,6 +19,7 @@
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
@@ -173,6 +174,11 @@ uint64_t hashBoundExpression(const binder::BoundExpression& expr) {
             } else if constexpr (std::is_same_v<T, binder::BoundParameter>) {
                 seed = hashBytes(seed, val.name);
                 seed = hashBoundType(seed, val.expected_type);
+            } else if constexpr (std::is_same_v<T, binder::BoundPatternComprehension>) {
+                seed = combine(seed, val.output_slot);
+                seed = hashBytes(seed, val.output_name);
+                seed = hashBoundType(seed, val.result_type);
+                seed = hashScalar(seed, reinterpret_cast<uintptr_t>(val.ast));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
                 if (!val)
                     return;
@@ -338,6 +344,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     seed = hashScalar(seed, reinterpret_cast<uintptr_t>(a.func_def));
                     seed = combine(seed, a.distinct ? 1u : 0u);
                     seed = combine(seed, a.is_internal ? 1u : 0u);
+                    seed = combine(seed, a.keeps_nulls ? 1u : 0u);
                 }
                 for (const auto& n : val->output_names)
                     seed = hashBytes(seed, n);
@@ -506,6 +513,18 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     seed = combine(seed, r);
                 }
                 seed = combine(seed, val->anti ? 1u : 0u);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                if (!val)
+                    return;
+                for (const auto& [l, r] : val->correlation) {
+                    seed = combine(seed, l);
+                    seed = combine(seed, r);
+                }
+                for (const auto& o : val->outputs) {
+                    seed = combine(seed, o.slot_id);
+                    seed = hashBytes(seed, o.name);
+                    seed = hashBoundType(seed, o.element_type);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 if (!val)
                     return;

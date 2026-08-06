@@ -160,6 +160,12 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 auto& col = acquireTempColumn(binder::BoundTypeKind::LIST, count);
                 evalListComprehension(*val, input, col, count);
                 return {&col, true};
+            } else if constexpr (std::is_same_v<T, binder::BoundPatternComprehension>) {
+                // column_rewrite must have replaced this placeholder with a
+                // BoundColumnRef to the precomputed list column. Reaching here
+                // means hoisting/rewrite was skipped (programmer error).
+                throw std::runtime_error(
+                    "BoundPatternComprehension reached evaluator — must be rewritten to BoundColumnRef");
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
                 auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
                 evalCase(*val, input, col, count);

@@ -186,8 +186,14 @@ bool hasUnsupportedExpr(const ast::Expression& expr) {
                     return true;
                 return false;
             } else if constexpr (std::is_same_v<Inner, ast::PatternComprehension>) {
-                spdlog::info("[TCK] skipping: pattern comprehension");
-                return true;
+                // Walk into the pattern comprehension's sub-expressions so we
+                // still skip scenarios with unsupported nested constructs, but
+                // no longer blanket-skip all pattern comprehensions.
+                if (ptr->where_pred && hasUnsupportedExpr(*ptr->where_pred))
+                    return true;
+                if (ptr->projection && hasUnsupportedExpr(*ptr->projection))
+                    return true;
+                return false;
             } else if constexpr (std::is_same_v<Inner, ast::SubscriptExpr>) {
                 return hasUnsupportedExpr(ptr->list) || hasUnsupportedExpr(ptr->index);
             } else if constexpr (std::is_same_v<Inner, ast::SliceExpr>) {

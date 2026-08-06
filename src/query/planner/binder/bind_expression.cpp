@@ -647,6 +647,16 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
             } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
                 error("UnexpectedSyntax: pattern expression is only allowed in WHERE clauses");
                 return std::nullopt;
+            } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                // Placeholder binding: keep the AST pointer so the hoisting
+                // pass (bind_return / bind_with) can construct the
+                // BoundPatternComprehensionApplyOp sub-plan later. Result
+                // type is LIST(Any) until the projection is bound — refined
+                // during hoisting.
+                BoundPatternComprehension bpc;
+                bpc.ast = ptr.get();
+                bpc.result_type = BoundType::List(BoundType::Any());
+                return BoundExpression(std::move(bpc));
             } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
                 auto bc = std::make_unique<BoundCase>();
 

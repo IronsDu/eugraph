@@ -10,6 +10,7 @@
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
 #include "query/physical_plan/operator/merge_physical_op.hpp"
 #include "query/physical_plan/operator/path_element_property_read_physical_op.hpp"
+#include "query/physical_plan/operator/pattern_comprehension_apply_physical_op.hpp"
 #include "query/physical_plan/operator/projection_extract_physical_op.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
@@ -486,6 +487,9 @@ static void remapChildOps(binder::BoundLogicalOperator& op, uint32_t offset) {
                 remapLogicalOpColumnIndices(val->left, offset);
                 remapLogicalOpColumnIndices(val->right, offset);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
+                remapLogicalOpColumnIndices(val->left, offset);
+                remapLogicalOpColumnIndices(val->right, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 remapLogicalOpColumnIndices(val->left, offset);
                 remapLogicalOpColumnIndices(val->right, offset);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
@@ -987,6 +991,10 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
             auto& sj = std::get<std::unique_ptr<binder::BoundSemiJoinOp>>(result);
             sj->left = materializeChosen(*chosen.children[0]);
             sj->right = materializeChosen(*chosen.children[1]);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result)) {
+            auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result);
+            pc->left = materializeChosen(*chosen.children[0]);
+            pc->right = materializeChosen(*chosen.children[1]);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundLeftJoinOp>>(result)) {
             auto& lj = std::get<std::unique_ptr<binder::BoundLeftJoinOp>>(result);
             lj->left = materializeChosen(*chosen.children[0]);
@@ -1063,7 +1071,8 @@ void recurseChild(binder::BoundLogicalOperator& op, const std::string& var, cons
                     applyEnrichInPlace(v->right, var, req);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 if (v) {
                     applyEnrichInPlace(v->left, var, req);
                     applyEnrichInPlace(v->right, var, req);
@@ -1159,8 +1168,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                    IAsyncGraphMetaStore& meta, PlanContext& ctx, Schema input_schema,
                                    const std::vector<binder::BoundType>& input_types) {
     return std::visit(
-        [this, &store, &meta, &ctx, &input_schema,
-         &input_types](auto& val) -> std::variant<PlanOperatorResult, std::string> {
+        [this, &store, &meta, &ctx, &input_schema, &input_types,
+         &op](auto& val) -> std::variant<PlanOperatorResult, std::string> {
             using T = std::decay_t<decltype(val)>;
 
             // Resolve __anon__ label id once (used by scan operators for labels filtering)
@@ -1416,6 +1425,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         ae.arguments = std::move(ai.arguments);
                         ae.distinct = ai.distinct;
                         ae.is_internal = ai.is_internal;
+                        ae.keeps_nulls = ai.keeps_nulls;
                         if (v.group_keys.size() + i < v.output_names.size())
                             ae.name = v.output_names[v.group_keys.size() + i];
                         aggregates.push_back(std::move(ae));
@@ -1440,6 +1450,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             output_type_kinds.push_back(binder::BoundTypeKind::ANY);
                         }
                     }
+                    // Pattern comprehension's collect() is_internal aggregate
+                    // emits a column consumed by the Apply op directly. Keep
+                    // output_types aligned with output_schema so downstream
+                    // passes (PE dispatch) can index by column position.
+                    while (output_types.size() < output_schema.size())
+                        output_types.push_back(binder::BoundType::Any());
 
                     auto result =
                         std::make_unique<AggregatePhysicalOp>(std::move(group_keys), std::move(aggregates),
@@ -1969,6 +1985,73 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                                              std::move(left_corr_cols), std::move(rr.output_types));
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                               std::move(ljoin_layout)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundPatternComprehensionApplyOp>) {
+                    auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(left_result))
+                        return std::get<std::string>(left_result);
+                    auto lr = extractChildResult(std::move(left_result));
+
+                    Schema right_input_schema;
+                    std::vector<binder::BoundType> right_input_types;
+                    auto right_result =
+                        planBoundOperator(v.right, store, meta, ctx, right_input_schema, right_input_types);
+                    if (std::holds_alternative<std::string>(right_result))
+                        return std::get<std::string>(right_result);
+                    auto rr = extractChildResult(std::move(right_result));
+
+                    if (v.correlation.empty())
+                        return std::string("PatternComprehensionApply: empty correlation is unsupported (requires at "
+                                           "least one outer variable)");
+
+                    // Locate the CorrelatedSourcePhysicalOp leaf in the right sub-plan.
+                    std::function<CorrelatedSourcePhysicalOp*(PhysicalOperator*)> findCorrelatedSource =
+                        [&](PhysicalOperator* node) -> CorrelatedSourcePhysicalOp* {
+                        if (auto* cs = dynamic_cast<CorrelatedSourcePhysicalOp*>(node))
+                            return cs;
+                        for (auto* child : node->children()) {
+                            if (auto* cs = findCorrelatedSource(const_cast<PhysicalOperator*>(child)))
+                                return cs;
+                        }
+                        return nullptr;
+                    };
+                    CorrelatedSourcePhysicalOp* correlated = findCorrelatedSource(rr.op.get());
+                    if (!correlated)
+                        return std::string(
+                            "PatternComprehensionApply: CorrelatedSourcePhysicalOp not found in right sub-plan");
+
+                    // Resolve left side correlation slots to physical column positions.
+                    std::vector<uint32_t> left_corr_cols;
+                    left_corr_cols.reserve(v.correlation.size());
+                    for (const auto& [left_slot, _] : v.correlation) {
+                        int pos = lr.slot_layout.getColumnIndex(left_slot);
+                        if (pos < 0) {
+                            return std::string("PatternComprehensionApply: left slot " + std::to_string(left_slot) +
+                                               " not found in left slot layout (size " +
+                                               std::to_string(lr.slot_layout.size()) + ")");
+                        }
+                        left_corr_cols.push_back(static_cast<uint32_t>(pos));
+                    }
+
+                    // Output schema: left columns + one LIST column per output.
+                    std::vector<binder::BoundType> list_elem_types;
+                    list_elem_types.reserve(v.outputs.size());
+                    Schema output_schema = lr.output_schema;
+                    std::vector<binder::BoundType> output_types = lr.output_types;
+                    TupleSlotLayout out_layout = lr.slot_layout;
+                    for (auto& out : v.outputs) {
+                        binder::BoundType list_t = binder::BoundType::List(out.element_type);
+                        output_schema.push_back(out.name);
+                        output_types.push_back(list_t);
+                        list_elem_types.push_back(out.element_type);
+                        out_layout.append(out.slot_id);
+                    }
+
+                    auto result = std::make_unique<PatternComprehensionApplyPhysicalOp>(
+                        std::move(lr.op), std::move(rr.op), correlated, std::move(left_corr_cols),
+                        std::move(list_elem_types));
+                    result->setEvalContext(ctx.eval_ctx);
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                                              std::move(out_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundMergeOp>) {
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))

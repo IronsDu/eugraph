@@ -3,6 +3,7 @@
 #include "query/planner/bound_expression/bound_column_ref.hpp"
 #include "query/planner/bound_expression/bound_literal.hpp"
 #include "query/planner/bound_expression/bound_parameter.hpp"
+#include "query/planner/bound_expression/bound_pattern_comprehension.hpp"
 #include "query/planner/bound_expression/bound_variable_ref.hpp"
 
 #include <memory>
@@ -28,6 +29,7 @@ struct BoundAnyExpr;
 struct BoundNoneExpr;
 struct BoundSingleExpr;
 struct BoundListComprehension;
+struct BoundPatternComprehension;
 
 using BoundExpression =
     std::variant<BoundLiteral, BoundColumnRef, BoundVariableRef, BoundParameter,
@@ -36,7 +38,7 @@ using BoundExpression =
                  std::unique_ptr<BoundFunctionCall>, std::unique_ptr<BoundList>, std::unique_ptr<BoundMap>,
                  std::unique_ptr<BoundCase>, std::unique_ptr<BoundSubscript>, std::unique_ptr<BoundSlice>,
                  std::unique_ptr<BoundAllExpr>, std::unique_ptr<BoundAnyExpr>, std::unique_ptr<BoundNoneExpr>,
-                 std::unique_ptr<BoundSingleExpr>, std::unique_ptr<BoundListComprehension>>;
+                 std::unique_ptr<BoundSingleExpr>, std::unique_ptr<BoundListComprehension>, BoundPatternComprehension>;
 
 } // namespace binder
 } // namespace eugraph

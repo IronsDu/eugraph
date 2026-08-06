@@ -274,8 +274,9 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
         auto current = std::move(child);
         for (auto& [ex, anti] : exists_list) {
             auto sj = bindExistsAsSemiJoin(*ex, std::move(current), anti);
-            if (!sj)
+            if (!sj) {
                 return std::nullopt;
+            }
             current = std::move(*sj);
         }
 

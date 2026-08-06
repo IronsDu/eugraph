@@ -87,6 +87,12 @@ public:
     const BindContext& ctx() const {
         return ctx_;
     }
+    BindContext& ctx() {
+        return ctx_;
+    }
+    const catalog::Catalog& catalog() const {
+        return catalog_;
+    }
     uint32_t anon_id_ = 0;
 
     /// Alias substitutions for non-aggregating WITH ORDER BY binding.
@@ -156,6 +162,20 @@ public:
     /// Remove EXISTS expressions (and their wrapping NOT, if any) from the top-level
     /// AND chain. Returns nullopt if the entire expression was EXISTS-related.
     static std::optional<cypher::Expression> removeExistsFromWhere(const cypher::Expression& expr);
+
+    // ── Pattern comprehension binding ──
+    /// Bind a PatternComprehension AST node as a BoundPatternComprehensionApplyOp
+    /// wrapping the given left child. The output list column slot is allocated
+    /// and returned via `out_slot` / `out_name` so the caller can rewrite the
+    /// original placeholder to a BoundColumnRef pointing at it. `correlation`
+    /// carries (outer_slot, sub_slot) pairs (same semantics as bindExistsSubPlan).
+    /// `out_element_type` is the projection's element type; the full result type
+    /// is LIST(out_element_type).
+    std::optional<BoundLogicalOperator> bindPatternComprehension(const cypher::PatternComprehension& pc,
+                                                                 BoundLogicalOperator child,
+                                                                 std::vector<std::pair<SlotId, SlotId>>& correlation,
+                                                                 SlotId& out_slot, std::string& out_name,
+                                                                 BoundType& out_element_type);
 
     // ── Variable registration ──
 

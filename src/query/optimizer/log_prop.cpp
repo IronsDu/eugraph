@@ -15,6 +15,7 @@
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
 #include "query/planner/logical_plan/operator/bound_merge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_path_build_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
 #include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_remove_op.hpp"
 #include "query/planner/logical_plan/operator/bound_scan_op.hpp"
@@ -82,6 +83,8 @@ LogProp LogPropDeriver::derive(const binder::BoundLogicalOperator& op, const std
                 return deriveLeftJoin(*val, input_lps.at(0), input_lps.at(1));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
                 return deriveSemiJoin(*val, input_lps.at(0), input_lps.at(1));
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                return derivePatternComprehensionApply(*val, input_lps.at(0), input_lps.at(1));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                 return deriveUnion(*val, input_lps.at(0), input_lps.at(1));
             }
@@ -406,6 +409,24 @@ LogProp LogPropDeriver::deriveUnion(const binder::BoundUnionOp& op, const LogPro
         lp.cardinality = (left.cardinality + right.cardinality) * 0.8;
     }
     lp.columns = left.columns; // assume same schema
+    lp.valid = true;
+    return lp;
+}
+
+LogProp LogPropDeriver::derivePatternComprehensionApply(const binder::BoundPatternComprehensionApplyOp& op,
+                                                        const LogProp& left, const LogProp& /*right*/) const {
+    // Mirror SemiJoin shape: one output row per left row, schema is left
+    // columns plus one LIST column per `outputs` entry.
+    LogProp lp;
+    lp.cardinality = left.cardinality;
+    lp.columns = left.columns;
+    for (const auto& out : op.outputs) {
+        ColumnInfo ci;
+        ci.variable = out.name;
+        ci.column_index = out.slot_id;
+        ci.type_kind = binder::BoundTypeKind::LIST;
+        lp.columns.push_back(std::move(ci));
+    }
     lp.valid = true;
     return lp;
 }

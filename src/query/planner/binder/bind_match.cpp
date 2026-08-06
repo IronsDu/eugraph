@@ -1,12 +1,16 @@
 #include "query/planner/binder.hpp"
 
 #include "query/function/batch_ops.hpp"
+#include "query/planner/bound_expression/bound_literal.hpp"
+#include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
+
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_pattern_comprehension_apply_op.hpp"
+#include "query/planner/logical_plan/operator/bound_project_op.hpp"
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 #include <algorithm>
-#include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace binder {
@@ -976,6 +980,272 @@ std::optional<BoundLogicalOperator> Binder::bindExistsAsSemiJoin(const cypher::E
     semi_join->correlation = std::move(correlation);
     semi_join->anti = anti;
     return semi_join;
+}
+
+// ==================== Pattern Comprehension Binding ====================
+
+namespace {
+
+/// Resolve a Variable/property/Literal from a PatternComprehension projection
+/// AST into a BoundExpression. Since the sub-plan scope was already restored
+/// by bindExistsSubPlan, we use ctx_.all_symbols (permanent) for slot_id
+/// lookup and a map of sub-plan variable names → BoundType collected from
+/// the pattern definition.
+BoundExpression bindSimpleProjectionExpr(Binder& binder, const cypher::Expression& proj_ast,
+                                         const cypher::PatternComprehension& pc) {
+    // Build a map of sub-plan variable → BoundType from the pattern definition.
+    // These are the names/names that bindExistsSubPlan registers in the sub-scope.
+    std::unordered_map<std::string, BoundType> sub_var_types;
+    if (pc.patterns.empty())
+        return BoundExpression(BoundLiteral(int64_t(1)));
+
+    const auto& pp = pc.patterns[0];
+    // Path variable from PatternComprehension (e.g. `p` in `[p=(n)-->() | p]`)
+    if (pc.variable.has_value())
+        sub_var_types[*pc.variable] = BoundType::Path();
+    // Also check PatternPart variable for shared AST patterns
+    if (pp.variable.has_value())
+        sub_var_types[*pp.variable] = BoundType::Path();
+    // Chain node and edge variables (non-correlated ones keep their names)
+    if (!pp.element.chain.empty()) {
+        for (const auto& [rel_pat, node_pat] : pp.element.chain) {
+            if (rel_pat.variable.has_value())
+                sub_var_types[*rel_pat.variable] = BoundType::Edge();
+            if (node_pat.variable.has_value())
+                sub_var_types[*node_pat.variable] = BoundType::Vertex();
+        }
+    } else if (pp.element.node.variable.has_value()) {
+        sub_var_types[*pp.element.node.variable] = BoundType::Vertex();
+    }
+
+    // Variable
+    if (auto* var = std::get_if<std::unique_ptr<cypher::Variable>>(&proj_ast)) {
+        const auto& name = (*var)->name;
+        auto type_it = sub_var_types.find(name);
+        auto slot_it = binder.ctx().all_symbols.find(name);
+        if (type_it != sub_var_types.end() && slot_it != binder.ctx().all_symbols.end()) {
+            BoundType topo = BoundType::clone(type_it->second);
+            BoundTypeKind tk = topologyCounterpart(topo.kind);
+            if (tk != topo.kind)
+                topo.kind = tk;
+            return BoundExpression(BoundColumnRef(0, topo, name, slot_it->second));
+        }
+    }
+    // Literal
+    else if (auto* lit = std::get_if<std::unique_ptr<cypher::Literal>>(&proj_ast)) {
+        const auto& v = (*lit)->value;
+        if (std::holds_alternative<bool>(v))
+            return BoundExpression(BoundLiteral(std::get<bool>(v)));
+        if (std::holds_alternative<int64_t>(v))
+            return BoundExpression(BoundLiteral(std::get<int64_t>(v)));
+        if (std::holds_alternative<double>(v))
+            return BoundExpression(BoundLiteral(std::get<double>(v)));
+        if (std::holds_alternative<std::string>(v))
+            return BoundExpression(BoundLiteral(std::get<std::string>(v)));
+    }
+    // PropertyAccess: e.g. b.name → look up b's slot, create BoundPropertyRef
+    // with catalog-resolved candidates so the evaluator can find the property
+    // and applyProjectionPushdown wires Expand to materialize the value.
+    else if (auto* pr = std::get_if<std::unique_ptr<cypher::PropertyAccess>>(&proj_ast)) {
+        auto obj_var = std::get_if<std::unique_ptr<cypher::Variable>>(&(*pr)->object);
+        if (obj_var) {
+            const auto& name = (*obj_var)->name;
+            auto type_it = sub_var_types.find(name);
+            auto slot_it = binder.ctx().all_symbols.find(name);
+            if (type_it != sub_var_types.end() && slot_it != binder.ctx().all_symbols.end()) {
+                const auto& pname = (*pr)->property;
+                auto prop_ref = std::make_unique<BoundPropertyRef>();
+                prop_ref->property_name = pname;
+                prop_ref->object = BoundExpression(BoundColumnRef(0, type_it->second, name, slot_it->second));
+
+                if (type_it->second.kind == BoundTypeKind::VERTEX) {
+                    // Resolve candidates across all labels so the evaluator
+                    // knows which (label_id, prop_id) pairs to read. Also
+                    // push property requirements so applyProjectionPushdown
+                    // wires the Expand to materialize the destination.
+                    LabelIdSet all_labels;
+                    for (const auto& [lid, ldef] : binder.catalog().allLabels())
+                        all_labels.insert(lid);
+                    auto candidates = binder.catalog().lookupPropertyAcrossLabels(all_labels, pname);
+                    BoundType merged = BoundType::Null();
+                    for (auto& [lid, pd] : candidates) {
+                        BoundPropertyRef::ResolvedProperty rp;
+                        rp.label_id = lid;
+                        rp.prop_id = pd->id;
+                        rp.type = binder.propertyTypeToBoundType(pd->type);
+                        merged = BoundType::merge(merged, rp.type);
+                        prop_ref->candidates.push_back(rp);
+                        binder.ctx().addPropertyRequirement(name, lid, pd->id);
+                    }
+                    prop_ref->result_type = candidates.empty() ? BoundType::Any() : merged;
+                } else if (type_it->second.kind == BoundTypeKind::EDGE) {
+                    // Edge property: resolve candidates across all edge labels.
+                    // EdgeVariableRef is rare here; we set candidates so the
+                    // evaluator's edge-property path can find the property.
+                    BoundType merged = BoundType::Null();
+                    for (const auto& [elid, eldef] : binder.catalog().allEdgeLabels()) {
+                        for (const auto& pd : eldef.properties) {
+                            if (pd.name == pname) {
+                                BoundPropertyRef::ResolvedProperty rp;
+                                rp.label_id = static_cast<LabelId>(elid);
+                                rp.prop_id = pd.id;
+                                rp.type = binder.propertyTypeToBoundType(pd.type);
+                                merged = BoundType::merge(merged, rp.type);
+                                prop_ref->candidates.push_back(rp);
+                                binder.ctx().addPropertyRequirement(name, static_cast<LabelId>(elid), pd.id);
+                            }
+                        }
+                    }
+                    prop_ref->result_type = prop_ref->candidates.empty() ? BoundType::Any() : merged;
+                } else {
+                    prop_ref->result_type = BoundType::Any();
+                }
+                return BoundExpression(std::move(prop_ref));
+            }
+        }
+    }
+
+    // Fallback: literal 1 (works for size([... | 1]) and similar)
+    return BoundExpression(BoundLiteral(int64_t(1)));
+}
+
+} // namespace
+
+// ==================== Pattern Comprehension Binding ====================
+
+std::optional<BoundLogicalOperator>
+Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLogicalOperator child,
+                                 std::vector<std::pair<SlotId, SlotId>>& correlation, SlotId& out_slot,
+                                 std::string& out_name, BoundType& out_element_type) {
+    // Reuse bindExistsSubPlan by synthesising an ExistsExpr wrapper. Pattern
+    // binding, sub-scope management, and correlated-source wiring are
+    // identical; we then append Project + Aggregate(collect) to collapse the
+    // sub-plan into a single-row single-list result.
+    if (pc.patterns.empty()) {
+        error("PatternComprehension: empty pattern");
+        return std::nullopt;
+    }
+
+    cypher::ExistsExpr synthetic;
+    synthetic.is_bare_predicate = false;
+    synthetic.patterns.reserve(pc.patterns.size());
+    for (const auto& pp : pc.patterns) {
+        cypher::PatternPart cloned_pp;
+        // Propagate the path variable from pc.variable (PatternComprehension
+        // level, e.g. `[p=(n)-->() | p]` stores `p` here), falling back to
+        // pp.variable (PatternPart level, for shared AST patterns).
+        cloned_pp.variable = pc.variable.has_value() ? pc.variable : pp.variable;
+        cloned_pp.element.node.variable = pp.element.node.variable;
+        cloned_pp.element.node.labels = pp.element.node.labels;
+        if (pp.element.node.properties) {
+            cloned_pp.element.node.properties = cypher::PropertiesMap{};
+            for (const auto& [k, v] : pp.element.node.properties->entries)
+                cloned_pp.element.node.properties->entries.emplace_back(k, cloneExpression(v));
+        }
+        for (const auto& [rel_pat, node_pat] : pp.element.chain) {
+            cypher::RelationshipPattern cloned_rel;
+            cloned_rel.variable = rel_pat.variable;
+            cloned_rel.rel_types = rel_pat.rel_types;
+            cloned_rel.direction = rel_pat.direction;
+            if (rel_pat.range) {
+                cloned_rel.range =
+                    std::make_pair(cloneExpression(rel_pat.range->first), cloneExpression(rel_pat.range->second));
+            }
+            if (rel_pat.properties) {
+                cloned_rel.properties = cypher::PropertiesMap{};
+                for (const auto& [k, v] : rel_pat.properties->entries)
+                    cloned_rel.properties->entries.emplace_back(k, cloneExpression(v));
+            }
+            cypher::NodePattern cloned_node;
+            cloned_node.variable = node_pat.variable;
+            cloned_node.labels = node_pat.labels;
+            if (node_pat.properties) {
+                cloned_node.properties = cypher::PropertiesMap{};
+                for (const auto& [k, v] : node_pat.properties->entries)
+                    cloned_node.properties->entries.emplace_back(k, cloneExpression(v));
+            }
+            cloned_pp.element.chain.emplace_back(std::move(cloned_rel), std::move(cloned_node));
+        }
+        synthetic.patterns.push_back(std::move(cloned_pp));
+    }
+    if (pc.where_pred)
+        synthetic.where_pred = cloneExpression(*pc.where_pred);
+
+    std::vector<std::pair<uint32_t, uint32_t>> exists_corr;
+    auto sub_plan = bindExistsSubPlan(synthetic, exists_corr);
+    if (!sub_plan)
+        return std::nullopt;
+    for (const auto& [l, r] : exists_corr)
+        correlation.emplace_back(static_cast<SlotId>(l), static_cast<SlotId>(r));
+
+    // Bind projection expression. The sub-plan scope has been restored by
+    // bindExistsSubPlan, so variables registered during spine construction
+    // are no longer in ctx_.symbols. However, ctx_.all_symbols retains
+    // their globally-unique slot_ids. We resolve the slot_id and type by
+    // collecting from the pattern definition (path var, chain vars, etc.),
+    // then build a BoundColumnRef. The column_index (currently 0) will be
+    // resolved later by ExpressionCompiler using the slot_layout.
+    BoundExpression proj_expr;
+    if (pc.projection) {
+        proj_expr = bindSimpleProjectionExpr(*this, *pc.projection, pc);
+    } else {
+        proj_expr = BoundExpression(BoundLiteral(int64_t(1)));
+    }
+    out_element_type = getBoundExprType(proj_expr);
+
+    // Append Project → single column __pc_proj
+    auto proj_op = std::make_unique<BoundProjectOp>();
+    BoundProjectOp::ProjectItem item;
+    item.expr = std::move(proj_expr);
+    item.alias = "__pc_proj";
+    item.result_type = out_element_type;
+    item.output_slot = INVALID_SLOT_ID;
+    proj_op->items.push_back(std::move(item));
+    proj_op->child = std::move(*sub_plan);
+    sub_plan = std::move(proj_op);
+
+    // Append Aggregate → single collect() over __pc_proj
+    auto agg_op = std::make_unique<BoundAggregateOp>();
+    const function::FunctionDef* collect_fn = func_registry_.lookup("collect", {out_element_type});
+    if (!collect_fn) {
+        // Fall back to ANY-typed collect if a typed overload is missing.
+        collect_fn = func_registry_.lookup("collect", {BoundType::Any()});
+    }
+    if (!collect_fn) {
+        error("PatternComprehension: collect() not registered");
+        return std::nullopt;
+    }
+    BoundAggregateOp::AggregateItem agg_item;
+    agg_item.func_def = collect_fn;
+    agg_item.function_name = "collect";
+    agg_item.arguments.push_back(BoundExpression(BoundColumnRef(0, out_element_type, "__pc_proj", INVALID_SLOT_ID)));
+    agg_item.alias = "__pc_list";
+    agg_item.result_type = BoundType::List(out_element_type);
+    agg_item.is_internal = false; // must be visible — PCApply reads this column directly
+    agg_item.keeps_nulls = true;  // collect() must retain nulls for pattern comprehension
+    agg_op->aggregates.push_back(std::move(agg_item));
+    agg_op->output_names.push_back("__pc_list");
+    agg_op->child = std::move(*sub_plan);
+    sub_plan = std::move(agg_op);
+
+    // Allocate output slot and wrap in the Apply op. The unique name ties
+    // together: the all_symbols entry, the Apply op's Output struct (used by
+    // column_rewrite to register the slot for downstream name resolution), and
+    // the placeholder's output_name (used by column_rewrite to rewrite the
+    // placeholder to a BoundColumnRef).
+    out_name = "__pc_" + std::to_string(nextAnonId());
+    out_slot = allocateNamedSlot(out_name);
+
+    auto apply = std::make_unique<BoundPatternComprehensionApplyOp>();
+    apply->left = std::move(child);
+    apply->right = std::move(*sub_plan);
+    apply->correlation = std::move(correlation);
+    BoundPatternComprehensionApplyOp::Output out;
+    out.slot_id = out_slot;
+    out.name = out_name;
+    out.element_type = out_element_type;
+    apply->outputs.push_back(std::move(out));
+    return BoundLogicalOperator(std::move(apply));
 }
 
 // ==================== OPTIONAL MATCH Binding ====================
