@@ -1,4 +1,6 @@
 #include "query/planner/binder.hpp"
+#include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_call_op.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -58,8 +60,30 @@ std::optional<BoundStatement> Binder::bind(const cypher::Statement& stmt) {
                 }
                 error("EXPLAIN with no query");
                 return std::nullopt;
+            } else if constexpr (std::is_same_v<Elem, cypher::StandaloneCall>) {
+                BoundStatement result;
+                cypher::CallClause call_clause;
+                call_clause.procedure_name = std::move(ptr->procedure_name);
+                call_clause.args = std::move(ptr->args);
+                call_clause.yield_items = std::move(ptr->yield_items);
+                call_clause.where_pred = std::move(ptr->where_pred);
+                auto call_op = bindCall(call_clause, std::nullopt);
+                if (!call_op)
+                    return std::nullopt;
+                result.plan.root = std::move(*call_op);
+                if (!ctx_.return_columns.empty())
+                    result.plan.output_schema = std::move(ctx_.return_columns);
+                else {
+                    auto bound_call = std::get_if<std::unique_ptr<BoundCallOp>>(&result.plan.root);
+                    if (bound_call && *bound_call) {
+                        for (size_t i = 0; i < (*bound_call)->output_names.size(); ++i)
+                            result.plan.output_schema.push_back(
+                                makeColumnInfo((*bound_call)->output_names[i], (*bound_call)->output_types[i]));
+                    }
+                }
+                return std::make_optional(std::move(result));
             } else {
-                error("CALL statement not yet supported in binder");
+                error("Unsupported statement type");
                 return std::nullopt;
             }
         },
@@ -230,6 +254,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                     return bindUnwind(*ptr, std::move(current));
                 } else if constexpr (std::is_same_v<Elem, cypher::MergeClause>) {
                     return bindMerge(*ptr, std::move(current));
+                } else if constexpr (std::is_same_v<Elem, cypher::CallClause>) {
+                    return bindCall(*ptr, std::move(current));
                 } else {
                     error("Clause type not yet supported in binder");
                     return std::nullopt;

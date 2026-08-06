@@ -239,7 +239,7 @@ CMakeLists.txt                                # 新增源文件
 
 ### 完成度总览
 
-**整体完成度：约 70%** — 核心功能完整，多数据库、DDL、存储过程已实现。
+**整体完成度：约 85%** — 核心功能完整，参数化谓词、事务提交、时间类型已修复。
 
 | 模块 | 完成度 | 说明 |
 |------|--------|------|
@@ -248,7 +248,7 @@ CMakeLists.txt                                # 新增源文件
 | 会话状态机 | 100% | 6 个状态、所有转换路径已实现 |
 | 消息分发 | 67% | 12 个主要消息已实现，缺 ROUTE/TELEMETRY/NOOP |
 | 图实体编码 (Node/Rel/Path) | 100% | NODE(0x4E)/RELATIONSHIP(0x52)/PATH(0x50) 完整 |
-| 时间类型编码 | 0% | 序列化为字符串，非标准结构体格式 |
+| 时间类型编码 | 100% | Date/Time/DateTime/Duration 标准 Bolt 结构体编码 |
 | 空间类型编码 | 0% | 类型系统无 Point 类型 |
 | 多 chunk 消息 | 0% | 仅支持单 chunk (<64KB) |
 | Bookmark/因果一致性 | 5% | 仅返回空 bookmark 桩 |
@@ -347,21 +347,21 @@ neo4j 5.x 驱动会在同一个 TCP 数据包中流水线发送多个 Bolt 消�
 - **PATH**(0x50): `struct(0x50, [nodes: list<NODE>, edges: list<RELATIONSHIP>, sequence: list<int>])`
   - sequence 使用基于索引的交替编码（正索引=nodes，负索引=edges）
 
-**时间类型（序列化为字符串，待修复）**：
-
-当前 `DateTimeValue`、`TimeValue`、`DurationValue` 都通过 `temporalToString()` 转为字符串发送，而非使用 Bolt 标准结构体标记。这意味着 neo4j 驱动无法将其反序列化为原生时间对象。
-
-应使用的标准标记：
+**时间类型（标准 Bolt v5.0+ 结构体编码）**：
 
 | 类型 | 标记 | 字段 |
 |------|------|------|
 | Date | 0x44 | `[days_since_epoch: int]` |
 | Time | 0x54 | `[nanos: int, offset_seconds: int]` |
 | LocalTime | 0x74 | `[nanos: int]` |
-| DateTime | 0x46 | `[seconds: int, nanos: int, offset_seconds: int]` |
-| DateTimeZoneId | 0x66 | `[seconds: int, nanos: int, zone_id: string]` |
+| DateTime | 0x49 | `[utc_seconds: int, nanos: int, offset_seconds: int]` |
+| DateTimeZoneId | 0x69 | `[utc_seconds: int, nanos: int, zone_id: string]` |
 | LocalDateTime | 0x64 | `[seconds: int, nanos: int]` |
 | Duration | 0x45 | `[months: int, days: int, seconds: int, nanos: int]` |
+
+> **Bolt v5.0+ 变更**: DateTime 标签从 0x46 改为 0x49，DateTimeZoneId 从 0x66 改为 0x69。
+> `seconds` 字段语义从本地墙上时间（wall-clock）改为 UTC 纪元秒（local_seconds - tz_offset_sec）。
+> 其他时间类型标签未变（0x44、0x54、0x74、0x64、0x45）。
 
 ### 5. 会话状态机
 
@@ -434,8 +434,8 @@ neo4j 5.x 驱动会在同一个 TCP 数据包中流水线发送多个 Bolt 消�
 
 | 状态 | 数量 | 说明 |
 |------|------|------|
-| 通过 | 15 | 连接、查询、类型往返、参数传递、事务回滚 |
-| xfail | 3 | 查询引擎不支持 MATCH 参数化谓词 (2)、显式事务提交持久化 (1) |
+| 通过 | 22 | 连接、查询、类型往返（含时间类型）、参数传递、事务提交/回滚 |
+| xfail | 0 | — |
 
 运行命令：
 ```bash
@@ -508,46 +508,32 @@ cmake -DSKIP_BOLT_INTEGRATION_TESTS=ON ..
 
 **关键设计**：DDL 结果通过标准 `StreamContext` 管线返回（构建 `Row` → `RowBatch` → `wrapRowBatchToChunkGenerator`），与 Index DDL 模式一致。`USE <graph>` 通过 `CypherExecutionContext::switched_database` 字段通知调用方更新会话状态。
 
-### 问题 4：MATCH 不支持参数化谓词
+### 问题 4：MATCH 不支持参数化谓词（已修复）
 
-**严重程度**：中 | **影响范围**：所有带过滤条件的 MATCH 查询
+**严重程度**：中（已修复） | **影响范围**：所有带过滤条件的 MATCH 查询
 
-**现象**：
-```cypher
-MATCH (n:Person {name: $name}) RETURN n   -- 失败
-MATCH (n:Person {name: "Alice"}) RETURN n -- 通过
-```
-错误信息：`InvalidParameterUse: MATCH does not support parameter as node predicate`
+**修复方案**：删除了 `bind_match.cpp` 和 `bind_merge.cpp` 中硬编码的 `containsParameter()`/`propertiesContainParameter()` 检查。`bindExpression()` 已有完整的 `Parameter` 解析支持（查找参数表并转换为 `BoundLiteral`），只需移除阻拦门禁即可。相应的 2 个 xfail 集成测试标记已移除。
 
-**影响测试**（标记为 xfail）：
-- `TestCRUD::test_create_and_match_node`
-- `TestCRUD::test_create_and_match_edge`
+### 问题 5：显式事务 COMMIT 数据不可见（已修复）
 
-**修复方向**：`src/query/planner/binder/bind_match.cpp` — MATCH 绑定阶段需要支持参数化属性比较。
+**严重程度**：中（已修复） | **影响范围**：需要事务保证的写操作
 
-### 问题 5：显式事务 COMMIT 数据不可见
+**修复方案**：
+- `BoltSession` 新增 `pending_txn_` 和 `pending_store_` 成员，在 `handlePull()`/`handleDiscard()` 中 `stream_ctx_.reset()` 前保存事务句柄
+- `handleCommit()` 调用 `pending_store_->commitTran(pending_txn_)` 提交数据库事务
+- `handleRollback()` 调用 `pending_store_->rollbackTran()` 回滚
+- `handleReset()` 清理未完成的事务
+- 移除了 1 个 xfail 集成测试标记
 
-**严重程度**：中 | **影响范围**：需要事务保证的写操作
+### 问题 6：时间类型序列化为非标准字符串（已修复）
 
-**现象**：
-```cypher
-:BEGIN
-CREATE (n:TxTest {val: 1});
-:COMMIT
-MATCH (n:TxTest {val: 1}) RETURN n;  -- 返回 0 行
-```
+**严重程度**：中（已修复） | **影响范围**：使用时间类型的查询
 
-**影响测试**（标记为 xfail）：`TestTransactions::test_explicit_commit`
-
-**修复方向**：`src/bolt/bolt_session.cpp` — `handleCommit` 目前只发送 SUCCESS，未确保事务写入对后续查询可见。可能需要检查底层存储的事务隔离/提交机制。
-
-### 问题 6：时间类型序列化为非标准字符串
-
-**严重程度**：中 | **影响范围**：使用时间类型的查询
-
-**现象**：`DateTimeValue`、`TimeValue`、`DurationValue` 通过 `temporalToString()` 转为字符串发送。neo4j 驱动按 struct tag（0x44-0x66）识别时间类型，字符串格式无法还原为原生时间对象。
-
-详见上文"时间类型"章节。
+**修复方案**：
+- `bolt_messages.hpp` 新增 7 个时间类型标签（DATE 0x44、TIME 0x54、LOCAL_TIME 0x74、DATETIME 0x49、DATETIME_ZONE_ID 0x69、LOCAL_DATETIME 0x64、DURATION 0x45）。DATETIME/DATETIME_ZONE_ID 使用 Bolt 5.0+ 标签（原 0x46/0x66 为旧版标签，已被 cypher-shell v5.x 拒绝）
+- `bolt_value_mapping.cpp` 新增 `dateTimeToStruct()`、`timeToStruct()`、`durationToStruct()` 辅助函数，替换所有 `temporalToString()` 调用。DATETIME/DATETIME_ZONE_ID 的 `seconds` 字段使用 UTC 纪元秒（local_seconds - tz_offset_sec）
+- DateTimeValue 根据 `kind` 分派到 Date/LocalDateTime/DateTime/DateTimeZoneId
+- 新增 7 个 C++ 单元测试 + 4 个 Python 集成测试（date/datetime/time/duration 往返）
 
 ### 问题 7：多 chunk 消息不支持
 
@@ -583,10 +569,10 @@ if (term != 0) {
 2. ~~**[Bolt] 多数据库路由** — 解析 HELLO db 字段，路由到对应图~~
 3. ~~**[Cypher] CREATE/DROP/SHOW DATABASES + USE** — DDL 语法支持~~
 
-### 第 2 批（查询能力）
-4. **[Binder] MATCH 参数化谓词** — 修复 2 个 xfail 测试
-5. **[事务] COMMIT 持久化** — 修复 1 个 xfail 测试
-6. **[类型] 时间类型标准编码** — DateTime/Time/Duration 的 Bolt 结构体输出
+### 第 2 批（查询能力）✅ 已完成
+4. ~~**[Binder] MATCH 参数化谓词** — 修复 2 个 xfail 测试~~
+5. ~~**[事务] COMMIT 持久化** — 修复 1 个 xfail 测试~~
+6. ~~**[类型] 时间类型标准编码** — DateTime/Time/Duration 的 Bolt 结构体输出~~
 
 ### 第 3 批（生产加固）
 7. **多 chunk 消息** — 支持 >64KB 查询/参数

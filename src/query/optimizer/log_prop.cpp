@@ -75,6 +75,8 @@ LogProp LogPropDeriver::derive(const binder::BoundLogicalOperator& op, const std
                 return derivePathBuild(*val, input_lps.at(0));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 return deriveUnwind(*val, input_lps.at(0));
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
+                return deriveCall(*val);
             }
             // Binary operators
             else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
@@ -117,6 +119,20 @@ LogProp LogPropDeriver::derive(const binder::BoundLogicalOperator& op, const std
 LogProp LogPropDeriver::deriveSingleton() const {
     LogProp lp;
     lp.cardinality = 1.0;
+    lp.valid = true;
+    return lp;
+}
+
+LogProp LogPropDeriver::deriveCall(const binder::BoundCallOp& op) const {
+    LogProp lp;
+    lp.cardinality = 1.0;
+    for (size_t i = 0; i < op.output_names.size() && i < op.output_types.size(); ++i) {
+        ColumnInfo ci;
+        ci.variable = op.output_names[i];
+        ci.column_index = static_cast<uint32_t>(i);
+        ci.type_kind = op.output_types[i].kind;
+        lp.columns.push_back(std::move(ci));
+    }
     lp.valid = true;
     return lp;
 }

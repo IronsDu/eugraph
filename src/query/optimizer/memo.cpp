@@ -24,7 +24,8 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
                           std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
-                          std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
+                          std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                 // Leaf operators — no child field
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
@@ -52,7 +53,8 @@ int getChildCount(const binder::BoundLogicalOperator& op) {
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
                           std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
-                          std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
+                          std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                 return 0;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
@@ -131,7 +133,8 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                 using T = std::decay_t<decltype(val)>;
                 if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
                               std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
-                              std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
+                              std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp> ||
+                              std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                     return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
@@ -822,6 +825,15 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->list_expr = cloneBoundExpression(val->list_expr);
                 c->variable = val->variable;
                 c->variable_column_index = val->variable_column_index;
+                return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
+                auto c = std::make_unique<binder::BoundCallOp>();
+                c->procedure_name = val->procedure_name;
+                for (const auto& arg : val->arguments)
+                    c->arguments.push_back(cloneBoundExpression(arg));
+                c->yield_items = val->yield_items;
+                c->output_names = val->output_names;
+                c->output_types = val->output_types;
                 return c;
             }
             // This line reached only if variant type not handled — compile error preferred

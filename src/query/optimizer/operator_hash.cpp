@@ -7,6 +7,7 @@
 #include "query/planner/bound_type.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_call_op.hpp"
 #include "query/planner/logical_plan/operator/bound_correlated_source_op.hpp"
 #include "query/planner/logical_plan/operator/bound_create_edge_op.hpp"
 #include "query/planner/logical_plan/operator/bound_create_node_op.hpp"
@@ -426,6 +427,16 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = combine(seed, hashBoundExpression(val->list_expr));
                 seed = hashBytes(seed, val->variable);
                 seed = combine(seed, val->variable_column_index);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
+                if (!val)
+                    return;
+                seed = hashBytes(seed, val->procedure_name);
+                for (const auto& arg : val->arguments)
+                    seed = combine(seed, hashBoundExpression(arg));
+                for (const auto& yi : val->yield_items)
+                    seed = hashBytes(seed, yi);
+                for (const auto& n : val->output_names)
+                    seed = hashBytes(seed, n);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (!val)
                     return;

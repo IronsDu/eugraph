@@ -431,6 +431,12 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
             co_await stream_ctx_->store.commitTran(stream_ctx_->txn);
         }
 
+        // Save transaction handle for explicit transaction commits
+        if (in_transaction_ && stream_ctx_->should_commit) {
+            pending_txn_ = stream_ctx_->txn;
+            pending_store_ = &stream_ctx_->store;
+        }
+
         // Build success metadata
         std::unordered_map<std::string, packstream::Value> meta;
         meta["type"] = std::string{"r"};
@@ -463,6 +469,11 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
 folly::coro::Task<std::vector<uint8_t>> BoltSession::handleDiscard(const DiscardMessage&) {
     if (state_ == SessionState::FAILED) {
         co_return makeIgnored();
+    }
+    // Save transaction handle for explicit transaction commits
+    if (in_transaction_ && stream_ctx_ && stream_ctx_->should_commit) {
+        pending_txn_ = stream_ctx_->txn;
+        pending_store_ = &stream_ctx_->store;
     }
     // Discard remaining results and close stream
     stream_ctx_.reset();
@@ -497,6 +508,12 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleCommit() {
         co_return makeFailure("ProtocolError", "Unexpected COMMIT in current state");
     }
 
+    if (pending_txn_ != INVALID_GRAPH_TXN && pending_store_) {
+        co_await pending_store_->commitTran(pending_txn_);
+        pending_txn_ = INVALID_GRAPH_TXN;
+        pending_store_ = nullptr;
+    }
+
     in_transaction_ = false;
     state_ = SessionState::READY;
     std::unordered_map<std::string, packstream::Value> meta;
@@ -512,6 +529,12 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRollback() {
         co_return makeFailure("ProtocolError", "Unexpected ROLLBACK in current state");
     }
 
+    if (pending_txn_ != INVALID_GRAPH_TXN && pending_store_) {
+        co_await pending_store_->rollbackTran(pending_txn_);
+        pending_txn_ = INVALID_GRAPH_TXN;
+        pending_store_ = nullptr;
+    }
+
     in_transaction_ = false;
     state_ = SessionState::READY;
     std::unordered_map<std::string, packstream::Value> meta;
@@ -520,6 +543,11 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRollback() {
 
 folly::coro::Task<std::vector<uint8_t>> BoltSession::handleReset() {
     // RESET is valid in any state
+    if (pending_txn_ != INVALID_GRAPH_TXN && pending_store_) {
+        co_await pending_store_->rollbackTran(pending_txn_);
+        pending_txn_ = INVALID_GRAPH_TXN;
+        pending_store_ = nullptr;
+    }
     stream_ctx_.reset();
     in_transaction_ = false;
     state_ = SessionState::READY;

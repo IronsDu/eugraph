@@ -78,6 +78,11 @@ private:
     // Explicit transaction state
     bool in_transaction_ = false;
 
+    // Pending transaction handle for explicit transactions (saved before
+    // stream_ctx_ is reset in PULL/DISCARD, committed/rolled back later).
+    GraphTxnHandle pending_txn_ = INVALID_GRAPH_TXN;
+    class IAsyncGraphDataStore* pending_store_ = nullptr;
+
     // Current database name (from HELLO db field or RUN extra metadata)
     std::string current_database_ = "default";
 };

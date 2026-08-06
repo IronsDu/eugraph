@@ -131,7 +131,7 @@ template <typename OpRef, typename Visit> void forEachChild(OpRef&& op, Visit&& 
                 }
             }
             // Leaves: BoundScanOp / BoundLabelScanOp / BoundSingletonOp /
-            // BoundCorrelatedSourceOp — no children.
+            // BoundCorrelatedSourceOp / BoundCallOp — no children.
         },
         std::forward<OpRef>(op));
 }
@@ -284,6 +284,11 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                     ensureSlot(name_to_slot, alloc, v.variable);
             } else if constexpr (std::is_same_v<T, binder::BoundSingletonOp>) {
                 // Leaf with no output columns.
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
+                if (v) {
+                    for (const auto& name : v->output_names)
+                        ensureSlot(name_to_slot, alloc, name);
+                }
             } else if constexpr (std::is_same_v<T, binder::BoundCorrelatedSourceOp>) {
                 for (const auto& var : v.variables)
                     ensureSlot(name_to_slot, alloc, var);
