@@ -750,6 +750,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                     ca.func_def = agg.func_def;
                     ca.distinct = agg.distinct;
                     ca.is_internal = agg.is_internal;
+                    ca.keeps_nulls = agg.keeps_nulls;
                     c->aggregates.push_back(std::move(ca));
                 }
                 c->output_names = val->output_names;

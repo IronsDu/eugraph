@@ -1275,12 +1275,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::CollectState&>(s).add(args[0]); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::CollectState&>(s).finalize(); }});
 
-    // Mark collect as keeps_nulls so the physical operator forwards null
-    // input values to the state (Pattern2 [4] expects [null] in the result).
-    // The struct is constructed above with default flags; flip the field now
-    // that the FunctionDef is owned by the registry.
-    functions_["collect"].back().keeps_nulls = true;
-
     // percentileDisc(Double, Double) -> Double
     functions_["percentileDisc"].push_back(
         {"percentileDisc",

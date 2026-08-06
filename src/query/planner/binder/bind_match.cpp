@@ -1222,6 +1222,7 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
     agg_item.alias = "__pc_list";
     agg_item.result_type = BoundType::List(out_element_type);
     agg_item.is_internal = false; // must be visible — PCApply reads this column directly
+    agg_item.keeps_nulls = true;  // collect() must retain nulls for pattern comprehension
     agg_op->aggregates.push_back(std::move(agg_item));
     agg_op->output_names.push_back("__pc_list");
     agg_op->child = std::move(*sub_plan);

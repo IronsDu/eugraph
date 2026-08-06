@@ -1425,6 +1425,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         ae.arguments = std::move(ai.arguments);
                         ae.distinct = ai.distinct;
                         ae.is_internal = ai.is_internal;
+                        ae.keeps_nulls = ai.keeps_nulls;
                         if (v.group_keys.size() + i < v.output_names.size())
                             ae.name = v.output_names[v.group_keys.size() + i];
                         aggregates.push_back(std::move(ae));

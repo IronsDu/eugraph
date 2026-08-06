@@ -344,6 +344,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     seed = hashScalar(seed, reinterpret_cast<uintptr_t>(a.func_def));
                     seed = combine(seed, a.distinct ? 1u : 0u);
                     seed = combine(seed, a.is_internal ? 1u : 0u);
+                    seed = combine(seed, a.keeps_nulls ? 1u : 0u);
                 }
                 for (const auto& n : val->output_names)
                     seed = hashBytes(seed, n);

@@ -324,6 +324,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                         return false;
                     if (x.is_internal != y.is_internal)
                         return false;
+                    if (x.keeps_nulls != y.keeps_nulls)
+                        return false;
                 }
                 return av->output_names == bv->output_names;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
