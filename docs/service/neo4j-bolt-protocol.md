@@ -191,6 +191,12 @@ src/bolt/bolt_value_mapping.hpp           # Value ↔ Bolt 类型映射
 src/bolt/bolt_value_mapping.cpp
 src/bolt/bolt_server.hpp                  # TCP 服务端
 src/bolt/bolt_server.cpp
+src/query/planner/logical_plan/operator/bound_call_op.hpp   # CALL 子句逻辑算子
+src/query/planner/binder/bind_call.cpp                      # CALL 子句绑定
+src/query/physical_plan/operator/call_physical_op.hpp       # CALL 物理执行算子
+src/query/physical_plan/operator/call_physical_op.cpp
+src/query/parser/database_ddl_parser.hpp                    # 数据库 DDL 解析器
+src/query/parser/database_ddl_parser.cpp
 tests/test_packstream.cpp                 # PackStream 单元测试
 tests/test_bolt_values.cpp                # Bolt 类型映射测试
 tests/bolt/test_bolt_integration.py       # Python 驱动集成测试
@@ -201,7 +207,22 @@ tests/bolt/test_bolt_integration.py       # Python 驱动集成测试
 src/program/server/eugraph_handler.hpp     # 使用 GraphService 替代 GraphManager
 src/program/server/eugraph_handler.cpp     # 委托给 GraphService
 src/program/server/eugraph_server_main.cpp # 创建 GraphService + 启动 Bolt 服务端
-CMakeLists.txt                             # 新增 eugraph_bolt 库及测试目标
+src/query/planner/bound_logical_plan_fwd.hpp  # BoundCallOp 加入 variant
+src/query/planner/binder.hpp                  # bindCall() 声明
+src/query/planner/binder/binder.cpp           # CallClause/StandaloneCall 分发
+src/query/physical_plan/physical_planner.cpp  # BoundCallOp 物理计划转换
+src/query/optimizer/memo.cpp                  # BoundCallOp clone/children
+src/query/optimizer/log_prop.hpp              # deriveCall 声明
+src/query/optimizer/log_prop.cpp              # deriveCall 实现
+src/query/optimizer/operator_eq.cpp           # BoundCallOp 等值比较
+src/query/optimizer/operator_hash.cpp         # BoundCallOp 哈希
+src/query/optimizer/column_rewrite.cpp        # BoundCallOp 槽位分配
+src/query/optimizer/requirement_collector.cpp # BoundCallOp 需求收集
+src/server/graph_service.hpp               # executeCypher 加入 DDL 检测, handleDatabaseDdl
+src/server/graph_service.cpp               # DDL 实现, switched_database 字段
+src/bolt/bolt_session.hpp                     # 移除 handleDatabaseDdl
+src/bolt/bolt_session.cpp                     # 移除 DDL 拦截, 检查 switched_database
+CMakeLists.txt                                # 新增源文件
 ```
 
 ### 零改动模块
@@ -214,11 +235,11 @@ CMakeLists.txt                             # 新增 eugraph_bolt 库及测试目
 
 ## 实现状态
 
-> 最后更新：2026-08-04
+> 最后更新：2026-08-06
 
 ### 完成度总览
 
-**整体完成度：约 55%** — 基本 CRUD 可用，高级特性待完善。
+**整体完成度：约 70%** — 核心功能完整，多数据库、DDL、存储过程已实现。
 
 | 模块 | 完成度 | 说明 |
 |------|--------|------|
@@ -447,55 +468,45 @@ cmake -DSKIP_BOLT_INTEGRATION_TESTS=ON ..
 
 > 最后更新：2026-08-05
 
-### 问题 1：Binder 不支持 CallClause（已绕过，未根治）
+### 问题 1：Binder 不支持 CallClause（已修复）
 
-**严重程度**：高 | **影响范围**：cypher-shell、所有 neo4j 5.x 驱动
+**严重程度**：高（已修复） | **影响范围**：cypher-shell、所有 neo4j 5.x 驱动
 
-**现象**：cypher-shell 启动时发送 `CALL db.ping()` 健康检查，binder 报 `Clause type not yet supported in binder`，导致客户端连接后无法执行任何查询。
+**修复方案**：实现了 `BindCallOp` 逻辑算子 + `CallPhysicalOp` 物理算子，binder 完整支持 `CallClause` 绑定（包括 StandaloneCall 和 CALL 作为子句）。支持 `db.ping()` 和 `db.schema.visualization()` 两个内置存储过程。
 
-**临时绕过**：在 `bolt_session.cpp` 的 `handleRun` 方法中拦截 `CALL db.ping()` 调用，直接返回空 SUCCESS 响应。同时修改 `handlePull` 兼容空流（`stream_ctx_ == nullptr`）。
+**新增文件**：
+- `src/query/planner/logical_plan/operator/bound_call_op.hpp` — BoundCallOp 叶子算子定义
+- `src/query/planner/binder/bind_call.cpp` — Binder::bindCall() 实现
+- `src/query/physical_plan/operator/call_physical_op.hpp/.cpp` — 物理执行算子
 
-**根本修复**：binder 需要支持 `CallClause`。`CallClause` 已在 AST 中定义（`src/query/parser/ast.hpp:373`），但 binder 的 `bindClause` 方法（`src/query/planner/binder/binder.cpp:179`）不处理该类型。
+**相关变更**：`BoundLogicalOperator` variant 新增 `std::unique_ptr<BoundCallOp>`；optimizer 全套（memo/log_prop/operator_eq/operator_hash/column_rewrite/requirement_collector）新增 BoundCallOp 处理。
 
-| Cypher 语句 | 需求 |
-|------------|------|
-| `CALL db.ping()` | neo4j 驱动健康检查，必须返回 `{success: true}` |
-| `CALL db.schema.visualization()` | cypher-shell 自动补全 |
-| `CALL db.<proc>(args)` | 通用存储过程调用 |
+### 问题 2：Bolt 层硬编码路由到默认图（已修复）
 
-### 问题 2：Bolt 层硬编码路由到默认图
+**严重程度**：高（已修复） | **影响范围**：多数据库场景
 
-**严重程度**：高 | **影响范围**：多数据库场景
+**修复方案**：
+- `BoltSession` 新增 `current_database_` 成员（默认 `"default"`），HELLO 消息中解析 `db` 字段设置当前数据库
+- RUN 消息的 extra metadata 中支持 per-query `db` 字段覆盖
+- 所有 `service_.executeCypher()` 调用使用 `current_database_` 路由到对应图
 
-**现象**：所有 Bolt 连接的查询都固定路由到 `"default"` 图名称。`BoltSession::handleRun()` 中写死：
+### 问题 3：缺少 Cypher DDL 数据库管理语句（已修复）
 
-```cpp
-auto exec_ctx = co_await service_.executeCypher(msg.query, params, "default");
-```
+**严重程度**：高（已修复） | **影响范围**：数据库生命周期管理
 
-neo4j 驱动在 HELLO 消息中传递的 `db` 字段（如 `bolt://host:7687/mydb`）被接收但未使用。
+**修复方案**：实现了 `DatabaseDdlParser`（token-based 字符串解析器），DDL 处理位于 `GraphService::executeCypher()` 中，在调用 `QueryExecutor::prepareStream()` 之前拦截。这样 Bolt 和 Thrift/eugraph-shell 两条路径都能执行 DDL。
 
-| 子任务 | 说明 |
-|--------|------|
-| 解析 HELLO 消息的 `db` 字段 | `bolt_session.cpp` handleHello 已有 fields map，提取 `db` 键 |
-| 维护当前图名 | 在 `BoltSession` 中添加 `current_db_` 成员，默认为 `"default"` |
-| 路由 RUN 查询到对应图 | 将 `current_db_` 传入 `service_.executeCypher()` |
+| Cypher DDL | 实现 |
+|-----------|------|
+| `CREATE DATABASE <name>` | `GraphService::handleDatabaseDdl()` → `GraphManager::createGraph()` |
+| `DROP DATABASE <name>` | `GraphService::handleDatabaseDdl()` → `GraphManager::dropGraph()` |
+| `SHOW DATABASES` | 返回所有数据库列表（name, status, type, current） |
+| `SHOW DATABASE <name>` | 返回指定数据库信息 |
+| `USE <graph>` | 返回 `switched_database` 字段，由协议层（BoltSession）更新 session 状态 |
 
-### 问题 3：缺少 Cypher DDL 数据库管理语句
+**新增文件**：`src/query/parser/database_ddl_parser.hpp/.cpp`
 
-**严重程度**：高 | **影响范围**：数据库生命周期管理
-
-**现象**：EuGraph 内部有图管理 API（`GraphService::createGraph/dropGraph/listGraphs`），但未通过 Cypher 语法暴露。用户创建/删除数据库必须使用 `eugraph-shell`（Thrift RPC）。
-
-需要支持的 Neo4j 兼容语句：
-
-| Cypher DDL | 对应内部 API | 优先级 |
-|-----------|-------------|--------|
-| `CREATE DATABASE <name>` | `GraphService::createGraph(name)` | 高 |
-| `DROP DATABASE <name>` | `GraphService::dropGraph(name)` | 高 |
-| `SHOW DATABASES` | `GraphService::listGraphs()` | 高 |
-| `SHOW DATABASE <name>` | `GraphService::listGraphs()` + filter | 中 |
-| `USE <graph>` | 当前 session 切换图 | 高 |
+**关键设计**：DDL 结果通过标准 `StreamContext` 管线返回（构建 `Row` → `RowBatch` → `wrapRowBatchToChunkGenerator`），与 Index DDL 模式一致。`USE <graph>` 通过 `CypherExecutionContext::switched_database` 字段通知调用方更新会话状态。
 
 ### 问题 4：MATCH 不支持参数化谓词
 
@@ -567,10 +578,10 @@ if (term != 0) {
 
 ## 改进路线图（建议）
 
-### 第 1 批（核心可用性）
-1. **[Binder] 支持 CallClause** — 根治 CALL db.ping() 及存储过程
-2. **[Bolt] 多数据库路由** — 解析 HELLO db 字段，路由到对应图
-3. **[Cypher] CREATE/DROP/SHOW DATABASES + USE** — DDL 语法支持
+### 第 1 批（核心可用性）✅ 已完成
+1. ~~**[Binder] 支持 CallClause** — 根治 CALL db.ping() 及存储过程~~
+2. ~~**[Bolt] 多数据库路由** — 解析 HELLO db 字段，路由到对应图~~
+3. ~~**[Cypher] CREATE/DROP/SHOW DATABASES + USE** — DDL 语法支持~~
 
 ### 第 2 批（查询能力）
 4. **[Binder] MATCH 参数化谓词** — 修复 2 个 xfail 测试

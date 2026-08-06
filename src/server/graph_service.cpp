@@ -1,5 +1,7 @@
 #include "server/graph_service.hpp"
 
+#include "query/physical_plan/physical_operator_base.hpp"
+
 #include <spdlog/spdlog.h>
 #include <stdexcept>
 
@@ -86,6 +88,15 @@ folly::coro::Task<std::vector<EdgeLabelDef>> GraphService::listEdgeLabels(const 
 folly::coro::Task<CypherExecutionContext>
 GraphService::executeCypher(const std::string& query, const std::unordered_map<std::string, Value>& params,
                             const std::string& graph_name) {
+    // Check for database DDL before resolving a specific graph.
+    // Database-level DDL (CREATE/DROP/SHOW DATABASE, USE) operates on the
+    // GraphManager, not on a single graph instance.
+    auto ddl_stmt = DatabaseDdlParser::tryParse(query);
+    if (ddl_stmt.has_value()) {
+        auto* default_inst = resolveGraph(GraphManager::kDefaultGraphName);
+        co_return co_await handleDatabaseDdl(*ddl_stmt, *default_inst->async_data);
+    }
+
     auto* inst = resolveGraph(graph_name);
 
     auto ctx = co_await inst->executor->prepareStream(query, params);
@@ -170,6 +181,97 @@ folly::coro::Task<int32_t> GraphService::batchInsertEdges(const std::string& edg
     co_await inst->async_data->batchInsertEdges(elabel_id, std::move(batch_entries));
 
     co_return static_cast<int32_t>(count);
+}
+
+folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const DatabaseDdlStatement& stmt,
+                                                                          IAsyncGraphDataStore& data_store) {
+    CypherExecutionContext result;
+    auto ctx = std::make_shared<compute::StreamContext>(data_store);
+    Schema columns;
+    std::vector<Row> rows;
+
+    switch (stmt.type) {
+    case DatabaseDdlStatement::USE_GRAPH: {
+        result.switched_database = stmt.name;
+        spdlog::info("[service] switched to database: {}", stmt.name);
+        columns = {"current_database"};
+        Row row;
+        row.push_back(std::string(stmt.name));
+        rows.push_back(std::move(row));
+        break;
+    }
+    case DatabaseDdlStatement::CREATE_DATABASE: {
+        auto entry = gm_.createGraph(stmt.name);
+        spdlog::info("[service] created database: {}", stmt.name);
+        columns = {"result"};
+        Row row;
+        row.push_back(std::string("Database created: " + stmt.name));
+        rows.push_back(std::move(row));
+        break;
+    }
+    case DatabaseDdlStatement::DROP_DATABASE: {
+        bool ok = false;
+        std::string error_msg;
+        try {
+            ok = gm_.dropGraph(stmt.name);
+        } catch (const std::exception& e) {
+            error_msg = e.what();
+        }
+        spdlog::info("[service] dropped database: {} (success={})", stmt.name, ok);
+        columns = {"result"};
+        Row row;
+        if (ok) {
+            row.push_back(std::string("Database dropped: " + stmt.name));
+        } else {
+            row.push_back(
+                std::string("Failed to drop database: " + stmt.name + (error_msg.empty() ? "" : " - " + error_msg)));
+        }
+        rows.push_back(std::move(row));
+        break;
+    }
+    case DatabaseDdlStatement::SHOW_DATABASES: {
+        auto graphs = gm_.listGraphs();
+        columns = {"name", "status", "type", "current"};
+        for (auto& g : graphs) {
+            Row row;
+            row.push_back(std::string(g.name));
+            row.push_back(std::string("online"));
+            row.push_back(std::string("standard"));
+            row.push_back(bool(g.name == "default")); // current — tracks the session default
+            rows.push_back(std::move(row));
+        }
+        break;
+    }
+    case DatabaseDdlStatement::SHOW_DATABASE: {
+        auto graphs = gm_.listGraphs();
+        columns = {"name", "status", "type", "current"};
+        for (auto& g : graphs) {
+            if (g.name != stmt.name)
+                continue;
+            Row row;
+            row.push_back(std::string(g.name));
+            row.push_back(std::string("online"));
+            row.push_back(std::string("standard"));
+            row.push_back(bool(false));
+            rows.push_back(std::move(row));
+            break;
+        }
+        break;
+    }
+    }
+
+    ctx->columns = std::move(columns);
+    auto ddl_row_gen =
+        folly::coro::co_invoke([rows = std::move(rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
+            if (!rows.empty()) {
+                RowBatch batch;
+                batch.rows = std::move(rows);
+                co_yield std::move(batch);
+            }
+        });
+    ctx->gen = compute::wrapRowBatchToChunkGenerator(std::move(ddl_row_gen));
+    result.ctx = std::move(ctx);
+    co_return result;
 }
 
 } // namespace server

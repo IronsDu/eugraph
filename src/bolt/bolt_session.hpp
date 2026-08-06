@@ -77,6 +77,9 @@ private:
 
     // Explicit transaction state
     bool in_transaction_ = false;
+
+    // Current database name (from HELLO db field or RUN extra metadata)
+    std::string current_database_ = "default";
 };
 
 } // namespace bolt

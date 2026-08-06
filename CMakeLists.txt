@@ -131,6 +131,7 @@ set(ANTLR_GENERATED_SOURCES
 add_library(eugraph_compute STATIC
     ${ANTLR_GENERATED_SOURCES}
     src/query/parser/cypher_parser.cpp
+    src/query/parser/database_ddl_parser.cpp
     src/query/parser/index_ddl_parser.cpp
 )
 
@@ -168,6 +169,7 @@ add_library(eugraph_query_engine STATIC
     src/query/function/batch_ops.cpp
     src/query/function/function_registry.cpp
     src/query/planner/binder/binder.cpp
+    src/query/planner/binder/bind_call.cpp
     src/query/planner/binder/bind_match.cpp
     src/query/planner/binder/bind_return.cpp
     src/query/planner/binder/bind_mutation.cpp
@@ -195,6 +197,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/create_edge_label_physical_op.cpp
     src/query/physical_plan/operator/create_edge_physical_op.cpp
     src/query/physical_plan/operator/create_node_physical_op.cpp
+    src/query/physical_plan/operator/call_physical_op.cpp
     src/query/physical_plan/operator/correlated_source_physical_op.cpp
     src/query/physical_plan/operator/cross_product_physical_op.cpp
     src/query/physical_plan/operator/distinct_physical_op.cpp
@@ -731,6 +734,31 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(catalog_tests wiredtiger_ext)
     gtest_add_tests(TARGET catalog_tests)
+
+    # Database DDL tests (parser + GraphService integration)
+    add_executable(database_ddl_tests
+        tests/test_database_ddl.cpp
+    )
+
+    target_include_directories(database_ddl_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${WT_INSTALL_DIR}/include"
+    )
+
+    target_link_libraries(database_ddl_tests PRIVATE
+        eugraph_shell_lib
+        eugraph_query_engine
+        eugraph_metadata
+        eugraph_thrift
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    add_dependencies(database_ddl_tests wiredtiger_ext)
+    gtest_add_tests(TARGET database_ddl_tests)
 
     # Vertex serialization tests
     add_executable(vertex_serialization_tests

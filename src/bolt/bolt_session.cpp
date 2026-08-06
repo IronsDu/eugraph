@@ -196,7 +196,12 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::processMessage(const uint8_
                      std::get<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(params))
                     msg.parameters[k] = v.value;
             }
-            decoder.skip(); // extra field
+            auto extra = decoder.decode();
+            if (std::holds_alternative<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(extra)) {
+                for (auto& [k, v] :
+                     std::get<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(extra))
+                    msg.extra[k] = v.value;
+            }
             co_return co_await handleRun(msg);
         }
         case tags::PULL: {
@@ -268,6 +273,13 @@ BoltSession::handleHello(const std::unordered_map<std::string, packstream::Value
         spdlog::info("[bolt] client: {}", std::get<std::string>(it->second));
     }
 
+    // Extract database name from HELLO fields
+    auto db_it = fields.find("db");
+    if (db_it != fields.end() && std::holds_alternative<std::string>(db_it->second)) {
+        current_database_ = std::get<std::string>(db_it->second);
+        spdlog::info("[bolt] database: {}", current_database_);
+    }
+
     std::unordered_map<std::string, packstream::Value> meta;
     meta["server"] = std::string{"Neo4j/EuGraph-1.0"};
     meta["connection_id"] = std::string{"bolt-1"};
@@ -311,22 +323,17 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
     }
 
     try {
-        // Handle CALL db.ping() — cypher-shell sends this as a health check.
-        // The binder does not support CallClause yet, so intercept it here.
-        if (msg.query == "CALL db.ping()") {
-            stream_ctx_ = nullptr;
-            std::unordered_map<std::string, packstream::Value> meta;
-            meta["fields"] = std::vector<packstream::PackStreamValueStorage>{};
-            meta["t_first"] = static_cast<int64_t>(0);
-            if (state_ == SessionState::TX_READY) {
-                state_ = SessionState::TX_STREAMING;
-            } else {
-                state_ = SessionState::STREAMING;
-            }
-            co_return makeSuccess(meta);
-        }
+        // Use db from RUN extra metadata if present, otherwise keep current
+        auto db_it = msg.extra.find("db");
+        std::string db_name = current_database_;
+        if (db_it != msg.extra.end() && std::holds_alternative<std::string>(db_it->second))
+            db_name = std::get<std::string>(db_it->second);
 
-        auto exec_ctx = co_await service_.executeCypher(msg.query, params, "default");
+        auto exec_ctx = co_await service_.executeCypher(msg.query, params, db_name);
+
+        // Handle USE <graph> — update session database context
+        if (!exec_ctx.switched_database.empty())
+            current_database_ = exec_ctx.switched_database;
 
         stream_ctx_ = std::move(exec_ctx.ctx);
         label_defs_ = std::move(exec_ctx.label_defs);
