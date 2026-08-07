@@ -175,6 +175,18 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             current = scan;
         }
 
+        // Parameter as entire properties map ($param) is not allowed in MATCH.
+        // Parameters as property values ({name: $name}) are fine — they flow
+        // through normal expression binding.
+        if (element.node.properties) {
+            for (const auto& [pn, _] : element.node.properties->entries) {
+                if (pn == "$param") {
+                    error("InvalidParameterUse: MATCH does not support parameter as node predicate");
+                    return std::nullopt;
+                }
+            }
+        }
+
         // Process inline properties on start node as filter
         std::optional<BoundLogicalOperator> inline_filter;
         if (element.node.properties && current) {
@@ -205,6 +217,24 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         for (const auto& [rel_pat, node_pat] : element.chain) {
             if (!current)
                 break;
+
+            // Parameter as entire properties map is not allowed in MATCH.
+            if (rel_pat.properties) {
+                for (const auto& [pn, _] : rel_pat.properties->entries) {
+                    if (pn == "$param") {
+                        error("InvalidParameterUse: MATCH does not support parameter as relationship predicate");
+                        return std::nullopt;
+                    }
+                }
+            }
+            if (node_pat.properties) {
+                for (const auto& [pn, _] : node_pat.properties->entries) {
+                    if (pn == "$param") {
+                        error("InvalidParameterUse: MATCH does not support parameter as node predicate");
+                        return std::nullopt;
+                    }
+                }
+            }
 
             if (rel_pat.range.has_value()) {
                 // ── Variable-length expand ──

@@ -159,10 +159,37 @@ std::optional<BoundLogicalOperator> Binder::bindMerge(const cypher::MergeClause&
             error("NoSingleRelationshipType: MERGE requires exactly one relationship type");
             return std::nullopt;
         }
+        // Parameter as entire properties map is not allowed in MERGE.
+        if (rel_pat.properties) {
+            for (const auto& [pn, _] : rel_pat.properties->entries) {
+                if (pn == "$param") {
+                    error("InvalidParameterUse: MERGE does not support parameter as relationship predicate");
+                    return std::nullopt;
+                }
+            }
+        }
+        if (node_pat.properties) {
+            for (const auto& [pn, _] : node_pat.properties->entries) {
+                if (pn == "$param") {
+                    error("InvalidParameterUse: MERGE does not support parameter as node predicate");
+                    return std::nullopt;
+                }
+            }
+        }
         // VariableAlreadyBound for end node with new predicates (labels/properties)
         if (node_pat.variable && ctx_.lookup(*node_pat.variable)) {
             if (!node_pat.labels.empty() || node_pat.properties.has_value()) {
                 error("VariableAlreadyBound: variable '" + *node_pat.variable + "' is already defined in this scope");
+                return std::nullopt;
+            }
+        }
+    }
+
+    // Parameter as entire properties map is not allowed in MERGE.
+    if (element.node.properties) {
+        for (const auto& [pn, _] : element.node.properties->entries) {
+            if (pn == "$param") {
+                error("InvalidParameterUse: MERGE does not support parameter as node predicate");
                 return std::nullopt;
             }
         }
