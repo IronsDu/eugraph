@@ -11,6 +11,7 @@
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 #include <algorithm>
+#include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace binder {
@@ -639,13 +640,29 @@ std::optional<cypher::Expression> Binder::removeExistsFromWhere(const cypher::Ex
 
 std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::ExistsExpr& exists,
                                                               std::vector<std::pair<uint32_t, uint32_t>>& correlation) {
-    if (exists.patterns.empty()) {
+    bool is_full_query = (exists.full_query != nullptr);
+    // For full EXISTS subquery, extract the first MATCH clause's patterns
+    // into a local vector to reuse the simple EXISTS binding path.
+    std::vector<cypher::PatternPart> full_query_patterns;
+    std::optional<cypher::Expression> full_query_where;
+    if (is_full_query) {
+        for (auto& clause : exists.full_query->clauses) {
+            if (auto* mc = std::get_if<std::unique_ptr<cypher::MatchClause>>(&clause)) {
+                full_query_patterns = std::move((*mc)->patterns);
+                full_query_where = std::move((*mc)->where_pred);
+                break;
+            }
+        }
+    }
+    const auto& exp_patterns = is_full_query ? full_query_patterns : exists.patterns;
+    const auto& where_pred = is_full_query ? full_query_where : exists.where_pred;
+    if (exp_patterns.empty()) {
         error("EXISTS subquery has no patterns");
         return std::nullopt;
     }
 
     // Determine correlation before saving context.
-    const auto& first_node = exists.patterns[0].element.node;
+    const auto& first_node = exp_patterns[0].element.node;
     std::string start_var_name;
     if (first_node.variable.has_value()) {
         start_var_name = *first_node.variable;
@@ -674,7 +691,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
     // This strictness applies only to *bare* pattern predicates — explicit
     // `EXISTS { ... }` subqueries may introduce fresh local variables.
     if (exists.is_bare_predicate) {
-        for (const auto& pp : exists.patterns) {
+        for (const auto& pp : exp_patterns) {
             if (pp.element.chain.empty()) {
                 error("InvalidArgumentType: bare node pattern is not a valid predicate");
                 return std::nullopt;
@@ -739,7 +756,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
     // makeSlotLayout would collapse them onto the same slot, breaking the
     // post-Expand equality filter.
     uint32_t chain_counter = 0;
-    for (const auto& pp : exists.patterns) {
+    for (const auto& pp : exp_patterns) {
         for (auto& [rel_pat, node_pat] : pp.element.chain) {
             if (!node_pat.variable.has_value())
                 continue;
@@ -829,70 +846,71 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         source_op = std::move(scan);
     }
 
-    // Deep-clone the EXISTS patterns into a synthetic MatchClause.
-    // (Expression contains unique_ptr and cannot be trivially copied.)
-    // For correlated chain nodes, the dst variable is rewritten to the fresh
-    // sub-plan name (sub_dst_var) so Expand writes to a dedicated slot.
-    std::unordered_map<std::string, std::string> chain_var_rewrite;
-    for (const auto& sc : saved_chain_corrs)
-        chain_var_rewrite[sc.orig_var] = sc.sub_dst_var;
+    std::optional<BoundLogicalOperator> sub_plan;
 
-    cypher::MatchClause synthetic_match;
-    synthetic_match.patterns.reserve(exists.patterns.size());
-    for (const auto& pp : exists.patterns) {
-        cypher::PatternPart cloned_pp;
-        cloned_pp.variable = pp.variable;
-        // Use the resolved start variable name (auto-generated for anonymous nodes).
-        cloned_pp.element.node.variable =
-            pp.element.node.variable.has_value() ? pp.element.node.variable : std::make_optional(start_var_name);
-        cloned_pp.element.node.labels = pp.element.node.labels;
-        if (pp.element.node.properties) {
-            cloned_pp.element.node.properties = cypher::PropertiesMap{};
-            for (const auto& [name, expr] : pp.element.node.properties->entries) {
-                cloned_pp.element.node.properties->entries.emplace_back(name, cloneExpression(expr));
-            }
-        }
-        for (const auto& [rel_pat, node_pat] : pp.element.chain) {
-            cypher::RelationshipPattern cloned_rel;
-            cloned_rel.variable = rel_pat.variable;
-            cloned_rel.rel_types = rel_pat.rel_types;
-            cloned_rel.direction = rel_pat.direction;
-            if (rel_pat.range) {
-                cloned_rel.range = {cloneExpression(rel_pat.range->first), cloneExpression(rel_pat.range->second)};
-            }
-            if (rel_pat.properties) {
-                cloned_rel.properties = cypher::PropertiesMap{};
-                for (const auto& [name, expr] : rel_pat.properties->entries) {
-                    cloned_rel.properties->entries.emplace_back(name, cloneExpression(expr));
+    {
+        // Construct synthetic MatchClause from patterns.
+        // Deep-clone the EXISTS patterns into a synthetic MatchClause.
+        // (Expression contains unique_ptr and cannot be trivially copied.)
+        // For correlated chain nodes, the dst variable is rewritten to the fresh
+        // sub-plan name (sub_dst_var) so Expand writes to a dedicated slot.
+        std::unordered_map<std::string, std::string> chain_var_rewrite;
+        for (const auto& sc : saved_chain_corrs)
+            chain_var_rewrite[sc.orig_var] = sc.sub_dst_var;
+
+        cypher::MatchClause synthetic_match;
+        synthetic_match.patterns.reserve(exp_patterns.size());
+        for (const auto& pp : exp_patterns) {
+            cypher::PatternPart cloned_pp;
+            cloned_pp.variable = pp.variable;
+            cloned_pp.element.node.variable =
+                pp.element.node.variable.has_value() ? pp.element.node.variable : std::make_optional(start_var_name);
+            cloned_pp.element.node.labels = pp.element.node.labels;
+            if (pp.element.node.properties) {
+                cloned_pp.element.node.properties = cypher::PropertiesMap{};
+                for (const auto& [name, expr] : pp.element.node.properties->entries) {
+                    cloned_pp.element.node.properties->entries.emplace_back(name, cloneExpression(expr));
                 }
             }
-            cypher::NodePattern cloned_node;
-            // Rewrite chain var to the fresh sub-plan name when correlated,
-            // so Expand writes to a slot distinct from the saved outer value.
-            if (node_pat.variable.has_value()) {
-                auto rw = chain_var_rewrite.find(*node_pat.variable);
-                if (rw != chain_var_rewrite.end())
-                    cloned_node.variable = rw->second;
-                else
-                    cloned_node.variable = node_pat.variable;
-            }
-            cloned_node.labels = node_pat.labels;
-            if (node_pat.properties) {
-                cloned_node.properties = cypher::PropertiesMap{};
-                for (const auto& [name, expr] : node_pat.properties->entries) {
-                    cloned_node.properties->entries.emplace_back(name, cloneExpression(expr));
+            for (const auto& [rel_pat, node_pat] : pp.element.chain) {
+                cypher::RelationshipPattern cloned_rel;
+                cloned_rel.variable = rel_pat.variable;
+                cloned_rel.rel_types = rel_pat.rel_types;
+                cloned_rel.direction = rel_pat.direction;
+                if (rel_pat.range) {
+                    cloned_rel.range = {cloneExpression(rel_pat.range->first), cloneExpression(rel_pat.range->second)};
                 }
+                if (rel_pat.properties) {
+                    cloned_rel.properties = cypher::PropertiesMap{};
+                    for (const auto& [name, expr] : rel_pat.properties->entries) {
+                        cloned_rel.properties->entries.emplace_back(name, cloneExpression(expr));
+                    }
+                }
+                cypher::NodePattern cloned_node;
+                if (node_pat.variable.has_value()) {
+                    auto rw = chain_var_rewrite.find(*node_pat.variable);
+                    if (rw != chain_var_rewrite.end())
+                        cloned_node.variable = rw->second;
+                    else
+                        cloned_node.variable = node_pat.variable;
+                }
+                cloned_node.labels = node_pat.labels;
+                if (node_pat.properties) {
+                    cloned_node.properties = cypher::PropertiesMap{};
+                    for (const auto& [name, expr] : node_pat.properties->entries) {
+                        cloned_node.properties->entries.emplace_back(name, cloneExpression(expr));
+                    }
+                }
+                cloned_pp.element.chain.emplace_back(std::move(cloned_rel), std::move(cloned_node));
             }
-            cloned_pp.element.chain.emplace_back(std::move(cloned_rel), std::move(cloned_node));
+            synthetic_match.patterns.push_back(std::move(cloned_pp));
         }
-        synthetic_match.patterns.push_back(std::move(cloned_pp));
-    }
-    if (exists.where_pred) {
-        synthetic_match.where_pred = cloneExpression(*exists.where_pred);
-    }
+        if (exists.where_pred) {
+            synthetic_match.where_pred = cloneExpression(*exists.where_pred);
+        }
 
-    // Bind the sub-plan with the source as parent
-    auto sub_plan = bindMatch(synthetic_match, std::move(source_op), false);
+        sub_plan = bindMatch(synthetic_match, std::move(source_op), false);
+    }
     if (!sub_plan)
         return std::nullopt;
 
