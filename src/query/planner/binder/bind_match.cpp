@@ -643,14 +643,42 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
     bool is_full_query = (exists.full_query != nullptr);
     // For full EXISTS subquery, extract the first MATCH clause's patterns
     // into a local vector to reuse the simple EXISTS binding path.
+    // Also validate remaining clauses and save any WITH for post-match binding.
     std::vector<cypher::PatternPart> full_query_patterns;
     std::optional<cypher::Expression> full_query_where;
+    const cypher::WithClause* full_query_with = nullptr;
+    bool found_match = false;
     if (is_full_query) {
         for (auto& clause : exists.full_query->clauses) {
             if (auto* mc = std::get_if<std::unique_ptr<cypher::MatchClause>>(&clause)) {
                 full_query_patterns = std::move((*mc)->patterns);
                 full_query_where = std::move((*mc)->where_pred);
-                break;
+                found_match = true;
+            } else if (found_match) {
+                if (std::holds_alternative<std::unique_ptr<cypher::WithClause>>(clause)) {
+                    full_query_with = std::get<std::unique_ptr<cypher::WithClause>>(clause).get();
+                } else if (std::holds_alternative<std::unique_ptr<cypher::ReturnClause>>(clause)) {
+                    // RETURN is fine — just check existence of rows.
+                } else if (std::holds_alternative<std::unique_ptr<cypher::SetClause>>(clause)) {
+                    error("InvalidClauseComposition: SET is not allowed in EXISTS subquery");
+                    return std::nullopt;
+                } else if (std::holds_alternative<std::unique_ptr<cypher::CreateClause>>(clause)) {
+                    error("InvalidClauseComposition: CREATE is not allowed in EXISTS subquery");
+                    return std::nullopt;
+                } else if (std::holds_alternative<std::unique_ptr<cypher::DeleteClause>>(clause)) {
+                    error("InvalidClauseComposition: DELETE is not allowed in EXISTS subquery");
+                    return std::nullopt;
+                } else if (std::holds_alternative<std::unique_ptr<cypher::RemoveClause>>(clause)) {
+                    error("InvalidClauseComposition: REMOVE is not allowed in EXISTS subquery");
+                    return std::nullopt;
+                } else if (std::holds_alternative<std::unique_ptr<cypher::MergeClause>>(clause)) {
+                    error("InvalidClauseComposition: MERGE is not allowed in EXISTS subquery");
+                    return std::nullopt;
+                } else if (std::holds_alternative<std::unique_ptr<cypher::MatchClause>>(clause)) {
+                    // Additional MATCH after the first one — not yet supported.
+                    error("Multiple MATCH clauses in EXISTS subquery are not yet supported");
+                    return std::nullopt;
+                }
             }
         }
     }
@@ -677,6 +705,17 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         is_correlated = true;
         outer_slot = outer_col->slot_id;
         saved_outer_info = *outer_col;
+    } else {
+        // For nested EXISTS, the correlated variable may be in a grandparent
+        // scope (hidden from symbols but still in all_symbols).
+        auto all_it = ctx_.all_symbols.find(start_var_name);
+        if (all_it != ctx_.all_symbols.end()) {
+            is_correlated = true;
+            outer_slot = all_it->second;
+            saved_outer_info.name = start_var_name;
+            saved_outer_info.type = BoundType::Vertex();
+            saved_outer_info.slot_id = all_it->second;
+        }
     }
 
     // Save outer binding context
@@ -697,7 +736,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                 return std::nullopt;
             }
             auto checkVar = [&](const std::optional<std::string>& var) {
-                if (var.has_value() && !saved_ctx.symbols.count(*var)) {
+                if (var.has_value() && !saved_ctx.symbols.count(*var) && !ctx_.all_symbols.count(*var)) {
                     error("UndefinedVariable: variable '" + *var + "' not defined in pattern predicate");
                     return false;
                 }
@@ -905,14 +944,25 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             }
             synthetic_match.patterns.push_back(std::move(cloned_pp));
         }
-        if (exists.where_pred) {
-            synthetic_match.where_pred = cloneExpression(*exists.where_pred);
+        if (is_full_query && full_query_where) {
+            synthetic_match.where_pred = std::move(full_query_where);
+        } else if (!is_full_query && where_pred) {
+            synthetic_match.where_pred = cloneExpression(*where_pred);
         }
 
         sub_plan = bindMatch(synthetic_match, std::move(source_op), false);
     }
     if (!sub_plan)
         return std::nullopt;
+
+    // For full EXISTS with WITH clause: bind the WITH on top of the sub-plan.
+    // WITH may contain aggregation (e.g. count(*)) and a WHERE filter.
+    if (full_query_with) {
+        auto with_op = bindWith(*full_query_with, std::move(*sub_plan));
+        if (!with_op)
+            return std::nullopt;
+        sub_plan = std::move(*with_op);
+    }
 
     // For correlated chain nodes: filter the expanded dst against the saved
     // outer value (Pattern1 [12]-[18]). The dst was rewritten to sub_dst_var,
