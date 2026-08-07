@@ -580,9 +580,9 @@ if (term != 0) {
 9. ~~**因果一致性** — Bookmark 生成与验证~~
 
 ### 第 4 批（完整协议）
-10. **ROUTE 消息** — 集群/路由驱动支持
-11. **空间类型** — Point 类型系统 + Bolt 编码
-12. **TELEMETRY/NOOP** — 规范合规
+10. ~~**TELEMETRY/NOOP** — 规范合规~~（NOOP 已被 chunk terminator 处理）
+11. ~~**ROUTE 消息** — 返回指向自身的固定路由表，支持 neo4j:// 协议~~（单机桩）
+12. **空间类型** — Point 类型系统 + Bolt 编码（暂不需要）
 
 ## 参考
 

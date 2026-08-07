@@ -238,6 +238,36 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::processMessage(const uint8_
             co_return co_await handleCommit();
         case tags::ROLLBACK:
             co_return co_await handleRollback();
+        case tags::ROUTE: {
+            if (field_count != 3) {
+                co_return makeFailure("ProtocolError", "ROUTE must have 3 fields");
+            }
+            RouteMessage msg;
+            auto routing = decoder.decode();
+            if (std::holds_alternative<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(routing)) {
+                for (auto& [k, v] : std::get<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(routing))
+                    msg.routing[k] = v.value;
+            }
+            auto bookmarks = decoder.decode();
+            if (std::holds_alternative<std::vector<packstream::PackStreamValueStorage>>(bookmarks)) {
+                for (auto& b : std::get<std::vector<packstream::PackStreamValueStorage>>(bookmarks)) {
+                    if (std::holds_alternative<std::string>(b.value))
+                        msg.bookmarks.push_back(std::get<std::string>(b.value));
+                }
+            }
+            auto extra = decoder.decode();
+            if (std::holds_alternative<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(extra)) {
+                for (auto& [k, v] : std::get<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(extra))
+                    msg.extra[k] = v.value;
+            }
+            co_return co_await handleRoute(msg);
+        }
+        case tags::TELEMETRY: {
+            // TELEMETRY contains API usage stats from the driver.
+            // We acknowledge but don't consume the data.
+            std::unordered_map<std::string, packstream::Value> meta;
+            co_return makeSuccess(meta);
+        }
         case tags::RESET:
             co_return co_await handleReset();
         case tags::GOODBYE:
@@ -623,6 +653,42 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRollback() {
     in_transaction_ = false;
     state_ = SessionState::READY;
     std::unordered_map<std::string, packstream::Value> meta;
+    co_return makeSuccess(meta);
+}
+
+folly::coro::Task<std::vector<uint8_t>>
+BoltSession::handleRoute(const RouteMessage& msg) {
+    // ROUTE is valid in READY state (and optional in CONNECTING for drivers
+    // that use neo4j:// scheme). Return a routing table pointing to self.
+    (void)msg; // routing/extra metadata not consumed in single-node stub
+    if (state_ == SessionState::FAILED) {
+        co_return makeIgnored();
+    }
+    if (state_ != SessionState::READY && state_ != SessionState::CONNECTING) {
+        co_return makeFailure("ProtocolError", "Unexpected ROUTE in current state");
+    }
+
+    // Build single-node routing table using PackStreamValueStorage nesting
+    using PS = packstream::PackStreamValueStorage;
+
+    auto make_server = [](const std::string& role) -> PS {
+        std::unordered_map<std::string, PS> m;
+        m["addresses"] = PS{std::vector<PS>{PS{std::string{"localhost:7687"}}}};
+        m["role"] = PS{role};
+        return PS{std::move(m)};
+    };
+
+    std::vector<PS> servers;
+    servers.push_back(make_server("WRITE"));
+    servers.push_back(make_server("READ"));
+    servers.push_back(make_server("ROUTE"));
+
+    std::unordered_map<std::string, PS> rt;
+    rt["servers"] = PS{std::move(servers)};
+    rt["ttl"] = PS{int64_t(3600)};
+
+    std::unordered_map<std::string, packstream::Value> meta;
+    meta["rt"] = std::move(rt);
     co_return makeSuccess(meta);
 }
 

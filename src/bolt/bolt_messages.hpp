@@ -24,6 +24,8 @@ constexpr uint8_t PULL = 0x3F;
 constexpr uint8_t BEGIN = 0x11;
 constexpr uint8_t COMMIT = 0x12;
 constexpr uint8_t ROLLBACK = 0x13;
+constexpr uint8_t TELEMETRY = 0x54; // tag shared with TIME (different contexts)
+constexpr uint8_t ROUTE = 0x66;
 
 // Server → Client
 constexpr uint8_t SUCCESS = 0x70;
@@ -72,7 +74,13 @@ struct BeginMessage {
     std::unordered_map<std::string, packstream::Value> extra;
 };
 
-// RESET, COMMIT, ROLLBACK, GOODBYE have no fields
+struct RouteMessage {
+    std::unordered_map<std::string, packstream::Value> routing;
+    std::vector<std::string> bookmarks;
+    std::unordered_map<std::string, packstream::Value> extra;
+};
+
+// RESET, COMMIT, ROLLBACK, GOODBYE, TELEMETRY have no fields
 
 // ==================== Server → Client Messages ====================
 

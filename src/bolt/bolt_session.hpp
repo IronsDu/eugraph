@@ -60,6 +60,7 @@ private:
     folly::coro::Task<std::vector<uint8_t>> handleBegin(const BeginMessage& msg);
     folly::coro::Task<std::vector<uint8_t>> handleCommit();
     folly::coro::Task<std::vector<uint8_t>> handleRollback();
+    folly::coro::Task<std::vector<uint8_t>> handleRoute(const RouteMessage& msg);
     folly::coro::Task<std::vector<uint8_t>> handleReset();
     folly::coro::Task<std::vector<uint8_t>> handleGoodbye();
 
