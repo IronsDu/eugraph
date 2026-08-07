@@ -201,9 +201,14 @@ struct SliceExpr {
 
 // ==================== ExistsExpr ====================
 
+struct SingleQuery; // forward declaration for full EXISTS subquery
+
 struct ExistsExpr {
     std::vector<PatternPart> patterns;
     std::optional<Expression> where_pred;
+    /// Full subquery form: EXISTS { MATCH ... RETURN ... }
+    /// If set, patterns and where_pred are ignored.
+    std::unique_ptr<SingleQuery> full_query;
     /// True when this ExistsExpr was synthesized from a bare pattern predicate
     /// (e.g. `WHERE (n)-[]->()`) rather than an explicit `EXISTS { ... }`.
     /// Bare predicates require every named variable to be bound in the outer

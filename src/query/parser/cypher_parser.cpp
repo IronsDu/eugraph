@@ -917,6 +917,10 @@ private:
             ex->patterns = buildPattern(ctx->patternWhere()->pattern());
             if (ctx->patternWhere()->where())
                 ex->where_pred = buildExpression(ctx->patternWhere()->where()->expression());
+        } else if (ctx->regularQuery()) {
+            auto rq = buildRegularQuery(ctx->regularQuery());
+            // EXISTS only needs the first single query; UNION inside EXISTS is invalid.
+            ex->full_query = std::make_unique<SingleQuery>(std::move(rq->first));
         }
         return Expression(std::move(ex));
     }
