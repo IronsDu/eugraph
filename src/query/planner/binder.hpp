@@ -128,6 +128,8 @@ public:
                                                    std::optional<BoundLogicalOperator> child);
     std::optional<BoundLogicalOperator> bindMerge(const cypher::MergeClause& merge,
                                                   std::optional<BoundLogicalOperator> child);
+    std::optional<BoundLogicalOperator> bindCall(const cypher::CallClause& call,
+                                                 std::optional<BoundLogicalOperator> current);
 
     // ── Expression binding helpers ──
     BoundType inferBinaryOpType(cypher::BinaryOperator op, const BoundType& left_type, const BoundType& right_type,

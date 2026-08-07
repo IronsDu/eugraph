@@ -420,6 +420,18 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->variable != bv->variable)
                     return false;
                 return av->variable_column_index == bv->variable_column_index;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
+                if (!av || !bv)
+                    return !av && !bv;
+                if (av->procedure_name != bv->procedure_name)
+                    return false;
+                if (av->arguments.size() != bv->arguments.size())
+                    return false;
+                for (size_t i = 0; i < av->arguments.size(); ++i)
+                    if (!equalBoundExpression(av->arguments[i], bv->arguments[i]))
+                        return false;
+                return av->yield_items == bv->yield_items && av->output_names == bv->output_names &&
+                       av->output_types == bv->output_types;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (!av || !bv)
                     return !av && !bv;

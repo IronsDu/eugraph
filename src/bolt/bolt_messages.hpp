@@ -24,6 +24,8 @@ constexpr uint8_t PULL = 0x3F;
 constexpr uint8_t BEGIN = 0x11;
 constexpr uint8_t COMMIT = 0x12;
 constexpr uint8_t ROLLBACK = 0x13;
+constexpr uint8_t TELEMETRY = 0x54; // tag shared with TIME (different contexts)
+constexpr uint8_t ROUTE = 0x66;
 
 // Server → Client
 constexpr uint8_t SUCCESS = 0x70;
@@ -35,6 +37,19 @@ constexpr uint8_t FAILURE = 0x7F;
 constexpr uint8_t NODE = 0x4E;
 constexpr uint8_t RELATIONSHIP = 0x52;
 constexpr uint8_t PATH = 0x50;
+
+// Temporal types (v5.0+)
+constexpr uint8_t DATE = 0x44;
+constexpr uint8_t TIME = 0x54;
+constexpr uint8_t LOCAL_TIME = 0x74;
+constexpr uint8_t DATETIME = 0x49;
+constexpr uint8_t DATETIME_ZONE_ID = 0x69;
+constexpr uint8_t LOCAL_DATETIME = 0x64;
+constexpr uint8_t DURATION = 0x45;
+
+// Temporal types (v4.x legacy — DATETIME tags changed in v5.0)
+constexpr uint8_t DATETIME_V4 = 0x46;
+constexpr uint8_t DATETIME_ZONE_ID_V4 = 0x66;
 } // namespace tags
 
 // ==================== Client → Server Messages ====================
@@ -63,7 +78,13 @@ struct BeginMessage {
     std::unordered_map<std::string, packstream::Value> extra;
 };
 
-// RESET, COMMIT, ROLLBACK, GOODBYE have no fields
+struct RouteMessage {
+    std::unordered_map<std::string, packstream::Value> routing;
+    std::vector<std::string> bookmarks;
+    std::unordered_map<std::string, packstream::Value> extra;
+};
+
+// RESET, COMMIT, ROLLBACK, GOODBYE, TELEMETRY have no fields
 
 // ==================== Server → Client Messages ====================
 
@@ -111,6 +132,11 @@ inline constexpr uint32_t BOLT_PROPOSED_VERSIONS[] = {
     BOLT_VERSION_5_0,
     BOLT_VERSION_4_4,
 };
+
+// Bolt v5.x maximum chunk payload size (top 2 bits of uint16 header reserved).
+inline constexpr uint16_t BOLT_MAX_CHUNK_SIZE = 0x3FFF; // 16383
+// Maximum assembled message size to prevent memory exhaustion.
+inline constexpr size_t BOLT_MAX_MESSAGE_SIZE = 64ULL * 1024 * 1024; // 64 MiB
 
 } // namespace bolt
 } // namespace eugraph

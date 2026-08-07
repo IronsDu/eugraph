@@ -6,53 +6,6 @@ namespace binder {
 
 namespace {
 
-bool containsParameter(const cypher::Expression& expr) {
-    return std::visit(
-        [](const auto& ptr) -> bool {
-            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
-            if constexpr (std::is_same_v<Elem, cypher::Parameter>) {
-                return true;
-            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
-                return containsParameter(ptr->left) || containsParameter(ptr->right);
-            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
-                return containsParameter(ptr->operand);
-            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
-                for (const auto& arg : ptr->args)
-                    if (containsParameter(arg))
-                        return true;
-                return false;
-            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
-                return containsParameter(ptr->object);
-            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
-                for (const auto& e : ptr->elements)
-                    if (containsParameter(e))
-                        return true;
-                return false;
-            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
-                for (const auto& [k, v] : ptr->entries)
-                    if (containsParameter(v))
-                        return true;
-                return false;
-            }
-            return false;
-        },
-        expr);
-}
-
-bool propertiesContainParameter(const std::optional<cypher::PropertiesMap>& props) {
-    if (!props)
-        return false;
-    for (const auto& [name, expr] : props->entries) {
-        if (containsParameter(expr))
-            return true;
-    }
-    return false;
-}
-
-} // namespace
-
-namespace {
-
 bool bindMergeSetItem(const cypher::SetItem& item, BoundSetOp::SetItem& bound_item, const catalog::Catalog& catalog,
                       Binder& binder, std::string* error_out) {
     switch (item.kind) {
@@ -192,11 +145,6 @@ std::optional<BoundLogicalOperator> Binder::bindMerge(const cypher::MergeClause&
 
     // ── Validate pattern ──
 
-    // Validate: no parameter use in MERGE node predicates
-    if (propertiesContainParameter(element.node.properties)) {
-        error("InvalidParameterUse: MERGE does not support parameter as node predicate");
-        return std::nullopt;
-    }
     for (const auto& [rel_pat, node_pat] : element.chain) {
         if (rel_pat.range.has_value()) {
             error("CreatingVarLength: MERGE does not support variable-length relationships");
@@ -211,18 +159,37 @@ std::optional<BoundLogicalOperator> Binder::bindMerge(const cypher::MergeClause&
             error("NoSingleRelationshipType: MERGE requires exactly one relationship type");
             return std::nullopt;
         }
-        if (propertiesContainParameter(rel_pat.properties)) {
-            error("InvalidParameterUse: MERGE does not support parameter as relationship predicate");
-            return std::nullopt;
+        // Parameter as entire properties map is not allowed in MERGE.
+        if (rel_pat.properties) {
+            for (const auto& [pn, _] : rel_pat.properties->entries) {
+                if (pn == "$param") {
+                    error("InvalidParameterUse: MERGE does not support parameter as relationship predicate");
+                    return std::nullopt;
+                }
+            }
         }
-        if (propertiesContainParameter(node_pat.properties)) {
-            error("InvalidParameterUse: MERGE does not support parameter as node predicate");
-            return std::nullopt;
+        if (node_pat.properties) {
+            for (const auto& [pn, _] : node_pat.properties->entries) {
+                if (pn == "$param") {
+                    error("InvalidParameterUse: MERGE does not support parameter as node predicate");
+                    return std::nullopt;
+                }
+            }
         }
         // VariableAlreadyBound for end node with new predicates (labels/properties)
         if (node_pat.variable && ctx_.lookup(*node_pat.variable)) {
             if (!node_pat.labels.empty() || node_pat.properties.has_value()) {
                 error("VariableAlreadyBound: variable '" + *node_pat.variable + "' is already defined in this scope");
+                return std::nullopt;
+            }
+        }
+    }
+
+    // Parameter as entire properties map is not allowed in MERGE.
+    if (element.node.properties) {
+        for (const auto& [pn, _] : element.node.properties->entries) {
+            if (pn == "$param") {
+                error("InvalidParameterUse: MERGE does not support parameter as node predicate");
                 return std::nullopt;
             }
         }

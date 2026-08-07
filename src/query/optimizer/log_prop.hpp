@@ -80,6 +80,7 @@ private:
     LogProp deriveDistinct(const LogProp& input) const;
     LogProp derivePathBuild(const binder::BoundPathBuildOp& op, const LogProp& input) const;
     LogProp deriveUnwind(const binder::BoundUnwindOp& op, const LogProp& input) const;
+    LogProp deriveCall(const binder::BoundCallOp& op) const;
     LogProp deriveBinaryJoin(const binder::BoundBinaryJoinOp& op, const LogProp& left, const LogProp& right) const;
     LogProp deriveLeftJoin(const binder::BoundLeftJoinOp& op, const LogProp& left, const LogProp& right) const;
     LogProp deriveSemiJoin(const binder::BoundSemiJoinOp& op, const LogProp& left, const LogProp& right) const;

@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include "bolt/bolt_messages.hpp"
 #include "bolt/bolt_value_mapping.hpp"
 #include "bolt/packstream/decoder.hpp"
+#include "common/types/temporal_value.hpp"
 
 using namespace eugraph;
 using namespace eugraph::bolt;
@@ -106,7 +108,7 @@ TEST_F(BoltValueMappingTest, ConvertVertexToNode) {
     ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
     auto& node = std::get<packstream::PackStreamStruct>(result);
     EXPECT_EQ(node.tag, tags::NODE);
-    ASSERT_EQ(node.fields.size(), 3u);
+    ASSERT_EQ(node.fields.size(), 4u);
 
     // Field 0: node id
     EXPECT_EQ(std::get<int64_t>(node.fields[0].value), 100);
@@ -120,6 +122,9 @@ TEST_F(BoltValueMappingTest, ConvertVertexToNode) {
     auto& props_dict = std::get<PSMap>(node.fields[2].value);
     EXPECT_EQ(std::get<std::string>(props_dict.at("name").value), "Alice");
     EXPECT_EQ(std::get<int64_t>(props_dict.at("age").value), 30);
+
+    // Field 3: element_id
+    EXPECT_EQ(std::get<std::string>(node.fields[3].value), "100");
 }
 
 TEST_F(BoltValueMappingTest, ConvertVertexWithAnonLabel) {
@@ -157,7 +162,7 @@ TEST_F(BoltValueMappingTest, ConvertEdgeToRelationship) {
     ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
     auto& rel = std::get<packstream::PackStreamStruct>(result);
     EXPECT_EQ(rel.tag, tags::RELATIONSHIP);
-    ASSERT_EQ(rel.fields.size(), 5u);
+    ASSERT_EQ(rel.fields.size(), 8u);
 
     EXPECT_EQ(std::get<int64_t>(rel.fields[0].value), 500);         // id
     EXPECT_EQ(std::get<int64_t>(rel.fields[1].value), 100);         // src
@@ -166,6 +171,11 @@ TEST_F(BoltValueMappingTest, ConvertEdgeToRelationship) {
 
     auto& rprops = std::get<PSMap>(rel.fields[4].value);
     EXPECT_EQ(std::get<int64_t>(rprops.at("since").value), 2020);
+
+    // Bolt v5.1 element_id fields
+    EXPECT_EQ(std::get<std::string>(rel.fields[5].value), "500");   // element_id
+    EXPECT_EQ(std::get<std::string>(rel.fields[6].value), "100");   // startNodeElementId
+    EXPECT_EQ(std::get<std::string>(rel.fields[7].value), "200");   // endNodeElementId
 }
 
 // ==================== ListValue ====================
@@ -318,4 +328,160 @@ TEST_F(BoltValueMappingTest, ConvertPath) {
     EXPECT_EQ(std::get<int64_t>(seq[0].value), 0); // first node (index into nodes)
     EXPECT_EQ(std::get<int64_t>(seq[1].value), 0); // first rel (index into rels)
     EXPECT_EQ(std::get<int64_t>(seq[2].value), 1); // second node
+}
+
+// ==================== Temporal types ====================
+
+TEST_F(BoltValueMappingTest, ConvertDate) {
+    DateTimeValue tv;
+    tv.kind = DateTimeKind::DATE;
+    tv.year = 2025;
+    tv.month = 1;
+    tv.day = 15;
+
+    Value val{std::move(tv)};
+    auto result = valueToBolt(val, label_defs_, edge_label_defs_);
+
+    ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
+    auto& s = std::get<packstream::PackStreamStruct>(result);
+    EXPECT_EQ(s.tag, tags::DATE);
+    ASSERT_EQ(s.fields.size(), 1u);
+    // 2025-01-15 = daysFromCivil(2025, 1, 15) days since 1970-01-01
+    int64_t expected_days = daysFromCivil(2025, 1, 15);
+    EXPECT_EQ(std::get<int64_t>(s.fields[0].value), expected_days);
+}
+
+TEST_F(BoltValueMappingTest, ConvertLocalDateTime) {
+    DateTimeValue tv;
+    tv.kind = DateTimeKind::LOCAL_DATETIME;
+    tv.year = 2025;
+    tv.month = 1;
+    tv.day = 15;
+    tv.hour = 10;
+    tv.minute = 30;
+    tv.second = 0;
+    tv.nanos = 0;
+
+    Value val{std::move(tv)};
+    auto result = valueToBolt(val, label_defs_, edge_label_defs_);
+
+    ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
+    auto& s = std::get<packstream::PackStreamStruct>(result);
+    EXPECT_EQ(s.tag, tags::LOCAL_DATETIME);
+    ASSERT_EQ(s.fields.size(), 2u);
+    int64_t expected_seconds = daysFromCivil(2025, 1, 15) * 86400 + 10 * 3600 + 30 * 60;
+    EXPECT_EQ(std::get<int64_t>(s.fields[0].value), expected_seconds);
+    EXPECT_EQ(std::get<int64_t>(s.fields[1].value), 0);
+}
+
+TEST_F(BoltValueMappingTest, ConvertDateTimeWithOffset) {
+    DateTimeValue tv;
+    tv.kind = DateTimeKind::DATETIME;
+    tv.year = 2025;
+    tv.month = 1;
+    tv.day = 15;
+    tv.hour = 10;
+    tv.minute = 30;
+    tv.second = 0;
+    tv.nanos = 123000000;
+    tv.tz_offset_sec = 28800; // +08:00
+    // tz_name left empty → uses DATETIME tag (not DATETIME_ZONE_ID)
+
+    Value val{std::move(tv)};
+    auto result = valueToBolt(val, label_defs_, edge_label_defs_);
+
+    ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
+    auto& s = std::get<packstream::PackStreamStruct>(result);
+    EXPECT_EQ(s.tag, tags::DATETIME);
+    ASSERT_EQ(s.fields.size(), 3u);
+    int64_t local_seconds = daysFromCivil(2025, 1, 15) * 86400 + 10 * 3600 + 30 * 60;
+    int64_t utc_seconds = local_seconds - 28800; // Bolt 5.0+ uses UTC seconds
+    EXPECT_EQ(std::get<int64_t>(s.fields[0].value), utc_seconds);
+    EXPECT_EQ(std::get<int64_t>(s.fields[1].value), 123000000);
+    EXPECT_EQ(std::get<int64_t>(s.fields[2].value), 28800);
+}
+
+TEST_F(BoltValueMappingTest, ConvertDateTimeZoneId) {
+    DateTimeValue tv;
+    tv.kind = DateTimeKind::DATETIME;
+    tv.year = 2025;
+    tv.month = 7;
+    tv.day = 1;
+    tv.hour = 12;
+    tv.minute = 0;
+    tv.second = 0;
+    tv.nanos = 0;
+    tv.tz_name = "Asia/Shanghai";
+
+    Value val{std::move(tv)};
+    auto result = valueToBolt(val, label_defs_, edge_label_defs_);
+
+    ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
+    auto& s = std::get<packstream::PackStreamStruct>(result);
+    EXPECT_EQ(s.tag, tags::DATETIME_ZONE_ID);
+    ASSERT_EQ(s.fields.size(), 3u);
+    int64_t expected_seconds = daysFromCivil(2025, 7, 1) * 86400 + 12 * 3600;
+    EXPECT_EQ(std::get<int64_t>(s.fields[0].value), expected_seconds);
+    EXPECT_EQ(std::get<int64_t>(s.fields[1].value), 0);
+    EXPECT_EQ(std::get<std::string>(s.fields[2].value), "Asia/Shanghai");
+}
+
+TEST_F(BoltValueMappingTest, ConvertLocalTime) {
+    TimeValue tv;
+    tv.kind = TimeKind::LOCAL_TIME;
+    tv.hour = 10;
+    tv.minute = 30;
+    tv.second = 45;
+    tv.nanos = 500000000;
+
+    Value val{std::move(tv)};
+    auto result = valueToBolt(val, label_defs_, edge_label_defs_);
+
+    ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
+    auto& s = std::get<packstream::PackStreamStruct>(result);
+    EXPECT_EQ(s.tag, tags::LOCAL_TIME);
+    ASSERT_EQ(s.fields.size(), 1u);
+    int64_t expected_nanos = (10 * 3600 + 30 * 60 + 45) * 1000000000LL + 500000000;
+    EXPECT_EQ(std::get<int64_t>(s.fields[0].value), expected_nanos);
+}
+
+TEST_F(BoltValueMappingTest, ConvertTimeWithOffset) {
+    TimeValue tv;
+    tv.kind = TimeKind::TIME;
+    tv.hour = 14;
+    tv.minute = 0;
+    tv.second = 0;
+    tv.nanos = 0;
+    tv.tz_offset_sec = 3600; // +01:00
+
+    Value val{std::move(tv)};
+    auto result = valueToBolt(val, label_defs_, edge_label_defs_);
+
+    ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
+    auto& s = std::get<packstream::PackStreamStruct>(result);
+    EXPECT_EQ(s.tag, tags::TIME);
+    ASSERT_EQ(s.fields.size(), 2u);
+    int64_t expected_nanos = (14 * 3600) * 1000000000LL;
+    EXPECT_EQ(std::get<int64_t>(s.fields[0].value), expected_nanos);
+    EXPECT_EQ(std::get<int64_t>(s.fields[1].value), 3600);
+}
+
+TEST_F(BoltValueMappingTest, ConvertDuration) {
+    DurationValue dv;
+    dv.months = 14; // 1 year, 2 months
+    dv.days = 3;
+    dv.seconds = 7200; // 2 hours
+    dv.nanos = 500000;
+
+    Value val{std::move(dv)};
+    auto result = valueToBolt(val, label_defs_, edge_label_defs_);
+
+    ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
+    auto& s = std::get<packstream::PackStreamStruct>(result);
+    EXPECT_EQ(s.tag, tags::DURATION);
+    ASSERT_EQ(s.fields.size(), 4u);
+    EXPECT_EQ(std::get<int64_t>(s.fields[0].value), 14);
+    EXPECT_EQ(std::get<int64_t>(s.fields[1].value), 3);
+    EXPECT_EQ(std::get<int64_t>(s.fields[2].value), 7200);
+    EXPECT_EQ(std::get<int64_t>(s.fields[3].value), 500000);
 }

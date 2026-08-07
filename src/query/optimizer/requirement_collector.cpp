@@ -222,11 +222,9 @@ VarRequirements collectOpRequirements(const binder::BoundLogicalOperator& op, co
             using T = std::decay_t<decltype(val)>;
             if constexpr (std::is_same_v<T, binder::BoundSingletonOp> ||
                           std::is_same_v<T, binder::BoundCorrelatedSourceOp> ||
-                          std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp>) {
-                // Leaf sources carry no expression to walk; their label/prop
-                // requirements are modelled at the operator level via
-                // label_prop_ids instead — handled by the impl rule that
-                // declares the scan's output_mat (see rules/impl/impl_scan).
+                          std::is_same_v<T, binder::BoundScanOp> || std::is_same_v<T, binder::BoundLabelScanOp> ||
+                          std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
+                // Leaf sources carry no expression to walk.
                 return;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (!val)

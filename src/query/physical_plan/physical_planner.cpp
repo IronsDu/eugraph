@@ -3,6 +3,7 @@
 #include "query/optimizer/chosen_plan.hpp"
 #include "query/optimizer/column_rewrite.hpp"
 #include "query/optimizer/memo.hpp"
+#include "query/physical_plan/operator/call_physical_op.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/delete_physical_op.hpp"
@@ -2140,6 +2141,15 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     TupleSlotLayout merge_layout = makeSlotLayout(output_schema, ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                               std::move(merge_layout)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundCallOp>) {
+                    Schema output_schema = v.output_names;
+                    std::vector<binder::BoundType> output_types = v.output_types;
+                    auto result = std::make_unique<CallPhysicalOp>(v.procedure_name, std::move(v.output_names),
+                                                                   std::vector<binder::BoundType>(v.output_types),
+                                                                   &meta);
+                    TupleSlotLayout layout = makeSlotLayout(output_schema, ctx);
+                    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                                              std::move(layout)};
                 } else {
                     return std::string("Unknown bound logical operator type");
                 }

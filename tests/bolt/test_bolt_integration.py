@@ -67,7 +67,6 @@ class TestConnection:
 class TestCRUD:
     """Test basic CRUD operations via Cypher over Bolt."""
 
-    @pytest.mark.xfail(reason="Query engine: MATCH does not support parameter as node predicate")
     def test_create_and_match_node(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
@@ -90,7 +89,6 @@ class TestCRUD:
         finally:
             driver.close()
 
-    @pytest.mark.xfail(reason="Query engine: MATCH does not support parameter as node predicate")
     def test_create_and_match_edge(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
@@ -196,6 +194,65 @@ class TestTypes:
         finally:
             driver.close()
 
+    def test_date_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN date('2025-01-15') AS v")
+                records = list(result)
+                assert len(records) == 1
+                from neo4j.time import Date
+
+                assert isinstance(records[0]["v"], Date)
+                assert records[0]["v"].year == 2025
+                assert records[0]["v"].month == 1
+                assert records[0]["v"].day == 15
+        finally:
+            driver.close()
+
+    def test_datetime_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run(
+                    "RETURN datetime('2025-01-15T10:30:00+08:00') AS v"
+                )
+                records = list(result)
+                assert len(records) == 1
+                from neo4j.time import DateTime
+
+                assert isinstance(records[0]["v"], DateTime)
+        finally:
+            driver.close()
+
+    def test_time_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN time('10:30:00') AS v")
+                records = list(result)
+                assert len(records) == 1
+                from neo4j.time import Time
+
+                assert isinstance(records[0]["v"], Time)
+        finally:
+            driver.close()
+
+    def test_duration_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session() as session:
+                result = session.run("RETURN duration('P1Y2M3D') AS v")
+                records = list(result)
+                assert len(records) == 1
+                from neo4j.time import Duration
+
+                assert isinstance(records[0]["v"], Duration)
+                assert records[0]["v"].months == 14
+                assert records[0]["v"].days == 3
+        finally:
+            driver.close()
+
 
 # ---------------------------------------------------------------------------
 # Parameterized query tests
@@ -279,7 +336,6 @@ class TestParameters:
 class TestTransactions:
     """Test explicit transactions (BEGIN/COMMIT/ROLLBACK)."""
 
-    @pytest.mark.xfail(reason="Query engine: explicit transaction commit does not persist data")
     def test_explicit_commit(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:

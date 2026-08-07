@@ -9,6 +9,7 @@
 #include <folly/coro/Task.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,7 +25,15 @@ class BoltSession {
 public:
     friend class BoltConnection;
 
-    explicit BoltSession(server::GraphService& service) : service_(service) {}
+    explicit BoltSession(server::GraphService& service, std::function<uint64_t()> next_bookmark = {})
+        : service_(service), next_bookmark_fn_(std::move(next_bookmark)) {}
+
+    void setBookmarkGenerator(std::function<uint64_t()> fn) {
+        next_bookmark_fn_ = std::move(fn);
+    }
+    void setBoltPort(uint16_t port) {
+        bolt_port_ = port;
+    }
 
     SessionState state() const {
         return state_;
@@ -54,6 +63,7 @@ private:
     folly::coro::Task<std::vector<uint8_t>> handleBegin(const BeginMessage& msg);
     folly::coro::Task<std::vector<uint8_t>> handleCommit();
     folly::coro::Task<std::vector<uint8_t>> handleRollback();
+    folly::coro::Task<std::vector<uint8_t>> handleRoute(const RouteMessage& msg);
     folly::coro::Task<std::vector<uint8_t>> handleReset();
     folly::coro::Task<std::vector<uint8_t>> handleGoodbye();
 
@@ -77,6 +87,25 @@ private:
 
     // Explicit transaction state
     bool in_transaction_ = false;
+
+    // Pending transaction handle for explicit transactions (saved before
+    // stream_ctx_ is reset in PULL/DISCARD, committed/rolled back later).
+    GraphTxnHandle pending_txn_ = INVALID_GRAPH_TXN;
+    class IAsyncGraphDataStore* pending_store_ = nullptr;
+
+    // Current database name (from HELLO db field or RUN extra metadata)
+    std::string current_database_ = "default";
+
+    // Authentication state
+    std::string auth_scheme_;
+    std::string auth_principal_;
+
+    // Bookmark generation callback
+    std::function<uint64_t()> next_bookmark_fn_;
+    std::vector<std::string> received_bookmarks_;
+
+    // Bolt server port (used for ROUTE response)
+    uint16_t bolt_port_ = 7687;
 };
 
 } // namespace bolt

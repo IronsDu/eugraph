@@ -30,6 +30,8 @@ public:
     ~BoltConnection() override;
 
     void start();
+    void setBookmarkGenerator(std::function<uint64_t()> fn);
+    void setBoltPort(uint16_t port);
 
     // ReadCallback
     void getReadBuffer(void** buf, size_t* len) override;
@@ -62,6 +64,7 @@ private:
     std::unique_ptr<folly::IOBuf> read_buf_;
     std::unique_ptr<folly::IOBuf> write_buf_;
     bool writing_ = false;
+    std::vector<uint8_t> message_accumulator_;
 };
 
 /// Bolt protocol TCP server.
@@ -91,6 +94,10 @@ public:
 
     void removeConnection(BoltConnection* conn);
 
+    uint64_t nextBookmark() {
+        return bookmark_counter_.fetch_add(1) + 1;
+    }
+
 private:
     server::GraphService& service_;
     uint16_t port_;
@@ -99,6 +106,7 @@ private:
     std::shared_ptr<folly::AsyncServerSocket> server_socket_;
     std::thread thread_;
     std::atomic<bool> running_{false};
+    std::atomic<uint64_t> bookmark_counter_{0};
     std::unordered_set<std::shared_ptr<BoltConnection>> active_connections_;
 };
 

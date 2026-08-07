@@ -24,8 +24,15 @@ void BoltConnection::start() {
     folly::SocketAddress peerAddr;
     socket_->getPeerAddress(&peerAddr);
     spdlog::info("[bolt] new connection from {}", peerAddr.describe());
-    // Start reading the handshake
     socket_->setReadCB(this);
+}
+
+void BoltConnection::setBookmarkGenerator(std::function<uint64_t()> fn) {
+    session_.setBookmarkGenerator(std::move(fn));
+}
+
+void BoltConnection::setBoltPort(uint16_t port) {
+    session_.setBoltPort(port);
 }
 
 void BoltConnection::getReadBuffer(void** buf, size_t* len) {
@@ -123,57 +130,42 @@ void BoltConnection::processHandshake() {
 }
 
 void BoltConnection::processMessage() {
-    // Bolt v5.1 uses chunked transfer encoding:
-    //   uint16 chunk_size (big-endian)
+    // Bolt v5.1 chunked transfer encoding:
+    //   uint16 chunk_size (big-endian), max 16383
     //   chunk_size bytes of message data
+    //   ... more data chunks ...
     //   uint16 0x0000 (end-of-message terminator)
-    // Multiple chunks per message are possible, but typically messages
-    // fit in a single chunk.
+    // Accumulate data chunks until 0x0000, then decode as one message.
 
     while (read_buf_ && read_buf_->length() >= 2) {
         auto data = read_buf_->data();
         auto len = read_buf_->length();
 
-        // Read chunk header
         uint16_t chunk_size = (static_cast<uint16_t>(data[0]) << 8) | static_cast<uint16_t>(data[1]);
 
         if (chunk_size == 0) {
-            // End-of-message: consume the 2-byte terminator
+            // End-of-message terminator
             read_buf_->trimStart(2);
-            continue;
-        }
 
-        // Need chunk_size bytes + 2 bytes for the terminator
-        size_t needed = static_cast<size_t>(chunk_size) + 2 + 2; // data + terminator header
-        if (len < needed) {
-            // Incomplete: wait for more data
-            return;
-        }
+            if (message_accumulator_.empty()) {
+                // Stray terminator (or keep-alive noop), ignore
+                continue;
+            }
 
-        // Extract the chunk data (after the 2-byte header)
-        const uint8_t* chunk_data = data + 2;
-        size_t chunk_len = chunk_size;
+            // Decode the assembled message
+            std::vector<uint8_t> response;
+            try {
+                response = folly::coro::blockingWait(
+                    session_.processMessage(message_accumulator_.data(), message_accumulator_.size()));
+            } catch (const packstream::DecodeError& e) {
+                spdlog::error("[bolt] decode error: {}", e.what());
+                response = session_.makeFailure("ProtocolError", e.what());
+            } catch (const std::exception& e) {
+                spdlog::error("[bolt] session error: {}", e.what());
+                response = session_.makeFailure("DatabaseError", e.what());
+            }
 
-        // Verify terminator (should be 0x0000 right after chunk data)
-        uint16_t term =
-            (static_cast<uint16_t>(chunk_data[chunk_len]) << 8) | static_cast<uint16_t>(chunk_data[chunk_len + 1]);
-
-        if (term != 0) {
-            // Multi-chunk message: accumulate and continue
-            // For now, only handle single-chunk messages
-            spdlog::warn("[bolt] multi-chunk message not yet supported, skipping");
-            read_buf_->trimStart(needed);
-            continue;
-        }
-
-        // Decode the message
-        try {
-            auto response = folly::coro::blockingWait(session_.processMessage(chunk_data, chunk_len));
-
-            // Consume: chunk header(2) + data(chunk_size) + terminator(2)
-            read_buf_->trimStart(needed);
-            if (read_buf_->length() == 0)
-                read_buf_.reset();
+            message_accumulator_.clear();
 
             if (session_.isClosed()) {
                 if (!response.empty())
@@ -183,24 +175,35 @@ void BoltConnection::processMessage() {
             }
 
             sendResponse(std::move(response));
-            // Continue loop to process any pipelined messages
-        } catch (const packstream::DecodeError& e) {
-            spdlog::error("[bolt] decode error: {}", e.what());
+            // Continue loop for pipelined messages
+        } else {
+            // Data chunk
+            if (chunk_size > BOLT_MAX_CHUNK_SIZE) {
+                spdlog::warn("[bolt] chunk size {} exceeds max {}, closing", chunk_size, BOLT_MAX_CHUNK_SIZE);
+                sendResponse(session_.makeFailure("ProtocolError", "Chunk size exceeds maximum"));
+                message_accumulator_.clear();
+                closeConnection();
+                return;
+            }
+
+            size_t needed = size_t(2) + chunk_size; // header + data
+            if (len < needed) {
+                // Incomplete chunk: wait for more data
+                return;
+            }
+
+            if (message_accumulator_.size() + chunk_size > BOLT_MAX_MESSAGE_SIZE) {
+                spdlog::error("[bolt] assembled message exceeds {} byte limit", BOLT_MAX_MESSAGE_SIZE);
+                sendResponse(session_.makeFailure("ProtocolError", "Message size exceeds server limit"));
+                message_accumulator_.clear();
+                closeConnection();
+                return;
+            }
+
+            const uint8_t* chunk_data = data + 2;
+            message_accumulator_.insert(message_accumulator_.end(), chunk_data, chunk_data + chunk_size);
             read_buf_->trimStart(needed);
-            if (read_buf_->length() == 0)
-                read_buf_.reset();
-            // Send FAILURE and continue processing remaining messages
-            auto failure = session_.makeFailure("ProtocolError", e.what());
-            sendResponse(std::move(failure));
-            // Continue loop
-        } catch (const std::exception& e) {
-            spdlog::error("[bolt] session error: {}", e.what());
-            read_buf_->trimStart(needed);
-            if (read_buf_->length() == 0)
-                read_buf_.reset();
-            auto failure = session_.makeFailure("DatabaseError", e.what());
-            sendResponse(std::move(failure));
-            // Continue loop
+            // Continue loop to read next chunk header or terminator
         }
     }
 }
@@ -209,12 +212,22 @@ void BoltConnection::sendResponse(std::vector<uint8_t> data) {
     if (data.empty())
         return;
 
-    // If the data already starts with a chunk header (first byte is 0x00
-    // for small chunks, meaning it's pre-chunked), send as-is. Otherwise,
-    // wrap in Bolt v5.1 chunked transfer encoding.
-    // PackStream struct markers are 0xB0-0xBF; chunk headers for small
-    // messages start with 0x00.
-    bool pre_chunked = !data.empty() && data[0] == 0x00;
+    // Detect pre-chunked data: validate that the first 2 bytes form a
+    // uint16_be chunk size in [1, BOLT_MAX_CHUNK_SIZE], and that a 0x0000
+    // terminator follows at the expected position.
+    // Previously we only checked data[0]==0x00 which failed for chunks
+    // >= 256 bytes (e.g. db.schema.visualization RECORDs).
+    bool pre_chunked = false;
+    if (data.size() >= 4) {
+        uint16_t chunk_size = (static_cast<uint16_t>(data[0]) << 8) | data[1];
+        if (chunk_size > 0 && chunk_size <= BOLT_MAX_CHUNK_SIZE) {
+            size_t term_pos = size_t(2) + chunk_size;
+            if (term_pos + 2 <= data.size() &&
+                data[term_pos] == 0x00 && data[term_pos + 1] == 0x00) {
+                pre_chunked = true;
+            }
+        }
+    }
 
     std::vector<uint8_t> out;
     if (pre_chunked) {
@@ -237,6 +250,7 @@ void BoltConnection::closeConnection() {
     if (phase_ == Phase::CLOSED)
         return;
     phase_ = Phase::CLOSED;
+    message_accumulator_.clear();
 
     // Keep a self-reference so the connection is not destroyed while
     // we're still inside this method (removeConnection may drop the
@@ -313,6 +327,8 @@ void BoltServer::connectionAccepted(folly::NetworkSocket fd, const folly::Socket
     auto async_socket = folly::AsyncSocket::newSocket(evb_, fd);
     auto conn = std::make_shared<BoltConnection>(std::move(async_socket), service_);
     conn->server_ = this;
+    conn->setBookmarkGenerator([this]() { return nextBookmark(); });
+    conn->setBoltPort(port_);
     active_connections_.insert(conn);
     conn->start();
 }

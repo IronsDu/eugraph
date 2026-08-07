@@ -2,6 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "query/executor/query_executor.hpp"
+#include "query/parser/database_ddl_parser.hpp"
 #include "storage/graph_manager.hpp"
 
 #include <folly/coro/Task.h>
@@ -21,6 +22,7 @@ struct CypherExecutionContext {
     std::shared_ptr<compute::StreamContext> ctx;
     std::unordered_map<LabelId, LabelDef> label_defs;
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
+    std::string switched_database; // non-empty when USE <graph> was executed
 };
 
 /// Protocol-agnostic service layer shared by Thrift and Bolt handlers.
@@ -79,6 +81,9 @@ public:
 
 private:
     GraphManager& gm_;
+
+    folly::coro::Task<CypherExecutionContext> handleDatabaseDdl(const DatabaseDdlStatement& stmt,
+                                                                IAsyncGraphDataStore& data_store);
 };
 
 } // namespace server
