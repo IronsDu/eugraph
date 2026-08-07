@@ -9,6 +9,7 @@
 #include <folly/coro/Task.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,7 +25,12 @@ class BoltSession {
 public:
     friend class BoltConnection;
 
-    explicit BoltSession(server::GraphService& service) : service_(service) {}
+    explicit BoltSession(server::GraphService& service, std::function<uint64_t()> next_bookmark = {})
+        : service_(service), next_bookmark_fn_(std::move(next_bookmark)) {}
+
+    void setBookmarkGenerator(std::function<uint64_t()> fn) {
+        next_bookmark_fn_ = std::move(fn);
+    }
 
     SessionState state() const {
         return state_;
@@ -85,6 +91,14 @@ private:
 
     // Current database name (from HELLO db field or RUN extra metadata)
     std::string current_database_ = "default";
+
+    // Authentication state
+    std::string auth_scheme_;
+    std::string auth_principal_;
+
+    // Bookmark generation callback
+    std::function<uint64_t()> next_bookmark_fn_;
+    std::vector<std::string> received_bookmarks_;
 };
 
 } // namespace bolt

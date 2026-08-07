@@ -121,5 +121,10 @@ inline constexpr uint32_t BOLT_PROPOSED_VERSIONS[] = {
     BOLT_VERSION_4_4,
 };
 
+// Bolt v5.x maximum chunk payload size (top 2 bits of uint16 header reserved).
+inline constexpr uint16_t BOLT_MAX_CHUNK_SIZE = 0x3FFF; // 16383
+// Maximum assembled message size to prevent memory exhaustion.
+inline constexpr size_t BOLT_MAX_MESSAGE_SIZE = 64ULL * 1024 * 1024; // 64 MiB
+
 } // namespace bolt
 } // namespace eugraph

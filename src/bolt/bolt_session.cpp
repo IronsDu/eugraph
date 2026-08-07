@@ -280,6 +280,37 @@ BoltSession::handleHello(const std::unordered_map<std::string, packstream::Value
         spdlog::info("[bolt] database: {}", current_database_);
     }
 
+    // Extract authentication info (Bolt v5.0+ sends auth in HELLO)
+    auto scheme_it = fields.find("scheme");
+    if (scheme_it != fields.end() && std::holds_alternative<std::string>(scheme_it->second)) {
+        auth_scheme_ = std::get<std::string>(scheme_it->second);
+    }
+
+    if (!auth_scheme_.empty()) {
+        if (auth_scheme_ != "basic") {
+            spdlog::warn("[bolt] unsupported auth scheme: {}", auth_scheme_);
+            co_return makeFailure("Neo.ClientError.Security.Unauthorized",
+                                  "Only BASIC auth is supported");
+        }
+
+        std::string principal;
+        std::string credentials;
+        auto principal_it = fields.find("principal");
+        if (principal_it != fields.end() && std::holds_alternative<std::string>(principal_it->second))
+            principal = std::get<std::string>(principal_it->second);
+        auto creds_it = fields.find("credentials");
+        if (creds_it != fields.end() && std::holds_alternative<std::string>(creds_it->second))
+            credentials = std::get<std::string>(creds_it->second);
+
+        auth_principal_ = principal;
+
+        if (credentials != "eugraph") {
+            spdlog::warn("[bolt] HELLO auth failed for user '{}'", principal);
+            co_return makeFailure("Neo.ClientError.Security.Unauthorized",
+                                  "Invalid credentials");
+        }
+    }
+
     std::unordered_map<std::string, packstream::Value> meta;
     meta["server"] = std::string{"Neo4j/EuGraph-1.0"};
     meta["connection_id"] = std::string{"bolt-1"};
@@ -289,12 +320,41 @@ BoltSession::handleHello(const std::unordered_map<std::string, packstream::Value
 }
 
 folly::coro::Task<std::vector<uint8_t>>
-BoltSession::handleLogon(const std::unordered_map<std::string, packstream::Value>& /*fields*/) {
+BoltSession::handleLogon(const std::unordered_map<std::string, packstream::Value>& fields) {
     if (state_ == SessionState::FAILED) {
         co_return makeIgnored();
     }
-    // Accept any LOGON (no authentication required)
-    spdlog::debug("[bolt] LOGON accepted");
+
+    // Extract auth scheme from LOGON fields or fall back to HELLO-provided scheme
+    std::string scheme = auth_scheme_;
+    auto scheme_it = fields.find("scheme");
+    if (scheme_it != fields.end() && std::holds_alternative<std::string>(scheme_it->second))
+        scheme = std::get<std::string>(scheme_it->second);
+
+    if (!scheme.empty()) {
+        if (scheme != "basic") {
+            spdlog::warn("[bolt] unsupported auth scheme: {}", scheme);
+            co_return makeFailure("Neo.ClientError.Security.Unauthorized",
+                                  "Only BASIC auth is supported");
+        }
+
+        auto principal_it = fields.find("principal");
+        auto creds_it = fields.find("credentials");
+
+        std::string principal;
+        std::string credentials;
+        if (principal_it != fields.end() && std::holds_alternative<std::string>(principal_it->second))
+            principal = std::get<std::string>(principal_it->second);
+        if (creds_it != fields.end() && std::holds_alternative<std::string>(creds_it->second))
+            credentials = std::get<std::string>(creds_it->second);
+
+        if (credentials != "eugraph") {
+            spdlog::warn("[bolt] LOGON failed for user '{}'", principal);
+            co_return makeFailure("Neo.ClientError.Security.Unauthorized",
+                                  "Invalid credentials");
+        }
+    }
+
     std::unordered_map<std::string, packstream::Value> meta;
     co_return makeSuccess(meta);
 }
@@ -328,6 +388,17 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
         std::string db_name = current_database_;
         if (db_it != msg.extra.end() && std::holds_alternative<std::string>(db_it->second))
             db_name = std::get<std::string>(db_it->second);
+
+        // Extract bookmarks from RUN extra metadata
+        received_bookmarks_.clear();
+        auto bm_it = msg.extra.find("bookmarks");
+        if (bm_it != msg.extra.end() &&
+            std::holds_alternative<std::vector<packstream::PackStreamValueStorage>>(bm_it->second)) {
+            for (auto& bm : std::get<std::vector<packstream::PackStreamValueStorage>>(bm_it->second)) {
+                if (std::holds_alternative<std::string>(bm.value))
+                    received_bookmarks_.push_back(std::get<std::string>(bm.value));
+            }
+        }
 
         auto exec_ctx = co_await service_.executeCypher(msg.query, params, db_name);
 
@@ -444,6 +515,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         if (limit >= 0 && fetched >= limit) {
             meta["has_more"] = true;
         }
+        if (stream_ctx_->should_commit && next_bookmark_fn_)
+            meta["bookmark"] = std::string{"eugraph:bookmark:" + std::to_string(next_bookmark_fn_())};
 
         auto success_chunk = wrapChunk(makeSuccess(meta));
         response.insert(response.end(), success_chunk.begin(), success_chunk.end());
@@ -486,12 +559,23 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleDiscard(const Discard
     co_return makeSuccess(meta);
 }
 
-folly::coro::Task<std::vector<uint8_t>> BoltSession::handleBegin(const BeginMessage&) {
+folly::coro::Task<std::vector<uint8_t>> BoltSession::handleBegin(const BeginMessage& msg) {
     if (state_ == SessionState::FAILED) {
         co_return makeIgnored();
     }
     if (state_ != SessionState::READY) {
         co_return makeFailure("ProtocolError", "Unexpected BEGIN in current state");
+    }
+
+    // Extract bookmarks from BEGIN extra metadata
+    received_bookmarks_.clear();
+    auto bm_it = msg.extra.find("bookmarks");
+    if (bm_it != msg.extra.end() &&
+        std::holds_alternative<std::vector<packstream::PackStreamValueStorage>>(bm_it->second)) {
+        for (auto& bm : std::get<std::vector<packstream::PackStreamValueStorage>>(bm_it->second)) {
+            if (std::holds_alternative<std::string>(bm.value))
+                received_bookmarks_.push_back(std::get<std::string>(bm.value));
+        }
     }
 
     in_transaction_ = true;
@@ -517,7 +601,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleCommit() {
     in_transaction_ = false;
     state_ = SessionState::READY;
     std::unordered_map<std::string, packstream::Value> meta;
-    meta["bookmark"] = std::string{""};
+    if (next_bookmark_fn_)
+        meta["bookmark"] = std::string{"eugraph:bookmark:" + std::to_string(next_bookmark_fn_())};
     co_return makeSuccess(meta);
 }
 
