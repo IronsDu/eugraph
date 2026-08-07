@@ -8,7 +8,7 @@ EuGraph 支持 Neo4j Bolt 协议后，允许任何 Neo4j 官方/社区驱动（P
 
 ### 支持的 Bolt 版本
 
-**实际测试通过**：Bolt v5.1（Python neo4j 5.28.x 驱动 + cypher-shell 5.26.x）、v4.4（Python neo4j 4.4.0 驱动）。v5.0 握手可协商，兼容性未独立验证。
+**实际测试通过**：Bolt v5.1（Python neo4j 5.28.x 驱动 + cypher-shell 5.26.x）、v5.0（Python neo4j 5.0.0 驱动）、v4.4（Python neo4j 4.4.0 驱动）。
 
 握手阶段声明支持 v5.1、v5.0、v4.4 三个版本并可协商成功。v5.0+ 使用 UTC epoch 秒和 0x49/0x69 标签，v4.x 使用本地墙上时间和 0x46/0x66 标签，根据协商版本自动分派。
 
