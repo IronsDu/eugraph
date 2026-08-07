@@ -212,12 +212,22 @@ void BoltConnection::sendResponse(std::vector<uint8_t> data) {
     if (data.empty())
         return;
 
-    // If the data already starts with a chunk header (first byte is 0x00
-    // for small chunks, meaning it's pre-chunked), send as-is. Otherwise,
-    // wrap in Bolt v5.1 chunked transfer encoding.
-    // PackStream struct markers are 0xB0-0xBF; chunk headers for small
-    // messages start with 0x00.
-    bool pre_chunked = !data.empty() && data[0] == 0x00;
+    // Detect pre-chunked data: validate that the first 2 bytes form a
+    // uint16_be chunk size in [1, BOLT_MAX_CHUNK_SIZE], and that a 0x0000
+    // terminator follows at the expected position.
+    // Previously we only checked data[0]==0x00 which failed for chunks
+    // >= 256 bytes (e.g. db.schema.visualization RECORDs).
+    bool pre_chunked = false;
+    if (data.size() >= 4) {
+        uint16_t chunk_size = (static_cast<uint16_t>(data[0]) << 8) | data[1];
+        if (chunk_size > 0 && chunk_size <= BOLT_MAX_CHUNK_SIZE) {
+            size_t term_pos = size_t(2) + chunk_size;
+            if (term_pos + 2 <= data.size() &&
+                data[term_pos] == 0x00 && data[term_pos + 1] == 0x00) {
+                pre_chunked = true;
+            }
+        }
+    }
 
     std::vector<uint8_t> out;
     if (pre_chunked) {
