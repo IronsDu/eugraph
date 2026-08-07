@@ -505,7 +505,9 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
     try {
         // Read from the async generator and encode RECORD messages
         while (auto chunk = co_await stream_ctx_->gen.next()) {
+            spdlog::info("[handlePull] got chunk: count={} columns={}", chunk->count, chunk->numColumns());
             auto rows = chunk->toRows();
+            spdlog::info("[handlePull] converted to {} rows", rows.size());
             for (auto& row : rows) {
                 if (limit >= 0 && fetched >= limit) {
                     // We've reached the limit but there may be more.
@@ -519,7 +521,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
 
                 std::vector<packstream::Value> record_fields;
                 for (auto& val : row) {
-                    record_fields.push_back(valueToBolt(val, label_defs_, edge_label_defs_));
+                    record_fields.push_back(valueToBolt(val, label_defs_, edge_label_defs_, negotiated_version_));
                 }
                 auto record_chunk = wrapChunk(makeRecord(record_fields));
                 response.insert(response.end(), record_chunk.begin(), record_chunk.end());
@@ -671,9 +673,10 @@ BoltSession::handleRoute(const RouteMessage& msg) {
     // Build single-node routing table using PackStreamValueStorage nesting
     using PS = packstream::PackStreamValueStorage;
 
-    auto make_server = [](const std::string& role) -> PS {
+    auto make_server = [this](const std::string& role) -> PS {
         std::unordered_map<std::string, PS> m;
-        m["addresses"] = PS{std::vector<PS>{PS{std::string{"localhost:7687"}}}};
+        std::string addr = "localhost:" + std::to_string(bolt_port_);
+        m["addresses"] = PS{std::vector<PS>{PS{std::move(addr)}}};
         m["role"] = PS{role};
         return PS{std::move(m)};
     };

@@ -298,6 +298,56 @@ TEST_F(PackStreamTest, EncodeDecodeEmptyStruct) {
     EXPECT_TRUE(dst.fields.empty());
 }
 
+// ==================== Structure (large) ====================
+
+TEST_F(PackStreamTest, EncodeDecodeStruct32) {
+    // STRUCT_32 (0xDF) is triggered when field_count > 65535.
+    // Use exactly 65536 fields to cross the STRUCT_16 threshold.
+    constexpr size_t kFieldCount = 65536;
+
+    PackStreamStruct st;
+    st.tag = 0x01;
+    for (size_t i = 0; i < kFieldCount; i++)
+        st.fields.push_back(PS{int64_t{1}});
+
+    Value val{st};
+    auto encoded = encodeOne(val);
+
+    // Verify STRUCT_32 marker (0xDF)
+    ASSERT_EQ(encoded[0], 0xDF);
+    // field_count as uint32 big-endian: 65536 = 0x00010000
+    EXPECT_EQ(encoded[1], 0x00);
+    EXPECT_EQ(encoded[2], 0x01);
+    EXPECT_EQ(encoded[3], 0x00);
+    EXPECT_EQ(encoded[4], 0x00);
+    // tag byte
+    EXPECT_EQ(encoded[5], 0x01);
+
+    // Decode and verify
+    auto decoded = decodeOne(encoded);
+    ASSERT_TRUE(std::holds_alternative<PackStreamStruct>(decoded));
+    auto& dst = std::get<PackStreamStruct>(decoded);
+    EXPECT_EQ(dst.tag, 0x01);
+    ASSERT_EQ(dst.fields.size(), kFieldCount);
+    // Spot-check: every field is int64_t(1)
+    EXPECT_EQ(std::get<int64_t>(dst.fields[0].value), 1);
+    EXPECT_EQ(std::get<int64_t>(dst.fields[kFieldCount - 1].value), 1);
+}
+
+TEST_F(PackStreamTest, DecodeStructHeaderStruct32) {
+    Encoder enc;
+    enc.writeStructHeader(0x02, 65537);
+    auto buf = enc.release();
+
+    // Verify STRUCT_32 marker
+    ASSERT_EQ(buf[0], 0xDF);
+
+    Decoder dec(buf.data(), buf.size());
+    auto [tag, count] = dec.decodeStructHeader();
+    EXPECT_EQ(tag, 0x02);
+    EXPECT_EQ(count, 65537u);
+}
+
 // ==================== DecodeError ====================
 
 TEST_F(PackStreamTest, DecodeTruncatedData) {

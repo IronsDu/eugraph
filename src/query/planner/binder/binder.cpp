@@ -9,6 +9,24 @@ namespace binder {
 
 // ==================== Public Expression Binding API ====================
 
+namespace {
+
+/// Extract BoundCallOp from plan root, supporting both direct CallOp and
+/// CrossJoin(CallOp) wrapping (when CALL follows a prior clause without RETURN).
+BoundCallOp* tryExtractCallOp(BoundLogicalOperator& op) {
+    // Direct: BoundCallOp
+    if (auto* call = std::get_if<std::unique_ptr<BoundCallOp>>(&op))
+        return call->get();
+    // CrossJoin wrapping: left=..., right=BoundCallOp
+    if (auto* join = std::get_if<std::unique_ptr<BoundBinaryJoinOp>>(&op)) {
+        if (*join && (*join)->join_type == JoinType::Cross)
+            return tryExtractCallOp((*join)->right);
+    }
+    return nullptr;
+}
+
+} // namespace
+
 void Binder::registerColumn(const std::string& name, BoundType type) {
     uint32_t idx = static_cast<uint32_t>(ctx_.symbols.size());
     ColumnInfo info;
@@ -61,6 +79,7 @@ std::optional<BoundStatement> Binder::bind(const cypher::Statement& stmt) {
                 error("EXPLAIN with no query");
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Elem, cypher::StandaloneCall>) {
+                spdlog::info("[Binder] StandaloneCall: procedure={}", ptr->procedure_name);
                 BoundStatement result;
                 cypher::CallClause call_clause;
                 call_clause.procedure_name = std::move(ptr->procedure_name);
@@ -278,6 +297,11 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
         if (!ctx_.return_columns.empty()) {
             plan.output_schema = std::move(ctx_.return_columns);
+        } else if (auto* call_op = tryExtractCallOp(plan.root)) {
+            // CALL clause without RETURN: use the procedure's output columns
+            for (size_t i = 0; i < call_op->output_names.size(); ++i)
+                plan.output_schema.push_back(
+                    makeColumnInfo(call_op->output_names[i], call_op->output_types[i]));
         } else {
             // No RETURN clause: wrap root in an empty BoundProjectOp → 0 output columns
             auto proj = std::make_unique<BoundProjectOp>();

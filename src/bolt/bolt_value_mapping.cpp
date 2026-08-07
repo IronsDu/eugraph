@@ -14,7 +14,11 @@ using PS = packstream::PackStreamValueStorage;
 
 namespace {
 
-packstream::PackStreamStruct dateTimeToStruct(const DateTimeValue& tv) {
+inline uint8_t boltMajorVersion(uint32_t ver) {
+    return static_cast<uint8_t>((ver >> 8) & 0xFF);
+}
+
+packstream::PackStreamStruct dateTimeToStruct(const DateTimeValue& tv, uint32_t bolt_version) {
     int64_t days = daysFromCivil(tv.year, tv.month, tv.day);
     packstream::PackStreamStruct s;
     switch (tv.kind) {
@@ -30,19 +34,35 @@ packstream::PackStreamStruct dateTimeToStruct(const DateTimeValue& tv) {
         break;
     }
     case DateTimeKind::DATETIME: {
-        // Bolt 5.0+ uses UTC epoch seconds (not local wall-clock seconds)
         int64_t local_seconds = days * 86400 + tv.hour * 3600 + tv.minute * 60 + tv.second;
-        int64_t utc_seconds = local_seconds - tv.tz_offset_sec;
-        if (!tv.tz_name.empty()) {
-            s.tag = tags::DATETIME_ZONE_ID;
-            s.fields.push_back(PS{utc_seconds});
-            s.fields.push_back(PS{tv.nanos});
-            s.fields.push_back(PS{std::string{tv.tz_name}});
+        bool is_v4 = boltMajorVersion(bolt_version) <= 4;
+        if (is_v4) {
+            // v4.x: local wall-clock seconds, tags 0x46/0x66
+            if (!tv.tz_name.empty()) {
+                s.tag = tags::DATETIME_ZONE_ID_V4;
+                s.fields.push_back(PS{local_seconds});
+                s.fields.push_back(PS{tv.nanos});
+                s.fields.push_back(PS{std::string{tv.tz_name}});
+            } else {
+                s.tag = tags::DATETIME_V4;
+                s.fields.push_back(PS{local_seconds});
+                s.fields.push_back(PS{tv.nanos});
+                s.fields.push_back(PS{static_cast<int64_t>(tv.tz_offset_sec)});
+            }
         } else {
-            s.tag = tags::DATETIME;
-            s.fields.push_back(PS{utc_seconds});
-            s.fields.push_back(PS{tv.nanos});
-            s.fields.push_back(PS{static_cast<int64_t>(tv.tz_offset_sec)});
+            // v5.x: UTC epoch seconds, tags 0x49/0x69
+            int64_t utc_seconds = local_seconds - tv.tz_offset_sec;
+            if (!tv.tz_name.empty()) {
+                s.tag = tags::DATETIME_ZONE_ID;
+                s.fields.push_back(PS{utc_seconds});
+                s.fields.push_back(PS{tv.nanos});
+                s.fields.push_back(PS{std::string{tv.tz_name}});
+            } else {
+                s.tag = tags::DATETIME;
+                s.fields.push_back(PS{utc_seconds});
+                s.fields.push_back(PS{tv.nanos});
+                s.fields.push_back(PS{static_cast<int64_t>(tv.tz_offset_sec)});
+            }
         }
         break;
     }
@@ -77,7 +97,7 @@ packstream::PackStreamStruct durationToStruct(const DurationValue& dv) {
     return s;
 }
 
-packstream::Value propertyToBolt(const PropertyValue& pv) {
+packstream::Value propertyToBolt(const PropertyValue& pv, uint32_t bolt_version) {
     if (std::holds_alternative<std::monostate>(pv)) {
         return std::monostate{};
     } else if (std::holds_alternative<bool>(pv)) {
@@ -104,7 +124,7 @@ packstream::Value propertyToBolt(const PropertyValue& pv) {
             list.push_back(PS{s});
         return list;
     } else if (std::holds_alternative<DateTimeValue>(pv)) {
-        return dateTimeToStruct(std::get<DateTimeValue>(pv));
+        return dateTimeToStruct(std::get<DateTimeValue>(pv), bolt_version);
     } else if (std::holds_alternative<TimeValue>(pv)) {
         return timeToStruct(std::get<TimeValue>(pv));
     } else if (std::holds_alternative<DurationValue>(pv)) {
@@ -112,7 +132,7 @@ packstream::Value propertyToBolt(const PropertyValue& pv) {
     } else if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
         std::vector<PS> list;
         for (auto& tv : std::get<std::vector<DateTimeValue>>(pv))
-            list.push_back(PS{dateTimeToStruct(tv)});
+            list.push_back(PS{dateTimeToStruct(tv, bolt_version)});
         return list;
     } else if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
         std::vector<PS> list;
@@ -131,7 +151,8 @@ packstream::Value propertyToBolt(const PropertyValue& pv) {
 } // anonymous namespace
 
 packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
-                              const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs) {
+                              const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs,
+                              uint32_t bolt_version) {
     if (std::holds_alternative<std::monostate>(val)) {
         return std::monostate{};
     } else if (std::holds_alternative<bool>(val)) {
@@ -163,7 +184,7 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
                 if (pd.id < props_vec.size()) {
                     const auto& pv = props_vec[pd.id];
                     if (pv.has_value())
-                        props[pd.name] = PS{propertyToBolt(*pv)};
+                        props[pd.name] = PS{propertyToBolt(*pv, bolt_version)};
                 }
             }
         }
@@ -189,7 +210,7 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
                 if (pd.id < e.properties->size()) {
                     const auto& pv = (*e.properties)[pd.id];
                     if (pv.has_value())
-                        props[pd.name] = PS{propertyToBolt(*pv)};
+                        props[pd.name] = PS{propertyToBolt(*pv, bolt_version)};
                 }
             }
         }
@@ -232,7 +253,7 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         path_s.fields.push_back(PS{std::move(sequence)});
         return path_s;
     } else if (std::holds_alternative<DateTimeValue>(val)) {
-        return dateTimeToStruct(std::get<DateTimeValue>(val));
+        return dateTimeToStruct(std::get<DateTimeValue>(val), bolt_version);
     } else if (std::holds_alternative<TimeValue>(val)) {
         return timeToStruct(std::get<TimeValue>(val));
     } else if (std::holds_alternative<DurationValue>(val)) {
@@ -241,13 +262,13 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         auto& lv = std::get<ListValue>(val);
         std::vector<PS> list;
         for (auto& elem : lv.elements)
-            list.push_back(PS{valueToBolt(elem.value, label_defs, edge_label_defs)});
+            list.push_back(PS{valueToBolt(elem.value, label_defs, edge_label_defs, bolt_version)});
         return list;
     } else if (std::holds_alternative<MapValue>(val)) {
         auto& mv = std::get<MapValue>(val);
         std::unordered_map<std::string, PS> dict;
         for (auto& [key, elem] : mv.entries)
-            dict[key] = PS{valueToBolt(elem.value, label_defs, edge_label_defs)};
+            dict[key] = PS{valueToBolt(elem.value, label_defs, edge_label_defs, bolt_version)};
         return dict;
     }
 

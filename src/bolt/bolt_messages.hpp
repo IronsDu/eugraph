@@ -38,7 +38,7 @@ constexpr uint8_t NODE = 0x4E;
 constexpr uint8_t RELATIONSHIP = 0x52;
 constexpr uint8_t PATH = 0x50;
 
-// Temporal types
+// Temporal types (v5.0+)
 constexpr uint8_t DATE = 0x44;
 constexpr uint8_t TIME = 0x54;
 constexpr uint8_t LOCAL_TIME = 0x74;
@@ -46,6 +46,10 @@ constexpr uint8_t DATETIME = 0x49;
 constexpr uint8_t DATETIME_ZONE_ID = 0x69;
 constexpr uint8_t LOCAL_DATETIME = 0x64;
 constexpr uint8_t DURATION = 0x45;
+
+// Temporal types (v4.x legacy — DATETIME tags changed in v5.0)
+constexpr uint8_t DATETIME_V4 = 0x46;
+constexpr uint8_t DATETIME_ZONE_ID_V4 = 0x66;
 } // namespace tags
 
 // ==================== Client → Server Messages ====================

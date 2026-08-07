@@ -200,6 +200,11 @@ Value Decoder::decode() {
     } else if (marker == marker::STRUCT_16) {
         uint8_t buf[2] = {readByte(), readByte()};
         field_count = readUintBigEndian(buf, 2);
+    } else if (marker == marker::STRUCT_32) {
+        uint8_t buf[4];
+        for (auto& b : buf)
+            b = readByte();
+        field_count = readUintBigEndian(buf, 4);
     } else {
         std::ostringstream oss;
         oss << "unknown packstream marker: 0x" << std::hex << static_cast<int>(marker);
@@ -225,6 +230,11 @@ std::pair<uint8_t, size_t> Decoder::decodeStructHeader() {
     } else if (marker == marker::STRUCT_16) {
         uint8_t buf[2] = {readByte(), readByte()};
         field_count = readUintBigEndian(buf, 2);
+    } else if (marker == marker::STRUCT_32) {
+        uint8_t buf[4];
+        for (auto& b : buf)
+            b = readByte();
+        field_count = readUintBigEndian(buf, 4);
     } else {
         std::ostringstream oss;
         oss << "expected struct marker, got 0x" << std::hex << static_cast<int>(marker);

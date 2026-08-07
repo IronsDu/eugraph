@@ -186,9 +186,16 @@ void Encoder::writeStructHeader(uint8_t tag, size_t field_count) {
     } else if (field_count <= UINT8_MAX) {
         writeByte(marker::STRUCT_8);
         writeByte(static_cast<uint8_t>(field_count));
-    } else {
+    } else if (field_count <= UINT16_MAX) {
         writeByte(marker::STRUCT_16);
         uint16_t uc = static_cast<uint16_t>(field_count);
+        writeByte(static_cast<uint8_t>((uc >> 8) & 0xFF));
+        writeByte(static_cast<uint8_t>(uc & 0xFF));
+    } else {
+        writeByte(marker::STRUCT_32);
+        uint32_t uc = static_cast<uint32_t>(field_count);
+        writeByte(static_cast<uint8_t>((uc >> 24) & 0xFF));
+        writeByte(static_cast<uint8_t>((uc >> 16) & 0xFF));
         writeByte(static_cast<uint8_t>((uc >> 8) & 0xFF));
         writeByte(static_cast<uint8_t>(uc & 0xFF));
     }

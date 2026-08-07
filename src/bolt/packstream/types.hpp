@@ -82,6 +82,7 @@ constexpr uint8_t TINY_STRUCT_BASE = 0xB0;
 constexpr uint8_t TINY_STRUCT_MAX_LEN = 15;
 constexpr uint8_t STRUCT_8 = 0xDC;
 constexpr uint8_t STRUCT_16 = 0xDD;
+constexpr uint8_t STRUCT_32 = 0xDF;
 } // namespace marker
 
 } // namespace packstream

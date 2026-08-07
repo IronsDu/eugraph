@@ -31,6 +31,9 @@ public:
     void setBookmarkGenerator(std::function<uint64_t()> fn) {
         next_bookmark_fn_ = std::move(fn);
     }
+    void setBoltPort(uint16_t port) {
+        bolt_port_ = port;
+    }
 
     SessionState state() const {
         return state_;
@@ -100,6 +103,9 @@ private:
     // Bookmark generation callback
     std::function<uint64_t()> next_bookmark_fn_;
     std::vector<std::string> received_bookmarks_;
+
+    // Bolt server port (used for ROUTE response)
+    uint16_t bolt_port_ = 7687;
 };
 
 } // namespace bolt

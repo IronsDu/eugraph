@@ -31,6 +31,10 @@ void BoltConnection::setBookmarkGenerator(std::function<uint64_t()> fn) {
     session_.setBookmarkGenerator(std::move(fn));
 }
 
+void BoltConnection::setBoltPort(uint16_t port) {
+    session_.setBoltPort(port);
+}
+
 void BoltConnection::getReadBuffer(void** buf, size_t* len) {
     // Allocate a new buffer for each read
     constexpr size_t kBufSize = 65536;
@@ -314,6 +318,7 @@ void BoltServer::connectionAccepted(folly::NetworkSocket fd, const folly::Socket
     auto conn = std::make_shared<BoltConnection>(std::move(async_socket), service_);
     conn->server_ = this;
     conn->setBookmarkGenerator([this]() { return nextBookmark(); });
+    conn->setBoltPort(port_);
     active_connections_.insert(conn);
     conn->start();
 }

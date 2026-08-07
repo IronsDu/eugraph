@@ -31,6 +31,7 @@ public:
 
     void start();
     void setBookmarkGenerator(std::function<uint64_t()> fn);
+    void setBoltPort(uint16_t port);
 
     // ReadCallback
     void getReadBuffer(void** buf, size_t* len) override;

@@ -8,9 +8,9 @@ EuGraph 支持 Neo4j Bolt 协议后，允许任何 Neo4j 官方/社区驱动（P
 
 ### 支持的 Bolt 版本
 
-**实际测试通过**：Bolt v5.1（Python neo4j 5.28.x 驱动 + cypher-shell 5.26.x）。
+**实际测试通过**：Bolt v5.1（Python neo4j 5.28.x 驱动 + cypher-shell 5.26.x）、v4.4（Python neo4j 4.4.0 驱动）。v5.0 握手可协商，兼容性未独立验证。
 
-握手阶段声明支持 v5.1、v5.0、v4.4 三个版本并可协商成功，但**协议行为始终按 v5.1 处理**（未根据协商版本分派不同行为），因此 v5.0/v4.4 驱动的兼容性未实际验证，见缺陷 2。
+握手阶段声明支持 v5.1、v5.0、v4.4 三个版本并可协商成功。v5.0+ 使用 UTC epoch 秒和 0x49/0x69 标签，v4.x 使用本地墙上时间和 0x46/0x66 标签，根据协商版本自动分派。
 
 ## 架构
 
@@ -283,19 +283,7 @@ tests/bolt/test_bolt_integration.py             # Python 驱动集成测试
 
 ## 已知缺陷
 
-### 缺陷 1：NODE 缺少 element_id 字段
-
-**严重程度**：中 | **影响范围**：neo4j 5.x 驱动通过 `GraphDatabase.driver()` 连接
-
-neo4j 5.x 驱动期望 NODE 结构体包含 4 个字段：`id, labels, props, element_id`。当前只输出 3 个字段（缺 element_id）。部分驱动（cypher-shell）容忍此差异，但 Python 驱动可能报错。
-
-### 缺陷 2：v4.x 驱动不兼容
-
-**严重程度**：低 | **影响范围**：旧版驱动
-
-当前始终使用 v5.x 的时间类型标签（DATETIME=0x49、DATETIME_ZONE_ID=0x69），如果客户端协商到 v4.4，返回的时间类型标签会与驱动预期不匹配（v4.4 期望 0x46/0x66）。需要根据 `negotiated_version_` 分派不同的标签。
-
-### 缺陷 3：LOGOFF 无实际清理
+### 缺陷 1：LOGOFF 无实际清理
 
 **严重程度**：低 | **影响范围**：长时间连接的会话
 
@@ -305,9 +293,8 @@ neo4j 5.x 驱动期望 NODE 结构体包含 4 个字段：`id, labels, props, el
 
 | # | 问题 | 说明 |
 |---|------|------|
-| 4 | **PackStream 解码器缺 STRUCT_32** | 不支持 >65535 字段的结构体（极端罕见场景） |
-| 5 | **空间类型 (Point) 缺失** | 类型系统无 Point2D/Point3D |
-| 6 | **认证密码硬编码** | 密码 `"eugraph"` 写死在代码中，应从配置文件读取 |
+| 1 | **空间类型 (Point) 缺失** | 类型系统无 Point2D/Point3D |
+| 2 | **认证密码硬编码** | 密码 `"eugraph"` 写死在代码中，应从配置文件读取 |
 
 ## 参考
 
