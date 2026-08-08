@@ -1204,8 +1204,10 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 } else {
                     layout = makeSlotLayout(output_schema, ctx);
                 }
-                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
-                                          std::move(layout)};
+                auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                       std::move(output_types), std::move(layout)};
+                plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
+                return plan_result;
             } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
                 Schema output_schema;
                 std::vector<binder::BoundType> output_types;

@@ -939,10 +939,10 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             if (os == left_slot) { dup = true; break; }
         if (dup)
             continue;
-        // Allocate a fresh slot but do NOT overwrite all_symbols[var_name].
-        // The outer scope's slot must survive so the physical planner can
-        // resolve the correct column in the SemiJoin's left layout (§extra_corr).
-        SlotId sub_slot = nextSlotId();
+        // Reuse the caller scope's slot rather than allocating a fresh one.
+        // Using the same slot for this variable name across all scopes keeps
+        // var_slots / PE plans / PropertyRef replay consistent (§extra_corr_slot).
+        SlotId sub_slot = left_slot;
         ColumnInfo ci;
         ci.name = var_name;
         ci.type = BoundType::Vertex();
