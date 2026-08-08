@@ -679,6 +679,28 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                                 collect(ptr->object);
                             } else if constexpr (std::is_same_v<E, cypher::ExistsExpr>) {
                                 if (ptr->where_pred) collect(*ptr->where_pred);
+                                // Walk patterns (bare form) and full_query clauses
+                                // for nested EXISTS where variables are in MATCH.
+                                for (auto& pp : ptr->patterns) {
+                                    if (pp.element.node.variable) extra_corr_vars.push_back(*pp.element.node.variable);
+                                    for (auto& [rp, np] : pp.element.chain) {
+                                        if (rp.variable) extra_corr_vars.push_back(*rp.variable);
+                                        if (np.variable) extra_corr_vars.push_back(*np.variable);
+                                    }
+                                }
+                                if (ptr->full_query) {
+                                    for (auto& clause : ptr->full_query->clauses) {
+                                        if (auto* mc = std::get_if<std::unique_ptr<cypher::MatchClause>>(&clause)) {
+                                            for (auto& pp : (*mc)->patterns) {
+                                                if (pp.element.node.variable) extra_corr_vars.push_back(*pp.element.node.variable);
+                                                for (auto& [rp, np] : pp.element.chain) {
+                                                    if (rp.variable) extra_corr_vars.push_back(*rp.variable);
+                                                    if (np.variable) extra_corr_vars.push_back(*np.variable);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }, expr);
                     };
