@@ -647,6 +647,10 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
     std::vector<cypher::PatternPart> full_query_patterns;
     std::optional<cypher::Expression> full_query_where;
     const cypher::WithClause* full_query_with = nullptr;
+    // Grandparent-scope variables collected from full_query's WHERE for
+    // nested EXISTS: these must be threaded through the CorrelatedSource
+    // so the inner SemiJoin can find them in the left layout.
+    std::vector<std::string> extra_corr_vars;
     bool found_match = false;
     if (is_full_query) {
         for (auto& clause : exists.full_query->clauses) {
@@ -654,6 +658,32 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                 full_query_patterns = std::move((*mc)->patterns);
                 full_query_where = std::move((*mc)->where_pred);
                 found_match = true;
+                if (full_query_where) {
+                    std::function<void(const cypher::Expression&)> collect;
+                    collect = [&](const cypher::Expression& expr) {
+                        std::visit([&](const auto& ptr) {
+                            using E = typename std::decay_t<decltype(ptr)>::element_type;
+                            if constexpr (std::is_same_v<E, cypher::Variable>) {
+                                // Collect all grandparent-scope variables from
+                                // all_symbols, even if they're currently visible
+                                // (ctx_ is the parent scope before beginSubScope).
+                                if (ctx_.all_symbols.count(ptr->name))
+                                    extra_corr_vars.push_back(ptr->name);
+                            } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
+                                collect(ptr->left); collect(ptr->right);
+                            } else if constexpr (std::is_same_v<E, cypher::UnaryOp>) {
+                                collect(ptr->operand);
+                            } else if constexpr (std::is_same_v<E, cypher::FunctionCall>) {
+                                for (auto& a : ptr->args) collect(a);
+                            } else if constexpr (std::is_same_v<E, cypher::PropertyAccess>) {
+                                collect(ptr->object);
+                            } else if constexpr (std::is_same_v<E, cypher::ExistsExpr>) {
+                                if (ptr->where_pred) collect(*ptr->where_pred);
+                            }
+                        }, expr);
+                    };
+                    collect(*full_query_where);
+                }
             } else if (found_match) {
                 if (std::holds_alternative<std::unique_ptr<cypher::WithClause>>(clause)) {
                     full_query_with = std::get<std::unique_ptr<cypher::WithClause>>(clause).get();
@@ -698,6 +728,11 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         start_var_name = "__anon_exists_start_" + std::to_string(nextAnonId());
     }
 
+    // Save outer binding context before correlation check so saved_ctx
+    // is available to look up variables registered in the parent scope
+    // (needed by nested EXISTS with extra_corr_vars).
+    auto saved_ctx = ctx_.save();
+
     bool is_correlated = false;
     ColumnInfo saved_outer_info;
     SlotId outer_slot = INVALID_SLOT_ID;
@@ -706,20 +741,23 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         outer_slot = outer_col->slot_id;
         saved_outer_info = *outer_col;
     } else {
-        // For nested EXISTS, the correlated variable may be in a grandparent
-        // scope (hidden from symbols but still in all_symbols).
-        auto all_it = ctx_.all_symbols.find(start_var_name);
-        if (all_it != ctx_.all_symbols.end()) {
+        // Check parent scope for nested EXISTS support.
+        auto saved_it = saved_ctx.symbols.find(start_var_name);
+        if (saved_it != saved_ctx.symbols.end()) {
             is_correlated = true;
-            outer_slot = all_it->second;
-            saved_outer_info.name = start_var_name;
-            saved_outer_info.type = BoundType::Vertex();
-            saved_outer_info.slot_id = all_it->second;
+            outer_slot = saved_it->second.slot_id;
+            saved_outer_info = saved_it->second;
+        } else {
+            auto all_it = ctx_.all_symbols.find(start_var_name);
+            if (all_it != ctx_.all_symbols.end()) {
+                is_correlated = true;
+                outer_slot = all_it->second;
+                saved_outer_info.name = start_var_name;
+                saved_outer_info.type = BoundType::Vertex();
+                saved_outer_info.slot_id = all_it->second;
+            }
         }
     }
-
-    // Save outer binding context
-    auto saved_ctx = ctx_.save();
 
     // Validate: all named variables in the pattern must exist in the outer
     // scope. Bare patterns like (n)-[r]->(a) where `a` or `r` are new should
@@ -788,6 +826,32 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
     };
     std::vector<SavedCorr> saved_chain_corrs;
 
+    // Pre-register chain variables from the parent scope for nested EXISTS.
+    // The chain_corr mechanism renames them to __exists_dst_N, which breaks
+    // WHERE expressions referencing them by their original names.
+    for (const auto& pp : exp_patterns) {
+        for (auto& [rel_pat, node_pat] : pp.element.chain) {
+            if (node_pat.variable.has_value()) {
+                auto sit = saved_ctx.symbols.find(*node_pat.variable);
+                if (sit != saved_ctx.symbols.end() && !ctx_.symbols.count(*node_pat.variable)) {
+                    ColumnInfo ci = sit->second;
+                    ci.column_index = nextColumnIndex();
+                    ci.slot_id = nextSlotId();
+                    ctx_.symbols[*node_pat.variable] = ci;
+                }
+            }
+            if (rel_pat.variable.has_value()) {
+                auto sit = saved_ctx.symbols.find(*rel_pat.variable);
+                if (sit != saved_ctx.symbols.end() && !ctx_.symbols.count(*rel_pat.variable)) {
+                    ColumnInfo ci = sit->second;
+                    ci.column_index = nextColumnIndex();
+                    ci.slot_id = nextSlotId();
+                    ctx_.symbols[*rel_pat.variable] = ci;
+                }
+            }
+        }
+    }
+
     // For chain nodes that reference outer-scope variables (e.g. `(n)-[]->(m)`
     // where both `n` and `m` are from the outer scope), allocate fresh names
     // and slots inside the sub-plan. Reusing the outer var's name would make
@@ -801,6 +865,8 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                 continue;
             const auto& chain_var = *node_pat.variable;
             if (chain_var == start_var_name)
+                continue;
+            if (ctx_.symbols.count(chain_var))
                 continue;
             auto it = saved_ctx.symbols.find(chain_var);
             if (it == saved_ctx.symbols.end())
@@ -846,38 +912,66 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         }
     }
 
+    // Register extra grandparent-scope variables for nested EXISTS support.
+    // These need to be in the correlation BEFORE source_op is created so the
+    // CorrelatedSource includes them in its output schema.
+    for (const auto& var_name : extra_corr_vars) {
+        auto ait = ctx_.all_symbols.find(var_name);
+        if (ait == ctx_.all_symbols.end())
+            continue;
+        // Skip variables already in the current scope (e.g. start var).
+        if (ctx_.lookup(var_name))
+            continue;
+        bool dup = (is_correlated && outer_slot == ait->second);
+        for (const auto& [os, _] : correlation)
+            if (os == ait->second) { dup = true; break; }
+        if (dup)
+            continue;
+        SlotId sub_slot = allocateNamedSlot(var_name);
+        ColumnInfo ci;
+        ci.name = var_name;
+        ci.type = BoundType::Vertex();
+        ci.column_index = nextColumnIndex();
+        ci.slot_id = sub_slot;
+        ctx_.symbols[var_name] = ci;
+        correlation.emplace_back(ait->second, sub_slot);
+    }
+
     // Create the source leaf operator
     BoundLogicalOperator source_op;
     if (is_correlated || !correlation.empty()) {
         BoundCorrelatedSourceOp source;
-        // Collect correlated variables in the same order as correlation pairs.
-        // Each (outer_slot, sub_slot) pair maps to a symbol in ctx_.symbols;
-        // find it by slot_id and emit its name + type.
-        //
-        // The runtime Value injected by SemiJoin is the topology-stage form
-        // (VertexRef / EdgeKey) — what the left side actually stores in its
-        // VertexRef / EdgeKey columns. The declared variable type (VERTEX /
-        // EDGE) is the semantic stage, but emitting that here would make PE
-        // create VERTEX-typed passthrough columns and then setValue(VertexRef)
-        // on a VERTEX column silently drops the value. Emit the topology
-        // counterpart so the source's output_types matches the actual value
-        // kind; PE can still upgrade to VERTEX via Construct specs.
         for (const auto& [outer_slot, sub_slot] : correlation) {
             for (const auto& [name, info] : ctx_.symbols) {
                 if (sub_slot == info.slot_id) {
                     source.variables.push_back(name);
                     BoundType topo = BoundType::clone(info.type);
                     BoundTypeKind tk = topologyCounterpart(info.type.kind);
-                    if (tk != info.type.kind) {
-                        topo.kind = tk;
-                    }
+                    if (tk != info.type.kind) topo.kind = tk;
                     source.types.push_back(std::move(topo));
                     source.column_indices.push_back(info.column_index);
                     break;
                 }
             }
         }
-        source_op = std::move(source);
+        if (!is_correlated) {
+            // Nested EXISTS: start var not correlated, but extra vars are.
+            // CrossJoin CorrelatedSource(extras) + Scan(start_var).
+            BoundScanOp scan;
+            scan.variable = start_var_name;
+            scan.column_index = sub_idx;
+            auto join = std::make_unique<BoundBinaryJoinOp>();
+            join->join_type = JoinType::Cross;
+            join->left = std::move(source);
+            join->right = std::move(scan);
+            source_op = BoundLogicalOperator(std::move(join));
+            // start_var's column_index shifted by number of extra correlation cols.
+            size_t extra_cols = correlation.size();
+            if (auto* col = ctx_.lookup(start_var_name))
+                const_cast<ColumnInfo*>(col)->column_index += static_cast<uint32_t>(extra_cols);
+        } else {
+            source_op = std::move(source);
+        }
     } else {
         BoundScanOp scan;
         scan.variable = start_var_name;
