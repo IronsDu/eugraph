@@ -1205,7 +1205,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     layout = makeSlotLayout(output_schema, ctx);
                 }
                 auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
-                                                       std::move(output_types), std::move(layout)};
+                                                      std::move(output_types), std::move(layout)};
                 plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                 return plan_result;
             } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
@@ -2155,9 +2155,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 } else if constexpr (std::is_same_v<Elem, binder::BoundCallOp>) {
                     Schema output_schema = v.output_names;
                     std::vector<binder::BoundType> output_types = v.output_types;
-                    auto result = std::make_unique<CallPhysicalOp>(v.procedure_name, std::move(v.output_names),
-                                                                   std::vector<binder::BoundType>(v.output_types),
-                                                                   &meta);
+                    auto result =
+                        std::make_unique<CallPhysicalOp>(v.procedure_name, std::move(v.output_names),
+                                                         std::vector<binder::BoundType>(v.output_types), &meta);
                     TupleSlotLayout layout = makeSlotLayout(output_schema, ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                               std::move(layout)};

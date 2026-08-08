@@ -13,20 +13,34 @@ namespace {
 
 const char* propTypeName(PropertyType t) {
     switch (t) {
-    case PropertyType::BOOL: return "BOOLEAN";
-    case PropertyType::INT64: return "INTEGER";
-    case PropertyType::DOUBLE: return "FLOAT";
-    case PropertyType::STRING: return "STRING";
-    case PropertyType::INT64_ARRAY: return "INTEGER_ARRAY";
-    case PropertyType::DOUBLE_ARRAY: return "FLOAT_ARRAY";
-    case PropertyType::STRING_ARRAY: return "STRING_ARRAY";
-    case PropertyType::DATETIME: return "DATE_TIME";
-    case PropertyType::TIME: return "TIME";
-    case PropertyType::DURATION: return "DURATION";
-    case PropertyType::DATETIME_ARRAY: return "DATE_TIME_ARRAY";
-    case PropertyType::TIME_ARRAY: return "TIME_ARRAY";
-    case PropertyType::DURATION_ARRAY: return "DURATION_ARRAY";
-    default: return "ANY";
+    case PropertyType::BOOL:
+        return "BOOLEAN";
+    case PropertyType::INT64:
+        return "INTEGER";
+    case PropertyType::DOUBLE:
+        return "FLOAT";
+    case PropertyType::STRING:
+        return "STRING";
+    case PropertyType::INT64_ARRAY:
+        return "INTEGER_ARRAY";
+    case PropertyType::DOUBLE_ARRAY:
+        return "FLOAT_ARRAY";
+    case PropertyType::STRING_ARRAY:
+        return "STRING_ARRAY";
+    case PropertyType::DATETIME:
+        return "DATE_TIME";
+    case PropertyType::TIME:
+        return "TIME";
+    case PropertyType::DURATION:
+        return "DURATION";
+    case PropertyType::DATETIME_ARRAY:
+        return "DATE_TIME_ARRAY";
+    case PropertyType::TIME_ARRAY:
+        return "TIME_ARRAY";
+    case PropertyType::DURATION_ARRAY:
+        return "DURATION_ARRAY";
+    default:
+        return "ANY";
     }
 }
 

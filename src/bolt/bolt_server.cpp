@@ -222,8 +222,7 @@ void BoltConnection::sendResponse(std::vector<uint8_t> data) {
         uint16_t chunk_size = (static_cast<uint16_t>(data[0]) << 8) | data[1];
         if (chunk_size > 0 && chunk_size <= BOLT_MAX_CHUNK_SIZE) {
             size_t term_pos = size_t(2) + chunk_size;
-            if (term_pos + 2 <= data.size() &&
-                data[term_pos] == 0x00 && data[term_pos + 1] == 0x00) {
+            if (term_pos + 2 <= data.size() && data[term_pos] == 0x00 && data[term_pos + 1] == 0x00) {
                 pre_chunked = true;
             }
         }
