@@ -1194,7 +1194,16 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 std::vector<binder::BoundType> output_types = val.types;
                 auto result = std::make_unique<CorrelatedSourcePhysicalOp>(std::vector<std::string>(val.variables),
                                                                            std::vector<binder::BoundType>(val.types));
-                TupleSlotLayout layout = makeSlotLayout(output_schema, ctx);
+                // Use binder-assigned slot_ids so layout matches SemiJoin correlation.
+                TupleSlotLayout layout;
+                if (val.slot_ids.size() == output_schema.size()) {
+                    for (size_t i = 0; i < val.slot_ids.size(); ++i) {
+                        layout.append(val.slot_ids[i]);
+                        ctx.var_slots[output_schema[i]] = val.slot_ids[i];
+                    }
+                } else {
+                    layout = makeSlotLayout(output_schema, ctx);
+                }
                 return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                           std::move(layout)};
             } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {

@@ -944,6 +944,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                     if (tk != info.type.kind) topo.kind = tk;
                     source.types.push_back(std::move(topo));
                     source.column_indices.push_back(info.column_index);
+                    source.slot_ids.push_back(sub_slot);
                     break;
                 }
             }
