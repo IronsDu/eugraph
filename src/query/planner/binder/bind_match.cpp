@@ -848,32 +848,6 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
     };
     std::vector<SavedCorr> saved_chain_corrs;
 
-    // Pre-register chain variables from the parent scope for nested EXISTS.
-    // The chain_corr mechanism renames them to __exists_dst_N, which breaks
-    // WHERE expressions referencing them by their original names.
-    for (const auto& pp : exp_patterns) {
-        for (auto& [rel_pat, node_pat] : pp.element.chain) {
-            if (node_pat.variable.has_value()) {
-                auto sit = saved_ctx.symbols.find(*node_pat.variable);
-                if (sit != saved_ctx.symbols.end() && !ctx_.symbols.count(*node_pat.variable)) {
-                    ColumnInfo ci = sit->second;
-                    ci.column_index = nextColumnIndex();
-                    ci.slot_id = nextSlotId();
-                    ctx_.symbols[*node_pat.variable] = ci;
-                }
-            }
-            if (rel_pat.variable.has_value()) {
-                auto sit = saved_ctx.symbols.find(*rel_pat.variable);
-                if (sit != saved_ctx.symbols.end() && !ctx_.symbols.count(*rel_pat.variable)) {
-                    ColumnInfo ci = sit->second;
-                    ci.column_index = nextColumnIndex();
-                    ci.slot_id = nextSlotId();
-                    ctx_.symbols[*rel_pat.variable] = ci;
-                }
-            }
-        }
-    }
-
     // For chain nodes that reference outer-scope variables (e.g. `(n)-[]->(m)`
     // where both `n` and `m` are from the outer scope), allocate fresh names
     // and slots inside the sub-plan. Reusing the outer var's name would make
@@ -887,8 +861,6 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                 continue;
             const auto& chain_var = *node_pat.variable;
             if (chain_var == start_var_name)
-                continue;
-            if (ctx_.symbols.count(chain_var))
                 continue;
             auto it = saved_ctx.symbols.find(chain_var);
             if (it == saved_ctx.symbols.end())
