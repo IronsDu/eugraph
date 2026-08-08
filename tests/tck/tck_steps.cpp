@@ -397,7 +397,36 @@ THEN("^the result should be, in any order:$") {
 
     ASSERT_EQ(gCtx->lastRows.size(), expRows.size());
 
-    auto sortFunc = [](std::vector<std::vector<std::string>> r) {
+    // Normalize insignificant whitespace in property formatting before
+    // comparison. The openCypher TCK feature files are inconsistent:
+    // some use {prop:1} and others {prop: 1}. Normalize both to the
+    // compact form so string comparison succeeds regardless of which
+    // format the formatter produces.
+    auto normalizeFmt = [](std::string s) {
+        // Normalize ": " to ":" in property key:value pairs.
+        // Only replace ": " that appears between a word boundary and value.
+        for (size_t i = 0; i + 1 < s.size();) {
+            if (s[i] == ':' && s[i + 1] == ' ') {
+                s.erase(i + 1, 1);
+            } else {
+                i++;
+            }
+        }
+        // Normalize ", " to "," in property lists.
+        for (size_t i = 0; i + 1 < s.size();) {
+            if (s[i] == ',' && s[i + 1] == ' ') {
+                s.erase(i + 1, 1);
+            } else {
+                i++;
+            }
+        }
+        return s;
+    };
+
+    auto sortFunc = [&](std::vector<std::vector<std::string>> r) {
+        for (auto& row : r)
+            for (auto& cell : row)
+                cell = normalizeFmt(cell);
         std::sort(r.begin(), r.end());
         return r;
     };
