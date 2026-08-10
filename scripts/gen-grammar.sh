@@ -2,9 +2,10 @@
 #
 # Regenerate ANTLR4 C++ sources for the Cypher parser.
 #
-# Run from the project root. Idempotent: produces identical output on repeat
-# runs, including the "Generated from <basename>.g4" comment (no absolute
-# paths leak into the committed files).
+# Cwd-independent: all paths resolved from the script's own location, so
+# the script can be invoked from any directory. Idempotent: produces
+# identical output on repeat runs, including the "Generated from
+# <basename>.g4" comment (no absolute paths leak into the committed files).
 #
 # Why this exact shape:
 # -cd into grammar/ and pass bare filenames so ANTLR's "Generated from"
