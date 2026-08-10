@@ -6,4 +6,4 @@
  */
 #pragma once
 
-#include "gen-cpp2/EuGraphServiceAsyncClient.h"
+#include "./gen-cpp2/EuGraphServiceAsyncClient.h"
