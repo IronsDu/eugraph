@@ -661,48 +661,59 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                 if (full_query_where) {
                     std::function<void(const cypher::Expression&)> collect;
                     collect = [&](const cypher::Expression& expr) {
-                        std::visit([&](const auto& ptr) {
-                            using E = typename std::decay_t<decltype(ptr)>::element_type;
-                            if constexpr (std::is_same_v<E, cypher::Variable>) {
-                                // Collect all grandparent-scope variables from
-                                // all_symbols, even if they're currently visible
-                                // (ctx_ is the parent scope before beginSubScope).
-                                if (ctx_.all_symbols.count(ptr->name))
-                                    extra_corr_vars.push_back(ptr->name);
-                            } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
-                                collect(ptr->left); collect(ptr->right);
-                            } else if constexpr (std::is_same_v<E, cypher::UnaryOp>) {
-                                collect(ptr->operand);
-                            } else if constexpr (std::is_same_v<E, cypher::FunctionCall>) {
-                                for (auto& a : ptr->args) collect(a);
-                            } else if constexpr (std::is_same_v<E, cypher::PropertyAccess>) {
-                                collect(ptr->object);
-                            } else if constexpr (std::is_same_v<E, cypher::ExistsExpr>) {
-                                if (ptr->where_pred) collect(*ptr->where_pred);
-                                // Walk patterns (bare form) and full_query clauses
-                                // for nested EXISTS where variables are in MATCH.
-                                for (auto& pp : ptr->patterns) {
-                                    if (pp.element.node.variable) extra_corr_vars.push_back(*pp.element.node.variable);
-                                    for (auto& [rp, np] : pp.element.chain) {
-                                        if (rp.variable) extra_corr_vars.push_back(*rp.variable);
-                                        if (np.variable) extra_corr_vars.push_back(*np.variable);
+                        std::visit(
+                            [&](const auto& ptr) {
+                                using E = typename std::decay_t<decltype(ptr)>::element_type;
+                                if constexpr (std::is_same_v<E, cypher::Variable>) {
+                                    // Collect all grandparent-scope variables from
+                                    // all_symbols, even if they're currently visible
+                                    // (ctx_ is the parent scope before beginSubScope).
+                                    if (ctx_.all_symbols.count(ptr->name))
+                                        extra_corr_vars.push_back(ptr->name);
+                                } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
+                                    collect(ptr->left);
+                                    collect(ptr->right);
+                                } else if constexpr (std::is_same_v<E, cypher::UnaryOp>) {
+                                    collect(ptr->operand);
+                                } else if constexpr (std::is_same_v<E, cypher::FunctionCall>) {
+                                    for (auto& a : ptr->args)
+                                        collect(a);
+                                } else if constexpr (std::is_same_v<E, cypher::PropertyAccess>) {
+                                    collect(ptr->object);
+                                } else if constexpr (std::is_same_v<E, cypher::ExistsExpr>) {
+                                    if (ptr->where_pred)
+                                        collect(*ptr->where_pred);
+                                    // Walk patterns (bare form) and full_query clauses
+                                    // for nested EXISTS where variables are in MATCH.
+                                    for (auto& pp : ptr->patterns) {
+                                        if (pp.element.node.variable)
+                                            extra_corr_vars.push_back(*pp.element.node.variable);
+                                        for (auto& [rp, np] : pp.element.chain) {
+                                            if (rp.variable)
+                                                extra_corr_vars.push_back(*rp.variable);
+                                            if (np.variable)
+                                                extra_corr_vars.push_back(*np.variable);
+                                        }
                                     }
-                                }
-                                if (ptr->full_query) {
-                                    for (auto& clause : ptr->full_query->clauses) {
-                                        if (auto* mc = std::get_if<std::unique_ptr<cypher::MatchClause>>(&clause)) {
-                                            for (auto& pp : (*mc)->patterns) {
-                                                if (pp.element.node.variable) extra_corr_vars.push_back(*pp.element.node.variable);
-                                                for (auto& [rp, np] : pp.element.chain) {
-                                                    if (rp.variable) extra_corr_vars.push_back(*rp.variable);
-                                                    if (np.variable) extra_corr_vars.push_back(*np.variable);
+                                    if (ptr->full_query) {
+                                        for (auto& clause : ptr->full_query->clauses) {
+                                            if (auto* mc = std::get_if<std::unique_ptr<cypher::MatchClause>>(&clause)) {
+                                                for (auto& pp : (*mc)->patterns) {
+                                                    if (pp.element.node.variable)
+                                                        extra_corr_vars.push_back(*pp.element.node.variable);
+                                                    for (auto& [rp, np] : pp.element.chain) {
+                                                        if (rp.variable)
+                                                            extra_corr_vars.push_back(*rp.variable);
+                                                        if (np.variable)
+                                                            extra_corr_vars.push_back(*np.variable);
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
-                        }, expr);
+                            },
+                            expr);
                     };
                     collect(*full_query_where);
                 }
@@ -918,7 +929,10 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             continue;
         bool dup = (is_correlated && outer_slot == ait->second);
         for (const auto& [os, _] : correlation)
-            if (os == ait->second) { dup = true; break; }
+            if (os == ait->second) {
+                dup = true;
+                break;
+            }
         if (dup)
             continue;
         SlotId sub_slot = allocateNamedSlot(var_name);
@@ -941,7 +955,8 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                     source.variables.push_back(name);
                     BoundType topo = BoundType::clone(info.type);
                     BoundTypeKind tk = topologyCounterpart(info.type.kind);
-                    if (tk != info.type.kind) topo.kind = tk;
+                    if (tk != info.type.kind)
+                        topo.kind = tk;
                     source.types.push_back(std::move(topo));
                     source.column_indices.push_back(info.column_index);
                     break;

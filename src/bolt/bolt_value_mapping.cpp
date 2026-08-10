@@ -222,9 +222,9 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         rel_s.fields.push_back(PS{static_cast<int64_t>(e.dst_id)});
         rel_s.fields.push_back(PS{std::move(type_name)});
         rel_s.fields.push_back(PS{std::move(props)});
-        rel_s.fields.push_back(PS{std::to_string(e.id)});       // element_id (Bolt v5.1)
-        rel_s.fields.push_back(PS{std::to_string(e.src_id)});    // startNodeElementId (Bolt v5.1)
-        rel_s.fields.push_back(PS{std::to_string(e.dst_id)});    // endNodeElementId (Bolt v5.1)
+        rel_s.fields.push_back(PS{std::to_string(e.id)});     // element_id (Bolt v5.1)
+        rel_s.fields.push_back(PS{std::to_string(e.src_id)}); // startNodeElementId (Bolt v5.1)
+        rel_s.fields.push_back(PS{std::to_string(e.dst_id)}); // endNodeElementId (Bolt v5.1)
         return rel_s;
     } else if (std::holds_alternative<PathValue>(val)) {
         auto& p = std::get<PathValue>(val);

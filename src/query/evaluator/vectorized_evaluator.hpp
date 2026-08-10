@@ -70,6 +70,16 @@ private:
                                 size_t count);
     void evalFunctionCall(const binder::BoundFunctionCall& fc, const DataChunk& input, Column& result, size_t count);
 
+    /// Return a reference to an input column (no real evaluation). Falls back
+    /// to an empty temp column if the index is out of range.
+    EvalResult evalColumnRef(const binder::BoundColumnRef& ref, const DataChunk& input);
+
+    /// Construct a literal list, evaluating each element sub-expression per row.
+    EvalResult evalList(const binder::BoundList& list, const DataChunk& input);
+
+    /// Re-cast a value to its label-typed vertex form (copies the inner column).
+    EvalResult evalLabelCast(const binder::BoundLabelCast& cast, const DataChunk& input);
+
     /// Evaluate a quantifier expression (ALL/ANY/NONE/SINGLE).
     void evalQuantifierExpr(QuantifierKind kind, uint32_t loop_column_index, const binder::BoundExpression& list_expr,
                             const std::optional<binder::BoundExpression>& where_pred, const DataChunk& input,

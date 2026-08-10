@@ -245,7 +245,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::processMessage(const uint8_
             RouteMessage msg;
             auto routing = decoder.decode();
             if (std::holds_alternative<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(routing)) {
-                for (auto& [k, v] : std::get<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(routing))
+                for (auto& [k, v] :
+                     std::get<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(routing))
                     msg.routing[k] = v.value;
             }
             auto bookmarks = decoder.decode();
@@ -257,7 +258,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::processMessage(const uint8_
             }
             auto extra = decoder.decode();
             if (std::holds_alternative<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(extra)) {
-                for (auto& [k, v] : std::get<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(extra))
+                for (auto& [k, v] :
+                     std::get<std::unordered_map<std::string, packstream::PackStreamValueStorage>>(extra))
                     msg.extra[k] = v.value;
             }
             co_return co_await handleRoute(msg);
@@ -319,8 +321,7 @@ BoltSession::handleHello(const std::unordered_map<std::string, packstream::Value
     if (!auth_scheme_.empty()) {
         if (auth_scheme_ != "basic") {
             spdlog::warn("[bolt] unsupported auth scheme: {}", auth_scheme_);
-            co_return makeFailure("Neo.ClientError.Security.Unauthorized",
-                                  "Only BASIC auth is supported");
+            co_return makeFailure("Neo.ClientError.Security.Unauthorized", "Only BASIC auth is supported");
         }
 
         std::string principal;
@@ -336,8 +337,7 @@ BoltSession::handleHello(const std::unordered_map<std::string, packstream::Value
 
         if (credentials != "eugraph") {
             spdlog::warn("[bolt] HELLO auth failed for user '{}'", principal);
-            co_return makeFailure("Neo.ClientError.Security.Unauthorized",
-                                  "Invalid credentials");
+            co_return makeFailure("Neo.ClientError.Security.Unauthorized", "Invalid credentials");
         }
     }
 
@@ -364,8 +364,7 @@ BoltSession::handleLogon(const std::unordered_map<std::string, packstream::Value
     if (!scheme.empty()) {
         if (scheme != "basic") {
             spdlog::warn("[bolt] unsupported auth scheme: {}", scheme);
-            co_return makeFailure("Neo.ClientError.Security.Unauthorized",
-                                  "Only BASIC auth is supported");
+            co_return makeFailure("Neo.ClientError.Security.Unauthorized", "Only BASIC auth is supported");
         }
 
         auto principal_it = fields.find("principal");
@@ -380,8 +379,7 @@ BoltSession::handleLogon(const std::unordered_map<std::string, packstream::Value
 
         if (credentials != "eugraph") {
             spdlog::warn("[bolt] LOGON failed for user '{}'", principal);
-            co_return makeFailure("Neo.ClientError.Security.Unauthorized",
-                                  "Invalid credentials");
+            co_return makeFailure("Neo.ClientError.Security.Unauthorized", "Invalid credentials");
         }
     }
 
@@ -658,8 +656,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRollback() {
     co_return makeSuccess(meta);
 }
 
-folly::coro::Task<std::vector<uint8_t>>
-BoltSession::handleRoute(const RouteMessage& msg) {
+folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRoute(const RouteMessage& msg) {
     // ROUTE is valid in READY state (and optional in CONNECTING for drivers
     // that use neo4j:// scheme). Return a routing table pointing to self.
     (void)msg; // routing/extra metadata not consumed in single-node stub

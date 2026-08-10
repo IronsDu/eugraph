@@ -173,9 +173,9 @@ TEST_F(BoltValueMappingTest, ConvertEdgeToRelationship) {
     EXPECT_EQ(std::get<int64_t>(rprops.at("since").value), 2020);
 
     // Bolt v5.1 element_id fields
-    EXPECT_EQ(std::get<std::string>(rel.fields[5].value), "500");   // element_id
-    EXPECT_EQ(std::get<std::string>(rel.fields[6].value), "100");   // startNodeElementId
-    EXPECT_EQ(std::get<std::string>(rel.fields[7].value), "200");   // endNodeElementId
+    EXPECT_EQ(std::get<std::string>(rel.fields[5].value), "500"); // element_id
+    EXPECT_EQ(std::get<std::string>(rel.fields[6].value), "100"); // startNodeElementId
+    EXPECT_EQ(std::get<std::string>(rel.fields[7].value), "200"); // endNodeElementId
 }
 
 // ==================== ListValue ====================

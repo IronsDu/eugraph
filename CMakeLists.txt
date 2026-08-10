@@ -180,15 +180,20 @@ add_library(eugraph_query_engine STATIC
     src/query/planner/bound_logical_plan.cpp
     src/query/planner/column_resolver.cpp
     src/query/evaluator/vectorized_evaluator.cpp
-    src/query/evaluator/eval_binary_op.cpp
-    src/query/evaluator/eval_property.cpp
-    src/query/evaluator/eval_function_call.cpp
-    src/query/evaluator/eval_quantifier.cpp
-    src/query/evaluator/eval_case.cpp
-    src/query/evaluator/eval_map.cpp
-    src/query/evaluator/eval_subscript.cpp
-    src/query/evaluator/eval_slice.cpp
-    src/query/evaluator/eval_list_comprehension.cpp
+    src/query/evaluator/expr/eval_literal.cpp
+    src/query/evaluator/expr/eval_unary_op.cpp
+    src/query/evaluator/expr/eval_column_ref.cpp
+    src/query/evaluator/expr/eval_list.cpp
+    src/query/evaluator/expr/eval_label_cast.cpp
+    src/query/evaluator/expr/eval_binary_op.cpp
+    src/query/evaluator/expr/eval_property.cpp
+    src/query/evaluator/expr/eval_function_call.cpp
+    src/query/evaluator/expr/eval_quantifier.cpp
+    src/query/evaluator/expr/eval_case.cpp
+    src/query/evaluator/expr/eval_map.cpp
+    src/query/evaluator/expr/eval_subscript.cpp
+    src/query/evaluator/expr/eval_slice.cpp
+    src/query/evaluator/expr/eval_list_comprehension.cpp
     src/query/physical_plan/operator/edge_index_scan_physical_op.cpp
     src/query/physical_plan/operator/projection_extract_physical_op.cpp
     src/query/physical_plan/operator/aggregate_physical_op.cpp

@@ -1,11 +1,6 @@
 #include "query/evaluator/vectorized_evaluator.hpp"
 
-#include "query/catalog/catalog.hpp"
-#include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
-#include "query/planner/bound_expression/bound_expression.hpp"
-
-#include <cmath>
-#include <spdlog/spdlog.h>
+#include <stdexcept>
 
 namespace eugraph {
 namespace compute {
@@ -66,19 +61,13 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 evalLiteral(val, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
-                if (val.column_index < input.columns.size()) {
-                    return {&input.columns[val.column_index], false};
-                }
-                spdlog::warn("BoundColumnRef name='{}' idx={} but input has {} columns", val.name, val.column_index,
-                             input.columns.size());
-                auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
-                return {&col, true};
+                return evalColumnRef(val, input);
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
-                auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
-                return {&col, true};
+                throw std::runtime_error(
+                    "BoundVariableRef reached VectorizedEvaluator — must be resolved to BoundColumnRef at bind time");
             } else if constexpr (std::is_same_v<T, binder::BoundParameter>) {
-                auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
-                return {&col, true};
+                throw std::runtime_error(
+                    "BoundParameter reached VectorizedEvaluator — must be substituted at bind time");
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
                 auto& col = acquireTempColumn(val->result_type.kind, count);
                 evalBinaryOp(*val, input, col, count);
@@ -97,45 +86,13 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 evalDynamicPropertyRef(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
-                // Check aggregate substitution map (used by AggregatePhysicalOp output phase)
-                if (aggregate_substitutions) {
-                    auto it = aggregate_substitutions->find(val->func_def);
-                    if (it != aggregate_substitutions->end()) {
-                        auto& col = acquireTempColumn(val->return_type.kind, count);
-                        for (size_t i = 0; i < count; ++i)
-                            col.setValue(i, it->second);
-                        return {&col, true};
-                    }
-                }
                 auto& col = acquireTempColumn(val->return_type.kind, count);
                 evalFunctionCall(*val, input, col, count);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
-                auto inner = evaluateInternal(val->object, input);
-                if (inner.column) {
-                    auto& col = acquireTempColumn(binder::BoundTypeKind::VERTEX, count);
-                    for (size_t i = 0; i < count; ++i) {
-                        col.setValue(i, inner.column->getValue(i));
-                    }
-                    return {&col, true};
-                }
-                auto& col = acquireTempColumn(binder::BoundTypeKind::VERTEX, count);
-                return {&col, true};
+                return evalLabelCast(*val, input);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
-                auto& col = acquireTempColumn(binder::BoundTypeKind::LIST, count);
-                for (size_t i = 0; i < count; ++i) {
-                    ListValue lv;
-                    for (const auto& elem : val->elements) {
-                        auto elem_eval = evaluateInternal(elem, input);
-                        if (elem_eval.column && !elem_eval.column->isNull(i)) {
-                            lv.elements.push_back(ValueStorage{elem_eval.column->getValue(i)});
-                        } else {
-                            lv.elements.push_back(ValueStorage{Value{}});
-                        }
-                    }
-                    col.setValue(i, Value(std::move(lv)));
-                }
-                return {&col, true};
+                return evalList(*val, input);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>>) {
                 auto& col = acquireTempColumn(binder::BoundTypeKind::BOOL, count);
                 evalQuantifierExpr(QuantifierKind::ALL, val->loop_column_index, val->list_expr, val->where_pred, input,
@@ -183,28 +140,10 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 evalSlice(*val, input, col, count);
                 return {&col, true};
             } else {
-                auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, count);
-                return {&col, true};
+                throw std::runtime_error("Unknown BoundExpression variant in VectorizedEvaluator");
             }
         },
         expr);
-}
-
-void VectorizedEvaluator::evalLiteral(const binder::BoundLiteral& lit, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        result.setValue(i, lit.value);
-    }
-}
-
-void VectorizedEvaluator::evalUnaryOp(const binder::BoundUnaryOp& op, const DataChunk& input, Column& result,
-                                      size_t count) {
-    auto operand = evaluateInternal(op.operand, input);
-    if (!operand.column)
-        return;
-
-    if (op.batch_fn) {
-        op.batch_fn(*operand.column, result, count);
-    }
 }
 
 } // namespace compute
