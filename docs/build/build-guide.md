@@ -158,24 +158,18 @@ ctest --preset=debug --verbose
 THRIFT1=./vcpkg/packages/fbthrift_x64-linux/tools/fbthrift/thrift1
 
 # 生成到 src/gen-cpp2/
-$THRIFT1 --gen mstch_cpp2 -o src/ proto/eugraph.thrift
-```
-
-### include 路径修复
-
-thrift1 生成的文件中 `#include` 路径带前导斜杠（如 `"/gen-cpp2/eugraph_types.h"`），但 CMake 的 include 目录是 `${PROJECT_SOURCE_DIR}/src`，需要相对路径（如 `"gen-cpp2/eugraph_types.h"`）。
-
-**每次重新生成后必须执行以下修复**：
-
-```bash
-sed -i 's|"/gen-cpp2/|"gen-cpp2/|g' src/gen-cpp2/*.h src/gen-cpp2/*.cpp src/gen-cpp2/*.tcc
+# :include_prefix=. 让生成代码内部互相引用时使用 "./gen-cpp2/..." 路径，
+# C 预处理器把 ./ 当 no-op，与应用代码里的 #include "gen-cpp2/..." 完全等价。
+# 不加这个选项的话，thrift1 会用输入路径的目录部分（"proto/"）作为前缀，
+# 生成出 "proto/gen-cpp2/..." 这种与应用代码不一致的路径。
+$THRIFT1 --gen mstch_cpp2:include_prefix=. -o src/ proto/eugraph.thrift
 ```
 
 ### 验证
 
 ```bash
-# 检查是否还有错误的绝对路径
-grep -r '"/gen-cpp2/' src/gen-cpp2/ && echo "ERROR: 仍有错误的 include 路径" || echo "OK"
+# 检查生成的 include 路径没有 proto/ 前缀
+grep -r '"/gen-cpp2/\|"proto/gen-cpp2/' src/gen-cpp2/ && echo "ERROR: include 路径异常" || echo "OK"
 ```
 
 ## 8. 代码格式化
