@@ -8,6 +8,17 @@ void VectorizedEvaluator::evalFunctionCall(const binder::BoundFunctionCall& fc, 
     if (!fc.func_def)
         return;
 
+    // Aggregate substitution: when set (used by AggregatePhysicalOp output phase),
+    // a function call whose func_def matches a key is replaced with the pre-computed Value.
+    if (aggregate_substitutions) {
+        auto it = aggregate_substitutions->find(fc.func_def);
+        if (it != aggregate_substitutions->end()) {
+            for (size_t i = 0; i < count; ++i)
+                result.setValue(i, it->second);
+            return;
+        }
+    }
+
     // Evaluate all arguments first
     std::vector<EvalResult> arg_results;
     arg_results.reserve(fc.args.size());

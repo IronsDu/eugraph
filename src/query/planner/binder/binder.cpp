@@ -300,8 +300,7 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
         } else if (auto* call_op = tryExtractCallOp(plan.root)) {
             // CALL clause without RETURN: use the procedure's output columns
             for (size_t i = 0; i < call_op->output_names.size(); ++i)
-                plan.output_schema.push_back(
-                    makeColumnInfo(call_op->output_names[i], call_op->output_types[i]));
+                plan.output_schema.push_back(makeColumnInfo(call_op->output_names[i], call_op->output_types[i]));
         } else {
             // No RETURN clause: wrap root in an empty BoundProjectOp → 0 output columns
             auto proj = std::make_unique<BoundProjectOp>();
