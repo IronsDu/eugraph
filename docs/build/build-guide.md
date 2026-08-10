@@ -172,7 +172,36 @@ $THRIFT1 --gen mstch_cpp2:include_prefix=. -o src/ proto/eugraph.thrift
 grep -r '"/gen-cpp2/\|"proto/gen-cpp2/' src/gen-cpp2/ && echo "ERROR: include 路径异常" || echo "OK"
 ```
 
-## 8. 代码格式化
+## 8. ANTLR 代码生成
+
+Cypher 解析器的 ANTLR4 生成代码（`src/query/parser/generated/grammar/Cypher*.{h,cpp}`）预生成后提交仓库，CMake 编译时直接使用，不依赖 Java/JAR。
+
+修改 `grammar/CypherLexer.g4` 或 `grammar/CypherParser.g4` 后需要重新生成：
+
+```bash
+./scripts/gen-grammar.sh
+```
+
+### 关键细节
+
+脚本内部做了两件容易踩坑的事：
+
+1. **`cd grammar/` + 裸文件名输入** — 让 ANTLR 在生成的 `// Generated from <name>.g4` 注释里只写裸文件名，不带任何路径前缀。如果传 `grammar/CypherLexer.g4` 或绝对路径，注释里就会出现 `"grammar/CypherLexer.g4"` 或 `"/home/user/.../CypherLexer.g4"`。
+2. **生成 parser 时 `-lib` 指向输出目录** — 让 ANTLR 找到上一步生成的 `CypherLexer.tokens`。没有 `-lib` 的话，ANTLR 会把 lexer 里已定义的 `EXPLAIN`、`COLONCOLON` 当成"隐式定义"追加到 parser token 表末尾，导致后续所有 token ID 错位（肉眼难发现，但会破坏序列化兼容性）。
+
+### 验证
+
+```bash
+# 注释里不应出现路径前缀
+grep "^// Generated from" src/query/parser/generated/grammar/Cypher*.{h,cpp}
+# 期望输出（每文件一行）：
+#   // Generated from CypherLexer.g4 by ANTLR 4.13.2
+#   // Generated from CypherParser.g4 by ANTLR 4.13.2
+```
+
+脚本是幂等的，重复运行不应产生 diff。
+
+## 9. 代码格式化
 
 ```bash
 # 检查格式（不修改）
@@ -184,7 +213,7 @@ grep -r '"/gen-cpp2/\|"proto/gen-cpp2/' src/gen-cpp2/ && echo "ERROR: include �
 
 要求 clang-format v18。脚本支持通过 Docker 容器运行（本地无 clang-format 18 时自动使用容器）。
 
-## 9. CI
+## 10. CI
 
 项目使用 GitHub Actions，配置在 `.github/workflows/`：
 
