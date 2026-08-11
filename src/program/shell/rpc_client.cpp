@@ -71,9 +71,9 @@ std::vector<thrift_service::GraphInfo> EuGraphRpcClient::listGraphs() {
 
 // ==================== DDL ====================
 
-thrift_service::LabelInfo EuGraphRpcClient::createLabel(const std::string& name,
-                                                const std::vector<thrift_service::PropertyDefThrift>& properties,
-                                                const std::string& graph_name) {
+thrift_service::LabelInfo
+EuGraphRpcClient::createLabel(const std::string& name, const std::vector<thrift_service::PropertyDefThrift>& properties,
+                              const std::string& graph_name) {
     return client_->semifuture_createLabel(name, properties, graph_name).via(evb_.get()).get();
 }
 
@@ -81,9 +81,10 @@ std::vector<thrift_service::LabelInfo> EuGraphRpcClient::listLabels(const std::s
     return client_->semifuture_listLabels(graph_name).via(evb_.get()).get();
 }
 
-thrift_service::EdgeLabelInfo EuGraphRpcClient::createEdgeLabel(const std::string& name,
-                                                        const std::vector<thrift_service::PropertyDefThrift>& properties,
-                                                        const std::string& graph_name) {
+thrift_service::EdgeLabelInfo
+EuGraphRpcClient::createEdgeLabel(const std::string& name,
+                                  const std::vector<thrift_service::PropertyDefThrift>& properties,
+                                  const std::string& graph_name) {
     return client_->semifuture_createEdgeLabel(name, properties, graph_name).via(evb_.get()).get();
 }
 
@@ -99,7 +100,8 @@ EuGraphRpcClient::executeCypher(const std::string& query, const std::string& gra
     return client_->semifuture_executeCypher(query, graph_name, params).via(evb_.get()).get();
 }
 
-folly::coro::Task<apache::thrift::ResponseAndClientBufferedStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
+folly::coro::Task<
+    apache::thrift::ResponseAndClientBufferedStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
 EuGraphRpcClient::co_executeCypher(const std::string& query, const std::string& graph_name,
                                    const std::map<std::string, std::string>& params) {
     co_return client_->semifuture_executeCypher(query, graph_name, params).via(evb_.get()).get();
@@ -107,9 +109,9 @@ EuGraphRpcClient::co_executeCypher(const std::string& query, const std::string& 
 
 // ==================== Batch Import ====================
 
-thrift_service::BatchInsertVerticesResult EuGraphRpcClient::batchInsertVertices(const std::string& label_name,
-                                                                        std::vector<thrift_service::VertexRecord> records,
-                                                                        const std::string& graph_name) {
+thrift_service::BatchInsertVerticesResult
+EuGraphRpcClient::batchInsertVertices(const std::string& label_name, std::vector<thrift_service::VertexRecord> records,
+                                      const std::string& graph_name) {
     auto t0 = nowMs();
     auto resp =
         client_->semifuture_batchInsertVertices(label_name, std::move(records), graph_name).via(evb_.get()).get();

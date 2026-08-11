@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
+#include "common/types/temporal_value.hpp"
 #include "service/bolt/bolt_messages.hpp"
 #include "service/bolt/bolt_value_mapping.hpp"
 #include "service/bolt/packstream/decoder.hpp"
-#include "common/types/temporal_value.hpp"
 
 using namespace eugraph;
 using namespace eugraph::service::bolt;

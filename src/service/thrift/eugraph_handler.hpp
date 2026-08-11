@@ -1,8 +1,8 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "service/thrift/gen-cpp2/EuGraphService.h"
 #include "service/graph_service.hpp"
+#include "service/thrift/gen-cpp2/EuGraphService.h"
 
 #include <folly/coro/Task.h>
 
@@ -17,7 +17,8 @@ public:
     explicit EuGraphHandler(GraphService& graph_service) : graph_service_(graph_service) {}
 
     // Graph management
-    folly::coro::Task<std::unique_ptr<thrift_service::GraphInfo>> co_createGraph(std::unique_ptr<std::string> name) override;
+    folly::coro::Task<std::unique_ptr<thrift_service::GraphInfo>>
+    co_createGraph(std::unique_ptr<std::string> name) override;
 
     folly::coro::Task<bool> co_dropGraph(std::unique_ptr<std::string> name) override;
 
@@ -40,7 +41,8 @@ public:
     folly::coro::Task<std::unique_ptr<std::vector<thrift_service::EdgeLabelInfo>>>
     co_listEdgeLabels(std::unique_ptr<std::string> graph_name) override;
 
-    folly::coro::Task<apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
+    folly::coro::Task<
+        apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
     co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name,
                      std::unique_ptr<std::map<std::string, std::string>> parameters) override;
 
@@ -49,13 +51,14 @@ public:
                            std::unique_ptr<std::vector<thrift_service::VertexRecord>> records,
                            std::unique_ptr<std::string> graph_name) override;
 
-    folly::coro::Task<std::int32_t> co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
-                                                        std::unique_ptr<std::vector<thrift_service::EdgeRecord>> records,
-                                                        std::unique_ptr<std::string> graph_name) override;
+    folly::coro::Task<std::int32_t>
+    co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
+                        std::unique_ptr<std::vector<thrift_service::EdgeRecord>> records,
+                        std::unique_ptr<std::string> graph_name) override;
 
 public:
     thrift_service::ResultValue valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
-                                      const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs);
+                                              const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs);
 
 private:
     static ::eugraph::PropertyType toPropertyType(thrift_service::PropertyType t);

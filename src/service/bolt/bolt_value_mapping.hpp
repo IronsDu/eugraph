@@ -1,8 +1,8 @@
 #pragma once
 
-#include "service/bolt/bolt_messages.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/dataset/row.hpp"
+#include "service/bolt/bolt_messages.hpp"
 
 #include <unordered_map>
 

@@ -801,7 +801,8 @@ EuGraphHandler::co_listEdgeLabels(std::unique_ptr<std::string> graph_name) {
 
 // ==================== DML: Cypher (streaming) ====================
 
-folly::coro::Task<apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
+folly::coro::Task<
+    apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
 EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name,
                                  std::unique_ptr<std::map<std::string, std::string>> parameters) {
     auto t0 = nowMs();
@@ -877,8 +878,8 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
     auto gen = makeStreamGenerator(std::move(exec_ctx.ctx), std::move(exec_ctx.label_defs),
                                    std::move(exec_ctx.edge_label_defs), *this, t0);
 
-    co_return apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>{std::move(meta),
-                                                                                                       std::move(gen)};
+    co_return apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>{
+        std::move(meta), std::move(gen)};
 }
 
 // ==================== Batch Import ====================

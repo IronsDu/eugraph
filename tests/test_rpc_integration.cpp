@@ -2,11 +2,11 @@
 
 #include <folly/init/Init.h>
 
-#include "service/thrift/gen-cpp2/eugraph_types.h"
-#include "service/thrift/eugraph_handler.hpp"
 #include "program/shell/rpc_client.hpp"
 #include "query/executor/query_executor.hpp"
 #include "service/graph_service.hpp"
+#include "service/thrift/eugraph_handler.hpp"
+#include "service/thrift/gen-cpp2/eugraph_types.h"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/graph_manager.hpp"
