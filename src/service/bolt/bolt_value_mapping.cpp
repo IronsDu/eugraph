@@ -1,9 +1,9 @@
 #include "service/bolt/bolt_value_mapping.hpp"
 
-#include "service/bolt/bolt_messages.hpp"
 #include "common/types/graph_types.hpp"
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
+#include "service/bolt/bolt_messages.hpp"
 
 #include <string>
 

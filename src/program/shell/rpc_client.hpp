@@ -30,13 +30,14 @@ public:
     std::vector<thrift_service::GraphInfo> listGraphs();
 
     // DDL
-    thrift_service::LabelInfo createLabel(const std::string& name, const std::vector<thrift_service::PropertyDefThrift>& properties,
-                                  const std::string& graph_name);
+    thrift_service::LabelInfo createLabel(const std::string& name,
+                                          const std::vector<thrift_service::PropertyDefThrift>& properties,
+                                          const std::string& graph_name);
     std::vector<thrift_service::LabelInfo> listLabels(const std::string& graph_name);
 
     thrift_service::EdgeLabelInfo createEdgeLabel(const std::string& name,
-                                          const std::vector<thrift_service::PropertyDefThrift>& properties,
-                                          const std::string& graph_name);
+                                                  const std::vector<thrift_service::PropertyDefThrift>& properties,
+                                                  const std::string& graph_name);
     std::vector<thrift_service::EdgeLabelInfo> listEdgeLabels(const std::string& graph_name);
 
     // DML - returns streaming response
@@ -44,14 +45,15 @@ public:
     executeCypher(const std::string& query, const std::string& graph_name,
                   const std::map<std::string, std::string>& params = {});
 
-    folly::coro::Task<apache::thrift::ResponseAndClientBufferedStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
+    folly::coro::Task<apache::thrift::ResponseAndClientBufferedStream<thrift_service::QueryStreamMeta,
+                                                                      thrift_service::ResultRowBatch>>
     co_executeCypher(const std::string& query, const std::string& graph_name,
                      const std::map<std::string, std::string>& params = {});
 
     // Batch import
     thrift_service::BatchInsertVerticesResult batchInsertVertices(const std::string& label_name,
-                                                          std::vector<thrift_service::VertexRecord> records,
-                                                          const std::string& graph_name);
+                                                                  std::vector<thrift_service::VertexRecord> records,
+                                                                  const std::string& graph_name);
     std::int32_t batchInsertEdges(const std::string& edge_label_name, std::vector<thrift_service::EdgeRecord> records,
                                   const std::string& graph_name);
 

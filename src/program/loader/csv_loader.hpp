@@ -1,8 +1,8 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "service/thrift/gen-cpp2/EuGraphService.h"
 #include "program/shell/rpc_client.hpp"
+#include "service/thrift/gen-cpp2/EuGraphService.h"
 
 #include <filesystem>
 #include <string>

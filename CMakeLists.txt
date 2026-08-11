@@ -120,7 +120,7 @@ add_dependencies(eugraph_lib wiredtiger_ext)
 # ==================== Compute Service (Cypher Parser + Query Engine) ====================
 
 # Pre-generated ANTLR4 C++ sources (committed to repo, no Java build dependency)
-set(ANTLR_GENERATED_DIR "${PROJECT_SOURCE_DIR}/src/query/parser/generated")
+set(ANTLR_GENERATED_DIR "${PROJECT_SOURCE_DIR}/src/query/parser/generated/grammar")
 set(ANTLR_GENERATED_SOURCES
     "${ANTLR_GENERATED_DIR}/CypherLexer.cpp"
     "${ANTLR_GENERATED_DIR}/CypherParser.cpp"
@@ -835,11 +835,10 @@ if(EUGRAPH_BUILD_TESTS)
         if(PYTEST_EXECUTABLE)
             set(BOLT_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_bolt_integration.py")
             add_test(NAME bolt_integration_tests
-                COMMAND ${CMAKE_COMMAND}
-                    -D "SERVER=$<TARGET_FILE:eugraph-server>"
-                    -D "PYTEST=${PYTEST_EXECUTABLE}"
-                    -D "TEST_SCRIPT=${BOLT_TEST_SCRIPT}"
-                    -P "${PROJECT_SOURCE_DIR}/cmake/run_bolt_tests.cmake"
+                COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-bolt-tests.sh"
+                    "$<TARGET_FILE:eugraph-server>"
+                    "${PYTEST_EXECUTABLE}"
+                    "${BOLT_TEST_SCRIPT}"
                 WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
             )
             set_tests_properties(bolt_integration_tests PROPERTIES
