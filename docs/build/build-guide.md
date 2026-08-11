@@ -157,19 +157,20 @@ ctest --preset=debug --verbose
 # thrift1 编译器位置（由 vcpkg fbthrift 包安装）
 THRIFT1=./vcpkg/packages/fbthrift_x64-linux/tools/fbthrift/thrift1
 
-# 生成到 src/gen-cpp2/
-# :include_prefix=. 让生成代码内部互相引用时使用 "./gen-cpp2/..." 路径，
-# C 预处理器把 ./ 当 no-op，与应用代码里的 #include "gen-cpp2/..." 完全等价。
+# 生成到 src/service/thrift/gen-cpp2/
+# :include_prefix=./service/thrift 让生成代码内部互相引用时使用
+# "./service/thrift/gen-cpp2/..." 路径，与物理路径一致，直接通过 src/
+# 这条标准 include 路径就能解析。应用代码则用 #include "service/thrift/gen-cpp2/..."。
 # 不加这个选项的话，thrift1 会用输入路径的目录部分（"proto/"）作为前缀，
-# 生成出 "proto/gen-cpp2/..." 这种与应用代码不一致的路径。
-$THRIFT1 --gen mstch_cpp2:include_prefix=. -o src/ proto/eugraph.thrift
+# 生成出 "proto/gen-cpp2/..." 这种与物理路径不一致的写法。
+$THRIFT1 --gen mstch_cpp2:include_prefix=./service/thrift -o src/service/thrift/ proto/eugraph.thrift
 ```
 
 ### 验证
 
 ```bash
 # 检查生成的 include 路径没有 proto/ 前缀
-grep -r '"/gen-cpp2/\|"proto/gen-cpp2/' src/gen-cpp2/ && echo "ERROR: include 路径异常" || echo "OK"
+grep -r '"/gen-cpp2/\|"proto/gen-cpp2/' src/service/thrift/gen-cpp2/ && echo "ERROR: include 路径异常" || echo "OK"
 ```
 
 ## 8. ANTLR 代码生成

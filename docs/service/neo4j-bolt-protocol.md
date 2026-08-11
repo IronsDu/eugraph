@@ -102,7 +102,7 @@ CONNECTING → READY → STREAMING → READY
 
 ## PackStream 编解码
 
-Bolt 协议使用 PackStream 二进制编码（类似 MessagePack），定义在 `src/bolt/packstream/`。
+Bolt 协议使用 PackStream 二进制编码（类似 MessagePack），定义在 `src/service/bolt/packstream/`。
 
 ### 类型映射
 
@@ -256,14 +256,14 @@ Bolt v5.1 使用分块传输编码进行消息帧定界：
 ## 文件清单
 
 ```
-src/server/graph_service.hpp/.cpp               # 协议无关服务层
-src/bolt/packstream/types.hpp                   # PackStream 类型定义
-src/bolt/packstream/encoder.hpp/.cpp            # PackStream 编码器
-src/bolt/packstream/decoder.hpp/.cpp            # PackStream 解码器
-src/bolt/bolt_messages.hpp                      # Bolt 消息结构与标签
-src/bolt/bolt_session.hpp/.cpp                  # 会话状态机与消息处理
-src/bolt/bolt_value_mapping.hpp/.cpp            # Value ↔ Bolt 类型映射
-src/bolt/bolt_server.hpp/.cpp                   # TCP 服务端（folly::AsyncServerSocket）
+src/service/graph_service.hpp/.cpp               # 协议无关服务层
+src/service/bolt/packstream/types.hpp                   # PackStream 类型定义
+src/service/bolt/packstream/encoder.hpp/.cpp            # PackStream 编码器
+src/service/bolt/packstream/decoder.hpp/.cpp            # PackStream 解码器
+src/service/bolt/bolt_messages.hpp                      # Bolt 消息结构与标签
+src/service/bolt/bolt_session.hpp/.cpp                  # 会话状态机与消息处理
+src/service/bolt/bolt_value_mapping.hpp/.cpp            # Value ↔ Bolt 类型映射
+src/service/bolt/bolt_server.hpp/.cpp                   # TCP 服务端（folly::AsyncServerSocket）
 src/query/planner/logical_plan/operator/bound_call_op.hpp   # CALL 子句逻辑算子
 src/query/planner/binder/bind_call.cpp                      # CALL 子句绑定
 src/query/physical_plan/operator/call_physical_op.hpp/.cpp  # CALL 物理执行算子

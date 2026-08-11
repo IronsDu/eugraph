@@ -1,0 +1,1099 @@
+#include "service/thrift/eugraph_handler.hpp"
+
+#include "common/types/temporal_value.hpp"
+#include "query/parser/cypher_parser.hpp"
+#include "service/thrift/result_format.hpp"
+
+#include <thrift/lib/cpp2/async/ServerStream.h>
+
+#include <spdlog/spdlog.h>
+
+#include <chrono>
+#include <cmath>
+#include <iomanip>
+#include <limits>
+#include <sstream>
+
+#include <folly/io/async/EventBaseManager.h>
+
+namespace {
+
+int64_t nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+folly::coro::AsyncGenerator<eugraph::thrift_service::ResultRowBatch&&>
+makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
+                    std::unordered_map<eugraph::LabelId, eugraph::LabelDef> label_defs,
+                    std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
+                    eugraph::service::thrift::EuGraphHandler& handler, int64_t t0) {
+    size_t total_rows = 0;
+    bool labels_merged = false;
+    while (auto chunk = co_await ctx->gen.next()) {
+        if (!labels_merged) {
+            labels_merged = true;
+            for (const auto& [lid, def] : ctx->label_defs) {
+                if (!label_defs.count(lid))
+                    label_defs[lid] = def;
+                else if (!def.properties.empty()) {
+                    auto& existing = label_defs[lid];
+                    for (const auto& pd : def.properties) {
+                        bool found = false;
+                        for (const auto& epd : existing.properties) {
+                            if (epd.id == pd.id) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found)
+                            existing.properties.push_back(pd);
+                    }
+                }
+            }
+            for (const auto& [eid, def] : ctx->edge_label_defs) {
+                if (!edge_label_defs.count(eid))
+                    edge_label_defs[eid] = def;
+                else if (!def.properties.empty()) {
+                    auto& existing = edge_label_defs[eid];
+                    for (const auto& pd : def.properties) {
+                        bool found = false;
+                        for (const auto& epd : existing.properties) {
+                            if (epd.id == pd.id) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found)
+                            existing.properties.push_back(pd);
+                    }
+                }
+            }
+        }
+        eugraph::thrift_service::ResultRowBatch thrift_batch;
+        auto rows = chunk->toRows();
+        for (auto& row : rows) {
+            eugraph::thrift_service::ResultRow row_resp;
+            for (auto& val : row) {
+                row_resp.values()->push_back(handler.valueToThrift(val, label_defs, edge_label_defs));
+            }
+            thrift_batch.rows()->push_back(std::move(row_resp));
+        }
+        total_rows += rows.size();
+        co_yield std::move(thrift_batch);
+    }
+    if (ctx->should_commit) {
+        co_await ctx->store.commitTran(ctx->txn);
+    }
+    spdlog::info("[handler] executeCypher stream done, {} rows, took={}ms", total_rows, nowMs() - t0);
+}
+
+} // anonymous namespace
+
+namespace eugraph {
+namespace service {
+namespace thrift {
+
+// ==================== Helpers ====================
+
+::eugraph::PropertyType EuGraphHandler::toPropertyType(thrift_service::PropertyType t) {
+    switch (t) {
+    case thrift_service::PropertyType::BOOL:
+        return ::eugraph::PropertyType::BOOL;
+    case thrift_service::PropertyType::INT64:
+        return ::eugraph::PropertyType::INT64;
+    case thrift_service::PropertyType::DOUBLE:
+        return ::eugraph::PropertyType::DOUBLE;
+    case thrift_service::PropertyType::STRING:
+        return ::eugraph::PropertyType::STRING;
+    case thrift_service::PropertyType::INT64_ARRAY:
+        return ::eugraph::PropertyType::INT64_ARRAY;
+    case thrift_service::PropertyType::DOUBLE_ARRAY:
+        return ::eugraph::PropertyType::DOUBLE_ARRAY;
+    case thrift_service::PropertyType::STRING_ARRAY:
+        return ::eugraph::PropertyType::STRING_ARRAY;
+    case thrift_service::PropertyType::DATETIME:
+        return ::eugraph::PropertyType::DATETIME;
+    case thrift_service::PropertyType::TIME:
+        return ::eugraph::PropertyType::TIME;
+    case thrift_service::PropertyType::DURATION:
+        return ::eugraph::PropertyType::DURATION;
+    case thrift_service::PropertyType::DATETIME_ARRAY:
+        return ::eugraph::PropertyType::DATETIME_ARRAY;
+    case thrift_service::PropertyType::TIME_ARRAY:
+        return ::eugraph::PropertyType::TIME_ARRAY;
+    case thrift_service::PropertyType::DURATION_ARRAY:
+        return ::eugraph::PropertyType::DURATION_ARRAY;
+    }
+    return ::eugraph::PropertyType::STRING;
+}
+
+thrift_service::PropertyType EuGraphHandler::fromPropertyType(::eugraph::PropertyType t) {
+    switch (t) {
+    case ::eugraph::PropertyType::ANY:
+        return thrift_service::PropertyType::STRING;
+    case ::eugraph::PropertyType::DATETIME:
+        return thrift_service::PropertyType::DATETIME;
+    case ::eugraph::PropertyType::TIME:
+        return thrift_service::PropertyType::TIME;
+    case ::eugraph::PropertyType::DURATION:
+        return thrift_service::PropertyType::DURATION;
+    case ::eugraph::PropertyType::BOOL:
+        return thrift_service::PropertyType::BOOL;
+    case ::eugraph::PropertyType::INT64:
+        return thrift_service::PropertyType::INT64;
+    case ::eugraph::PropertyType::DOUBLE:
+        return thrift_service::PropertyType::DOUBLE;
+    case ::eugraph::PropertyType::STRING:
+        return thrift_service::PropertyType::STRING;
+    case ::eugraph::PropertyType::INT64_ARRAY:
+        return thrift_service::PropertyType::INT64_ARRAY;
+    case ::eugraph::PropertyType::DOUBLE_ARRAY:
+        return thrift_service::PropertyType::DOUBLE_ARRAY;
+    case ::eugraph::PropertyType::STRING_ARRAY:
+        return thrift_service::PropertyType::STRING_ARRAY;
+    case ::eugraph::PropertyType::DATETIME_ARRAY:
+        return thrift_service::PropertyType::DATETIME_ARRAY;
+    case ::eugraph::PropertyType::TIME_ARRAY:
+        return thrift_service::PropertyType::TIME_ARRAY;
+    case ::eugraph::PropertyType::DURATION_ARRAY:
+        return thrift_service::PropertyType::DURATION_ARRAY;
+    }
+    return thrift_service::PropertyType::STRING;
+}
+
+PropertyDef EuGraphHandler::toPropertyDef(const thrift_service::PropertyDefThrift& req, uint16_t id) {
+    PropertyDef def;
+    def.id = id;
+    def.name = req.name().value();
+    def.type = toPropertyType(req.type().value());
+    def.required = req.is_required().value();
+    return def;
+}
+
+// ==================== Graph Management ====================
+
+folly::coro::Task<std::unique_ptr<thrift_service::GraphInfo>>
+EuGraphHandler::co_createGraph(std::unique_ptr<std::string> name) {
+    spdlog::info("[handler] createGraph '{}'", *name);
+    auto entry = graph_service_.createGraph(*name);
+    auto resp = std::make_unique<thrift_service::GraphInfo>();
+    resp->graph_id() = static_cast<int32_t>(entry.graph_id);
+    resp->name() = std::move(*name);
+    resp->created_at() = static_cast<int64_t>(entry.created_at);
+    co_return resp;
+}
+
+folly::coro::Task<bool> EuGraphHandler::co_dropGraph(std::unique_ptr<std::string> name) {
+    spdlog::info("[handler] dropGraph '{}'", *name);
+    co_return graph_service_.dropGraph(*name);
+}
+
+folly::coro::Task<std::unique_ptr<std::vector<thrift_service::GraphInfo>>> EuGraphHandler::co_listGraphs() {
+    spdlog::info("[handler] listGraphs");
+    auto entries = graph_service_.listGraphs();
+    auto resp = std::make_unique<std::vector<thrift_service::GraphInfo>>();
+    for (const auto& e : entries) {
+        thrift_service::GraphInfo info;
+        info.graph_id() = static_cast<int32_t>(e.graph_id);
+        info.name() = e.name;
+        info.created_at() = static_cast<int64_t>(e.created_at);
+        resp->push_back(std::move(info));
+    }
+    co_return resp;
+}
+
+// ==================== Value conversion ====================
+
+namespace {
+
+using eugraph::service::thrift::formatDouble;
+
+void appendCypherValue(std::ostringstream& oss, const PropertyValue& pv) {
+    if (std::holds_alternative<bool>(pv)) {
+        oss << (std::get<bool>(pv) ? "true" : "false");
+    } else if (std::holds_alternative<int64_t>(pv)) {
+        oss << std::get<int64_t>(pv);
+    } else if (std::holds_alternative<double>(pv)) {
+        oss << formatDouble(std::get<double>(pv));
+    } else if (std::holds_alternative<std::string>(pv)) {
+        oss << '\'';
+        for (char c : std::get<std::string>(pv)) {
+            switch (c) {
+            case '\'':
+                oss << "\\'";
+                break;
+            case '\\':
+                oss << "\\\\";
+                break;
+            case '\n':
+                oss << "\\n";
+                break;
+            case '\r':
+                oss << "\\r";
+                break;
+            case '\t':
+                oss << "\\t";
+                break;
+            default:
+                oss << c;
+                break;
+            }
+        }
+        oss << '\'';
+    } else if (std::holds_alternative<std::vector<int64_t>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<int64_t>>(pv)) {
+            if (!first)
+                oss << ", ";
+            oss << x;
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<double>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<double>>(pv)) {
+            if (!first)
+                oss << ", ";
+            oss << formatDouble(x);
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<std::string>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& s : std::get<std::vector<std::string>>(pv)) {
+            if (!first)
+                oss << ", ";
+            oss << '\'' << s << '\'';
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<DateTimeValue>(pv)) {
+        oss << '\'' << temporalToString(std::get<DateTimeValue>(pv)) << '\'';
+    } else if (std::holds_alternative<TimeValue>(pv)) {
+        oss << '\'' << temporalToString(std::get<TimeValue>(pv)) << '\'';
+    } else if (std::holds_alternative<DurationValue>(pv)) {
+        oss << '\'' << temporalToString(std::get<DurationValue>(pv)) << '\'';
+    } else if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<DateTimeValue>>(pv))
+            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToString(x) << '\'';
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<TimeValue>>(pv))
+            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToString(x) << '\'';
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<DurationValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<DurationValue>>(pv))
+            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToString(x) << '\'';
+        oss << ']';
+    }
+}
+
+void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
+    if (std::holds_alternative<bool>(pv)) {
+        oss << (std::get<bool>(pv) ? "true" : "false");
+    } else if (std::holds_alternative<int64_t>(pv)) {
+        oss << std::get<int64_t>(pv);
+    } else if (std::holds_alternative<double>(pv)) {
+        oss << formatDouble(std::get<double>(pv));
+    } else if (std::holds_alternative<std::string>(pv)) {
+        oss << '"';
+        for (char c : std::get<std::string>(pv)) {
+            switch (c) {
+            case '"':
+                oss << "\\\"";
+                break;
+            case '\\':
+                oss << "\\\\";
+                break;
+            case '\n':
+                oss << "\\n";
+                break;
+            case '\r':
+                oss << "\\r";
+                break;
+            case '\t':
+                oss << "\\t";
+                break;
+            default:
+                oss << c;
+                break;
+            }
+        }
+        oss << '"';
+    } else if (std::holds_alternative<std::vector<int64_t>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<int64_t>>(pv)) {
+            if (!first)
+                oss << ',';
+            oss << x;
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<double>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<double>>(pv)) {
+            if (!first)
+                oss << ',';
+            oss << formatDouble(x);
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<std::string>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& s : std::get<std::vector<std::string>>(pv)) {
+            if (!first)
+                oss << ',';
+            oss << '"' << s << '"';
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<DateTimeValue>(pv)) {
+        oss << '"' << temporalToString(std::get<DateTimeValue>(pv)) << '"';
+    } else if (std::holds_alternative<TimeValue>(pv)) {
+        oss << '"' << temporalToString(std::get<TimeValue>(pv)) << '"';
+    } else if (std::holds_alternative<DurationValue>(pv)) {
+        oss << '"' << temporalToString(std::get<DurationValue>(pv)) << '"';
+    } else if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<DateTimeValue>>(pv)) {
+            if (!first)
+                oss << ',';
+            oss << '"' << temporalToString(x) << '"';
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<TimeValue>>(pv)) {
+            if (!first)
+                oss << ',';
+            oss << '"' << temporalToString(x) << '"';
+            first = false;
+        }
+        oss << ']';
+    } else if (std::holds_alternative<std::vector<DurationValue>>(pv)) {
+        oss << '[';
+        bool first = true;
+        for (auto& x : std::get<std::vector<DurationValue>>(pv)) {
+            if (!first)
+                oss << ',';
+            oss << '"' << temporalToString(x) << '"';
+            first = false;
+        }
+        oss << ']';
+    } else {
+        oss << "null";
+    }
+}
+
+} // anonymous namespace
+
+thrift_service::ResultValue
+EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
+                              const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs) {
+    thrift_service::ResultValue rv;
+
+    if (std::holds_alternative<std::monostate>(val)) {
+        // Leave as __EMPTY__
+    } else if (std::holds_alternative<bool>(val)) {
+        rv.set_bool_val(std::get<bool>(val));
+    } else if (std::holds_alternative<int64_t>(val)) {
+        rv.set_int_val(std::get<int64_t>(val));
+    } else if (std::holds_alternative<double>(val)) {
+        rv.set_double_val(std::get<double>(val));
+    } else if (std::holds_alternative<std::string>(val)) {
+        rv.set_string_val(std::get<std::string>(val));
+    } else if (std::holds_alternative<VertexValue>(val)) {
+        auto& v = std::get<VertexValue>(val);
+        std::ostringstream oss;
+        oss << "{\"id\":" << v.id;
+
+        if (v.labels.has_value() && !v.labels->empty()) {
+            oss << ",\"labels\":[";
+            bool first = true;
+            for (LabelId lid : *v.labels) {
+                auto it = label_defs.find(lid);
+                if (it == label_defs.end())
+                    continue;
+                if (it->second.name == kAnonLabelName)
+                    continue;
+                if (!first)
+                    oss << ',';
+                oss << '"' << it->second.name << '"';
+                first = false;
+            }
+            oss << ']';
+        }
+        oss << ",\"properties\":[";
+        bool first_prop = true;
+        for (const auto& [lid, props] : v.properties) {
+            auto it = label_defs.find(lid);
+            if (it == label_defs.end())
+                continue;
+            for (const auto& pd : it->second.properties) {
+                if (pd.id < props.size()) {
+                    const auto& pv = props[pd.id];
+                    if (pv.has_value()) {
+                        if (!first_prop)
+                            oss << ',';
+                        oss << "[\"" << pd.name << "\",";
+                        appendJsonValue(oss, *pv);
+                        oss << ']';
+                        first_prop = false;
+                    }
+                }
+            }
+        }
+        oss << ']';
+        oss << '}';
+        rv.set_vertex_json(oss.str());
+    } else if (std::holds_alternative<EdgeValue>(val)) {
+        auto& e = std::get<EdgeValue>(val);
+        std::ostringstream oss;
+        oss << "{\"id\":" << e.id << ",\"start\":" << e.src_id << ",\"end\":" << e.dst_id;
+
+        auto elit = edge_label_defs.find(e.label_id);
+        if (elit != edge_label_defs.end()) {
+            oss << ",\"type\":\"" << elit->second.name << '"';
+        }
+
+        oss << ",\"properties\":{";
+        bool first_prop = true;
+        if (e.properties.has_value() && elit != edge_label_defs.end()) {
+            for (const auto& pd : elit->second.properties) {
+                if (pd.id < e.properties->size()) {
+                    const auto& pv = (*e.properties)[pd.id];
+                    if (pv.has_value()) {
+                        if (!first_prop)
+                            oss << ',';
+                        oss << '"' << pd.name << "\":";
+                        appendJsonValue(oss, *pv);
+                        first_prop = false;
+                    }
+                }
+            }
+        }
+        oss << '}';
+        oss << '}';
+        rv.set_edge_json(oss.str());
+    } else if (std::holds_alternative<PathValue>(val)) {
+        auto& p = std::get<PathValue>(val);
+        std::ostringstream oss;
+        oss << "<";
+        for (size_t i = 0; i < p.elements.size(); ++i) {
+            const auto& elem = p.elements[i].value;
+            if (std::holds_alternative<VertexValue>(elem)) {
+                auto& v = std::get<VertexValue>(elem);
+                oss << "(";
+                std::optional<LabelId> display_lid;
+                if (v.labels.has_value() && !v.labels->empty()) {
+                    for (LabelId lid : *v.labels) {
+                        auto it = label_defs.find(lid);
+                        if (it != label_defs.end() && it->second.name != kAnonLabelName) {
+                            oss << ":" << it->second.name;
+                            display_lid = lid;
+                            break;
+                        }
+                    }
+                }
+                bool first_prop = true;
+                if (v.labels.has_value()) {
+                    for (LabelId lid : *v.labels) {
+                        auto it = label_defs.find(lid);
+                        if (it == label_defs.end())
+                            continue;
+                        auto prop_it = v.properties.find(lid);
+                        if (prop_it == v.properties.end())
+                            continue;
+                        for (const auto& pd : it->second.properties) {
+                            if (pd.id < prop_it->second.size()) {
+                                const auto& pv = prop_it->second[pd.id];
+                                if (pv.has_value()) {
+                                    if (first_prop) {
+                                        oss << (display_lid.has_value() ? " {" : "{");
+                                        first_prop = false;
+                                    } else {
+                                        oss << ", ";
+                                    }
+                                    oss << pd.name << ": ";
+                                    appendCypherValue(oss, *pv);
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!first_prop)
+                    oss << "}";
+                oss << ")";
+            } else if (std::holds_alternative<EdgeValue>(elem)) {
+                auto& e = std::get<EdgeValue>(elem);
+                bool outgoing = true;
+                if (i > 0 && i + 1 < p.elements.size()) {
+                    const auto& prev_v = p.elements[i - 1].value;
+                    const auto& next_v = p.elements[i + 1].value;
+                    if (std::holds_alternative<VertexValue>(prev_v) && std::holds_alternative<VertexValue>(next_v)) {
+                        auto prev_id = std::get<VertexValue>(prev_v).id;
+                        auto next_id = std::get<VertexValue>(next_v).id;
+                        outgoing = (e.src_id == prev_id && e.dst_id == next_id);
+                    }
+                }
+                oss << (outgoing ? "-[" : "<-[");
+                auto elit = edge_label_defs.find(e.label_id);
+                if (elit != edge_label_defs.end()) {
+                    oss << ":" << elit->second.name;
+                    if (e.properties.has_value() && !e.properties->empty()) {
+                        bool first_eprop = true;
+                        for (const auto& pd : elit->second.properties) {
+                            if (pd.id < e.properties->size()) {
+                                const auto& pv = (*e.properties)[pd.id];
+                                if (pv.has_value()) {
+                                    oss << (first_eprop ? " {" : ", ");
+                                    first_eprop = false;
+                                    oss << pd.name << ": ";
+                                    appendCypherValue(oss, *pv);
+                                }
+                            }
+                        }
+                        if (!first_eprop)
+                            oss << "}";
+                    }
+                }
+                oss << (outgoing ? "]->" : "]-");
+            }
+        }
+        oss << ">";
+        rv.set_path_json(oss.str());
+    } else if (std::holds_alternative<DateTimeValue>(val)) {
+        rv.set_string_val(temporalToString(std::get<DateTimeValue>(val)));
+    } else if (std::holds_alternative<TimeValue>(val)) {
+        rv.set_string_val(temporalToString(std::get<TimeValue>(val)));
+    } else if (std::holds_alternative<DurationValue>(val)) {
+        rv.set_string_val(temporalToString(std::get<DurationValue>(val)));
+    } else if (std::holds_alternative<ListValue>(val)) {
+        auto& lv = std::get<ListValue>(val);
+        std::ostringstream oss;
+        oss << "[";
+        for (size_t i = 0; i < lv.elements.size(); ++i) {
+            if (i > 0)
+                oss << ", ";
+            auto elem_rv = valueToThrift(lv.elements[i].value, label_defs, edge_label_defs);
+            switch (elem_rv.getType()) {
+            case thrift_service::ResultValue::Type::__EMPTY__:
+                oss << "null";
+                break;
+            case thrift_service::ResultValue::Type::bool_val:
+                oss << (elem_rv.get_bool_val() ? "true" : "false");
+                break;
+            case thrift_service::ResultValue::Type::int_val:
+                oss << elem_rv.get_int_val();
+                break;
+            case thrift_service::ResultValue::Type::double_val:
+                oss << formatDouble(elem_rv.get_double_val());
+                break;
+            case thrift_service::ResultValue::Type::string_val:
+                oss << "'";
+                for (char c : elem_rv.get_string_val()) {
+                    if (c == '\'')
+                        oss << "\\'";
+                    else
+                        oss << c;
+                }
+                oss << "'";
+                break;
+            case thrift_service::ResultValue::Type::vertex_json:
+                oss << elem_rv.get_vertex_json();
+                break;
+            case thrift_service::ResultValue::Type::edge_json:
+                oss << elem_rv.get_edge_json();
+                break;
+            case thrift_service::ResultValue::Type::path_json:
+                oss << elem_rv.get_path_json();
+                break;
+            case thrift_service::ResultValue::Type::list_json:
+                oss << elem_rv.get_list_json();
+                break;
+            case thrift_service::ResultValue::Type::map_json:
+                oss << elem_rv.get_map_json();
+                break;
+            }
+        }
+        oss << "]";
+        rv.set_list_json(oss.str());
+    } else if (std::holds_alternative<MapValue>(val)) {
+        auto& mv = std::get<MapValue>(val);
+        std::ostringstream oss;
+        oss << "{";
+        for (size_t i = 0; i < mv.entries.size(); ++i) {
+            if (i > 0)
+                oss << ", ";
+            oss << mv.entries[i].first << ": ";
+            auto elem_rv = valueToThrift(mv.entries[i].second.value, label_defs, edge_label_defs);
+            switch (elem_rv.getType()) {
+            case thrift_service::ResultValue::Type::__EMPTY__:
+                oss << "null";
+                break;
+            case thrift_service::ResultValue::Type::bool_val:
+                oss << (elem_rv.get_bool_val() ? "true" : "false");
+                break;
+            case thrift_service::ResultValue::Type::int_val:
+                oss << elem_rv.get_int_val();
+                break;
+            case thrift_service::ResultValue::Type::double_val:
+                oss << formatDouble(elem_rv.get_double_val());
+                break;
+            case thrift_service::ResultValue::Type::string_val:
+                oss << "'";
+                for (char c : elem_rv.get_string_val()) {
+                    if (c == '\'')
+                        oss << "\\'";
+                    else
+                        oss << c;
+                }
+                oss << "'";
+                break;
+            case thrift_service::ResultValue::Type::vertex_json:
+                oss << elem_rv.get_vertex_json();
+                break;
+            case thrift_service::ResultValue::Type::edge_json:
+                oss << elem_rv.get_edge_json();
+                break;
+            case thrift_service::ResultValue::Type::path_json:
+                oss << elem_rv.get_path_json();
+                break;
+            case thrift_service::ResultValue::Type::list_json:
+                oss << elem_rv.get_list_json();
+                break;
+            case thrift_service::ResultValue::Type::map_json:
+                oss << elem_rv.get_map_json();
+                break;
+            }
+        }
+        oss << "}";
+        rv.set_map_json(oss.str());
+    }
+
+    return rv;
+}
+
+// ==================== DDL: Label ====================
+
+folly::coro::Task<std::unique_ptr<thrift_service::LabelInfo>>
+EuGraphHandler::co_createLabel(std::unique_ptr<std::string> name,
+                               std::unique_ptr<std::vector<thrift_service::PropertyDefThrift>> properties,
+                               std::unique_ptr<std::string> graph_name) {
+    auto t0 = nowMs();
+    spdlog::info("[handler] createLabel start, graph='{}'", *graph_name);
+
+    std::vector<PropertyDef> defs;
+    for (size_t i = 0; i < properties->size(); i++) {
+        defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
+    }
+
+    auto label_def = co_await graph_service_.createLabel(*name, defs, *graph_name);
+
+    auto resp = std::make_unique<thrift_service::LabelInfo>();
+    resp->id() = label_def.id;
+    resp->name() = label_def.name;
+    for (auto& d : label_def.properties) {
+        thrift_service::PropertyDefThrift pd;
+        pd.name() = d.name;
+        pd.type() = static_cast<thrift_service::PropertyType>(static_cast<int>(d.type));
+        pd.is_required() = d.required;
+        resp->properties()->push_back(std::move(pd));
+    }
+
+    spdlog::info("[handler] createLabel '{}' done on graph '{}', id={}, {} properties, took={}ms", *name, *graph_name,
+                 label_def.id, label_def.properties.size(), nowMs() - t0);
+    co_return resp;
+}
+
+folly::coro::Task<std::unique_ptr<std::vector<thrift_service::LabelInfo>>>
+EuGraphHandler::co_listLabels(std::unique_ptr<std::string> graph_name) {
+    auto t0 = nowMs();
+    spdlog::info("[handler] listLabels start, graph='{}'", *graph_name);
+
+    auto labels = co_await graph_service_.listLabels(*graph_name);
+    auto resp = std::make_unique<std::vector<thrift_service::LabelInfo>>();
+
+    for (const auto& l : labels) {
+        thrift_service::LabelInfo info;
+        info.id() = l.id;
+        info.name() = l.name;
+        for (const auto& pd : l.properties) {
+            thrift_service::PropertyDefThrift p;
+            p.name() = pd.name;
+            p.type() = fromPropertyType(pd.type);
+            p.is_required() = pd.required;
+            info.properties()->push_back(std::move(p));
+        }
+        resp->push_back(std::move(info));
+    }
+
+    spdlog::info("[handler] listLabels done, took={}ms", nowMs() - t0);
+    co_return resp;
+}
+
+folly::coro::Task<std::unique_ptr<thrift_service::EdgeLabelInfo>>
+EuGraphHandler::co_createEdgeLabel(std::unique_ptr<std::string> name,
+                                   std::unique_ptr<std::vector<thrift_service::PropertyDefThrift>> properties,
+                                   std::unique_ptr<std::string> graph_name) {
+    auto t0 = nowMs();
+    spdlog::info("[handler] createEdgeLabel start, graph='{}'", *graph_name);
+
+    std::vector<PropertyDef> defs;
+    for (size_t i = 0; i < properties->size(); i++) {
+        defs.push_back(toPropertyDef((*properties)[i], static_cast<uint16_t>(i + 1)));
+    }
+
+    auto label_def = co_await graph_service_.createEdgeLabel(*name, defs, *graph_name);
+
+    auto resp = std::make_unique<thrift_service::EdgeLabelInfo>();
+    resp->id() = label_def.id;
+    resp->name() = label_def.name;
+    resp->directed() = label_def.directed;
+
+    spdlog::info("[handler] createEdgeLabel '{}' done on graph '{}', id={}, took={}ms", *name, *graph_name,
+                 label_def.id, nowMs() - t0);
+    co_return resp;
+}
+
+folly::coro::Task<std::unique_ptr<std::vector<thrift_service::EdgeLabelInfo>>>
+EuGraphHandler::co_listEdgeLabels(std::unique_ptr<std::string> graph_name) {
+    auto t0 = nowMs();
+    spdlog::info("[handler] listEdgeLabels start, graph='{}'", *graph_name);
+
+    auto labels = co_await graph_service_.listEdgeLabels(*graph_name);
+    auto resp = std::make_unique<std::vector<thrift_service::EdgeLabelInfo>>();
+
+    for (const auto& l : labels) {
+        thrift_service::EdgeLabelInfo info;
+        info.id() = l.id;
+        info.name() = l.name;
+        info.directed() = l.directed;
+        for (const auto& pd : l.properties) {
+            thrift_service::PropertyDefThrift p;
+            p.name() = pd.name;
+            p.type() = fromPropertyType(pd.type);
+            p.is_required() = pd.required;
+            info.properties()->push_back(std::move(p));
+        }
+        resp->push_back(std::move(info));
+    }
+
+    spdlog::info("[handler] listEdgeLabels done, took={}ms", nowMs() - t0);
+    co_return resp;
+}
+
+// ==================== DML: Cypher (streaming) ====================
+
+folly::coro::Task<apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
+EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique_ptr<std::string> graph_name,
+                                 std::unique_ptr<std::map<std::string, std::string>> parameters) {
+    auto t0 = nowMs();
+    spdlog::info("[handler] executeCypher start, graph='{}', query='{}'", *graph_name, *query);
+
+    // Parse parameter values from Cypher literal strings to runtime Values
+    std::unordered_map<std::string, Value> params;
+    if (parameters && !parameters->empty()) {
+        static thread_local cypher::CypherQueryParser parser;
+
+        auto exprToValue = [](auto& self, const cypher::Expression& expr) -> std::optional<Value> {
+            if (auto* lit = std::get_if<std::unique_ptr<cypher::Literal>>(&expr)) {
+                if (!*lit)
+                    return std::nullopt;
+                return std::visit(
+                    [](const auto& v) -> std::optional<Value> {
+                        using V = std::decay_t<decltype(v)>;
+                        if constexpr (std::is_same_v<V, cypher::NullValue>) {
+                            return Value{};
+                        } else {
+                            return Value(v);
+                        }
+                    },
+                    (*lit)->value);
+            }
+            if (auto* map = std::get_if<std::unique_ptr<cypher::MapExpr>>(&expr)) {
+                if (!*map)
+                    return std::nullopt;
+                MapValue mv;
+                for (auto& [k, v] : (*map)->entries) {
+                    auto val = self(self, v);
+                    if (val)
+                        mv.entries.push_back({k, ValueStorage{std::move(*val)}});
+                }
+                return Value(std::move(mv));
+            }
+            if (auto* list = std::get_if<std::unique_ptr<cypher::ListExpr>>(&expr)) {
+                if (!*list)
+                    return std::nullopt;
+                ListValue lv;
+                for (auto& elem : (*list)->elements) {
+                    auto val = self(self, elem);
+                    if (val)
+                        lv.elements.push_back(ValueStorage{std::move(*val)});
+                }
+                return Value(std::move(lv));
+            }
+            return std::nullopt;
+        };
+
+        for (const auto& [name, literal_str] : *parameters) {
+            auto result = parser.parse("RETURN " + literal_str);
+            if (std::holds_alternative<cypher::Statement>(result)) {
+                auto& stmt = std::get<cypher::Statement>(result);
+                auto* rq = std::get_if<std::unique_ptr<cypher::RegularQuery>>(&stmt);
+                if (rq && *rq && !(*rq)->first.clauses.empty()) {
+                    auto* ret = std::get_if<std::unique_ptr<cypher::ReturnClause>>(&(*rq)->first.clauses[0]);
+                    if (ret && *ret && !(*ret)->items.empty()) {
+                        auto val = exprToValue(exprToValue, (*ret)->items[0].expr);
+                        if (val)
+                            params[name] = std::move(*val);
+                    }
+                }
+            }
+        }
+    }
+
+    auto exec_ctx = co_await graph_service_.executeCypher(*query, params, *graph_name);
+
+    thrift_service::QueryStreamMeta meta;
+    meta.columns() = std::move(exec_ctx.ctx->columns);
+
+    auto gen = makeStreamGenerator(std::move(exec_ctx.ctx), std::move(exec_ctx.label_defs),
+                                   std::move(exec_ctx.edge_label_defs), *this, t0);
+
+    co_return apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>{std::move(meta),
+                                                                                                       std::move(gen)};
+}
+
+// ==================== Batch Import ====================
+
+PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift_service::PropertyValueThrift& v) {
+    switch (v.getType()) {
+    case thrift_service::PropertyValueThrift::Type::bool_val:
+        return v.get_bool_val();
+    case thrift_service::PropertyValueThrift::Type::int_val:
+        return v.get_int_val();
+    case thrift_service::PropertyValueThrift::Type::double_val:
+        return v.get_double_val();
+    case thrift_service::PropertyValueThrift::Type::string_val:
+        return std::string(v.get_string_val());
+    case thrift_service::PropertyValueThrift::Type::int_array: {
+        const auto& arr = v.get_int_array();
+        return std::vector<int64_t>(arr.begin(), arr.end());
+    }
+    case thrift_service::PropertyValueThrift::Type::double_array: {
+        const auto& arr = v.get_double_array();
+        return std::vector<double>(arr.begin(), arr.end());
+    }
+    case thrift_service::PropertyValueThrift::Type::string_array: {
+        const auto& arr = v.get_string_array();
+        return std::vector<std::string>(arr.begin(), arr.end());
+    }
+    case thrift_service::PropertyValueThrift::Type::datetime_val: {
+        const auto& dt = v.get_datetime_val();
+        DateTimeValue tv;
+        switch (*dt.kind()) {
+        case thrift_service::DateTimeKind::DATE:
+            tv.kind = DateTimeKind::DATE;
+            break;
+        case thrift_service::DateTimeKind::LOCAL_DATETIME:
+            tv.kind = DateTimeKind::LOCAL_DATETIME;
+            break;
+        case thrift_service::DateTimeKind::DATETIME_WITH_TZ:
+            tv.kind = DateTimeKind::DATETIME;
+            break;
+        }
+        tv.year = *dt.year();
+        tv.month = *dt.month();
+        tv.day = *dt.day();
+        tv.hour = *dt.hour();
+        tv.minute = *dt.minute();
+        tv.second = *dt.second();
+        tv.nanos = *dt.nanos();
+        tv.tz_offset_sec = *dt.tz_offset_min() * 60;
+        tv.tz_name = *dt.tz_name();
+        return tv;
+    }
+    case thrift_service::PropertyValueThrift::Type::time_val: {
+        const auto& t = v.get_time_val();
+        TimeValue tv;
+        switch (*t.kind()) {
+        case thrift_service::TimeKind::LOCAL_TIME:
+            tv.kind = TimeKind::LOCAL_TIME;
+            break;
+        case thrift_service::TimeKind::TIME_WITH_TZ:
+            tv.kind = TimeKind::TIME;
+            break;
+        }
+        tv.hour = *t.hour();
+        tv.minute = *t.minute();
+        tv.second = *t.second();
+        tv.nanos = *t.nanos();
+        tv.tz_offset_sec = *t.tz_offset_min() * 60;
+        tv.tz_name = *t.tz_name();
+        return tv;
+    }
+    case thrift_service::PropertyValueThrift::Type::duration_val: {
+        const auto& d = v.get_duration_val();
+        DurationValue dv;
+        dv.months = *d.months();
+        dv.days = *d.days();
+        dv.seconds = *d.seconds();
+        dv.nanos = *d.nanos();
+        return dv;
+    }
+    case thrift_service::PropertyValueThrift::Type::datetime_array: {
+        const auto& arr = v.get_datetime_array();
+        std::vector<DateTimeValue> result;
+        result.reserve(arr.size());
+        for (const auto& dt : arr) {
+            DateTimeValue tv;
+            switch (*dt.kind()) {
+            case thrift_service::DateTimeKind::DATE:
+                tv.kind = DateTimeKind::DATE;
+                break;
+            case thrift_service::DateTimeKind::LOCAL_DATETIME:
+                tv.kind = DateTimeKind::LOCAL_DATETIME;
+                break;
+            case thrift_service::DateTimeKind::DATETIME_WITH_TZ:
+                tv.kind = DateTimeKind::DATETIME;
+                break;
+            }
+            tv.year = *dt.year();
+            tv.month = *dt.month();
+            tv.day = *dt.day();
+            tv.hour = *dt.hour();
+            tv.minute = *dt.minute();
+            tv.second = *dt.second();
+            tv.nanos = *dt.nanos();
+            tv.tz_offset_sec = *dt.tz_offset_min() * 60;
+            tv.tz_name = *dt.tz_name();
+            result.push_back(std::move(tv));
+        }
+        return result;
+    }
+    case thrift_service::PropertyValueThrift::Type::time_array: {
+        const auto& arr = v.get_time_array();
+        std::vector<TimeValue> result;
+        result.reserve(arr.size());
+        for (const auto& t : arr) {
+            TimeValue tv;
+            switch (*t.kind()) {
+            case thrift_service::TimeKind::LOCAL_TIME:
+                tv.kind = TimeKind::LOCAL_TIME;
+                break;
+            case thrift_service::TimeKind::TIME_WITH_TZ:
+                tv.kind = TimeKind::TIME;
+                break;
+            }
+            tv.hour = *t.hour();
+            tv.minute = *t.minute();
+            tv.second = *t.second();
+            tv.nanos = *t.nanos();
+            tv.tz_offset_sec = *t.tz_offset_min() * 60;
+            tv.tz_name = *t.tz_name();
+            result.push_back(std::move(tv));
+        }
+        return result;
+    }
+    case thrift_service::PropertyValueThrift::Type::duration_array: {
+        const auto& arr = v.get_duration_array();
+        std::vector<DurationValue> result;
+        result.reserve(arr.size());
+        for (const auto& d : arr) {
+            DurationValue dv;
+            dv.months = *d.months();
+            dv.days = *d.days();
+            dv.seconds = *d.seconds();
+            dv.nanos = *d.nanos();
+            result.push_back(std::move(dv));
+        }
+        return result;
+    }
+    default:
+        return std::monostate{};
+    }
+}
+
+folly::coro::Task<std::unique_ptr<thrift_service::BatchInsertVerticesResult>>
+EuGraphHandler::co_batchInsertVertices(std::unique_ptr<std::string> label_name,
+                                       std::unique_ptr<std::vector<thrift_service::VertexRecord>> records,
+                                       std::unique_ptr<std::string> graph_name) {
+    auto t0 = nowMs();
+    auto count = records->size();
+    spdlog::info("[handler] batchInsertVertices start, graph='{}', label='{}', count={}", *graph_name, *label_name,
+                 count);
+
+    std::vector<GraphService::BatchVertexEntry> entries;
+    entries.reserve(count);
+    for (size_t i = 0; i < count; i++) {
+        auto& rec = (*records)[i];
+        GraphService::BatchVertexEntry entry;
+        entry.vid = 0; // will be assigned by service
+        for (const auto& pv : *rec.properties()) {
+            entry.props.push_back(thriftToPropertyValue(pv));
+        }
+        entries.push_back(std::move(entry));
+    }
+
+    auto vids = co_await graph_service_.batchInsertVertices(*label_name, std::move(entries), *graph_name);
+
+    auto resp = std::make_unique<thrift_service::BatchInsertVerticesResult>();
+    resp->vertex_ids()->reserve(vids.size());
+    for (auto vid : vids) {
+        resp->vertex_ids()->push_back(static_cast<int64_t>(vid));
+    }
+    resp->count() = static_cast<int32_t>(vids.size());
+    spdlog::info("[handler] batchInsertVertices done, count={}, took={}ms", count, nowMs() - t0);
+    co_return resp;
+}
+
+folly::coro::Task<std::int32_t>
+EuGraphHandler::co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
+                                    std::unique_ptr<std::vector<thrift_service::EdgeRecord>> records,
+                                    std::unique_ptr<std::string> graph_name) {
+    auto t0 = nowMs();
+    auto count = records->size();
+    spdlog::info("[handler] batchInsertEdges start, graph='{}', edgeLabel='{}', count={}", *graph_name,
+                 *edge_label_name, count);
+
+    std::vector<GraphService::BatchEdgeEntry> entries;
+    entries.reserve(count);
+    for (size_t i = 0; i < count; i++) {
+        auto& rec = (*records)[i];
+        GraphService::BatchEdgeEntry entry;
+        entry.eid = 0; // will be assigned by service
+        entry.src_id = static_cast<VertexId>(rec.src_vertex_id().value());
+        entry.dst_id = static_cast<VertexId>(rec.dst_vertex_id().value());
+        entry.seq = i;
+        for (const auto& pv : *rec.properties()) {
+            entry.props.push_back(thriftToPropertyValue(pv));
+        }
+        entries.push_back(std::move(entry));
+    }
+
+    auto result = co_await graph_service_.batchInsertEdges(*edge_label_name, std::move(entries), *graph_name);
+
+    spdlog::info("[handler] batchInsertEdges done, count={}, took={}ms", count, nowMs() - t0);
+    co_return result;
+}
+
+} // namespace thrift
+} // namespace service
+} // namespace eugraph
