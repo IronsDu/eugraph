@@ -267,7 +267,7 @@ endif()
 
 # ==================== Thrift Generated Code ====================
 
-set(GEN_CPP2_DIR "${PROJECT_SOURCE_DIR}/src/gen-cpp2")
+set(GEN_CPP2_DIR "${PROJECT_SOURCE_DIR}/src/service/thrift/gen-cpp2")
 
 add_library(eugraph_thrift STATIC
     ${GEN_CPP2_DIR}/eugraph_types.cpp
@@ -298,11 +298,11 @@ target_link_libraries(eugraph_thrift PUBLIC
 # ==================== Bolt Protocol (Neo4j protocol support) ====================
 
 add_library(eugraph_bolt STATIC
-    src/bolt/packstream/encoder.cpp
-    src/bolt/packstream/decoder.cpp
-    src/bolt/bolt_session.cpp
-    src/bolt/bolt_value_mapping.cpp
-    src/bolt/bolt_server.cpp
+    src/service/bolt/packstream/encoder.cpp
+    src/service/bolt/packstream/decoder.cpp
+    src/service/bolt/bolt_session.cpp
+    src/service/bolt/bolt_value_mapping.cpp
+    src/service/bolt/bolt_server.cpp
 )
 
 target_include_directories(eugraph_bolt PUBLIC
@@ -320,7 +320,7 @@ target_link_libraries(eugraph_bolt PUBLIC
 # ==================== Thrift formatting (shared by shell & TCK) ====================
 
 add_library(eugraph_thrift_fmt STATIC
-    src/thrift_fmt/result_format.cpp
+    src/service/thrift/result_format.cpp
 )
 
 target_include_directories(eugraph_thrift_fmt PUBLIC
@@ -336,8 +336,8 @@ target_link_libraries(eugraph_thrift_fmt PUBLIC
 add_library(eugraph_shell_lib STATIC
     src/program/shell/shell_repl.cpp
     src/program/shell/rpc_client.cpp
-    src/program/server/eugraph_handler.cpp
-    src/server/graph_service.cpp
+    src/service/thrift/eugraph_handler.cpp
+    src/service/graph_service.cpp
     src/storage/graph_manager.cpp
     third_party/linenoise/linenoise.c
 )

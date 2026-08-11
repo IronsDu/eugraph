@@ -1,12 +1,12 @@
 #include <gtest/gtest.h>
 
-#include "bolt/bolt_messages.hpp"
-#include "bolt/bolt_value_mapping.hpp"
-#include "bolt/packstream/decoder.hpp"
+#include "service/bolt/bolt_messages.hpp"
+#include "service/bolt/bolt_value_mapping.hpp"
+#include "service/bolt/packstream/decoder.hpp"
 #include "common/types/temporal_value.hpp"
 
 using namespace eugraph;
-using namespace eugraph::bolt;
+using namespace eugraph::service::bolt;
 using PS = packstream::PackStreamValueStorage;
 using PSMap = std::unordered_map<std::string, packstream::PackStreamValueStorage>;
 using PSList = std::vector<packstream::PackStreamValueStorage>;

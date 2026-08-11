@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
-#include "bolt/packstream/decoder.hpp"
-#include "bolt/packstream/encoder.hpp"
+#include "service/bolt/packstream/decoder.hpp"
+#include "service/bolt/packstream/encoder.hpp"
 
-using namespace eugraph::bolt::packstream;
+using namespace eugraph::service::bolt::packstream;
 using PS = PackStreamValueStorage;
 // Use aliases to work around gtest macro comma issues
 using PSMap = std::unordered_map<std::string, PackStreamValueStorage>;

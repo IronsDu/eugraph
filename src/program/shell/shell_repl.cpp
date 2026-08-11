@@ -1,8 +1,8 @@
 #include "program/shell/shell_repl.hpp"
 #include "program/shell/rpc_client.hpp"
 
-#include "gen-cpp2/eugraph_types.h"
-#include "thrift_fmt/result_format.hpp"
+#include "service/thrift/gen-cpp2/eugraph_types.h"
+#include "service/thrift/result_format.hpp"
 
 #include <linenoise.h>
 
@@ -19,7 +19,7 @@
 namespace eugraph {
 namespace shell {
 
-using namespace eugraph::thrift;
+using namespace eugraph::thrift_service;
 
 // ==================== Value formatting ====================
 
@@ -82,7 +82,7 @@ std::string formatPropertyList(const std::vector<PropertyDefThrift>& props) {
     for (size_t i = 0; i < props.size(); ++i) {
         if (i > 0)
             result += ", ";
-        result += props[i].name().value() + ":" + thrift_fmt::propertyTypeToString(props[i].type().value());
+        result += props[i].name().value() + ":" + service::thrift::propertyTypeToString(props[i].type().value());
     }
     return result;
 }
@@ -112,7 +112,7 @@ std::string formatTimestamp(int64_t ts) {
     return oss.str();
 }
 
-std::string formatGraphList(const std::vector<thrift::GraphInfo>& graphs) {
+std::string formatGraphList(const std::vector<thrift_service::GraphInfo>& graphs) {
     std::vector<std::string> cols = {"graph_id", "graph_name", "created_at"};
     std::vector<std::vector<std::string>> rows;
     for (const auto& g : graphs) {
@@ -166,10 +166,10 @@ std::vector<PropertyDefThrift> parsePropertyDefs(const std::string& args) {
         PropertyDefThrift def;
         if (colon_pos != std::string::npos) {
             def.name() = token.substr(0, colon_pos);
-            def.type() = thrift_fmt::parsePropertyType(token.substr(colon_pos + 1));
+            def.type() = service::thrift::parsePropertyType(token.substr(colon_pos + 1));
         } else {
             def.name() = token;
-            def.type() = thrift::PropertyType::STRING;
+            def.type() = thrift_service::PropertyType::STRING;
         }
         def.is_required() = false;
         props.push_back(std::move(def));
@@ -401,7 +401,7 @@ static void runRpcRepl(const ShellConfig& config) {
                                 for (const auto& row : *batch->rows()) {
                                     std::vector<std::string> cells;
                                     for (const auto& val : *row.values()) {
-                                        cells.push_back(thrift_fmt::formatResultValue(val));
+                                        cells.push_back(service::thrift::formatResultValue(val));
                                     }
                                     all_rows.push_back(std::move(cells));
                                     ++total_rows;

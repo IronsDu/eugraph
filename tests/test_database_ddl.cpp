@@ -2,13 +2,13 @@
 
 #include "common/types/graph_types.hpp"
 #include "query/parser/database_ddl_parser.hpp"
-#include "server/graph_service.hpp"
+#include "service/graph_service.hpp"
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
 
 using namespace eugraph;
-using namespace eugraph::server;
+using namespace eugraph::service;
 using namespace folly::coro;
 
 namespace {

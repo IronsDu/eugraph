@@ -1,4 +1,4 @@
-namespace cpp2 eugraph.thrift
+namespace cpp2 eugraph.thrift_service
 
 // ==================== Common Types ====================
 

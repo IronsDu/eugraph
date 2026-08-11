@@ -64,7 +64,7 @@ QueryStreamMeta,stream<ResultRowBatch> executeCypher(
 
 ## 结果序列化与 TCK 格式化
 
-`thrift_fmt::formatResultValue`（`src/thrift_fmt/result_format.cpp`）将 Thrift `ResultValue` 转为 Cypher 语法字符串供 TCK 比较：
+`thrift_fmt::formatResultValue`（`src/service/thrift/result_format.cpp`）将 Thrift `ResultValue` 转为 Cypher 语法字符串供 TCK 比较：
 
 - `vertex_json` → `(:Label {prop: 'val'})`，`__anon__` 标签被过滤（内部默认标签，不可见）
 - `edge_json` → `[:TYPE {prop: 'val'}]`
