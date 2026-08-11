@@ -1,25 +1,25 @@
 # EuGraph
 
-单机图数据库，兼容 [openCypher](https://opencypher.org/) 查询语言（尚未 100% 完成对 openCypher 标准的实现），支持 Neo4j Bolt 协议（任意 Neo4j 官方/社区驱动可直接连接）。
+单机图数据库：
+
+- 实现 [openCypher](https://opencypher.org/) 查询语言（尚未 100% 覆盖 openCypher 标准），并做了若干扩展
+- 实现 Neo4j Bolt 协议，任意 Neo4j 官方/社区驱动可直接连接
 
 ## 特性
 
 ### 查询语言：openCypher（含扩展）
-
-基于 openCypher 实现，并做了一些扩展：
 
 **扩展**（在 openCypher 基础上新增）
 
 - `EXPLAIN` 前缀（`EXPLAIN MATCH ...`）
 - 标签转型操作符 `::`（`n::Label` / `n::Label.prop`）
 - 额外数值字面量格式：十六进制（`0xFF`）、八进制（`0o17`）、下划线分隔（`1_000_000`）—— 标准 openCypher 仅支持十进制和科学计数法
-- 关键字大小写无关（`match`、`MATCH`、`Match` 等价）
 
-**Neo4j 扩展里有但我们没实现的**（这些不在 openCypher 标准，但 Neo4j 用户可能期望）
+**Neo4j 扩展中有但暂未实现的**（这些不在 openCypher 标准，但 Neo4j 用户可能期望）
 
 - `LOAD CSV`（项目另有独立的 `eugraph-loader` CSV 批量导入工具替代）
 - `FOREACH`
-- `PROFILE`（`EXPLAIN` 已支持）
+- `PROFILE`（已有 `EXPLAIN`，`PROFILE` 暂未实现）
 
 ### Neo4j Bolt 协议支持
 
