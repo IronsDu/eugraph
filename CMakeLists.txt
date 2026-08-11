@@ -303,6 +303,7 @@ add_library(eugraph_bolt STATIC
     src/service/bolt/bolt_session.cpp
     src/service/bolt/bolt_value_mapping.cpp
     src/service/bolt/bolt_server.cpp
+    src/service/bolt/websocket.cpp
 )
 
 target_include_directories(eugraph_bolt PUBLIC

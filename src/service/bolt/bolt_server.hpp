@@ -56,11 +56,25 @@ private:
         CLOSED
     };
 
+    /// Transport-layer protocol detected on this connection.
+    enum class Transport {
+        DETECTING,    // Peeking first bytes to determine protocol
+        BOLT_RAW,     // Traditional raw TCP Bolt (handshake magic + chunked transfer)
+        WS_HANDSHAKE, // Reading WebSocket HTTP upgrade request
+        WS_FRAMED,    // WebSocket connected; reading/writing frames
+    };
+
+    // Transport detection / handshake (called from readDataAvailable)
+    void detectProtocol();
+    void processWsHandshake();
+    void processWsFrame();
+
     folly::AsyncSocket::UniquePtr socket_;
     service::GraphService& service_;
     BoltSession session_;
     BoltServer* server_ = nullptr; // for removing self from active set
 
+    Transport transport_ = Transport::DETECTING;
     Phase phase_ = Phase::HANDSHAKE;
     std::unique_ptr<folly::IOBuf> read_buf_;
     std::unique_ptr<folly::IOBuf> write_buf_;
