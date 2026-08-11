@@ -15,14 +15,14 @@
 - 额外数值字面量格式：十六进制（`0xFF`）、八进制（`0o17`）、下划线分隔（`1_000_000`）—— 标准 openCypher 仅支持十进制和科学计数法
 - 关键字大小写无关（`match`、`MATCH`、`Match` 等价）
 
-**openCypher 中未实现**
+**openCypher 标准里有但我们没实现的**
 
 - `REDUCE`、`TRIM` 函数
 - 正则匹配操作符 `=~`
 - 路径模式选择器：`ANY` / `SHORTEST` / `ALL SHORTEST` 等
 - `INF` / `INFINITY` / `NAN` 数值字面量
 
-**Neo4j 扩展中未实现**（这些不在 openCypher 标准，但 Neo4j 用户可能期望）
+**Neo4j 扩展里有但我们没实现的**（这些不在 openCypher 标准，但 Neo4j 用户可能期望）
 
 - `LOAD CSV`（项目另有独立的 `eugraph-loader` CSV 批量导入工具替代）
 - `FOREACH`
