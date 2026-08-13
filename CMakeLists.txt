@@ -846,6 +846,29 @@ if(EUGRAPH_BUILD_TESTS)
                 TIMEOUT 600
                 LABELS "bolt;integration"
             )
+
+            # Bolt Node WebSocket integration tests — requires eugraph-server,
+            # neo4j-driver (browser bundle), node, and npm.
+            find_program(NODE_EXECUTABLE node)
+            find_program(NPM_EXECUTABLE npm)
+            if(NODE_EXECUTABLE AND NPM_EXECUTABLE)
+                set(BOLT_NODE_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_node_driver_matrix.py")
+                add_test(NAME bolt_node_ws_integration_tests
+                    COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-bolt-node-tests.sh"
+                        "$<TARGET_FILE:eugraph-server>"
+                        "${PYTEST_EXECUTABLE}"
+                        "${BOLT_NODE_TEST_SCRIPT}"
+                        "${NODE_EXECUTABLE}"
+                        "${NPM_EXECUTABLE}"
+                    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+                )
+                set_tests_properties(bolt_node_ws_integration_tests PROPERTIES
+                    TIMEOUT 600
+                    LABELS "bolt;integration;websocket"
+                )
+            else()
+                message(STATUS "node/npm not found — skipping Node Bolt WS integration tests")
+            endif()
         else()
             message(STATUS "pytest not found — skipping Bolt integration tests")
         endif()
