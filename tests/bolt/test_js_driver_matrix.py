@@ -7,7 +7,7 @@ implementation.
 
 Each driver version is installed into an isolated npm prefix under
 ``build/driver_node_modules`` (or ``EUGRAPH_DRIVER_NODE_CACHE``), mirroring the
-Python driver matrix in ``test_driver_matrix.py``.
+Python driver matrix in ``test_python_driver_matrix.py``.
 """
 
 import os
@@ -80,7 +80,7 @@ def _driver_root_for_version(version):
 def test_official_node_driver_ws_compatibility(driver_version):
     driver_root = _driver_root_for_version(driver_version)
     node = _node_binary()
-    test_file = _project_root() / "tests" / "bolt" / "test_ws_driver.cjs"
+    test_file = _project_root() / "tests" / "bolt" / "test_js_ws_driver.cjs"
 
     env = os.environ.copy()
     env["EUGRAPH_BOLT_PORT"] = os.environ.get("EUGRAPH_BOLT_PORT", "17687")

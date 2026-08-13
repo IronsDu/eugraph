@@ -1,10 +1,10 @@
 #!/bin/bash
 #
 # Start eugraph-server, run Bolt Python integration tests, stop server.
-# Invoked by CTest's `bolt_integration_tests` (see CMakeLists.txt).
+# Invoked by CTest's `bolt_python_driver_integration_tests` (see CMakeLists.txt).
 #
 # Usage:
-#   ./scripts/run-bolt-tests.sh <server_binary> <pytest_binary> <test_script>
+#   ./scripts/run-bolt-python-tests.sh <server_binary> <pytest_binary> <test_script>
 #
 # Optional env overrides:
 #   BOLT_PORT     (default 17687)

@@ -12,10 +12,10 @@ Usage:
     eugraph-server --bolt-port 7687
 
     # Then run tests:
-    pytest tests/bolt/test_bolt_integration.py -v
+    pytest tests/bolt/test_python_driver_integration.py -v
 
     # Or with a custom port:
-    EUGRAPH_BOLT_PORT=17687 pytest tests/bolt/test_bolt_integration.py -v
+    EUGRAPH_BOLT_PORT=17687 pytest tests/bolt/test_python_driver_integration.py -v
 """
 
 import os

@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# Start eugraph-server, run Node WebSocket Bolt integration tests, stop server.
-# Invoked by CTest's `bolt_node_ws_integration_tests` (see CMakeLists.txt).
+# Start eugraph-server, run JS WebSocket Bolt driver integration tests, stop server.
+# Invoked by CTest's `bolt_js_ws_driver_integration_tests` (see CMakeLists.txt).
 #
 # Usage:
-#   ./scripts/run-bolt-node-tests.sh \
+#   ./scripts/run-bolt-js-ws-tests.sh \
 #       <server_binary> <pytest_binary> <test_script> <node_binary> <npm_binary>
 #
 # Optional env overrides:
