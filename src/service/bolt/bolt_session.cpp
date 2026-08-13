@@ -609,6 +609,10 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleBegin(const BeginMess
         }
     }
 
+    auto db_it = msg.extra.find("db");
+    if (db_it != msg.extra.end() && std::holds_alternative<std::string>(db_it->second))
+        current_database_ = std::get<std::string>(db_it->second);
+
     in_transaction_ = true;
     state_ = SessionState::TX_READY;
     std::unordered_map<std::string, packstream::Value> meta;

@@ -1,4 +1,4 @@
-"""Run the Bolt probe with several official neo4j Python driver versions."""
+"""Run the Bolt integration suite with several official neo4j driver versions."""
 
 import os
 import subprocess
@@ -33,17 +33,22 @@ def _python_for_version(version):
 
     if python.exists():
         check = subprocess.run(
-            [str(python), "-c", "import neo4j"],
+            [str(python), "-c", "import neo4j, pytest"],
             capture_output=True,
             text=True,
         )
         if check.returncode == 0:
             return python
+        subprocess.run(
+            [str(python), "-m", "pip", "install", "--quiet", f"neo4j=={version}", "pytest"],
+            check=True,
+        )
+        return python
 
     env_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run([sys.executable, "-m", "venv", str(env_dir)], check=True)
     subprocess.run(
-        [str(python), "-m", "pip", "install", "--quiet", f"neo4j=={version}"],
+        [str(python), "-m", "pip", "install", "--quiet", f"neo4j=={version}", "pytest"],
         check=True,
     )
     return python
@@ -52,13 +57,12 @@ def _python_for_version(version):
 @pytest.mark.parametrize("driver_version", DRIVER_VERSIONS)
 def test_official_driver_compatibility(driver_version):
     python = _python_for_version(driver_version)
-    probe = _project_root() / "tests" / "bolt" / "driver_cases" / "probe.py"
+    integration_test = _project_root() / "tests" / "bolt" / "test_bolt_integration.py"
     env = os.environ.copy()
     env["EUGRAPH_BOLT_PORT"] = os.environ.get("EUGRAPH_BOLT_PORT", "7687")
-    env["EUGRAPH_DRIVER_VERSION"] = driver_version
 
     result = subprocess.run(
-        [str(python), str(probe)],
+        [str(python), "-m", "pytest", str(integration_test), "-q"],
         capture_output=True,
         text=True,
         env=env,
