@@ -198,23 +198,43 @@ std::string parseHandshakeKey(const uint8_t* data, size_t len) {
     // Must be GET with Upgrade: websocket
     if (request.find("GET ") != 0)
         return {};
-    if (request.find("Upgrade: websocket") == std::string::npos)
+
+    // HTTP header names and values are case-insensitive. Browser WebSocket
+    // implementations (including Node's built-in WebSocket) may send headers
+    // in lowercase, so do a case-insensitive scan instead of exact matching.
+    auto containsCI = [](const std::string& haystack, const std::string& needle) {
+        if (needle.empty())
+            return haystack.find(needle);
+        for (size_t i = 0; i + needle.size() <= haystack.size(); ++i) {
+            bool match = true;
+            for (size_t j = 0; j < needle.size(); ++j) {
+                char a = haystack[i + j];
+                char b = needle[j];
+                if (a >= 'A' && a <= 'Z')
+                    a = static_cast<char>(a - 'A' + 'a');
+                if (b >= 'A' && b <= 'Z')
+                    b = static_cast<char>(b - 'A' + 'a');
+                if (a != b) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match)
+                return i;
+        }
+        return std::string::npos;
+    };
+
+    if (containsCI(request, "upgrade: websocket") == std::string::npos)
         return {};
-    if (request.find("\r\nConnection:") == std::string::npos && request.find("\r\nConnection :") == std::string::npos) {
-        // Connection header may not include Upgrade — be lenient
-    }
 
     // Extract Sec-WebSocket-Key
-    const char* key_hdr = "Sec-WebSocket-Key:";
-    size_t pos = request.find(key_hdr);
-    if (pos == std::string::npos) {
-        key_hdr = "Sec-WebSocket-Key :";
-        pos = request.find(key_hdr);
-    }
+    const std::string key_hdr = "sec-websocket-key:";
+    size_t pos = containsCI(request, key_hdr);
     if (pos == std::string::npos)
         return {};
 
-    pos += std::strlen(key_hdr);
+    pos += key_hdr.size();
     // Skip whitespace
     while (pos < request.size() && (request[pos] == ' ' || request[pos] == '\t'))
         ++pos;

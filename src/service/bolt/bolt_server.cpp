@@ -55,6 +55,10 @@ void BoltConnection::readDataAvailable(size_t len) noexcept {
 
         if (transport_ == Transport::DETECTING) {
             detectProtocol();
+            // detectProtocol may call processWsHandshake which can fail and
+            // call closeConnection — bail out if the connection is closed.
+            if (phase_ == Phase::CLOSED)
+                return;
             if (transport_ == Transport::DETECTING)
                 return; // Need more data
         }
@@ -226,35 +230,59 @@ void BoltConnection::sendResponse(std::vector<uint8_t> data) {
     if (data.empty())
         return;
 
-    std::vector<uint8_t> out;
-
-    if (transport_ == Transport::WS_FRAMED) {
-        // Wrap in WebSocket binary frame (no chunked transfer over WS)
-        out = websocket::buildFrame(data.data(), data.size(), websocket::Opcode::BINARY);
-    } else {
-        // BOLT_RAW: apply chunked transfer encoding if not already chunked
-        bool pre_chunked = false;
-        if (data.size() >= 4) {
-            uint16_t chunk_size = (static_cast<uint16_t>(data[0]) << 8) | data[1];
-            if (chunk_size > 0 && chunk_size <= BOLT_MAX_CHUNK_SIZE) {
-                size_t term_pos = size_t(2) + chunk_size;
-                if (term_pos + 2 <= data.size() && data[term_pos] == 0x00 && data[term_pos + 1] == 0x00) {
-                    pre_chunked = true;
-                }
+    // Streaming PULL responses are already Bolt chunked, possibly containing
+    // multiple data chunks before their final 0x0000 terminator. Validate the
+    // whole stream instead of only checking the first chunk, otherwise large
+    // messages split into multiple chunks get incorrectly wrapped again.
+    auto isChunkedResponse = [](const std::vector<uint8_t>& data) {
+        size_t pos = 0;
+        bool saw_data_chunk = false;
+        bool saw_terminator = false;
+        while (pos < data.size()) {
+            if (pos + 2 > data.size())
+                return false;
+            uint16_t chunk_size = (static_cast<uint16_t>(data[pos]) << 8) | data[pos + 1];
+            pos += 2;
+            if (chunk_size == 0) {
+                saw_terminator = true;
+                continue;
             }
+            if (chunk_size > BOLT_MAX_CHUNK_SIZE || pos + chunk_size > data.size())
+                return false;
+            saw_data_chunk = true;
+            pos += chunk_size;
         }
+        return saw_data_chunk && saw_terminator;
+    };
 
-        if (pre_chunked) {
-            out = std::move(data);
-        } else {
-            uint16_t size = static_cast<uint16_t>(data.size());
-            out.reserve(2 + data.size() + 2);
-            out.push_back(static_cast<uint8_t>((size >> 8) & 0xFF));
-            out.push_back(static_cast<uint8_t>(size & 0xFF));
-            out.insert(out.end(), data.begin(), data.end());
-            out.push_back(0x00);
-            out.push_back(0x00);
-        }
+    auto appendRawChunked = [](std::vector<uint8_t>& out, const std::vector<uint8_t>& data) {
+        size_t offset = 0;
+        do {
+            size_t chunk_size = std::min<size_t>(BOLT_MAX_CHUNK_SIZE, data.size() - offset);
+            if (chunk_size == 0)
+                break;
+            out.push_back(static_cast<uint8_t>((chunk_size >> 8) & 0xFF));
+            out.push_back(static_cast<uint8_t>(chunk_size & 0xFF));
+            out.insert(out.end(), data.begin() + offset, data.begin() + offset + chunk_size);
+            offset += chunk_size;
+        } while (offset < data.size());
+        out.push_back(0x00);
+        out.push_back(0x00);
+    };
+
+    std::vector<uint8_t> body;
+    if (isChunkedResponse(data)) {
+        body = std::move(data);
+    } else {
+        appendRawChunked(body, data);
+    }
+
+    std::vector<uint8_t> out;
+    if (transport_ == Transport::WS_FRAMED) {
+        // Wrap chunked Bolt message in WebSocket binary frame
+        out = websocket::buildFrame(body.data(), body.size(), websocket::Opcode::BINARY);
+    } else {
+        out = std::move(body);
     }
 
     auto buf = folly::IOBuf::copyBuffer(out.data(), out.size());
@@ -335,10 +363,10 @@ void BoltConnection::processWsHandshake() {
     if (read_buf_->length() == 0)
         read_buf_.reset();
 
-    // WebSocket connections skip the Bolt handshake — go directly to MESSAGES
+    // WebSocket connections still perform the Bolt handshake inside WS frames
     transport_ = Transport::WS_FRAMED;
-    phase_ = Phase::MESSAGES;
-    spdlog::info("[bolt] WebSocket upgrade complete, ready for Bolt messages");
+    // phase_ stays HANDSHAKE — first WS binary frame carries the Bolt magic+versions
+    spdlog::info("[bolt] WebSocket upgrade complete, waiting for Bolt handshake");
 
     // Process any data that arrived after the HTTP headers
     if (read_buf_ && read_buf_->length() > 0)
@@ -384,26 +412,30 @@ void BoltConnection::processWsFrame() {
                 return;
             }
 
-            // Complete Bolt message — process directly (no chunked transfer)
-            std::vector<uint8_t> response;
-            try {
-                response = folly::coro::blockingWait(session_.processMessage(payload_start, hdr.payload_len));
-            } catch (const packstream::DecodeError& e) {
-                spdlog::error("[bolt] decode error: {}", e.what());
-                response = session_.makeFailure("ProtocolError", e.what());
-            } catch (const std::exception& e) {
-                spdlog::error("[bolt] session error: {}", e.what());
-                response = session_.makeFailure("DatabaseError", e.what());
+            if (phase_ == Phase::HANDSHAKE) {
+                // First WS message is the Bolt handshake (magic + versions)
+                auto response = session_.negotiateHandshake(payload_start, hdr.payload_len);
+                if (response.empty()) {
+                    spdlog::error("[bolt] WebSocket Bolt handshake negotiation failed");
+                    closeConnection();
+                    return;
+                }
+                phase_ = Phase::MESSAGES;
+                // Handshake response (4 bytes version) is NOT chunked — wrap directly
+                auto frame = websocket::buildFrame(response.data(), response.size(), websocket::Opcode::BINARY);
+                auto buf = folly::IOBuf::copyBuffer(frame.data(), frame.size());
+                socket_->writeChain(this, std::move(buf));
+            } else {
+                // Feed WS frame payload through chunked transfer decoder.
+                // Neo4j Browser sends Bolt messages with chunked transfer
+                // encoding inside WebSocket binary frames.
+                auto saved_buf = std::move(read_buf_);
+                read_buf_ = folly::IOBuf::copyBuffer(payload_start, hdr.payload_len);
+                processMessage();
+                read_buf_ = std::move(saved_buf);
+                if (phase_ == Phase::CLOSED || !read_buf_)
+                    return;
             }
-
-            if (session_.isClosed()) {
-                if (!response.empty())
-                    sendResponse(std::move(response));
-                closeConnection();
-                return;
-            }
-
-            sendResponse(std::move(response));
             break;
         }
         case websocket::Opcode::PING: {

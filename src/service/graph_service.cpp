@@ -97,7 +97,14 @@ GraphService::executeCypher(const std::string& query, const std::unordered_map<s
         co_return co_await handleDatabaseDdl(*ddl_stmt, *default_inst->async_data);
     }
 
-    auto* inst = resolveGraph(graph_name);
+    // Neo4j Browser commonly uses `neo4j` (the default DB name) or `system`
+    // (its administration DB). EuGraph currently exposes one database named
+    // `default`, so alias those well-known names for regular Cypher queries.
+    std::string resolved_graph = graph_name;
+    if (resolved_graph == "neo4j" || resolved_graph == "system")
+        resolved_graph = GraphManager::kDefaultGraphName;
+
+    auto* inst = resolveGraph(resolved_graph);
 
     auto ctx = co_await inst->executor->prepareStream(query, params);
 
@@ -231,20 +238,21 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
     }
     case DatabaseDdlStatement::SHOW_DATABASES: {
         auto graphs = gm_.listGraphs();
-        columns = {"name", "status", "type", "current"};
+        columns = {"name", "status", "type", "current", "currentStatus"};
         for (auto& g : graphs) {
             Row row;
             row.push_back(std::string(g.name));
             row.push_back(std::string("online"));
             row.push_back(std::string("standard"));
             row.push_back(bool(g.name == "default")); // current — tracks the session default
+            row.push_back(std::string("online"));
             rows.push_back(std::move(row));
         }
         break;
     }
     case DatabaseDdlStatement::SHOW_DATABASE: {
         auto graphs = gm_.listGraphs();
-        columns = {"name", "status", "type", "current"};
+        columns = {"name", "status", "type", "current", "currentStatus"};
         for (auto& g : graphs) {
             if (g.name != stmt.name)
                 continue;
@@ -253,6 +261,7 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
             row.push_back(std::string("online"));
             row.push_back(std::string("standard"));
             row.push_back(bool(false));
+            row.push_back(std::string("online"));
             rows.push_back(std::move(row));
             break;
         }

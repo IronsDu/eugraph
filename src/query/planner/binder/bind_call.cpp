@@ -9,7 +9,15 @@ std::optional<BoundLogicalOperator> Binder::bindCall(const cypher::CallClause& c
                                                      std::optional<BoundLogicalOperator> current) {
     // Only support known built-in procedures for now.
     if (call.procedure_name != "db.ping" && call.procedure_name != "db.ping()" &&
-        call.procedure_name != "db.schema.visualization") {
+        call.procedure_name != "db.schema.visualization" && call.procedure_name != "dbms.clientConfig" &&
+        call.procedure_name != "dbms.clientConfig()" && call.procedure_name != "db.indexes" &&
+        call.procedure_name != "db.indexes()" && call.procedure_name != "dbms.procedures" &&
+        call.procedure_name != "dbms.procedures()" && call.procedure_name != "dbms.components" &&
+        call.procedure_name != "dbms.components()" && call.procedure_name != "dbms.functions" &&
+        call.procedure_name != "dbms.functions()" && call.procedure_name != "db.labels" &&
+        call.procedure_name != "db.labels()" && call.procedure_name != "db.relationshipTypes" &&
+        call.procedure_name != "db.relationshipTypes()" && call.procedure_name != "db.propertyKeys" &&
+        call.procedure_name != "db.propertyKeys()") {
         error("Unknown procedure: " + call.procedure_name);
         return std::nullopt;
     }
@@ -42,6 +50,42 @@ std::optional<BoundLogicalOperator> Binder::bindCall(const cypher::CallClause& c
     } else if (proc_base == "db.schema.visualization") {
         call_op->output_names = {"nodes", "relationships"};
         call_op->output_types = {BoundType::List(BoundType::Any()), BoundType::List(BoundType::Any())};
+    } else if (proc_base == "dbms.clientConfig") {
+        // Neo4j Browser calls this on connect; return empty result.
+        call_op->output_names = {"value"};
+        call_op->output_types = {BoundType::Map(BoundType::String(), BoundType::Any())};
+    } else if (proc_base == "db.indexes") {
+        call_op->output_names = {"id",   "name",       "state",         "populationPercent", "uniqueness",
+                                 "type", "entityType", "labelsOrTypes", "properties",        "owningConstraint"};
+        call_op->output_types = {BoundType::Int64(),
+                                 BoundType::String(),
+                                 BoundType::String(),
+                                 BoundType::Double(),
+                                 BoundType::String(),
+                                 BoundType::String(),
+                                 BoundType::String(),
+                                 BoundType::List(BoundType::String()),
+                                 BoundType::List(BoundType::String()),
+                                 BoundType::Null()};
+    } else if (proc_base == "dbms.procedures") {
+        call_op->output_names = {"name", "signature", "description", "mode", "roles"};
+        call_op->output_types = {BoundType::String(), BoundType::String(), BoundType::String(), BoundType::String(),
+                                 BoundType::List(BoundType::String())};
+    } else if (proc_base == "dbms.components") {
+        call_op->output_names = {"name", "versions", "edition"};
+        call_op->output_types = {BoundType::String(), BoundType::List(BoundType::String()), BoundType::String()};
+    } else if (proc_base == "dbms.functions") {
+        call_op->output_names = {"name", "signature", "description"};
+        call_op->output_types = {BoundType::String(), BoundType::String(), BoundType::String()};
+    } else if (proc_base == "db.labels") {
+        call_op->output_names = {"label"};
+        call_op->output_types = {BoundType::String()};
+    } else if (proc_base == "db.relationshipTypes") {
+        call_op->output_names = {"relationshipType"};
+        call_op->output_types = {BoundType::String()};
+    } else if (proc_base == "db.propertyKeys") {
+        call_op->output_names = {"propertyKey"};
+        call_op->output_types = {BoundType::String()};
     } else {
         error("Unknown procedure: " + call.procedure_name);
         return std::nullopt;
