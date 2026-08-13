@@ -151,7 +151,9 @@ jobs:
         gcovr --xml-pretty --exclude-unreachable-branches --print-summary \
           --output coverage.xml \
           --root ${{ github.workspace }} \
-          --filter ${{ github.workspace }}/src
+          --filter '${{ github.workspace }}/src' \
+          --exclude '${{ github.workspace }}/src/service/thrift/gen-cpp2/.*' \
+          --exclude '${{ github.workspace }}/src/query/parser/generated/.*'
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
