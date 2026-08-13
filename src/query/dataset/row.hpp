@@ -55,6 +55,7 @@ struct ListValue {
 
 struct MapValue {
     std::vector<std::pair<std::string, struct ValueStorage>> entries;
+    ~MapValue();
     bool operator==(const MapValue& o) const;
 };
 
@@ -75,6 +76,8 @@ using Value =
 struct ValueStorage {
     Value value;
 };
+
+inline MapValue::~MapValue() = default;
 
 // ==================== Deep equality for container types ====================
 

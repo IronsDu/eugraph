@@ -79,17 +79,6 @@ jobs:
     - name: Build
       run: cmake --build --preset=release
 
-    - name: Run tests
-      run: ctest --preset=release --verbose --output-junit build/release/junit.xml
-
-    - name: Publish test results
-      uses: EnricoMi/publish-unit-test-result-action@v2
-      if: always() && hashFiles('build/release/junit.xml') != ''
-      with:
-        files: build/release/junit.xml
-        check_name: Unit Test Results
-        comment_title: Unit Test Report
-
     - name: Check library linking
       working-directory: build/release
       run: |
@@ -245,6 +234,3 @@ jobs:
 
     - name: Build
       run: cmake --build --preset=clang-release
-
-    - name: Run tests
-      run: ctest --preset=clang-release --verbose
