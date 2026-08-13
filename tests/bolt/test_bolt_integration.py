@@ -19,7 +19,6 @@ Usage:
 """
 
 import os
-import sys
 
 import pytest
 
@@ -30,6 +29,32 @@ neo4j = pytest.importorskip("neo4j")
 def get_bolt_url():
     port = os.environ.get("EUGRAPH_BOLT_PORT", "7687")
     return f"bolt://localhost:{port}"
+
+
+TEST_DATABASE = "bolt_test"
+
+
+def make_session(driver):
+    return driver.session(database=TEST_DATABASE)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def test_database():
+    admin_driver = neo4j.GraphDatabase.driver(get_bolt_url())
+    try:
+        with admin_driver.session() as session:
+            try:
+                session.run(f"DROP DATABASE {TEST_DATABASE}")
+            except Exception:
+                pass
+            session.run(f"CREATE DATABASE {TEST_DATABASE}")
+
+        yield TEST_DATABASE
+
+        with admin_driver.session() as session:
+            session.run(f"DROP DATABASE {TEST_DATABASE}")
+    finally:
+        admin_driver.close()
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +75,7 @@ class TestConnection:
     def test_session_hello(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN 1 AS n")
                 records = list(result)
                 assert len(records) == 1
@@ -70,7 +95,7 @@ class TestCRUD:
     def test_create_and_match_node(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 # Create a node
                 session.run(
                     "CREATE (n:Person {name: $name, age: $age})",
@@ -92,7 +117,7 @@ class TestCRUD:
     def test_create_and_match_edge(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 session.run(
                     "CREATE (a:Person {name: $a_name}) "
                     "CREATE (b:Person {name: $b_name}) "
@@ -116,6 +141,11 @@ class TestCRUD:
 
 
 # ---------------------------------------------------------------------------
+# Protocol-version-specific wire compatibility
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
 # Type handling tests
 # ---------------------------------------------------------------------------
 
@@ -126,7 +156,7 @@ class TestTypes:
     def test_null_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN null AS v")
                 records = list(result)
                 assert len(records) == 1
@@ -137,7 +167,7 @@ class TestTypes:
     def test_string_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN 'hello' AS v")
                 records = list(result)
                 assert records[0]["v"] == "hello"
@@ -147,7 +177,7 @@ class TestTypes:
     def test_integer_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN 42 AS v")
                 records = list(result)
                 assert records[0]["v"] == 42
@@ -157,7 +187,7 @@ class TestTypes:
     def test_float_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN 3.14 AS v")
                 records = list(result)
                 assert records[0]["v"] == 3.14
@@ -167,7 +197,7 @@ class TestTypes:
     def test_boolean_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN true AS v")
                 records = list(result)
                 assert records[0]["v"] is True
@@ -177,7 +207,7 @@ class TestTypes:
     def test_list_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN [1, 2, 3] AS v")
                 records = list(result)
                 assert records[0]["v"] == [1, 2, 3]
@@ -187,7 +217,7 @@ class TestTypes:
     def test_map_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN {name: 'Alice', age: 30} AS v")
                 records = list(result)
                 assert records[0]["v"] == {"name": "Alice", "age": 30}
@@ -197,7 +227,7 @@ class TestTypes:
     def test_date_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN date('2025-01-15') AS v")
                 records = list(result)
                 assert len(records) == 1
@@ -213,7 +243,7 @@ class TestTypes:
     def test_datetime_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run(
                     "RETURN datetime('2025-01-15T10:30:00+08:00') AS v"
                 )
@@ -228,7 +258,7 @@ class TestTypes:
     def test_time_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN time('10:30:00') AS v")
                 records = list(result)
                 assert len(records) == 1
@@ -241,7 +271,7 @@ class TestTypes:
     def test_duration_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run("RETURN duration('P1Y2M3D') AS v")
                 records = list(result)
                 assert len(records) == 1
@@ -265,7 +295,7 @@ class TestParameters:
     def test_string_param(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run(
                     "RETURN $name AS v",
                     name="Alice",
@@ -278,7 +308,7 @@ class TestParameters:
     def test_integer_param(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run(
                     "RETURN $n AS v",
                     n=42,
@@ -291,7 +321,7 @@ class TestParameters:
     def test_float_param(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run(
                     "RETURN $x AS v",
                     x=3.14,
@@ -304,7 +334,7 @@ class TestParameters:
     def test_list_param(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run(
                     "RETURN $items AS v",
                     items=[1, 2, 3],
@@ -317,7 +347,7 @@ class TestParameters:
     def test_map_param(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 result = session.run(
                     "RETURN $props AS v",
                     props={"name": "Alice", "age": 30},
@@ -339,7 +369,7 @@ class TestTransactions:
     def test_explicit_commit(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 tx = session.begin_transaction()
                 tx.run("CREATE (n:TxTest {val: 1})")
                 tx.commit()
@@ -356,7 +386,7 @@ class TestTransactions:
     def test_explicit_rollback(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
-            with driver.session() as session:
+            with make_session(driver) as session:
                 tx = session.begin_transaction()
                 tx.run("CREATE (n:TxTest {val: 999})")
                 tx.rollback()

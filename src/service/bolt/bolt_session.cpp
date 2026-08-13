@@ -481,20 +481,22 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         co_return makeSuccess(meta);
     }
 
-    // We build a pre-chunked response: each RECORD and the final SUCCESS
-    // are wrapped in their own Bolt v5.1 chunk (2-byte size + data + 0x0000).
-    // This is necessary because the Bolt protocol requires each message to
-    // be in its own chunk, separate from other messages.
-    auto wrapChunk = [](const std::vector<uint8_t>& data) -> std::vector<uint8_t> {
-        std::vector<uint8_t> chunk;
-        uint16_t size = static_cast<uint16_t>(data.size());
-        chunk.reserve(2 + data.size() + 2);
-        chunk.push_back(static_cast<uint8_t>((size >> 8) & 0xFF));
-        chunk.push_back(static_cast<uint8_t>(size & 0xFF));
-        chunk.insert(chunk.end(), data.begin(), data.end());
-        chunk.push_back(0x00);
-        chunk.push_back(0x00);
-        return chunk;
+    // Bolt messages may not exceed BOLT_MAX_CHUNK_SIZE bytes in a single
+    // chunk. Large messages must be split into multiple chunks, all followed
+    // by a single 0x0000 message terminator.
+    auto appendChunkedMessage = [](std::vector<uint8_t>& out, const std::vector<uint8_t>& data) {
+        size_t offset = 0;
+        do {
+            size_t chunk_size = std::min<size_t>(BOLT_MAX_CHUNK_SIZE, data.size() - offset);
+            if (chunk_size == 0)
+                break;
+            out.push_back(static_cast<uint8_t>((chunk_size >> 8) & 0xFF));
+            out.push_back(static_cast<uint8_t>(chunk_size & 0xFF));
+            out.insert(out.end(), data.begin() + offset, data.begin() + offset + chunk_size);
+            offset += chunk_size;
+        } while (offset < data.size());
+        out.push_back(0x00);
+        out.push_back(0x00);
     };
 
     std::vector<uint8_t> response;
@@ -522,8 +524,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
                 for (auto& val : row) {
                     record_fields.push_back(valueToBolt(val, label_defs_, edge_label_defs_, negotiated_version_));
                 }
-                auto record_chunk = wrapChunk(makeRecord(record_fields));
-                response.insert(response.end(), record_chunk.begin(), record_chunk.end());
+                appendChunkedMessage(response, makeRecord(record_fields));
                 fetched++;
             }
         }
@@ -549,8 +550,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         if (stream_ctx_->should_commit && next_bookmark_fn_)
             meta["bookmark"] = std::string{"eugraph:bookmark:" + std::to_string(next_bookmark_fn_())};
 
-        auto success_chunk = wrapChunk(makeSuccess(meta));
-        response.insert(response.end(), success_chunk.begin(), success_chunk.end());
+        appendChunkedMessage(response, makeSuccess(meta));
 
         // State transition
         if (state_ == SessionState::TX_STREAMING) {
@@ -608,6 +608,10 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleBegin(const BeginMess
                 received_bookmarks_.push_back(std::get<std::string>(bm.value));
         }
     }
+
+    auto db_it = msg.extra.find("db");
+    if (db_it != msg.extra.end() && std::holds_alternative<std::string>(db_it->second))
+        current_database_ = std::get<std::string>(db_it->second);
 
     in_transaction_ = true;
     state_ = SessionState::TX_READY;
@@ -671,10 +675,22 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRoute(const RouteMess
     // Build single-node routing table using PackStreamValueStorage nesting
     using PS = packstream::PackStreamValueStorage;
 
-    auto make_server = [this](const std::string& role) -> PS {
+    // Neo4j Browser connects to `neo4j://<host>:<port>` and sends its original
+    // address in the routing context. Use that address in the returned routing
+    // table instead of `localhost`, otherwise a browser on another machine will
+    // try to open query connections against its own localhost and hang.
+    std::string advertised_address = "localhost:" + std::to_string(bolt_port_);
+    auto address_it = msg.routing.find("address");
+    if (address_it != msg.routing.end() && std::holds_alternative<std::string>(address_it->second)) {
+        auto candidate = std::get<std::string>(address_it->second);
+        if (!candidate.empty())
+            advertised_address = candidate;
+    }
+
+    // Rebuild with the advertised address captured above.
+    auto make_server = [advertised_address](const std::string& role) -> PS {
         std::unordered_map<std::string, PS> m;
-        std::string addr = "localhost:" + std::to_string(bolt_port_);
-        m["addresses"] = PS{std::vector<PS>{PS{std::move(addr)}}};
+        m["addresses"] = PS{std::vector<PS>{PS{advertised_address}}};
         m["role"] = PS{role};
         return PS{std::move(m)};
     };
@@ -687,6 +703,12 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRoute(const RouteMess
     std::unordered_map<std::string, PS> rt;
     rt["servers"] = PS{std::move(servers)};
     rt["ttl"] = PS{int64_t(3600)};
+
+    std::string route_db = current_database_;
+    auto route_db_it = msg.extra.find("db");
+    if (route_db_it != msg.extra.end() && std::holds_alternative<std::string>(route_db_it->second))
+        route_db = std::get<std::string>(route_db_it->second);
+    rt["db"] = PS{route_db};
 
     std::unordered_map<std::string, packstream::Value> meta;
     meta["rt"] = std::move(rt);

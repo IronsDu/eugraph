@@ -303,6 +303,7 @@ add_library(eugraph_bolt STATIC
     src/service/bolt/bolt_session.cpp
     src/service/bolt/bolt_value_mapping.cpp
     src/service/bolt/bolt_server.cpp
+    src/service/bolt/websocket.cpp
 )
 
 target_include_directories(eugraph_bolt PUBLIC
@@ -833,7 +834,7 @@ if(EUGRAPH_BUILD_TESTS)
     if(NOT DEFINED SKIP_BOLT_INTEGRATION_TESTS)
         find_program(PYTEST_EXECUTABLE pytest)
         if(PYTEST_EXECUTABLE)
-            set(BOLT_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_bolt_integration.py")
+            set(BOLT_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_driver_matrix.py")
             add_test(NAME bolt_integration_tests
                 COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-bolt-tests.sh"
                     "$<TARGET_FILE:eugraph-server>"
@@ -842,7 +843,7 @@ if(EUGRAPH_BUILD_TESTS)
                 WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
             )
             set_tests_properties(bolt_integration_tests PROPERTIES
-                TIMEOUT 120
+                TIMEOUT 600
                 LABELS "bolt;integration"
             )
         else()
