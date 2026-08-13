@@ -1,10 +1,11 @@
 #!/bin/bash
 #
-# Start eugraph-server, run Bolt Python integration tests, stop server.
-# Invoked by CTest's `bolt_integration_tests` (see CMakeLists.txt).
+# Start eugraph-server, run JS WebSocket Bolt driver integration tests, stop server.
+# Invoked by CTest's `bolt_js_ws_driver_integration_tests` (see CMakeLists.txt).
 #
 # Usage:
-#   ./scripts/run-bolt-tests.sh <server_binary> <pytest_binary> <test_script>
+#   ./scripts/run-bolt-js-ws-tests.sh \
+#       <server_binary> <pytest_binary> <test_script> <node_binary> <npm_binary>
 #
 # Optional env overrides:
 #   BOLT_PORT     (default 17687)
@@ -15,11 +16,13 @@ set -euo pipefail
 
 SERVER="${1:?server binary required}"
 PYTEST="${2:?pytest binary required}"
-TEST_SCRIPT="${3:?test script required}"
+TEST_SCRIPT="${3:?pytest driver matrix required}"
+NODE="${4:?node binary required}"
+NPM="${5:?npm binary required}"
 
 BOLT_PORT="${BOLT_PORT:-17687}"
 THRIFT_PORT="${THRIFT_PORT:-19090}"
-WORK_DIR="${WORK_DIR:-$(mktemp -d -t bolt-test-XXXX)}"
+WORK_DIR="${WORK_DIR:-$(mktemp -d -t bolt-node-test-XXXX)}"
 LOG_FILE="${WORK_DIR}/bolt-server.log"
 
 cleanup() {
@@ -57,4 +60,7 @@ if ! kill -0 "$SERVER_PID" 2>/dev/null; then
 fi
 
 export EUGRAPH_BOLT_PORT="$BOLT_PORT"
+export NODE_EXECUTABLE="$NODE"
+export NPM_EXECUTABLE="$NPM"
+
 "$PYTEST" "$TEST_SCRIPT" -v

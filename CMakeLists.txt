@@ -830,22 +830,45 @@ if(EUGRAPH_BUILD_TESTS)
         add_subdirectory(tests/tck)
     endif()
 
-    # Bolt Python integration tests — requires eugraph-server, neo4j, pytest
+    # Bolt Python driver integration tests — requires eugraph-server, neo4j, pytest
     if(NOT DEFINED SKIP_BOLT_INTEGRATION_TESTS)
         find_program(PYTEST_EXECUTABLE pytest)
         if(PYTEST_EXECUTABLE)
-            set(BOLT_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_driver_matrix.py")
-            add_test(NAME bolt_integration_tests
-                COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-bolt-tests.sh"
+            set(BOLT_PYTHON_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_python_driver_matrix.py")
+            add_test(NAME bolt_python_driver_integration_tests
+                COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-bolt-python-tests.sh"
                     "$<TARGET_FILE:eugraph-server>"
                     "${PYTEST_EXECUTABLE}"
-                    "${BOLT_TEST_SCRIPT}"
+                    "${BOLT_PYTHON_TEST_SCRIPT}"
                 WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
             )
-            set_tests_properties(bolt_integration_tests PROPERTIES
+            set_tests_properties(bolt_python_driver_integration_tests PROPERTIES
                 TIMEOUT 600
-                LABELS "bolt;integration"
+                LABELS "bolt;integration;python"
             )
+
+            # Bolt JS WebSocket driver integration tests — requires eugraph-server,
+            # neo4j-driver (browser bundle), node, and npm.
+            find_program(NODE_EXECUTABLE node)
+            find_program(NPM_EXECUTABLE npm)
+            if(NODE_EXECUTABLE AND NPM_EXECUTABLE)
+                set(BOLT_JS_WS_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_js_driver_matrix.py")
+                add_test(NAME bolt_js_ws_driver_integration_tests
+                    COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-bolt-js-ws-tests.sh"
+                        "$<TARGET_FILE:eugraph-server>"
+                        "${PYTEST_EXECUTABLE}"
+                        "${BOLT_JS_WS_TEST_SCRIPT}"
+                        "${NODE_EXECUTABLE}"
+                        "${NPM_EXECUTABLE}"
+                    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+                )
+                set_tests_properties(bolt_js_ws_driver_integration_tests PROPERTIES
+                    TIMEOUT 600
+                    LABELS "bolt;integration;websocket;javascript"
+                )
+            else()
+                message(STATUS "node/npm not found — skipping JS Bolt WS driver integration tests")
+            endif()
         else()
             message(STATUS "pytest not found — skipping Bolt integration tests")
         endif()

@@ -270,7 +270,8 @@ src/query/physical_plan/operator/call_physical_op.hpp/.cpp  # CALL 物理执行�
 src/query/parser/database_ddl_parser.hpp/.cpp               # 数据库 DDL 解析器
 tests/test_packstream.cpp                       # PackStream 单元测试
 tests/test_bolt_values.cpp                      # Bolt 类型映射测试
-tests/bolt/test_bolt_integration.py             # Python 驱动集成测试
+tests/bolt/test_python_driver_integration.py    # Python 驱动集成测试
+tests/bolt/test_js_ws_driver.cjs                # JS 驱动 WebSocket 集成测试
 ```
 
 ## 测试覆盖

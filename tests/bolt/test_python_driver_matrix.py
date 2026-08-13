@@ -57,7 +57,7 @@ def _python_for_version(version):
 @pytest.mark.parametrize("driver_version", DRIVER_VERSIONS)
 def test_official_driver_compatibility(driver_version):
     python = _python_for_version(driver_version)
-    integration_test = _project_root() / "tests" / "bolt" / "test_bolt_integration.py"
+    integration_test = _project_root() / "tests" / "bolt" / "test_python_driver_integration.py"
     env = os.environ.copy()
     env["EUGRAPH_BOLT_PORT"] = os.environ.get("EUGRAPH_BOLT_PORT", "7687")
 
