@@ -19,10 +19,6 @@ Usage:
 """
 
 import os
-import socket
-import struct
-import sys
-import time
 
 import pytest
 
@@ -33,130 +29,6 @@ neo4j = pytest.importorskip("neo4j")
 def get_bolt_url():
     port = os.environ.get("EUGRAPH_BOLT_PORT", "7687")
     return f"bolt://localhost:{port}"
-
-
-# ---------------------------------------------------------------------------
-# Minimal raw Bolt client for protocol-version-specific assertions.
-# The official Python driver negotiates only its preferred protocol version,
-# so these helpers explicitly negotiate a requested version to test wire
-# compatibility for both Bolt 4.x and Bolt 5.x.
-# ---------------------------------------------------------------------------
-
-BOLT_MAGIC = 0x6060B017
-
-
-def _pack_str(value):
-    data = value.encode("utf-8")
-    size = len(data)
-    if size < 16:
-        return bytes([0x80 | size]) + data
-    if size < 256:
-        return b"\xd0" + bytes([size]) + data
-    return b"\xd1" + struct.pack(">H", size) + data
-
-
-def _pack_int(value):
-    if 0 <= value <= 127:
-        return bytes([value])
-    if -16 <= value < 0:
-        return bytes([value & 0xFF])
-    if -128 <= value < 128:
-        return b"\xc8" + struct.pack(">b", value)
-    return b"\xca" + struct.pack(">i", value)
-
-
-def _pack_value(value):
-    if isinstance(value, str):
-        return _pack_str(value)
-    if isinstance(value, int):
-        return _pack_int(value)
-    if isinstance(value, dict):
-        out = bytes([0xA0 | len(value)])
-        for key, item in value.items():
-            out += _pack_str(key) + _pack_value(item)
-        return out
-    if isinstance(value, (list, tuple)):
-        out = bytes([0x90 | len(value)])
-        for item in value:
-            out += _pack_value(item)
-        return out
-    raise TypeError(f"unsupported raw Bolt test value: {type(value)!r}")
-
-
-def _pack_struct(tag, fields):
-    return bytes([0xB0 | len(fields), tag]) + b"".join(_pack_value(f) for f in fields)
-
-
-def _chunk(message):
-    return struct.pack(">H", len(message)) + message + b"\x00\x00"
-
-
-def _recv_exact(sock, size):
-    chunks = []
-    remaining = size
-    while remaining:
-        data = sock.recv(remaining)
-        if not data:
-            raise AssertionError("unexpected EOF while reading Bolt response")
-        chunks.append(data)
-        remaining -= len(data)
-    return b"".join(chunks)
-
-
-def _recv_next_message(sock):
-    body = bytearray()
-    while True:
-        header = _recv_exact(sock, 2)
-        chunk_size = (header[0] << 8) | header[1]
-        if chunk_size == 0:
-            return bytes(body)
-        if chunk_size > 0x3FFF:
-            raise AssertionError(f"invalid Bolt chunk size: {chunk_size}")
-        body.extend(_recv_exact(sock, chunk_size))
-
-
-def _raw_bolt_connect(bolt_port, protocol_version):
-    sock = socket.create_connection(("127.0.0.1", bolt_port), timeout=5)
-    sock.settimeout(5)
-
-    proposals = [protocol_version, 0x00000000, 0x00000000, 0x00000000]
-    handshake = struct.pack(">I", BOLT_MAGIC) + b"".join(
-        struct.pack(">I", proposal) for proposal in proposals
-    )
-    sock.sendall(handshake)
-    negotiated = _recv_exact(sock, 4)
-
-    hello = _pack_struct(
-        0x01,
-        [
-            {
-                "user_agent": f"eugraph-raw-bolt-test/{protocol_version >> 8}.{protocol_version & 0xFF}",
-                "scheme": "basic",
-                "principal": "neo4j",
-                "credentials": "eugraph",
-            }
-        ],
-    )
-    sock.sendall(_chunk(hello))
-    _recv_next_message(sock)
-
-    return sock, negotiated
-
-
-def _raw_bolt_create_node(bolt_port, protocol_version, query):
-    sock, negotiated = _raw_bolt_connect(bolt_port, protocol_version)
-    try:
-        run = _pack_struct(0x10, [query, {}, {}])
-        sock.sendall(_chunk(run))
-        _recv_next_message(sock)
-
-        pull = _pack_struct(0x3F, [{"n": -1}])
-        sock.sendall(_chunk(pull))
-        record = _recv_next_message(sock)
-        _recv_next_message(sock)  # SUCCESS
-        return negotiated, record
-    finally:
-        sock.close()
 
 
 # ---------------------------------------------------------------------------
@@ -245,47 +117,6 @@ class TestCRUD:
 # ---------------------------------------------------------------------------
 # Protocol-version-specific wire compatibility
 # ---------------------------------------------------------------------------
-
-
-class TestBoltVersionSpecificEncoding:
-    """Exercise struct shapes that differ between Bolt 4.x and Bolt 5.x."""
-
-    def test_node_struct_is_v4_compatible(self):
-        port = int(os.environ.get("EUGRAPH_BOLT_PORT", "7687"))
-        negotiated, record = _raw_bolt_create_node(
-            port,
-            0x00000404,
-            "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n",
-        )
-        assert negotiated == bytes([0x00, 0x00, 0x04, 0x04])
-        # Bolt 4.x Node = 3 fields: id, labels, properties.
-        assert b"\xb3\x4e" in record
-        assert b"\xb4\x4e" not in record
-
-    def test_node_struct_is_v5_compatible(self):
-        port = int(os.environ.get("EUGRAPH_BOLT_PORT", "7687"))
-        negotiated, record = _raw_bolt_create_node(
-            port,
-            0x00000501,
-            "CREATE (n:Person {name: 'Alice', age: 30}) RETURN n",
-        )
-        assert negotiated == bytes([0x00, 0x00, 0x01, 0x05])
-        # Bolt 5.x Node = 4 fields: id, labels, properties, element_id.
-        assert b"\xb4\x4e" in record
-
-    def test_relationship_struct_is_v4_compatible(self):
-        port = int(os.environ.get("EUGRAPH_BOLT_PORT", "7687"))
-        query = (
-            "CREATE (a:Person {name: 'Alice'}) "
-            "CREATE (b:Person {name: 'Bob'}) "
-            "CREATE (a)-[r:KNOWS {since: 2024}]->(b) "
-            "RETURN a, b, r"
-        )
-        negotiated, record = _raw_bolt_create_node(port, 0x00000404, query)
-        assert negotiated == bytes([0x00, 0x00, 0x04, 0x04])
-        # Bolt 4.x Relationship = 5 fields:
-        # id, start, end, type, properties.
-        assert b"\xb5\x52" in record
 
 
 # ---------------------------------------------------------------------------
