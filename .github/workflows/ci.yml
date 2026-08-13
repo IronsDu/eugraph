@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      checks: write
       pull-requests: write
 
     steps:
@@ -81,16 +82,13 @@ jobs:
     - name: Run tests
       run: ctest --preset=release --verbose --output-junit build/release/junit.xml
 
-    - name: Generate unit test report
+    - name: Publish test results
+      uses: EnricoMi/publish-unit-test-result-action@v2
       if: always() && hashFiles('build/release/junit.xml') != ''
-      run: python3 scripts/gen_unit_test_report.py build/release/junit.xml build/release/unit-test-report.md
-
-    - name: Post unit test report to PR
-      uses: marocchino/sticky-pull-request-comment@v2
-      if: always() && github.event_name == 'pull_request' && hashFiles('build/release/unit-test-report.md') != ''
       with:
-        path: build/release/unit-test-report.md
-        header: unit-test-report
+        files: build/release/junit.xml
+        check_name: Unit Test Results
+        comment_title: Unit Test Report
 
     - name: Check library linking
       working-directory: build/release
