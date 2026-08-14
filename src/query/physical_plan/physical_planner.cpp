@@ -1197,17 +1197,23 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 // Use binder-assigned slot_ids when available so downstream
                 // BoundColumnRefs (which carry bind-time slot_ids) resolve to
                 // the correct columns in this operator's output layout.
+                // Binder-assigned slots are set only by bindExistsSubPlan.
+                // Correlated OPTIONAL MATCH sources still rely on column-index
+                // correlation (bindOptionalMatch deliberately does not set
+                // slot_ids); wrapping those in ProjectionExtract changes the
+                // right sub-plan's schema and breaks LeftJoin matching.
                 TupleSlotLayout layout;
-                if (val.slot_ids.size() == output_schema.size()) {
+                if (val.slot_ids.size() == output_schema.size() && !val.slot_ids.empty()) {
                     for (size_t i = 0; i < val.slot_ids.size(); ++i)
                         layout.append(val.slot_ids[i]);
-                } else {
-                    layout = makeSlotLayout(output_schema, ctx);
+                    auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
+                                                          std::move(output_types), std::move(layout)};
+                    plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
+                    return plan_result;
                 }
-                auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
-                                                      std::move(output_types), std::move(layout)};
-                plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
-                return plan_result;
+                layout = makeSlotLayout(output_schema, ctx);
+                return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
+                                          std::move(layout)};
             } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
                 Schema output_schema;
                 std::vector<binder::BoundType> output_types;
