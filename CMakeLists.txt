@@ -120,7 +120,7 @@ add_dependencies(eugraph_lib wiredtiger_ext)
 # ==================== Compute Service (Cypher Parser + Query Engine) ====================
 
 # Pre-generated ANTLR4 C++ sources (committed to repo, no Java build dependency)
-set(ANTLR_GENERATED_DIR "${PROJECT_SOURCE_DIR}/src/query/parser/generated")
+set(ANTLR_GENERATED_DIR "${PROJECT_SOURCE_DIR}/src/query/parser/generated/grammar")
 set(ANTLR_GENERATED_SOURCES
     "${ANTLR_GENERATED_DIR}/CypherLexer.cpp"
     "${ANTLR_GENERATED_DIR}/CypherParser.cpp"
@@ -180,15 +180,20 @@ add_library(eugraph_query_engine STATIC
     src/query/planner/bound_logical_plan.cpp
     src/query/planner/column_resolver.cpp
     src/query/evaluator/vectorized_evaluator.cpp
-    src/query/evaluator/eval_binary_op.cpp
-    src/query/evaluator/eval_property.cpp
-    src/query/evaluator/eval_function_call.cpp
-    src/query/evaluator/eval_quantifier.cpp
-    src/query/evaluator/eval_case.cpp
-    src/query/evaluator/eval_map.cpp
-    src/query/evaluator/eval_subscript.cpp
-    src/query/evaluator/eval_slice.cpp
-    src/query/evaluator/eval_list_comprehension.cpp
+    src/query/evaluator/expr/eval_literal.cpp
+    src/query/evaluator/expr/eval_unary_op.cpp
+    src/query/evaluator/expr/eval_column_ref.cpp
+    src/query/evaluator/expr/eval_list.cpp
+    src/query/evaluator/expr/eval_label_cast.cpp
+    src/query/evaluator/expr/eval_binary_op.cpp
+    src/query/evaluator/expr/eval_property.cpp
+    src/query/evaluator/expr/eval_function_call.cpp
+    src/query/evaluator/expr/eval_quantifier.cpp
+    src/query/evaluator/expr/eval_case.cpp
+    src/query/evaluator/expr/eval_map.cpp
+    src/query/evaluator/expr/eval_subscript.cpp
+    src/query/evaluator/expr/eval_slice.cpp
+    src/query/evaluator/expr/eval_list_comprehension.cpp
     src/query/physical_plan/operator/edge_index_scan_physical_op.cpp
     src/query/physical_plan/operator/projection_extract_physical_op.cpp
     src/query/physical_plan/operator/aggregate_physical_op.cpp
@@ -262,7 +267,7 @@ endif()
 
 # ==================== Thrift Generated Code ====================
 
-set(GEN_CPP2_DIR "${PROJECT_SOURCE_DIR}/src/gen-cpp2")
+set(GEN_CPP2_DIR "${PROJECT_SOURCE_DIR}/src/service/thrift/gen-cpp2")
 
 add_library(eugraph_thrift STATIC
     ${GEN_CPP2_DIR}/eugraph_types.cpp
@@ -293,11 +298,12 @@ target_link_libraries(eugraph_thrift PUBLIC
 # ==================== Bolt Protocol (Neo4j protocol support) ====================
 
 add_library(eugraph_bolt STATIC
-    src/bolt/packstream/encoder.cpp
-    src/bolt/packstream/decoder.cpp
-    src/bolt/bolt_session.cpp
-    src/bolt/bolt_value_mapping.cpp
-    src/bolt/bolt_server.cpp
+    src/service/bolt/packstream/encoder.cpp
+    src/service/bolt/packstream/decoder.cpp
+    src/service/bolt/bolt_session.cpp
+    src/service/bolt/bolt_value_mapping.cpp
+    src/service/bolt/bolt_server.cpp
+    src/service/bolt/websocket.cpp
 )
 
 target_include_directories(eugraph_bolt PUBLIC
@@ -315,7 +321,7 @@ target_link_libraries(eugraph_bolt PUBLIC
 # ==================== Thrift formatting (shared by shell & TCK) ====================
 
 add_library(eugraph_thrift_fmt STATIC
-    src/thrift_fmt/result_format.cpp
+    src/service/thrift/result_format.cpp
 )
 
 target_include_directories(eugraph_thrift_fmt PUBLIC
@@ -331,8 +337,8 @@ target_link_libraries(eugraph_thrift_fmt PUBLIC
 add_library(eugraph_shell_lib STATIC
     src/program/shell/shell_repl.cpp
     src/program/shell/rpc_client.cpp
-    src/program/server/eugraph_handler.cpp
-    src/server/graph_service.cpp
+    src/service/thrift/eugraph_handler.cpp
+    src/service/graph_service.cpp
     src/storage/graph_manager.cpp
     third_party/linenoise/linenoise.c
 )
@@ -824,23 +830,45 @@ if(EUGRAPH_BUILD_TESTS)
         add_subdirectory(tests/tck)
     endif()
 
-    # Bolt Python integration tests — requires eugraph-server, neo4j, pytest
+    # Bolt Python driver integration tests — requires eugraph-server, neo4j, pytest
     if(NOT DEFINED SKIP_BOLT_INTEGRATION_TESTS)
         find_program(PYTEST_EXECUTABLE pytest)
         if(PYTEST_EXECUTABLE)
-            set(BOLT_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_bolt_integration.py")
-            add_test(NAME bolt_integration_tests
-                COMMAND ${CMAKE_COMMAND}
-                    -D "SERVER=$<TARGET_FILE:eugraph-server>"
-                    -D "PYTEST=${PYTEST_EXECUTABLE}"
-                    -D "TEST_SCRIPT=${BOLT_TEST_SCRIPT}"
-                    -P "${PROJECT_SOURCE_DIR}/cmake/run_bolt_tests.cmake"
+            set(BOLT_PYTHON_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_python_driver_matrix.py")
+            add_test(NAME bolt_python_driver_integration_tests
+                COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-bolt-python-tests.sh"
+                    "$<TARGET_FILE:eugraph-server>"
+                    "${PYTEST_EXECUTABLE}"
+                    "${BOLT_PYTHON_TEST_SCRIPT}"
                 WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
             )
-            set_tests_properties(bolt_integration_tests PROPERTIES
-                TIMEOUT 120
-                LABELS "bolt;integration"
+            set_tests_properties(bolt_python_driver_integration_tests PROPERTIES
+                TIMEOUT 600
+                LABELS "bolt;integration;python"
             )
+
+            # Bolt JS WebSocket driver integration tests — requires eugraph-server,
+            # neo4j-driver (browser bundle), node, and npm.
+            find_program(NODE_EXECUTABLE node)
+            find_program(NPM_EXECUTABLE npm)
+            if(NODE_EXECUTABLE AND NPM_EXECUTABLE)
+                set(BOLT_JS_WS_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_js_driver_matrix.py")
+                add_test(NAME bolt_js_ws_driver_integration_tests
+                    COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-bolt-js-ws-tests.sh"
+                        "$<TARGET_FILE:eugraph-server>"
+                        "${PYTEST_EXECUTABLE}"
+                        "${BOLT_JS_WS_TEST_SCRIPT}"
+                        "${NODE_EXECUTABLE}"
+                        "${NPM_EXECUTABLE}"
+                    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+                )
+                set_tests_properties(bolt_js_ws_driver_integration_tests PROPERTIES
+                    TIMEOUT 600
+                    LABELS "bolt;integration;websocket;javascript"
+                )
+            else()
+                message(STATUS "node/npm not found — skipping JS Bolt WS driver integration tests")
+            endif()
         else()
             message(STATUS "pytest not found — skipping Bolt integration tests")
         endif()

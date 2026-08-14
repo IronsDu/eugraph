@@ -2,12 +2,12 @@
 
 #include <folly/init/Init.h>
 
-#include "gen-cpp2/eugraph_types.h"
 #include "program/loader/csv_loader.hpp"
-#include "program/server/eugraph_handler.hpp"
 #include "program/shell/rpc_client.hpp"
 #include "query/executor/query_executor.hpp"
-#include "server/graph_service.hpp"
+#include "service/graph_service.hpp"
+#include "service/thrift/eugraph_handler.hpp"
+#include "service/thrift/gen-cpp2/eugraph_types.h"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/graph_manager.hpp"
@@ -35,7 +35,7 @@
 #include <thrift/lib/cpp2/util/ScopedServerInterfaceThread.h>
 
 using namespace eugraph;
-using namespace eugraph::thrift;
+using namespace eugraph::thrift_service;
 using namespace folly::coro;
 
 namespace {
@@ -61,8 +61,8 @@ class LoaderIntegrationTest : public ::testing::Test {
 protected:
     std::string db_path_;
     std::shared_ptr<GraphManager> graph_manager_;
-    std::shared_ptr<server::GraphService> graph_service_;
-    std::shared_ptr<server::EuGraphHandler> handler_;
+    std::shared_ptr<service::GraphService> graph_service_;
+    std::shared_ptr<service::thrift::EuGraphHandler> handler_;
     std::unique_ptr<apache::thrift::ScopedServerInterfaceThread> server_;
     std::unique_ptr<shell::EuGraphRpcClient> client_;
 
@@ -73,8 +73,8 @@ protected:
         graph_manager_ = std::make_shared<GraphManager>();
         ASSERT_TRUE(graph_manager_->init(db_path_, 2, 2));
 
-        graph_service_ = std::make_shared<server::GraphService>(*graph_manager_);
-        handler_ = std::make_shared<server::EuGraphHandler>(*graph_service_);
+        graph_service_ = std::make_shared<service::GraphService>(*graph_manager_);
+        handler_ = std::make_shared<service::thrift::EuGraphHandler>(*graph_service_);
 
         auto ts = std::make_shared<apache::thrift::ThriftServer>();
         ts->setAddress(folly::SocketAddress("::1", 0));

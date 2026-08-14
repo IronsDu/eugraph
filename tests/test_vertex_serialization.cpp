@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "common/types/graph_types.hpp"
-#include "program/server/eugraph_handler.hpp"
 #include "query/dataset/row.hpp"
-#include "server/graph_service.hpp"
+#include "service/graph_service.hpp"
+#include "service/thrift/eugraph_handler.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/graph_manager.hpp"
@@ -15,7 +15,8 @@
 #include <string>
 
 using namespace eugraph;
-using namespace eugraph::server;
+using namespace eugraph::service;
+using namespace eugraph::service::thrift;
 
 namespace {
 
@@ -71,7 +72,7 @@ TEST_F(VertexSerializationTest, OutputsIdNotVid) {
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
 
     auto result = handler_->valueToThrift(Value{v}, label_defs, edge_label_defs);
-    ASSERT_EQ(result.getType(), thrift::ResultValue::Type::vertex_json);
+    ASSERT_EQ(result.getType(), thrift_service::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
     EXPECT_NE(json.find("\"id\":42"), std::string::npos) << "JSON should contain \"id\":42, got: " << json;
@@ -93,7 +94,7 @@ TEST_F(VertexSerializationTest, IncludesLabelName) {
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
 
     auto result = handler_->valueToThrift(Value{v}, label_defs, edge_label_defs);
-    ASSERT_EQ(result.getType(), thrift::ResultValue::Type::vertex_json);
+    ASSERT_EQ(result.getType(), thrift_service::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
     EXPECT_NE(json.find("\"labels\":[\"User\"]"), std::string::npos) << "JSON should contain label name, got: " << json;
@@ -116,7 +117,7 @@ TEST_F(VertexSerializationTest, SerializesProperties) {
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
 
     auto result = handler_->valueToThrift(Value{v}, label_defs, edge_label_defs);
-    ASSERT_EQ(result.getType(), thrift::ResultValue::Type::vertex_json);
+    ASSERT_EQ(result.getType(), thrift_service::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
     // Properties are serialized as ordered [key, value] pairs (not a JSON object)
@@ -133,7 +134,7 @@ TEST_F(VertexSerializationTest, VertexWithoutLabels) {
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
 
     auto result = handler_->valueToThrift(Value{v}, label_defs, edge_label_defs);
-    ASSERT_EQ(result.getType(), thrift::ResultValue::Type::vertex_json);
+    ASSERT_EQ(result.getType(), thrift_service::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
     EXPECT_NE(json.find("\"id\":99"), std::string::npos) << "Should contain id, got: " << json;

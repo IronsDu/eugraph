@@ -2,7 +2,7 @@
 
 #include "query/parser/ast.hpp"
 #include "query/parser/cypher_parser.hpp"
-#include "thrift_fmt/result_format.hpp"
+#include "service/thrift/result_format.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -412,12 +412,12 @@ void TckContext::executeQuery(const std::string& query) {
         lastColumns = *meta.columns();
 
         // Process stream
-        std::move(stream).subscribeInline([this](folly::Try<thrift::ResultRowBatch>&& batch) {
+        std::move(stream).subscribeInline([this](folly::Try<thrift_service::ResultRowBatch>&& batch) {
             if (batch.hasValue()) {
                 for (const auto& row : *batch->rows()) {
                     std::vector<std::string> tckRow;
                     for (const auto& val : *row.values()) {
-                        tckRow.push_back(thrift_fmt::formatResultValue(val));
+                        tckRow.push_back(service::thrift::formatResultValue(val));
                     }
                     lastRows.push_back(std::move(tckRow));
                 }
@@ -597,12 +597,12 @@ GraphSnapshot TckContext::takeSnapshot() {
     // Count nodes
     try {
         auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN count(n)", graphName);
-        std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
+        std::move(stream).subscribeInline([&snap](folly::Try<thrift_service::ResultRowBatch>&& batch) {
             if (batch.hasValue()) {
                 for (const auto& row : *batch->rows()) {
                     if (row.values()->size() > 0) {
                         const auto& v = (*row.values())[0];
-                        if (v.getType() == thrift::ResultValue::Type::int_val) {
+                        if (v.getType() == thrift_service::ResultValue::Type::int_val) {
                             snap.nodeCount = v.get_int_val();
                         }
                     }
@@ -616,12 +616,12 @@ GraphSnapshot TckContext::takeSnapshot() {
     // Count edges
     try {
         auto [meta, stream] = rpc->executeCypher("MATCH ()-[r]->() RETURN count(r)", graphName);
-        std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
+        std::move(stream).subscribeInline([&snap](folly::Try<thrift_service::ResultRowBatch>&& batch) {
             if (batch.hasValue()) {
                 for (const auto& row : *batch->rows()) {
                     if (row.values()->size() > 0) {
                         const auto& v = (*row.values())[0];
-                        if (v.getType() == thrift::ResultValue::Type::int_val) {
+                        if (v.getType() == thrift_service::ResultValue::Type::int_val) {
                             snap.edgeCount = v.get_int_val();
                         }
                     }
@@ -638,12 +638,12 @@ GraphSnapshot TckContext::takeSnapshot() {
     // MATCH (n) RETURN labels(n) — each row has list_json like ['A', 'B']
     try {
         auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN labels(n)", graphName);
-        std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
+        std::move(stream).subscribeInline([&snap](folly::Try<thrift_service::ResultRowBatch>&& batch) {
             if (batch.hasValue()) {
                 for (const auto& row : *batch->rows()) {
                     if (row.values()->size() > 0) {
                         const auto& v = (*row.values())[0];
-                        if (v.getType() == thrift::ResultValue::Type::list_json) {
+                        if (v.getType() == thrift_service::ResultValue::Type::list_json) {
                             std::string json = v.get_list_json();
                             // Format uses single quotes: ['A', 'B']
                             for (size_t i = 0; i < json.size(); ++i) {
@@ -667,12 +667,12 @@ GraphSnapshot TckContext::takeSnapshot() {
     int64_t vprop_count = 0;
     try {
         auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN sum(size(keys(n)))", graphName);
-        std::move(stream).subscribeInline([&vprop_count](folly::Try<thrift::ResultRowBatch>&& batch) {
+        std::move(stream).subscribeInline([&vprop_count](folly::Try<thrift_service::ResultRowBatch>&& batch) {
             if (batch.hasValue()) {
                 for (const auto& row : *batch->rows()) {
                     if (row.values()->size() > 0) {
                         const auto& v = (*row.values())[0];
-                        if (v.getType() == thrift::ResultValue::Type::int_val) {
+                        if (v.getType() == thrift_service::ResultValue::Type::int_val) {
                             vprop_count = v.get_int_val();
                         }
                     }
@@ -687,12 +687,12 @@ GraphSnapshot TckContext::takeSnapshot() {
     int64_t eprop_count = 0;
     try {
         auto [meta, stream] = rpc->executeCypher("MATCH ()-[r]->() RETURN sum(size(keys(r)))", graphName);
-        std::move(stream).subscribeInline([&eprop_count](folly::Try<thrift::ResultRowBatch>&& batch) {
+        std::move(stream).subscribeInline([&eprop_count](folly::Try<thrift_service::ResultRowBatch>&& batch) {
             if (batch.hasValue()) {
                 for (const auto& row : *batch->rows()) {
                     if (row.values()->size() > 0) {
                         const auto& v = (*row.values())[0];
-                        if (v.getType() == thrift::ResultValue::Type::int_val) {
+                        if (v.getType() == thrift_service::ResultValue::Type::int_val) {
                             eprop_count = v.get_int_val();
                         }
                     }
@@ -711,12 +711,12 @@ GraphSnapshot TckContext::takeSnapshot() {
     if (snap.nodeCount <= 1000) {
         try {
             auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN id(n)", graphName);
-            std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
+            std::move(stream).subscribeInline([&snap](folly::Try<thrift_service::ResultRowBatch>&& batch) {
                 if (batch.hasValue()) {
                     for (const auto& row : *batch->rows()) {
                         if (row.values()->size() > 0) {
                             const auto& v = (*row.values())[0];
-                            if (v.getType() == thrift::ResultValue::Type::int_val) {
+                            if (v.getType() == thrift_service::ResultValue::Type::int_val) {
                                 snap.nodeIds.insert(v.get_int_val());
                             }
                         }
@@ -731,12 +731,12 @@ GraphSnapshot TckContext::takeSnapshot() {
     if (snap.edgeCount <= 1000) {
         try {
             auto [meta, stream] = rpc->executeCypher("MATCH ()-[r]->() RETURN id(r)", graphName);
-            std::move(stream).subscribeInline([&snap](folly::Try<thrift::ResultRowBatch>&& batch) {
+            std::move(stream).subscribeInline([&snap](folly::Try<thrift_service::ResultRowBatch>&& batch) {
                 if (batch.hasValue()) {
                     for (const auto& row : *batch->rows()) {
                         if (row.values()->size() > 0) {
                             const auto& v = (*row.values())[0];
-                            if (v.getType() == thrift::ResultValue::Type::int_val) {
+                            if (v.getType() == thrift_service::ResultValue::Type::int_val) {
                                 snap.edgeIds.insert(v.get_int_val());
                             }
                         }
@@ -845,17 +845,17 @@ GraphSnapshot TckContext::takeSnapshot() {
 
     try {
         auto [meta, stream] = rpc->executeCypher("MATCH (n) RETURN id(n), properties(n)", graphName);
-        std::move(stream).subscribeInline([&](folly::Try<thrift::ResultRowBatch>&& batch) {
+        std::move(stream).subscribeInline([&](folly::Try<thrift_service::ResultRowBatch>&& batch) {
             if (!batch.hasValue())
                 return;
             for (const auto& row : *batch->rows()) {
                 const auto& vals = *row.values();
                 if (vals.size() < 2)
                     continue;
-                if (vals[0].getType() != thrift::ResultValue::Type::int_val)
+                if (vals[0].getType() != thrift_service::ResultValue::Type::int_val)
                     continue;
                 int64_t id = vals[0].get_int_val();
-                if (vals[1].getType() == thrift::ResultValue::Type::map_json)
+                if (vals[1].getType() == thrift_service::ResultValue::Type::map_json)
                     collectProps(vals[1].get_map_json(), id, snap.vertexProps);
             }
         });
@@ -863,17 +863,17 @@ GraphSnapshot TckContext::takeSnapshot() {
 
     try {
         auto [meta, stream] = rpc->executeCypher("MATCH ()-[r]->() RETURN id(r), properties(r)", graphName);
-        std::move(stream).subscribeInline([&](folly::Try<thrift::ResultRowBatch>&& batch) {
+        std::move(stream).subscribeInline([&](folly::Try<thrift_service::ResultRowBatch>&& batch) {
             if (!batch.hasValue())
                 return;
             for (const auto& row : *batch->rows()) {
                 const auto& vals = *row.values();
                 if (vals.size() < 2)
                     continue;
-                if (vals[0].getType() != thrift::ResultValue::Type::int_val)
+                if (vals[0].getType() != thrift_service::ResultValue::Type::int_val)
                     continue;
                 int64_t id = vals[0].get_int_val();
-                if (vals[1].getType() == thrift::ResultValue::Type::map_json)
+                if (vals[1].getType() == thrift_service::ResultValue::Type::map_json)
                     collectProps(vals[1].get_map_json(), id, snap.edgeProps);
             }
         });

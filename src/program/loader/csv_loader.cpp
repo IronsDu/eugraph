@@ -185,8 +185,8 @@ std::vector<EdgeTypeSchema> buildEdgeTypeSchemas(const std::vector<CsvFileInfo>&
     return result;
 }
 
-thrift::PropertyValueThrift toThriftValue(const std::string& value, bool is_int64) {
-    thrift::PropertyValueThrift tv;
+thrift_service::PropertyValueThrift toThriftValue(const std::string& value, bool is_int64) {
+    thrift_service::PropertyValueThrift tv;
     if (value.empty()) {
         // Leave as __EMPTY__
         return tv;
@@ -201,11 +201,11 @@ thrift::PropertyValueThrift toThriftValue(const std::string& value, bool is_int6
 
 void createLabels(shell::EuGraphRpcClient& client, const std::vector<LabelSchema>& schemas) {
     for (const auto& schema : schemas) {
-        std::vector<thrift::PropertyDefThrift> props;
+        std::vector<thrift_service::PropertyDefThrift> props;
         for (const auto& pi : schema.properties) {
-            thrift::PropertyDefThrift pd;
+            thrift_service::PropertyDefThrift pd;
             pd.name() = pi.name;
-            pd.type() = pi.is_int64 ? thrift::PropertyType::INT64 : thrift::PropertyType::STRING;
+            pd.type() = pi.is_int64 ? thrift_service::PropertyType::INT64 : thrift_service::PropertyType::STRING;
             pd.is_required() = false;
             props.push_back(std::move(pd));
         }
@@ -216,11 +216,11 @@ void createLabels(shell::EuGraphRpcClient& client, const std::vector<LabelSchema
 
 void createEdgeLabels(shell::EuGraphRpcClient& client, const std::vector<EdgeTypeSchema>& schemas) {
     for (const auto& schema : schemas) {
-        std::vector<thrift::PropertyDefThrift> props;
+        std::vector<thrift_service::PropertyDefThrift> props;
         for (const auto& pi : schema.properties) {
-            thrift::PropertyDefThrift pd;
+            thrift_service::PropertyDefThrift pd;
             pd.name() = pi.name;
-            pd.type() = pi.is_int64 ? thrift::PropertyType::INT64 : thrift::PropertyType::STRING;
+            pd.type() = pi.is_int64 ? thrift_service::PropertyType::INT64 : thrift_service::PropertyType::STRING;
             pd.is_required() = false;
             props.push_back(std::move(pd));
         }
@@ -251,7 +251,7 @@ CsvIdMap loadVertices(shell::EuGraphRpcClient& client, const std::vector<CsvFile
         std::getline(ifs, header_line); // skip header
 
         std::vector<int64_t> csv_ids;
-        std::vector<thrift::VertexRecord> batch;
+        std::vector<thrift_service::VertexRecord> batch;
         csv_ids.reserve(batch_size);
         batch.reserve(batch_size);
         int total = 0;
@@ -279,13 +279,13 @@ CsvIdMap loadVertices(shell::EuGraphRpcClient& client, const std::vector<CsvFile
             int64_t csv_id = std::stoll(fields[0]);
             csv_ids.push_back(csv_id);
 
-            thrift::VertexRecord rec;
+            thrift_service::VertexRecord rec;
             auto& props = *rec.properties();
             for (size_t i = 0; i < schema.properties.size(); i++) {
                 if (i < fields.size()) {
                     props.push_back(toThriftValue(fields[i], schema.properties[i].is_int64));
                 } else {
-                    props.push_back(thrift::PropertyValueThrift{});
+                    props.push_back(thrift_service::PropertyValueThrift{});
                 }
             }
 
@@ -354,7 +354,7 @@ void loadEdges(shell::EuGraphRpcClient& client, const std::vector<CsvFileInfo>& 
         std::string header_line;
         std::getline(ifs, header_line); // skip header
 
-        std::vector<thrift::EdgeRecord> batch;
+        std::vector<thrift_service::EdgeRecord> batch;
         batch.reserve(batch_size);
         int total = 0;
         int skipped = 0;
@@ -375,7 +375,7 @@ void loadEdges(shell::EuGraphRpcClient& client, const std::vector<CsvFileInfo>& 
                 continue;
             }
 
-            thrift::EdgeRecord rec;
+            thrift_service::EdgeRecord rec;
             rec.src_vertex_id() = static_cast<int64_t>(src_vid_it->second);
             rec.dst_vertex_id() = static_cast<int64_t>(dst_vid_it->second);
 
@@ -384,7 +384,7 @@ void loadEdges(shell::EuGraphRpcClient& client, const std::vector<CsvFileInfo>& 
                 if (i + 2 < fields.size()) {
                     props.push_back(toThriftValue(fields[i + 2], schema.properties[i].is_int64));
                 } else {
-                    props.push_back(thrift::PropertyValueThrift{});
+                    props.push_back(thrift_service::PropertyValueThrift{});
                 }
             }
 

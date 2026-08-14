@@ -1,7 +1,7 @@
-#include "bolt/bolt_server.hpp"
-#include "gen-cpp2/EuGraphService.h"
-#include "program/server/eugraph_handler.hpp"
-#include "server/graph_service.hpp"
+#include "service/bolt/bolt_server.hpp"
+#include "service/graph_service.hpp"
+#include "service/thrift/eugraph_handler.hpp"
+#include "service/thrift/gen-cpp2/EuGraphService.h"
 #include "storage/graph_manager.hpp"
 
 #include <thrift/lib/cpp2/server/ThriftServer.h>
@@ -70,8 +70,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    auto graph_service = std::make_shared<server::GraphService>(*graph_manager);
-    auto handler = std::make_shared<server::EuGraphHandler>(*graph_service);
+    auto graph_service = std::make_shared<service::GraphService>(*graph_manager);
+    auto handler = std::make_shared<service::thrift::EuGraphHandler>(*graph_service);
 
     auto server = std::make_shared<apache::thrift::ThriftServer>();
     server->setPort(config.port);
@@ -91,9 +91,10 @@ int main(int argc, char* argv[]) {
     spdlog::info("Listening on port {}...", config.port);
 
     // Start Bolt protocol server (if enabled)
-    std::unique_ptr<bolt::BoltServer> bolt_server;
+    std::unique_ptr<service::bolt::BoltServer> bolt_server;
     if (config.bolt_port > 0) {
-        bolt_server = std::make_unique<bolt::BoltServer>(*graph_service, static_cast<uint16_t>(config.bolt_port));
+        bolt_server =
+            std::make_unique<service::bolt::BoltServer>(*graph_service, static_cast<uint16_t>(config.bolt_port));
         bolt_server->start();
         spdlog::info("Bolt server listening on port {}...", config.bolt_port);
     }

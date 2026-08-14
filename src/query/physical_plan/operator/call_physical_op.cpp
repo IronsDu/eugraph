@@ -124,6 +124,14 @@ MapValue buildEdgeEntry(const EdgeLabelDef& eldef) {
 
 folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
     spdlog::info("[CallPhysicalOp] executeChunk called, procedure={}", procedure_name_);
+
+    // Procedures that return empty results (Neo4j Browser compatibility stubs).
+    if (procedure_name_ == "dbms.clientConfig" || procedure_name_ == "db.indexes" ||
+        procedure_name_ == "dbms.procedures" || procedure_name_ == "dbms.functions" || procedure_name_ == "db.labels" ||
+        procedure_name_ == "db.relationshipTypes" || procedure_name_ == "db.propertyKeys") {
+        co_return;
+    }
+
     DataChunk output;
     output.setSchema(output_types_);
     output.reserve(1);
@@ -132,6 +140,12 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
     if (procedure_name_ == "db.ping") {
         spdlog::info("[CallPhysicalOp] db.ping path");
         output.columns[0].setValue(0, Value(true));
+    } else if (procedure_name_ == "dbms.components") {
+        ListValue versions;
+        versions.elements.push_back({ValueStorage{Value{std::string{"4.4.3"}}}});
+        output.columns[0].setValue(0, Value{std::string{"EuGraph"}});
+        output.columns[1].setValue(0, Value{versions});
+        output.columns[2].setValue(0, Value{std::string{"community"}});
     } else if (procedure_name_ == "db.schema.visualization") {
         spdlog::info("[CallPhysicalOp] db.schema.visualization path, meta_={}", (void*)meta_);
         ListValue nodes;

@@ -22,7 +22,7 @@ EuGraphRpcClient::EuGraphRpcClient(const std::string& host, int port)
     evb_->waitUntilRunning();
 }
 
-EuGraphRpcClient::EuGraphRpcClient(std::unique_ptr<apache::thrift::Client<thrift::EuGraphService>> client)
+EuGraphRpcClient::EuGraphRpcClient(std::unique_ptr<apache::thrift::Client<thrift_service::EuGraphService>> client)
     : port_(0), evb_(std::make_unique<folly::EventBase>()), evb_thread_([this] { evb_->loopForever(); }),
       client_(std::move(client)) {
     evb_->waitUntilRunning();
@@ -44,7 +44,7 @@ bool EuGraphRpcClient::connect() {
             auto socket = folly::AsyncSocket::UniquePtr(new folly::AsyncSocket(evb_.get(), host_.c_str(), port_));
             auto channel = apache::thrift::RocketClientChannel::newChannel(std::move(socket));
             channel->setTimeout(30000);
-            client_ = std::make_unique<apache::thrift::Client<thrift::EuGraphService>>(std::move(channel));
+            client_ = std::make_unique<apache::thrift::Client<thrift_service::EuGraphService>>(std::move(channel));
         });
         auto t1 = nowMs();
         spdlog::info("[rpc_client] connect: total={}ms", t1 - t0);
@@ -57,7 +57,7 @@ bool EuGraphRpcClient::connect() {
 
 // ==================== Graph Management ====================
 
-thrift::GraphInfo EuGraphRpcClient::createGraph(const std::string& name) {
+thrift_service::GraphInfo EuGraphRpcClient::createGraph(const std::string& name) {
     return client_->semifuture_createGraph(name).via(evb_.get()).get();
 }
 
@@ -65,41 +65,43 @@ bool EuGraphRpcClient::dropGraph(const std::string& name) {
     return client_->semifuture_dropGraph(name).via(evb_.get()).get();
 }
 
-std::vector<thrift::GraphInfo> EuGraphRpcClient::listGraphs() {
+std::vector<thrift_service::GraphInfo> EuGraphRpcClient::listGraphs() {
     return client_->semifuture_listGraphs().via(evb_.get()).get();
 }
 
 // ==================== DDL ====================
 
-thrift::LabelInfo EuGraphRpcClient::createLabel(const std::string& name,
-                                                const std::vector<thrift::PropertyDefThrift>& properties,
-                                                const std::string& graph_name) {
+thrift_service::LabelInfo
+EuGraphRpcClient::createLabel(const std::string& name, const std::vector<thrift_service::PropertyDefThrift>& properties,
+                              const std::string& graph_name) {
     return client_->semifuture_createLabel(name, properties, graph_name).via(evb_.get()).get();
 }
 
-std::vector<thrift::LabelInfo> EuGraphRpcClient::listLabels(const std::string& graph_name) {
+std::vector<thrift_service::LabelInfo> EuGraphRpcClient::listLabels(const std::string& graph_name) {
     return client_->semifuture_listLabels(graph_name).via(evb_.get()).get();
 }
 
-thrift::EdgeLabelInfo EuGraphRpcClient::createEdgeLabel(const std::string& name,
-                                                        const std::vector<thrift::PropertyDefThrift>& properties,
-                                                        const std::string& graph_name) {
+thrift_service::EdgeLabelInfo
+EuGraphRpcClient::createEdgeLabel(const std::string& name,
+                                  const std::vector<thrift_service::PropertyDefThrift>& properties,
+                                  const std::string& graph_name) {
     return client_->semifuture_createEdgeLabel(name, properties, graph_name).via(evb_.get()).get();
 }
 
-std::vector<thrift::EdgeLabelInfo> EuGraphRpcClient::listEdgeLabels(const std::string& graph_name) {
+std::vector<thrift_service::EdgeLabelInfo> EuGraphRpcClient::listEdgeLabels(const std::string& graph_name) {
     return client_->semifuture_listEdgeLabels(graph_name).via(evb_.get()).get();
 }
 
 // ==================== DML ====================
 
-apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>
+apache::thrift::ResponseAndClientBufferedStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>
 EuGraphRpcClient::executeCypher(const std::string& query, const std::string& graph_name,
                                 const std::map<std::string, std::string>& params) {
     return client_->semifuture_executeCypher(query, graph_name, params).via(evb_.get()).get();
 }
 
-folly::coro::Task<apache::thrift::ResponseAndClientBufferedStream<thrift::QueryStreamMeta, thrift::ResultRowBatch>>
+folly::coro::Task<
+    apache::thrift::ResponseAndClientBufferedStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>>
 EuGraphRpcClient::co_executeCypher(const std::string& query, const std::string& graph_name,
                                    const std::map<std::string, std::string>& params) {
     co_return client_->semifuture_executeCypher(query, graph_name, params).via(evb_.get()).get();
@@ -107,9 +109,9 @@ EuGraphRpcClient::co_executeCypher(const std::string& query, const std::string& 
 
 // ==================== Batch Import ====================
 
-thrift::BatchInsertVerticesResult EuGraphRpcClient::batchInsertVertices(const std::string& label_name,
-                                                                        std::vector<thrift::VertexRecord> records,
-                                                                        const std::string& graph_name) {
+thrift_service::BatchInsertVerticesResult
+EuGraphRpcClient::batchInsertVertices(const std::string& label_name, std::vector<thrift_service::VertexRecord> records,
+                                      const std::string& graph_name) {
     auto t0 = nowMs();
     auto resp =
         client_->semifuture_batchInsertVertices(label_name, std::move(records), graph_name).via(evb_.get()).get();
@@ -118,7 +120,7 @@ thrift::BatchInsertVerticesResult EuGraphRpcClient::batchInsertVertices(const st
 }
 
 std::int32_t EuGraphRpcClient::batchInsertEdges(const std::string& edge_label_name,
-                                                std::vector<thrift::EdgeRecord> records,
+                                                std::vector<thrift_service::EdgeRecord> records,
                                                 const std::string& graph_name) {
     auto t0 = nowMs();
     auto resp =

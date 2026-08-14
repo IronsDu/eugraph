@@ -2,13 +2,13 @@
 
 #include "common/types/graph_types.hpp"
 #include "query/parser/database_ddl_parser.hpp"
-#include "server/graph_service.hpp"
+#include "service/graph_service.hpp"
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
 
 using namespace eugraph;
-using namespace eugraph::server;
+using namespace eugraph::service;
 using namespace folly::coro;
 
 namespace {
@@ -230,11 +230,12 @@ TEST_F(GraphServiceDdlTest, ShowDatabasesHasColumnNames) {
     auto exec_ctx =
         blockingWait(svc_->executeCypher("SHOW DATABASES", std::unordered_map<std::string, Value>{}, "default"));
     ASSERT_NE(exec_ctx.ctx, nullptr);
-    EXPECT_EQ(exec_ctx.ctx->columns.size(), 4u);
+    EXPECT_EQ(exec_ctx.ctx->columns.size(), 5u);
     EXPECT_EQ(exec_ctx.ctx->columns[0], "name");
     EXPECT_EQ(exec_ctx.ctx->columns[1], "status");
     EXPECT_EQ(exec_ctx.ctx->columns[2], "type");
     EXPECT_EQ(exec_ctx.ctx->columns[3], "current");
+    EXPECT_EQ(exec_ctx.ctx->columns[4], "currentStatus");
 }
 
 TEST_F(GraphServiceDdlTest, CreateDuplicateDatabaseReturnsIdempotent) {

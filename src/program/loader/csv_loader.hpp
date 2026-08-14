@@ -1,8 +1,8 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "gen-cpp2/EuGraphService.h"
 #include "program/shell/rpc_client.hpp"
+#include "service/thrift/gen-cpp2/EuGraphService.h"
 
 #include <filesystem>
 #include <string>
@@ -54,7 +54,7 @@ std::vector<EdgeTypeSchema> buildEdgeTypeSchemas(const std::vector<CsvFileInfo>&
 PropertyInfo inferPropertyType(const std::string& name, const std::vector<std::string>& samples);
 
 // Convert a string value to thrift PropertyValueThrift.
-thrift::PropertyValueThrift toThriftValue(const std::string& value, bool is_int64);
+thrift_service::PropertyValueThrift toThriftValue(const std::string& value, bool is_int64);
 
 // Create labels on server via RPC.
 void createLabels(shell::EuGraphRpcClient& client, const std::vector<LabelSchema>& schemas);

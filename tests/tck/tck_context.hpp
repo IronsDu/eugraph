@@ -2,8 +2,8 @@
 
 #include "tck_types.hpp"
 
-#include "gen-cpp2/EuGraphService.h"
 #include "program/shell/rpc_client.hpp"
+#include "service/thrift/gen-cpp2/EuGraphService.h"
 
 #include <spdlog/spdlog.h>
 
@@ -79,7 +79,7 @@ struct TckContext {
                msg.find("TTransportException") != std::string::npos;
     }
 
-    thrift::GraphInfo createGraph(const std::string& name) {
+    thrift_service::GraphInfo createGraph(const std::string& name) {
         connectRpc();
         try {
             return rpc->createGraph(name);
@@ -104,8 +104,9 @@ struct TckContext {
         }
     }
 
-    thrift::LabelInfo createLabel(const std::string& name, const std::vector<thrift::PropertyDefThrift>& props,
-                                  const std::string& gname) {
+    thrift_service::LabelInfo createLabel(const std::string& name,
+                                          const std::vector<thrift_service::PropertyDefThrift>& props,
+                                          const std::string& gname) {
         try {
             return rpc->createLabel(name, props, gname);
         } catch (const std::exception& e) {
@@ -118,8 +119,9 @@ struct TckContext {
         }
     }
 
-    thrift::EdgeLabelInfo createEdgeLabel(const std::string& name, const std::vector<thrift::PropertyDefThrift>& props,
-                                          const std::string& gname) {
+    thrift_service::EdgeLabelInfo createEdgeLabel(const std::string& name,
+                                                  const std::vector<thrift_service::PropertyDefThrift>& props,
+                                                  const std::string& gname) {
         try {
             return rpc->createEdgeLabel(name, props, gname);
         } catch (const std::exception& e) {

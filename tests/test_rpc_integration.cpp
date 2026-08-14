@@ -2,11 +2,11 @@
 
 #include <folly/init/Init.h>
 
-#include "gen-cpp2/eugraph_types.h"
-#include "program/server/eugraph_handler.hpp"
 #include "program/shell/rpc_client.hpp"
 #include "query/executor/query_executor.hpp"
-#include "server/graph_service.hpp"
+#include "service/graph_service.hpp"
+#include "service/thrift/eugraph_handler.hpp"
+#include "service/thrift/gen-cpp2/eugraph_types.h"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/graph_manager.hpp"
@@ -36,7 +36,7 @@
 using Clock = std::chrono::steady_clock;
 
 using namespace eugraph;
-using namespace eugraph::thrift;
+using namespace eugraph::thrift_service;
 using namespace folly::coro;
 
 namespace {
@@ -46,7 +46,7 @@ std::string getTestDbPath() {
 }
 
 // Helper to create a PropertyDefThrift
-PropertyDefThrift makePropDef(const std::string& name, eugraph::thrift::PropertyType type) {
+PropertyDefThrift makePropDef(const std::string& name, eugraph::thrift_service::PropertyType type) {
     PropertyDefThrift pd;
     pd.name() = name;
     pd.type() = type;
@@ -58,8 +58,8 @@ class RpcIntegrationTest : public ::testing::Test {
 protected:
     std::string db_path_;
     std::shared_ptr<GraphManager> graph_manager_;
-    std::shared_ptr<server::GraphService> graph_service_;
-    std::shared_ptr<server::EuGraphHandler> handler_;
+    std::shared_ptr<service::GraphService> graph_service_;
+    std::shared_ptr<service::thrift::EuGraphHandler> handler_;
 
     // Real RPC server and client
     std::unique_ptr<apache::thrift::ScopedServerInterfaceThread> server_;
@@ -72,8 +72,8 @@ protected:
         graph_manager_ = std::make_shared<GraphManager>();
         ASSERT_TRUE(graph_manager_->init(db_path_, 2, 2));
 
-        graph_service_ = std::make_shared<server::GraphService>(*graph_manager_);
-        handler_ = std::make_shared<server::EuGraphHandler>(*graph_service_);
+        graph_service_ = std::make_shared<service::GraphService>(*graph_manager_);
+        handler_ = std::make_shared<service::thrift::EuGraphHandler>(*graph_service_);
 
         // Start real fbthrift server via ScopedServerInterfaceThread
         // Use a config callback to set the IO thread pool as handler executor
@@ -176,8 +176,8 @@ protected:
 // ==================== DDL Tests ====================
 
 TEST_F(RpcIntegrationTest, CreateAndListLabels) {
-    auto info = createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
-                                       makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    auto info = createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING),
+                                       makePropDef("age", eugraph::thrift_service::PropertyType::INT64)});
     EXPECT_GE(info.id().value(), 1); // __anon__ label may reserve id=1
     EXPECT_EQ(info.name().value(), "Person");
 
@@ -197,9 +197,9 @@ TEST_F(RpcIntegrationTest, CreateAndListEdgeLabels) {
 // ==================== Index DDL via RPC ====================
 
 TEST_F(RpcIntegrationTest, CreateAndShowIndexes) {
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
-                           makePropDef("age", eugraph::thrift::PropertyType::INT64),
-                           makePropDef("city", eugraph::thrift::PropertyType::STRING)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift_service::PropertyType::INT64),
+                           makePropDef("city", eugraph::thrift_service::PropertyType::STRING)});
 
     // CREATE INDEX (non-unique)
     auto r1 = execCypher("CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
@@ -232,7 +232,7 @@ TEST_F(RpcIntegrationTest, CreateAndShowIndexes) {
 }
 
 TEST_F(RpcIntegrationTest, DropIndex) {
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING)});
     execCypher("CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
 
     auto r1 = execCypher("DROP INDEX idx_name");
@@ -253,7 +253,7 @@ TEST_F(RpcIntegrationTest, CreateIndexLabelNotFound) {
 }
 
 TEST_F(RpcIntegrationTest, UniqueIndexConstraintViaRpc) {
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING)});
 
     // Insert a vertex first so backfill has data to check
     auto r0 = execCypher("CREATE (n:Person {name: \"alice\"})");
@@ -290,8 +290,8 @@ TEST_F(RpcIntegrationTest, UniqueIndexConstraintViaRpc) {
 // ==================== Vertex CRUD ====================
 
 TEST_F(RpcIntegrationTest, CreateVerticesWithPropertiesAndQuery) {
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
-                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift_service::PropertyType::INT64)});
 
     auto r1 = execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})");
     EXPECT_TRUE(r1.error.empty()) << "CREATE error: " << r1.error;
@@ -311,8 +311,8 @@ TEST_F(RpcIntegrationTest, CreateVerticesWithPropertiesAndQuery) {
 // ==================== Adjacency Queries ====================
 
 TEST_F(RpcIntegrationTest, CreateEdgeInSingleStatementAndExpand) {
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
-                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift_service::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
 
     auto r1 = execCypher("CREATE (alice:Person {name: \"Alice\"})-[:KNOWS]->(bob:Person {name: \"Bob\"})");
@@ -328,8 +328,8 @@ TEST_F(RpcIntegrationTest, CreateEdgeInSingleStatementAndExpand) {
 }
 
 TEST_F(RpcIntegrationTest, FullAdjacencyScenario) {
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
-                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift_service::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
 
     execCypher("CREATE (alice:Person {name: \"Alice\", age: 30})-[:KNOWS]->(bob:Person {name: \"Bob\", age: 25})");
@@ -355,8 +355,8 @@ TEST_F(RpcIntegrationTest, PerformanceBenchmark) {
     using ms = std::chrono::milliseconds;
 
     auto t0 = Clock::now();
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
-                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift_service::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
     auto t1 = Clock::now();
     std::cout << "[PERF] DDL (createLabel + createEdgeLabel): " << std::chrono::duration_cast<ms>(t1 - t0).count()
@@ -401,8 +401,8 @@ TEST_F(RpcIntegrationTest, PerformanceBenchmark) {
 TEST_F(RpcIntegrationTest, RPCDetailedTiming) {
     using us = std::chrono::microseconds;
 
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
-                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift_service::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
 
     execCypher("CREATE (a:Person {name: \"Alice\", age: 30})-[:KNOWS]->(b:Person {name: \"Bob\", age: 25})");
@@ -449,8 +449,8 @@ TEST_F(RpcIntegrationTest, RPCDetailedTiming) {
 TEST_F(RpcIntegrationTest, MetadataOverheadAnalysis) {
     using us = std::chrono::microseconds;
 
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING),
-                           makePropDef("age", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING),
+                           makePropDef("age", eugraph::thrift_service::PropertyType::INT64)});
     createEdgeLabel("KNOWS");
 
     for (int i = 0; i < 50; i++) {
@@ -543,7 +543,7 @@ TEST_F(RpcIntegrationTest, MultiGraphLabelIsolation) {
     client_->createGraph("graph_b");
 
     auto label_a =
-        client_->createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING)}, "graph_a");
+        client_->createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING)}, "graph_a");
     EXPECT_GT(label_a.id().value(), 0);
 
     auto labels_a = client_->listLabels("graph_a");
@@ -558,7 +558,7 @@ TEST_F(RpcIntegrationTest, MultiGraphCypherIsolation) {
     client_->createGraph("alpha");
     client_->createGraph("beta");
 
-    client_->createLabel("Node", {makePropDef("val", eugraph::thrift::PropertyType::INT64)}, "alpha");
+    client_->createLabel("Node", {makePropDef("val", eugraph::thrift_service::PropertyType::INT64)}, "alpha");
 
     execCypherOnGraph("CREATE (n:Node {val: 42})", "alpha");
 
@@ -572,7 +572,7 @@ TEST_F(RpcIntegrationTest, MultiGraphCypherIsolation) {
 // ==================== Parameterized Queries ====================
 
 TEST_F(RpcIntegrationTest, ParameterizedQueryNodeProperty) {
-    createLabel("Person", {makePropDef("name", eugraph::thrift::PropertyType::STRING)});
+    createLabel("Person", {makePropDef("name", eugraph::thrift_service::PropertyType::STRING)});
     execCypher("CREATE (:Person {name: 'Alice'}), (:Person {name: 'Bob'})");
 
     auto result = execCypherWithParams("MATCH (n:Person) WHERE n.name = $name RETURN n.name", {{"name", "'Alice'"}});
@@ -582,7 +582,7 @@ TEST_F(RpcIntegrationTest, ParameterizedQueryNodeProperty) {
 }
 
 TEST_F(RpcIntegrationTest, ParameterizedQueryIntegerParam) {
-    createLabel("Node", {makePropDef("val", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Node", {makePropDef("val", eugraph::thrift_service::PropertyType::INT64)});
     execCypher("CREATE (:Node {val: 10}), (:Node {val: 20}), (:Node {val: 30})");
 
     auto result = execCypherWithParams("MATCH (n:Node) WHERE n.val > $threshold RETURN n.val", {{"threshold", "15"}});
@@ -590,7 +590,7 @@ TEST_F(RpcIntegrationTest, ParameterizedQueryIntegerParam) {
 }
 
 TEST_F(RpcIntegrationTest, ParameterizedQueryMultipleParams) {
-    createLabel("Item", {makePropDef("price", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Item", {makePropDef("price", eugraph::thrift_service::PropertyType::INT64)});
     execCypher("CREATE (:Item {price: 5}), (:Item {price: 15}), (:Item {price: 25})");
 
     auto result = execCypherWithParams("MATCH (n:Item) WHERE n.price >= $min AND n.price <= $max RETURN n.price",
@@ -600,7 +600,7 @@ TEST_F(RpcIntegrationTest, ParameterizedQueryMultipleParams) {
 }
 
 TEST_F(RpcIntegrationTest, ParameterizedQueryEmptyParams) {
-    createLabel("Thing", {makePropDef("x", eugraph::thrift::PropertyType::INT64)});
+    createLabel("Thing", {makePropDef("x", eugraph::thrift_service::PropertyType::INT64)});
     execCypher("CREATE (:Thing {x: 1})");
 
     auto result = execCypherWithParams("MATCH (n:Thing) RETURN n.x", {});
