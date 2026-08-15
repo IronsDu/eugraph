@@ -21,6 +21,10 @@ struct ChosenPlan;
 struct PEPlan;
 } // namespace optimizer
 
+namespace function {
+class FunctionRegistry;
+} // namespace function
+
 namespace compute {
 
 /// Context passed through physical planning: maps label/edge-label names to IDs,
@@ -52,6 +56,8 @@ struct PlanContext {
     /// emit Construct columns for names that canonicalForName would
     /// conflate with an alias chain (§6.2).
     optimizer::NameSlotMap fresh_expands;
+    /// Built-in function catalog, used by dbms.functions() procedure rows.
+    const function::FunctionRegistry* func_registry = nullptr;
 
     /// Read-only resolver over (var_slots, alias_map). All read-only query
     /// paths should go through this — direct map access is reserved for the

@@ -411,10 +411,10 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
         params[key] = boltParamToValue(val);
     }
 
+    std::string db_name = current_database_;
     try {
         // Use db from RUN extra metadata if present, otherwise keep current
         auto db_it = msg.extra.find("db");
-        std::string db_name = current_database_;
         if (db_it != msg.extra.end() && std::holds_alternative<std::string>(db_it->second))
             db_name = std::get<std::string>(db_it->second);
 
@@ -429,6 +429,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
             }
         }
 
+        spdlog::info("[bolt] RUN db='{}' query='{}'", db_name, msg.query);
         auto exec_ctx = co_await service_.executeCypher(msg.query, params, db_name);
 
         // Handle USE <graph> — update session database context
@@ -456,6 +457,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
 
         co_return makeSuccess(meta);
     } catch (const std::exception& e) {
+        spdlog::error("[bolt] RUN failed db='{}' query='{}' error='{}'", db_name, msg.query, e.what());
         state_ = SessionState::FAILED;
         co_return makeFailure("DatabaseError", e.what());
     }

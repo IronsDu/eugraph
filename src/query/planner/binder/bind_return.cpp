@@ -2,6 +2,9 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cctype>
+
 namespace eugraph {
 namespace binder {
 
@@ -66,10 +69,16 @@ static bool expressionReferencesVariableImpl(const cypher::Expression& expr, con
 
 // ==================== Aggregate Detection Helper ====================
 
+static std::string toLowerAscii(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
 static bool isAggregateFunctionName(const std::string& name) {
-    return name == "count" || name == "sum" || name == "avg" || name == "min" || name == "max" || name == "collect" ||
-           name == "percentile_cont" || name == "percentile_disc" || name == "percentileCont" ||
-           name == "percentileDisc" || name == "st_dev" || name == "st_dev_p";
+    const std::string lower = toLowerAscii(name);
+    return lower == "count" || lower == "sum" || lower == "avg" || lower == "min" || lower == "max" ||
+           lower == "collect" || lower == "percentile_cont" || lower == "percentile_disc" ||
+           lower == "percentilecont" || lower == "percentiledisc" || lower == "st_dev" || lower == "st_dev_p";
 }
 
 static bool hasAggregate(const cypher::Expression& expr) {
@@ -116,6 +125,15 @@ static bool hasAggregate(const cypher::Expression& expr) {
                     if (hasAggregate(w) || hasAggregate(t))
                         return true;
                 if (ptr->else_expr && hasAggregate(*ptr->else_expr))
+                    return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                return hasAggregate(ptr->list) || hasAggregate(ptr->index);
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                if (hasAggregate(ptr->list))
+                    return true;
+                if (ptr->from && hasAggregate(*ptr->from))
+                    return true;
+                if (ptr->to && hasAggregate(*ptr->to))
                     return true;
             }
             return false;
@@ -404,6 +422,15 @@ static void collectNonAggregateVariables(const cypher::Expression& expr, std::se
                 }
                 if (ptr->else_expr)
                     collectNonAggregateVariables(*ptr->else_expr, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                collectNonAggregateVariables(ptr->list, vars, grouping_key_strs);
+                collectNonAggregateVariables(ptr->index, vars, grouping_key_strs);
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                collectNonAggregateVariables(ptr->list, vars, grouping_key_strs);
+                if (ptr->from)
+                    collectNonAggregateVariables(*ptr->from, vars, grouping_key_strs);
+                if (ptr->to)
+                    collectNonAggregateVariables(*ptr->to, vars, grouping_key_strs);
             }
         },
         expr);
@@ -534,6 +561,15 @@ static void walkAndReplaceAggCalls(binder::BoundExpression& expr,
                 if (ptr->where_pred)
                     walkAndReplaceAggCalls(*ptr->where_pred, out_aggs, agg_idx, group_keys_size);
                 walkAndReplaceAggCalls(ptr->projection, out_aggs, agg_idx, group_keys_size);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
+                walkAndReplaceAggCalls(ptr->list, out_aggs, agg_idx, group_keys_size);
+                walkAndReplaceAggCalls(ptr->index, out_aggs, agg_idx, group_keys_size);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
+                walkAndReplaceAggCalls(ptr->list, out_aggs, agg_idx, group_keys_size);
+                if (ptr->from)
+                    walkAndReplaceAggCalls(*ptr->from, out_aggs, agg_idx, group_keys_size);
+                if (ptr->to)
+                    walkAndReplaceAggCalls(*ptr->to, out_aggs, agg_idx, group_keys_size);
             }
         },
         expr);

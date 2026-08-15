@@ -194,6 +194,26 @@ class TestTypes:
         finally:
             driver.close()
 
+    def test_path_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                session.run(
+                    "CREATE (:PathStart)-[:PATH_EDGE]->(:PathEnd)"
+                )
+                result = session.run(
+                    "MATCH p=(:PathStart)-[:PATH_EDGE]->(:PathEnd) RETURN p"
+                )
+                records = list(result)
+                assert len(records) == 1
+                path = records[0]["p"]
+                assert isinstance(path, neo4j.graph.Path)
+                assert "PathStart" in path.start_node.labels
+                assert "PathEnd" in path.end_node.labels
+                assert [rel.type for rel in path.relationships] == ["PATH_EDGE"]
+        finally:
+            driver.close()
+
     def test_boolean_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
@@ -292,6 +312,19 @@ class TestTypes:
 class TestParameters:
     """Test parameter passing over Bolt."""
 
+    def test_float_slice_param(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                result = session.run(
+                    "RETURN [10, 20, 30][..$n] AS v",
+                    n=2.0,
+                )
+                records = list(result)
+                assert records[0]["v"] == [10, 20]
+        finally:
+            driver.close()
+
     def test_string_param(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
@@ -354,6 +387,168 @@ class TestParameters:
                 )
                 records = list(result)
                 assert records[0]["v"] == {"name": "Alice", "age": 30}
+        finally:
+            driver.close()
+
+
+# ---------------------------------------------------------------------------
+# Built-in procedure tests
+# ---------------------------------------------------------------------------
+
+
+class TestProcedures:
+    """Test Neo4j Browser compatibility procedures."""
+
+    def test_db_labels_relationship_types_and_property_keys(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                session.run(
+                    "CREATE (:ProcedureLabel {browser_key: 1})"
+                    "-[:PROCEDURE_EDGE]->(:ProcedureLabel)"
+                )
+
+                labels = list(session.run("CALL db.labels()"))
+                assert any(record["label"] == "ProcedureLabel" for record in labels)
+
+                rel_types = list(session.run("CALL db.relationshipTypes()"))
+                assert any(
+                    record["relationshipType"] == "PROCEDURE_EDGE"
+                    for record in rel_types
+                )
+
+                property_keys = list(session.run("CALL db.propertyKeys()"))
+                assert any(
+                    record["propertyKey"] == "browser_key"
+                    for record in property_keys
+                )
+        finally:
+            driver.close()
+
+    def test_dbms_client_config_returns_name_value_rows(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                records = list(session.run("CALL dbms.clientConfig()"))
+                assert records
+                assert records[0].keys() == ["name", "value"]
+                by_name = {record["name"]: record["value"] for record in records}
+                assert by_name["dbms.security.auth_enabled"] is True
+                assert by_name["browser.post_connect_cmd"] == ""
+        finally:
+            driver.close()
+
+    def test_db_schema_visualization_returns_virtual_graph(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                session.run(
+                    "CREATE (:SchemaLabel)-[:SCHEMA_REL]->(:SchemaLabel)"
+                )
+
+                records = list(session.run("CALL db.schema.visualization()"))
+                assert records
+                nodes = records[0]["nodes"]
+                relationships = records[0]["relationships"]
+                assert nodes
+                assert relationships
+                assert all(isinstance(node, neo4j.graph.Node) for node in nodes)
+                assert all(
+                    isinstance(rel, neo4j.graph.Relationship)
+                    for rel in relationships
+                )
+                assert any("SchemaLabel" in node.labels for node in nodes)
+                assert any(rel.type == "SCHEMA_REL" for rel in relationships)
+        finally:
+            driver.close()
+
+    def test_browser_show_commands_and_dbms_info(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                databases = list(session.run("SHOW DATABASES YIELD *"))
+                assert databases
+                database = databases[0].data()
+                assert "name" in database
+                assert "aliases" in database
+                assert "default" in database
+                assert "home" in database
+
+                users = list(session.run("SHOW CURRENT USER"))
+                assert len(users) == 1
+                user = users[0].data()
+                assert user["user"] == "neo4j"
+                assert isinstance(user["passwordChangeRequired"], bool)
+
+                procedures = list(session.run("SHOW PROCEDURES YIELD *"))
+                assert any(record["name"] == "db.ping" for record in procedures)
+                assert any(record["name"] == "dbms.info" for record in procedures)
+                assert all(isinstance(record["admin"], bool) for record in procedures)
+
+                functions = list(session.run("SHOW FUNCTIONS YIELD *"))
+                assert any(record["name"] == "id" for record in functions)
+                assert all(isinstance(record["isBuiltIn"], bool) for record in functions)
+
+                info = list(session.run("CALL dbms.info()"))
+                assert len(info) == 1
+                assert info[0].data()["name"] == "EuGraph"
+
+                components = list(
+                    session.run(
+                        "CALL dbms.components() YIELD name, versions, edition"
+                    )
+                )
+                by_component = {record["name"]: record for record in components}
+                assert by_component["Neo4j Kernel"]["versions"] == ["4.4.3"]
+                assert by_component["Cypher"]["versions"] == ["5"]
+
+                # Browser uses uppercase COLLECT in its metadata query.
+                collected = list(
+                    session.run(
+                        "CALL db.labels() YIELD label "
+                        "RETURN COLLECT(label) AS labels"
+                    )
+                )
+                assert collected
+
+                node_types = list(
+                    session.run(
+                        "CALL db.schema.nodeTypeProperties() "
+                        "YIELD nodeLabels, propertyName, propertyTypes"
+                    )
+                )
+                assert any(record["propertyName"] == "name" for record in node_types)
+        finally:
+            driver.close()
+
+    def test_dbms_procedures_lists_builtins(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                records = list(session.run("CALL dbms.procedures()"))
+                names = {record["name"] for record in records}
+                assert {
+                    "db.ping",
+                    "db.labels",
+                    "db.relationshipTypes",
+                    "db.propertyKeys",
+                    "db.indexes",
+                    "dbms.clientConfig",
+                    "dbms.procedures",
+                    "dbms.functions",
+                } <= names
+        finally:
+            driver.close()
+
+    def test_dbms_functions_lists_builtins(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                records = list(session.run("CALL dbms.functions()"))
+                names = {record["name"] for record in records}
+                assert "id" in names
+                assert "abs" in names
+                assert not any(name.startswith("__") for name in names)
         finally:
             driver.close()
 

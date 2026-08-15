@@ -208,6 +208,86 @@ test('pass typed parameters', async () => {
   assert.deepEqual(record.get('items'), [1, 2, 3]);
 });
 
+test('browser compatibility procedures over WebSocket', async () => {
+  const labels = await run((session) =>
+    session
+      .run('CALL db.labels()')
+      .then((result) => result.records.map((record) => record.get('label')))
+  );
+  assert.equal(labels.includes('Person'), true);
+
+  const config = await run((session) =>
+    session
+      .run('CALL dbms.clientConfig()')
+      .then((result) =>
+        result.records.map((record) => ({
+          name: record.get('name'),
+          value: record.get('value'),
+        }))
+      )
+  );
+  assert.equal(config.length > 0, true);
+  assert.equal(config.some((entry) => entry.name === 'dbms.security.auth_enabled' && entry.value === true), true);
+});
+
+test('db.schema.visualization returns virtual graph', async () => {
+  const records = await run((session) =>
+    session
+      .run('CALL db.schema.visualization()')
+      .then((result) => result.records)
+  );
+
+  assert.equal(records.length, 1);
+  const nodes = records[0].get('nodes');
+  const relationships = records[0].get('relationships');
+  assert.equal(Array.isArray(nodes), true);
+  assert.equal(Array.isArray(relationships), true);
+  assert.equal(nodes.some((node) => node.labels.includes('Person')), true);
+  assert.equal(relationships.some((rel) => rel.type === 'KNOWS'), true);
+});
+
+test('return path over WebSocket', async () => {
+  await run((session) =>
+    session.run('CREATE (:PathStart)-[:PATH_EDGE]->(:PathEnd)')
+  );
+
+  const records = await run((session) =>
+    session
+      .run('MATCH p=(:PathStart)-[:PATH_EDGE]->(:PathEnd) RETURN p')
+      .then((result) => result.records)
+  );
+
+  assert.equal(records.length, 1);
+  const path = records[0].get('p');
+  assert.equal(path.start.labels.includes('PathStart'), true);
+  assert.equal(path.end.labels.includes('PathEnd'), true);
+  assert.equal(path.segments.length, 1);
+  assert.equal(path.segments[0].relationship.type, 'PATH_EDGE');
+});
+
+test('browser schema metadata query with plain JS number parameter', async () => {
+  const records = await run((session) =>
+    session
+      .run(
+        'CALL db.labels() YIELD label ' +
+          'RETURN COLLECT(label)[..$itemLimit] AS result ' +
+          'UNION ALL ' +
+          'CALL db.relationshipTypes() YIELD relationshipType ' +
+          'RETURN COLLECT(relationshipType)[..$itemLimit] AS result ' +
+          'UNION ALL ' +
+          'CALL db.propertyKeys() YIELD propertyKey ' +
+          'RETURN COLLECT(propertyKey)[..$itemLimit] AS result',
+        { itemLimit: 1000 }
+      )
+      .then((result) => result.records)
+  );
+
+  assert.equal(records.length, 3);
+  assert.equal(records[0].get('result').includes('Person'), true);
+  assert.equal(records[1].get('result').includes('KNOWS'), true);
+  assert.equal(records[2].get('result').includes('name'), true);
+});
+
 test('explicit transaction commit', async () => {
   await run(async (session) => {
     const tx = session.beginTransaction();

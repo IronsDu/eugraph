@@ -9,6 +9,7 @@
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
 #include <set>
@@ -177,6 +178,15 @@ ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
         }
     }));
     return result;
+}
+
+std::vector<std::string> collectStrings(const ExecutionResult& result, size_t column = 0) {
+    std::vector<std::string> values;
+    for (const auto& row : result.rows) {
+        if (column < row.size() && std::holds_alternative<std::string>(row[column]))
+            values.push_back(std::get<std::string>(row[column]));
+    }
+    return values;
 }
 
 } // anonymous namespace
@@ -7294,6 +7304,18 @@ TEST_F(QueryExecutorTest, TypeConversionToStringOnNodePropertyXProd) {
     EXPECT_EQ(std::get<std::string>(val), "4");
 }
 
+TEST_F(QueryExecutorTest, SliceAcceptsIntegralDoubleBounds) {
+    auto result = execSync(*executor_, "RETURN [10, 20, 30][..2.0] AS value");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<ListValue>(result.rows[0][0]));
+    const auto& list = std::get<ListValue>(result.rows[0][0]);
+    ASSERT_EQ(list.elements.size(), 2u);
+    EXPECT_TRUE(std::holds_alternative<int64_t>(list.elements[0].value));
+    EXPECT_EQ(std::get<int64_t>(list.elements[0].value), 10);
+    EXPECT_EQ(std::get<int64_t>(list.elements[1].value), 20);
+}
+
 TEST_F(QueryExecutorTest, ListSubscript) {
     auto result = execSync(*executor_, "RETURN ['Apa'][toInteger(0)] AS value");
     std::cerr << "Direct: error=" << result.error << " rows=" << result.rows.size() << "\n";
@@ -7312,4 +7334,181 @@ TEST_F(QueryExecutorTest, ListSubscript) {
                                    "RETURN expr[toString(idx)] AS value");
     std::cerr << "Map WITH: error=" << r3.error << " rows=" << r3.rows.size() << "\n";
     ASSERT_TRUE(r3.error.empty()) << r3.error;
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbLabelsReturnsSchemaLabels) {
+    auto result = execSync(*executor_, "CALL db.labels() RETURN label");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    auto labels = collectStrings(result);
+    EXPECT_NE(std::find(labels.begin(), labels.end(), "Person"), labels.end());
+    EXPECT_NE(std::find(labels.begin(), labels.end(), "City"), labels.end());
+    EXPECT_EQ(std::find(labels.begin(), labels.end(), std::string(kAnonLabelName)), labels.end());
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbRelationshipTypesReturnsSchemaEdgeTypes) {
+    auto result = execSync(*executor_, "CALL db.relationshipTypes() RETURN relationshipType");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    auto types = collectStrings(result);
+    EXPECT_NE(std::find(types.begin(), types.end(), "KNOWS"), types.end());
+    EXPECT_NE(std::find(types.begin(), types.end(), "LIVES_IN"), types.end());
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbPropertyKeysReturnsSchemaPropertyKeys) {
+    auto result = execSync(*executor_, "CALL db.propertyKeys() RETURN propertyKey");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    auto keys = collectStrings(result);
+    EXPECT_NE(std::find(keys.begin(), keys.end(), "name"), keys.end());
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbmsClientConfigReturnsBrowserRows) {
+    auto result = execSync(*executor_, "CALL dbms.clientConfig() RETURN name, value");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_FALSE(result.rows.empty());
+
+    bool sawAuthEnabled = false;
+    for (const auto& row : result.rows) {
+        ASSERT_EQ(row.size(), 2u);
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[0]));
+        const auto& name = std::get<std::string>(row[0]);
+        if (name == "dbms.security.auth_enabled") {
+            ASSERT_TRUE(std::holds_alternative<bool>(row[1]));
+            EXPECT_TRUE(std::get<bool>(row[1]));
+            sawAuthEnabled = true;
+        }
+    }
+    EXPECT_TRUE(sawAuthEnabled);
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbmsComponentsReturnsBrowserComponents) {
+    auto result = execSync(*executor_, "CALL dbms.components() RETURN name, versions, edition");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+
+    std::set<std::string> names;
+    for (const auto& row : result.rows) {
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[0]));
+        names.insert(std::get<std::string>(row[0]));
+        ASSERT_TRUE(std::holds_alternative<ListValue>(row[1]));
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[2]));
+    }
+    EXPECT_TRUE(names.count("Neo4j Kernel"));
+    EXPECT_TRUE(names.count("Cypher"));
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbSchemaTypePropertiesReturnsCatalog) {
+    auto node_result = execSync(*executor_, "CALL db.schema.nodeTypeProperties() "
+                                            "RETURN nodeLabels, propertyName, propertyTypes");
+    ASSERT_TRUE(node_result.error.empty()) << node_result.error;
+    ASSERT_GE(node_result.rows.size(), 2u);
+    bool saw_person_name = false;
+    for (const auto& row : node_result.rows) {
+        ASSERT_TRUE(std::holds_alternative<ListValue>(row[0]));
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[1]));
+        const auto& labels = std::get<ListValue>(row[0]);
+        const auto& prop = std::get<std::string>(row[1]);
+        if (labels.elements.size() == 1u && std::holds_alternative<std::string>(labels.elements[0].value) &&
+            std::get<std::string>(labels.elements[0].value) == "Person" && prop == "name") {
+            saw_person_name = true;
+        }
+    }
+    EXPECT_TRUE(saw_person_name);
+
+    ASSERT_TRUE(blockingWait(async_meta_->addEdgeLabelProperties("KNOWS", {{"since", PropertyType::INT64}})));
+    auto rel_result = execSync(*executor_, "CALL db.schema.relTypeProperties() "
+                                           "RETURN relType, propertyName, propertyTypes");
+    ASSERT_TRUE(rel_result.error.empty()) << rel_result.error;
+    ASSERT_EQ(rel_result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(rel_result.rows[0][0]), "KNOWS");
+    EXPECT_EQ(std::get<std::string>(rel_result.rows[0][1]), "since");
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbmsProceduresListsBuiltins) {
+    auto result = execSync(*executor_, "CALL dbms.procedures() RETURN name, signature, mode");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    auto names = collectStrings(result);
+    for (const auto* expected : {"db.ping", "db.labels", "db.relationshipTypes", "db.propertyKeys", "db.indexes",
+                                 "dbms.procedures", "dbms.functions", "dbms.clientConfig"}) {
+        EXPECT_NE(std::find(names.begin(), names.end(), expected), names.end()) << "missing " << expected;
+    }
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbmsFunctionsListsRegistry) {
+    auto result = execSync(*executor_, "CALL dbms.functions() RETURN name, signature");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    auto names = collectStrings(result);
+    ASSERT_FALSE(names.empty());
+    EXPECT_NE(std::find(names.begin(), names.end(), "id"), names.end());
+    EXPECT_NE(std::find(names.begin(), names.end(), "abs"), names.end());
+    EXPECT_EQ(std::find_if(names.begin(), names.end(), [](const auto& name) { return name.starts_with("__"); }),
+              names.end());
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbSchemaVisualizationReturnsVirtualGraph) {
+    insertTestVertices();
+    insertMixedEdges();
+
+    auto result = execSync(*executor_, "CALL db.schema.visualization() RETURN nodes, relationships");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+
+    const auto& row = result.rows[0];
+    ASSERT_TRUE(std::holds_alternative<ListValue>(row[0]));
+    ASSERT_TRUE(std::holds_alternative<ListValue>(row[1]));
+
+    const auto& nodes = std::get<ListValue>(row[0]);
+    ASSERT_EQ(nodes.elements.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(nodes.elements[0].value));
+    const auto& node = std::get<VertexValue>(nodes.elements[0].value);
+    ASSERT_TRUE(node.labels.has_value());
+    EXPECT_TRUE(node.labels->count(PERSON_LABEL));
+
+    const auto& rels = std::get<ListValue>(row[1]);
+    ASSERT_EQ(rels.elements.size(), 2u);
+    std::set<EdgeLabelId> rel_types;
+    for (const auto& elem : rels.elements) {
+        ASSERT_TRUE(std::holds_alternative<EdgeValue>(elem.value));
+        const auto& edge = std::get<EdgeValue>(elem.value);
+        EXPECT_EQ(edge.src_id, node.id);
+        EXPECT_EQ(edge.dst_id, node.id);
+        rel_types.insert(edge.label_id);
+    }
+    EXPECT_TRUE(rel_types.count(KNOWS_LABEL));
+    EXPECT_TRUE(rel_types.count(LIVES_IN_LABEL));
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbIndexesReturnsMetaIndex) {
+    ASSERT_TRUE(blockingWait(async_meta_->createVertexIndex("idx_person_name", "Person", {"name"}, false)));
+    ASSERT_TRUE(blockingWait(async_meta_->updateIndexState("idx_person_name", IndexState::PUBLIC)));
+
+    auto result = execSync(*executor_, "CALL db.indexes() RETURN name, state, populationPercent, uniqueness, type, "
+                                       "entityType, labelsOrTypes, properties, owningConstraint");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+
+    const auto& row = result.rows[0];
+    ASSERT_TRUE(std::holds_alternative<std::string>(row[0]));
+    EXPECT_EQ(std::get<std::string>(row[0]), "idx_person_name");
+    ASSERT_TRUE(std::holds_alternative<std::string>(row[1]));
+    EXPECT_EQ(std::get<std::string>(row[1]), "ONLINE");
+    ASSERT_TRUE(std::holds_alternative<double>(row[2]));
+    EXPECT_DOUBLE_EQ(std::get<double>(row[2]), 100.0);
+    ASSERT_TRUE(std::holds_alternative<std::string>(row[3]));
+    EXPECT_EQ(std::get<std::string>(row[3]), "NONUNIQUE");
+    ASSERT_TRUE(std::holds_alternative<std::string>(row[4]));
+    EXPECT_EQ(std::get<std::string>(row[4]), "BTREE");
+    ASSERT_TRUE(std::holds_alternative<std::string>(row[5]));
+    EXPECT_EQ(std::get<std::string>(row[5]), "NODE");
+
+    ASSERT_TRUE(std::holds_alternative<ListValue>(row[6]));
+    const auto& labels = std::get<ListValue>(row[6]);
+    ASSERT_EQ(labels.elements.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(labels.elements[0].value));
+    EXPECT_EQ(std::get<std::string>(labels.elements[0].value), "Person");
+
+    ASSERT_TRUE(std::holds_alternative<ListValue>(row[7]));
+    const auto& props = std::get<ListValue>(row[7]);
+    ASSERT_EQ(props.elements.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(props.elements[0].value));
+    EXPECT_EQ(std::get<std::string>(props.elements[0].value), "name");
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(row[8]));
 }

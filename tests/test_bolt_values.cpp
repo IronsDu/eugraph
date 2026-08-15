@@ -322,12 +322,39 @@ TEST_F(BoltValueMappingTest, ConvertPath) {
     auto& rels = std::get<PSList>(path.fields[1].value);
     ASSERT_EQ(rels.size(), 1u);
 
-    // sequence: [0, 0] means node[0], rel[0], node[1] should be [0N, 0R, 1N]
+    // Bolt PATH sequence is [rel_index, next_node_index]. The first node
+    // is implicitly nodes[0].
     auto& seq = std::get<PSList>(path.fields[2].value);
-    ASSERT_EQ(seq.size(), 3u);
-    EXPECT_EQ(std::get<int64_t>(seq[0].value), 0); // first node (index into nodes)
-    EXPECT_EQ(std::get<int64_t>(seq[1].value), 0); // first rel (index into rels)
-    EXPECT_EQ(std::get<int64_t>(seq[2].value), 1); // second node
+    ASSERT_EQ(seq.size(), 2u);
+    EXPECT_EQ(std::get<int64_t>(seq[0].value), 1); // +rel[0], traversed start->end
+    EXPECT_EQ(std::get<int64_t>(seq[1].value), 1); // nodes[1]
+}
+
+TEST_F(BoltValueMappingTest, ConvertPathReversedRelationship) {
+    PathValue pv;
+    VertexValue v1;
+    v1.id = 100;
+    pv.elements.push_back({Value{std::move(v1)}});
+
+    EdgeValue e1;
+    e1.id = 500;
+    e1.src_id = 200;
+    e1.dst_id = 100;
+    e1.label_id = 10;
+    pv.elements.push_back({Value{std::move(e1)}});
+
+    VertexValue v2;
+    v2.id = 200;
+    pv.elements.push_back({Value{std::move(v2)}});
+
+    Value val{std::move(pv)};
+    auto result = valueToBolt(val, label_defs_, edge_label_defs_);
+    ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
+    auto& path = std::get<packstream::PackStreamStruct>(result);
+    auto& seq = std::get<PSList>(path.fields[2].value);
+    ASSERT_EQ(seq.size(), 2u);
+    EXPECT_EQ(std::get<int64_t>(seq[0].value), -1); // -rel[0], traversed end->start
+    EXPECT_EQ(std::get<int64_t>(seq[1].value), 1);  // nodes[1]
 }
 
 // ==================== Temporal types ====================

@@ -158,6 +158,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .alias_map = {},
         .slot_allocator = {},
         .fresh_expands = {},
+        .func_registry = ctx->func_registry.get(),
     };
 
     plan_ctx.eval_ctx.catalog = ctx->catalog.get();
