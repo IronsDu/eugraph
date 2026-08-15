@@ -11,6 +11,10 @@ jobs:
   build-gcc:
     name: Ubuntu (GCC)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
 
     steps:
     - name: Checkout code
@@ -55,8 +59,8 @@ jobs:
         runVcpkgInstall: true
         doNotCache: false
         vcpkgJsonGlob: vcpkg.json
-        vcpkgJsonIgnores: ['**/vcpkg/**']
-        runVcpkgFormatString: ['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']
+        vcpkgJsonIgnores: "['**/vcpkg/**']"
+        runVcpkgFormatString: "['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']"
 
     - name: Debug vcpkg environment
       run: |
@@ -74,9 +78,6 @@ jobs:
 
     - name: Build
       run: cmake --build --preset=release
-
-    - name: Run tests
-      run: ctest --preset=release --verbose
 
     - name: Check library linking
       working-directory: build/release
@@ -133,8 +134,8 @@ jobs:
         runVcpkgInstall: true
         doNotCache: false
         vcpkgJsonGlob: vcpkg.json
-        vcpkgJsonIgnores: ['**/vcpkg/**']
-        runVcpkgFormatString: ['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']
+        vcpkgJsonIgnores: "['**/vcpkg/**']"
+        runVcpkgFormatString: "['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']"
 
     - name: Configure CMake with Coverage
       run: cmake --preset=coverage
@@ -151,7 +152,9 @@ jobs:
         gcovr --xml-pretty --exclude-unreachable-branches --print-summary \
           --output coverage.xml \
           --root ${{ github.workspace }} \
-          --filter ${{ github.workspace }}/src
+          --filter '${{ github.workspace }}/src' \
+          --exclude '${{ github.workspace }}/src/service/thrift/gen-cpp2/.*' \
+          --exclude '${{ github.workspace }}/src/query/parser/generated/.*'
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
@@ -212,8 +215,8 @@ jobs:
         runVcpkgInstall: true
         doNotCache: false
         vcpkgJsonGlob: vcpkg.json
-        vcpkgJsonIgnores: ['**/vcpkg/**']
-        runVcpkgFormatString: ['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']
+        vcpkgJsonIgnores: "['**/vcpkg/**']"
+        runVcpkgFormatString: "['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']"
 
     - name: Debug vcpkg environment
       run: |
@@ -231,6 +234,3 @@ jobs:
 
     - name: Build
       run: cmake --build --preset=clang-release
-
-    - name: Run tests
-      run: ctest --preset=clang-release --verbose

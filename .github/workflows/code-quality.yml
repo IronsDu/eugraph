@@ -34,6 +34,8 @@ jobs:
     name: Address Sanitizer
     runs-on: ubuntu-latest
     permissions:
+      contents: read
+      checks: write
       pull-requests: write
 
     steps:
@@ -135,13 +137,21 @@ jobs:
     - name: Run tests with ASan
       working-directory: build
       run: |
-        ctest --output-on-failure --verbose
+        ctest --output-on-failure --verbose --output-junit junit.xml
       env:
         ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
         TCK_REPORT_PATH: ${{ github.workspace }}/build/tck-report.md
         TCK_BASELINE_REPORT_PATH: ${{ github.workspace }}/build/tck-baseline-report.md
         TCK_STEP_RESULTS_PATH: ${{ github.workspace }}/build/tck-step-results.json
         TCK_STEP_BASELINE_PATH: ${{ github.workspace }}/build/tck-step-baseline.json
+
+    - name: Publish unit test results
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      if: always() && hashFiles('build/junit.xml') != ''
+      with:
+        files: build/junit.xml
+        check_name: Unit Test Results
+        comment_title: Unit Test Report
 
     - name: Post TCK report to PR
       uses: marocchino/sticky-pull-request-comment@v2

@@ -12,6 +12,12 @@ endif()
 option(EUGRAPH_BUILD_TESTS "Build unit tests" ON)
 option(EUGRAPH_ENABLE_CCACHE "Enable ccache for faster rebuilds" OFF)
 option(EUGRAPH_UNITY_BUILD "Enable unity builds to reduce compilation time" OFF)
+option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+
+if(ENABLE_COVERAGE)
+    add_compile_options(--coverage)
+    add_link_options(--coverage)
+endif()
 
 # ccache support
 if(EUGRAPH_ENABLE_CCACHE)
@@ -158,6 +164,7 @@ target_include_directories(eugraph_metadata PUBLIC
 target_link_libraries(eugraph_metadata PUBLIC
     eugraph_lib
     Folly::folly
+    atomic
     spdlog::spdlog
 )
 
@@ -255,6 +262,7 @@ target_link_libraries(eugraph_query_engine PUBLIC
     eugraph_lib
     Folly::folly
     Folly::folly_deps
+    atomic
     spdlog::spdlog
 )
 
@@ -293,6 +301,7 @@ target_link_libraries(eugraph_thrift PUBLIC
     FBThrift::thriftcpp2
     FBThrift::async
     Folly::folly
+    atomic
 )
 
 # ==================== Bolt Protocol (Neo4j protocol support) ====================
