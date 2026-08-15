@@ -265,6 +265,29 @@ test('return path over WebSocket', async () => {
   assert.equal(path.segments[0].relationship.type, 'PATH_EDGE');
 });
 
+test('browser schema metadata query with plain JS number parameter', async () => {
+  const records = await run((session) =>
+    session
+      .run(
+        'CALL db.labels() YIELD label ' +
+          'RETURN COLLECT(label)[..$itemLimit] AS result ' +
+          'UNION ALL ' +
+          'CALL db.relationshipTypes() YIELD relationshipType ' +
+          'RETURN COLLECT(relationshipType)[..$itemLimit] AS result ' +
+          'UNION ALL ' +
+          'CALL db.propertyKeys() YIELD propertyKey ' +
+          'RETURN COLLECT(propertyKey)[..$itemLimit] AS result',
+        { itemLimit: 1000 }
+      )
+      .then((result) => result.records)
+  );
+
+  assert.equal(records.length, 3);
+  assert.equal(records[0].get('result').includes('Person'), true);
+  assert.equal(records[1].get('result').includes('KNOWS'), true);
+  assert.equal(records[2].get('result').includes('name'), true);
+});
+
 test('explicit transaction commit', async () => {
   await run(async (session) => {
     const tx = session.beginTransaction();
