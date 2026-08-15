@@ -708,6 +708,12 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                                                             extra_corr_vars.push_back(*np.variable);
                                                     }
                                                 }
+                                                // Also walk the MATCH clause's WHERE for
+                                                // pattern predicates that reference grandparent
+                                                // variables (e.g. MATCH (l) WHERE
+                                                // (l)<-[:R]-(n)-[:R]->(m)).
+                                                if ((*mc)->where_pred)
+                                                    collect(*(*mc)->where_pred);
                                             }
                                         }
                                     }
@@ -927,22 +933,37 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         // Skip variables already in the current scope (e.g. start var).
         if (ctx_.lookup(var_name))
             continue;
-        bool dup = (is_correlated && outer_slot == ait->second);
+        // Use the slot from saved_ctx (caller scope) as the correlation
+        // left_slot. saved_ctx was captured before beginSubScope and holds
+        // the caller's symbol table, which is what the SemiJoin left layout
+        // will contain. all_symbols always holds the outermost slot, which
+        // is wrong for nested EXISTS (where the caller scope has a
+        // different slot from the outermost scope).
+        SlotId left_slot;
+        auto saved_it = saved_ctx.symbols.find(var_name);
+        if (saved_it != saved_ctx.symbols.end())
+            left_slot = saved_it->second.slot_id;
+        else
+            left_slot = ait->second;
+        bool dup = (is_correlated && outer_slot == left_slot);
         for (const auto& [os, _] : correlation)
-            if (os == ait->second) {
+            if (os == left_slot) {
                 dup = true;
                 break;
             }
         if (dup)
             continue;
-        SlotId sub_slot = allocateNamedSlot(var_name);
+        // Reuse the caller scope's slot rather than allocating a fresh one.
+        // Using the same slot for this variable name across all scopes keeps
+        // var_slots / PE plans / PropertyRef replay consistent (§extra_corr_slot).
+        SlotId sub_slot = left_slot;
         ColumnInfo ci;
         ci.name = var_name;
         ci.type = BoundType::Vertex();
         ci.column_index = nextColumnIndex();
         ci.slot_id = sub_slot;
         ctx_.symbols[var_name] = ci;
-        correlation.emplace_back(ait->second, sub_slot);
+        correlation.emplace_back(left_slot, sub_slot);
     }
 
     // Create the source leaf operator
@@ -959,6 +980,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                         topo.kind = tk;
                     source.types.push_back(std::move(topo));
                     source.column_indices.push_back(info.column_index);
+                    source.slot_ids.push_back(sub_slot);
                     break;
                 }
             }
@@ -1047,10 +1069,62 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             }
             synthetic_match.patterns.push_back(std::move(cloned_pp));
         }
+        // Clone an expression, rewriting chain variable names to their
+        // sub-dst equivalents so the WHERE clause can reference chain
+        // nodes by their in-scope names (e.g. m → __exists_dst_1).
+        std::function<cypher::Expression(const cypher::Expression&)> cloneAndRewriteExpr;
+        cloneAndRewriteExpr = [&](const cypher::Expression& expr) -> cypher::Expression {
+            return std::visit(
+                [&](const auto& ptr) -> cypher::Expression {
+                    using T = std::decay_t<decltype(ptr)>;
+                    using Elem = typename T::element_type;
+                    if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                        auto rw = chain_var_rewrite.find(ptr->name);
+                        if (rw != chain_var_rewrite.end()) {
+                            auto v = std::make_unique<cypher::Variable>();
+                            v->name = rw->second;
+                            return v;
+                        }
+                        return std::make_unique<cypher::Variable>(*ptr);
+                    } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                        auto c = std::make_unique<cypher::PropertyAccess>();
+                        c->object = cloneAndRewriteExpr(ptr->object);
+                        c->property = ptr->property;
+                        return c;
+                    } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                        auto c = std::make_unique<cypher::BinaryOp>();
+                        c->op = ptr->op;
+                        c->left = cloneAndRewriteExpr(ptr->left);
+                        c->right = cloneAndRewriteExpr(ptr->right);
+                        return c;
+                    } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                        auto c = std::make_unique<cypher::UnaryOp>();
+                        c->op = ptr->op;
+                        c->operand = cloneAndRewriteExpr(ptr->operand);
+                        return c;
+                    } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                        auto c = std::make_unique<cypher::FunctionCall>();
+                        c->name = ptr->name;
+                        c->distinct = ptr->distinct;
+                        for (const auto& a : ptr->args)
+                            c->args.push_back(cloneAndRewriteExpr(a));
+                        return c;
+                    } else if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
+                        auto c = std::make_unique<cypher::LabelCastExpr>();
+                        c->object = cloneAndRewriteExpr(ptr->object);
+                        c->label = ptr->label;
+                        return c;
+                    }
+                    // For everything else, use plain cloneExpression
+                    return cloneExpression(expr);
+                },
+                expr);
+        };
+
         if (is_full_query && full_query_where) {
             synthetic_match.where_pred = std::move(full_query_where);
         } else if (!is_full_query && where_pred) {
-            synthetic_match.where_pred = cloneExpression(*where_pred);
+            synthetic_match.where_pred = cloneAndRewriteExpr(*where_pred);
         }
 
         sub_plan = bindMatch(synthetic_match, std::move(source_op), false);
