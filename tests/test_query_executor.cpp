@@ -7367,6 +7367,22 @@ TEST_F(QueryExecutorTest, ProcedureDbmsClientConfigReturnsBrowserRows) {
     EXPECT_TRUE(sawAuthEnabled);
 }
 
+TEST_F(QueryExecutorTest, ProcedureDbmsComponentsReturnsBrowserComponents) {
+    auto result = execSync(*executor_, "CALL dbms.components() RETURN name, versions, edition");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+
+    std::set<std::string> names;
+    for (const auto& row : result.rows) {
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[0]));
+        names.insert(std::get<std::string>(row[0]));
+        ASSERT_TRUE(std::holds_alternative<ListValue>(row[1]));
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[2]));
+    }
+    EXPECT_TRUE(names.count("Neo4j Kernel"));
+    EXPECT_TRUE(names.count("Cypher"));
+}
+
 TEST_F(QueryExecutorTest, ProcedureDbmsProceduresListsBuiltins) {
     auto result = execSync(*executor_, "CALL dbms.procedures() RETURN name, signature, mode");
     ASSERT_TRUE(result.error.empty()) << result.error;

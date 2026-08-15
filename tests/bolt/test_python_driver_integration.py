@@ -460,6 +460,15 @@ class TestProcedures:
                 assert len(info) == 1
                 assert info[0].data()["name"] == "EuGraph"
 
+                components = list(
+                    session.run(
+                        "CALL dbms.components() YIELD name, versions, edition"
+                    )
+                )
+                by_component = {record["name"]: record for record in components}
+                assert by_component["Neo4j Kernel"]["versions"] == ["4.4.3"]
+                assert by_component["Cypher"]["versions"] == ["5"]
+
                 # Browser uses uppercase COLLECT in its metadata query.
                 collected = list(
                     session.run(

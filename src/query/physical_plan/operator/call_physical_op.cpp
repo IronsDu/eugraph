@@ -202,9 +202,17 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
     if (procedure == "db.ping") {
         rows.push_back({Value{true}});
     } else if (procedure == "dbms.components") {
-        ListValue versions;
-        versions.elements.push_back({ValueStorage{Value{std::string{"4.4.3"}}}});
-        rows.push_back({Value{std::string{"EuGraph"}}, Value{versions}, Value{std::string{"community"}}});
+        // Neo4j Browser derives the server version from the `Neo4j Kernel`
+        // component and the Cypher version from the `Cypher` component. Keep
+        // the advertised server version in the 4.4.x range so Browser uses
+        // CALL dbms.procedures()/dbms.functions() (both are implemented).
+        ListValue kernel_versions;
+        kernel_versions.elements.push_back({ValueStorage{Value{std::string{"4.4.3"}}}});
+        rows.push_back({Value{std::string{"Neo4j Kernel"}}, Value{kernel_versions}, Value{std::string{"community"}}});
+
+        ListValue cypher_versions;
+        cypher_versions.elements.push_back({ValueStorage{Value{std::string{"5"}}}});
+        rows.push_back({Value{std::string{"Cypher"}}, Value{cypher_versions}, Value{std::string{"community"}}});
     } else if (procedure == "dbms.clientConfig") {
         for (const auto& [name, value] : clientConfigRows())
             rows.push_back({Value{name}, value});
