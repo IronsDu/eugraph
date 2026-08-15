@@ -194,6 +194,26 @@ class TestTypes:
         finally:
             driver.close()
 
+    def test_path_return(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                session.run(
+                    "CREATE (:PathStart)-[:PATH_EDGE]->(:PathEnd)"
+                )
+                result = session.run(
+                    "MATCH p=(:PathStart)-[:PATH_EDGE]->(:PathEnd) RETURN p"
+                )
+                records = list(result)
+                assert len(records) == 1
+                path = records[0]["p"]
+                assert isinstance(path, neo4j.graph.Path)
+                assert "PathStart" in path.start_node.labels
+                assert "PathEnd" in path.end_node.labels
+                assert [rel.type for rel in path.relationships] == ["PATH_EDGE"]
+        finally:
+            driver.close()
+
     def test_boolean_return(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:

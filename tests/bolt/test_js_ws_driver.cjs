@@ -246,6 +246,25 @@ test('db.schema.visualization returns virtual graph', async () => {
   assert.equal(relationships.some((rel) => rel.type === 'KNOWS'), true);
 });
 
+test('return path over WebSocket', async () => {
+  await run((session) =>
+    session.run('CREATE (:PathStart)-[:PATH_EDGE]->(:PathEnd)')
+  );
+
+  const records = await run((session) =>
+    session
+      .run('MATCH p=(:PathStart)-[:PATH_EDGE]->(:PathEnd) RETURN p')
+      .then((result) => result.records)
+  );
+
+  assert.equal(records.length, 1);
+  const path = records[0].get('p');
+  assert.equal(path.start.labels.includes('PathStart'), true);
+  assert.equal(path.end.labels.includes('PathEnd'), true);
+  assert.equal(path.segments.length, 1);
+  assert.equal(path.segments[0].relationship.type, 'PATH_EDGE');
+});
+
 test('explicit transaction commit', async () => {
   await run(async (session) => {
     const tx = session.beginTransaction();

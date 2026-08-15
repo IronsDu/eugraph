@@ -5,6 +5,7 @@
 #include "query/dataset/row.hpp"
 #include "service/bolt/bolt_messages.hpp"
 
+#include <optional>
 #include <string>
 
 namespace eugraph {
@@ -236,17 +237,31 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         std::vector<PS> nodes;
         std::vector<PS> rels;
         std::vector<PS> sequence;
+        VertexId last_node_id = INVALID_VERTEX_ID;
+        std::optional<int64_t> pending_rel;
 
+        // Bolt PATH sequence is [rel_index, next_node_index, ...]. The first
+        // element of a path is implicitly nodes[0]. A positive rel_index means
+        // the relationship is traversed start->end; a negative index means
+        // end->start.
         for (size_t i = 0; i < p.elements.size(); ++i) {
             const auto& elem = p.elements[i].value;
             if (std::holds_alternative<VertexValue>(elem)) {
-                auto node_bolt = valueToBolt(elem, label_defs, edge_label_defs);
+                const auto& node = std::get<VertexValue>(elem);
+                auto node_bolt = valueToBolt(elem, label_defs, edge_label_defs, bolt_version);
                 nodes.push_back(PS{std::move(node_bolt)});
-                sequence.push_back(PS{static_cast<int64_t>(nodes.size() - 1)});
+                if (pending_rel) {
+                    sequence.push_back(PS{*pending_rel});
+                    sequence.push_back(PS{static_cast<int64_t>(nodes.size() - 1)});
+                    pending_rel.reset();
+                }
+                last_node_id = node.id;
             } else if (std::holds_alternative<EdgeValue>(elem)) {
-                auto edge_bolt = valueToBolt(elem, label_defs, edge_label_defs);
+                const auto& edge = std::get<EdgeValue>(elem);
+                auto edge_bolt = valueToBolt(elem, label_defs, edge_label_defs, bolt_version);
                 rels.push_back(PS{std::move(edge_bolt)});
-                sequence.push_back(PS{static_cast<int64_t>(rels.size() - 1)});
+                int64_t rel_index = static_cast<int64_t>(rels.size());
+                pending_rel = edge.src_id == last_node_id ? rel_index : -rel_index;
             }
         }
 
