@@ -51,9 +51,10 @@ std::optional<BoundLogicalOperator> Binder::bindCall(const cypher::CallClause& c
         call_op->output_names = {"nodes", "relationships"};
         call_op->output_types = {BoundType::List(BoundType::Any()), BoundType::List(BoundType::Any())};
     } else if (proc_base == "dbms.clientConfig") {
-        // Neo4j Browser calls this on connect; return empty result.
-        call_op->output_names = {"value"};
-        call_op->output_types = {BoundType::Map(BoundType::String(), BoundType::Any())};
+        // Neo4j Browser calls this on connect and reads one (name, value)
+        // row per client setting.
+        call_op->output_names = {"name", "value"};
+        call_op->output_types = {BoundType::String(), BoundType::Any()};
     } else if (proc_base == "db.indexes") {
         call_op->output_names = {"id",   "name",       "state",         "populationPercent", "uniqueness",
                                  "type", "entityType", "labelsOrTypes", "properties",        "owningConstraint"};

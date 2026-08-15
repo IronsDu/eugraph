@@ -247,7 +247,15 @@ Bolt v5.1 使用分块传输编码进行消息帧定界：
 
 ### 7. CALL 存储过程
 
-`BoundCallOp` 逻辑算子 + `CallPhysicalOp` 物理算子支持 CALL 子句。内置存储过程：`db.ping()` 和 `db.schema.visualization()`。
+`BoundCallOp` 逻辑算子 + `CallPhysicalOp` 物理算子支持 CALL 子句。内置存储过程：
+
+- `db.ping()`：连通性检查。
+- `db.schema.visualization()`：返回 schema 可视化所需的 nodes / relationships 列表。
+- `dbms.clientConfig()`：返回 Neo4j Browser 客户端配置（`name` / `value` 行）。
+- `db.labels()`、`db.relationshipTypes()`、`db.propertyKeys()`：返回当前库的 label、关系类型和属性键。
+- `db.indexes()`：返回当前库的索引信息。
+- `dbms.procedures()`、`dbms.functions()`：返回内置存储过程 / 函数目录。
+- `dbms.components()`：返回 DBMS 组件版本信息。
 
 ### 8. Cypher DDL（数据库管理）
 

@@ -2161,9 +2161,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                 } else if constexpr (std::is_same_v<Elem, binder::BoundCallOp>) {
                     Schema output_schema = v.output_names;
                     std::vector<binder::BoundType> output_types = v.output_types;
-                    auto result =
-                        std::make_unique<CallPhysicalOp>(v.procedure_name, std::move(v.output_names),
-                                                         std::vector<binder::BoundType>(v.output_types), &meta);
+                    auto result = std::make_unique<CallPhysicalOp>(v.procedure_name, std::move(v.output_names),
+                                                                   std::vector<binder::BoundType>(v.output_types),
+                                                                   &meta, ctx.func_registry);
                     TupleSlotLayout layout = makeSlotLayout(output_schema, ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                               std::move(layout)};

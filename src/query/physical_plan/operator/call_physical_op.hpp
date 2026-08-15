@@ -11,14 +11,18 @@
 #include <vector>
 
 namespace eugraph {
+namespace function {
+class FunctionRegistry;
+}
 namespace compute {
 
 class CallPhysicalOp : public PhysicalOperator {
 public:
     CallPhysicalOp(std::string procedure_name, std::vector<std::string> output_names,
-                   std::vector<binder::BoundType> output_types, IAsyncGraphMetaStore* meta = nullptr)
+                   std::vector<binder::BoundType> output_types, IAsyncGraphMetaStore* meta = nullptr,
+                   const function::FunctionRegistry* func_registry = nullptr)
         : procedure_name_(std::move(procedure_name)), output_names_(std::move(output_names)),
-          output_types_(std::move(output_types)), meta_(meta) {}
+          output_types_(std::move(output_types)), meta_(meta), func_registry_(func_registry) {}
 
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
@@ -34,6 +38,7 @@ private:
     std::vector<std::string> output_names_;
     std::vector<binder::BoundType> output_types_;
     IAsyncGraphMetaStore* meta_ = nullptr;
+    const function::FunctionRegistry* func_registry_ = nullptr;
 };
 
 } // namespace compute

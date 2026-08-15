@@ -35,6 +35,10 @@ public:
     /// Check whether a function with the given name exists.
     bool exists(const std::string& name) const;
 
+    /// Return all registered function overloads. Used by dbms.functions()
+    /// to expose the built-in function catalog over Bolt.
+    std::vector<FunctionDef> listFunctions() const;
+
 private:
     // name -> list of overloads
     std::unordered_map<std::string, std::vector<FunctionDef>> functions_;

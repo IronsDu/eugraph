@@ -208,6 +208,28 @@ test('pass typed parameters', async () => {
   assert.deepEqual(record.get('items'), [1, 2, 3]);
 });
 
+test('browser compatibility procedures over WebSocket', async () => {
+  const labels = await run((session) =>
+    session
+      .run('CALL db.labels()')
+      .then((result) => result.records.map((record) => record.get('label')))
+  );
+  assert.equal(labels.includes('Person'), true);
+
+  const config = await run((session) =>
+    session
+      .run('CALL dbms.clientConfig()')
+      .then((result) =>
+        result.records.map((record) => ({
+          name: record.get('name'),
+          value: record.get('value'),
+        }))
+      )
+  );
+  assert.equal(config.length > 0, true);
+  assert.equal(config.some((entry) => entry.name === 'dbms.security.auth_enabled' && entry.value === true), true);
+});
+
 test('explicit transaction commit', async () => {
   await run(async (session) => {
     const tx = session.beginTransaction();

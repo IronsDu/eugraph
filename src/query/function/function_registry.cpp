@@ -1383,5 +1383,16 @@ bool FunctionRegistry::exists(const std::string& name) const {
     return functions_.find(name) != functions_.end();
 }
 
+std::vector<FunctionDef> FunctionRegistry::listFunctions() const {
+    std::vector<FunctionDef> result;
+    result.reserve(functions_.size());
+    for (const auto& [name, overloads] : functions_) {
+        (void)name;
+        for (const auto& def : overloads)
+            result.push_back(def);
+    }
+    return result;
+}
+
 } // namespace function
 } // namespace eugraph

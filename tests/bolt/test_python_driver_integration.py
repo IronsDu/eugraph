@@ -359,6 +359,85 @@ class TestParameters:
 
 
 # ---------------------------------------------------------------------------
+# Built-in procedure tests
+# ---------------------------------------------------------------------------
+
+
+class TestProcedures:
+    """Test Neo4j Browser compatibility procedures."""
+
+    def test_db_labels_relationship_types_and_property_keys(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                session.run(
+                    "CREATE (:ProcedureLabel {browser_key: 1})"
+                    "-[:PROCEDURE_EDGE]->(:ProcedureLabel)"
+                )
+
+                labels = list(session.run("CALL db.labels()"))
+                assert any(record["label"] == "ProcedureLabel" for record in labels)
+
+                rel_types = list(session.run("CALL db.relationshipTypes()"))
+                assert any(
+                    record["relationshipType"] == "PROCEDURE_EDGE"
+                    for record in rel_types
+                )
+
+                property_keys = list(session.run("CALL db.propertyKeys()"))
+                assert any(
+                    record["propertyKey"] == "browser_key"
+                    for record in property_keys
+                )
+        finally:
+            driver.close()
+
+    def test_dbms_client_config_returns_name_value_rows(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                records = list(session.run("CALL dbms.clientConfig()"))
+                assert records
+                assert records[0].keys() == ["name", "value"]
+                by_name = {record["name"]: record["value"] for record in records}
+                assert by_name["dbms.security.auth_enabled"] is True
+                assert by_name["browser.post_connect_cmd"] == ""
+        finally:
+            driver.close()
+
+    def test_dbms_procedures_lists_builtins(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                records = list(session.run("CALL dbms.procedures()"))
+                names = {record["name"] for record in records}
+                assert {
+                    "db.ping",
+                    "db.labels",
+                    "db.relationshipTypes",
+                    "db.propertyKeys",
+                    "db.indexes",
+                    "dbms.clientConfig",
+                    "dbms.procedures",
+                    "dbms.functions",
+                } <= names
+        finally:
+            driver.close()
+
+    def test_dbms_functions_lists_builtins(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                records = list(session.run("CALL dbms.functions()"))
+                names = {record["name"] for record in records}
+                assert "id" in names
+                assert "abs" in names
+                assert not any(name.startswith("__") for name in names)
+        finally:
+            driver.close()
+
+
+# ---------------------------------------------------------------------------
 # Transaction tests
 # ---------------------------------------------------------------------------
 
