@@ -7304,6 +7304,18 @@ TEST_F(QueryExecutorTest, TypeConversionToStringOnNodePropertyXProd) {
     EXPECT_EQ(std::get<std::string>(val), "4");
 }
 
+TEST_F(QueryExecutorTest, SliceAcceptsIntegralDoubleBounds) {
+    auto result = execSync(*executor_, "RETURN [10, 20, 30][..2.0] AS value");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<ListValue>(result.rows[0][0]));
+    const auto& list = std::get<ListValue>(result.rows[0][0]);
+    ASSERT_EQ(list.elements.size(), 2u);
+    EXPECT_TRUE(std::holds_alternative<int64_t>(list.elements[0].value));
+    EXPECT_EQ(std::get<int64_t>(list.elements[0].value), 10);
+    EXPECT_EQ(std::get<int64_t>(list.elements[1].value), 20);
+}
+
 TEST_F(QueryExecutorTest, ListSubscript) {
     auto result = execSync(*executor_, "RETURN ['Apa'][toInteger(0)] AS value");
     std::cerr << "Direct: error=" << result.error << " rows=" << result.rows.size() << "\n";
@@ -7381,6 +7393,33 @@ TEST_F(QueryExecutorTest, ProcedureDbmsComponentsReturnsBrowserComponents) {
     }
     EXPECT_TRUE(names.count("Neo4j Kernel"));
     EXPECT_TRUE(names.count("Cypher"));
+}
+
+TEST_F(QueryExecutorTest, ProcedureDbSchemaTypePropertiesReturnsCatalog) {
+    auto node_result = execSync(*executor_, "CALL db.schema.nodeTypeProperties() "
+                                            "RETURN nodeLabels, propertyName, propertyTypes");
+    ASSERT_TRUE(node_result.error.empty()) << node_result.error;
+    ASSERT_GE(node_result.rows.size(), 2u);
+    bool saw_person_name = false;
+    for (const auto& row : node_result.rows) {
+        ASSERT_TRUE(std::holds_alternative<ListValue>(row[0]));
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[1]));
+        const auto& labels = std::get<ListValue>(row[0]);
+        const auto& prop = std::get<std::string>(row[1]);
+        if (labels.elements.size() == 1u && std::holds_alternative<std::string>(labels.elements[0].value) &&
+            std::get<std::string>(labels.elements[0].value) == "Person" && prop == "name") {
+            saw_person_name = true;
+        }
+    }
+    EXPECT_TRUE(saw_person_name);
+
+    ASSERT_TRUE(blockingWait(async_meta_->addEdgeLabelProperties("KNOWS", {{"since", PropertyType::INT64}})));
+    auto rel_result = execSync(*executor_, "CALL db.schema.relTypeProperties() "
+                                           "RETURN relType, propertyName, propertyTypes");
+    ASSERT_TRUE(rel_result.error.empty()) << rel_result.error;
+    ASSERT_EQ(rel_result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(rel_result.rows[0][0]), "KNOWS");
+    EXPECT_EQ(std::get<std::string>(rel_result.rows[0][1]), "since");
 }
 
 TEST_F(QueryExecutorTest, ProcedureDbmsProceduresListsBuiltins) {

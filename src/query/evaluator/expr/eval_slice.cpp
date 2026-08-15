@@ -2,10 +2,24 @@
 
 #include "query/planner/bound_expression/bound_slice.hpp"
 
+#include <cmath>
+#include <optional>
+
 namespace eugraph {
 namespace compute {
 
 namespace {
+std::optional<int64_t> sliceIndex(const Value& value) {
+    if (std::holds_alternative<int64_t>(value))
+        return std::get<int64_t>(value);
+    if (std::holds_alternative<double>(value)) {
+        double d = std::get<double>(value);
+        if (std::floor(d) == d)
+            return static_cast<int64_t>(d);
+    }
+    return std::nullopt;
+}
+
 // Apply Cypher slice semantics with negative-index normalization and clamping.
 // `from_idx`/`to_idx` may be negative (counted from end) and are clamped to
 // the valid range. If from > to after normalization, the result is empty.
@@ -57,11 +71,12 @@ void VectorizedEvaluator::evalSlice(const binder::BoundSlice& slice, const DataC
                 continue;
             }
             Value fv = from_eval.column->getValue(i);
-            if (!std::holds_alternative<int64_t>(fv)) {
+            auto from_idx_opt = sliceIndex(fv);
+            if (!from_idx_opt) {
                 result.setNull(i);
                 continue;
             }
-            int64_t from_idx = std::get<int64_t>(fv);
+            int64_t from_idx = *from_idx_opt;
             if (slice.to) {
                 auto to_eval = evaluateInternal(*slice.to, input);
                 if (!to_eval.column || to_eval.column->isNull(i)) {
@@ -69,11 +84,12 @@ void VectorizedEvaluator::evalSlice(const binder::BoundSlice& slice, const DataC
                     continue;
                 }
                 Value tv = to_eval.column->getValue(i);
-                if (!std::holds_alternative<int64_t>(tv)) {
+                auto to_idx_opt = sliceIndex(tv);
+                if (!to_idx_opt) {
                     result.setNull(i);
                     continue;
                 }
-                int64_t to_idx = std::get<int64_t>(tv);
+                int64_t to_idx = *to_idx_opt;
                 finishSlice(lv, from_idx, to_idx, result, i);
                 continue;
             }
@@ -87,11 +103,12 @@ void VectorizedEvaluator::evalSlice(const binder::BoundSlice& slice, const DataC
                 continue;
             }
             Value tv = to_eval.column->getValue(i);
-            if (!std::holds_alternative<int64_t>(tv)) {
+            auto to_idx_opt = sliceIndex(tv);
+            if (!to_idx_opt) {
                 result.setNull(i);
                 continue;
             }
-            int64_t to_idx = std::get<int64_t>(tv);
+            int64_t to_idx = *to_idx_opt;
             finishSlice(lv, 0, to_idx, result, i);
             continue;
         }

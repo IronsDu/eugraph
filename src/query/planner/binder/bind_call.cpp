@@ -18,7 +18,10 @@ std::optional<BoundLogicalOperator> Binder::bindCall(const cypher::CallClause& c
         call.procedure_name != "dbms.info()" && call.procedure_name != "db.labels" &&
         call.procedure_name != "db.labels()" && call.procedure_name != "db.relationshipTypes" &&
         call.procedure_name != "db.relationshipTypes()" && call.procedure_name != "db.propertyKeys" &&
-        call.procedure_name != "db.propertyKeys()") {
+        call.procedure_name != "db.propertyKeys()" && call.procedure_name != "db.schema.nodeTypeProperties" &&
+        call.procedure_name != "db.schema.nodeTypeProperties()" &&
+        call.procedure_name != "db.schema.relTypeProperties" &&
+        call.procedure_name != "db.schema.relTypeProperties()") {
         error("Unknown procedure: " + call.procedure_name);
         return std::nullopt;
     }
@@ -91,6 +94,13 @@ std::optional<BoundLogicalOperator> Binder::bindCall(const cypher::CallClause& c
     } else if (proc_base == "db.propertyKeys") {
         call_op->output_names = {"propertyKey"};
         call_op->output_types = {BoundType::String()};
+    } else if (proc_base == "db.schema.nodeTypeProperties") {
+        call_op->output_names = {"nodeLabels", "propertyName", "propertyTypes"};
+        call_op->output_types = {BoundType::List(BoundType::String()), BoundType::String(),
+                                 BoundType::List(BoundType::String())};
+    } else if (proc_base == "db.schema.relTypeProperties") {
+        call_op->output_names = {"relType", "propertyName", "propertyTypes"};
+        call_op->output_types = {BoundType::String(), BoundType::String(), BoundType::List(BoundType::String())};
     } else {
         error("Unknown procedure: " + call.procedure_name);
         return std::nullopt;

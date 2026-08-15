@@ -45,6 +45,40 @@ EdgeValue buildVirtualRelationship(VertexId src_id, VertexId dst_id, EdgeLabelId
     return edge;
 }
 
+std::string propertyTypeName(PropertyType type) {
+    switch (type) {
+    case PropertyType::BOOL:
+        return "BOOLEAN";
+    case PropertyType::INT64:
+        return "INTEGER";
+    case PropertyType::DOUBLE:
+        return "FLOAT";
+    case PropertyType::STRING:
+        return "STRING";
+    case PropertyType::INT64_ARRAY:
+        return "INTEGER_ARRAY";
+    case PropertyType::DOUBLE_ARRAY:
+        return "FLOAT_ARRAY";
+    case PropertyType::STRING_ARRAY:
+        return "STRING_ARRAY";
+    case PropertyType::DATETIME:
+        return "DATE_TIME";
+    case PropertyType::TIME:
+        return "TIME";
+    case PropertyType::DURATION:
+        return "DURATION";
+    case PropertyType::DATETIME_ARRAY:
+        return "DATE_TIME_ARRAY";
+    case PropertyType::TIME_ARRAY:
+        return "TIME_ARRAY";
+    case PropertyType::DURATION_ARRAY:
+        return "DURATION_ARRAY";
+    case PropertyType::ANY:
+        return "ANY";
+    }
+    return "ANY";
+}
+
 std::string normalizedProcedureName(std::string name) {
     if (name.size() > 2 && name.substr(name.size() - 2) == "()")
         name.resize(name.size() - 2);
@@ -188,6 +222,14 @@ std::vector<ProcedureEntry> builtinProcedures() {
          "List all relationship types in the current database.", "READ"},
         {"db.propertyKeys", "db.propertyKeys() :: (propertyKey :: STRING)",
          "List all property keys in the current database.", "READ"},
+        {"db.schema.nodeTypeProperties",
+         "db.schema.nodeTypeProperties() :: (nodeLabels :: LIST<STRING>, propertyName :: STRING, "
+         "propertyTypes :: LIST<STRING>)",
+         "List node labels and their property types.", "READ"},
+        {"db.schema.relTypeProperties",
+         "db.schema.relTypeProperties() :: (relType :: STRING, propertyName :: STRING, "
+         "propertyTypes :: LIST<STRING>)",
+         "List relationship types and their property types.", "READ"},
     };
 }
 
@@ -298,6 +340,31 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
             }
             for (const auto& key : keys)
                 rows.push_back({Value{key}});
+        }
+    } else if (procedure == "db.schema.nodeTypeProperties") {
+        if (meta_) {
+            auto labels = co_await meta_->listLabels();
+            std::sort(labels.begin(), labels.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+            for (const auto& label : labels) {
+                if (label.name == kAnonLabelName)
+                    continue;
+                for (const auto& prop : label.properties) {
+                    rows.push_back({Value{stringList({label.name})}, Value{prop.name},
+                                    Value{stringList({propertyTypeName(prop.type)})}});
+                }
+            }
+        }
+    } else if (procedure == "db.schema.relTypeProperties") {
+        if (meta_) {
+            auto edge_labels = co_await meta_->listEdgeLabels();
+            std::sort(edge_labels.begin(), edge_labels.end(),
+                      [](const auto& a, const auto& b) { return a.name < b.name; });
+            for (const auto& edge_label : edge_labels) {
+                for (const auto& prop : edge_label.properties) {
+                    rows.push_back(
+                        {Value{edge_label.name}, Value{prop.name}, Value{stringList({propertyTypeName(prop.type)})}});
+                }
+            }
         }
     } else if (procedure == "db.schema.visualization") {
         spdlog::info("[CallPhysicalOp] db.schema.visualization path, meta_={} data_store_={}", (void*)meta_,

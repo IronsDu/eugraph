@@ -312,6 +312,19 @@ class TestTypes:
 class TestParameters:
     """Test parameter passing over Bolt."""
 
+    def test_float_slice_param(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                result = session.run(
+                    "RETURN [10, 20, 30][..$n] AS v",
+                    n=2.0,
+                )
+                records = list(result)
+                assert records[0]["v"] == [10, 20]
+        finally:
+            driver.close()
+
     def test_string_param(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
@@ -497,6 +510,14 @@ class TestProcedures:
                     )
                 )
                 assert collected
+
+                node_types = list(
+                    session.run(
+                        "CALL db.schema.nodeTypeProperties() "
+                        "YIELD nodeLabels, propertyName, propertyTypes"
+                    )
+                )
+                assert any(record["propertyName"] == "name" for record in node_types)
         finally:
             driver.close()
 

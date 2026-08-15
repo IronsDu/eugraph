@@ -108,6 +108,14 @@ std::vector<ProcedureShowEntry> builtinProcedureShowEntries() {
         {"db.relationshipTypes", "db.relationshipTypes() :: (relationshipType :: STRING)",
          "List all relationship types."},
         {"db.propertyKeys", "db.propertyKeys() :: (propertyKey :: STRING)", "List all property keys."},
+        {"db.schema.nodeTypeProperties",
+         "db.schema.nodeTypeProperties() :: (nodeLabels :: LIST<STRING>, propertyName :: STRING, "
+         "propertyTypes :: LIST<STRING>)",
+         "List node labels and their property types."},
+        {"db.schema.relTypeProperties",
+         "db.schema.relTypeProperties() :: (relType :: STRING, propertyName :: STRING, "
+         "propertyTypes :: LIST<STRING>)",
+         "List relationship types and their property types."},
     };
 }
 
