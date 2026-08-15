@@ -11,32 +11,34 @@ namespace optimizer {
 
 // Maps BoundLogicalOperator variant indices to operator type enum.
 enum class OptNodeType {
-    Singleton,                // 0
-    CorrelatedSource,         // 1
-    Scan,                     // 2
-    LabelScan,                // 3
-    Expand,                   // 4
-    Filter,                   // 5
-    Project,                  // 6
-    Aggregate,                // 7
-    Sort,                     // 8
-    Skip,                     // 9
-    Limit,                    // 10
-    Distinct,                 // 11
-    CreateNode,               // 12
-    CreateEdge,               // 13
-    Set,                      // 14
-    Remove,                   // 15
-    Delete,                   // 16
-    PathBuild,                // 17
-    VarLenExpand,             // 18
-    BinaryJoin,               // 19
-    LeftJoin,                 // 20
-    SemiJoin,                 // 21
-    Unwind,                   // 22
-    Union,                    // 23
-    Merge,                    // 24
-    PatternComprehensionApply // 25
+    Singleton,                 // 0
+    CorrelatedSource,          // 1
+    Scan,                      // 2
+    LabelScan,                 // 3
+    Expand,                    // 4
+    Filter,                    // 5
+    Project,                   // 6
+    Aggregate,                 // 7
+    Sort,                      // 8
+    Skip,                      // 9
+    Limit,                     // 10
+    Distinct,                  // 11
+    CreateNode,                // 12
+    CreateEdge,                // 13
+    Set,                       // 14
+    Remove,                    // 15
+    Delete,                    // 16
+    PathBuild,                 // 17
+    VarLenExpand,              // 18
+    BinaryJoin,                // 19
+    LeftJoin,                  // 20
+    SemiJoin,                  // 21
+    Unwind,                    // 22
+    Union,                     // 23
+    Merge,                     // 24
+    PatternComprehensionApply, // 25
+    Call,                      // 26
+    Unknown                    // out-of-range / future operator
 };
 
 // Convert BoundLogicalOperator variant index to OptNodeType.
