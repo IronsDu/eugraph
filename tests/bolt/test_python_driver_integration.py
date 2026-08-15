@@ -405,6 +405,30 @@ class TestProcedures:
         finally:
             driver.close()
 
+    def test_db_schema_visualization_returns_virtual_graph(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                session.run(
+                    "CREATE (:SchemaLabel)-[:SCHEMA_REL]->(:SchemaLabel)"
+                )
+
+                records = list(session.run("CALL db.schema.visualization()"))
+                assert records
+                nodes = records[0]["nodes"]
+                relationships = records[0]["relationships"]
+                assert nodes
+                assert relationships
+                assert all(isinstance(node, neo4j.graph.Node) for node in nodes)
+                assert all(
+                    isinstance(rel, neo4j.graph.Relationship)
+                    for rel in relationships
+                )
+                assert any("SchemaLabel" in node.labels for node in nodes)
+                assert any(rel.type == "SCHEMA_REL" for rel in relationships)
+        finally:
+            driver.close()
+
     def test_dbms_procedures_lists_builtins(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:

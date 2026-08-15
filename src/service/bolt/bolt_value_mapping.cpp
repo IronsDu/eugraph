@@ -196,7 +196,7 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         node_s.fields.push_back(PS{std::move(label_list)});
         node_s.fields.push_back(PS{std::move(props)});
         if (boltMajorVersion(bolt_version) >= 5)
-            node_s.fields.push_back(PS{std::to_string(v.id)}); // element_id (Bolt v5.x)
+            node_s.fields.push_back(PS{std::to_string(static_cast<int64_t>(v.id))}); // element_id (Bolt v5.x)
         return node_s;
     } else if (std::holds_alternative<EdgeValue>(val)) {
         auto& e = std::get<EdgeValue>(val);
@@ -225,9 +225,9 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         rel_s.fields.push_back(PS{std::move(type_name)});
         rel_s.fields.push_back(PS{std::move(props)});
         if (boltMajorVersion(bolt_version) >= 5) {
-            rel_s.fields.push_back(PS{std::to_string(e.id)});     // element_id (Bolt v5.x)
-            rel_s.fields.push_back(PS{std::to_string(e.src_id)}); // startNodeElementId
-            rel_s.fields.push_back(PS{std::to_string(e.dst_id)}); // endNodeElementId
+            rel_s.fields.push_back(PS{std::to_string(static_cast<int64_t>(e.id))});     // element_id (Bolt v5.x)
+            rel_s.fields.push_back(PS{std::to_string(static_cast<int64_t>(e.src_id))}); // startNodeElementId
+            rel_s.fields.push_back(PS{std::to_string(static_cast<int64_t>(e.dst_id))}); // endNodeElementId
         }
         return rel_s;
     } else if (std::holds_alternative<PathValue>(val)) {

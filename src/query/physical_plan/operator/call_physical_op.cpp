@@ -2,12 +2,15 @@
 
 #include "common/types/graph_types.hpp"
 #include "query/function/function_registry.hpp"
+#include "storage/data/i_async_graph_data_store.hpp"
 
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace eugraph {
@@ -15,113 +18,31 @@ namespace compute {
 
 namespace {
 
-const char* propTypeName(PropertyType t) {
-    switch (t) {
-    case PropertyType::BOOL:
-        return "BOOLEAN";
-    case PropertyType::INT64:
-        return "INTEGER";
-    case PropertyType::DOUBLE:
-        return "FLOAT";
-    case PropertyType::STRING:
-        return "STRING";
-    case PropertyType::INT64_ARRAY:
-        return "INTEGER_ARRAY";
-    case PropertyType::DOUBLE_ARRAY:
-        return "FLOAT_ARRAY";
-    case PropertyType::STRING_ARRAY:
-        return "STRING_ARRAY";
-    case PropertyType::DATETIME:
-        return "DATE_TIME";
-    case PropertyType::TIME:
-        return "TIME";
-    case PropertyType::DURATION:
-        return "DURATION";
-    case PropertyType::DATETIME_ARRAY:
-        return "DATE_TIME_ARRAY";
-    case PropertyType::TIME_ARRAY:
-        return "TIME_ARRAY";
-    case PropertyType::DURATION_ARRAY:
-        return "DURATION_ARRAY";
-    default:
-        return "ANY";
-    }
+constexpr int64_t kVirtualEdgeIdBase = -1000000;
+
+VertexId virtualNodeId(LabelId label_id) {
+    // Virtual node ids must not collide with real vertex ids (positive) or
+    // with each other. Label ids are small uint16 values, so this range is
+    // stable and deterministic for the lifetime of a query.
+    return static_cast<VertexId>(-1 - static_cast<int64_t>(label_id));
 }
 
-/// Build a MapValue representing one node label entry for db.schema.visualization.
-MapValue buildNodeEntry(const LabelDef& ldef) {
-    MapValue entry;
-
-    entry.entries.push_back({"name", ValueStorage{ldef.name}});
-
-    ListValue labels;
-    labels.elements.push_back({ValueStorage{ldef.name}});
-    entry.entries.push_back({"labels", ValueStorage{Value{labels}}});
-
-    MapValue props;
-    for (const auto& pd : ldef.properties) {
-        MapValue prop_info;
-        prop_info.entries.push_back({"type", ValueStorage{std::string{propTypeName(pd.type)}}});
-        props.entries.push_back({pd.name, ValueStorage{Value{prop_info}}});
-    }
-    entry.entries.push_back({"properties", ValueStorage{Value{props}}});
-
-    ListValue indexes;
-    for (const auto& idx : ldef.indexes) {
-        MapValue idx_info;
-        idx_info.entries.push_back({"name", ValueStorage{idx.name}});
-        ListValue idx_props;
-        for (auto prop_id : idx.prop_ids) {
-            for (const auto& pd : ldef.properties) {
-                if (pd.id == prop_id)
-                    idx_props.elements.push_back({ValueStorage{pd.name}});
-            }
-        }
-        idx_info.entries.push_back({"properties", ValueStorage{Value{idx_props}}});
-        idx_info.entries.push_back({"unique", ValueStorage{idx.unique}});
-        indexes.elements.push_back({ValueStorage{Value{idx_info}}});
-    }
-    entry.entries.push_back({"indexes", ValueStorage{Value{indexes}}});
-
-    entry.entries.push_back({"constraints", ValueStorage{Value{ListValue{}}}});
-
-    return entry;
+VertexValue buildVirtualNode(LabelId label_id) {
+    VertexValue node;
+    node.id = virtualNodeId(label_id);
+    node.labels = LabelIdSet{label_id};
+    return node;
 }
 
-MapValue buildEdgeEntry(const EdgeLabelDef& eldef) {
-    MapValue entry;
-
-    entry.entries.push_back({"name", ValueStorage{eldef.name}});
-    entry.entries.push_back({"relationshipType", ValueStorage{eldef.name}});
-
-    MapValue props;
-    for (const auto& pd : eldef.properties) {
-        MapValue prop_info;
-        prop_info.entries.push_back({"type", ValueStorage{std::string{propTypeName(pd.type)}}});
-        props.entries.push_back({pd.name, ValueStorage{Value{prop_info}}});
-    }
-    entry.entries.push_back({"properties", ValueStorage{Value{props}}});
-
-    ListValue indexes;
-    for (const auto& idx : eldef.indexes) {
-        MapValue idx_info;
-        idx_info.entries.push_back({"name", ValueStorage{idx.name}});
-        ListValue idx_props;
-        for (auto prop_id : idx.prop_ids) {
-            for (const auto& pd : eldef.properties) {
-                if (pd.id == prop_id)
-                    idx_props.elements.push_back({ValueStorage{pd.name}});
-            }
-        }
-        idx_info.entries.push_back({"properties", ValueStorage{Value{idx_props}}});
-        idx_info.entries.push_back({"unique", ValueStorage{idx.unique}});
-        indexes.elements.push_back({ValueStorage{Value{idx_info}}});
-    }
-    entry.entries.push_back({"indexes", ValueStorage{Value{indexes}}});
-
-    entry.entries.push_back({"constraints", ValueStorage{Value{ListValue{}}}});
-
-    return entry;
+EdgeValue buildVirtualRelationship(VertexId src_id, VertexId dst_id, EdgeLabelId edge_label_id, int64_t virtual_id) {
+    EdgeValue edge;
+    edge.id = static_cast<EdgeId>(virtual_id);
+    edge.src_id = src_id;
+    edge.dst_id = dst_id;
+    edge.label_id = edge_label_id;
+    edge.seq = 0;
+    edge.properties = Properties{};
+    return edge;
 }
 
 std::string normalizedProcedureName(std::string name) {
@@ -366,25 +287,76 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
                 rows.push_back({Value{key}});
         }
     } else if (procedure == "db.schema.visualization") {
-        spdlog::info("[CallPhysicalOp] db.schema.visualization path, meta_={}", (void*)meta_);
+        spdlog::info("[CallPhysicalOp] db.schema.visualization path, meta_={} data_store_={}", (void*)meta_,
+                     (void*)data_store_);
         ListValue nodes;
         ListValue rels;
 
-        if (meta_) {
+        if (meta_ && data_store_) {
+            // Labels in use: only labels that actually have vertices become
+            // virtual nodes, matching Neo4j's db.schema.visualization().
             auto labels = co_await meta_->listLabels();
+            std::vector<LabelDef> labels_in_use;
             for (const auto& ldef : labels) {
                 if (ldef.name == kAnonLabelName)
                     continue;
-                nodes.elements.push_back({ValueStorage{Value{buildNodeEntry(ldef)}}});
+                auto scan = data_store_->scanVerticesByLabel(ldef.id);
+                while (auto batch = co_await scan.next()) {
+                    if (batch && !batch->empty()) {
+                        labels_in_use.push_back(ldef);
+                        break;
+                    }
+                }
+            }
+            std::sort(labels_in_use.begin(), labels_in_use.end(),
+                      [](const auto& a, const auto& b) { return a.name < b.name; });
+
+            std::unordered_map<LabelId, VertexId> virtual_ids;
+            for (const auto& ldef : labels_in_use) {
+                virtual_ids[ldef.id] = virtualNodeId(ldef.id);
+                nodes.elements.push_back({ValueStorage{Value{buildVirtualNode(ldef.id)}}});
             }
 
+            // Relationship types in use: scan edges of each type, collect the
+            // endpoint labels, then emit the same cross-product of start/end
+            // label nodes that Neo4j builds for the schema meta-graph.
             auto edge_labels = co_await meta_->listEdgeLabels();
-            for (const auto& eldef : edge_labels)
-                rels.elements.push_back({ValueStorage{Value{buildEdgeEntry(eldef)}}});
+            std::sort(edge_labels.begin(), edge_labels.end(),
+                      [](const auto& a, const auto& b) { return a.name < b.name; });
+            int64_t next_virtual_edge_id = kVirtualEdgeIdBase;
+            for (const auto& eldef : edge_labels) {
+                std::set<LabelId> start_labels;
+                std::set<LabelId> end_labels;
+
+                auto edges = data_store_->scanEdgesByType(eldef.id, std::nullopt, std::nullopt);
+                while (auto batch = co_await edges.next()) {
+                    if (!batch)
+                        continue;
+                    for (const auto& edge : *batch) {
+                        auto src_labels = co_await data_store_->getVertexLabels(edge.src_vertex_id);
+                        for (LabelId lid : src_labels) {
+                            if (virtual_ids.count(lid))
+                                start_labels.insert(lid);
+                        }
+                        auto dst_labels = co_await data_store_->getVertexLabels(edge.dst_vertex_id);
+                        for (LabelId lid : dst_labels) {
+                            if (virtual_ids.count(lid))
+                                end_labels.insert(lid);
+                        }
+                    }
+                }
+
+                for (LabelId start_label : start_labels) {
+                    for (LabelId end_label : end_labels) {
+                        rels.elements.push_back({ValueStorage{Value{buildVirtualRelationship(
+                            virtual_ids[start_label], virtual_ids[end_label], eldef.id, next_virtual_edge_id--)}}});
+                    }
+                }
+            }
         }
 
         spdlog::info("[CallPhysicalOp] built schema: {} nodes, {} rels", nodes.elements.size(), rels.elements.size());
-        rows.push_back({Value{nodes}, Value{rels}});
+        rows.push_back({Value{std::move(nodes)}, Value{std::move(rels)}});
     }
 
     if (rows.empty()) {

@@ -230,6 +230,22 @@ test('browser compatibility procedures over WebSocket', async () => {
   assert.equal(config.some((entry) => entry.name === 'dbms.security.auth_enabled' && entry.value === true), true);
 });
 
+test('db.schema.visualization returns virtual graph', async () => {
+  const records = await run((session) =>
+    session
+      .run('CALL db.schema.visualization()')
+      .then((result) => result.records)
+  );
+
+  assert.equal(records.length, 1);
+  const nodes = records[0].get('nodes');
+  const relationships = records[0].get('relationships');
+  assert.equal(Array.isArray(nodes), true);
+  assert.equal(Array.isArray(relationships), true);
+  assert.equal(nodes.some((node) => node.labels.includes('Person')), true);
+  assert.equal(relationships.some((rel) => rel.type === 'KNOWS'), true);
+});
+
 test('explicit transaction commit', async () => {
   await run(async (session) => {
     const tx = session.beginTransaction();

@@ -7388,6 +7388,39 @@ TEST_F(QueryExecutorTest, ProcedureDbmsFunctionsListsRegistry) {
               names.end());
 }
 
+TEST_F(QueryExecutorTest, ProcedureDbSchemaVisualizationReturnsVirtualGraph) {
+    insertTestVertices();
+    insertMixedEdges();
+
+    auto result = execSync(*executor_, "CALL db.schema.visualization() RETURN nodes, relationships");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+
+    const auto& row = result.rows[0];
+    ASSERT_TRUE(std::holds_alternative<ListValue>(row[0]));
+    ASSERT_TRUE(std::holds_alternative<ListValue>(row[1]));
+
+    const auto& nodes = std::get<ListValue>(row[0]);
+    ASSERT_EQ(nodes.elements.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(nodes.elements[0].value));
+    const auto& node = std::get<VertexValue>(nodes.elements[0].value);
+    ASSERT_TRUE(node.labels.has_value());
+    EXPECT_TRUE(node.labels->count(PERSON_LABEL));
+
+    const auto& rels = std::get<ListValue>(row[1]);
+    ASSERT_EQ(rels.elements.size(), 2u);
+    std::set<EdgeLabelId> rel_types;
+    for (const auto& elem : rels.elements) {
+        ASSERT_TRUE(std::holds_alternative<EdgeValue>(elem.value));
+        const auto& edge = std::get<EdgeValue>(elem.value);
+        EXPECT_EQ(edge.src_id, node.id);
+        EXPECT_EQ(edge.dst_id, node.id);
+        rel_types.insert(edge.label_id);
+    }
+    EXPECT_TRUE(rel_types.count(KNOWS_LABEL));
+    EXPECT_TRUE(rel_types.count(LIVES_IN_LABEL));
+}
+
 TEST_F(QueryExecutorTest, ProcedureDbIndexesReturnsMetaIndex) {
     ASSERT_TRUE(blockingWait(async_meta_->createVertexIndex("idx_person_name", "Person", {"name"}, false)));
     ASSERT_TRUE(blockingWait(async_meta_->updateIndexState("idx_person_name", IndexState::PUBLIC)));
