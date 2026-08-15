@@ -181,6 +181,8 @@ std::vector<ProcedureEntry> builtinProcedures() {
          "List DBMS components and their versions.", "READ"},
         {"dbms.functions", "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)",
          "List all functions available in the current database.", "READ"},
+        {"dbms.info", "dbms.info() :: (id :: STRING, name :: STRING, creationDate :: STRING)",
+         "Return DBMS information.", "READ"},
         {"db.labels", "db.labels() :: (label :: STRING)", "List all labels in the current database.", "READ"},
         {"db.relationshipTypes", "db.relationshipTypes() :: (relationshipType :: STRING)",
          "List all relationship types in the current database.", "READ"},
@@ -231,6 +233,9 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
                             Value{std::string{entry.description}}, Value{std::string{entry.mode}},
                             Value{stringList({"PUBLIC"})}});
         }
+    } else if (procedure == "dbms.info") {
+        rows.push_back({Value{std::string{"eugraph-1"}}, Value{std::string{"EuGraph"}},
+                        Value{std::string{"2026-08-15T00:00:00Z"}}});
     } else if (procedure == "dbms.functions") {
         std::vector<function::FunctionDef> defs;
         if (func_registry_) {

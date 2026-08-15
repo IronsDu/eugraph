@@ -255,11 +255,12 @@ Bolt v5.1 使用分块传输编码进行消息帧定界：
 - `db.labels()`、`db.relationshipTypes()`、`db.propertyKeys()`：返回当前库的 label、关系类型和属性键。
 - `db.indexes()`：返回当前库的索引信息。
 - `dbms.procedures()`、`dbms.functions()`：返回内置存储过程 / 函数目录。
+- `dbms.info()`：返回 DBMS id / name / creationDate。
 - `dbms.components()`：返回 DBMS 组件版本信息。
 
 ### 8. Cypher DDL（数据库管理）
 
-通过 `DatabaseDdlParser`（token-based）在 `GraphService::executeCypher()` 中拦截 DDL 语句，Bolt 和 Thrift 两条路径共享。支持：`CREATE DATABASE`、`DROP DATABASE`、`SHOW DATABASES`、`SHOW DATABASE`、`USE <graph>`。
+通过 `DatabaseDdlParser`（token-based）在 `GraphService::executeCypher()` 中拦截 DDL 语句，Bolt 和 Thrift 两条路径共享。支持：`CREATE DATABASE`、`DROP DATABASE`、`SHOW DATABASES [YIELD *]`、`SHOW DATABASE`、`SHOW PROCEDURES`、`SHOW FUNCTIONS`、`SHOW CURRENT USER`、`SHOW VECTOR INDEXES`、`USE <graph>`。
 
 ## 文件清单
 

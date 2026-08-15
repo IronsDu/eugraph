@@ -1,5 +1,7 @@
 #include "query/planner/binder.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <unordered_set>
 
 #include "common/types/temporal_value.hpp"
@@ -13,14 +15,20 @@ namespace eugraph {
 namespace binder {
 
 namespace {
+std::string toLowerAscii(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
 bool isTemporalType(BoundTypeKind k) {
     return k == BoundTypeKind::DATETIME || k == BoundTypeKind::TIME || k == BoundTypeKind::DURATION;
 }
 
 bool isAggregateFunctionName(const std::string& name) {
-    return name == "count" || name == "sum" || name == "avg" || name == "min" || name == "max" || name == "collect" ||
-           name == "percentile_cont" || name == "percentile_disc" || name == "percentileCont" ||
-           name == "percentileDisc" || name == "st_dev" || name == "st_dev_p";
+    const std::string lower = toLowerAscii(name);
+    return lower == "count" || lower == "sum" || lower == "avg" || lower == "min" || lower == "max" ||
+           lower == "collect" || lower == "percentile_cont" || lower == "percentile_disc" ||
+           lower == "percentilecont" || lower == "percentiledisc" || lower == "st_dev" || lower == "st_dev_p";
 }
 
 // Detect aggregate function calls inside a Cypher expression subtree.
@@ -192,7 +200,8 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     bound_args.push_back(std::move(*bound_arg));
                 }
 
-                const function::FunctionDef* func = func_registry_.lookup(ptr->name, arg_types);
+                const std::string lookup_name = toLowerAscii(ptr->name);
+                const function::FunctionDef* func = func_registry_.lookup(lookup_name, arg_types);
                 if (!func) {
                     std::string sig = ptr->name + "(";
                     for (size_t i = 0; i < arg_types.size(); ++i) {
@@ -201,7 +210,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                         sig += arg_types[i].toString();
                     }
                     sig += ")";
-                    if (func_registry_.exists(ptr->name)) {
+                    if (func_registry_.exists(lookup_name)) {
                         error("SyntaxError: InvalidArgumentType: no overload of '" + ptr->name + "' accepts (" + sig +
                               ")");
                     } else {

@@ -66,6 +66,7 @@ std::optional<DatabaseDdlStatement> DatabaseDdlParser::tryParse(const std::strin
     if (first == "SHOW" && tokens.size() >= 2 && toUpper(tokens[1]) == "DATABASES") {
         DatabaseDdlStatement stmt;
         stmt.type = DatabaseDdlStatement::SHOW_DATABASES;
+        stmt.yield_all = std::any_of(tokens.begin(), tokens.end(), [](const auto& t) { return toUpper(t) == "YIELD"; });
         return stmt;
     }
 
@@ -74,6 +75,34 @@ std::optional<DatabaseDdlStatement> DatabaseDdlParser::tryParse(const std::strin
         DatabaseDdlStatement stmt;
         stmt.type = DatabaseDdlStatement::SHOW_DATABASE;
         stmt.name = tokens[2];
+        return stmt;
+    }
+
+    // SHOW PROCEDURES [YIELD ...]
+    if (first == "SHOW" && tokens.size() >= 2 && toUpper(tokens[1]) == "PROCEDURES") {
+        DatabaseDdlStatement stmt;
+        stmt.type = DatabaseDdlStatement::SHOW_PROCEDURES;
+        return stmt;
+    }
+
+    // SHOW FUNCTIONS [YIELD ...]
+    if (first == "SHOW" && tokens.size() >= 2 && toUpper(tokens[1]) == "FUNCTIONS") {
+        DatabaseDdlStatement stmt;
+        stmt.type = DatabaseDdlStatement::SHOW_FUNCTIONS;
+        return stmt;
+    }
+
+    // SHOW CURRENT USER
+    if (first == "SHOW" && tokens.size() >= 3 && toUpper(tokens[1]) == "CURRENT" && toUpper(tokens[2]) == "USER") {
+        DatabaseDdlStatement stmt;
+        stmt.type = DatabaseDdlStatement::SHOW_CURRENT_USER;
+        return stmt;
+    }
+
+    // SHOW VECTOR INDEXES [YIELD ...]
+    if (first == "SHOW" && tokens.size() >= 3 && toUpper(tokens[1]) == "VECTOR" && toUpper(tokens[2]) == "INDEXES") {
+        DatabaseDdlStatement stmt;
+        stmt.type = DatabaseDdlStatement::SHOW_VECTOR_INDEXES;
         return stmt;
     }
 

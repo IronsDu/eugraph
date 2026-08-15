@@ -12,10 +12,15 @@ struct DatabaseDdlStatement {
         DROP_DATABASE,
         SHOW_DATABASES,
         SHOW_DATABASE,
+        SHOW_PROCEDURES,
+        SHOW_FUNCTIONS,
+        SHOW_CURRENT_USER,
+        SHOW_VECTOR_INDEXES,
         USE_GRAPH,
     };
     Type type;
     std::string name; // database/graph name
+    bool yield_all = false;
 };
 
 class DatabaseDdlParser {

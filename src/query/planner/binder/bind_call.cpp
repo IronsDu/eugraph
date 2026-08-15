@@ -14,7 +14,8 @@ std::optional<BoundLogicalOperator> Binder::bindCall(const cypher::CallClause& c
         call.procedure_name != "db.indexes()" && call.procedure_name != "dbms.procedures" &&
         call.procedure_name != "dbms.procedures()" && call.procedure_name != "dbms.components" &&
         call.procedure_name != "dbms.components()" && call.procedure_name != "dbms.functions" &&
-        call.procedure_name != "dbms.functions()" && call.procedure_name != "db.labels" &&
+        call.procedure_name != "dbms.functions()" && call.procedure_name != "dbms.info" &&
+        call.procedure_name != "dbms.info()" && call.procedure_name != "db.labels" &&
         call.procedure_name != "db.labels()" && call.procedure_name != "db.relationshipTypes" &&
         call.procedure_name != "db.relationshipTypes()" && call.procedure_name != "db.propertyKeys" &&
         call.procedure_name != "db.propertyKeys()") {
@@ -77,6 +78,9 @@ std::optional<BoundLogicalOperator> Binder::bindCall(const cypher::CallClause& c
         call_op->output_types = {BoundType::String(), BoundType::List(BoundType::String()), BoundType::String()};
     } else if (proc_base == "dbms.functions") {
         call_op->output_names = {"name", "signature", "description"};
+        call_op->output_types = {BoundType::String(), BoundType::String(), BoundType::String()};
+    } else if (proc_base == "dbms.info") {
+        call_op->output_names = {"id", "name", "creationDate"};
         call_op->output_types = {BoundType::String(), BoundType::String(), BoundType::String()};
     } else if (proc_base == "db.labels") {
         call_op->output_names = {"label"};

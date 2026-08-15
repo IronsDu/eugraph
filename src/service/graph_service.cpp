@@ -1,12 +1,117 @@
 #include "service/graph_service.hpp"
 
+#include "query/function/function_registry.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 
 #include <spdlog/spdlog.h>
+
+#include <algorithm>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace eugraph {
 namespace service {
+namespace {
+
+std::string catalogTypeName(const binder::BoundType& type) {
+    switch (type.kind) {
+    case binder::BoundTypeKind::BOOL:
+        return "BOOLEAN";
+    case binder::BoundTypeKind::INT64:
+        return "INTEGER";
+    case binder::BoundTypeKind::DOUBLE:
+        return "FLOAT";
+    case binder::BoundTypeKind::STRING:
+        return "STRING";
+    case binder::BoundTypeKind::VERTEX:
+    case binder::BoundTypeKind::VERTEX_REF:
+        return "NODE";
+    case binder::BoundTypeKind::EDGE:
+    case binder::BoundTypeKind::EDGE_KEY:
+        return "RELATIONSHIP";
+    case binder::BoundTypeKind::PATH:
+    case binder::BoundTypeKind::PATH_TOPOLOGY:
+        return "PATH";
+    case binder::BoundTypeKind::DATETIME:
+        return "DATE_TIME";
+    case binder::BoundTypeKind::TIME:
+        return "TIME";
+    case binder::BoundTypeKind::DURATION:
+        return "DURATION";
+    case binder::BoundTypeKind::LIST:
+        return "LIST<" + (type.element_type ? catalogTypeName(*type.element_type) : "ANY") + ">";
+    case binder::BoundTypeKind::MAP:
+        return "MAP";
+    case binder::BoundTypeKind::NULL_TYPE:
+        return "NULL";
+    case binder::BoundTypeKind::ANY:
+        return "ANY";
+    }
+    return "ANY";
+}
+
+std::string catalogFunctionSignature(const function::FunctionDef& def) {
+    std::string sig = def.name + "(";
+    if (def.has_variadic_args) {
+        sig += "...";
+    } else {
+        for (size_t i = 0; i < def.arg_types.size(); ++i) {
+            if (i > 0)
+                sig += ", ";
+            sig += "input" + std::to_string(i) + " :: " + catalogTypeName(def.arg_types[i]);
+        }
+    }
+    sig += ") :: (";
+    sig += catalogTypeName(def.return_type);
+    sig += ")";
+    return sig;
+}
+
+ListValue catalogStringList(const std::vector<std::string>& values) {
+    ListValue list;
+    for (const auto& value : values)
+        list.elements.push_back({ValueStorage{Value{value}}});
+    return list;
+}
+
+struct ProcedureShowEntry {
+    const char* name;
+    const char* signature;
+    const char* description;
+};
+
+std::vector<ProcedureShowEntry> builtinProcedureShowEntries() {
+    return {
+        {"db.ping", "db.ping() :: (success :: BOOLEAN)", "Check whether the database is reachable."},
+        {"db.schema.visualization",
+         "db.schema.visualization() :: (nodes :: LIST<NODE>, relationships :: LIST<RELATIONSHIP>)",
+         "Return the schema as a virtual graph."},
+        {"dbms.clientConfig", "dbms.clientConfig() :: (name :: STRING, value :: ANY)",
+         "Return Neo4j Browser client configuration entries."},
+        {"db.indexes",
+         "db.indexes() :: (id :: INTEGER, name :: STRING, state :: STRING, populationPercent :: FLOAT, "
+         "uniqueness :: STRING, type :: STRING, entityType :: STRING, labelsOrTypes :: LIST<STRING>, "
+         "properties :: LIST<STRING>, owningConstraint :: NULL)",
+         "List all indexes."},
+        {"dbms.procedures",
+         "dbms.procedures() :: (name :: STRING, signature :: STRING, description :: STRING, "
+         "mode :: STRING, roles :: LIST<STRING>)",
+         "List all procedures."},
+        {"dbms.components", "dbms.components() :: (name :: STRING, versions :: LIST<STRING>, edition :: STRING)",
+         "List DBMS components."},
+        {"dbms.functions", "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)",
+         "List all functions."},
+        {"dbms.info", "dbms.info() :: (id :: STRING, name :: STRING, creationDate :: STRING)",
+         "Return DBMS information."},
+        {"db.labels", "db.labels() :: (label :: STRING)", "List all labels."},
+        {"db.relationshipTypes", "db.relationshipTypes() :: (relationshipType :: STRING)",
+         "List all relationship types."},
+        {"db.propertyKeys", "db.propertyKeys() :: (propertyKey :: STRING)", "List all property keys."},
+    };
+}
+
+} // namespace
 
 GraphInstance* GraphService::resolveGraph(const std::string& name) {
     auto* inst = gm_.getGraph(name);
@@ -238,15 +343,44 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
     }
     case DatabaseDdlStatement::SHOW_DATABASES: {
         auto graphs = gm_.listGraphs();
-        columns = {"name", "status", "type", "current", "currentStatus"};
-        for (auto& g : graphs) {
-            Row row;
-            row.push_back(std::string(g.name));
-            row.push_back(std::string("online"));
-            row.push_back(std::string("standard"));
-            row.push_back(bool(g.name == "default")); // current — tracks the session default
-            row.push_back(std::string("online"));
-            rows.push_back(std::move(row));
+        if (stmt.yield_all) {
+            // Neo4j Browser 5+ uses `SHOW DATABASES YIELD *` and validates the
+            // full SHOW DATABASES record shape.
+            columns = {
+                "name",          "type",          "aliases", "access",  "address", "role",         "requestedStatus",
+                "currentStatus", "statusMessage", "error",   "default", "home",    "constituents", "defaultLanguage",
+                "writer"};
+            for (auto& g : graphs) {
+                bool is_default = g.name == "default";
+                Row row;
+                row.push_back(std::string(g.name));
+                row.push_back(std::string("standard"));
+                row.push_back(Value{ListValue{}});
+                row.push_back(std::string("READ_WRITE"));
+                row.push_back(std::string("localhost:17687"));
+                row.push_back(Value{});
+                row.push_back(std::string("online"));
+                row.push_back(std::string("online"));
+                row.push_back(std::string(""));
+                row.push_back(std::string(""));
+                row.push_back(bool(is_default));
+                row.push_back(bool(is_default));
+                row.push_back(Value{ListValue{}});
+                row.push_back(std::string(""));
+                row.push_back(bool(false));
+                rows.push_back(std::move(row));
+            }
+        } else {
+            columns = {"name", "status", "type", "current", "currentStatus"};
+            for (auto& g : graphs) {
+                Row row;
+                row.push_back(std::string(g.name));
+                row.push_back(std::string("online"));
+                row.push_back(std::string("standard"));
+                row.push_back(bool(g.name == "default")); // current — tracks the session default
+                row.push_back(std::string("online"));
+                rows.push_back(std::move(row));
+            }
         }
         break;
     }
@@ -265,6 +399,76 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
             rows.push_back(std::move(row));
             break;
         }
+        break;
+    }
+    case DatabaseDdlStatement::SHOW_CURRENT_USER: {
+        columns = {"user", "roles", "passwordChangeRequired", "suspended", "home"};
+        Row row;
+        row.push_back(std::string("neo4j"));
+        row.push_back(catalogStringList({"PUBLIC"}));
+        row.push_back(bool(false));
+        row.push_back(bool(false));
+        row.push_back(Value{});
+        rows.push_back(std::move(row));
+        break;
+    }
+    case DatabaseDdlStatement::SHOW_PROCEDURES: {
+        columns = {"name",   "signature",           "description",      "mode", "admin", "worksOnSystem",
+                   "option", "argumentDescription", "returnDescription"};
+        for (const auto& entry : builtinProcedureShowEntries()) {
+            Row row;
+            row.push_back(std::string(entry.name));
+            row.push_back(std::string(entry.signature));
+            row.push_back(std::string(entry.description));
+            row.push_back(std::string("READ"));
+            row.push_back(bool(false));
+            row.push_back(bool(false));
+            row.push_back(Value{MapValue{}});
+            row.push_back(Value{ListValue{}});
+            row.push_back(std::string(""));
+            rows.push_back(std::move(row));
+        }
+        break;
+    }
+    case DatabaseDdlStatement::SHOW_FUNCTIONS: {
+        columns = {"name",     "signature", "description",         "aggregating",
+                   "category", "isBuiltIn", "argumentDescription", "returnDescription"};
+        function::FunctionRegistry registry;
+        auto defs = registry.listFunctions();
+        defs.erase(std::remove_if(defs.begin(), defs.end(), [](const auto& def) { return def.name.starts_with("__"); }),
+                   defs.end());
+        std::sort(defs.begin(), defs.end(), [](const auto& a, const auto& b) {
+            if (a.name != b.name)
+                return a.name < b.name;
+            return catalogFunctionSignature(a) < catalogFunctionSignature(b);
+        });
+        for (const auto& def : defs) {
+            ListValue args;
+            for (size_t i = 0; i < def.arg_types.size(); ++i) {
+                MapValue arg;
+                arg.entries.push_back({"name", ValueStorage{Value{std::string{"input"} + std::to_string(i)}}});
+                arg.entries.push_back({"description", ValueStorage{Value{std::string{}}}});
+                arg.entries.push_back({"type", ValueStorage{Value{catalogTypeName(def.arg_types[i])}}});
+                args.elements.push_back({ValueStorage{Value{arg}}});
+            }
+
+            Row row;
+            row.push_back(def.name);
+            row.push_back(catalogFunctionSignature(def));
+            row.push_back(std::string(def.is_aggregate ? "Aggregate function" : "Scalar function"));
+            row.push_back(bool(def.is_aggregate));
+            row.push_back(std::string(def.is_aggregate ? "Aggregate" : "Scalar"));
+            row.push_back(bool(true));
+            row.push_back(Value{args});
+            row.push_back(catalogTypeName(def.return_type));
+            rows.push_back(std::move(row));
+        }
+        break;
+    }
+    case DatabaseDdlStatement::SHOW_VECTOR_INDEXES: {
+        columns = {"id",         "name",          "state",      "populationPercent", "type",
+                   "entityType", "labelsOrTypes", "properties", "indexProvider",     "owningConstraint",
+                   "lastRead",   "readCount",     "options"};
         break;
     }
     }

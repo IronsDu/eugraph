@@ -238,6 +238,63 @@ TEST_F(GraphServiceDdlTest, ShowDatabasesHasColumnNames) {
     EXPECT_EQ(exec_ctx.ctx->columns[4], "currentStatus");
 }
 
+TEST_F(GraphServiceDdlTest, ShowDatabasesYieldAllReturnsBrowserRecordShape) {
+    execute("CREATE DATABASE db1");
+
+    auto exec_ctx = blockingWait(
+        svc_->executeCypher("SHOW DATABASES YIELD *", std::unordered_map<std::string, Value>{}, "default"));
+    ASSERT_NE(exec_ctx.ctx, nullptr);
+    EXPECT_EQ(exec_ctx.ctx->columns.size(), 15u);
+    EXPECT_EQ(exec_ctx.ctx->columns[0], "name");
+    EXPECT_EQ(exec_ctx.ctx->columns[6], "requestedStatus");
+    EXPECT_EQ(exec_ctx.ctx->columns[7], "currentStatus");
+    EXPECT_EQ(exec_ctx.ctx->columns[10], "default");
+
+    auto rows = execute("SHOW DATABASES YIELD *");
+    ASSERT_EQ(rows.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(rows[0][0]), "db1");
+    EXPECT_EQ(std::get<std::string>(rows[0][4]), "localhost:17687");
+    EXPECT_TRUE(std::holds_alternative<bool>(rows[0][10]));
+}
+
+TEST_F(GraphServiceDdlTest, ShowCurrentUserReturnsValidRecord) {
+    auto exec_ctx =
+        blockingWait(svc_->executeCypher("SHOW CURRENT USER", std::unordered_map<std::string, Value>{}, "system"));
+    ASSERT_NE(exec_ctx.ctx, nullptr);
+    EXPECT_EQ(exec_ctx.ctx->columns.size(), 5u);
+    EXPECT_EQ(exec_ctx.ctx->columns[0], "user");
+
+    auto rows = execute("SHOW CURRENT USER");
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(rows[0][0]), "neo4j");
+    EXPECT_TRUE(std::holds_alternative<bool>(rows[0][2]));
+}
+
+TEST_F(GraphServiceDdlTest, ShowProceduresAndFunctions) {
+    auto procs = execute("SHOW PROCEDURES YIELD *");
+    ASSERT_GT(procs.size(), 0u);
+    EXPECT_EQ(std::get<std::string>(procs[0][0]), "db.ping");
+
+    auto funcs = execute("SHOW FUNCTIONS YIELD *");
+    ASSERT_GT(funcs.size(), 0u);
+    bool has_id = false;
+    for (const auto& row : funcs) {
+        if (std::holds_alternative<std::string>(row[0]) && std::get<std::string>(row[0]) == "id") {
+            has_id = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(has_id);
+}
+
+TEST_F(GraphServiceDdlTest, ShowVectorIndexesReturnsEmptyResultWithColumns) {
+    auto exec_ctx = blockingWait(
+        svc_->executeCypher("SHOW VECTOR INDEXES YIELD *", std::unordered_map<std::string, Value>{}, "default"));
+    ASSERT_NE(exec_ctx.ctx, nullptr);
+    EXPECT_GT(exec_ctx.ctx->columns.size(), 0u);
+    EXPECT_EQ(execute("SHOW VECTOR INDEXES YIELD *").size(), 0u);
+}
+
 TEST_F(GraphServiceDdlTest, CreateDuplicateDatabaseReturnsIdempotent) {
     auto rows1 = execute("CREATE DATABASE dupdb");
     ASSERT_EQ(rows1.size(), 1u);

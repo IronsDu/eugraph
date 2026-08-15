@@ -19,6 +19,9 @@
 #include "query/function/scalar/temporal_functions.hpp"
 #include "query/function/scalar/type_function.hpp"
 
+#include <algorithm>
+#include <cctype>
+
 namespace eugraph {
 namespace function {
 
@@ -1354,9 +1357,25 @@ void FunctionRegistry::registerFunction(FunctionDef def) {
     functions_[def.name].push_back(std::move(def));
 }
 
+namespace {
+std::string lowerAscii(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+} // namespace
+
 const FunctionDef* FunctionRegistry::lookup(const std::string& name,
                                             const std::vector<binder::BoundType>& arg_types) const {
     auto it = functions_.find(name);
+    if (it == functions_.end()) {
+        const std::string lower_name = lowerAscii(name);
+        for (auto candidate = functions_.begin(); candidate != functions_.end(); ++candidate) {
+            if (lowerAscii(candidate->first) == lower_name) {
+                it = candidate;
+                break;
+            }
+        }
+    }
     if (it == functions_.end())
         return nullptr;
 
@@ -1380,7 +1399,15 @@ const std::vector<FunctionDef>* FunctionRegistry::lookupAll(const std::string& n
 }
 
 bool FunctionRegistry::exists(const std::string& name) const {
-    return functions_.find(name) != functions_.end();
+    if (functions_.find(name) != functions_.end())
+        return true;
+    const std::string lower_name = lowerAscii(name);
+    for (const auto& [candidate, overloads] : functions_) {
+        (void)overloads;
+        if (lowerAscii(candidate) == lower_name)
+            return true;
+    }
+    return false;
 }
 
 std::vector<FunctionDef> FunctionRegistry::listFunctions() const {

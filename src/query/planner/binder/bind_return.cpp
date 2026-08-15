@@ -2,6 +2,9 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <cctype>
+
 namespace eugraph {
 namespace binder {
 
@@ -66,10 +69,16 @@ static bool expressionReferencesVariableImpl(const cypher::Expression& expr, con
 
 // ==================== Aggregate Detection Helper ====================
 
+static std::string toLowerAscii(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
 static bool isAggregateFunctionName(const std::string& name) {
-    return name == "count" || name == "sum" || name == "avg" || name == "min" || name == "max" || name == "collect" ||
-           name == "percentile_cont" || name == "percentile_disc" || name == "percentileCont" ||
-           name == "percentileDisc" || name == "st_dev" || name == "st_dev_p";
+    const std::string lower = toLowerAscii(name);
+    return lower == "count" || lower == "sum" || lower == "avg" || lower == "min" || lower == "max" ||
+           lower == "collect" || lower == "percentile_cont" || lower == "percentile_disc" ||
+           lower == "percentilecont" || lower == "percentiledisc" || lower == "st_dev" || lower == "st_dev_p";
 }
 
 static bool hasAggregate(const cypher::Expression& expr) {

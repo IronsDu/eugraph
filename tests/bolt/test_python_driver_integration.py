@@ -429,6 +429,48 @@ class TestProcedures:
         finally:
             driver.close()
 
+    def test_browser_show_commands_and_dbms_info(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with make_session(driver) as session:
+                databases = list(session.run("SHOW DATABASES YIELD *"))
+                assert databases
+                database = databases[0].data()
+                assert "name" in database
+                assert "aliases" in database
+                assert "default" in database
+                assert "home" in database
+
+                users = list(session.run("SHOW CURRENT USER"))
+                assert len(users) == 1
+                user = users[0].data()
+                assert user["user"] == "neo4j"
+                assert isinstance(user["passwordChangeRequired"], bool)
+
+                procedures = list(session.run("SHOW PROCEDURES YIELD *"))
+                assert any(record["name"] == "db.ping" for record in procedures)
+                assert any(record["name"] == "dbms.info" for record in procedures)
+                assert all(isinstance(record["admin"], bool) for record in procedures)
+
+                functions = list(session.run("SHOW FUNCTIONS YIELD *"))
+                assert any(record["name"] == "id" for record in functions)
+                assert all(isinstance(record["isBuiltIn"], bool) for record in functions)
+
+                info = list(session.run("CALL dbms.info()"))
+                assert len(info) == 1
+                assert info[0].data()["name"] == "EuGraph"
+
+                # Browser uses uppercase COLLECT in its metadata query.
+                collected = list(
+                    session.run(
+                        "CALL db.labels() YIELD label "
+                        "RETURN COLLECT(label) AS labels"
+                    )
+                )
+                assert collected
+        finally:
+            driver.close()
+
     def test_dbms_procedures_lists_builtins(self):
         driver = neo4j.GraphDatabase.driver(get_bolt_url())
         try:
