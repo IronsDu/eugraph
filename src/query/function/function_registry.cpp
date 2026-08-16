@@ -1402,7 +1402,6 @@ Value edgeUniqueScalar(const std::vector<Value>& args, const EvalContext&) {
     }
     // The same edge id appearing twice in one MATCH path is a uniqueness
     // violation; return false so the row is filtered out.
-    size_t total = seen.size();
     // Recompute the number of valid edges actually checked, because null /
     // non-edge values should not be counted against uniqueness.
     size_t valid = 0;
