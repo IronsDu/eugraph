@@ -96,14 +96,9 @@ bool hasUnsupportedPattern(const ast::PatternPart& pp, bool is_create = false) {
 
     // Check each chain step: (rel, node)
     for (const auto& [rel, node] : el.chain) {
-        // Multi-label nodes are now supported in both CREATE and MATCH
-        // Relationship type alternation? [:A|B]
-        // For MERGE/CREATE, let the server-side binder reject it (NoSingleRelationshipType).
-        // Only skip for MATCH where alternation is genuinely unsupported.
-        if (rel.rel_types.size() > 1 && !is_create) {
-            spdlog::info("[TCK] skipping: relationship type alternation");
-            return true;
-        }
+        // Multi-label nodes are now supported in both CREATE and MATCH.
+        // Relationship type alternation [:A|B] is supported by the binder and
+        // physical expand path as well.
         // Unbounded variable-length expand? [:T*] without upper bound.
         // The binder accepts this and produces an explicit error if execution
         // is unsupported; skipping here would suppress legitimate binding-time
