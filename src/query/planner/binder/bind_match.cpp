@@ -593,17 +593,11 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             if (auto* einfo = ctx_.lookup(edge_var))
                 expand->edge_slot_id = einfo->slot_id;
 
-            // For RIGHT_TO_LEFT patterns, put dst+edge before src so the
-            // path order matches the query's written direction (§path-order).
-            if (rel_pat.direction == cypher::RelationshipDirection::RIGHT_TO_LEFT) {
-                path_element_vars.clear();
-                path_element_vars.push_back(dst_var);
-                path_element_vars.push_back(edge_var);
-                path_element_vars.push_back(start_var);
-            } else {
-                path_element_vars.push_back(edge_var);
-                path_element_vars.push_back(dst_var);
-            }
+            // Path elements follow the written order of the pattern:
+            // previous node, relationship, destination node. The physical
+            // Expand operator carries the actual EdgeKey direction.
+            path_element_vars.push_back(edge_var);
+            path_element_vars.push_back(dst_var);
             expand->dst_variable = dst_var;
             expand->dst_column_index = dst_col;
             if (auto* dinfo = ctx_.lookup(dst_var))

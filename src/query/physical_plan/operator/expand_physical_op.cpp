@@ -156,8 +156,9 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                 if (!ok)
                                     continue;
                             }
+                            bool phy_out = (dir == Direction::OUT);
                             edges.push_back(
-                                {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, true});
+                                {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
                         }
                     }
                 }
