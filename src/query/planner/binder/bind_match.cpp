@@ -485,15 +485,13 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 varlen->min_hops = min_hops;
                 varlen->max_hops = max_hops;
 
-                // P1: handle named path variable — varlen produces PathValue directly
+                // P1: handle named path variable. A single varlen hop can be
+                // produced directly by VarLenExpand; mixed fixed/varlen chains
+                // are assembled later by PathBuildPhysicalOp.
                 if (pp.variable) {
                     if (edge_var && *edge_var == *pp.variable) {
                         error("VariableAlreadyBound: variable '" + *pp.variable +
                               "' already defined as relationship but used as path");
-                        return std::nullopt;
-                    }
-                    if (element.chain.size() > 1) {
-                        error("Named path with mixed fixed/varlen chain is not supported yet");
                         return std::nullopt;
                     }
                     auto* path_existing = ctx_.lookup(*pp.variable);
@@ -502,10 +500,12 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                               path_existing->type.toString() + " but used as path");
                         return std::nullopt;
                     }
-                    varlen->path_variable = *pp.variable;
-                    varlen->path_column_index = nextColumnIndex();
-                    varlen->path_handled_by_varlen = true;
-                    ctx_.symbols[varlen->path_variable] = makeColumnInfo(varlen->path_variable, BoundType::Path());
+                    if (element.chain.size() == 1) {
+                        varlen->path_variable = *pp.variable;
+                        varlen->path_column_index = nextColumnIndex();
+                        varlen->path_handled_by_varlen = true;
+                        ctx_.symbols[varlen->path_variable] = makeColumnInfo(varlen->path_variable, BoundType::Path());
+                    }
                 }
 
                 // P2: handle named edge variable → LIST<EDGE>
@@ -556,6 +556,8 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     }
                 }
 
+                if (edge_var)
+                    path_element_vars.push_back(*edge_var);
                 path_element_vars.push_back(dst_var);
 
                 start_var = dst_var;
