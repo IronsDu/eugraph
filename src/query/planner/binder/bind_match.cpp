@@ -1669,9 +1669,94 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
         return std::nullopt;
     }
 
-    const auto& first_node = match.patterns[0].element.node;
+    MatchPatternGraph graph = MatchPatternGraphBuilder{}.build(match);
 
-    // Determine if the OPTIONAL MATCH is correlated (reuses a variable from current scope)
+    // Collect every variable from the outer scope that appears in this
+    // OPTIONAL MATCH pattern. Correlating all of them avoids re-scanning a
+    // node that is already bound later in the chain.
+    struct BoundPatternVar {
+        std::string name;
+        ColumnInfo info;
+        bool is_node;
+    };
+    std::vector<BoundPatternVar> bound_vars;
+    std::unordered_set<std::string> seen;
+    auto collect = [&](const std::string& name, bool is_node) {
+        if (name.empty() || seen.count(name))
+            return;
+        const ColumnInfo* col = ctx_.lookup(name);
+        if (!col || !isCompatibleForPatternUse(col->type, is_node ? BoundType::Vertex() : BoundType::Edge()))
+            return;
+        seen.insert(name);
+        bound_vars.push_back({name, *col, is_node});
+    };
+    for (const auto& node : graph.nodes)
+        collect(node.variable, true);
+    for (const auto& rel : graph.relationships)
+        collect(rel.variable, false);
+
+    const bool first_node_bound =
+        graph.parts.empty() || graph.parts[0].ordered_elements.empty()
+            ? false
+            : graph.nodes[graph.parts[0].ordered_elements.front()].bound ||
+                  (!graph.nodes[graph.parts[0].ordered_elements.front()].variable.empty() &&
+                   ctx_.lookup(graph.nodes[graph.parts[0].ordered_elements.front()].variable) != nullptr);
+
+    if (!bound_vars.empty() && first_node_bound) {
+        auto saved_ctx = ctx_.save();
+        ctx_.beginSubScope();
+
+        // The first correlated variable must be the pattern's start node so
+        // that bindMatch(parent) can continue the chain from it.
+        auto start_var = graph.nodes[graph.parts[0].ordered_elements.front()].variable;
+        auto start_it = std::find_if(bound_vars.begin(), bound_vars.end(),
+                                     [&](const BoundPatternVar& v) { return v.name == start_var; });
+        if (start_it != bound_vars.end())
+            std::iter_swap(bound_vars.begin(), start_it);
+
+        std::vector<std::pair<uint32_t, uint32_t>> correlation;
+        BoundCorrelatedSourceOp source;
+        for (const auto& bound : bound_vars) {
+            ColumnInfo sub_info = bound.info;
+            sub_info.column_index = nextColumnIndex();
+            uint32_t sub_idx = sub_info.column_index;
+            ctx_.symbols[bound.name] = sub_info;
+            correlation.emplace_back(bound.info.column_index, sub_idx);
+            source.variables.push_back(bound.name);
+            source.types.push_back(sub_info.type);
+            source.column_indices.push_back(sub_idx);
+        }
+
+        BoundLogicalOperator parent_op = std::move(source);
+        auto sub_plan = bindMatch(match, std::move(parent_op), /*skip_where=*/false);
+        if (!sub_plan)
+            return std::nullopt;
+
+        std::vector<std::pair<std::string, ColumnInfo>> new_vars;
+        for (const auto& [name, info] : ctx_.symbols) {
+            if (seen.count(name) == 0)
+                new_vars.emplace_back(name, info);
+        }
+
+        ctx_.restore(saved_ctx);
+
+        uint32_t col_offset = ctx_.next_column_index;
+        for (auto& [name, info] : new_vars) {
+            info.column_index += col_offset;
+            ctx_.symbols[name] = std::move(info);
+        }
+        ctx_.next_column_index = col_offset + static_cast<uint32_t>(new_vars.size());
+
+        auto left_join = std::make_unique<BoundLeftJoinOp>();
+        left_join->left = std::move(current);
+        left_join->right = std::move(*sub_plan);
+        left_join->correlation = std::move(correlation);
+        return left_join;
+    }
+
+    // Fallback: previous behavior for patterns whose first node is not
+    // correlated, or when no variable is bound yet.
+    const auto& first_node = match.patterns[0].element.node;
     bool correlated = false;
     std::string corr_var_name;
     const ColumnInfo* outer_col = nullptr;
@@ -1685,96 +1770,62 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
     }
 
     if (correlated) {
-        // ── Correlated OPTIONAL MATCH ──
-        // Similar to bindExistsSubPlan: create a CorrelatedSource sub-plan.
-        // Note: LeftJoin correlation uses column indices (not SlotIds) because
-        // a WITH projection between the outer scan and OPTIONAL MATCH forwards
-        // graph variables under their PEPlan object_slot, breaking slot-based
-        // lookup while column_index remains valid (Project preserves order).
         uint32_t outer_idx = outer_col->column_index;
         ColumnInfo saved_outer_info = *outer_col;
-
         auto saved_ctx = ctx_.save();
         ctx_.beginSubScope();
-
-        // Register correlated variable in sub-scope
         ColumnInfo sub_info = saved_outer_info;
         sub_info.column_index = nextColumnIndex();
         uint32_t sub_idx = sub_info.column_index;
         ctx_.symbols[corr_var_name] = sub_info;
-
         std::vector<std::pair<uint32_t, uint32_t>> correlation;
         correlation.emplace_back(outer_idx, sub_idx);
-
-        // Create CorrelatedSource leaf
         BoundCorrelatedSourceOp source;
         source.variables.push_back(corr_var_name);
         source.types.push_back(sub_info.type);
         source.column_indices.push_back(sub_idx);
-
-        // Bind the MATCH pattern in the sub-scope
         BoundLogicalOperator parent_op = std::move(source);
         auto sub_plan = bindMatch(match, std::move(parent_op), /*skip_where=*/false);
         if (!sub_plan)
             return std::nullopt;
-
-        // Collect new variables from sub-scope before restoring
         std::vector<std::pair<std::string, ColumnInfo>> new_vars;
         for (const auto& [name, info] : ctx_.symbols) {
-            if (name != corr_var_name) {
+            if (name != corr_var_name)
                 new_vars.emplace_back(name, info);
-            }
         }
-
         ctx_.restore(saved_ctx);
-
-        // Adjust column indices: sub-scope indices start from 0, but the
-        // LeftJoin physical output is [left_cols... | right_cols...], so
-        // right-side variables need an offset equal to the left column count.
         uint32_t col_offset = ctx_.next_column_index;
         for (auto& [name, info] : new_vars) {
             info.column_index += col_offset;
             ctx_.symbols[name] = std::move(info);
         }
         ctx_.next_column_index = col_offset + static_cast<uint32_t>(new_vars.size());
-
         auto left_join = std::make_unique<BoundLeftJoinOp>();
         left_join->left = std::move(current);
         left_join->right = std::move(*sub_plan);
         left_join->correlation = std::move(correlation);
         return left_join;
-    } else {
-        // ── Independent (non-correlated) OPTIONAL MATCH ──
-        // Bind the pattern as an independent sub-plan, then left-join
-        auto saved_ctx = ctx_.save();
-        ctx_.beginSubScope();
-
-        auto sub_plan = bindMatch(match, std::nullopt, /*skip_where=*/false);
-        if (!sub_plan)
-            return std::nullopt;
-
-        // Collect new variables from sub-scope
-        std::vector<std::pair<std::string, ColumnInfo>> new_vars;
-        for (const auto& [name, info] : ctx_.symbols) {
-            new_vars.emplace_back(name, info);
-        }
-
-        ctx_.restore(saved_ctx);
-
-        // Adjust column indices (same as correlated case)
-        uint32_t col_offset = ctx_.next_column_index;
-        for (auto& [name, info] : new_vars) {
-            info.column_index += col_offset;
-            ctx_.symbols[name] = std::move(info);
-        }
-        ctx_.next_column_index = col_offset + static_cast<uint32_t>(new_vars.size());
-
-        auto left_join = std::make_unique<BoundLeftJoinOp>();
-        left_join->left = std::move(current);
-        left_join->right = std::move(*sub_plan);
-        return left_join;
     }
-}
 
+    auto saved_ctx = ctx_.save();
+    ctx_.beginSubScope();
+    auto sub_plan = bindMatch(match, std::nullopt, /*skip_where=*/false);
+    if (!sub_plan)
+        return std::nullopt;
+    std::vector<std::pair<std::string, ColumnInfo>> new_vars;
+    for (const auto& [name, info] : ctx_.symbols)
+        new_vars.emplace_back(name, info);
+    ctx_.restore(saved_ctx);
+    uint32_t col_offset = ctx_.next_column_index;
+    for (auto& [name, info] : new_vars) {
+        info.column_index += col_offset;
+        ctx_.symbols[name] = std::move(info);
+    }
+    ctx_.next_column_index = col_offset + static_cast<uint32_t>(new_vars.size());
+    auto left_join = std::make_unique<BoundLeftJoinOp>();
+    left_join->left = std::move(current);
+    left_join->right = std::move(*sub_plan);
+    return left_join;
+}
 } // namespace binder
 } // namespace eugraph
