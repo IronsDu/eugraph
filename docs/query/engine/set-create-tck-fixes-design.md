@@ -452,7 +452,7 @@ TCK 中存在 `SET (n).p = 'x'` 语法（带括号的属性访问），AST 解�
 
 ## 五、实施计划
 
-> 严格遵循 `notes.md` "零-三" 流程：每完成一个 phase 等待开发者确认。
+> 严格遵循 `AGENTS.md` "零-三" 流程：每完成一个 phase 等待开发者确认。
 
 ### Phase 1：内存态镜像统一（§4.1）— A 类
 - 新增 `mutation_mirror.hpp`（含 `mirrorVertexToAllReferences` / `mirrorEdgeToAllReferences` / `ensureExclusiveBuffer`）
