@@ -3596,13 +3596,14 @@ TEST_F(QueryExecutorTest, VarLenExpandPathSelfLoop) {
     }
 }
 
-TEST_F(QueryExecutorTest, VarLenExpandNamedPathMixedChainRejected) {
+TEST_F(QueryExecutorTest, VarLenExpandNamedPathMixedChain) {
     insertMultiHopEdges();
 
-    // Mixed fixed + varlen chain with named path
+    // Mixed fixed + varlen chain with named path is now assembled by
+    // PathBuildPhysicalOp from the varlen relationship list.
     auto result = execSync(*executor_, "MATCH p = (a:Person)-[:KNOWS]->(b)-[:KNOWS*2..3]->(c) RETURN p");
-    EXPECT_FALSE(result.error.empty());
-    EXPECT_NE(result.error.find("not supported"), std::string::npos);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_GT(result.rows.size(), 0u);
 }
 
 // ── P2: Unbounded upper + undirected + named edge variables ──

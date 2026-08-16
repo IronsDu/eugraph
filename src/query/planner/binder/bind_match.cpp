@@ -1,5 +1,7 @@
 #include "query/planner/binder.hpp"
 
+#include "query/planner/binder/pattern/pattern_graph.hpp"
+
 #include "query/function/batch_ops.hpp"
 #include "query/planner/bound_expression/bound_literal.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
@@ -11,7 +13,11 @@
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <set>
 #include <spdlog/spdlog.h>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace eugraph {
 namespace binder {
@@ -106,6 +112,131 @@ cypher::Expression cloneExpression(const cypher::Expression& expr) {
 }
 } // anonymous namespace
 
+// ==================== Pattern-graph semantic pre-pass ====================
+
+namespace {
+
+bool isAggregateName(const std::string& name) {
+    std::string lower;
+    lower.reserve(name.size());
+    for (unsigned char c : name)
+        lower.push_back(static_cast<char>(std::tolower(c)));
+    return lower == "count" || lower == "sum" || lower == "avg" || lower == "min" || lower == "max" ||
+           lower == "collect" || lower == "percentile_cont" || lower == "percentile_disc" ||
+           lower == "percentilecont" || lower == "percentiledisc" || lower == "st_dev" || lower == "st_dev_p";
+}
+
+bool containsAggregate(const cypher::Expression& expr) {
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                if (isAggregateName(ptr->name))
+                    return true;
+                for (const auto& arg : ptr->args) {
+                    if (containsAggregate(arg))
+                        return true;
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return containsAggregate(ptr->left) || containsAggregate(ptr->right);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return containsAggregate(ptr->operand);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                return containsAggregate(ptr->object);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements) {
+                    if (containsAggregate(e))
+                        return true;
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries) {
+                    (void)k;
+                    if (containsAggregate(v))
+                        return true;
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject && containsAggregate(*ptr->subject))
+                    return true;
+                for (const auto& [w, t] : ptr->when_thens) {
+                    if (containsAggregate(w) || containsAggregate(t))
+                        return true;
+                }
+                return ptr->else_expr && containsAggregate(*ptr->else_expr);
+            }
+            return false;
+        },
+        expr);
+}
+
+bool propertyOnPath(const cypher::Expression& expr, const MatchPatternGraph& graph) {
+    std::set<std::string> path_vars;
+    for (const auto& part : graph.parts) {
+        if (part.path_variable)
+            path_vars.insert(*part.path_variable);
+    }
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                bool object_is_path = false;
+                std::visit(
+                    [&](const auto& obj) {
+                        if constexpr (std::is_same_v<typename std::decay_t<decltype(obj)>::element_type,
+                                                     cypher::Variable>) {
+                            object_is_path = path_vars.count(obj->name) > 0;
+                        }
+                    },
+                    ptr->object);
+                return object_is_path || propertyOnPath(ptr->object, graph);
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return propertyOnPath(ptr->left, graph) || propertyOnPath(ptr->right, graph);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return propertyOnPath(ptr->operand, graph);
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args) {
+                    if (propertyOnPath(arg, graph))
+                        return true;
+                }
+            }
+            return false;
+        },
+        expr);
+}
+
+bool validateMatchPatternVariables(const MatchPatternGraph& graph, Binder& binder) {
+    std::unordered_set<std::string> node_vars;
+    for (const auto& node : graph.nodes) {
+        if (!node.variable.empty())
+            node_vars.insert(node.variable);
+    }
+
+    // RelationshipUniquenessViolation is specifically for using the same
+    // relationship variable twice as a relationship in one pattern. A
+    // variable used once as a relationship and once as a node is handled by
+    // normal VariableTypeConflict binding below.
+    std::unordered_map<std::string, size_t> first_rel_part;
+    for (size_t part_idx = 0; part_idx < graph.parts.size(); ++part_idx) {
+        const auto& part = graph.parts[part_idx];
+        for (const auto& rel : graph.relationships) {
+            if (rel.variable.empty() || node_vars.count(rel.variable) ||
+                std::find(part.ordered_elements.begin(), part.ordered_elements.end(), rel.id) ==
+                    part.ordered_elements.end()) {
+                continue;
+            }
+            auto [it, inserted] = first_rel_part.emplace(rel.variable, part_idx);
+            if (!inserted && it->second == part_idx) {
+                binder.error("RelationshipUniquenessViolation: relationship variable '" + rel.variable +
+                             "' is used more than once in the same pattern");
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+} // namespace
+
 // ==================== MATCH Binding ====================
 
 std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause& match,
@@ -115,7 +246,20 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         return std::nullopt;
     }
 
+    MatchPatternGraph pattern_graph = MatchPatternGraphBuilder{}.build(match);
+    if (!validateMatchPatternVariables(pattern_graph, *this))
+        return std::nullopt;
+    if (match.where_pred && containsAggregate(*match.where_pred)) {
+        error("InvalidAggregation: aggregate functions are not allowed in MATCH WHERE");
+        return std::nullopt;
+    }
+    if (match.where_pred && propertyOnPath(*match.where_pred, pattern_graph)) {
+        error("InvalidArgumentType: property access is not supported on path values");
+        return std::nullopt;
+    }
+
     std::optional<BoundLogicalOperator> current;
+    std::vector<std::string> match_edge_vars;
 
     for (size_t pi = 0; pi < match.patterns.size(); ++pi) {
         const auto& pp = match.patterns[pi];
@@ -240,10 +384,14 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             if (rel_pat.range.has_value()) {
                 // ── Variable-length expand ──
 
-                // P2: named edge variable → LIST<EDGE>
+                // P2: named edge variable → LIST<EDGE>. Anonymous varlen edges
+                // still need an internal column when a named path must be
+                // assembled later by PathBuildPhysicalOp.
                 std::optional<std::string> edge_var;
                 if (rel_pat.variable.has_value()) {
                     edge_var = *rel_pat.variable;
+                } else if (pp.variable.has_value()) {
+                    edge_var = "__anon_edge_" + std::to_string(nextAnonId());
                 }
                 // P3: edge property filters (resolved after edge type binding below)
                 std::unordered_map<EdgeLabelId, std::vector<std::pair<uint16_t, PropertyValue>>> edge_prop_filters;
@@ -287,7 +435,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 // regular MATCH (no matches when the edge type doesn't exist).
                 std::vector<EdgeLabelId> edge_label_ids;
                 if (!rel_pat.rel_types.empty()) {
-                    edge_label_ids = catalog_.resolveEdgeLabelIds(rel_pat.rel_types);
+                    edge_label_ids = catalog_.resolveEdgeLabelIds(normalizeRelationshipTypes(rel_pat.rel_types));
                 } else {
                     for (const auto& [id, def] : catalog_.allEdgeLabels()) {
                         edge_label_ids.push_back(id);
@@ -341,10 +489,13 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 varlen->min_hops = min_hops;
                 varlen->max_hops = max_hops;
 
-                // P1: handle named path variable — varlen produces PathValue directly
+                // P1: handle named path variable. A single varlen hop can be
+                // produced directly by VarLenExpand; mixed fixed/varlen chains
+                // are assembled later by PathBuildPhysicalOp.
                 if (pp.variable) {
-                    if (element.chain.size() > 1) {
-                        error("Named path with mixed fixed/varlen chain is not supported yet");
+                    if (edge_var && *edge_var == *pp.variable) {
+                        error("VariableAlreadyBound: variable '" + *pp.variable +
+                              "' already defined as relationship but used as path");
                         return std::nullopt;
                     }
                     auto* path_existing = ctx_.lookup(*pp.variable);
@@ -353,14 +504,17 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                               path_existing->type.toString() + " but used as path");
                         return std::nullopt;
                     }
-                    varlen->path_variable = *pp.variable;
-                    varlen->path_column_index = nextColumnIndex();
-                    varlen->path_handled_by_varlen = true;
-                    ctx_.symbols[varlen->path_variable] = makeColumnInfo(varlen->path_variable, BoundType::Path());
+                    if (element.chain.size() == 1) {
+                        varlen->path_variable = *pp.variable;
+                        varlen->path_column_index = nextColumnIndex();
+                        varlen->path_handled_by_varlen = true;
+                        ctx_.symbols[varlen->path_variable] = makeColumnInfo(varlen->path_variable, BoundType::Path());
+                    }
                 }
 
                 // P2: handle named edge variable → LIST<EDGE>
                 if (edge_var) {
+                    match_edge_vars.push_back(*edge_var);
                     auto* edge_existing = ctx_.lookup(*edge_var);
                     if (edge_existing &&
                         !isCompatibleForPatternUse(edge_existing->type, BoundType::List(BoundType::Edge()))) {
@@ -406,6 +560,8 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     }
                 }
 
+                if (edge_var)
+                    path_element_vars.push_back(*edge_var);
                 path_element_vars.push_back(dst_var);
 
                 start_var = dst_var;
@@ -422,6 +578,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             std::vector<uint16_t> edge_prop_ids;
             if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids))
                 return std::nullopt;
+            match_edge_vars.push_back(edge_var);
 
             // Bind target node
             std::string dst_var;
@@ -442,17 +599,11 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             if (auto* einfo = ctx_.lookup(edge_var))
                 expand->edge_slot_id = einfo->slot_id;
 
-            // For RIGHT_TO_LEFT patterns, put dst+edge before src so the
-            // path order matches the query's written direction (§path-order).
-            if (rel_pat.direction == cypher::RelationshipDirection::RIGHT_TO_LEFT) {
-                path_element_vars.clear();
-                path_element_vars.push_back(dst_var);
-                path_element_vars.push_back(edge_var);
-                path_element_vars.push_back(start_var);
-            } else {
-                path_element_vars.push_back(edge_var);
-                path_element_vars.push_back(dst_var);
-            }
+            // Path elements follow the written order of the pattern:
+            // previous node, relationship, destination node. The physical
+            // Expand operator carries the actual EdgeKey direction.
+            path_element_vars.push_back(edge_var);
+            path_element_vars.push_back(dst_var);
             expand->dst_variable = dst_var;
             expand->dst_column_index = dst_col;
             if (auto* dinfo = ctx_.lookup(dst_var))
@@ -531,6 +682,14 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 *current);
 
             if (!path_already_handled) {
+                for (const auto& [rel_pat, node_pat] : element.chain) {
+                    (void)node_pat;
+                    if (rel_pat.variable && *rel_pat.variable == *pp.variable) {
+                        error("VariableAlreadyBound: variable '" + *pp.variable +
+                              "' already defined as relationship but used as path");
+                        return std::nullopt;
+                    }
+                }
                 auto* path_existing = ctx_.lookup(*pp.variable);
                 if (path_existing && !isCompatibleForPatternUse(path_existing->type, BoundType::Path())) {
                     error("VariableAlreadyBound: variable '" + *pp.variable + "' already defined as " +
@@ -560,6 +719,29 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
     }
 
     // Bind WHERE predicate
+    // Enforce Cypher relationship uniqueness within this MATCH clause.
+    // The predicate is evaluated row-by-row and keeps rows where every
+    // traversed relationship id appears at most once.
+    if (current && match_edge_vars.size() > 1) {
+        const function::FunctionDef* unique_fn = func_registry_.lookup("__edge_unique", {});
+        if (unique_fn) {
+            auto unique_call = std::make_unique<binder::BoundFunctionCall>();
+            unique_call->func_def = unique_fn;
+            unique_call->return_type = BoundType::Bool();
+            for (const auto& edge_var : match_edge_vars) {
+                const ColumnInfo* edge_col = ctx_.lookup(edge_var);
+                if (!edge_col)
+                    continue;
+                unique_call->args.push_back(
+                    BoundColumnRef(edge_col->column_index, edge_col->type, edge_var, edge_col->slot_id));
+            }
+            BoundFilterOp unique_filter;
+            unique_filter.predicate = BoundExpression(std::move(unique_call));
+            unique_filter.child = std::move(*current);
+            current = std::make_unique<BoundFilterOp>(std::move(unique_filter));
+        }
+    }
+
     if (match.where_pred && current && !skip_where) {
         auto where_op = bindWhere(*match.where_pred, std::move(*current));
         current = std::move(where_op);
@@ -1474,9 +1656,94 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
         return std::nullopt;
     }
 
-    const auto& first_node = match.patterns[0].element.node;
+    MatchPatternGraph graph = MatchPatternGraphBuilder{}.build(match);
 
-    // Determine if the OPTIONAL MATCH is correlated (reuses a variable from current scope)
+    // Collect every variable from the outer scope that appears in this
+    // OPTIONAL MATCH pattern. Correlating all of them avoids re-scanning a
+    // node that is already bound later in the chain.
+    struct BoundPatternVar {
+        std::string name;
+        ColumnInfo info;
+        bool is_node;
+    };
+    std::vector<BoundPatternVar> bound_vars;
+    std::unordered_set<std::string> seen;
+    auto collect = [&](const std::string& name, bool is_node) {
+        if (name.empty() || seen.count(name))
+            return;
+        const ColumnInfo* col = ctx_.lookup(name);
+        if (!col || !isCompatibleForPatternUse(col->type, is_node ? BoundType::Vertex() : BoundType::Edge()))
+            return;
+        seen.insert(name);
+        bound_vars.push_back({name, *col, is_node});
+    };
+    for (const auto& node : graph.nodes)
+        collect(node.variable, true);
+    for (const auto& rel : graph.relationships)
+        collect(rel.variable, false);
+
+    const bool first_node_bound =
+        graph.parts.empty() || graph.parts[0].ordered_elements.empty()
+            ? false
+            : graph.nodes[graph.parts[0].ordered_elements.front()].bound ||
+                  (!graph.nodes[graph.parts[0].ordered_elements.front()].variable.empty() &&
+                   ctx_.lookup(graph.nodes[graph.parts[0].ordered_elements.front()].variable) != nullptr);
+
+    if (!bound_vars.empty() && first_node_bound) {
+        auto saved_ctx = ctx_.save();
+        ctx_.beginSubScope();
+
+        // The first correlated variable must be the pattern's start node so
+        // that bindMatch(parent) can continue the chain from it.
+        auto start_var = graph.nodes[graph.parts[0].ordered_elements.front()].variable;
+        auto start_it = std::find_if(bound_vars.begin(), bound_vars.end(),
+                                     [&](const BoundPatternVar& v) { return v.name == start_var; });
+        if (start_it != bound_vars.end())
+            std::iter_swap(bound_vars.begin(), start_it);
+
+        std::vector<std::pair<uint32_t, uint32_t>> correlation;
+        BoundCorrelatedSourceOp source;
+        for (const auto& bound : bound_vars) {
+            ColumnInfo sub_info = bound.info;
+            sub_info.column_index = nextColumnIndex();
+            uint32_t sub_idx = sub_info.column_index;
+            ctx_.symbols[bound.name] = sub_info;
+            correlation.emplace_back(bound.info.column_index, sub_idx);
+            source.variables.push_back(bound.name);
+            source.types.push_back(sub_info.type);
+            source.column_indices.push_back(sub_idx);
+        }
+
+        BoundLogicalOperator parent_op = std::move(source);
+        auto sub_plan = bindMatch(match, std::move(parent_op), /*skip_where=*/false);
+        if (!sub_plan)
+            return std::nullopt;
+
+        std::vector<std::pair<std::string, ColumnInfo>> new_vars;
+        for (const auto& [name, info] : ctx_.symbols) {
+            if (seen.count(name) == 0)
+                new_vars.emplace_back(name, info);
+        }
+
+        ctx_.restore(saved_ctx);
+
+        uint32_t col_offset = ctx_.next_column_index;
+        for (auto& [name, info] : new_vars) {
+            info.column_index += col_offset;
+            ctx_.symbols[name] = std::move(info);
+        }
+        ctx_.next_column_index = col_offset + static_cast<uint32_t>(new_vars.size());
+
+        auto left_join = std::make_unique<BoundLeftJoinOp>();
+        left_join->left = std::move(current);
+        left_join->right = std::move(*sub_plan);
+        left_join->correlation = std::move(correlation);
+        return left_join;
+    }
+
+    // Fallback: previous behavior for patterns whose first node is not
+    // correlated, or when no variable is bound yet.
+    const auto& first_node = match.patterns[0].element.node;
     bool correlated = false;
     std::string corr_var_name;
     const ColumnInfo* outer_col = nullptr;
@@ -1490,96 +1757,62 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
     }
 
     if (correlated) {
-        // ── Correlated OPTIONAL MATCH ──
-        // Similar to bindExistsSubPlan: create a CorrelatedSource sub-plan.
-        // Note: LeftJoin correlation uses column indices (not SlotIds) because
-        // a WITH projection between the outer scan and OPTIONAL MATCH forwards
-        // graph variables under their PEPlan object_slot, breaking slot-based
-        // lookup while column_index remains valid (Project preserves order).
         uint32_t outer_idx = outer_col->column_index;
         ColumnInfo saved_outer_info = *outer_col;
-
         auto saved_ctx = ctx_.save();
         ctx_.beginSubScope();
-
-        // Register correlated variable in sub-scope
         ColumnInfo sub_info = saved_outer_info;
         sub_info.column_index = nextColumnIndex();
         uint32_t sub_idx = sub_info.column_index;
         ctx_.symbols[corr_var_name] = sub_info;
-
         std::vector<std::pair<uint32_t, uint32_t>> correlation;
         correlation.emplace_back(outer_idx, sub_idx);
-
-        // Create CorrelatedSource leaf
         BoundCorrelatedSourceOp source;
         source.variables.push_back(corr_var_name);
         source.types.push_back(sub_info.type);
         source.column_indices.push_back(sub_idx);
-
-        // Bind the MATCH pattern in the sub-scope
         BoundLogicalOperator parent_op = std::move(source);
         auto sub_plan = bindMatch(match, std::move(parent_op), /*skip_where=*/false);
         if (!sub_plan)
             return std::nullopt;
-
-        // Collect new variables from sub-scope before restoring
         std::vector<std::pair<std::string, ColumnInfo>> new_vars;
         for (const auto& [name, info] : ctx_.symbols) {
-            if (name != corr_var_name) {
+            if (name != corr_var_name)
                 new_vars.emplace_back(name, info);
-            }
         }
-
         ctx_.restore(saved_ctx);
-
-        // Adjust column indices: sub-scope indices start from 0, but the
-        // LeftJoin physical output is [left_cols... | right_cols...], so
-        // right-side variables need an offset equal to the left column count.
         uint32_t col_offset = ctx_.next_column_index;
         for (auto& [name, info] : new_vars) {
             info.column_index += col_offset;
             ctx_.symbols[name] = std::move(info);
         }
         ctx_.next_column_index = col_offset + static_cast<uint32_t>(new_vars.size());
-
         auto left_join = std::make_unique<BoundLeftJoinOp>();
         left_join->left = std::move(current);
         left_join->right = std::move(*sub_plan);
         left_join->correlation = std::move(correlation);
         return left_join;
-    } else {
-        // ── Independent (non-correlated) OPTIONAL MATCH ──
-        // Bind the pattern as an independent sub-plan, then left-join
-        auto saved_ctx = ctx_.save();
-        ctx_.beginSubScope();
-
-        auto sub_plan = bindMatch(match, std::nullopt, /*skip_where=*/false);
-        if (!sub_plan)
-            return std::nullopt;
-
-        // Collect new variables from sub-scope
-        std::vector<std::pair<std::string, ColumnInfo>> new_vars;
-        for (const auto& [name, info] : ctx_.symbols) {
-            new_vars.emplace_back(name, info);
-        }
-
-        ctx_.restore(saved_ctx);
-
-        // Adjust column indices (same as correlated case)
-        uint32_t col_offset = ctx_.next_column_index;
-        for (auto& [name, info] : new_vars) {
-            info.column_index += col_offset;
-            ctx_.symbols[name] = std::move(info);
-        }
-        ctx_.next_column_index = col_offset + static_cast<uint32_t>(new_vars.size());
-
-        auto left_join = std::make_unique<BoundLeftJoinOp>();
-        left_join->left = std::move(current);
-        left_join->right = std::move(*sub_plan);
-        return left_join;
     }
-}
 
+    auto saved_ctx = ctx_.save();
+    ctx_.beginSubScope();
+    auto sub_plan = bindMatch(match, std::nullopt, /*skip_where=*/false);
+    if (!sub_plan)
+        return std::nullopt;
+    std::vector<std::pair<std::string, ColumnInfo>> new_vars;
+    for (const auto& [name, info] : ctx_.symbols)
+        new_vars.emplace_back(name, info);
+    ctx_.restore(saved_ctx);
+    uint32_t col_offset = ctx_.next_column_index;
+    for (auto& [name, info] : new_vars) {
+        info.column_index += col_offset;
+        ctx_.symbols[name] = std::move(info);
+    }
+    ctx_.next_column_index = col_offset + static_cast<uint32_t>(new_vars.size());
+    auto left_join = std::make_unique<BoundLeftJoinOp>();
+    left_join->left = std::move(current);
+    left_join->right = std::move(*sub_plan);
+    return left_join;
+}
 } // namespace binder
 } // namespace eugraph

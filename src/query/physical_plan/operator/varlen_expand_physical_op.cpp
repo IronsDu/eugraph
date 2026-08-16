@@ -3,6 +3,8 @@
 #include "query/dataset/row.hpp"
 #include "storage/data/i_sync_graph_data_store.hpp"
 
+#include <spdlog/spdlog.h>
+
 namespace eugraph {
 namespace compute {
 
@@ -109,6 +111,17 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         co_return out;
     };
 
+    auto hasDstLabels = [&](VertexId vid) -> folly::coro::Task<bool> {
+        if (dst_label_ids_.empty())
+            co_return true;
+        auto labels = co_await store_.getVertexLabels(vid);
+        for (LabelId need : dst_label_ids_) {
+            if (labels.find(need) == labels.end())
+                co_return false;
+        }
+        co_return true;
+    };
+
     auto scanAll = [&](VertexId vid) -> folly::coro::Task<std::vector<DirectedEdgeEntry>> {
         if (split_undirected) {
             auto out = co_await scanDirected(vid, Direction::OUT);
@@ -168,7 +181,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
             std::vector<DirectedEdgeEntry> start_edges = co_await scanAll(src_id);
 
             // Emit identity path when min_hops == 0 (zero-hop: src == dst)
-            if (min_hops_ == 0) {
+            if (min_hops_ == 0 && co_await hasDstLabels(src_id)) {
                 OutputEntry identity_entry;
                 identity_entry.src_row = src_row;
                 identity_entry.dst_id = src_id;
@@ -247,7 +260,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
 
                 int next_depth = frame.depth + 1;
 
-                if (next_depth >= min_hops_) {
+                if (next_depth >= min_hops_ && co_await hasDstLabels(edge.neighbor_id)) {
                     OutputEntry entry;
                     entry.src_row = src_row;
                     entry.dst_id = edge.neighbor_id;
@@ -352,16 +365,21 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
 
                 // P2: unbounded depth check (max_hops_ < 0 means unbounded)
                 if (max_hops_ < 0 || next_depth < max_hops_) {
-                    // P2: vertex cycle detection — prevent infinite loops on unbounded
-                    bool vertex_on_path = false;
-                    for (const auto& f : stack) {
-                        if (f.vertex == edge.neighbor_id) {
-                            vertex_on_path = true;
-                            break;
+                    // P2: vertex cycle detection is only required for truly
+                    // unbounded traversals. Bounded varlen paths may legally
+                    // revisit a vertex as long as every relationship is used
+                    // at most once.
+                    if (max_hops_ < 0) {
+                        bool vertex_on_path = false;
+                        for (const auto& f : stack) {
+                            if (f.vertex == edge.neighbor_id) {
+                                vertex_on_path = true;
+                                break;
+                            }
                         }
+                        if (vertex_on_path)
+                            continue;
                     }
-                    if (vertex_on_path)
-                        continue;
 
                     // Go deeper: collect edges from neighbor
                     visited_edges.insert(edge_key);
