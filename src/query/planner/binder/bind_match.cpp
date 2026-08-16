@@ -384,10 +384,14 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             if (rel_pat.range.has_value()) {
                 // ── Variable-length expand ──
 
-                // P2: named edge variable → LIST<EDGE>
+                // P2: named edge variable → LIST<EDGE>. Anonymous varlen edges
+                // still need an internal column when a named path must be
+                // assembled later by PathBuildPhysicalOp.
                 std::optional<std::string> edge_var;
                 if (rel_pat.variable.has_value()) {
                     edge_var = *rel_pat.variable;
+                } else if (pp.variable.has_value()) {
+                    edge_var = "__anon_edge_" + std::to_string(nextAnonId());
                 }
                 // P3: edge property filters (resolved after edge type binding below)
                 std::unordered_map<EdgeLabelId, std::vector<std::pair<uint16_t, PropertyValue>>> edge_prop_filters;
