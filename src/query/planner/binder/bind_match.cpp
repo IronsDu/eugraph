@@ -311,6 +311,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
     }
 
     std::optional<BoundLogicalOperator> current;
+    std::vector<std::string> match_edge_vars;
 
     for (size_t pi = 0; pi < match.patterns.size(); ++pi) {
         const auto& pp = match.patterns[pi];
@@ -556,6 +557,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
 
                 // P2: handle named edge variable → LIST<EDGE>
                 if (edge_var) {
+                    match_edge_vars.push_back(*edge_var);
                     auto* edge_existing = ctx_.lookup(*edge_var);
                     if (edge_existing &&
                         !isCompatibleForPatternUse(edge_existing->type, BoundType::List(BoundType::Edge()))) {
@@ -617,6 +619,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             std::vector<uint16_t> edge_prop_ids;
             if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids))
                 return std::nullopt;
+            match_edge_vars.push_back(edge_var);
 
             // Bind target node
             std::string dst_var;
@@ -755,6 +758,29 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
     }
 
     // Bind WHERE predicate
+    // Enforce Cypher relationship uniqueness within this MATCH clause.
+    // The predicate is evaluated row-by-row and keeps rows where every
+    // traversed relationship id appears at most once.
+    if (current && match_edge_vars.size() > 1) {
+        const function::FunctionDef* unique_fn = func_registry_.lookup("__edge_unique", {});
+        if (unique_fn) {
+            auto unique_call = std::make_unique<binder::BoundFunctionCall>();
+            unique_call->func_def = unique_fn;
+            unique_call->return_type = BoundType::Bool();
+            for (const auto& edge_var : match_edge_vars) {
+                const ColumnInfo* edge_col = ctx_.lookup(edge_var);
+                if (!edge_col)
+                    continue;
+                unique_call->args.push_back(
+                    BoundColumnRef(edge_col->column_index, edge_col->type, edge_var, edge_col->slot_id));
+            }
+            BoundFilterOp unique_filter;
+            unique_filter.predicate = BoundExpression(std::move(unique_call));
+            unique_filter.child = std::move(*current);
+            current = std::make_unique<BoundFilterOp>(std::move(unique_filter));
+        }
+    }
+
     if (match.where_pred && current && !skip_where) {
         auto where_op = bindWhere(*match.where_pred, std::move(*current));
         current = std::move(where_op);

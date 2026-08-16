@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <unordered_set>
 
 namespace eugraph {
 namespace function {
@@ -32,6 +33,10 @@ FunctionRegistry::FunctionRegistry() {
 void FunctionRegistry::registerBuiltins() {
     registerScalarBuiltins();
     registerAggregateBuiltins();
+}
+
+namespace {
+Value edgeUniqueScalar(const std::vector<Value>& args, const EvalContext& ctx);
 }
 
 void FunctionRegistry::registerScalarBuiltins() {
@@ -1161,6 +1166,15 @@ void FunctionRegistry::registerScalarBuiltins() {
     regNoArg("datetime.transaction", BoundType::DateTime(), scalar::datetimeTransactionScalarFn);
     regNoArg("datetime.statement", BoundType::DateTime(), scalar::datetimeStatementScalarFn);
     regNoArg("datetime.realtime", BoundType::DateTime(), scalar::datetimeRealtimeScalarFn);
+
+    // Internal MATCH uniqueness predicate. Not user-visible; dbms.functions()
+    // filters names starting with "__".
+    FunctionDef edge_unique;
+    edge_unique.name = "__edge_unique";
+    edge_unique.return_type = BoundType::Bool();
+    edge_unique.has_variadic_args = true;
+    edge_unique.scalar_fn = edgeUniqueScalar;
+    functions_["__edge_unique"].push_back(std::move(edge_unique));
 }
 
 void FunctionRegistry::registerAggregateBuiltins() {
@@ -1361,6 +1375,49 @@ namespace {
 std::string lowerAscii(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return s;
+}
+
+Value edgeUniqueScalar(const std::vector<Value>& args, const EvalContext&) {
+    std::unordered_set<uint64_t> seen;
+    auto check_edge = [&](const Value& value) {
+        if (isNull(value))
+            return;
+        uint64_t edge_id = 0;
+        if (std::holds_alternative<EdgeValue>(value))
+            edge_id = std::get<EdgeValue>(value).id;
+        else if (std::holds_alternative<EdgeKey>(value))
+            edge_id = std::get<EdgeKey>(value).id;
+        else
+            return;
+        if (edge_id != INVALID_EDGE_ID)
+            seen.insert(edge_id);
+    };
+    for (const auto& arg : args) {
+        if (std::holds_alternative<ListValue>(arg)) {
+            for (const auto& elem : std::get<ListValue>(arg).elements)
+                check_edge(elem.value);
+        } else {
+            check_edge(arg);
+        }
+    }
+    // The same edge id appearing twice in one MATCH path is a uniqueness
+    // violation; return false so the row is filtered out.
+    size_t total = seen.size();
+    // Recompute the number of valid edges actually checked, because null /
+    // non-edge values should not be counted against uniqueness.
+    size_t valid = 0;
+    for (const auto& arg : args) {
+        if (std::holds_alternative<ListValue>(arg)) {
+            for (const auto& elem : std::get<ListValue>(arg).elements) {
+                if (std::holds_alternative<EdgeValue>(elem.value) || std::holds_alternative<EdgeKey>(elem.value)) {
+                    ++valid;
+                }
+            }
+        } else if (std::holds_alternative<EdgeValue>(arg) || std::holds_alternative<EdgeKey>(arg)) {
+            ++valid;
+        }
+    }
+    return Value(seen.size() == valid);
 }
 } // namespace
 
