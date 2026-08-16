@@ -97,6 +97,10 @@
 
 ## 四、标准验证命令
 
+> **优先走 skill**：格式化调用 `eugraph-format`；构建 / 测试 / 专项验证调用 `eugraph-verify`。
+> 两个 skill 位于 `.agents/skills/<name>/SKILL.md`，DeepSeek Harness 会从项目根目录 `.agents/skills` 自动发现。
+> skill 不可用时，按下面命令兜底执行。
+
 ### 默认验证（提交前必须全部通过）
 ```bash
 # 1. 格式化（自动修复后重新检查应通过）
