@@ -204,58 +204,6 @@ bool propertyOnPath(const cypher::Expression& expr, const MatchPatternGraph& gra
 }
 
 bool validateMatchPatternVariables(const MatchPatternGraph& graph, Binder& binder) {
-    std::unordered_map<std::string, std::vector<std::string>> roles;
-    std::unordered_set<std::string> path_vars;
-    for (const auto& part : graph.parts) {
-        if (part.path_variable)
-            path_vars.insert(*part.path_variable);
-    }
-
-    for (const auto& node : graph.nodes) {
-        if (!node.variable.empty())
-            roles[node.variable].push_back("node");
-    }
-    for (const auto& rel : graph.relationships) {
-        if (!rel.variable.empty())
-            roles[rel.variable].push_back("relationship");
-    }
-
-    // A path variable reused as a relationship in the same named path is
-    // VariableAlreadyBound (p = ()-[p*]-()). Reused as a relationship in a
-    // different pattern part it is a regular VariableTypeConflict.
-    std::unordered_map<std::string, size_t> path_part;
-    for (size_t part_idx = 0; part_idx < graph.parts.size(); ++part_idx) {
-        if (graph.parts[part_idx].path_variable)
-            path_part[*graph.parts[part_idx].path_variable] = part_idx;
-    }
-    for (const auto& path_var : path_vars) {
-        auto it = roles.find(path_var);
-        if (it == roles.end())
-            continue;
-        bool path_is_relationship = std::find(it->second.begin(), it->second.end(), "relationship") != it->second.end();
-        if (!path_is_relationship)
-            continue;
-        size_t declared_part = path_part[path_var];
-        bool same_part = false;
-        for (size_t part_idx = 0; part_idx < graph.parts.size(); ++part_idx) {
-            for (const auto& rel : graph.relationships) {
-                if (rel.variable == path_var && std::find(graph.parts[part_idx].ordered_elements.begin(),
-                                                          graph.parts[part_idx].ordered_elements.end(),
-                                                          rel.id) != graph.parts[part_idx].ordered_elements.end()) {
-                    same_part = (part_idx == declared_part);
-                }
-            }
-        }
-        if (same_part) {
-            binder.error("VariableAlreadyBound: variable '" + path_var +
-                         "' already defined as PATH but used as relationship");
-        } else {
-            binder.error("VariableTypeConflict: variable '" + path_var +
-                         "' already defined as PATH but used as relationship");
-        }
-        return false;
-    }
-
     std::unordered_set<std::string> node_vars;
     for (const auto& node : graph.nodes) {
         if (!node.variable.empty())
@@ -539,6 +487,11 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
 
                 // P1: handle named path variable — varlen produces PathValue directly
                 if (pp.variable) {
+                    if (edge_var && *edge_var == *pp.variable) {
+                        error("VariableAlreadyBound: variable '" + *pp.variable +
+                              "' already defined as relationship but used as path");
+                        return std::nullopt;
+                    }
                     if (element.chain.size() > 1) {
                         error("Named path with mixed fixed/varlen chain is not supported yet");
                         return std::nullopt;
@@ -729,6 +682,14 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 *current);
 
             if (!path_already_handled) {
+                for (const auto& [rel_pat, node_pat] : element.chain) {
+                    (void)node_pat;
+                    if (rel_pat.variable && *rel_pat.variable == *pp.variable) {
+                        error("VariableAlreadyBound: variable '" + *pp.variable +
+                              "' already defined as relationship but used as path");
+                        return std::nullopt;
+                    }
+                }
                 auto* path_existing = ctx_.lookup(*pp.variable);
                 if (path_existing && !isCompatibleForPatternUse(path_existing->type, BoundType::Path())) {
                     error("VariableAlreadyBound: variable '" + *pp.variable + "' already defined as " +
