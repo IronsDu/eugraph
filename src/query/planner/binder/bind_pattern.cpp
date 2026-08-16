@@ -1,5 +1,7 @@
 #include "query/planner/binder.hpp"
 
+#include "query/planner/binder/pattern/pattern_graph.hpp"
+
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
@@ -82,7 +84,7 @@ bool Binder::bindRelationshipPattern(const cypher::RelationshipPattern& rel, std
 
     edge_label_ids.clear();
     if (!rel.rel_types.empty()) {
-        edge_label_ids = catalog_.resolveEdgeLabelIds(rel.rel_types);
+        edge_label_ids = catalog_.resolveEdgeLabelIds(normalizeRelationshipTypes(rel.rel_types));
         // Non-existent edge types produce an empty label list:
         // - MATCH / OPTIONAL MATCH: empty → zero rows (LeftJoin gives null for OPTIONAL)
         // - CREATE / MERGE: empty → label_name is set, auto-created by the physical operator

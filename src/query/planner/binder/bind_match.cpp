@@ -1,5 +1,7 @@
 #include "query/planner/binder.hpp"
 
+#include "query/planner/binder/pattern/pattern_graph.hpp"
+
 #include "query/function/batch_ops.hpp"
 #include "query/planner/bound_expression/bound_literal.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
@@ -11,7 +13,11 @@
 #include "query/planner/logical_plan/operator/bound_varlen_expand_op.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <set>
 #include <spdlog/spdlog.h>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace eugraph {
 namespace binder {
@@ -106,12 +112,177 @@ cypher::Expression cloneExpression(const cypher::Expression& expr) {
 }
 } // anonymous namespace
 
+// ==================== Pattern-graph semantic pre-pass ====================
+
+namespace {
+
+bool isAggregateName(const std::string& name) {
+    std::string lower;
+    lower.reserve(name.size());
+    for (unsigned char c : name)
+        lower.push_back(static_cast<char>(std::tolower(c)));
+    return lower == "count" || lower == "sum" || lower == "avg" || lower == "min" || lower == "max" ||
+           lower == "collect" || lower == "percentile_cont" || lower == "percentile_disc" ||
+           lower == "percentilecont" || lower == "percentiledisc" || lower == "st_dev" || lower == "st_dev_p";
+}
+
+bool containsAggregate(const cypher::Expression& expr) {
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                if (isAggregateName(ptr->name))
+                    return true;
+                for (const auto& arg : ptr->args) {
+                    if (containsAggregate(arg))
+                        return true;
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return containsAggregate(ptr->left) || containsAggregate(ptr->right);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return containsAggregate(ptr->operand);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                return containsAggregate(ptr->object);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements) {
+                    if (containsAggregate(e))
+                        return true;
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries) {
+                    (void)k;
+                    if (containsAggregate(v))
+                        return true;
+                }
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject && containsAggregate(*ptr->subject))
+                    return true;
+                for (const auto& [w, t] : ptr->when_thens) {
+                    if (containsAggregate(w) || containsAggregate(t))
+                        return true;
+                }
+                return ptr->else_expr && containsAggregate(*ptr->else_expr);
+            }
+            return false;
+        },
+        expr);
+}
+
+bool propertyOnPath(const cypher::Expression& expr, const MatchPatternGraph& graph) {
+    std::set<std::string> path_vars;
+    for (const auto& part : graph.parts) {
+        if (part.path_variable)
+            path_vars.insert(*part.path_variable);
+    }
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                bool object_is_path = false;
+                std::visit(
+                    [&](const auto& obj) {
+                        if constexpr (std::is_same_v<typename std::decay_t<decltype(obj)>::element_type,
+                                                     cypher::Variable>) {
+                            object_is_path = path_vars.count(obj->name) > 0;
+                        }
+                    },
+                    ptr->object);
+                return object_is_path || propertyOnPath(ptr->object, graph);
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return propertyOnPath(ptr->left, graph) || propertyOnPath(ptr->right, graph);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return propertyOnPath(ptr->operand, graph);
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args) {
+                    if (propertyOnPath(arg, graph))
+                        return true;
+                }
+            }
+            return false;
+        },
+        expr);
+}
+
+bool validateMatchPatternVariables(const MatchPatternGraph& graph, Binder& binder) {
+    std::unordered_map<std::string, std::vector<std::string>> roles;
+    std::unordered_set<std::string> path_vars;
+    for (const auto& part : graph.parts) {
+        if (part.path_variable)
+            path_vars.insert(*part.path_variable);
+    }
+
+    for (const auto& node : graph.nodes) {
+        if (!node.variable.empty())
+            roles[node.variable].push_back("node");
+    }
+    for (const auto& rel : graph.relationships) {
+        if (!rel.variable.empty())
+            roles[rel.variable].push_back("relationship");
+    }
+
+    for (const auto& path_var : path_vars) {
+        auto it = roles.find(path_var);
+        if (it == roles.end())
+            continue;
+        bool path_is_relationship = std::find(it->second.begin(), it->second.end(), "relationship") != it->second.end();
+        if (path_is_relationship) {
+            binder.error("VariableAlreadyBound: variable '" + path_var +
+                         "' already defined as PATH but used as relationship");
+            return false;
+        }
+    }
+
+    std::unordered_set<std::string> node_vars;
+    for (const auto& node : graph.nodes) {
+        if (!node.variable.empty())
+            node_vars.insert(node.variable);
+    }
+
+    // RelationshipUniquenessViolation is specifically for using the same
+    // relationship variable twice as a relationship in one pattern. A
+    // variable used once as a relationship and once as a node is handled by
+    // normal VariableTypeConflict binding below.
+    std::unordered_map<std::string, size_t> first_rel_part;
+    for (size_t part_idx = 0; part_idx < graph.parts.size(); ++part_idx) {
+        const auto& part = graph.parts[part_idx];
+        for (const auto& rel : graph.relationships) {
+            if (rel.variable.empty() || node_vars.count(rel.variable) ||
+                std::find(part.ordered_elements.begin(), part.ordered_elements.end(), rel.id) ==
+                    part.ordered_elements.end()) {
+                continue;
+            }
+            auto [it, inserted] = first_rel_part.emplace(rel.variable, part_idx);
+            if (!inserted && it->second == part_idx) {
+                binder.error("RelationshipUniquenessViolation: relationship variable '" + rel.variable +
+                             "' is used more than once in the same pattern");
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+} // namespace
+
 // ==================== MATCH Binding ====================
 
 std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause& match,
                                                       std::optional<BoundLogicalOperator> parent, bool skip_where) {
     if (match.patterns.empty()) {
         error("MATCH clause has no patterns");
+        return std::nullopt;
+    }
+
+    MatchPatternGraph pattern_graph = MatchPatternGraphBuilder{}.build(match);
+    if (!validateMatchPatternVariables(pattern_graph, *this))
+        return std::nullopt;
+    if (match.where_pred && containsAggregate(*match.where_pred)) {
+        error("InvalidAggregation: aggregate functions are not allowed in MATCH WHERE");
+        return std::nullopt;
+    }
+    if (match.where_pred && propertyOnPath(*match.where_pred, pattern_graph)) {
+        error("InvalidArgumentType: property access is not supported on path values");
         return std::nullopt;
     }
 
@@ -287,7 +458,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 // regular MATCH (no matches when the edge type doesn't exist).
                 std::vector<EdgeLabelId> edge_label_ids;
                 if (!rel_pat.rel_types.empty()) {
-                    edge_label_ids = catalog_.resolveEdgeLabelIds(rel_pat.rel_types);
+                    edge_label_ids = catalog_.resolveEdgeLabelIds(normalizeRelationshipTypes(rel_pat.rel_types));
                 } else {
                     for (const auto& [id, def] : catalog_.allEdgeLabels()) {
                         edge_label_ids.push_back(id);

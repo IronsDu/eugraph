@@ -171,6 +171,7 @@ add_library(eugraph_query_engine STATIC
     src/query/planner/binder/binder.cpp
     src/query/planner/binder/bind_call.cpp
     src/query/planner/binder/bind_match.cpp
+    src/query/planner/binder/pattern/pattern_graph.cpp
     src/query/planner/binder/bind_return.cpp
     src/query/planner/binder/bind_mutation.cpp
     src/query/planner/binder/bind_merge.cpp
