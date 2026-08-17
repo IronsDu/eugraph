@@ -164,6 +164,15 @@ public:
     /// Remove EXISTS expressions (and their wrapping NOT, if any) from the top-level
     /// AND chain. Returns nullopt if the entire expression was EXISTS-related.
     static std::optional<cypher::Expression> removeExistsFromWhere(const cypher::Expression& expr);
+    /// Bind `term0 OR term1 OR ...` where every term is EXISTS (optionally
+    /// wrapped in NOT). Implemented as an outer AntiSemiJoin over a right
+    /// sub-plan that first applies the inverted term filters to a correlated
+    /// source: the right sub-plan produces a row only when every term is
+    /// false, so the outer AntiSemiJoin keeps exactly the rows where at least
+    /// one term is true.
+    std::optional<BoundLogicalOperator>
+    bindExistsOrAsSemiJoin(const std::vector<std::pair<const cypher::ExistsExpr*, bool>>& terms,
+                           BoundLogicalOperator child);
 
     // ── Pattern comprehension binding ──
     /// Bind a PatternComprehension AST node as a BoundPatternComprehensionApplyOp
@@ -178,6 +187,15 @@ public:
                                                                  std::vector<std::pair<SlotId, SlotId>>& correlation,
                                                                  SlotId& out_slot, std::string& out_name,
                                                                  BoundType& out_element_type);
+    /// Lower a top-level list comprehension whose projection / WHERE contains
+    /// pattern comprehensions. The list comprehension is compiled into an
+    /// outer PatternComprehensionApplyOp whose right sub-plan UNWINDs the
+    /// iteration list, applies the inner pattern comprehensions per element,
+    /// and collects the projection back into a single list. Returns false
+    /// after recording a binder error.
+    bool lowerListComprehensionWithPatternComprehension(const cypher::ListComprehension& lc,
+                                                        BoundLogicalOperator& child, SlotId& out_slot,
+                                                        std::string& out_name, BoundType& out_elem_type);
 
     // ── Variable registration ──
 

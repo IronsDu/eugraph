@@ -4234,6 +4234,66 @@ TEST_F(QueryExecutorTest, PatternPredicateTwoNodes) {
     ASSERT_EQ(result.rows.size(), 4u);
 }
 
+// ── Nested EXISTS with a correlated property filter (ExistentialSubquery3 [1]) ──
+
+TEST_F(QueryExecutorTest, NestedExistsWithCorrelatedPropertyFilter) {
+    auto setup =
+        execSync(*executor_, "CREATE (a:Person {name: 'same'}), (b:Person {name: 'same'}), (c:Person {name: 'other'}) "
+                             "CREATE (a)-[:KNOWS]->(b)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result =
+        execSync(*executor_, "MATCH (n:Person) WHERE exists { MATCH (m:Person) WHERE exists { (n)-[:KNOWS]->(m) WHERE "
+                             "n.name = m.name } RETURN true } RETURN n.name AS name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "same");
+}
+
+// ── EXISTS disjunction (Pattern1 [21]) ──
+
+TEST_F(QueryExecutorTest, ExistsDisjunctionPatternPredicates) {
+    auto setup =
+        execSync(*executor_, "CREATE (a:A)-[:REL1]->(b:B), (b)-[:REL2]->(a), (a)-[:REL3]->(:C), (a)-[:REL1]->(:D)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+
+    auto result = execSync(*executor_, "MATCH (n) WHERE (n)-[:REL1]-() OR (n)-[:REL2]-() RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // A (REL1), B (REL2) and D (incoming REL1) qualify.
+    ASSERT_EQ(result.rows.size(), 3u);
+}
+
+// ── Pattern comprehension inside a list comprehension (Pattern2 [7]) ──
+
+TEST_F(QueryExecutorTest, PatternComprehensionInsideListComprehension) {
+    auto setup1 = execSync(*executor_, "CREATE (n1:X {n: 1}), (m1:Y), (i1:Y), (i2:Y) "
+                                       "CREATE (n1)-[:T]->(m1), (m1)-[:T]->(i1), (m1)-[:T]->(i2)");
+    ASSERT_TRUE(setup1.error.empty()) << setup1.error;
+    auto setup2 = execSync(*executor_, "CREATE (n2:X {n: 2}), (m2), (i3:L), (i4:Y) "
+                                       "CREATE (n2)-[:T]->(m2), (m2)-[:T]->(i3), (m2)-[:T]->(i4)");
+    ASSERT_TRUE(setup2.error.empty()) << setup2.error;
+
+    auto result =
+        execSync(*executor_, "MATCH p = (n:X)-->() "
+                             "RETURN n.n AS n, [x IN nodes(p) | size([(x)-->(:Y) | 1])] AS list ORDER BY n.n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+
+    std::vector<int64_t> expected_lists[] = {{1, 2}, {0, 1}};
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[i][0]));
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][0]), static_cast<int64_t>(i + 1));
+        ASSERT_TRUE(std::holds_alternative<ListValue>(result.rows[i][1]));
+        const auto& lv = std::get<ListValue>(result.rows[i][1]);
+        ASSERT_EQ(lv.elements.size(), 2u);
+        for (size_t j = 0; j < lv.elements.size(); ++j) {
+            ASSERT_TRUE(std::holds_alternative<int64_t>(lv.elements[j].value));
+            EXPECT_EQ(std::get<int64_t>(lv.elements[j].value), expected_lists[i][j]);
+        }
+    }
+}
+
 // ── MapValue / properties() / keys() ──
 
 TEST_F(QueryExecutorTest, PropertiesVertex) {

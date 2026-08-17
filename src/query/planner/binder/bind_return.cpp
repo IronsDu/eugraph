@@ -10,6 +10,164 @@ namespace binder {
 
 // ==================== Helpers ====================
 
+static cypher::Expression cloneAstExpression(const cypher::Expression& expr);
+
+static cypher::PropertiesMap cloneProperties(const cypher::PropertiesMap& props) {
+    cypher::PropertiesMap out;
+    for (const auto& [name, value] : props.entries)
+        out.entries.emplace_back(name, cloneAstExpression(value));
+    return out;
+}
+
+static cypher::NodePattern cloneNodePattern(const cypher::NodePattern& node) {
+    cypher::NodePattern out;
+    out.variable = node.variable;
+    out.labels = node.labels;
+    if (node.properties)
+        out.properties = cloneProperties(*node.properties);
+    return out;
+}
+
+static cypher::RelationshipPattern cloneRelationshipPattern(const cypher::RelationshipPattern& rel) {
+    cypher::RelationshipPattern out;
+    out.variable = rel.variable;
+    out.rel_types = rel.rel_types;
+    if (rel.properties)
+        out.properties = cloneProperties(*rel.properties);
+    out.direction = rel.direction;
+    if (rel.range) {
+        cypher::Expression first = cloneAstExpression(rel.range->first);
+        cypher::Expression second = cloneAstExpression(rel.range->second);
+        out.range = std::make_pair(std::move(first), std::move(second));
+    }
+    return out;
+}
+
+static cypher::PatternPart clonePatternPart(const cypher::PatternPart& part) {
+    cypher::PatternPart out;
+    out.variable = part.variable;
+    out.element.node = cloneNodePattern(part.element.node);
+    for (const auto& [rel, node] : part.element.chain)
+        out.element.chain.emplace_back(cloneRelationshipPattern(rel), cloneNodePattern(node));
+    return out;
+}
+
+static cypher::Expression cloneAstExpression(const cypher::Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> cypher::Expression {
+            using T = std::decay_t<decltype(ptr)>;
+            using Elem = typename T::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::Literal> || std::is_same_v<Elem, cypher::Variable> ||
+                          std::is_same_v<Elem, cypher::Parameter>) {
+                return std::make_unique<Elem>(*ptr);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                auto out = std::make_unique<cypher::ParenExpr>();
+                out->inner = cloneAstExpression(ptr->inner);
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                auto out = std::make_unique<cypher::BinaryOp>();
+                out->op = ptr->op;
+                out->left = cloneAstExpression(ptr->left);
+                out->right = cloneAstExpression(ptr->right);
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                auto out = std::make_unique<cypher::UnaryOp>();
+                out->op = ptr->op;
+                out->operand = cloneAstExpression(ptr->operand);
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                auto out = std::make_unique<cypher::FunctionCall>();
+                out->name = ptr->name;
+                out->distinct = ptr->distinct;
+                for (const auto& arg : ptr->args)
+                    out->args.push_back(cloneAstExpression(arg));
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                auto out = std::make_unique<cypher::PropertyAccess>();
+                out->object = cloneAstExpression(ptr->object);
+                out->property = ptr->property;
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
+                auto out = std::make_unique<cypher::LabelCastExpr>();
+                out->object = cloneAstExpression(ptr->object);
+                out->label = ptr->label;
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                auto out = std::make_unique<cypher::ListExpr>();
+                for (const auto& elem : ptr->elements)
+                    out->elements.push_back(cloneAstExpression(elem));
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                auto out = std::make_unique<cypher::MapExpr>();
+                for (const auto& [key, value] : ptr->entries)
+                    out->entries.emplace_back(key, cloneAstExpression(value));
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                auto out = std::make_unique<cypher::CaseExpr>();
+                if (ptr->subject)
+                    out->subject = cloneAstExpression(*ptr->subject);
+                for (const auto& [when, then] : ptr->when_thens)
+                    out->when_thens.emplace_back(cloneAstExpression(when), cloneAstExpression(then));
+                if (ptr->else_expr)
+                    out->else_expr = cloneAstExpression(*ptr->else_expr);
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                auto out = std::make_unique<cypher::SubscriptExpr>();
+                out->list = cloneAstExpression(ptr->list);
+                out->index = cloneAstExpression(ptr->index);
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                auto out = std::make_unique<cypher::SliceExpr>();
+                out->list = cloneAstExpression(ptr->list);
+                if (ptr->from)
+                    out->from = cloneAstExpression(*ptr->from);
+                if (ptr->to)
+                    out->to = cloneAstExpression(*ptr->to);
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                auto out = std::make_unique<cypher::ListComprehension>();
+                out->variable = ptr->variable;
+                out->list_expr = cloneAstExpression(ptr->list_expr);
+                if (ptr->where_pred)
+                    out->where_pred = cloneAstExpression(*ptr->where_pred);
+                if (ptr->projection)
+                    out->projection = cloneAstExpression(*ptr->projection);
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                auto out = std::make_unique<cypher::PatternComprehension>();
+                out->variable = ptr->variable;
+                for (const auto& pattern : ptr->patterns)
+                    out->patterns.push_back(clonePatternPart(pattern));
+                if (ptr->where_pred)
+                    out->where_pred = cloneAstExpression(*ptr->where_pred);
+                if (ptr->projection)
+                    out->projection = cloneAstExpression(*ptr->projection);
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
+                                 std::is_same_v<Elem, cypher::NoneExpr> || std::is_same_v<Elem, cypher::SingleExpr>) {
+                auto out = std::make_unique<Elem>();
+                out->variable = ptr->variable;
+                out->list_expr = cloneAstExpression(ptr->list_expr);
+                if (ptr->where_pred)
+                    out->where_pred = cloneAstExpression(*ptr->where_pred);
+                return out;
+            } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                // Full EXISTS subqueries are rejected outside WHERE, so the
+                // full_query branch is intentionally not deep-cloned here.
+                auto out = std::make_unique<cypher::ExistsExpr>();
+                out->patterns.reserve(ptr->patterns.size());
+                for (const auto& pattern : ptr->patterns)
+                    out->patterns.push_back(clonePatternPart(pattern));
+                if (ptr->where_pred)
+                    out->where_pred = cloneAstExpression(*ptr->where_pred);
+                out->is_bare_predicate = ptr->is_bare_predicate;
+                return out;
+            }
+            return std::make_unique<cypher::Literal>();
+        },
+        expr);
+}
+
 static bool expressionReferencesVariableImpl(const cypher::Expression& expr, const std::string& name);
 
 static bool expressionReferencesVariable(const cypher::Expression& expr, const std::string& name) {
@@ -375,6 +533,210 @@ static void collectAllVariables(const cypher::Expression& expr, std::set<std::st
         expr);
 }
 
+bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListComprehension& lc,
+                                                            BoundLogicalOperator& child, SlotId& out_slot,
+                                                            std::string& out_name, BoundType& out_elem_type) {
+    auto saved = ctx_.save();
+
+    // Variables referenced from outside the list comprehension (the loop
+    // variable itself is produced by the inner UNWIND).
+    std::set<std::string> outer_vars;
+    collectAllVariables(lc.list_expr, outer_vars);
+    if (lc.where_pred)
+        collectAllVariables(*lc.where_pred, outer_vars);
+    if (lc.projection)
+        collectAllVariables(*lc.projection, outer_vars);
+    // collectAllVariables intentionally does not descend into pattern
+    // comprehensions; gather outer references from their patterns/expressions
+    // explicitly so patterns like `(n)-->(x)` can correlate on n as well.
+    std::vector<const cypher::PatternComprehension*> nested_pcs;
+    if (lc.where_pred)
+        collectPatternComprehensionsAST(*lc.where_pred, nested_pcs);
+    if (lc.projection)
+        collectPatternComprehensionsAST(*lc.projection, nested_pcs);
+    for (const auto* pc : nested_pcs) {
+        if (pc->variable)
+            outer_vars.insert(*pc->variable);
+        for (const auto& pp : pc->patterns) {
+            if (pp.element.node.variable)
+                outer_vars.insert(*pp.element.node.variable);
+            for (const auto& [rel, node] : pp.element.chain) {
+                if (rel.variable)
+                    outer_vars.insert(*rel.variable);
+                if (node.variable)
+                    outer_vars.insert(*node.variable);
+            }
+        }
+        if (pc->where_pred)
+            collectAllVariables(*pc->where_pred, outer_vars);
+        if (pc->projection)
+            collectAllVariables(*pc->projection, outer_vars);
+    }
+    outer_vars.erase(lc.variable);
+
+    // Build the right sub-plan in an independent scope. The correlated source
+    // keeps the outer slots and semantic types so expressions like nodes(p)
+    // see the same values as the original row-wise list comprehension.
+    ctx_.beginSubScope();
+    BoundCorrelatedSourceOp source;
+    std::vector<std::pair<SlotId, SlotId>> correlation;
+    uint32_t col = 0;
+    for (const auto& name : outer_vars) {
+        auto it = saved.symbols.find(name);
+        if (it == saved.symbols.end()) {
+            ctx_.restore(saved);
+            error("UndefinedVariable: Variable '" + name + "' not defined");
+            return false;
+        }
+        ColumnInfo ci = it->second;
+        ci.column_index = col++;
+        ci.slot_id = it->second.slot_id;
+        ctx_.symbols[name] = ci;
+
+        source.variables.push_back(name);
+        source.types.push_back(BoundType::clone(ci.type));
+        source.column_indices.push_back(ci.column_index);
+        source.slot_ids.push_back(ci.slot_id);
+        correlation.emplace_back(ci.slot_id, ci.slot_id);
+    }
+
+    // UNWIND list_expr AS loop_var.
+    auto bound_list = bindExpression(lc.list_expr);
+    if (!bound_list) {
+        ctx_.restore(saved);
+        return false;
+    }
+    const BoundType& list_type = getBoundExprType(*bound_list);
+    BoundType elem_type = (list_type.kind == BoundTypeKind::LIST && list_type.element_type)
+                              ? BoundType::clone(*list_type.element_type)
+                              : BoundType::Any();
+    uint32_t var_col = nextColumnIndex();
+    ctx_.symbols[lc.variable] = makeColumnInfo(lc.variable, BoundType::clone(elem_type));
+
+    auto unwind = std::make_unique<BoundUnwindOp>();
+    unwind->list_expr = std::move(*bound_list);
+    unwind->variable = lc.variable;
+    unwind->variable_column_index = var_col;
+    unwind->child = BoundLogicalOperator(std::move(source));
+    BoundLogicalOperator current = std::move(unwind);
+
+    // Clone WHERE / projection once; hoisting and subsequent binding must use
+    // the same AST nodes so the PatternComprehension patch map keys match.
+    struct AstItem {
+        cypher::Expression expr;
+    };
+    std::vector<AstItem> pc_items;
+    std::optional<size_t> where_idx;
+    std::optional<size_t> proj_idx;
+    if (lc.where_pred) {
+        AstItem item;
+        item.expr = cloneAstExpression(*lc.where_pred);
+        where_idx = pc_items.size();
+        pc_items.push_back(std::move(item));
+    }
+    if (lc.projection) {
+        AstItem item;
+        item.expr = cloneAstExpression(*lc.projection);
+        proj_idx = pc_items.size();
+        pc_items.push_back(std::move(item));
+    }
+
+    std::unordered_map<const cypher::PatternComprehension*, std::tuple<SlotId, std::string, BoundType>> pc_patch_map;
+    if (!hoistPatternComprehensions(*this, current, pc_items, nullptr, pc_patch_map)) {
+        ctx_.restore(saved);
+        return false;
+    }
+
+    // WHERE predicate is evaluated after the inner pattern comprehensions have
+    // been computed for the current list element.
+    if (where_idx) {
+        auto bound_where = bindExpression(pc_items[*where_idx].expr);
+        if (!bound_where) {
+            ctx_.restore(saved);
+            return false;
+        }
+        patchPatternComprehensionPlaceholders(*bound_where, pc_patch_map);
+        auto filter = std::make_unique<BoundFilterOp>();
+        filter->predicate = std::move(*bound_where);
+        filter->child = std::move(current);
+        current = std::move(filter);
+    }
+
+    BoundExpression proj_expr;
+    if (proj_idx) {
+        auto bound_proj = bindExpression(pc_items[*proj_idx].expr);
+        if (!bound_proj) {
+            ctx_.restore(saved);
+            return false;
+        }
+        patchPatternComprehensionPlaceholders(*bound_proj, pc_patch_map);
+        proj_expr = std::move(*bound_proj);
+    } else {
+        cypher::Expression var_expr(std::make_unique<cypher::Variable>(lc.variable));
+        auto bound_proj = bindExpression(var_expr);
+        if (!bound_proj) {
+            ctx_.restore(saved);
+            return false;
+        }
+        proj_expr = std::move(*bound_proj);
+    }
+    BoundType proj_type = getBoundExprType(proj_expr);
+
+    // collect(projection) collapses the per-element results into one list per
+    // outer row. No group keys: the right sub-plan is executed once per outer
+    // row by PatternComprehensionApplyPhysicalOp.
+    const function::FunctionDef* collect_fn = func_registry_.lookup("collect", {proj_type});
+    if (!collect_fn)
+        collect_fn = func_registry_.lookup("collect", {BoundType::Any()});
+    if (!collect_fn) {
+        ctx_.restore(saved);
+        error("ListComprehension: collect() not registered");
+        return false;
+    }
+
+    BoundAggregateOp::AggregateItem agg_item;
+    agg_item.func_def = collect_fn;
+    agg_item.function_name = "collect";
+    agg_item.arguments.push_back(std::move(proj_expr));
+    agg_item.alias = "__lc_agg_" + std::to_string(nextAnonId());
+    agg_item.result_type = BoundType::List(BoundType::clone(proj_type));
+    agg_item.keeps_nulls = true;
+
+    auto agg = std::make_unique<BoundAggregateOp>();
+    agg->aggregates.push_back(std::move(agg_item));
+    agg->output_names.push_back(agg->aggregates.back().alias);
+    agg->child = std::move(current);
+    current = std::move(agg);
+
+    ctx_.restore(saved);
+
+    // Wrap the right sub-plan in the same Apply operator used by ordinary
+    // pattern comprehensions; the final list column is then a normal column
+    // for downstream RETURN / WITH binding.
+    out_name = "__lc_" + std::to_string(nextAnonId());
+    out_slot = allocateNamedSlot(out_name);
+    out_elem_type = BoundType::clone(proj_type);
+
+    auto apply = std::make_unique<BoundPatternComprehensionApplyOp>();
+    apply->left = std::move(child);
+    apply->right = std::move(current);
+    apply->correlation = std::move(correlation);
+    BoundPatternComprehensionApplyOp::Output out;
+    out.slot_id = out_slot;
+    out.name = out_name;
+    out.element_type = BoundType::clone(proj_type);
+    apply->outputs.push_back(std::move(out));
+    child = std::move(apply);
+
+    ColumnInfo out_info;
+    out_info.name = out_name;
+    out_info.type = BoundType::List(BoundType::clone(proj_type));
+    out_info.column_index = nextColumnIndex();
+    out_info.slot_id = out_slot;
+    ctx_.symbols[out_name] = std::move(out_info);
+    return true;
+}
+
 // Collect variables from expressions OUTSIDE aggregate function calls.
 // Variables inside aggregate calls (e.g. `n` in `collect(n)`) are skipped
 // because they are properly aggregated.
@@ -690,9 +1052,45 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         return current;
     }
 
+    // Lower top-level list comprehensions that contain pattern comprehensions.
+    // Their loop variable only exists inside the row-wise list comprehension,
+    // so the ordinary PC hoisting pass (which runs at plan level) cannot
+    // correlate on it.
+    struct ReturnItemView {
+        const cypher::Expression& expr;
+        const std::optional<std::string>& alias;
+    };
+    std::vector<cypher::Expression> lowered_exprs;
+    lowered_exprs.reserve(ret.items.size());
+    std::vector<ReturnItemView> items;
+    items.reserve(ret.items.size());
+    for (const auto& item : ret.items) {
+        auto* lc = std::get_if<std::unique_ptr<cypher::ListComprehension>>(&item.expr);
+        std::vector<const cypher::PatternComprehension*> pc_asts;
+        if (lc && *lc) {
+            if ((*lc)->where_pred)
+                collectPatternComprehensionsAST(*(*lc)->where_pred, pc_asts);
+            if ((*lc)->projection)
+                collectPatternComprehensionsAST(*(*lc)->projection, pc_asts);
+        }
+        if (!pc_asts.empty()) {
+            SlotId out_slot = INVALID_SLOT_ID;
+            std::string out_name;
+            BoundType out_elem_type;
+            if (!lowerListComprehensionWithPatternComprehension(**lc, child, out_slot, out_name, out_elem_type))
+                return std::nullopt;
+            auto var = std::make_unique<cypher::Variable>();
+            var->name = out_name;
+            lowered_exprs.push_back(cypher::Expression(std::move(var)));
+            items.push_back({lowered_exprs.back(), item.alias});
+        } else {
+            items.push_back({item.expr, item.alias});
+        }
+    }
+
     // Check for aggregate functions in return items (recursively)
     bool has_aggregate = false;
-    for (const auto& item : ret.items) {
+    for (const auto& item : items) {
         if (hasAggregate(item.expr)) {
             has_aggregate = true;
             break;
@@ -709,11 +1107,10 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         pc_patch_map;
     {
         std::vector<const cypher::PatternComprehension*> pc_asts;
-        for (const auto& item : ret.items)
+        for (const auto& item : items)
             collectPatternComprehensionsAST(item.expr, pc_asts);
     }
-    if (!hoistPatternComprehensions(*this, child, ret.items, ret.order_by ? &ret.order_by->items : nullptr,
-                                    pc_patch_map)) {
+    if (!hoistPatternComprehensions(*this, child, items, ret.order_by ? &ret.order_by->items : nullptr, pc_patch_map)) {
         return std::nullopt;
     }
 
@@ -742,7 +1139,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         // Column index tracker for anonymous aggregate columns.
         uint32_t anon_idx = 0;
 
-        for (const auto& item : ret.items) {
+        for (const auto& item : items) {
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
             // "Simple" aggregate = the entire item is a single top-level aggregate call
             // (e.g. `count(*)`, `collect(x)`). Expressions like `size(collect(x))` are
@@ -930,7 +1327,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             std::set<std::string> projection_aggs;
             std::set<std::string> grouping_key_exprs;
             std::set<std::string> projected_names;
-            for (const auto& item : ret.items) {
+            for (const auto& item : items) {
                 std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
                 projected_names.insert(alias);
                 if (hasAggregate(item.expr))
@@ -963,14 +1360,14 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                 // item (by AST string), emit a BoundColumnRef to that column.
                 std::string ob_key_str = cypher::expressionToString(si.expr);
                 std::optional<BoundExpression> resolved;
-                for (size_t i = 0; i < ret.items.size(); ++i) {
-                    std::string item_str = cypher::expressionToString(ret.items[i].expr);
+                for (size_t i = 0; i < items.size(); ++i) {
+                    std::string item_str = cypher::expressionToString(items[i].expr);
                     bool match = (item_str == ob_key_str);
-                    if (!match && ret.items[i].alias && *ret.items[i].alias == ob_key_str)
+                    if (!match && items[i].alias && *items[i].alias == ob_key_str)
                         match = true;
                     if (!match)
                         continue;
-                    std::string alias = ret.items[i].alias ? *ret.items[i].alias : item_str;
+                    std::string alias = items[i].alias ? *items[i].alias : item_str;
                     auto sym_it = ctx_.symbols.find(alias);
                     if (sym_it != ctx_.symbols.end()) {
                         const auto& info = sym_it->second;
@@ -1024,7 +1421,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
 
     // Non-aggregate: simple projection
     auto proj = std::make_unique<BoundProjectOp>();
-    for (const auto& item : ret.items) {
+    for (const auto& item : items) {
         auto bound_expr = bindExpression(item.expr);
         if (!bound_expr)
             continue;
@@ -1096,7 +1493,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                 // Re-bind the original expression from the RETURN item.
                 // This works because the child columns are still available
                 // (sort is before projection).
-                auto bound_key = bindExpression(ret.items[idx].expr);
+                auto bound_key = bindExpression(items[idx].expr);
                 if (bound_key) {
                     BoundSortOp::SortItem sort_item;
                     sort_item.expr = std::move(*bound_key);
@@ -1152,9 +1549,42 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
 // ==================== WITH Binding ====================
 
 std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& wc, BoundLogicalOperator child) {
+    // Same top-level list-comprehension lowering as RETURN.
+    struct ReturnItemView {
+        const cypher::Expression& expr;
+        const std::optional<std::string>& alias;
+    };
+    std::vector<cypher::Expression> lowered_exprs;
+    lowered_exprs.reserve(wc.items.size());
+    std::vector<ReturnItemView> items;
+    items.reserve(wc.items.size());
+    for (const auto& item : wc.items) {
+        auto* lc = std::get_if<std::unique_ptr<cypher::ListComprehension>>(&item.expr);
+        std::vector<const cypher::PatternComprehension*> pc_asts;
+        if (lc && *lc) {
+            if ((*lc)->where_pred)
+                collectPatternComprehensionsAST(*(*lc)->where_pred, pc_asts);
+            if ((*lc)->projection)
+                collectPatternComprehensionsAST(*(*lc)->projection, pc_asts);
+        }
+        if (!pc_asts.empty()) {
+            SlotId out_slot = INVALID_SLOT_ID;
+            std::string out_name;
+            BoundType out_elem_type;
+            if (!lowerListComprehensionWithPatternComprehension(**lc, child, out_slot, out_name, out_elem_type))
+                return std::nullopt;
+            auto var = std::make_unique<cypher::Variable>();
+            var->name = out_name;
+            lowered_exprs.push_back(cypher::Expression(std::move(var)));
+            items.push_back({lowered_exprs.back(), item.alias});
+        } else {
+            items.push_back({item.expr, item.alias});
+        }
+    }
+
     // Check for aggregate functions in WITH items (recursively)
     bool has_aggregate = false;
-    for (const auto& item : wc.items) {
+    for (const auto& item : items) {
         if (hasAggregate(item.expr)) {
             has_aggregate = true;
             break;
@@ -1164,7 +1594,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     // ── Pattern comprehension hoisting ── (see bindReturn for rationale)
     std::unordered_map<const cypher::PatternComprehension*, std::tuple<binder::SlotId, std::string, binder::BoundType>>
         wc_pc_patch_map;
-    if (!hoistPatternComprehensions(*this, child, wc.items, wc.order_by ? &wc.order_by->items : nullptr,
+    if (!hoistPatternComprehensions(*this, child, items, wc.order_by ? &wc.order_by->items : nullptr,
                                     wc_pc_patch_map)) {
         return std::nullopt;
     }
@@ -1181,7 +1611,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     // Check for duplicate aliases (applies to both aggregating and non-aggregating WITH).
     {
         std::set<std::string> seen;
-        for (const auto& item : wc.items) {
+        for (const auto& item : items) {
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
             if (!seen.insert(alias).second) {
                 error("SyntaxError: ColumnNameConflict: duplicate column alias '" + alias + "' in WITH");
@@ -1195,7 +1625,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     if (has_aggregate) {
         // Build the set of grouping key expressions (items without aggregate).
         std::set<std::string> grouping_key_strs;
-        for (const auto& item : wc.items) {
+        for (const auto& item : items) {
             if (!hasAggregate(item.expr))
                 grouping_key_strs.insert(cypher::expressionToString(item.expr));
         }
@@ -1203,7 +1633,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         // Check for AmbiguousAggregationExpression (With6 [8][9]):
         // expressions that mix aggregate with non-aggregate operands
         // that are NOT already established as grouping keys.
-        for (const auto& item : wc.items) {
+        for (const auto& item : items) {
             if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
                 if (fc && *fc && isAggregateFunctionName((*fc)->name))
                     continue; // simple aggregate — ok
@@ -1242,7 +1672,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         // know whether to build a ProjectOp above the AggregateOp. See
         // bindReturn for the rationale.
         bool has_complex_agg = false;
-        for (const auto& item : wc.items) {
+        for (const auto& item : items) {
             if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
                 if (fc && *fc && isAggregateFunctionName((*fc)->name))
                     continue;
@@ -1253,7 +1683,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             }
         }
 
-        for (const auto& item : wc.items) {
+        for (const auto& item : items) {
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
             // "Simple" aggregate = the entire item is a single top-level aggregate call.
             // See bindReturn for the rationale.
@@ -1317,7 +1747,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         // bind and insert it BEFORE the aggregation for efficiency.
         where_has_projected_ref = false;
         if (wc.where_pred) {
-            for (const auto& item : wc.items) {
+            for (const auto& item : items) {
                 std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
                 if (expressionReferencesVariable(*wc.where_pred, alias)) {
                     where_has_projected_ref = true;
@@ -1356,7 +1786,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         }
     } else {
         // Check that expressions need explicit aliases (With4 [5]).
-        for (const auto& item : wc.items) {
+        for (const auto& item : items) {
             if (item.alias)
                 continue;
             if (std::holds_alternative<std::unique_ptr<cypher::Variable>>(item.expr))
@@ -1371,7 +1801,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         // WHERE references them.
         where_has_projected_ref = false;
         if (wc.where_pred) {
-            for (const auto& item : wc.items) {
+            for (const auto& item : items) {
                 std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
                 if (expressionReferencesVariable(*wc.where_pred, alias)) {
                     where_has_projected_ref = true;
@@ -1427,7 +1857,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 with_outputs.emplace_back(col_info->name, proj_item.result_type);
             }
         } else
-            for (const auto& item : wc.items) {
+            for (const auto& item : items) {
                 auto bound_expr = bindExpression(item.expr);
                 if (!bound_expr)
                     continue;
@@ -1469,7 +1899,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             // aliases to their original expressions (resolving against input scope).
             order_by_alias_subs_.clear();
             if (!wc.return_all) {
-                for (const auto& item : wc.items) {
+                for (const auto& item : items) {
                     std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
                     order_by_alias_subs_[alias] = &item.expr;
                 }
@@ -1539,7 +1969,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         std::set<std::string> projection_aggs;
         std::set<std::string> grouping_key_exprs;
         std::set<std::string> projected_names;
-        for (const auto& item : wc.items) {
+        for (const auto& item : items) {
             std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
             projected_names.insert(alias);
             if (hasAggregate(item.expr)) {

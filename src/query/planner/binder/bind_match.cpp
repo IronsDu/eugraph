@@ -1381,6 +1381,171 @@ std::optional<BoundLogicalOperator> Binder::bindExistsAsSemiJoin(const cypher::E
     return semi_join;
 }
 
+std::optional<BoundLogicalOperator>
+Binder::bindExistsOrAsSemiJoin(const std::vector<std::pair<const cypher::ExistsExpr*, bool>>& terms,
+                               BoundLogicalOperator child) {
+    if (terms.empty()) {
+        error("EXISTS disjunction has no terms");
+        return std::nullopt;
+    }
+
+    auto saved = ctx_.save();
+
+    // Collect the outer variables the disjunction correlates on. Bare-pattern
+    // terms are walked precisely; full-subquery terms fall back to the whole
+    // current scope (they may reference any in-scope variable).
+    bool any_full_query = false;
+    for (const auto& [ex, _] : terms)
+        if (ex->full_query)
+            any_full_query = true;
+
+    std::vector<std::string> outer_names;
+    if (any_full_query) {
+        for (const auto& [name, _] : saved.symbols)
+            outer_names.push_back(name);
+    } else {
+        std::function<void(const cypher::Expression&)> collectExprVars;
+        collectExprVars = [&](const cypher::Expression& expr) {
+            std::visit(
+                [&](const auto& ptr) {
+                    using T = std::decay_t<decltype(ptr)>;
+                    using E = typename T::element_type;
+                    if constexpr (std::is_same_v<E, cypher::Variable>) {
+                        outer_names.push_back(ptr->name);
+                    } else if constexpr (std::is_same_v<E, cypher::PropertyAccess>) {
+                        collectExprVars(ptr->object);
+                    } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
+                        collectExprVars(ptr->left);
+                        collectExprVars(ptr->right);
+                    } else if constexpr (std::is_same_v<E, cypher::UnaryOp>) {
+                        collectExprVars(ptr->operand);
+                    } else if constexpr (std::is_same_v<E, cypher::FunctionCall>) {
+                        for (const auto& arg : ptr->args)
+                            collectExprVars(arg);
+                    } else if constexpr (std::is_same_v<E, cypher::ListExpr>) {
+                        for (const auto& elem : ptr->elements)
+                            collectExprVars(elem);
+                    } else if constexpr (std::is_same_v<E, cypher::MapExpr>) {
+                        for (const auto& [_, v] : ptr->entries)
+                            collectExprVars(v);
+                    } else if constexpr (std::is_same_v<E, cypher::CaseExpr>) {
+                        if (ptr->subject)
+                            collectExprVars(*ptr->subject);
+                        for (const auto& [w, t] : ptr->when_thens) {
+                            collectExprVars(w);
+                            collectExprVars(t);
+                        }
+                        if (ptr->else_expr)
+                            collectExprVars(*ptr->else_expr);
+                    } else if constexpr (std::is_same_v<E, cypher::SubscriptExpr>) {
+                        collectExprVars(ptr->list);
+                        collectExprVars(ptr->index);
+                    } else if constexpr (std::is_same_v<E, cypher::SliceExpr>) {
+                        collectExprVars(ptr->list);
+                        if (ptr->from)
+                            collectExprVars(*ptr->from);
+                        if (ptr->to)
+                            collectExprVars(*ptr->to);
+                    } else if constexpr (std::is_same_v<E, cypher::AllExpr> || std::is_same_v<E, cypher::AnyExpr> ||
+                                         std::is_same_v<E, cypher::NoneExpr> || std::is_same_v<E, cypher::SingleExpr>) {
+                        collectExprVars(ptr->list_expr);
+                        if (ptr->where_pred)
+                            collectExprVars(*ptr->where_pred);
+                    } else if constexpr (std::is_same_v<E, cypher::ListComprehension>) {
+                        collectExprVars(ptr->list_expr);
+                        if (ptr->where_pred)
+                            collectExprVars(*ptr->where_pred);
+                        if (ptr->projection)
+                            collectExprVars(*ptr->projection);
+                    } else if constexpr (std::is_same_v<E, cypher::ParenExpr>) {
+                        collectExprVars(ptr->inner);
+                    }
+                },
+                expr);
+        };
+        auto collectPatternVars = [&](const cypher::PatternPart& pp) {
+            if (pp.element.node.variable)
+                outer_names.push_back(*pp.element.node.variable);
+            for (const auto& [rel_pat, node_pat] : pp.element.chain) {
+                if (rel_pat.variable)
+                    outer_names.push_back(*rel_pat.variable);
+                if (node_pat.variable)
+                    outer_names.push_back(*node_pat.variable);
+            }
+        };
+        for (const auto& [ex, _] : terms) {
+            for (const auto& pp : ex->patterns)
+                collectPatternVars(pp);
+            if (ex->where_pred)
+                collectExprVars(*ex->where_pred);
+        }
+    }
+
+    // Deduplicate while preserving first-seen order.
+    std::vector<std::string> unique_names;
+    for (const auto& name : outer_names) {
+        if (std::find(unique_names.begin(), unique_names.end(), name) == unique_names.end())
+            unique_names.push_back(name);
+    }
+
+    // Build a correlated source for the disjunction's right sub-plan. It keeps
+    // the outer slot ids so the final AntiSemiJoin resolves left columns by
+    // slot, exactly like a normal EXISTS sub-plan.
+    ctx_.beginSubScope();
+    BoundCorrelatedSourceOp source;
+    std::vector<std::pair<SlotId, SlotId>> correlation;
+    uint32_t col = 0;
+    for (const auto& name : unique_names) {
+        auto saved_it = saved.symbols.find(name);
+        if (saved_it == saved.symbols.end())
+            continue;
+
+        ColumnInfo ci = saved_it->second;
+        ci.column_index = col++;
+        ci.slot_id = saved_it->second.slot_id;
+        ctx_.symbols[name] = ci;
+
+        source.variables.push_back(name);
+        BoundType topo = BoundType::clone(ci.type);
+        BoundTypeKind tk = topologyCounterpart(ci.type.kind);
+        if (tk != ci.type.kind)
+            topo.kind = tk;
+        source.types.push_back(std::move(topo));
+        source.column_indices.push_back(ci.column_index);
+        source.slot_ids.push_back(ci.slot_id);
+        correlation.emplace_back(ci.slot_id, ci.slot_id);
+    }
+    if (correlation.empty()) {
+        ctx_.restore(saved);
+        error("EXISTS disjunction without outer correlation is not supported");
+        return std::nullopt;
+    }
+
+    // right_sub = rows where every term is false:
+    //   T=E      → AntiSemiJoin(E)   (drop source rows where E matches)
+    //   T=NOT E  → SemiJoin(E)       (drop source rows where E does not match)
+    BoundLogicalOperator right_sub = std::move(source);
+    for (const auto& [ex, anti] : terms) {
+        auto sj = bindExistsAsSemiJoin(*ex, std::move(right_sub), !anti);
+        if (!sj) {
+            ctx_.restore(saved);
+            return std::nullopt;
+        }
+        right_sub = std::move(*sj);
+    }
+
+    ctx_.restore(saved);
+
+    // Keep an outer row only when the right sub-plan produced no row, i.e. at
+    // least one EXISTS term was true.
+    auto outer = std::make_unique<BoundSemiJoinOp>();
+    outer->left = std::move(child);
+    outer->right = std::move(right_sub);
+    outer->correlation = std::move(correlation);
+    outer->anti = true;
+    return outer;
+}
+
 // ==================== Pattern Comprehension Binding ====================
 
 namespace {

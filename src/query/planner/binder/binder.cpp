@@ -4,6 +4,8 @@
 
 #include <spdlog/spdlog.h>
 
+#include <functional>
+
 namespace eugraph {
 namespace binder {
 
@@ -314,6 +316,46 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
 std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& pred, BoundLogicalOperator child,
                                                       std::optional<BoundLogicalOperator> /*extra_filter_child*/) {
+    // EXISTS disjunctions (E1 OR E2): every leaf must be an EXISTS term,
+    // optionally wrapped in NOT. Anything else falls through to the
+    // expression binder, which reports the existing UnexpectedSyntax error.
+    std::vector<std::pair<const cypher::ExistsExpr*, bool>> or_terms;
+    std::function<bool(const cypher::Expression&)> collectExistsOrTerms;
+    collectExistsOrTerms = [&](const cypher::Expression& expr) -> bool {
+        return std::visit(
+            [&](const auto& ptr) -> bool {
+                using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+                if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                    or_terms.emplace_back(ptr.get(), false);
+                    return true;
+                } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                    if (ptr->op != cypher::UnaryOperator::NOT)
+                        return false;
+                    bool found = false;
+                    std::visit(
+                        [&](const auto& inner) {
+                            if constexpr (std::is_same_v<typename std::decay_t<decltype(inner)>::element_type,
+                                                         cypher::ExistsExpr>) {
+                                or_terms.emplace_back(inner.get(), true);
+                                found = true;
+                            }
+                        },
+                        ptr->operand);
+                    return found;
+                } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                    if (ptr->op != cypher::BinaryOperator::OR)
+                        return false;
+                    return collectExistsOrTerms(ptr->left) && collectExistsOrTerms(ptr->right);
+                } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                    return collectExistsOrTerms(ptr->inner);
+                }
+                return false;
+            },
+            expr);
+    };
+    if (collectExistsOrTerms(pred) && or_terms.size() >= 2)
+        return bindExistsOrAsSemiJoin(or_terms, std::move(child));
+
     // Check for EXISTS subqueries in the top-level AND chain.
     std::vector<std::pair<const cypher::ExistsExpr*, bool>> exists_list;
     collectExistsFromAnd(pred, exists_list);
