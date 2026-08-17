@@ -1054,6 +1054,13 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 expr = binder::BoundColumnRef{0, val.type, val.name, target};
                 return true;
             } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
+                // Topology-stage references must keep reading the topology
+                // column. Promoting them to a ConstructVertex/Edge object
+                // slot would change their runtime type and break filters that
+                // deliberately compare two VertexRef/EdgeKey values (e.g. the
+                // saved-correlation equality filter in EXISTS sub-plans).
+                if (binder::isTopologyKind(val.type.kind))
+                    return false;
                 const PEPlan* pi = planForSlot(val.slot_id, val.name);
                 if (!pi)
                     return false;

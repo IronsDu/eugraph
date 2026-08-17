@@ -135,11 +135,13 @@ MATCH (n), (m) WHERE (n)-[:KNOWS]->(m) RETURN n, m
 | 单跳 / 多跳展开 | 已实现 |
 | 无向展开 `-[...]-` | 已实现 |
 | EXISTS 内部属性过滤（`WHERE m.name = ...`） | 部分（属性下推有已知问题） |
-| 多 EXISTS OR 组合（`EXISTS1 OR EXISTS2`） | 未实现（需要标量 EXISTS / MarkJoin） |
+| 多 EXISTS OR 组合（`EXISTS1 OR EXISTS2`） | 已实现（EXISTS 项构成的 OR 树，经 AntiSemiJoin 反演组合求值） |
 | 变长模式谓词 `WHERE (n)-[:REL*]-()` | 未实现 |
-| `EXISTS { MATCH ... RETURN ... }`（完整子查询） | 未实现 |
-| 嵌套 EXISTS | 未实现 |
+| `EXISTS { MATCH ... RETURN ... }`（完整子查询） | 已实现（首个 MATCH + 可选 WITH/RETURN；更新子句在绑定期报错） |
+| 嵌套 EXISTS | 已实现（简单/完整子查询嵌套均支持） |
 | EXISTS 在 RETURN/CASE 等非 WHERE 上下文 | 未实现 |
+
+**模式推导式（Pattern Comprehension）**：`[(n)-->(m) | expr]` 已实现，且支持嵌套在列表推导式中，例如 `[x IN nodes(p) | size([(x)-->(:Y) | 1])]`。含模式推导式的顶层列表推导式在绑定阶段降级为外层 `PatternComprehensionApplyOp`：右子树先 `UNWIND` 迭代列表，再对每个元素执行模式推导式，最后 `collect` 回单行列表；不改变普通列表推导式与普通模式推导式的既有执行路径。
 
 ### 多标签属性访问
 
