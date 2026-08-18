@@ -1510,7 +1510,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
-                    auto result = std::make_unique<SkipPhysicalOp>(v.count, std::move(cr.op));
+                    auto result = std::make_unique<SkipPhysicalOp>(v.constant, std::move(v.expr), std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundLimitOp>) {
@@ -1518,7 +1518,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
-                    auto result = std::make_unique<LimitPhysicalOp>(v.count, std::move(cr.op));
+                    auto result = std::make_unique<LimitPhysicalOp>(v.constant, std::move(v.expr), std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundDistinctOp>) {
@@ -1897,7 +1897,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // row: if right produces any row, left rows pass through;
                     // if right produces no rows, the cross product is empty.
                     if (v.correlation.empty()) {
-                        auto limit = std::make_unique<LimitPhysicalOp>(1, std::move(rr.op));
+                        auto limit = std::make_unique<LimitPhysicalOp>(std::optional<int64_t>(1), std::nullopt,
+                                                                       std::move(rr.op));
                         limit->setEvalContext(ctx.eval_ctx);
 
                         TupleSlotLayout layout = lr.slot_layout;

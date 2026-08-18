@@ -350,7 +350,15 @@ struct SelectionVector {
 
 **无 RETURN 子句时的输出**：当查询不含 `RETURN` 时（如 `CREATE`、`SET`、`DELETE` 等纯写操作），Binder 在逻辑计划根部追加空 `BoundProjectOp`（投影表达式数组为空）。物理计划顶层为空 `ProjectPhysicalOp`，产出 0 列 DataChunk，但仍遍历 child 触发副作用。这符合 TCK 语义——写操作不输出数据。
 
-**RETURN + ORDER BY 管线顺序**：`ORDER BY` 在 `ProjectOp` 之前执行（物理管线：child → Sort → Project）。这样 ORDER BY 表达式可以引用原始 child 列（如 `r.id`，其中 `r` 是 EdgeValue）。当 ORDER BY 引用 RETURN 别名（如 `RETURN id(n) AS x ORDER BY x`）时，Binder 将别名替换为原始 RETURN 表达式重新绑定。
+**RETURN + ORDER BY 管线顺序**：`ORDER BY` 在 `ProjectOp` 之前执行（物理管线：child → Sort → Project）。这样 ORDER BY 表达式可以引用原始 child 列（如 `r.id`，其中 `r` 是 EdgeValue）。当 ORDER BY 引用 RETURN 别名（如 `RETURN id(n) AS x ORDER BY x`）时，Binder 将别名替换为原始 RETURN 表达式重新绑定；非聚合 RETURN 使用与 WITH 相同的 `order_by_alias_subs_` 机制，因此 `RETURN n.num AS n ORDER BY n + 2` 也能正确解析。
+
+**RETURN / WITH 隐式列名**：无 `AS` 的列名来自 AST `ReturnItem.source_text`（ANTLR TokenStream 原始文本），保留书写时的大小写与空白；`expressionToString` 只作为语义匹配/聚合分组键使用。
+
+**RETURN \* / WITH \* 顺序**：按变量名**字典序**展开；`RETURN *` 跳过 `__anon_*` 内部变量，作用域无可展开变量时报 `NoVariablesInScope`；`WITH *` 保留匿名变量以携带行上下文。
+
+**聚合物理布局**：`AggregateOp` 的输出列固定为「全部 group key 在前，全部 aggregate 在后」；Binder 聚合分支先收集全部项再分配物理列索引，避免 item 书写顺序导致列错位。
+
+**SKIP / LIMIT**：字面量在编译期校验；参数与无变量常量表达式在物理算子运行时求值并校验（保证负值/浮点参数按 TCK 语义在 runtime 报错）。`LIMIT` 达到限制后仍会继续消费 child，确保上游写操作副作用完整执行。
 
 **CREATE 列索引顺序**：在 `bindCreate` 中，dst node 在 edge 之前绑定，使列索引顺序为 (start_node, dst_node, edge)，与物理执行管线一致（CreateNode → CreateNode → CreateEdge，edge 列始终追加在最后）。
 

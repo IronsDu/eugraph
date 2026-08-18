@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <set>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace eugraph {
 namespace binder {
@@ -223,6 +226,95 @@ static bool expressionReferencesVariableImpl(const cypher::Expression& expr, con
             }
         },
         expr);
+}
+
+static bool expressionReferencesAnyVariableImpl(const cypher::Expression& expr);
+
+static bool expressionReferencesAnyVariable(const cypher::Expression& expr) {
+    return expressionReferencesAnyVariableImpl(expr);
+}
+
+static bool expressionReferencesAnyVariableImpl(const cypher::Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                return expressionReferencesAnyVariableImpl(ptr->inner);
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return expressionReferencesAnyVariableImpl(ptr->left) ||
+                       expressionReferencesAnyVariableImpl(ptr->right);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return expressionReferencesAnyVariableImpl(ptr->operand);
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    if (expressionReferencesAnyVariableImpl(arg))
+                        return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                return expressionReferencesAnyVariableImpl(ptr->object);
+            } else if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
+                return expressionReferencesAnyVariableImpl(ptr->object);
+            } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
+                return expressionReferencesAnyVariableImpl(ptr->list) ||
+                       expressionReferencesAnyVariableImpl(ptr->index);
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                if (expressionReferencesAnyVariableImpl(ptr->list))
+                    return true;
+                if (ptr->from && expressionReferencesAnyVariableImpl(*ptr->from))
+                    return true;
+                if (ptr->to && expressionReferencesAnyVariableImpl(*ptr->to))
+                    return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                if (ptr->subject && expressionReferencesAnyVariableImpl(*ptr->subject))
+                    return true;
+                for (const auto& [cond, res] : ptr->when_thens) {
+                    if (expressionReferencesAnyVariableImpl(cond) || expressionReferencesAnyVariableImpl(res))
+                        return true;
+                }
+                if (ptr->else_expr && expressionReferencesAnyVariableImpl(*ptr->else_expr))
+                    return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& elem : ptr->elements)
+                    if (expressionReferencesAnyVariableImpl(elem))
+                        return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries) {
+                    (void)k;
+                    if (expressionReferencesAnyVariableImpl(v))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                // The loop variable is local to the comprehension; only the
+                // source list expression is evaluated in the outer scope.
+                return expressionReferencesAnyVariableImpl(ptr->list_expr);
+            } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
+                                 std::is_same_v<Elem, cypher::NoneExpr> || std::is_same_v<Elem, cypher::SingleExpr>) {
+                return expressionReferencesAnyVariableImpl(ptr->list_expr);
+            } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr> ||
+                                 std::is_same_v<Elem, cypher::PatternComprehension>) {
+                // Pattern subqueries are not valid SKIP/LIMIT arguments.
+                return true;
+            } else {
+                return false;
+            }
+        },
+        expr);
+}
+
+/// Variant used by the in-function ReturnItemView (RETURN/WITH keep only an
+/// expression reference + alias after list-comprehension lowering).
+template <typename ItemView> static std::string projectionAliasOf(const ItemView& item) {
+    if (item.alias)
+        return *item.alias;
+    if (!item.source_text.empty())
+        return item.source_text;
+    return cypher::expressionToString(item.expr);
 }
 
 // ==================== Aggregate Detection Helper ====================
@@ -505,6 +597,140 @@ static bool isAmbiguousAggregationExpr(const cypher::Expression& expr) {
             return true;
     }
     return isAmbiguousAggregationExpr((*bin)->left) || isAmbiguousAggregationExpr((*bin)->right);
+}
+
+/// True when any aggregate function call appears inside another aggregate
+/// call's argument list (e.g. count(count(*))).
+static bool hasNestedAggregate(const cypher::Expression& expr, bool inside_aggregate = false);
+
+static bool hasNestedAggregate(const cypher::Expression& expr, bool inside_aggregate) {
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if (!ptr)
+                return false;
+            if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                if (isAggregateFunctionName(ptr->name)) {
+                    if (inside_aggregate)
+                        return true;
+                    for (const auto& arg : ptr->args)
+                        if (hasNestedAggregate(arg, true))
+                            return true;
+                    return false;
+                }
+                for (const auto& arg : ptr->args)
+                    if (hasNestedAggregate(arg, inside_aggregate))
+                        return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return hasNestedAggregate(ptr->left, inside_aggregate) ||
+                       hasNestedAggregate(ptr->right, inside_aggregate);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return hasNestedAggregate(ptr->operand, inside_aggregate);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                return hasNestedAggregate(ptr->inner, inside_aggregate);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                return hasNestedAggregate(ptr->object, inside_aggregate);
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements)
+                    if (hasNestedAggregate(e, inside_aggregate))
+                        return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries) {
+                    (void)k;
+                    if (hasNestedAggregate(v, inside_aggregate))
+                        return true;
+                }
+                return false;
+            } else {
+                return false;
+            }
+        },
+        expr);
+}
+
+/// True when `rand()` appears inside an aggregate function's arguments.
+/// Cypher treats non-deterministic functions in aggregations as
+/// NonConstantExpression.
+static bool hasRandInsideAggregate(const cypher::Expression& expr, bool inside_aggregate = false);
+
+static bool hasRandInsideAggregate(const cypher::Expression& expr, bool inside_aggregate) {
+    return std::visit(
+        [&](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if (!ptr)
+                return false;
+            if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                std::string lower;
+                lower.reserve(ptr->name.size());
+                for (unsigned char c : ptr->name)
+                    lower.push_back(static_cast<char>(std::tolower(c)));
+                if (inside_aggregate && lower == "rand")
+                    return true;
+                bool now_inside = inside_aggregate || isAggregateFunctionName(ptr->name);
+                for (const auto& arg : ptr->args)
+                    if (hasRandInsideAggregate(arg, now_inside))
+                        return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return hasRandInsideAggregate(ptr->left, inside_aggregate) ||
+                       hasRandInsideAggregate(ptr->right, inside_aggregate);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return hasRandInsideAggregate(ptr->operand, inside_aggregate);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                return hasRandInsideAggregate(ptr->inner, inside_aggregate);
+            } else {
+                return false;
+            }
+        },
+        expr);
+}
+
+/// True when a list comprehension appears anywhere in the expression.
+/// List comprehensions introduce their own local variable scope; aggregates
+/// inside them are already scoped to the comprehension, so they must not be
+/// treated as ambiguous against the outer RETURN/WITH scope.
+static bool containsListComprehension(const cypher::Expression& expr);
+
+static bool containsListComprehension(const cypher::Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if (!ptr)
+                return false;
+            if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    if (containsListComprehension(arg))
+                        return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return containsListComprehension(ptr->left) || containsListComprehension(ptr->right);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return containsListComprehension(ptr->operand);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                return containsListComprehension(ptr->inner);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                return containsListComprehension(ptr->object);
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries) {
+                    (void)k;
+                    if (containsListComprehension(v))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements)
+                    if (containsListComprehension(e))
+                        return true;
+                return false;
+            } else {
+                return false;
+            }
+        },
+        expr);
 }
 
 // Collect all variable names appearing anywhere in an expression.
@@ -937,27 +1163,126 @@ static void walkAndReplaceAggCalls(binder::BoundExpression& expr,
         expr);
 }
 
-// ==================== SKIP/LIMIT Helper ====================
+/// Recompute the physical column index and slot of internal `__agg_N`
+/// references once the final number of group keys and the aggregate slots are
+/// known. AggregateOp outputs all group keys first, then every aggregate
+/// column in the order it was collected.
+static void retargetAggregateColumnRefs(binder::BoundExpression& expr,
+                                        const std::unordered_map<std::string, size_t>& internal_ordinals,
+                                        const std::unordered_map<std::string, SlotId>& internal_slots,
+                                        size_t group_keys_size) {
+    std::visit(
+        [&](auto& ptr) {
+            using T = std::decay_t<decltype(ptr)>;
+            if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
+                auto it = internal_ordinals.find(ptr.name);
+                if (it != internal_ordinals.end()) {
+                    ptr.column_index = static_cast<uint32_t>(group_keys_size + it->second);
+                    auto slot_it = internal_slots.find(ptr.name);
+                    if (slot_it != internal_slots.end())
+                        ptr.slot_id = slot_it->second;
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
+                retargetAggregateColumnRefs(ptr->left, internal_ordinals, internal_slots, group_keys_size);
+                retargetAggregateColumnRefs(ptr->right, internal_ordinals, internal_slots, group_keys_size);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
+                retargetAggregateColumnRefs(ptr->operand, internal_ordinals, internal_slots, group_keys_size);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                for (auto& arg : ptr->args)
+                    retargetAggregateColumnRefs(arg, internal_ordinals, internal_slots, group_keys_size);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
+                for (auto& elem : ptr->elements)
+                    retargetAggregateColumnRefs(elem, internal_ordinals, internal_slots, group_keys_size);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
+                for (auto& [k, v] : ptr->entries) {
+                    (void)k;
+                    retargetAggregateColumnRefs(v, internal_ordinals, internal_slots, group_keys_size);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
+                if (ptr->subject)
+                    retargetAggregateColumnRefs(*ptr->subject, internal_ordinals, internal_slots, group_keys_size);
+                for (auto& [w, t] : ptr->when_thens) {
+                    retargetAggregateColumnRefs(w, internal_ordinals, internal_slots, group_keys_size);
+                    retargetAggregateColumnRefs(t, internal_ordinals, internal_slots, group_keys_size);
+                }
+                if (ptr->else_expr)
+                    retargetAggregateColumnRefs(*ptr->else_expr, internal_ordinals, internal_slots, group_keys_size);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
+                retargetAggregateColumnRefs(ptr->list, internal_ordinals, internal_slots, group_keys_size);
+                retargetAggregateColumnRefs(ptr->index, internal_ordinals, internal_slots, group_keys_size);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
+                retargetAggregateColumnRefs(ptr->list, internal_ordinals, internal_slots, group_keys_size);
+                if (ptr->from)
+                    retargetAggregateColumnRefs(*ptr->from, internal_ordinals, internal_slots, group_keys_size);
+                if (ptr->to)
+                    retargetAggregateColumnRefs(*ptr->to, internal_ordinals, internal_slots, group_keys_size);
+            }
+        },
+        expr);
+}
 
-std::optional<int64_t> Binder::bindSkipLimit(const cypher::Expression& expr, const char* clause_name) {
-    auto bound = bindExpression(expr);
-    if (!bound)
-        return std::nullopt;
-    if (!std::holds_alternative<BoundLiteral>(*bound)) {
+// ==================== SKIP/LIMIT Helper ====================
+std::optional<SkipLimitValue> Binder::bindSkipLimit(const cypher::Expression& expr, const char* clause_name) {
+    // Literals are validated at compile time; every other accepted form
+    // (parameters, variable-free constant expressions) is evaluated and
+    // validated once at runtime. Parameters keep their runtime error phase.
+    if (std::holds_alternative<std::unique_ptr<cypher::Literal>>(expr)) {
+        auto bound = bindExpression(expr);
+        if (!bound)
+            return std::nullopt;
+        if (!std::holds_alternative<BoundLiteral>(*bound)) {
+            error(std::string("SemanticError: ") + clause_name + " must be a constant expression");
+            return std::nullopt;
+        }
+        auto& lit = std::get<BoundLiteral>(*bound);
+        if (!std::holds_alternative<int64_t>(lit.value)) {
+            error(std::string("SemanticError: ") + clause_name + " must be an integer");
+            return std::nullopt;
+        }
+        auto val = std::get<int64_t>(lit.value);
+        if (val < 0) {
+            error(std::string("SemanticError: ") + clause_name + " must be a non-negative integer");
+            return std::nullopt;
+        }
+        SkipLimitValue result;
+        result.is_constant = true;
+        result.constant = val;
+        return result;
+    }
+
+    if (expressionReferencesAnyVariable(expr)) {
         error(std::string("SemanticError: ") + clause_name + " must be a constant expression");
         return std::nullopt;
     }
-    auto& lit = std::get<BoundLiteral>(*bound);
-    if (!std::holds_alternative<int64_t>(lit.value)) {
-        error(std::string("SemanticError: ") + clause_name + " must be an integer");
+
+    auto bound = bindExpression(expr);
+    if (!bound)
         return std::nullopt;
+
+    SkipLimitValue result;
+    result.is_constant = false;
+    result.runtime_expr = std::move(*bound);
+    return result;
+}
+
+static std::unique_ptr<BoundSkipOp> makeBoundSkipOp(SkipLimitValue value) {
+    auto op = std::make_unique<BoundSkipOp>();
+    if (value.is_constant) {
+        op->constant = value.constant;
+    } else {
+        op->expr = std::move(value.runtime_expr);
     }
-    auto val = std::get<int64_t>(lit.value);
-    if (val < 0) {
-        error(std::string("SemanticError: ") + clause_name + " must be a non-negative integer");
-        return std::nullopt;
+    return op;
+}
+
+static std::unique_ptr<BoundLimitOp> makeBoundLimitOp(SkipLimitValue value) {
+    auto op = std::make_unique<BoundLimitOp>();
+    if (value.is_constant) {
+        op->constant = value.constant;
+    } else {
+        op->expr = std::move(value.runtime_expr);
     }
-    return val;
+    return op;
 }
 
 // ==================== RETURN Binding ====================
@@ -968,30 +1293,22 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
     // and then fall through to the normal bindReturn logic.
     // Instead, we build the items vector here and use it directly.
     if (ret.return_all && ret.items.empty()) {
-        // Build a simple projection over all symbols, ordered by column index
+        // Build a projection over all visible variables. Cypher orders the
+        // RETURN * columns lexicographically by variable name; anonymous
+        // internal bindings are not user-visible.
         auto proj = std::make_unique<BoundProjectOp>();
         std::vector<const ColumnInfo*> sorted_symbols;
         for (const auto& [name, col_info] : ctx_.symbols) {
-            // Skip anonymous internal edge variables (__anon_edge_N).
-            if (name.starts_with("__anon_edge_"))
+            if (name.starts_with("__anon_"))
                 continue;
             sorted_symbols.push_back(&col_info);
         }
-        // VERTEX before EDGE before others (Neo4j convention for RETURN *).
-        std::sort(sorted_symbols.begin(), sorted_symbols.end(), [](const ColumnInfo* a, const ColumnInfo* b) {
-            auto typeRank = [](BoundTypeKind k) {
-                if (k == BoundTypeKind::VERTEX)
-                    return 0;
-                if (k == BoundTypeKind::EDGE)
-                    return 1;
-                return 2;
-            };
-            int ra = typeRank(a->type.kind);
-            int rb = typeRank(b->type.kind);
-            if (ra != rb)
-                return ra < rb;
-            return a->column_index < b->column_index;
-        });
+        if (sorted_symbols.empty()) {
+            error("SyntaxError: NoVariablesInScope: RETURN * requires at least one visible variable");
+            return std::nullopt;
+        }
+        std::sort(sorted_symbols.begin(), sorted_symbols.end(),
+                  [](const ColumnInfo* a, const ColumnInfo* b) { return a->name < b->name; });
         for (const auto* col_info : sorted_symbols) {
             auto bound_expr = std::make_optional<BoundExpression>(
                 BoundColumnRef(col_info->column_index, col_info->type, col_info->name, col_info->slot_id));
@@ -1007,11 +1324,11 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             out_info.column_index = static_cast<uint32_t>(proj->items.size() - 1);
             ctx_.return_columns.push_back(std::move(out_info));
         }
-        proj->child = std::move(child);
 
-        BoundLogicalOperator current = std::move(proj);
-
-        // ORDER BY
+        // Same pipeline as the regular non-aggregating RETURN path:
+        // child → Sort → Project → Skip → Limit → Distinct. Sort runs before
+        // Project so ORDER BY can reference the original in-scope variables.
+        BoundLogicalOperator child_op = std::move(child);
         if (ret.order_by) {
             auto sort = std::make_unique<BoundSortOp>();
             for (const auto& si : ret.order_by->items) {
@@ -1023,24 +1340,25 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                 sort_item.direction = si.direction;
                 sort->items.push_back(std::move(sort_item));
             }
-            sort->child = std::move(current);
-            current = std::move(sort);
+            sort->child = std::move(child_op);
+            child_op = std::move(sort);
         }
+        proj->child = std::move(child_op);
+        BoundLogicalOperator current = std::move(proj);
+
         if (ret.skip) {
-            auto count = bindSkipLimit(*ret.skip, "SKIP");
-            if (!count)
+            auto skip_spec = bindSkipLimit(*ret.skip, "SKIP");
+            if (!skip_spec)
                 return std::nullopt;
-            auto skip = std::make_unique<BoundSkipOp>();
-            skip->count = *count;
+            auto skip = makeBoundSkipOp(std::move(*skip_spec));
             skip->child = std::move(current);
             current = std::move(skip);
         }
         if (ret.limit) {
-            auto count = bindSkipLimit(*ret.limit, "LIMIT");
-            if (!count)
+            auto limit_spec = bindSkipLimit(*ret.limit, "LIMIT");
+            if (!limit_spec)
                 return std::nullopt;
-            auto limit = std::make_unique<BoundLimitOp>();
-            limit->count = *count;
+            auto limit = makeBoundLimitOp(std::move(*limit_spec));
             limit->child = std::move(current);
             current = std::move(limit);
         }
@@ -1052,6 +1370,20 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         return current;
     }
 
+    // Cypher forbids duplicate RETURN column names, including the implicit
+    // name derived from the written expression (`RETURN 1+1, 1+1` is allowed
+    // only if the resulting names differ — same name is a conflict).
+    {
+        std::set<std::string> seen;
+        for (const auto& item : ret.items) {
+            std::string alias = projectionAliasOf(item);
+            if (!seen.insert(alias).second) {
+                error("SyntaxError: ColumnNameConflict: duplicate column alias '" + alias + "' in RETURN");
+                return std::nullopt;
+            }
+        }
+    }
+
     // Lower top-level list comprehensions that contain pattern comprehensions.
     // Their loop variable only exists inside the row-wise list comprehension,
     // so the ordinary PC hoisting pass (which runs at plan level) cannot
@@ -1059,6 +1391,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
     struct ReturnItemView {
         const cypher::Expression& expr;
         const std::optional<std::string>& alias;
+        std::string source_text;
     };
     std::vector<cypher::Expression> lowered_exprs;
     lowered_exprs.reserve(ret.items.size());
@@ -1082,9 +1415,9 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             auto var = std::make_unique<cypher::Variable>();
             var->name = out_name;
             lowered_exprs.push_back(cypher::Expression(std::move(var)));
-            items.push_back({lowered_exprs.back(), item.alias});
+            items.push_back({lowered_exprs.back(), item.alias, item.source_text});
         } else {
-            items.push_back({item.expr, item.alias});
+            items.push_back({item.expr, item.alias, item.source_text});
         }
     }
 
@@ -1094,6 +1427,55 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         if (hasAggregate(item.expr)) {
             has_aggregate = true;
             break;
+        }
+    }
+
+    if (has_aggregate) {
+        // Compile-time aggregate semantics shared with WITH.
+        for (const auto& item : items) {
+            if (hasNestedAggregate(item.expr)) {
+                error("SyntaxError: NestedAggregation: aggregate functions cannot be nested");
+                return std::nullopt;
+            }
+            if (hasRandInsideAggregate(item.expr)) {
+                error("SyntaxError: NonConstantExpression: non-deterministic functions are not "
+                      "allowed inside aggregations");
+                return std::nullopt;
+            }
+        }
+
+        std::set<std::string> grouping_vars;
+        for (const auto& item : items) {
+            if (!hasAggregate(item.expr))
+                collectAllVariables(item.expr, grouping_vars);
+        }
+        for (const auto& item : items) {
+            if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
+                if (fc && *fc && isAggregateFunctionName((*fc)->name))
+                    continue; // simple aggregate — its arguments are aggregated
+            }
+            if (!hasAggregate(item.expr))
+                continue;
+            // List comprehensions introduce their own local loop variable;
+            // aggregates inside them (e.g. collect(r)) are already scoped to
+            // the comprehension and must not trigger ambiguity checks against
+            // the outer RETURN scope.
+            if (containsListComprehension(item.expr))
+                continue;
+            if (isAmbiguousAggregationExpr(item.expr)) {
+                error("SyntaxError: AmbiguousAggregationExpression: expression mixes aggregate "
+                      "and non-aggregate operations");
+                return std::nullopt;
+            }
+            std::set<std::string> non_agg_vars;
+            collectNonAggregateVariables(item.expr, non_agg_vars, {});
+            for (const auto& var : non_agg_vars) {
+                if (!grouping_vars.count(var)) {
+                    error("SyntaxError: AmbiguousAggregationExpression: expression mixes aggregate "
+                          "and non-aggregate operations");
+                    return std::nullopt;
+                }
+            }
         }
     }
 
@@ -1130,17 +1512,34 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         // leak into the user-visible output. The Project's items redirect
         // graph-variable refs to their `__pe_*` slots via the column-rewrite
         // pass.
+        enum class ProjKind {
+            GROUP,
+            SIMPLE_AGG,
+            COMPLEX_AGG
+        };
         struct ProjItem {
             binder::BoundExpression expr;
             std::string alias;
+            ProjKind kind;
+            /// GROUP: ordinal among group keys. SIMPLE_AGG: ordinal among
+            /// aggregates. Physical output positions are assigned once the
+            /// complete item list is known, because AggregateOp always lays
+            /// columns out as [group keys..., aggregates...].
+            size_t ordinal = 0;
         };
         std::vector<ProjItem> proj_items;
+        std::vector<std::string> group_key_aliases;
+        /// Alias → SlotId chosen for group keys / simple aggregates. Shadowing
+        /// a bound variable with a different runtime type must allocate a
+        /// fresh slot; reusing the old graph slot would make the DPL passes
+        /// treat the scalar projection as the graph variable.
+        std::unordered_map<std::string, SlotId> projection_slots;
 
         // Column index tracker for anonymous aggregate columns.
         uint32_t anon_idx = 0;
 
         for (const auto& item : items) {
-            std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            std::string alias = projectionAliasOf(item);
             // "Simple" aggregate = the entire item is a single top-level aggregate call
             // (e.g. `count(*)`, `collect(x)`). Expressions like `size(collect(x))` are
             // NOT simple — size() is scalar, collect() is the inner aggregate, so they
@@ -1171,107 +1570,99 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                         agg_item.arguments.push_back(std::move(arg));
                 }
                 agg->aggregates.push_back(std::move(agg_item));
-                agg->output_names.push_back(alias);
+                size_t ordinal = agg->aggregates.size() - 1;
 
-                ColumnInfo info;
-                info.name = alias;
-                info.type = BoundType::clone(agg->aggregates.back().result_type);
-                info.column_index = static_cast<uint32_t>(agg->group_keys.size() + agg->aggregates.size() - 1);
-                // Allocate (or reuse) a slot_id so the passthrough
-                // ProjectItem's BoundColumnRef resolves against the physical
-                // TupleSlotLayout. Without this, the slot defaults to
-                // INVALID_SLOT_ID and ExpressionCompiler cannot map it to a
-                // column index — the binder's stale column_index then points
-                // at the wrong column.
                 auto existing = ctx_.symbols.find(alias);
-                if (existing != ctx_.symbols.end() && existing->second.slot_id != INVALID_SLOT_ID)
-                    info.slot_id = existing->second.slot_id;
-                else
-                    info.slot_id = allocateNamedSlot(alias);
-                ctx_.symbols[alias] = std::move(info);
-
-                // Re-expose the simple aggregate as a passthrough ProjectItem
-                // so it survives the top-level projection. Without this, the
-                // top-level ProjectOp would drop the simple aggregate column.
-                binder::BoundExpression passthrough =
-                    binder::BoundColumnRef{ctx_.symbols[alias].column_index, BoundType::clone(ctx_.symbols[alias].type),
-                                           alias, ctx_.symbols[alias].slot_id};
-                proj_items.push_back({std::move(passthrough), alias});
+                BoundType type = BoundType::clone(agg->aggregates.back().result_type);
+                SlotId slot = existing != ctx_.symbols.end() && existing->second.slot_id != INVALID_SLOT_ID
+                                  ? existing->second.slot_id
+                                  : allocateNamedSlot(alias);
+                projection_slots[alias] = slot;
+                binder::BoundExpression passthrough = binder::BoundColumnRef{0, std::move(type), alias, slot};
+                proj_items.push_back({std::move(passthrough), alias, ProjKind::SIMPLE_AGG, ordinal});
             } else if (hasAggregate(item.expr)) {
                 // Complex expression containing aggregates: e.g., RETURN count(a) + 3.
                 // Walk the bound expression, extract each aggregate call into
                 // AggregateOp as an anonymous column, and replace the call in the
-                // expression tree with a BoundVariableRef to that column.
+                // expression tree with a BoundColumnRef to that column. The final
+                // physical index is retargeted below once all group keys are known.
                 auto full_expr = std::move(*bound_expr);
                 walkAndReplaceAggCalls(full_expr, agg->aggregates, anon_idx, agg->group_keys.size());
-
-                // Register anonymous aggregate columns in the symbol table
-                // so the ProjectOp and ColumnResolver can find them.
-                for (size_t i = 0; i < agg->aggregates.size(); ++i) {
-                    auto& ai = agg->aggregates[i];
-                    if (ai.alias.starts_with("__agg_")) {
-                        if (ctx_.symbols.find(ai.alias) == ctx_.symbols.end()) {
-                            ColumnInfo info;
-                            info.name = ai.alias;
-                            info.type = BoundType::clone(ai.result_type);
-                            info.column_index = static_cast<uint32_t>(agg->group_keys.size() + i);
-                            ctx_.symbols[ai.alias] = std::move(info);
-                        }
-                        agg->output_names.push_back(ai.alias);
-                    }
-                }
-
-                proj_items.push_back({std::move(full_expr), alias});
+                proj_items.push_back({std::move(full_expr), alias, ProjKind::COMPLEX_AGG, 0});
             } else {
                 // Group key: non-aggregate expression.
                 agg->group_keys.push_back(std::move(*bound_expr));
-                agg->output_names.push_back(alias);
+                size_t ordinal = agg->group_keys.size() - 1;
+                group_key_aliases.push_back(alias);
 
-                ColumnInfo info;
-                info.name = alias;
-                info.type = getBoundExprType(agg->group_keys.back());
-                info.column_index = static_cast<uint32_t>(agg->group_keys.size() - 1);
-                // Preserve the existing slot_id when the alias matches an
-                // already-bound variable (e.g. group key `a` reuses the slot
-                // from MATCH). Otherwise allocate a fresh slot so downstream
-                // refs resolve correctly through the TupleSlotLayout.
                 auto existing = ctx_.symbols.find(alias);
-                if (existing != ctx_.symbols.end() && existing->second.slot_id != INVALID_SLOT_ID) {
-                    info.slot_id = existing->second.slot_id;
-                    info.source_labels = existing->second.source_labels;
-                    info.source_prop_id = existing->second.source_prop_id;
-                    info.strong_typed = existing->second.strong_typed;
-                } else {
-                    info.slot_id = allocateNamedSlot(alias);
-                }
-                ctx_.symbols[alias] = info;
-
-                // Re-expose the group key as a passthrough ProjectItem so it
-                // survives the top-level projection. When the group key is a
-                // graph variable (VERTEX/EDGE), the ProjectItem's BoundColumnRef
-                // is redirected to the `__pe_*` slot by the column-rewrite pass
-                // so the user-visible value is the constructed VertexValue /
-                // EdgeValue rather than the topology-stage reference.
-                binder::BoundExpression passthrough =
-                    binder::BoundColumnRef{info.column_index, BoundType::clone(info.type), alias, info.slot_id};
-                proj_items.push_back({std::move(passthrough), alias});
+                BoundType type = getBoundExprType(agg->group_keys.back());
+                SlotId slot = existing != ctx_.symbols.end() && existing->second.slot_id != INVALID_SLOT_ID
+                                  ? existing->second.slot_id
+                                  : allocateNamedSlot(alias);
+                projection_slots[alias] = slot;
+                binder::BoundExpression passthrough = binder::BoundColumnRef{0, std::move(type), alias, slot};
+                proj_items.push_back({std::move(passthrough), alias, ProjKind::GROUP, ordinal});
             }
+        }
+
+        // AggregateOp physical layout: every group key first, then every
+        // aggregate column, regardless of the written item order.
+        const size_t final_group_count = agg->group_keys.size();
+        agg->output_names.clear();
+        agg->output_names = group_key_aliases;
+        std::unordered_map<std::string, size_t> internal_agg_ordinals;
+        for (size_t i = 0; i < agg->aggregates.size(); ++i) {
+            agg->output_names.push_back(agg->aggregates[i].alias);
+            if (agg->aggregates[i].alias.starts_with("__agg_"))
+                internal_agg_ordinals[agg->aggregates[i].alias] = i;
         }
 
         agg->child = std::move(child);
 
-        // Register all AggregateOp columns (group keys + aggregates) in symbol table.
+        // Register all AggregateOp columns (group keys first, then
+        // aggregates) in the symbol table with their final physical indices.
         for (size_t i = 0; i < agg->output_names.size(); ++i) {
-            if (ctx_.symbols.find(agg->output_names[i]) == ctx_.symbols.end()) {
+            const std::string& name = agg->output_names[i];
+            BoundType type = i < agg->group_keys.size()
+                                 ? getBoundExprType(agg->group_keys[i])
+                                 : BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
+            auto existing = ctx_.symbols.find(name);
+            if (existing != ctx_.symbols.end()) {
+                existing->second.column_index = static_cast<uint32_t>(i);
+                existing->second.type = std::move(type);
+                auto slot_it = projection_slots.find(name);
+                if (slot_it != projection_slots.end())
+                    existing->second.slot_id = slot_it->second;
+            } else {
                 ColumnInfo info;
-                info.name = agg->output_names[i];
+                info.name = name;
+                info.type = std::move(type);
                 info.column_index = static_cast<uint32_t>(i);
-                // Determine type: group keys first, then aggregates.
-                if (i < agg->group_keys.size())
-                    info.type = getBoundExprType(agg->group_keys[i]);
-                else
-                    info.type = BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
-                ctx_.symbols[agg->output_names[i]] = std::move(info);
+                auto slot_it = projection_slots.find(name);
+                info.slot_id = slot_it != projection_slots.end() ? slot_it->second : allocateNamedSlot(name);
+                ctx_.symbols[name] = std::move(info);
+            }
+        }
+
+        std::unordered_map<std::string, SlotId> internal_slots;
+        for (const auto& [name, ordinal] : internal_agg_ordinals) {
+            (void)ordinal;
+            auto it = ctx_.symbols.find(name);
+            if (it != ctx_.symbols.end())
+                internal_slots[name] = it->second.slot_id;
+        }
+        for (auto& pi : proj_items) {
+            auto* ref = std::get_if<binder::BoundColumnRef>(&pi.expr);
+            if (!ref) {
+                if (pi.kind == ProjKind::COMPLEX_AGG)
+                    retargetAggregateColumnRefs(pi.expr, internal_agg_ordinals, internal_slots, final_group_count);
+                continue;
+            }
+            if (pi.kind == ProjKind::GROUP) {
+                ref->column_index = static_cast<uint32_t>(pi.ordinal);
+            } else if (pi.kind == ProjKind::SIMPLE_AGG) {
+                ref->column_index = static_cast<uint32_t>(final_group_count + pi.ordinal);
             }
         }
 
@@ -1328,7 +1719,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             std::set<std::string> grouping_key_exprs;
             std::set<std::string> projected_names;
             for (const auto& item : items) {
-                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                std::string alias = projectionAliasOf(item);
                 projected_names.insert(alias);
                 if (hasAggregate(item.expr))
                     projection_aggs.insert(cypher::expressionToString(item.expr));
@@ -1394,20 +1785,18 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             current = std::move(sort);
         }
         if (ret.skip) {
-            auto count = bindSkipLimit(*ret.skip, "SKIP");
-            if (!count)
+            auto skip_spec = bindSkipLimit(*ret.skip, "SKIP");
+            if (!skip_spec)
                 return std::nullopt;
-            auto skip = std::make_unique<BoundSkipOp>();
-            skip->count = *count;
+            auto skip = makeBoundSkipOp(std::move(*skip_spec));
             skip->child = std::move(current);
             current = std::move(skip);
         }
         if (ret.limit) {
-            auto count = bindSkipLimit(*ret.limit, "LIMIT");
-            if (!count)
+            auto limit_spec = bindSkipLimit(*ret.limit, "LIMIT");
+            if (!limit_spec)
                 return std::nullopt;
-            auto limit = std::make_unique<BoundLimitOp>();
-            limit->count = *count;
+            auto limit = makeBoundLimitOp(std::move(*limit_spec));
             limit->child = std::move(current);
             current = std::move(limit);
         }
@@ -1445,7 +1834,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             }
         }
 
-        std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+        std::string alias = projectionAliasOf(item);
         BoundProjectOp::ProjectItem proj_item;
         proj_item.expr = std::move(*bound_expr);
         proj_item.alias = std::move(alias);
@@ -1454,14 +1843,11 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
     }
     proj->child = std::move(child);
 
-    // Register RETURN aliases so ORDER BY can reference them.
-    // Build alias → original expression map for ORDER BY resolution.
-    // (Sort is placed before projection, so aliases need to be resolved
-    // to the original expression, not the projected column index.)
-    std::unordered_map<std::string, size_t> alias_to_proj_idx;
+    // Register RETURN aliases so the output schema exposes the projected
+    // names. ORDER BY itself is handled below via alias substitution against
+    // the input scope (Sort is placed before Project).
     for (size_t i = 0; i < proj->items.size(); ++i) {
         const auto& proj_item = proj->items[i];
-        alias_to_proj_idx[proj_item.alias] = i;
         if (ctx_.symbols.find(proj_item.alias) == ctx_.symbols.end()) {
             ColumnInfo info;
             info.name = proj_item.alias;
@@ -1483,33 +1869,76 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
 
     // ORDER BY
     if (ret.order_by) {
-        auto sort = std::make_unique<BoundSortOp>();
+        // Same validation rules as WITH ORDER BY. DISTINCT removes all but
+        // the projected expressions, so every sort key must be (or match) a
+        // projection item. Aggregates are not allowed next to a non-
+        // aggregating RETURN.
         for (const auto& si : ret.order_by->items) {
-            // If the ORDER BY expression is a simple variable that matches a
-            // RETURN alias, re-bind the original RETURN expression.
-            auto* var = std::get_if<std::unique_ptr<cypher::Variable>>(&si.expr);
-            if (var && *var && alias_to_proj_idx.count((*var)->name)) {
-                size_t idx = alias_to_proj_idx[(*var)->name];
-                // Re-bind the original expression from the RETURN item.
-                // This works because the child columns are still available
-                // (sort is before projection).
-                auto bound_key = bindExpression(items[idx].expr);
-                if (bound_key) {
-                    BoundSortOp::SortItem sort_item;
-                    sort_item.expr = std::move(*bound_key);
-                    sort_item.direction = si.direction;
-                    sort->items.push_back(std::move(sort_item));
-                }
-            } else {
-                auto bound_key = bindExpression(si.expr);
-                if (!bound_key)
-                    continue;
-                BoundSortOp::SortItem sort_item;
-                sort_item.expr = std::move(*bound_key);
-                sort_item.direction = si.direction;
-                sort->items.push_back(std::move(sort_item));
+            if (hasAggregate(si.expr)) {
+                error("SyntaxError: InvalidAggregation: Cannot use aggregate functions in "
+                      "ORDER BY of a non-aggregating RETURN clause");
+                return std::nullopt;
             }
         }
+        if (ret.distinct) {
+            std::set<std::string> projected_exprs;
+            std::set<std::string> projected_names;
+            std::set<std::string> projected_bare_vars;
+            for (const auto& item : items) {
+                projected_exprs.insert(cypher::expressionToString(item.expr));
+                projected_names.insert(projectionAliasOf(item));
+                if (std::holds_alternative<std::unique_ptr<cypher::Variable>>(item.expr))
+                    projected_bare_vars.insert(cypher::expressionToString(item.expr));
+            }
+            for (const auto& si : ret.order_by->items) {
+                bool ok = projected_exprs.count(cypher::expressionToString(si.expr)) > 0;
+                if (!ok) {
+                    if (auto* var = std::get_if<std::unique_ptr<cypher::Variable>>(&si.expr)) {
+                        if (var && *var && projected_names.count((*var)->name) > 0)
+                            ok = true;
+                    }
+                }
+                // `RETURN DISTINCT n ORDER BY n.name` is valid: the sort key
+                // is derived from a projected bare variable.
+                if (!ok) {
+                    std::set<std::string> sort_vars;
+                    collectAllVariables(si.expr, sort_vars);
+                    bool all_bare = !sort_vars.empty();
+                    for (const auto& var : sort_vars) {
+                        if (!projected_bare_vars.count(var)) {
+                            all_bare = false;
+                            break;
+                        }
+                    }
+                    ok = all_bare;
+                }
+                if (!ok) {
+                    error("SyntaxError: UndefinedVariable: ORDER BY expression is not part of the "
+                          "DISTINCT projection");
+                    return std::nullopt;
+                }
+            }
+        }
+
+        // Sort runs before Project, so references to RETURN aliases are
+        // substituted with their original expressions (the same mechanism
+        // non-aggregating WITH uses). This also handles aliases nested in
+        // larger expressions, e.g. `RETURN n.num AS n ORDER BY n + 2`.
+        order_by_alias_subs_.clear();
+        for (const auto& item : items)
+            order_by_alias_subs_[projectionAliasOf(item)] = &item.expr;
+
+        auto sort = std::make_unique<BoundSortOp>();
+        for (const auto& si : ret.order_by->items) {
+            auto bound_key = bindExpression(si.expr);
+            if (!bound_key)
+                continue;
+            BoundSortOp::SortItem sort_item;
+            sort_item.expr = std::move(*bound_key);
+            sort_item.direction = si.direction;
+            sort->items.push_back(std::move(sort_item));
+        }
+        order_by_alias_subs_.clear();
         sort->child = std::move(child_op);
         child_op = std::move(sort);
     }
@@ -1520,20 +1949,18 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
 
     // SKIP, LIMIT, DISTINCT
     if (ret.skip) {
-        auto count = bindSkipLimit(*ret.skip, "SKIP");
-        if (!count)
+        auto skip_spec = bindSkipLimit(*ret.skip, "SKIP");
+        if (!skip_spec)
             return std::nullopt;
-        auto skip = std::make_unique<BoundSkipOp>();
-        skip->count = *count;
+        auto skip = makeBoundSkipOp(std::move(*skip_spec));
         skip->child = std::move(current);
         current = std::move(skip);
     }
     if (ret.limit) {
-        auto count = bindSkipLimit(*ret.limit, "LIMIT");
-        if (!count)
+        auto limit_spec = bindSkipLimit(*ret.limit, "LIMIT");
+        if (!limit_spec)
             return std::nullopt;
-        auto limit = std::make_unique<BoundLimitOp>();
-        limit->count = *count;
+        auto limit = makeBoundLimitOp(std::move(*limit_spec));
         limit->child = std::move(current);
         current = std::move(limit);
     }
@@ -1553,6 +1980,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     struct ReturnItemView {
         const cypher::Expression& expr;
         const std::optional<std::string>& alias;
+        std::string source_text;
     };
     std::vector<cypher::Expression> lowered_exprs;
     lowered_exprs.reserve(wc.items.size());
@@ -1576,9 +2004,9 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             auto var = std::make_unique<cypher::Variable>();
             var->name = out_name;
             lowered_exprs.push_back(cypher::Expression(std::move(var)));
-            items.push_back({lowered_exprs.back(), item.alias});
+            items.push_back({lowered_exprs.back(), item.alias, item.source_text});
         } else {
-            items.push_back({item.expr, item.alias});
+            items.push_back({item.expr, item.alias, item.source_text});
         }
     }
 
@@ -1612,7 +2040,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     {
         std::set<std::string> seen;
         for (const auto& item : items) {
-            std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            std::string alias = projectionAliasOf(item);
             if (!seen.insert(alias).second) {
                 error("SyntaxError: ColumnNameConflict: duplicate column alias '" + alias + "' in WITH");
                 return std::nullopt;
@@ -1620,6 +2048,12 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         }
     }
 
+    // WITH requires an explicit alias for every non-variable expression.
+    // The non-aggregating branch checks this before binding; aggregating WITH
+    // checks after aggregate/ORDER BY validation so ambiguity errors take
+    // precedence (`WITH a, count(*)` → NoExpressionAlias; `WITH me.age +
+    // you.age, count(*) ORDER BY me.age + you.age + count(*)` →
+    // AmbiguousAggregationExpression).
     BoundLogicalOperator current;
 
     if (has_aggregate) {
@@ -1661,11 +2095,20 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
 
         auto agg = std::make_unique<BoundAggregateOp>();
 
+        enum class ProjKind {
+            GROUP,
+            SIMPLE_AGG,
+            COMPLEX_AGG
+        };
         struct ProjItem {
             binder::BoundExpression expr;
             std::string alias;
+            ProjKind kind;
+            size_t ordinal = 0;
         };
         std::vector<ProjItem> proj_items;
+        std::vector<std::string> group_key_aliases;
+        std::unordered_map<std::string, SlotId> projection_slots;
         uint32_t anon_idx = 0;
 
         // First pass: detect whether any item is a *complex* aggregate so we
@@ -1684,7 +2127,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         }
 
         for (const auto& item : items) {
-            std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            std::string alias = projectionAliasOf(item);
             // "Simple" aggregate = the entire item is a single top-level aggregate call.
             // See bindReturn for the rationale.
             bool is_simple_agg = false;
@@ -1711,34 +2154,106 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                         agg_item.arguments.push_back(std::move(arg));
                 }
                 agg->aggregates.push_back(std::move(agg_item));
-                agg->output_names.push_back(alias);
-                uint32_t col_idx = static_cast<uint32_t>(agg->group_keys.size() + agg->aggregates.size() - 1);
-                with_outputs.emplace_back(alias, BoundType::clone(agg->aggregates.back().result_type));
-
-                // Only build a passthrough ProjectItem when there is a sibling
-                // complex aggregate forcing the ProjectOp path; otherwise the
-                // AggregateOp output is the final result and adding a
-                // passthrough would drop group keys from the schema.
+                size_t ordinal = agg->aggregates.size() - 1;
                 if (has_complex_agg) {
-                    binder::BoundExpression passthrough = binder::BoundColumnRef{
-                        col_idx, BoundType::clone(agg->aggregates.back().result_type), alias, INVALID_SLOT_ID};
-                    proj_items.push_back({std::move(passthrough), alias});
+                    auto existing = ctx_.symbols.find(alias);
+                    BoundType type = BoundType::clone(agg->aggregates.back().result_type);
+                    SlotId slot = existing != ctx_.symbols.end() && existing->second.slot_id != INVALID_SLOT_ID
+                                      ? existing->second.slot_id
+                                      : allocateNamedSlot(alias);
+                    projection_slots[alias] = slot;
+                    binder::BoundExpression passthrough = binder::BoundColumnRef{0, std::move(type), alias, slot};
+                    proj_items.push_back({std::move(passthrough), alias, ProjKind::SIMPLE_AGG, ordinal});
                 }
             } else if (hasAggregate(item.expr)) {
                 auto full_expr = std::move(*bound_expr);
                 walkAndReplaceAggCalls(full_expr, agg->aggregates, anon_idx, agg->group_keys.size());
-
-                for (auto& ai : agg->aggregates) {
-                    if (ai.alias.starts_with("__agg_")) {
-                        agg->output_names.push_back(ai.alias);
-                        with_outputs.emplace_back(ai.alias, BoundType::clone(ai.result_type));
-                    }
-                }
-                proj_items.push_back({std::move(full_expr), alias});
+                proj_items.push_back({std::move(full_expr), alias, ProjKind::COMPLEX_AGG, 0});
             } else {
                 agg->group_keys.push_back(std::move(*bound_expr));
-                agg->output_names.push_back(alias);
-                with_outputs.emplace_back(alias, getBoundExprType(agg->group_keys.back()));
+                size_t ordinal = agg->group_keys.size() - 1;
+                group_key_aliases.push_back(alias);
+                if (has_complex_agg) {
+                    auto existing = ctx_.symbols.find(alias);
+                    BoundType type = getBoundExprType(agg->group_keys.back());
+                    SlotId slot = existing != ctx_.symbols.end() && existing->second.slot_id != INVALID_SLOT_ID
+                                      ? existing->second.slot_id
+                                      : allocateNamedSlot(alias);
+                    projection_slots[alias] = slot;
+                    binder::BoundExpression passthrough = binder::BoundColumnRef{0, std::move(type), alias, slot};
+                    proj_items.push_back({std::move(passthrough), alias, ProjKind::GROUP, ordinal});
+                }
+            }
+        }
+
+        // AggregateOp physical layout: all group keys first, then all
+        // aggregate columns, regardless of the written item order.
+        const size_t final_group_count = agg->group_keys.size();
+        agg->output_names.clear();
+        agg->output_names = group_key_aliases;
+        std::unordered_map<std::string, size_t> internal_agg_ordinals;
+        for (size_t i = 0; i < agg->aggregates.size(); ++i) {
+            agg->output_names.push_back(agg->aggregates[i].alias);
+            if (agg->aggregates[i].alias.starts_with("__agg_"))
+                internal_agg_ordinals[agg->aggregates[i].alias] = i;
+        }
+
+        // Register AggregateOp columns with their final physical indices.
+        for (size_t i = 0; i < agg->output_names.size(); ++i) {
+            const std::string& name = agg->output_names[i];
+            BoundType type = i < agg->group_keys.size()
+                                 ? getBoundExprType(agg->group_keys[i])
+                                 : BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
+            auto existing = ctx_.symbols.find(name);
+            if (existing != ctx_.symbols.end()) {
+                existing->second.column_index = static_cast<uint32_t>(i);
+                existing->second.type = std::move(type);
+                auto slot_it = projection_slots.find(name);
+                if (slot_it != projection_slots.end())
+                    existing->second.slot_id = slot_it->second;
+            } else {
+                ColumnInfo info;
+                info.name = name;
+                info.type = std::move(type);
+                info.column_index = static_cast<uint32_t>(i);
+                auto slot_it = projection_slots.find(name);
+                info.slot_id = slot_it != projection_slots.end() ? slot_it->second : allocateNamedSlot(name);
+                ctx_.symbols[name] = std::move(info);
+            }
+        }
+
+        std::unordered_map<std::string, SlotId> internal_slots;
+        for (const auto& [name, ordinal] : internal_agg_ordinals) {
+            (void)ordinal;
+            auto it = ctx_.symbols.find(name);
+            if (it != ctx_.symbols.end())
+                internal_slots[name] = it->second.slot_id;
+        }
+        for (auto& pi : proj_items) {
+            auto* ref = std::get_if<binder::BoundColumnRef>(&pi.expr);
+            if (!ref) {
+                if (pi.kind == ProjKind::COMPLEX_AGG)
+                    retargetAggregateColumnRefs(pi.expr, internal_agg_ordinals, internal_slots, final_group_count);
+                continue;
+            }
+            if (pi.kind == ProjKind::GROUP) {
+                ref->column_index = static_cast<uint32_t>(pi.ordinal);
+            } else if (pi.kind == ProjKind::SIMPLE_AGG) {
+                ref->column_index = static_cast<uint32_t>(final_group_count + pi.ordinal);
+            }
+        }
+
+        if (has_complex_agg) {
+            with_outputs.clear();
+            for (const auto& pi : proj_items)
+                with_outputs.emplace_back(pi.alias, getBoundExprType(pi.expr));
+        } else {
+            with_outputs.clear();
+            for (size_t i = 0; i < agg->output_names.size(); ++i) {
+                BoundType type = i < agg->group_keys.size()
+                                     ? getBoundExprType(agg->group_keys[i])
+                                     : BoundType::clone(agg->aggregates[i - agg->group_keys.size()].result_type);
+                with_outputs.emplace_back(agg->output_names[i], std::move(type));
             }
         }
 
@@ -1748,7 +2263,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         where_has_projected_ref = false;
         if (wc.where_pred) {
             for (const auto& item : items) {
-                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                std::string alias = projectionAliasOf(item);
                 if (expressionReferencesVariable(*wc.where_pred, alias)) {
                     where_has_projected_ref = true;
                     break;
@@ -1802,7 +2317,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         where_has_projected_ref = false;
         if (wc.where_pred) {
             for (const auto& item : items) {
-                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                std::string alias = projectionAliasOf(item);
                 if (expressionReferencesVariable(*wc.where_pred, alias)) {
                     where_has_projected_ref = true;
                     break;
@@ -1822,29 +2337,18 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         // Simple projection
         auto proj = std::make_unique<BoundProjectOp>();
         if (wc.return_all && wc.items.empty()) {
-            // WITH *: pass through all variables from current scope.
-            // Mirrors bindReturn's RETURN * handler (line 220-242).
+            // WITH *: pass through all variables from current scope, ordered
+            // lexicographically like RETURN *. Anonymous variables are kept:
+            // they are not user-visible but still carry rows for downstream
+            // clauses (e.g. MATCH () CREATE () WITH * CREATE ()).
             std::vector<const ColumnInfo*> sorted_symbols;
             for (const auto& [name, col_info] : ctx_.symbols) {
                 if (name.starts_with("__anon_edge_"))
                     continue;
                 sorted_symbols.push_back(&col_info);
             }
-            // VERTEX before EDGE before others (Neo4j convention for WITH *).
-            std::sort(sorted_symbols.begin(), sorted_symbols.end(), [](const ColumnInfo* a, const ColumnInfo* b) {
-                auto typeRank = [](BoundTypeKind k) {
-                    if (k == BoundTypeKind::VERTEX)
-                        return 0;
-                    if (k == BoundTypeKind::EDGE)
-                        return 1;
-                    return 2;
-                };
-                int ra = typeRank(a->type.kind);
-                int rb = typeRank(b->type.kind);
-                if (ra != rb)
-                    return ra < rb;
-                return a->column_index < b->column_index;
-            });
+            std::sort(sorted_symbols.begin(), sorted_symbols.end(),
+                      [](const ColumnInfo* a, const ColumnInfo* b) { return a->name < b->name; });
             for (const auto* col_info : sorted_symbols) {
                 auto bound_expr =
                     BoundColumnRef(col_info->column_index, col_info->type, col_info->name, col_info->slot_id);
@@ -1871,7 +2375,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                     }
                 }
 
-                std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                std::string alias = projectionAliasOf(item);
                 BoundProjectOp::ProjectItem proj_item;
                 proj_item.expr = std::move(*bound_expr);
                 proj_item.alias = alias;
@@ -1900,7 +2404,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             order_by_alias_subs_.clear();
             if (!wc.return_all) {
                 for (const auto& item : items) {
-                    std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+                    std::string alias = projectionAliasOf(item);
                     order_by_alias_subs_[alias] = &item.expr;
                 }
             }
@@ -1970,7 +2474,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         std::set<std::string> grouping_key_exprs;
         std::set<std::string> projected_names;
         for (const auto& item : items) {
-            std::string alias = item.alias ? *item.alias : cypher::expressionToString(item.expr);
+            std::string alias = projectionAliasOf(item);
             projected_names.insert(alias);
             if (hasAggregate(item.expr)) {
                 projection_aggs.insert(cypher::expressionToString(item.expr));
@@ -2010,24 +2514,37 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         current = std::move(sort);
     }
 
+    // Aggregating WITH also requires explicit aliases for non-variable
+    // expressions. Run after aggregate/ORDER BY validation so the more
+    // specific aggregation errors take precedence.
+    if (has_aggregate) {
+        for (const auto& item : items) {
+            if (item.alias)
+                continue;
+            if (std::holds_alternative<std::unique_ptr<cypher::Variable>>(item.expr))
+                continue;
+            error("SyntaxError: NoExpressionAlias: expression in WITH must be aliased "
+                  "(use AS <name>)");
+            return std::nullopt;
+        }
+    }
+
     // SKIP
     if (wc.skip) {
-        auto count = bindSkipLimit(*wc.skip, "SKIP");
-        if (!count)
+        auto skip_spec = bindSkipLimit(*wc.skip, "SKIP");
+        if (!skip_spec)
             return std::nullopt;
-        auto skip = std::make_unique<BoundSkipOp>();
-        skip->count = *count;
+        auto skip = makeBoundSkipOp(std::move(*skip_spec));
         skip->child = std::move(current);
         current = std::move(skip);
     }
 
     // LIMIT
     if (wc.limit) {
-        auto count = bindSkipLimit(*wc.limit, "LIMIT");
-        if (!count)
+        auto limit_spec = bindSkipLimit(*wc.limit, "LIMIT");
+        if (!limit_spec)
             return std::nullopt;
-        auto limit = std::make_unique<BoundLimitOp>();
-        limit->count = *count;
+        auto limit = makeBoundLimitOp(std::move(*limit_spec));
         limit->child = std::move(current);
         current = std::move(limit);
     }

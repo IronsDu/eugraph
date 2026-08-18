@@ -264,12 +264,15 @@ RETURN 2 AS x
 ```cypher
 RETURN n.name, n.age
 RETURN n.name AS name, n.age AS age
-RETURN *                     -- 返回所有变量
+RETURN *                     -- 返回所有变量（按变量名字典序）
 RETURN DISTINCT n.city       -- 去重
 RETURN n::Employee           -- 返回指定标签全部属性
 RETURN true OR false         -- 无源 RETURN（无需 MATCH，求值常量表达式）
 RETURN 1 + 2 * 3            -- 算术表达式
 ```
+
+- 无 `AS` 的列名保留查询中的**原始文本**（含大小写与空白），例如 `RETURN cOuNt( * )` 的列名为 `cOuNt( * )`。
+- `RETURN *` 只展开用户可见变量，按变量名**字典序**排列；作用域中没有可见变量时编译报 `NoVariablesInScope`。
 
 ### ORDER BY — 排序
 
@@ -282,9 +285,15 @@ ORDER BY n.city, n.age DESC  -- 多键排序
 ### SKIP / LIMIT — 分页
 
 ```cypher
-SKIP 10                      -- 跳过前 N 行（仅支持字面量整数）
-LIMIT 20                     -- 限制返回行数（仅支持字面量整数）
+SKIP 10                      -- 跳过前 N 行（字面量在编译期校验）
+LIMIT 20                     -- 限制返回行数（字面量在编译期校验）
+SKIP $skipAmount             -- 参数在运行时求值并校验
+LIMIT toInteger(ceil(1.7))   -- 无变量常量表达式在运行时求值并校验
 ```
+
+- 参数与无变量常量表达式在**运行时**求值；负值/浮点参数按 TCK 语义在运行时报错。
+- 表达式引用了查询变量时编译报 `NonConstantExpression`。
+- `LIMIT` 只裁剪可见结果，上游写操作（CREATE/SET/DELETE 等）仍会消费全部输入行以保留副作用。
 
 ### EXPLAIN — 计划查看
 

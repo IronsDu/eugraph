@@ -343,11 +343,23 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
                 if (!av || !bv)
                     return !av && !bv;
-                return av->count == bv->count;
+                if (av->constant != bv->constant)
+                    return false;
+                if (av->expr.has_value() != bv->expr.has_value())
+                    return false;
+                if (av->expr && !equalBoundExpression(*av->expr, *bv->expr))
+                    return false;
+                return true;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
                 if (!av || !bv)
                     return !av && !bv;
-                return av->count == bv->count;
+                if (av->constant != bv->constant)
+                    return false;
+                if (av->expr.has_value() != bv->expr.has_value())
+                    return false;
+                if (av->expr && !equalBoundExpression(*av->expr, *bv->expr))
+                    return false;
+                return true;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                 return static_cast<bool>(av) == static_cast<bool>(bv);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {

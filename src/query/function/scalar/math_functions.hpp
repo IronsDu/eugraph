@@ -103,6 +103,29 @@ inline void signBatchFn(const std::vector<const Column*>& args, Column& result, 
     }
 }
 
+// --- ceil ---
+
+inline Value ceilImpl(const Value& arg) {
+    if (isNull(arg))
+        return Value{};
+    if (std::holds_alternative<double>(arg))
+        return Value(std::ceil(std::get<double>(arg)));
+    if (std::holds_alternative<int64_t>(arg))
+        return Value(std::ceil(static_cast<double>(std::get<int64_t>(arg))));
+    return Value{};
+}
+
+inline Value ceilScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
+    return ceilImpl(args[0]);
+}
+
+inline void ceilBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                        const EvalContext& /*ctx*/) {
+    for (size_t i = 0; i < count; i++) {
+        result.setValue(i, ceilImpl(args[0]->getValue(i)));
+    }
+}
+
 } // namespace scalar
 } // namespace function
 } // namespace eugraph

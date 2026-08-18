@@ -388,11 +388,16 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                     allocateSlotsInOp(v->child, name_to_slot, alloc);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
-                                 std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                 if (v)
                     allocateSlotsInOp(v->child, name_to_slot, alloc);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
+                if (v) {
+                    if (v->expr)
+                        ensureSlotsInExpr(*v->expr, name_to_slot, alloc);
+                    allocateSlotsInOp(v->child, name_to_slot, alloc);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>>) {
                 if (v) {
                     for (auto& item : v->items)
@@ -1044,6 +1049,8 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 changed_inner |= rewriteExpr(val->object, plans, resolver);
                 return changed_inner;
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
+                if (!binder::isSemanticGraphKind(val.type.kind))
+                    return false;
                 const PEPlan* pi = planForSlot(binder::INVALID_SLOT_ID, val.name);
                 if (!pi)
                     return false;
@@ -1060,6 +1067,13 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 // deliberately compare two VertexRef/EdgeKey values (e.g. the
                 // saved-correlation equality filter in EXISTS sub-plans).
                 if (binder::isTopologyKind(val.type.kind))
+                    return false;
+                // Scalar aliases may reuse a graph variable's slot when the
+                // projection shadows it (`RETURN n.num AS n`). They must keep
+                // reading the scalar aggregate/projection column — promoting
+                // them to the graph object slot would replace the value with
+                // a VertexValue.
+                if (!binder::isSemanticGraphKind(val.type.kind))
                     return false;
                 const PEPlan* pi = planForSlot(val.slot_id, val.name);
                 if (!pi)

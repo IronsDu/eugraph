@@ -641,11 +641,15 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
                 auto c = std::make_unique<binder::BoundSkipOp>();
-                c->count = val->count;
+                c->constant = val->constant;
+                if (val->expr)
+                    c->expr = cloneBoundExpression(*val->expr);
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
                 auto c = std::make_unique<binder::BoundLimitOp>();
-                c->count = val->count;
+                c->constant = val->constant;
+                if (val->expr)
+                    c->expr = cloneBoundExpression(*val->expr);
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                 return std::make_unique<binder::BoundDistinctOp>();

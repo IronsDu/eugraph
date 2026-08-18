@@ -637,7 +637,7 @@ TEST(LogPropTest, LimitCardinality) {
     auto input_lp = deriver.derive(scan, {});
 
     auto limit = std::make_unique<BoundLimitOp>();
-    limit->count = 10;
+    limit->constant = 10;
     limit->child = makeLabelScan("n", 0);
     BoundLogicalOperator limit_op(std::move(limit));
 
@@ -651,7 +651,7 @@ TEST(LogPropTest, LimitDoesNotExceedInput) {
     auto input_lp = deriver.derive(scan, {});
 
     auto limit = std::make_unique<BoundLimitOp>();
-    limit->count = 99999; // much larger than input
+    limit->constant = 99999; // much larger than input
     limit->child = makeLabelScan("n", 0);
     BoundLogicalOperator limit_op(std::move(limit));
 

@@ -180,6 +180,34 @@ ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
     return result;
 }
 
+ExecutionResult execSyncParams(QueryExecutor& executor, const std::string& query,
+                               const std::unordered_map<std::string, Value>& params) {
+    auto ctx = blockingWait(executor.prepareStream(query, params));
+    ExecutionResult result;
+    if (!ctx->error.empty()) {
+        result.error = std::move(ctx->error);
+        return result;
+    }
+    result.columns = std::move(ctx->columns);
+    auto gen = std::move(ctx->gen);
+    blockingWait(co_invoke([&]() -> Task<void> {
+        try {
+            while (auto chunk = co_await gen.next()) {
+                auto rows = chunk->toRows();
+                for (auto& row : rows) {
+                    result.rows.push_back(std::move(row));
+                }
+            }
+            if (ctx->should_commit) {
+                co_await ctx->store.commitTran(ctx->txn);
+            }
+        } catch (const std::exception& e) {
+            result.error = e.what();
+        }
+    }));
+    return result;
+}
+
 std::vector<std::string> collectStrings(const ExecutionResult& result, size_t column = 0) {
     std::vector<std::string> values;
     for (const auto& row : result.rows) {
@@ -7572,4 +7600,165 @@ TEST_F(QueryExecutorTest, ProcedureDbIndexesReturnsMetaIndex) {
     ASSERT_TRUE(std::holds_alternative<std::string>(props.elements[0].value));
     EXPECT_EQ(std::get<std::string>(props.elements[0].value), "name");
     EXPECT_TRUE(std::holds_alternative<std::monostate>(row[8]));
+}
+
+// ==================== TCK clause stable-fix regressions ====================
+
+TEST_F(QueryExecutorTest, SkipParameterNegativeFailsAtRuntime) {
+    auto result = execSyncParams(*executor_, "RETURN 1 AS x SKIP $s", {{"s", Value(int64_t{-1})}});
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("non-negative integer"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, LimitParameterFloatFailsAtRuntime) {
+    auto result = execSyncParams(*executor_, "RETURN 1 AS x LIMIT $l", {{"l", Value(1.5)}});
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("must be an integer"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, LimitConstantExpressionEvaluated) {
+    auto result = execSync(*executor_, "UNWIND range(1, 3) AS i RETURN i ORDER BY i LIMIT toInteger(ceil(1.7))");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][0]), 2);
+}
+
+TEST_F(QueryExecutorTest, SkipVariableDependentFailsCompileTime) {
+    auto result = execSync(*executor_, "UNWIND [1, 2] AS n RETURN n SKIP n");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("must be a constant expression"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, CeilFunctionRegistered) {
+    auto result = execSync(*executor_, "RETURN ceil(1.2)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<double>(result.rows[0][0]));
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 2.0);
+}
+
+TEST_F(QueryExecutorTest, ReturnImplicitColumnPreservesSourceText) {
+    auto result = execSync(*executor_, "RETURN cOuNt( * )");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.columns.size(), 1u);
+    EXPECT_EQ(result.columns[0], "cOuNt( * )");
+}
+
+TEST_F(QueryExecutorTest, ReturnDuplicateAliasFails) {
+    auto result = execSync(*executor_, "RETURN 1 AS a, 2 AS a");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("ColumnNameConflict"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ParameterExpressionColumnName) {
+    auto result = execSyncParams(*executor_, "MATCH (person) RETURN $age + avg(person.age) - 1000",
+                                 {{"age", Value(int64_t{38})}});
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.columns.size(), 1u);
+    EXPECT_EQ(result.columns[0], "$age + avg(person.age) - 1000");
+}
+
+TEST_F(QueryExecutorTest, ReturnStarLexicographicOrder) {
+    auto result = execSync(*executor_, "WITH [1, 2] AS xs, [3, 4] AS ys UNWIND xs AS x UNWIND ys AS y RETURN *");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.columns, (std::vector<std::string>{"x", "xs", "y", "ys"}));
+    ASSERT_EQ(result.rows.size(), 4u);
+}
+
+TEST_F(QueryExecutorTest, ReturnStarWithoutVariablesFails) {
+    auto result = execSync(*executor_, "MATCH () RETURN *");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("NoVariablesInScope"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ReturnOrderByAliasInsideExpression) {
+    auto setup = execSync(*executor_, "CREATE ({num: 1}), ({num: 3}), ({num: -5})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto result = execSync(*executor_, "MATCH (n) RETURN n.num AS n ORDER BY n + 2");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), -5);
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][0]), 1);
+    EXPECT_EQ(std::get<int64_t>(result.rows[2][0]), 3);
+}
+
+TEST_F(QueryExecutorTest, ReturnDistinctOrderByNonProjectedFails) {
+    auto setup = execSync(*executor_, "CREATE ({name: 'A', age: 13})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto result = execSync(*executor_, "MATCH (a) RETURN DISTINCT a.name ORDER BY a.age");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("UndefinedVariable"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ReturnOrderByAggregateFails) {
+    auto result = execSync(*executor_, "MATCH (n) RETURN n.num1 ORDER BY max(n.num2)");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("InvalidAggregation"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, CrossTypeOrdering) {
+    auto result = execSync(*executor_, "UNWIND ['text', false, 1.5, null] AS x RETURN x ORDER BY x");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 4u);
+    EXPECT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[1][0]));
+    EXPECT_TRUE(std::holds_alternative<double>(result.rows[2][0]));
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(result.rows[3][0]));
+}
+
+TEST_F(QueryExecutorTest, AggregateBeforeGroupKeyColumnOrder) {
+    auto setup = execSync(*executor_, "CREATE (a:Player), (b:Team) CREATE (a)-[:PLAYS_FOR]->(b)");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto result = execSync(*executor_, "MATCH (p:Player)-[:PLAYS_FOR]->(team:Team) "
+                                       "OPTIONAL MATCH (p)-[s:SUPPORTS]->(team) "
+                                       "RETURN count(*) AS matches, s IS NULL AS optMatch");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.columns, (std::vector<std::string>{"matches", "optMatch"}));
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+    EXPECT_TRUE(std::holds_alternative<bool>(result.rows[0][1]));
+    EXPECT_TRUE(std::get<bool>(result.rows[0][1]));
+}
+
+TEST_F(QueryExecutorTest, ReturnArithmeticOnAggregate) {
+    auto setup = execSync(*executor_, "CREATE ({id: 42})");
+    ASSERT_TRUE(setup.error.empty()) << setup.error;
+    auto result = execSync(*executor_, "MATCH (a) RETURN a, count(a) + 3");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 2u);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][1]))
+        << "count(a) + 3 should be int64, variant index = " << result.rows[0][1].index();
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 4);
+}
+
+TEST_F(QueryExecutorTest, ReturnNestedAggregationFails) {
+    auto result = execSync(*executor_, "RETURN count(count(*))");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("NestedAggregation"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ReturnRandInAggregationFails) {
+    auto result = execSync(*executor_, "RETURN count(rand())");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("NonConstantExpression"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ReturnAmbiguousAggregationFails) {
+    auto result = execSync(*executor_, "MATCH (me:Person)--(you:Person) RETURN me.age + count(you.age)");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("AmbiguousAggregationExpression"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, MatchWhereAggregateFailsCompileTime) {
+    auto result = execSync(*executor_, "MATCH (a) WHERE count(a) > 10 RETURN a");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("InvalidAggregation"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, RelationshipReuseFailsCompileTime) {
+    auto result = execSync(*executor_, "MATCH (a)-[r]->()-[r]->(a) RETURN r");
+    EXPECT_FALSE(result.error.empty());
+    EXPECT_NE(result.error.find("RelationshipUniquenessViolation"), std::string::npos);
 }

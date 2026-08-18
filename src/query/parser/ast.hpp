@@ -295,6 +295,10 @@ struct OrderBy {
 struct ReturnItem {
     Expression expr;
     std::optional<std::string> alias;
+    /// Exact source text of the projected expression (without `AS alias`).
+    /// Used for implicit column names so the original casing/whitespace is
+    /// preserved (Cypher keeps the written expression as the column name).
+    std::string source_text;
 };
 
 struct MatchClause {
@@ -470,6 +474,10 @@ inline std::string expressionToString(const Expression& expr) {
             using OpType = typename T::element_type;
             if constexpr (std::is_same_v<OpType, Variable>) {
                 return ptr->name;
+            } else if constexpr (std::is_same_v<OpType, Parameter>) {
+                if (!ptr->name.empty() && ptr->name.front() == '$')
+                    return ptr->name;
+                return "$" + ptr->name;
             } else if constexpr (std::is_same_v<OpType, PropertyAccess>) {
                 auto obj_str = expressionToString(ptr->object);
                 if (std::holds_alternative<std::unique_ptr<SubscriptExpr>>(ptr->object) ||

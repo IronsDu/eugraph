@@ -43,7 +43,12 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
                errMsg.find("NoSingleRelationshipType") != std::string::npos ||
                errMsg.find("RequiresDirectedRelationship") != std::string::npos ||
                errMsg.find("CreatingVarLength") != std::string::npos ||
-               errMsg.find("InvalidParameterUse") != std::string::npos) {
+               errMsg.find("InvalidParameterUse") != std::string::npos ||
+               errMsg.find("InvalidAggregation") != std::string::npos ||
+               errMsg.find("RelationshipUniquenessViolation") != std::string::npos ||
+               errMsg.find("NestedAggregation") != std::string::npos ||
+               errMsg.find("NoVariablesInScope") != std::string::npos ||
+               errMsg.find("AmbiguousAggregationExpression") != std::string::npos) {
         errorType = "SyntaxError";
         errorPhase = "compile time";
     } else if (errMsg.find("Function not found") != std::string::npos) {
@@ -439,6 +444,8 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "NegativeIntegerArgument";
                 } else if (errMsg.find("must be a constant expression") != std::string::npos) {
                     lastErrorDetail = "NonConstantExpression";
+                } else if (errMsg.find("NonConstantExpression") != std::string::npos) {
+                    lastErrorDetail = "NonConstantExpression";
                 } else if (errMsg.find("must be an integer") != std::string::npos) {
                     lastErrorDetail = "InvalidArgumentType";
                 } else if (errMsg.find("Duplicate map key") != std::string::npos) {
@@ -473,6 +480,12 @@ void TckContext::executeQuery(const std::string& query) {
                     lastErrorDetail = "InvalidAggregation";
                 } else if (errMsg.find("AmbiguousAggregationExpression") != std::string::npos) {
                     lastErrorDetail = "AmbiguousAggregationExpression";
+                } else if (errMsg.find("NestedAggregation") != std::string::npos) {
+                    lastErrorDetail = "NestedAggregation";
+                } else if (errMsg.find("NoVariablesInScope") != std::string::npos) {
+                    lastErrorDetail = "NoVariablesInScope";
+                } else if (errMsg.find("RelationshipUniquenessViolation") != std::string::npos) {
+                    lastErrorDetail = "RelationshipUniquenessViolation";
                 } else if (errMsg.find("EntityNotFound") != std::string::npos) {
                     lastErrorDetail = "DeletedEntityAccess";
                 } else if (errMsg.find("Function not found") != std::string::npos) {
@@ -526,6 +539,12 @@ void TckContext::executeQuery(const std::string& query) {
             lastErrorDetail = "NoExpressionAlias";
         } else if (errMsg.find("AmbiguousAggregationExpression") != std::string::npos) {
             lastErrorDetail = "AmbiguousAggregationExpression";
+        } else if (errMsg.find("NestedAggregation") != std::string::npos) {
+            lastErrorDetail = "NestedAggregation";
+        } else if (errMsg.find("NoVariablesInScope") != std::string::npos) {
+            lastErrorDetail = "NoVariablesInScope";
+        } else if (errMsg.find("RelationshipUniquenessViolation") != std::string::npos) {
+            lastErrorDetail = "RelationshipUniquenessViolation";
         } else if (errMsg.find("InvalidAggregation") != std::string::npos) {
             lastErrorDetail = "InvalidAggregation";
         } else if (errMsg.find("EntityNotFound") != std::string::npos) {
@@ -553,6 +572,8 @@ void TckContext::executeQuery(const std::string& query) {
         } else if (errMsg.find("must be a non-negative integer") != std::string::npos) {
             lastErrorDetail = "NegativeIntegerArgument";
         } else if (errMsg.find("must be a constant expression") != std::string::npos) {
+            lastErrorDetail = "NonConstantExpression";
+        } else if (errMsg.find("NonConstantExpression") != std::string::npos) {
             lastErrorDetail = "NonConstantExpression";
         } else if (errMsg.find("must be an integer") != std::string::npos) {
             lastErrorDetail = "InvalidArgumentType";
