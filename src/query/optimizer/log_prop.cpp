@@ -318,7 +318,8 @@ LogProp LogPropDeriver::deriveSort(const LogProp& input) const {
 
 LogProp LogPropDeriver::deriveLimit(const binder::BoundLimitOp& op, const LogProp& input) const {
     LogProp lp;
-    lp.cardinality = std::min(static_cast<double>(op.count), input.cardinality);
+    lp.cardinality =
+        op.constant.has_value() ? std::min(static_cast<double>(*op.constant), input.cardinality) : input.cardinality;
     lp.columns = input.columns;
     lp.valid = true;
     return lp;
@@ -326,7 +327,8 @@ LogProp LogPropDeriver::deriveLimit(const binder::BoundLimitOp& op, const LogPro
 
 LogProp LogPropDeriver::deriveSkip(const binder::BoundSkipOp& op, const LogProp& input) const {
     LogProp lp;
-    lp.cardinality = std::max(0.0, input.cardinality - static_cast<double>(op.count));
+    lp.cardinality = op.constant.has_value() ? std::max(0.0, input.cardinality - static_cast<double>(*op.constant))
+                                             : input.cardinality;
     lp.columns = input.columns;
     lp.valid = true;
     return lp;

@@ -7,7 +7,7 @@ namespace eugraph {
 namespace compute {
 
 /// Return a sort-order category for a Value, following Cypher type ordering:
-///   map < node/vertex < edge < path < list < temporal < bool < string < number < NULL
+///   map < node/vertex < edge < list < path < temporal < string < bool < number < NULL
 inline int cypherTypeCategory(const Value& v) {
     return std::visit(
         [](const auto& x) -> int {
@@ -16,22 +16,24 @@ inline int cypherTypeCategory(const Value& v) {
                 return 10;
             if constexpr (std::is_same_v<T, MapValue>)
                 return 0;
-            if constexpr (std::is_same_v<T, ListValue>)
-                return 4;
-            if constexpr (std::is_same_v<T, DateTimeValue> || std::is_same_v<T, TimeValue> ||
-                          std::is_same_v<T, DurationValue>)
-                return 5;
-            if constexpr (std::is_same_v<T, bool>)
-                return 6;
-            if constexpr (std::is_same_v<T, std::string>)
-                return 7;
-            if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, double>)
-                return 8;
             if constexpr (std::is_same_v<T, VertexRef> || std::is_same_v<T, VertexValue>)
                 return 1;
             if constexpr (std::is_same_v<T, EdgeKey> || std::is_same_v<T, EdgeValue>)
                 return 2;
-            return 3; // PathTopology / PathValue
+            if constexpr (std::is_same_v<T, ListValue>)
+                return 3;
+            if constexpr (std::is_same_v<T, PathTopology> || std::is_same_v<T, PathValue>)
+                return 4;
+            if constexpr (std::is_same_v<T, DateTimeValue> || std::is_same_v<T, TimeValue> ||
+                          std::is_same_v<T, DurationValue>)
+                return 5;
+            if constexpr (std::is_same_v<T, std::string>)
+                return 6;
+            if constexpr (std::is_same_v<T, bool>)
+                return 7;
+            if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, double>)
+                return 8;
+            return 9; // unknown values sort before NULL
         },
         v);
 }

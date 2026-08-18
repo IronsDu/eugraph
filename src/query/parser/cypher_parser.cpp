@@ -227,12 +227,19 @@ static Expression hoistAtomicPredicates(Expression expr) {
 
 class AstBuilder {
 public:
+    explicit AstBuilder(antlr4::TokenStream& tokens) : tokens_(tokens) {}
+
     // 顶层入口
     std::variant<Statement, ParseError> build(AP::ScriptContext* ctx) {
         return buildQuery(ctx->query());
     }
 
 private:
+    /// Token stream of the parsed query. Used to recover the exact source
+    /// text of a projection expression (including whitespace) for implicit
+    /// RETURN / WITH column names.
+    antlr4::TokenStream& tokens_;
+
     // Tracks contexts where a bare pattern expression is a syntax error:
     // function call arguments, RETURN/WITH projection items, etc. In other
     // contexts (e.g. WHERE clause) a bare pattern is a valid pattern predicate.
@@ -1072,6 +1079,7 @@ private:
             disallow_bare_pattern_ = true;
             for (auto* item : items->projectionItem()) {
                 ReturnItem ri;
+                ri.source_text = tokens_.getText(item->expression()->getSourceInterval());
                 ri.expr = buildExpression(item->expression());
                 if (item->AS() && item->symbol())
                     ri.alias = item->symbol()->getText();
@@ -1099,6 +1107,7 @@ private:
             disallow_bare_pattern_ = true;
             for (auto* item : items->projectionItem()) {
                 ReturnItem ri;
+                ri.source_text = tokens_.getText(item->expression()->getSourceInterval());
                 ri.expr = buildExpression(item->expression());
                 if (item->AS() && item->symbol())
                     ri.alias = item->symbol()->getText();
@@ -1504,7 +1513,7 @@ std::variant<Statement, ParseError> CypherQueryParser::parse(const std::string& 
         return err;
     }
 
-    AstBuilder builder;
+    AstBuilder builder(tokens);
     try {
         return builder.build(tree);
     } catch (const std::out_of_range& e) {

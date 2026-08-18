@@ -1,12 +1,51 @@
 #include "query/physical_plan/operator/skip_physical_op.hpp"
+
 #include "query/dataset/data_chunk.hpp"
+#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/physical_plan/expression_compiler.hpp"
+
+#include <stdexcept>
 
 namespace eugraph {
 namespace compute {
 
+namespace {
+
+/// Evaluate a variable-free SKIP expression once and validate it.
+/// Parameters and constant expressions share this path so their type /
+/// sign errors surface at runtime (matching Cypher semantics), while
+/// literal validation still happens at bind time.
+int64_t evaluateSkip(const binder::BoundExpression& expr, const function::EvalContext& eval_ctx) {
+    DataChunk chunk;
+    chunk.count = 1;
+    Column result_col = Column::flat(binder::BoundTypeKind::ANY, 1);
+    VectorizedEvaluator evaluator(eval_ctx);
+    evaluator.evaluate(expr, chunk, result_col);
+    const Value& value = result_col.getValue(0);
+    if (!std::holds_alternative<int64_t>(value))
+        throw std::runtime_error("SemanticError: SKIP must be an integer");
+    int64_t skip = std::get<int64_t>(value);
+    if (skip < 0)
+        throw std::runtime_error("SemanticError: SKIP must be a non-negative integer");
+    return skip;
+}
+
+} // namespace
+
+void SkipPhysicalOp::compileExpressions(const TupleSlotLayout& input_layout) {
+    if (expr_)
+        ExpressionCompiler(input_layout).compile(*expr_);
+}
+
 folly::coro::AsyncGenerator<DataChunk> SkipPhysicalOp::executeChunk() {
+    int64_t remaining = 0;
+    if (skip_.has_value()) {
+        remaining = *skip_;
+    } else if (expr_.has_value()) {
+        remaining = evaluateSkip(*expr_, eval_ctx_);
+    }
+
     auto child_gen = child_->executeChunk();
-    int64_t remaining = skip_;
 
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();

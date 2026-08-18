@@ -359,11 +359,15 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
                 if (!val)
                     return;
-                seed = combine(seed, static_cast<uint64_t>(val->count));
+                seed = combine(seed, static_cast<uint64_t>(val->constant.value_or(-1)));
+                if (val->expr)
+                    seed = combine(seed, hashBoundExpression(*val->expr));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
                 if (!val)
                     return;
-                seed = combine(seed, static_cast<uint64_t>(val->count));
+                seed = combine(seed, static_cast<uint64_t>(val->constant.value_or(-1)));
+                if (val->expr)
+                    seed = combine(seed, hashBoundExpression(*val->expr));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
                 return;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {

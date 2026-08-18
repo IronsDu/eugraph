@@ -17,6 +17,16 @@
 namespace eugraph {
 namespace binder {
 
+/// Result of binding a SKIP / LIMIT argument.
+/// - is_constant: the value was a literal validated at compile time.
+/// - otherwise runtime_expr holds a variable-free expression (parameter or
+///   constant expression) validated for type/sign at runtime.
+struct SkipLimitValue {
+    bool is_constant = false;
+    int64_t constant = 0;
+    BoundExpression runtime_expr;
+};
+
 /// Check whether two BoundTypes are compatible when reusing a pattern variable.
 /// Graph types (VERTEX, EDGE, PATH) are mutually exclusive.
 /// Scalar types are compatible via implicit conversion.
@@ -215,7 +225,7 @@ public:
     bool registerPatternVariable(const std::string& name, BoundType type, bool as_path);
 
     // ── Helpers ──
-    std::optional<int64_t> bindSkipLimit(const cypher::Expression& expr, const char* clause_name);
+    std::optional<SkipLimitValue> bindSkipLimit(const cypher::Expression& expr, const char* clause_name);
     uint32_t nextColumnIndex() {
         return ctx_.next_column_index++;
     }
