@@ -307,14 +307,6 @@ static bool expressionReferencesAnyVariableImpl(const cypher::Expression& expr) 
         expr);
 }
 
-static std::string projectionAlias(const cypher::ReturnItem& item) {
-    if (item.alias)
-        return *item.alias;
-    if (!item.source_text.empty())
-        return item.source_text;
-    return cypher::expressionToString(item.expr);
-}
-
 /// Variant used by the in-function ReturnItemView (RETURN/WITH keep only an
 /// expression reference + alias after list-comprehension lowering).
 template <typename ItemView> static std::string projectionAliasOf(const ItemView& item) {
@@ -688,6 +680,52 @@ static bool hasRandInsideAggregate(const cypher::Expression& expr, bool inside_a
                 return hasRandInsideAggregate(ptr->operand, inside_aggregate);
             } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
                 return hasRandInsideAggregate(ptr->inner, inside_aggregate);
+            } else {
+                return false;
+            }
+        },
+        expr);
+}
+
+/// True when a list comprehension appears anywhere in the expression.
+/// List comprehensions introduce their own local variable scope; aggregates
+/// inside them are already scoped to the comprehension, so they must not be
+/// treated as ambiguous against the outer RETURN/WITH scope.
+static bool containsListComprehension(const cypher::Expression& expr);
+
+static bool containsListComprehension(const cypher::Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> bool {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if (!ptr)
+                return false;
+            if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                return true;
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    if (containsListComprehension(arg))
+                        return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                return containsListComprehension(ptr->left) || containsListComprehension(ptr->right);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                return containsListComprehension(ptr->operand);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                return containsListComprehension(ptr->inner);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                return containsListComprehension(ptr->object);
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                for (const auto& [k, v] : ptr->entries) {
+                    (void)k;
+                    if (containsListComprehension(v))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                for (const auto& e : ptr->elements)
+                    if (containsListComprehension(e))
+                        return true;
+                return false;
             } else {
                 return false;
             }
@@ -1417,6 +1455,12 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
                     continue; // simple aggregate — its arguments are aggregated
             }
             if (!hasAggregate(item.expr))
+                continue;
+            // List comprehensions introduce their own local loop variable;
+            // aggregates inside them (e.g. collect(r)) are already scoped to
+            // the comprehension and must not trigger ambiguity checks against
+            // the outer RETURN scope.
+            if (containsListComprehension(item.expr))
                 continue;
             if (isAmbiguousAggregationExpr(item.expr)) {
                 error("SyntaxError: AmbiguousAggregationExpression: expression mixes aggregate "
