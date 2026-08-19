@@ -518,9 +518,11 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
                 if (!val)
                     return;
-                for (const auto& [l, r] : val->correlation) {
-                    seed = combine(seed, l);
-                    seed = combine(seed, r);
+                for (const auto& c : val->correlation) {
+                    seed = combine(seed, c.left_slot);
+                    seed = combine(seed, c.left_column);
+                    seed = hashBytes(seed, c.left_var);
+                    seed = combine(seed, c.right_column);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
                 if (!val)

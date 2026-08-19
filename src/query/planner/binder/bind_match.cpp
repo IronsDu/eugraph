@@ -306,6 +306,30 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         // Create scan operator (or reuse parent for correlated MATCH)
         if (correlated) {
             current = std::move(*parent);
+
+            // Correlated MATCH start nodes must still satisfy their label
+            // predicates. The parent pipeline already carries the variable, so
+            // add an explicit label filter instead of a fresh LabelScan.
+            for (const auto& label_name : element.node.labels) {
+                auto var_expr = std::make_unique<cypher::Variable>();
+                var_expr->name = start_var;
+                auto fc = std::make_unique<cypher::FunctionCall>();
+                fc->name = "labels";
+                fc->args.push_back(std::move(var_expr));
+                auto lit = std::make_unique<cypher::Literal>();
+                lit->value = label_name;
+                auto in = std::make_unique<cypher::BinaryOp>();
+                in->op = cypher::BinaryOperator::IN;
+                in->left = std::move(lit);
+                in->right = std::move(fc);
+                auto pred = bindExpression(cypher::Expression(std::move(in)));
+                if (pred && current) {
+                    BoundFilterOp filter;
+                    filter.predicate = std::move(*pred);
+                    filter.child = std::move(*current);
+                    current = std::make_unique<BoundFilterOp>(std::move(filter));
+                }
+            }
         } else if (!start_labels.empty() || !element.node.labels.empty()) {
             BoundLabelScanOp scan;
             scan.variable = start_var;
@@ -1866,14 +1890,19 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
         if (start_it != bound_vars.end())
             std::iter_swap(bound_vars.begin(), start_it);
 
-        std::vector<std::pair<uint32_t, uint32_t>> correlation;
+        std::vector<BoundLeftJoinOp::Correlation> correlation;
         BoundCorrelatedSourceOp source;
         for (const auto& bound : bound_vars) {
             ColumnInfo sub_info = bound.info;
             sub_info.column_index = nextColumnIndex();
             uint32_t sub_idx = sub_info.column_index;
             ctx_.symbols[bound.name] = sub_info;
-            correlation.emplace_back(bound.info.column_index, sub_idx);
+            BoundLeftJoinOp::Correlation corr;
+            corr.left_slot = bound.info.slot_id;
+            corr.left_column = bound.info.column_index;
+            corr.left_var = bound.name;
+            corr.right_column = sub_idx;
+            correlation.push_back(std::move(corr));
             source.variables.push_back(bound.name);
             source.types.push_back(sub_info.type);
             source.column_indices.push_back(sub_idx);
@@ -1922,7 +1951,6 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
     }
 
     if (correlated) {
-        uint32_t outer_idx = outer_col->column_index;
         ColumnInfo saved_outer_info = *outer_col;
         auto saved_ctx = ctx_.save();
         ctx_.beginSubScope();
@@ -1930,8 +1958,13 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
         sub_info.column_index = nextColumnIndex();
         uint32_t sub_idx = sub_info.column_index;
         ctx_.symbols[corr_var_name] = sub_info;
-        std::vector<std::pair<uint32_t, uint32_t>> correlation;
-        correlation.emplace_back(outer_idx, sub_idx);
+        std::vector<BoundLeftJoinOp::Correlation> correlation;
+        BoundLeftJoinOp::Correlation corr;
+        corr.left_slot = outer_col->slot_id;
+        corr.left_column = outer_col->column_index;
+        corr.left_var = corr_var_name;
+        corr.right_column = sub_idx;
+        correlation.push_back(std::move(corr));
         BoundCorrelatedSourceOp source;
         source.variables.push_back(corr_var_name);
         source.types.push_back(sub_info.type);

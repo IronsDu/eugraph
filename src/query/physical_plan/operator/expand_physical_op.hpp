@@ -24,16 +24,34 @@ public:
                      IAsyncGraphDataStore& store, Schema input_schema, std::vector<binder::BoundType> output_types,
                      std::unique_ptr<PhysicalOperator> child,
                      std::unordered_map<LabelId, std::vector<uint16_t>> dst_label_prop_ids = {},
-                     std::vector<uint16_t> edge_prop_ids = {}, std::vector<LabelId> dst_label_ids = {})
+                     std::vector<uint16_t> edge_prop_ids = {}, std::vector<LabelId> dst_label_ids = {},
+                     bool dst_bound = false, bool edge_bound = false, int dst_col_idx = -1, int edge_col_idx = -1)
         : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), edge_var_(std::move(edge_var)),
           label_filters_(std::move(label_filters)), direction_(direction), store_(store),
           input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)),
           dst_label_prop_ids_(std::move(dst_label_prop_ids)), edge_prop_ids_(std::move(edge_prop_ids)),
-          dst_label_ids_(std::move(dst_label_ids)) {
+          dst_label_ids_(std::move(dst_label_ids)), dst_bound_(dst_bound), edge_bound_(edge_bound),
+          dst_col_idx_(dst_col_idx), edge_col_idx_(edge_col_idx) {
         for (size_t i = 0; i < input_schema_.size(); ++i) {
             if (input_schema_[i] == src_var_) {
                 src_col_idx_ = static_cast<int>(i);
                 break;
+            }
+        }
+        if (dst_bound_ && dst_col_idx_ < 0) {
+            for (size_t i = 0; i < input_schema_.size(); ++i) {
+                if (input_schema_[i] == dst_var_) {
+                    dst_col_idx_ = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+        if (edge_bound_ && edge_col_idx_ < 0) {
+            for (size_t i = 0; i < input_schema_.size(); ++i) {
+                if (input_schema_[i] == edge_var_) {
+                    edge_col_idx_ = static_cast<int>(i);
+                    break;
+                }
             }
         }
     }
@@ -61,6 +79,10 @@ private:
     std::unordered_map<LabelId, std::vector<uint16_t>> dst_label_prop_ids_;
     std::vector<uint16_t> edge_prop_ids_;
     std::vector<LabelId> dst_label_ids_;
+    bool dst_bound_ = false;
+    bool edge_bound_ = false;
+    int dst_col_idx_ = -1;
+    int edge_col_idx_ = -1;
 };
 
 } // namespace compute

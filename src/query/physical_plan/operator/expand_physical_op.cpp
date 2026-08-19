@@ -5,6 +5,28 @@
 namespace eugraph {
 namespace compute {
 
+namespace {
+
+VertexId vertexIdFromValue(const Value& val) {
+    if (std::holds_alternative<VertexValue>(val))
+        return std::get<VertexValue>(val).id;
+    if (std::holds_alternative<VertexRef>(val))
+        return std::get<VertexRef>(val).id;
+    if (std::holds_alternative<int64_t>(val))
+        return static_cast<VertexId>(std::get<int64_t>(val));
+    return INVALID_VERTEX_ID;
+}
+
+EdgeId edgeIdFromValue(const Value& val) {
+    if (std::holds_alternative<EdgeValue>(val))
+        return std::get<EdgeValue>(val).id;
+    if (std::holds_alternative<EdgeKey>(val))
+        return std::get<EdgeKey>(val).id;
+    return INVALID_EDGE_ID;
+}
+
+} // anonymous namespace
+
 std::string ExpandPhysicalOp::toString() const {
     std::string dir;
     switch (direction_) {
@@ -83,6 +105,16 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 auto edge_gen = store_.scanEdges(src_id, scan_dir, label_filter);
                 while (auto edge_batch = co_await edge_gen.next()) {
                     for (const auto& entry : *edge_batch) {
+                        if (dst_bound_) {
+                            const Value& bval = rows[src_row][dst_col_idx_];
+                            if (vertexIdFromValue(bval) != entry.neighbor_id)
+                                continue;
+                        }
+                        if (edge_bound_) {
+                            const Value& eval = rows[src_row][edge_col_idx_];
+                            if (edgeIdFromValue(eval) != entry.edge_id)
+                                continue;
+                        }
                         // Filter by destination vertex label constraint (e.g. (b:Person))
                         if (!dst_label_ids_.empty()) {
                             auto labels = co_await store_.getVertexLabels(entry.neighbor_id);
@@ -144,6 +176,16 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
                     while (auto edge_batch = co_await edge_gen.next()) {
                         for (const auto& entry : *edge_batch) {
+                            if (dst_bound_) {
+                                const Value& bval = rows[src_row][dst_col_idx_];
+                                if (vertexIdFromValue(bval) != entry.neighbor_id)
+                                    continue;
+                            }
+                            if (edge_bound_) {
+                                const Value& eval = rows[src_row][edge_col_idx_];
+                                if (edgeIdFromValue(eval) != entry.edge_id)
+                                    continue;
+                            }
                             if (!dst_label_ids_.empty()) {
                                 auto labels = co_await store_.getVertexLabels(entry.neighbor_id);
                                 bool ok = true;
@@ -201,16 +243,20 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             output.columns.push_back(Column::flat(output_types_[c].kind, edges.size()));
         }
 
-        // Fill new columns: edge first, then dst (matches binder column index order)
+        // Fill new columns: edge first, then dst (matches binder column index
+        // order). Bound dst/edge columns already exist in the child and are
+        // passed through, so only unbound variables are appended.
         for (size_t i = 0; i < edges.size(); ++i) {
             size_t edge_col_idx = input_cols;
-            size_t dst_col_idx = input_cols + (edge_var_.empty() ? 0 : 1);
+            size_t dst_col_idx = input_cols;
+            if (!edge_bound_ && !edge_var_.empty())
+                dst_col_idx = input_cols + 1;
 
-            if (!dst_var_.empty()) {
+            if (!dst_bound_ && !dst_var_.empty()) {
                 VertexRef dst_ref{edges[i].dst_id};
                 output.setValue(dst_col_idx, i, Value(dst_ref));
             }
-            if (!edge_var_.empty()) {
+            if (!edge_bound_ && !edge_var_.empty()) {
                 VertexId sid = INVALID_VERTEX_ID;
                 if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[edges[i].src_row].size()) {
                     const auto& val = rows[edges[i].src_row][src_col_idx_];
