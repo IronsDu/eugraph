@@ -2,6 +2,8 @@
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_call_op.hpp"
 
+#include "query/function/batch_ops.hpp"
+
 #include <spdlog/spdlog.h>
 
 #include <functional>
@@ -28,6 +30,106 @@ BoundCallOp* tryExtractCallOp(BoundLogicalOperator& op) {
 }
 
 } // namespace
+
+BoundExpression Binder::makeEqualityExpr(const BoundColumnRef& left, const BoundColumnRef& right) {
+    auto isGraphEntity = [](BoundTypeKind kind) {
+        return kind == BoundTypeKind::VERTEX || kind == BoundTypeKind::EDGE || kind == BoundTypeKind::PATH ||
+               kind == BoundTypeKind::VERTEX_REF || kind == BoundTypeKind::EDGE_KEY ||
+               kind == BoundTypeKind::PATH_TOPOLOGY;
+    };
+
+    auto bin = std::make_unique<BoundBinaryOp>();
+    bin->op = cypher::BinaryOperator::EQ;
+    bin->result_type = BoundType::Bool();
+
+    if (isGraphEntity(left.type.kind) || isGraphEntity(right.type.kind)) {
+        auto wrapId = [&](const BoundColumnRef& ref) -> BoundExpression {
+            const function::FunctionDef* def = func_registry_.lookup("id", {ref.type});
+            if (!def) {
+                spdlog::warn("[binder] no id() overload for type {}; falling back to direct equality",
+                             ref.type.toString());
+                return BoundExpression(ref);
+            }
+            auto call = std::make_unique<BoundFunctionCall>();
+            call->func_def = def;
+            call->args.push_back(ref);
+            call->return_type = BoundType::Int64();
+            return BoundExpression(std::move(call));
+        };
+        bin->left = wrapId(left);
+        bin->right = wrapId(right);
+        bin->batch_fn =
+            function::resolveBinaryBatchFn(cypher::BinaryOperator::EQ, BoundTypeKind::INT64, BoundTypeKind::INT64);
+    } else {
+        bin->left = BoundExpression(left);
+        bin->right = BoundExpression(right);
+        bin->batch_fn = function::resolveBinaryBatchFn(cypher::BinaryOperator::EQ, left.type.kind, right.type.kind);
+    }
+    return BoundExpression(std::move(bin));
+}
+
+std::optional<BoundLogicalOperator> Binder::bindCrossWithEqualities(BoundLogicalOperator left,
+                                                                    BoundLogicalOperator right,
+                                                                    const BindContext::Snapshot& left_scope,
+                                                                    const BindContext::Snapshot& right_scope) {
+    std::vector<BoundExpression> equalities;
+    for (const auto& [name, right_info] : right_scope.symbols) {
+        auto left_it = left_scope.symbols.find(name);
+        if (left_it == left_scope.symbols.end())
+            continue;
+        const ColumnInfo& left_info = left_it->second;
+
+        bool left_graph = left_info.type.kind == BoundTypeKind::VERTEX || left_info.type.kind == BoundTypeKind::EDGE ||
+                          left_info.type.kind == BoundTypeKind::VERTEX_REF ||
+                          left_info.type.kind == BoundTypeKind::EDGE_KEY;
+        bool right_graph =
+            right_info.type.kind == BoundTypeKind::VERTEX || right_info.type.kind == BoundTypeKind::EDGE ||
+            right_info.type.kind == BoundTypeKind::VERTEX_REF || right_info.type.kind == BoundTypeKind::EDGE_KEY;
+        if (!left_graph && !right_graph && left_info.type.kind != right_info.type.kind) {
+            error("VariableTypeConflict: variable '" + name + "' has type " + left_info.type.toString() +
+                  " on the left and " + right_info.type.toString() + " on the right");
+            return std::nullopt;
+        }
+
+        BoundColumnRef left_ref{left_info.column_index, left_info.type, name, left_info.slot_id};
+        BoundColumnRef right_ref{right_info.column_index + left_scope.next_column_index, right_info.type,
+                                 left_graph || right_graph ? "" : name, right_info.slot_id};
+        equalities.push_back(makeEqualityExpr(left_ref, right_ref));
+    }
+
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = std::move(left);
+    join->right = std::move(right);
+
+    BoundLogicalOperator result = std::move(join);
+    if (equalities.empty())
+        return result;
+
+    BoundExpression predicate;
+    if (equalities.size() == 1) {
+        predicate = std::move(equalities.front());
+    } else {
+        // Fold into a left-deep AND chain.
+        BoundExpression acc = std::move(equalities.front());
+        for (size_t i = 1; i < equalities.size(); ++i) {
+            auto and_op = std::make_unique<BoundBinaryOp>();
+            and_op->op = cypher::BinaryOperator::AND;
+            and_op->left = std::move(acc);
+            and_op->right = std::move(equalities[i]);
+            and_op->result_type = BoundType::Bool();
+            and_op->batch_fn =
+                function::resolveBinaryBatchFn(cypher::BinaryOperator::AND, BoundTypeKind::BOOL, BoundTypeKind::BOOL);
+            acc = BoundExpression(std::move(and_op));
+        }
+        predicate = std::move(acc);
+    }
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = std::move(predicate);
+    filter->child = std::move(result);
+    return BoundLogicalOperator(std::move(filter));
+}
 
 void Binder::registerColumn(const std::string& name, BoundType type) {
     uint32_t idx = static_cast<uint32_t>(ctx_.symbols.size());
@@ -215,16 +317,32 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
                     if (needs_cross) {
                         auto left = std::move(*current);
+                        BindContext::Snapshot left_scope = ctx_.save();
+
+                        ctx_.beginSubScope();
                         auto right = bindMatch(*ptr, std::nullopt, /*skip_where=*/true);
                         if (!right)
                             return std::nullopt;
+                        BindContext::Snapshot right_scope = ctx_.save();
+                        ctx_.restore(left_scope);
 
-                        auto join = std::make_unique<BoundBinaryJoinOp>();
-                        join->join_type = JoinType::Cross;
-                        join->left = std::move(left);
-                        join->right = std::move(*right);
+                        // Merge right-only variables into the outer scope with
+                        // a column offset. Same-named variables keep the left
+                        // (outer) column as the canonical one.
+                        for (const auto& [name, info] : right_scope.symbols) {
+                            if (!ctx_.lookup(name)) {
+                                ColumnInfo merged = info;
+                                merged.column_index += left_scope.next_column_index;
+                                ctx_.symbols[name] = std::move(merged);
+                            }
+                        }
+                        ctx_.next_column_index = left_scope.next_column_index + right_scope.next_column_index;
 
-                        BoundLogicalOperator result = std::move(join);
+                        auto joined =
+                            bindCrossWithEqualities(std::move(left), std::move(*right), left_scope, right_scope);
+                        if (!joined)
+                            return std::nullopt;
+                        BoundLogicalOperator result = std::move(*joined);
 
                         if (ptr->where_pred) {
                             auto where_op = bindWhere(*ptr->where_pred, std::move(result));
