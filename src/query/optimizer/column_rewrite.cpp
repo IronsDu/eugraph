@@ -409,8 +409,12 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                 if (v)
                     allocateSlotsInOp(v->child, name_to_slot, alloc);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>>) {
-                if (v)
+                if (v) {
+                    for (const auto& t : v->targets)
+                        if (t.expr)
+                            ensureSlotsInExpr(*t.expr, name_to_slot, alloc);
                     allocateSlotsInOp(v->child, name_to_slot, alloc);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>>) {
                 if (v) {
                     for (const auto& [pn, e] : v->start_pending_props)
@@ -786,7 +790,9 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>>) {
                 if (v) {
                     for (const auto& t : v->targets) {
-                        if (!t.variable_name.empty()) {
+                        if (t.expr) {
+                            collectExprReqs(*t.expr, reqs, resolver);
+                        } else if (!t.variable_name.empty()) {
                             binder::SlotId canon = resolver.canonicalForName(t.variable_name);
                             if (canon != binder::INVALID_SLOT_ID) {
                                 if (t.kind == binder::BoundDeleteOp::TargetKind::EDGE)
@@ -1187,6 +1193,12 @@ void rewriteOp(binder::BoundLogicalOperator& op, const PEPlans& plans, const Slo
                         rewriteExpr(e, plans, resolver);
                     for (auto& [pn, e] : v->pending_props)
                         rewriteExpr(e, plans, resolver);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>>) {
+                if (v) {
+                    for (auto& t : v->targets)
+                        if (t.expr)
+                            rewriteExpr(*t.expr, plans, resolver);
                 }
             }
             // Write ops (Remove/Delete) and pure-passthrough ops

@@ -1768,11 +1768,15 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     std::vector<DeletePhysicalOp::DeleteTarget> targets;
                     for (auto& dt : v.targets) {
                         DeletePhysicalOp::DeleteTarget target;
-                        target.kind = (dt.kind == binder::BoundDeleteOp::TargetKind::VERTEX)
-                                          ? DeletePhysicalOp::TargetKind::VERTEX
-                                          : DeletePhysicalOp::TargetKind::EDGE;
-                        target.var_name = dt.variable_name;
-                        target.object_col = resolveMutationColumn(ctx, cr.slot_layout, dt.variable_name);
+                        if (dt.kind) {
+                            target.kind = (*dt.kind == binder::BoundDeleteOp::TargetKind::VERTEX)
+                                              ? DeletePhysicalOp::TargetKind::VERTEX
+                                              : DeletePhysicalOp::TargetKind::EDGE;
+                            target.var_name = dt.variable_name;
+                            target.object_col = resolveMutationColumn(ctx, cr.slot_layout, dt.variable_name);
+                        } else {
+                            target.expr = std::move(dt.expr);
+                        }
                         targets.push_back(std::move(target));
                     }
 

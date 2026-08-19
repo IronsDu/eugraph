@@ -352,6 +352,9 @@ VarRequirements collectOpRequirements(const binder::BoundLogicalOperator& op, co
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>>) {
                 if (!val)
                     return;
+                for (const auto& t : val->targets)
+                    if (t.expr)
+                        collectExprRequirements(*t.expr, dst, catalog);
                 mergeVarRequirements(dst, collectOpRequirements(val->child, catalog));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMergeOp>>) {
                 if (!val)

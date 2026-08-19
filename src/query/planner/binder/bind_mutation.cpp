@@ -3,12 +3,18 @@
 #include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
 
 #include <spdlog/spdlog.h>
+
+#include <algorithm>
+#include <cctype>
 #include <unordered_set>
 
 namespace eugraph {
 namespace binder {
 
 namespace {
+
+/// Forward declaration; definition lives at the end of the file.
+bool isDeleteLabelPredicate(const cypher::Expression& expr);
 
 /// Bind inline properties for a multi-label CREATE node.
 /// Returns (label_properties, pending_props). Sets error_out on ambiguous property names.
@@ -511,45 +517,71 @@ std::optional<BoundLogicalOperator> Binder::bindDelete(const cypher::DeleteClaus
     auto del_op = std::make_unique<BoundDeleteOp>();
     del_op->detach = del.detach;
 
+    auto isDeleteAllowedType = [](BoundTypeKind kind) {
+        return kind == BoundTypeKind::VERTEX || kind == BoundTypeKind::EDGE || kind == BoundTypeKind::PATH ||
+               kind == BoundTypeKind::LIST || kind == BoundTypeKind::MAP || kind == BoundTypeKind::ANY ||
+               kind == BoundTypeKind::VERTEX_REF || kind == BoundTypeKind::EDGE_KEY ||
+               kind == BoundTypeKind::PATH_TOPOLOGY;
+    };
+
     for (const auto& expr : del.expressions) {
         BoundDeleteOp::DeleteTarget target;
 
-        // Resolve expression to variable: only simple variables are valid DELETE targets
-        std::string var_name;
-        std::visit(
-            [&](const auto& ptr) {
-                using Elem = typename std::decay_t<decltype(ptr)>::element_type;
-                if constexpr (std::is_same_v<Elem, cypher::Variable>) {
-                    var_name = ptr->name;
-                }
-            },
-            expr);
+        // Simple variable fast path: DELETE n / DELETE r. The physical
+        // planner resolves these to the constructed VertexValue/EdgeValue
+        // column, which is cheaper than evaluating an expression per row.
+        if (auto* var = std::get_if<std::unique_ptr<cypher::Variable>>(&expr)) {
+            if (!var || !*var)
+                continue;
+            const std::string& var_name = (*var)->name;
+            auto* col = ctx_.lookup(var_name);
+            if (!col) {
+                error("UndefinedVariable: variable '" + var_name + "' not defined");
+                continue;
+            }
+            switch (col->type.kind) {
+            case BoundTypeKind::VERTEX:
+                target.kind = BoundDeleteOp::TargetKind::VERTEX;
+                target.variable_name = var_name;
+                del_op->targets.push_back(std::move(target));
+                continue;
+            case BoundTypeKind::EDGE:
+                target.kind = BoundDeleteOp::TargetKind::EDGE;
+                target.variable_name = var_name;
+                del_op->targets.push_back(std::move(target));
+                continue;
+            case BoundTypeKind::PATH:
+            case BoundTypeKind::PATH_TOPOLOGY:
+            case BoundTypeKind::LIST:
+            case BoundTypeKind::MAP:
+            case BoundTypeKind::ANY:
+                // Path variables and entity collections must go through the
+                // expression path so the physical operator can expand them.
+                target.expr = BoundColumnRef(col->column_index, col->type, var_name, col->slot_id);
+                del_op->targets.push_back(std::move(target));
+                continue;
+            default:
+                error("SyntaxError: InvalidArgumentType: DELETE expression must evaluate to a node, "
+                      "relationship, path, list, or map");
+                continue;
+            }
+        }
 
-        if (var_name.empty()) {
-            error("InvalidDelete: DELETE requires variable references, not expressions");
+        if (isDeleteLabelPredicate(expr)) {
+            error("InvalidDelete: DELETE does not accept label or relationship type predicates");
             continue;
         }
 
-        // Validate the variable exists and determine its type
-        auto* col = ctx_.lookup(var_name);
-        if (!col) {
-            error("UndefinedVariable: variable '" + var_name + "' not defined");
+        auto bound = bindExpression(expr);
+        if (!bound)
+            continue;
+        BoundType type = getBoundExprType(*bound);
+        if (!isDeleteAllowedType(type.kind)) {
+            error("SyntaxError: InvalidArgumentType: DELETE expression must evaluate to a node, "
+                  "relationship, path, list, or map");
             continue;
         }
-
-        switch (col->type.kind) {
-        case BoundTypeKind::VERTEX:
-            target.kind = BoundDeleteOp::TargetKind::VERTEX;
-            break;
-        case BoundTypeKind::EDGE:
-            target.kind = BoundDeleteOp::TargetKind::EDGE;
-            break;
-        default:
-            error("DELETE: variable '" + var_name + "' is not a vertex or edge");
-            continue;
-        }
-
-        target.variable_name = var_name;
+        target.expr = std::move(*bound);
         del_op->targets.push_back(std::move(target));
     }
 
@@ -592,6 +624,32 @@ std::optional<BoundLogicalOperator> Binder::bindUnwind(const cypher::UnwindClaus
     unwind_op->child = std::move(*child);
     return unwind_op;
 }
+
+namespace {
+
+/// Detect parser-produced label/type predicate used as a DELETE target,
+/// e.g. `DELETE n:Person` or `DELETE r:T`. These are represented as
+/// `IN('Label', labels(n))` / `IN('T', type(r))` and must be rejected as
+/// InvalidDelete rather than InvalidArgumentType.
+bool isDeleteLabelPredicate(const cypher::Expression& expr) {
+    const auto* bin = std::get_if<std::unique_ptr<cypher::BinaryOp>>(&expr);
+    if (!bin || !*bin || (*bin)->op != cypher::BinaryOperator::IN)
+        return false;
+    if (!std::holds_alternative<std::unique_ptr<cypher::Literal>>((*bin)->left))
+        return false;
+    const auto& lit = std::get<std::unique_ptr<cypher::Literal>>((*bin)->left);
+    if (!lit || !std::holds_alternative<std::string>(lit->value))
+        return false;
+    const auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&(*bin)->right);
+    if (!fc || !*fc)
+        return false;
+    std::string lower = (*fc)->name;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lower == "labels" || lower == "type";
+}
+
+} // namespace
 
 } // namespace binder
 } // namespace eugraph
