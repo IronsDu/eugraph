@@ -2057,34 +2057,36 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     BoundLogicalOperator current;
 
     if (has_aggregate) {
-        // Build the set of grouping key expressions (items without aggregate).
-        std::set<std::string> grouping_key_strs;
-        for (const auto& item : items) {
-            if (!hasAggregate(item.expr))
-                grouping_key_strs.insert(cypher::expressionToString(item.expr));
-        }
-
         // Check for AmbiguousAggregationExpression (With6 [8][9]):
         // expressions that mix aggregate with non-aggregate operands
         // that are NOT already established as grouping keys.
+        std::set<std::string> grouping_vars;
+        for (const auto& item : items) {
+            if (!hasAggregate(item.expr))
+                collectAllVariables(item.expr, grouping_vars);
+        }
         for (const auto& item : items) {
             if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&item.expr)) {
                 if (fc && *fc && isAggregateFunctionName((*fc)->name))
                     continue; // simple aggregate — ok
             }
             // List comprehension wraps its internal aggregate — valid.
-            if (std::holds_alternative<std::unique_ptr<cypher::ListComprehension>>(item.expr))
+            if (containsListComprehension(item.expr))
                 continue;
             if (hasAggregate(item.expr)) {
-                // Gather all variables in the expression, then check whether
-                // any non-aggregate-path variable is NOT a grouping key.
-                // Variables that appear only inside aggregate function
-                // arguments are fine (they are aggregated).
+                if (isAmbiguousAggregationExpr(item.expr)) {
+                    error("SyntaxError: AmbiguousAggregationExpression: expression mixes "
+                          "aggregate and non-aggregate operations");
+                    return std::nullopt;
+                }
+                // Gather all variables outside aggregate calls and check they
+                // are covered by grouping-key variables. A grouping key is a
+                // property expression (`me.age`), so compare variable sets
+                // rather than exact expression strings.
                 std::set<std::string> non_agg_vars;
-                collectNonAggregateVariables(item.expr, non_agg_vars, grouping_key_strs);
-                // Check each non-aggregate variable against grouping keys.
+                collectNonAggregateVariables(item.expr, non_agg_vars, {});
                 for (const auto& v : non_agg_vars) {
-                    if (!grouping_key_strs.count(v)) {
+                    if (!grouping_vars.count(v)) {
                         error("SyntaxError: AmbiguousAggregationExpression: expression mixes "
                               "aggregate and non-aggregate operations");
                         return std::nullopt;
