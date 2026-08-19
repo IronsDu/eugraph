@@ -6,10 +6,9 @@
 
 ## 〇、Review 修订记录
 
-- v1 初版把 `BoundJoinEquality` 设计为“左右 `BoundColumnRef` 成员”，review 发现这会绕过 DPL 的 slot 分配 / 表达式重写，导致列偏移再次失效。修订为**保存完整 `BoundExpression` 谓词**。
-- v1 未明确多 pattern part 的右侧作用域隔离方式；v2 补充。
-- v1 未明确“bindMatch 中 parent 存在但起点未绑定”这一路径的输出列规范；v2 补充并给出回归风险。
-- v1 未列出 DPL 各 pass 的接入点；v2 补齐。
+- v1：把等值约束作为左右 `BoundColumnRef` 存进 Join；问题：绕开 DPL。
+- v2：改为在 Join 上存 `BoundExpression` 谓词；问题：Join 职责膨胀、planner 需要新概念、三个 Binder 调用点重复、优化器/DPL 需要多处特判。
+- v3（当前）：**移除 Join 上的等值约束字段**。Binder 直接把等值谓词降级为显式 `BoundFilterOp` 放在 CrossProduct 之上；所有下游模块只看到统一的 Filter 语义。
 
 ---
 
@@ -58,151 +57,141 @@ CrossProduct(left=WITH 输出, right=独立 MATCH)
 
 ## 二、设计目标
 
-1. 每个 CrossProduct / LeftJoin 的左右子计划在**独立作用域**中绑定；
-2. 两侧同名变量通过**显式等值谓词**连接；
-3. 实体等值谓词通过 `id()` 比较 ID；
-4. 等值谓词是普通 `BoundExpression`，完整接入现有 SlotId / ProjectionExtract / rewriteColumnIndices 流程；
-5. 下游 `RETURN/WITH` 只看到**唯一**的规范列（同名变量取左/外层列）。
+1. **职责单一**：逻辑算子树只包含标准算子（Scan/Expand/Join/Filter/Project...），不新增“带条件的 Join”这种复合算子；
+2. **机制唯一**：跨作用域同名变量等值只由**一种 helper** 生成，任何调用点不得手写；
+3. **实体等值正确**：跨列实体比较统一走 `id()`；
+4. **作用域显式**：右侧独立绑定，快照/恢复/合并由 helper 封装；
+5. **列规范显式**：同名变量以左/外层列为规范列，右列作为内部列不暴露。
 
 ---
 
-## 三、设计
+## 三、模块职责
 
-### 3.1 新增逻辑结构：`BoundJoinEquality`
+| 模块 | 职责 | 不负责 |
+|------|------|--------|
+| `Binder` | 解析作用域、生成逻辑算子树（含显式 Filter） | 不决定物理列布局 |
+| `Optimizer` | 对标准逻辑算子做规则改写 | 不感知“等值约束”新概念 |
+| `PhysicalPlanner` | 把标准逻辑算子映射成物理算子 | 不重新构造任何谓词 |
+| `column_rewrite / DPL` | 遍历标准表达式树分配 slot、改写列引用 | 不新增 Join equalities 分支 |
 
-`bound_binary_join_op.hpp` 中新增：
+---
+
+## 四、设计
+
+### 4.1 逻辑结构：等值谓词 = 显式 `BoundFilterOp`
+
+**不修改 `BoundBinaryJoinOp` 的数据结构。**
+
+Binder 生成如下逻辑树：
+
+```
+BoundFilterOp(predicate = AND(eq1, eq2, ...))
+└── BoundBinaryJoinOp(Cross)
+    ├── left  = WITH 输出
+    └── right = 独立 MATCH
+```
+
+其中每个 `eq` 是普通 `BoundExpression`：
+
+- 图实体：`id(BoundColumnRef(left)) = id(BoundColumnRef(right))`
+- 标量：`BoundColumnRef(left) = BoundColumnRef(right)`
+
+收益：
+
+- Optimizer 按普通 Filter 处理（FilterPushdown 只会处理普通谓词）；
+- DPL 按普通表达式处理，无需改 Join 遍历；
+- PhysicalPlanner 直接复用 `BoundFilterOp` 分支，无新增概念；
+- `operator_eq/hash/memo/remap` 全部无需为 Join 加 equalities 分支。
+
+### 4.2 Binder helper：`bindCrossWithEqualities`
+
+新增唯一入口（内部静态 helper）：
 
 ```cpp
-#include "query/planner/bound_expression/bound_expression.hpp" // 完整类型
-
-struct BoundJoinEquality {
-    /// 同名变量，仅用于诊断和 canonical 列选择。
-    std::string var_name;
-    /// 已绑定的完整等值谓词。Binder 生成：
-    ///   - 图实体：id(left_ref) = id(right_ref)
-    ///   - 标量：  left_ref = right_ref
-    /// left_ref.column_index 使用左列号；
-    /// right_ref.column_index 在 Binder 中已加上左列数（右局部列 + left_cols）。
-    BoundExpression predicate;
+struct CrossJoinBindResult {
+    BoundLogicalOperator plan; // Filter(CrossProduct) 或 CrossProduct
 };
+
+std::optional<CrossJoinBindResult> bindCrossWithEqualities(
+    BoundLogicalOperator left,
+    BoundLogicalOperator right,
+    const BindContext::Snapshot& left_scope,
+    const BindContext::Snapshot& right_scope);
 ```
 
-`BoundBinaryJoinOp` 增加：
+语义：
 
-```cpp
-std::vector<BoundJoinEquality> equalities;
-```
+1. 收集 `left_scope.symbols` 与 `right_scope.symbols` 中的同名变量；
+2. 对每个同名变量：
+   - 类型兼容 → 生成 `eq`；
+   - 类型不兼容 → 报 `VariableTypeConflict`（不静默跳过）；
+3. 将多个 `eq` AND 成一个谓词（只有一个时直接用）；
+4. 生成 `BoundFilterOp(predicate, child=BoundBinaryJoinOp(Cross, left, right))`；
+5. 调用方继续在该 Filter 之上绑定 WHERE/RETURN。
 
-`BoundLeftJoinOp` 暂不改变 correlation 语义。
+### 4.3 `bindSingleQuery` 的 `needs_cross` 分支
 
-**为什么不是左右 `BoundColumnRef` 成员**：如果只存 refs，物理 planner 需要重新构造谓词，会绕开 `column_rewrite` 的 slot 分配与表达式重写；一旦 PE 在 Join 之上追加列，refs 的物理列号又会错位。
+1. `auto left = std::move(*current);`
+2. `auto left_scope = ctx_.save();`
+3. `ctx_.beginSubScope();`
+4. `right = bindMatch(match, std::nullopt, /*skip_where=*/true);`
+5. `auto right_scope = ctx_.save();`
+6. `ctx_.restore(left_scope);`
+7. 合并右新变量：
+   - 仅当变量名不在 left 符号表中时：`column_index += left_scope.next_column_index`，写入 `ctx_.symbols`；
+   - `ctx_.next_column_index = left_scope.next_column_index + right_scope.next_column_index`；
+8. `result = bindCrossWithEqualities(left, right, left_scope, right_scope)`；
+9. 若 MATCH 有 WHERE，在 `result.plan` 之上绑定 WHERE。
 
-### 3.2 Binder：独立作用域绑定右子计划
+### 4.4 `bindMatch` 多 pattern part
 
-`bindSingleQuery` 的 `needs_cross` 分支：
+对 `pi > 0` 的每个 pattern part：
 
-1. `auto saved = ctx_.save();`
-2. `ctx_.beginSubScope();`（清空符号，`next_column_index = 0`）
-3. `right = bindMatch(match, std::nullopt, /*skip_where=*/true)`；
-4. 保存 `right_symbols = ctx_.symbols`、`right_cols = ctx_.next_column_index`；
-5. `ctx_.restore(saved)`；
-6. 对 `right_symbols` 中**只出现在右侧**的变量：
-   - `column_index += saved.next_column_index`（左列数）；
-   - 写入 `ctx_.symbols`；
-   - 同名变量不覆盖左列，保留左列为规范列；
-7. `ctx_.next_column_index = saved.next_column_index + right_cols`；
-8. 构造 `BoundBinaryJoinOp(left, right)`；
-9. 对每个同时出现在 `saved.symbols` 和 `right_symbols` 的变量：
-   - 类型相同才加入 `equalities`；
-   - `left_ref = BoundColumnRef(saved_col.column_index, saved_col.type, name, saved_col.slot_id)`；
-   - `right_ref = BoundColumnRef(right_col.column_index + saved.next_column_index, right_col.type, name, right_col.slot_id)`；
-   - 若类型为图实体/拓扑形态，`predicate = makeEntityEquality(left_ref, right_ref)`；
-   - 否则 `predicate = makeScalarEquality(left_ref, right_ref)`；
-10. 如果 MATCH 有 WHERE，WHERE 在等值谓词**之上**绑定。
+1. `left_scope = ctx_.save()`（此时符号表 = 前序 pattern 的合并结果）；
+2. `ctx_.beginSubScope()` 后绑定当前 part；
+3. `right_scope = ctx_.save()`；
+4. `ctx_.restore(left_scope)`；
+5. 合并右新变量（同 4.3 的规则）；
+6. `previous = bindCrossWithEqualities(previous, current_part, left_scope, right_scope).plan`。
 
-### 3.3 Binder：多 pattern part 之间
+`pi == 0` 的 parent 路径不调用该 helper，避免重复约束。
 
-`bindMatch` 中，对每个 pattern part（`pi > 0`）与 `previous` 构造 CrossProduct 前：
+### 4.5 `bindOptionalMatch` 非起点绑定变量
 
-1. 保存 `part_saved = ctx_.save()`（包含上一 part 的符号表）；
-2. `ctx_.beginSubScope()` 后绑定当前 pattern part；
-3. 记录 `part_right_symbols`；
-4. `ctx_.restore(part_saved)`；
-5. 右侧新变量 `column_index += part_saved.next_column_index` 后合并；
-6. 对左右同名变量按 3.2 生成 equalities，挂到本次 CrossProduct；
-7. 最后 `previous` 与当前 part 构造 CrossProduct。
-
-注意：`pi == 0` 的 parent 路径不重复加约束；parent 已经在 pipeline 中。
-
-### 3.4 Binder：OPTIONAL MATCH 非起点绑定变量
-
-`bindOptionalMatch` 中，当 `bound_vars` 非空但 pattern 起点未绑定时：
+当 `bound_vars` 非空、pattern 起点未绑定时：
 
 1. `ctx_.beginSubScope()`；
-2. 为每个 `bound_vars` 创建 `BoundCorrelatedSourceOp` 列（列号从 0 开始）；
-3. 以该 source 作为 parent 调 `bindMatch(match, parent, ...)`；
-4. `bindMatch` 必须支持“parent 存在但起点未绑定”：
+2. 为每个 `bound_vars` 创建 `BoundCorrelatedSourceOp` 列；
+3. 以该 source 作为 parent 调 `bindMatch`；
+4. `bindMatch` 支持“parent 存在但起点未绑定”：
    - 起点按普通 Scan 绑定；
-   - 在 `pi == 0` 时构造 `CrossProduct(parent, start_scan)`；
+   - 仅 `pi == 0` 时构造 `CrossProduct(parent, start_scan)`；
    - 后续 hop 通过 Expand/VarLenExpand 的 bound filter 生效；
-   - 绑定变量在合并后输出中仍以 parent 列为规范列，不能新追加同名列；
-5. `left_join.correlation` 继续使用 SlotId 解析（已实现）。
+   - parent 中的绑定变量在 CrossProduct 后保持原 SlotId，不新增同名列；
+5. `left_join.correlation` 继续使用现有 SlotId 解析。
 
-**回归风险提示**：这一步曾出现过“行数正确但 RETURN 输出成顶点”的问题，根因是 CrossProduct 后规范列选择与 DPL 重写不一致。实现时必须保证：
-- 绑定变量在 CrossProduct 合并后仍使用 parent 的 SlotId；
-- 下游 RETURN 表达式解析到该 SlotId；
-- 新增列不覆盖同名 parent 列。
+**回归风险**：实现时重点验证 `RETURN` 对绑定变量的解析，确保它指向 parent 列而非右侧新列。
 
-### 3.5 物理计划：等值谓词落地
-
-`planBoundOperator(BoundBinaryJoinOp)`：
-
-1. 先规划左右子计划（现有逻辑）；
-2. 若 `v.equalities` 非空：
-   - 把所有 `predicate` AND 成一个 `BoundBinaryOp`（或逐个 Filter）；
-   - 在 CrossProduct 之上插入 `FilterPhysicalOp`；
-   - Filter 的输入 layout 是合并后的 layout；
-3. `compileOperatorTree` 会通过 ExpressionCompiler 将谓词中的 slot 解析为物理列；
-4. 输出 schema 使用现有 CrossProduct schema（左列 + 右列），SlotLayout 合并。
-
-**不要在物理 planner 重新构造谓词**；谓词在 Binder 中已完成类型解析和 batch_fn 解析，planner 只负责把它放进 Filter。
-
-### 3.6 实体 ID 比较辅助函数
-
-Binder 中新增：
+### 4.6 实体 ID 比较辅助函数
 
 ```cpp
 BoundExpression makeEntityEquality(const BoundColumnRef& left,
                                   const BoundColumnRef& right);
 ```
 
-- 内部使用 `FunctionRegistry::lookup("id", {ref.type})` 构造 `BoundFunctionCall`；
-- `id()` 已注册：VERTEX / VERTEX_REF / EDGE / EDGE_KEY；
-- 若 `lookup` 返回 nullptr，回退为 `left = right` 并记录 warning（防止崩溃）；
-- batch_fn 使用 `resolveBinaryBatchFn(EQ, INT64, INT64)`。
+- 使用 `FunctionRegistry::lookup("id", {ref.type})`；
+- 若 lookup 返回 nullptr：回退 `left = right` 并打 warning；
+- batch_fn = `resolveBinaryBatchFn(EQ, INT64, INT64)`。
 
 ---
 
-## 四、DPL / Optimizer 接入点
+## 五、优化器不变量
 
-新增 equalities 后，以下 pass 必须同步更新：
-
-| Pass | 位置 | 行为 |
-|------|------|------|
-| `allocateSlotsInOp` | `column_rewrite.cpp` | 对每个 equality 的 `predicate` 调 `ensureSlotsInExpr`，再递归 children |
-| `collectOpReqs` | `column_rewrite.cpp` / `requirement_collector.cpp` | 对每个 predicate 收集需求（当前是 id 函数/列引用，通常无属性需求，但不能漏） |
-| `rewriteOp` | `column_rewrite.cpp` | 对每个 predicate 调 `rewriteExpr` |
-| `memo.cpp` | BoundBinaryJoinOp 克隆 | `cloneBoundExpression` 深拷贝 predicate |
-| `operator_eq.cpp` / `operator_hash.cpp` | Join 相等性/哈希 | 用 `equalBoundExpression` / `hashBoundExpression` 处理 predicate |
-| `remapLogicalOpColumnIndices` | `physical_planner.cpp` | **不 remap equalities**（列号已在 Binder 中按合并布局设置） |
-
----
-
-## 五、列规范与作用域规则
-
-- 同名变量在 CrossProduct 后**以左列（外层列）为规范列**。
-- `ctx_.symbols` 中同名变量不覆盖；右列只用于等值谓词，不作为下游解析目标。
-- `BoundColumnRef` 仍携带 `slot_id`，由 ExpressionCompiler 在物理算子 init 时解析为最终物理列。
+1. **跨 Join 谓词不得下推**：等值 Filter 的谓词同时引用左右两侧列，FilterPushdown 必须保持它位于 Join 之上。
+   - 现有 pushdown 规则若只处理单侧引用，需要增加 guard；
+   - 或者等值 Filter 使用 `BoundFilterOp` 并在 optimizer 规则中标记不可下推（若该规则已存在，直接复用）。
+2. **右列是内部列**：右侧同名列仅服务于等值谓词，不进入 `ctx_.symbols` 的规范列；`RETURN *`/`WITH *` 只看到规范列。
+3. **SlotId 稳定**：右侧变量在独立作用域中获得新 SlotId；合并后其右列物理位置由 ExpressionCompiler 解析，Binder 不写死物理列号。
 
 ---
 
@@ -210,15 +199,14 @@ BoundExpression makeEntityEquality(const BoundColumnRef& left,
 
 1. 单测：
    - `MATCH ()-[r1]->(:X) WITH r1 AS r2 MATCH ()-[r2]->() RETURN r2 AS rel` → 2 行 `[:T1]`, `[:T2]`；
-   - `MATCH ()-[r1]->(:X) WITH r1 AS r2, count(*) AS c MATCH ()-[r2]->() RETURN r2` → 行为与 With6[2] 一致；
+   - `MATCH ()-[r1]->(:X) WITH r1 AS r2, count(*) AS c MATCH ()-[r2]->() RETURN r2` → With6[2] 语义；
    - `MATCH (a {name:'A'}), (b {name:'B'}), (c {name:'C'}) MATCH (a)-->(x), (b)-->(x), (c)-->(x) RETURN x` → 2 行；
    - `OPTIONAL MATCH (x)-->(b)`（b 已绑定）→ 正确返回匹配行；
-   - `MATCH ()-[r2]->() WITH r2` 等标量同名列场景。
+   - 同名变量类型冲突 → `VariableTypeConflict`。
 2. TCK：
    - `clauses/with`（当前 2 失败 → 预期 0）
    - `clauses/match`（当前 13 失败 → 预期显著下降）
-   - `clauses/match-where`、`clauses/delete`（回归）
-   - `expressions/list`（List12 回归）
+   - `clauses/match-where`、`clauses/delete`、`expressions/list`（回归）
 
 ---
 
@@ -226,8 +214,9 @@ BoundExpression makeEntityEquality(const BoundColumnRef& left,
 
 - 不重写 ColumnResolver；
 - 不改变 ProjectionExtract 的追加列模型；
-- 不引入新的运行时 Join 算子；
-- 不在物理算子里用变量名字符串做热路径比较。
+- 不新增运行时 Join 算子；
+- 不在物理算子里用变量名字符串做热路径比较；
+- 不修改 `BoundBinaryJoinOp` 的数据结构。
 
 ---
 
@@ -235,12 +224,9 @@ BoundExpression makeEntityEquality(const BoundColumnRef& left,
 
 | 文件 | 变更 |
 |------|------|
-| `src/query/planner/binder/binder.cpp` | needs_cross 独立作用域 + equalities 生成 |
-| `src/query/planner/binder/bind_match.cpp` | 多 pattern part 等值约束 + OPTIONAL 非起点绑定 + parent 未绑定起点路径 |
-| `src/query/planner/binder/bind_return.cpp` | `makeEntityEquality` / `makeScalarEquality` helper（或独立 helper 文件） |
-| `src/query/planner/logical_plan/operator/bound_binary_join_op.hpp` | 新增 `BoundJoinEquality` 与 equalities 字段 |
-| `src/query/planner/logical_plan/operator/bound_left_join_op.hpp` | 不变 |
-| `src/query/physical_plan/physical_planner.cpp` | equalities 落地为 Filter |
-| `src/query/optimizer/column_rewrite.cpp` | DPL 三个 pass 接入 equalities |
-| `src/query/optimizer/requirement_collector.cpp` | equalities 需求收集 |
-| `src/query/optimizer/memo.cpp` / `operator_eq.cpp` / `operator_hash.cpp` | equalities 深拷贝 / 相等性 / 哈希 |
+| `src/query/planner/binder/binder.cpp` | `needs_cross` 使用 `bindCrossWithEqualities` |
+| `src/query/planner/binder/bind_match.cpp` | 多 pattern part / OPTIONAL 非起点绑定调用同一 helper |
+| `src/query/planner/binder/bind_return.cpp` 或新 helper 文件 | `bindCrossWithEqualities` / `makeEntityEquality` |
+| `src/query/physical_plan/physical_planner.cpp` | 无新增概念（Filter 走现有分支） |
+| `src/query/optimizer/` | 仅必要时为跨 Join 谓词增加 pushdown guard |
+| `src/query/planner/logical_plan/operator/bound_binary_join_op.hpp` | **不修改** |
