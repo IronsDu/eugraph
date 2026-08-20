@@ -33,6 +33,18 @@ public:
         return {left_.get(), right_.get()};
     }
 
+    /// Physical column count of the left child output. Equality filters placed
+    /// above a CrossProduct use this to offset anonymous right-child refs.
+    size_t leftColumnCount() const {
+        return left_schema_.size();
+    }
+
+    /// Right child slot layout, populated during post-order physical compile.
+    /// Used to resolve anonymous right-child refs before offsetting them.
+    const TupleSlotLayout& rightSlotLayout() const {
+        return right_->slotLayout();
+    }
+
     void deriveOutputLayout(const TupleSlotLayout&) override {
         slot_layout_ = left_->slotLayout();
         slot_layout_.merge(right_->slotLayout());

@@ -1074,6 +1074,12 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 // saved-correlation equality filter in EXISTS sub-plans).
                 if (binder::isTopologyKind(val.type.kind))
                     return false;
+                // Anonymous refs are internal (e.g. cross-product equality
+                // right operands) and must read the raw source column; PE
+                // promotion would redirect both operands to the same
+                // name-based object slot.
+                if (val.name.empty())
+                    return false;
                 // Scalar aliases may reuse a graph variable's slot when the
                 // projection shadows it (`RETURN n.num AS n`). They must keep
                 // reading the scalar aggregate/projection column — promoting
