@@ -226,14 +226,6 @@ public:
 
     // ── Helpers ──
     std::optional<SkipLimitValue> bindSkipLimit(const cypher::Expression& expr, const char* clause_name);
-    /// Build a Filter(CrossProduct(left, right)) with explicit equality
-    /// predicates for variables present in both scopes. The caller must have
-    /// restored the outer scope and merged right-only variables before calling.
-    std::optional<BoundLogicalOperator> bindCrossWithEqualities(BoundLogicalOperator left, BoundLogicalOperator right,
-                                                                const BindContext::Snapshot& left_scope,
-                                                                const BindContext::Snapshot& right_scope);
-    /// Build `left = right`, comparing graph entities by id() when necessary.
-    BoundExpression makeEqualityExpr(const BoundColumnRef& left, const BoundColumnRef& right);
     uint32_t nextColumnIndex() {
         return ctx_.next_column_index++;
     }
