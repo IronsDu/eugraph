@@ -1,8 +1,9 @@
 #pragma once
 
 #include "query/planner/bound_logical_plan_fwd.hpp"
+#include "query/planner/slot_id.hpp"
 
-#include <utility>
+#include <string>
 #include <vector>
 
 namespace eugraph {
@@ -13,17 +14,26 @@ namespace binder {
 /// combined rows. If no match, emit the left row with NULLs for all right
 /// columns.
 struct BoundLeftJoinOp {
+    struct Correlation {
+        /// SlotId of the outer variable in the left plan. The physical planner
+        /// prefers resolving through the left TupleSlotLayout.
+        SlotId left_slot = INVALID_SLOT_ID;
+        /// Binder column index fallback (used when a WITH projection forwards
+        /// a graph variable under a different slot than the binder recorded).
+        uint32_t left_column = 0;
+        /// Variable name fallback (used when slot/column both miss).
+        std::string left_var;
+        /// Right-side local column index consumed by CorrelatedSource.
+        uint32_t right_column = 0;
+
+        bool operator==(const Correlation& other) const {
+            return left_slot == other.left_slot && left_column == other.left_column && left_var == other.left_var &&
+                   right_column == other.right_column;
+        }
+    };
     BoundLogicalOperator left;
     BoundLogicalOperator right;
-    /// Pairs of (left_column_index, right_column_index) for correlated
-    /// variables. Column indices are used here (rather than SlotIds as in
-    /// BoundSemiJoinOp) because OPTIONAL MATCH's left plan output preserves
-    /// the binder's column_index ordering — ProjectionExtract only appends
-    /// columns, never reorders. SlotId-based lookup fails when the left plan
-    /// contains a WITH projection that forwards a graph variable: the Project
-    /// emits under the PEPlan object_slot, while the binder still holds the
-    /// topology slot_id, so the lookup misses (Match7 [4][6][10]...).
-    std::vector<std::pair<uint32_t, uint32_t>> correlation;
+    std::vector<Correlation> correlation;
 };
 
 } // namespace binder

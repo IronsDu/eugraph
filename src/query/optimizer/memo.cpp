@@ -660,7 +660,14 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>>) {
                 auto c = std::make_unique<binder::BoundDeleteOp>();
                 c->detach = val->detach;
-                c->targets = val->targets;
+                for (const auto& t : val->targets) {
+                    binder::BoundDeleteOp::DeleteTarget ct;
+                    ct.kind = t.kind;
+                    ct.variable_name = t.variable_name;
+                    if (t.expr)
+                        ct.expr = cloneBoundExpression(*t.expr);
+                    c->targets.push_back(std::move(ct));
+                }
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
                 auto c = std::make_unique<binder::BoundPathBuildOp>();

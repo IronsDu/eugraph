@@ -129,6 +129,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [事务模型](query/engine/transaction-model.md) | 事务生命周期、snapshot isolation、流式事务、批量操作事务 |
 | [ProjectionExtract 按需属性物化设计](query/engine/projection-extract-design.md) | 需求驱动的属性物化：SlotId 系统、六阶段管线、PEPlan、ColumnSpec |
 | [SlotId 架构设计](query/engine/slot-id-design.md) | 全局唯一槽位标识符：动机、设计决策、物理布局映射、内部/用户槽位分区 |
+| [CrossProduct 相关变量等值约束](query/engine/cross-product-correlation.md) | WITH 后独立 MATCH / 多 pattern 同名变量的独立作用域绑定与实体 ID 等值约束设计 |
 | [物理算子审计](query/engine/physical-operator-audit.md) | 拓扑/语义类型分离的设计推理、PE 收敛历程、未落地方向（列裁剪、CBO） |
 
 ### 逻辑优化器

@@ -568,6 +568,10 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                         return false;
                     if (av->targets[i].variable_name != bv->targets[i].variable_name)
                         return false;
+                    if (av->targets[i].expr.has_value() != bv->targets[i].expr.has_value())
+                        return false;
+                    if (av->targets[i].expr && !equalBoundExpression(*av->targets[i].expr, *bv->targets[i].expr))
+                        return false;
                 }
                 return true;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {

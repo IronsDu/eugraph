@@ -8,6 +8,18 @@
 namespace eugraph {
 namespace compute {
 
+namespace {
+VertexId vertexIdFromValue(const Value& val) {
+    if (std::holds_alternative<VertexValue>(val))
+        return std::get<VertexValue>(val).id;
+    if (std::holds_alternative<VertexRef>(val))
+        return std::get<VertexRef>(val).id;
+    if (std::holds_alternative<int64_t>(val))
+        return static_cast<VertexId>(std::get<int64_t>(val));
+    return INVALID_VERTEX_ID;
+}
+} // anonymous namespace
+
 VarLenExpandPhysicalOp::~VarLenExpandPhysicalOp() = default;
 
 std::string VarLenExpandPhysicalOp::toString() const {
@@ -182,6 +194,11 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
 
             // Emit identity path when min_hops == 0 (zero-hop: src == dst)
             if (min_hops_ == 0 && co_await hasDstLabels(src_id)) {
+                if (dst_bound_) {
+                    VertexId bound_dst = vertexIdFromValue(rows[src_row][dst_col_idx_]);
+                    if (bound_dst != src_id)
+                        continue;
+                }
                 OutputEntry identity_entry;
                 identity_entry.src_row = src_row;
                 identity_entry.dst_id = src_id;
@@ -304,6 +321,11 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                             co_await loadEdge(edge.edge_id, edge.edge_label_id, el_phys_src, el_phys_dst, edge.seq))});
                         entry.edge_list = std::move(lv);
                     }
+                    if (dst_bound_) {
+                        VertexId bound_dst = vertexIdFromValue(rows[src_row][dst_col_idx_]);
+                        if (bound_dst != edge.neighbor_id)
+                            continue;
+                    }
                     output_buffer.push_back(std::move(entry));
 
                     if (output_buffer.size() >= DataChunk::DEFAULT_CAPACITY) {
@@ -339,20 +361,22 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                             output.columns.push_back(Column::flat(output_types_[c].kind, output_buffer.size()));
                         }
 
-                        for (size_t i = 0; i < output_buffer.size(); ++i) {
-                            size_t dst_col_idx = input_cols;
-                            output.setValue(dst_col_idx, i, Value(VertexRef{output_buffer[i].dst_id}));
+                        if (!dst_bound_) {
+                            for (size_t i = 0; i < output_buffer.size(); ++i) {
+                                size_t dst_col_idx = input_cols;
+                                output.setValue(dst_col_idx, i, Value(VertexRef{output_buffer[i].dst_id}));
+                            }
                         }
                         // Fill path column if present
                         if (!path_var_.empty()) {
-                            size_t path_col_idx = input_cols + 1;
+                            size_t path_col_idx = input_cols + (dst_bound_ ? 0 : 1);
                             for (size_t i = 0; i < output_buffer.size(); ++i) {
                                 output.setValue(path_col_idx, i, Value(output_buffer[i].path));
                             }
                         }
                         // Fill edge list column if present
                         if (!edge_var_.empty()) {
-                            size_t edge_col_idx = input_cols + 1 + (path_var_.empty() ? 0 : 1);
+                            size_t edge_col_idx = input_cols + (dst_bound_ ? 0 : 1) + (path_var_.empty() ? 0 : 1);
                             for (size_t i = 0; i < output_buffer.size(); ++i) {
                                 output.setValue(edge_col_idx, i, Value(output_buffer[i].edge_list));
                             }
@@ -426,20 +450,22 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 output.columns.push_back(Column::flat(output_types_[c].kind, output_buffer.size()));
             }
 
-            for (size_t i = 0; i < output_buffer.size(); ++i) {
-                size_t dst_col_idx = input_cols;
-                output.setValue(dst_col_idx, i, Value(VertexRef{output_buffer[i].dst_id}));
+            if (!dst_bound_) {
+                for (size_t i = 0; i < output_buffer.size(); ++i) {
+                    size_t dst_col_idx = input_cols;
+                    output.setValue(dst_col_idx, i, Value(VertexRef{output_buffer[i].dst_id}));
+                }
             }
             // Fill path column if present
             if (!path_var_.empty()) {
-                size_t path_col_idx = input_cols + 1;
+                size_t path_col_idx = input_cols + (dst_bound_ ? 0 : 1);
                 for (size_t i = 0; i < output_buffer.size(); ++i) {
                     output.setValue(path_col_idx, i, Value(output_buffer[i].path));
                 }
             }
             // Fill edge list column if present
             if (!edge_var_.empty()) {
-                size_t edge_col_idx = input_cols + 1 + (path_var_.empty() ? 0 : 1);
+                size_t edge_col_idx = input_cols + (dst_bound_ ? 0 : 1) + (path_var_.empty() ? 0 : 1);
                 for (size_t i = 0; i < output_buffer.size(); ++i) {
                     output.setValue(edge_col_idx, i, Value(output_buffer[i].edge_list));
                 }

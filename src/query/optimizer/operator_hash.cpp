@@ -506,8 +506,10 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     return;
                 seed = combine(seed, val->detach ? 1u : 0u);
                 for (const auto& t : val->targets) {
-                    seed = combine(seed, static_cast<uint64_t>(t.kind));
+                    seed = combine(seed, static_cast<uint64_t>(t.kind.has_value() ? static_cast<int>(*t.kind) : 0));
                     seed = hashBytes(seed, t.variable_name);
+                    if (t.expr)
+                        seed = combine(seed, hashBoundExpression(*t.expr));
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>>) {
                 if (!val)
@@ -516,9 +518,11 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>>) {
                 if (!val)
                     return;
-                for (const auto& [l, r] : val->correlation) {
-                    seed = combine(seed, l);
-                    seed = combine(seed, r);
+                for (const auto& c : val->correlation) {
+                    seed = combine(seed, c.left_slot);
+                    seed = combine(seed, c.left_column);
+                    seed = hashBytes(seed, c.left_var);
+                    seed = combine(seed, c.right_column);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>>) {
                 if (!val)
