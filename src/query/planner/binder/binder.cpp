@@ -1,4 +1,5 @@
 #include "query/planner/binder.hpp"
+#include "query/planner/binder/join_equality.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_call_op.hpp"
 
@@ -108,11 +109,10 @@ std::optional<BoundLogicalOperator> Binder::bindCrossWithEqualities(BoundLogical
             return std::nullopt;
         }
 
-        BoundColumnRef left_ref{left_info.column_index, left_info.type, name, left_info.slot_id};
-        // Graph-entity right refs stay anonymous so DPL/PE does not redirect
-        // them by name to the shared object slot.
-        BoundColumnRef right_ref{right_info.column_index + left_scope.next_column_index, right_info.type,
-                                 left_cat == 0 ? name : "", right_info.slot_id};
+        BoundColumnRef left_ref{left_info.column_index, left_info.type, std::string(kJoinEqualityLeft) + name,
+                                left_info.slot_id};
+        BoundColumnRef right_ref{right_info.column_index, right_info.type, std::string(kJoinEqualityRight) + name,
+                                 right_info.slot_id};
         equalities.push_back(makeEqualityExpr(left_ref, right_ref));
     }
 

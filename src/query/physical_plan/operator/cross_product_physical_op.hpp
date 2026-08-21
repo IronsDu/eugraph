@@ -45,6 +45,21 @@ public:
         return right_->slotLayout();
     }
 
+    /// Left child slot layout (same post-order compile invariant).
+    const TupleSlotLayout& leftSlotLayout() const {
+        return left_->slotLayout();
+    }
+
+    /// Schemas are used as the name-based fallback for equality refs whose
+    /// binder slot is not present in the repaired physical layout.
+    const Schema& leftOutputSchema() const {
+        return left_schema_;
+    }
+
+    const Schema& rightOutputSchema() const {
+        return right_schema_;
+    }
+
     void deriveOutputLayout(const TupleSlotLayout&) override {
         slot_layout_ = left_->slotLayout();
         slot_layout_.merge(right_->slotLayout());
