@@ -269,6 +269,17 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         std::optional<BoundLogicalOperator> previous = std::move(current);
         current = std::nullopt;
 
+        // Bind each later pattern part in an isolated scope; reused variables
+        // become local columns and are constrained via equality filters when
+        // joined with the previous part.
+        BindContext::Snapshot part_left_scope;
+        BindContext::Snapshot part_right_scope;
+        bool isolate_part = (pi > 0);
+        if (isolate_part) {
+            part_left_scope = ctx_.save();
+            ctx_.beginSubScope();
+        }
+
         // Only the first pattern in a correlated MATCH reuses the parent.
         bool correlated = (pi == 0) && parent.has_value();
 
@@ -732,13 +743,33 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             }
         }
 
-        // For patterns after the first, join with previous via cross product
+        // For patterns after the first, join with previous via cross product.
         if (pi > 0 && previous && current) {
-            auto join = std::make_unique<BoundBinaryJoinOp>();
-            join->join_type = JoinType::Cross;
-            join->left = std::move(*previous);
-            join->right = std::move(*current);
-            current = std::move(join);
+            if (isolate_part) {
+                part_right_scope = ctx_.save();
+                ctx_.restore(part_left_scope);
+
+                for (const auto& [name, info] : part_right_scope.symbols) {
+                    if (!ctx_.lookup(name)) {
+                        ColumnInfo merged = info;
+                        merged.column_index += part_left_scope.next_column_index;
+                        ctx_.symbols[name] = std::move(merged);
+                    }
+                }
+                ctx_.next_column_index = part_left_scope.next_column_index + part_right_scope.next_column_index;
+
+                auto joined = bindCrossWithEqualities(std::move(*previous), std::move(*current), part_left_scope,
+                                                      part_right_scope);
+                if (!joined)
+                    return std::nullopt;
+                current = std::move(*joined);
+            } else {
+                auto join = std::make_unique<BoundBinaryJoinOp>();
+                join->join_type = JoinType::Cross;
+                join->left = std::move(*previous);
+                join->right = std::move(*current);
+                current = std::move(join);
+            }
         }
     }
 
