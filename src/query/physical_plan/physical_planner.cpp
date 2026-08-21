@@ -443,6 +443,60 @@ static void remapExprColumnIndices(binder::BoundExpression& expr, uint32_t offse
         expr);
 }
 
+/// Add `offset` to every anonymous BoundColumnRef inside expr. Used for
+/// cross-product equality predicates: their right refs are anonymous with
+/// binder-local column indices, and the physical left child may contain extra
+/// ProjectionExtract-appended columns the binder could not count.
+static void offsetAnonymousColumnRefs(binder::BoundExpression& expr, uint32_t offset) {
+    std::visit(
+        [&offset](auto& val) {
+            using T = std::decay_t<decltype(val)>;
+            if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
+                if (val.name.empty())
+                    val.column_index += offset;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
+                offsetAnonymousColumnRefs(val->left, offset);
+                offsetAnonymousColumnRefs(val->right, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
+                offsetAnonymousColumnRefs(val->operand, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
+                offsetAnonymousColumnRefs(val->object, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
+                offsetAnonymousColumnRefs(val->object, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                for (auto& arg : val->args)
+                    offsetAnonymousColumnRefs(arg, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
+                for (auto& elem : val->elements)
+                    offsetAnonymousColumnRefs(elem, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
+                offsetAnonymousColumnRefs(val->object, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
+                if (val->subject.has_value())
+                    offsetAnonymousColumnRefs(*val->subject, offset);
+                for (auto& [w, t] : val->when_thens) {
+                    offsetAnonymousColumnRefs(w, offset);
+                    offsetAnonymousColumnRefs(t, offset);
+                }
+                if (val->else_expr.has_value())
+                    offsetAnonymousColumnRefs(*val->else_expr, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
+                offsetAnonymousColumnRefs(val->list, offset);
+                offsetAnonymousColumnRefs(val->index, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
+                offsetAnonymousColumnRefs(val->list, offset);
+                if (val->from.has_value())
+                    offsetAnonymousColumnRefs(*val->from, offset);
+                if (val->to.has_value())
+                    offsetAnonymousColumnRefs(*val->to, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
+                for (auto& [k, v] : val->entries)
+                    offsetAnonymousColumnRefs(v, offset);
+            }
+        },
+        expr);
+}
+
 static void remapLogicalOpColumnIndices(binder::BoundLogicalOperator& op, uint32_t offset);
 
 static void remapChildOps(binder::BoundLogicalOperator& op, uint32_t offset) {
@@ -1378,6 +1432,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));
+
+                    // A filter directly above a CrossProduct may be a
+                    // cross-scope equality filter whose anonymous right refs
+                    // carry binder-local column indices. Offset them by the
+                    // physical left output width (PE may have appended object
+                    // columns after binding).
+                    if (auto* cp = dynamic_cast<const CrossProductPhysicalOp*>(cr.op.get()))
+                        offsetAnonymousColumnRefs(v.predicate, static_cast<uint32_t>(cp->leftColumnCount()));
 
                     auto result =
                         std::make_unique<FilterPhysicalOp>(std::move(v.predicate), cr.output_schema, std::move(cr.op));

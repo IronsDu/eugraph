@@ -31,10 +31,7 @@ public:
         return {child_.get()};
     }
 
-    void compileExpressions(const TupleSlotLayout& input_layout) override {
-        ExpressionCompiler compiler(input_layout);
-        compiler.compile(predicate_);
-    }
+    void compileExpressions(const TupleSlotLayout& input_layout) override;
 
 private:
     binder::BoundExpression predicate_;

@@ -28,6 +28,12 @@ private:
     template <typename T> void compileOne(T& val) {
         using Type = std::decay_t<T>;
         if constexpr (std::is_same_v<Type, binder::BoundColumnRef>) {
+            // Anonymous refs are internal (cross-product equality right
+            // operands). Their column_index has already been offset to the
+            // physical merged layout by the planner; a name-based slot lookup
+            // could hit the duplicate left-side slot and overwrite it.
+            if (val.name.empty())
+                return;
             int idx = layout_.getColumnIndex(val.slot_id);
             if (idx >= 0)
                 val.column_index = static_cast<uint32_t>(idx);
