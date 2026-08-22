@@ -59,6 +59,35 @@ SlotId
 5. 若未来出现需要区分“两个绑定但同一语义实体”的场景，再把 `VariableId` 升级为独立强类型；
    该升级路径已预留（所有新代码通过 `VariableId` alias 引用，而不是直接写 `SlotId`）。
 
+### 第二轮评审结论（已做工程取舍）
+
+第二轮评审整体批准进入实现，并提出三个“实现前必须补”的点。逐条结论如下：
+
+| # | 意见 | 结论 | 说明 |
+|---|------|------|------|
+| 1 | 不再坚持独立 `VariableId` | 采纳 | 与本文不采纳项一致 |
+| 2 | `PatternPartConnection` 描述**任意两个 part** 的关联，而不是仅相邻 part | **部分采纳** | IR 保留任意 part 对；实现阶段仍按 source order 生成 left-deep join tree，原因见下方“不采纳项” |
+| 3 | 明确 `PatternJoinPlan` 是 Binder 内部的 **bound planning representation**，不是纯 semantic IR | 采纳 | 已写入 4.1 |
+| 4 | 区分 **pattern predicate** 与 **clause filter** 两类 WHERE | 采纳 | 已写入 4.2 |
+| 5 | `ScopeSlotKey` 是解析键，不是 identity | 采纳 | 已写入 4.4 |
+| 6 | varlen sequence equality 写成 invariant 并加单元测试 | 采纳 | 已写入 4.6 与测试清单 |
+| 7 | `PatternLegalityAnalyzer` 职责扩展为 legality + variable classification | 采纳 | 已写入 4.2；不新增独立 Resolver 模块 |
+| 8 | 不再增加 Binder abstraction | 采纳 | 核心链固定为 5 个组件，其余是辅助设施 |
+| 9 | 增加 Join Graph / Join Order 说明 | **部分采纳** | 记录 join graph 与未来 reorder 边界；本期不实现 reorder |
+
+#### 不采纳项：本期实现任意 part 连接 / join reorder
+
+评审建议 `PatternPartConnection` 不限于相邻 part，并引入 join order。
+
+**不采纳及理由：**
+
+1. 当前执行计划是 left-deep 树，且 CrossProduct / LeftJoin 的物理算子只支持二叉输入；
+   任意 part 图会立刻要求 join-order 决策与 bushy-tree 执行支持，超出本次 TCK 修复范围。
+2. IR 层仍会记录完整的 `(left_part, right_part, kind, equalities)` 关系，
+   避免把 AST 顺序写死；实现阶段由 `PatternJoinPlanner` 按 source order 稳定地构造 left-deep tree。
+3. 未来接入 cardinality 或成本模型时，可在 `PatternJoinPlanner` 与 `BoundLogicalPlan` 之间
+   增加 join-order 阶段，IR 无需再改。
+
 ## 一、当前失败清单（14 个）
 
 | 场景 | 查询要点 | 根因分类 |
@@ -219,6 +248,8 @@ struct JoinEqualitySpec {
 
 struct PatternPartConnection {
     enum Kind { CARTESIAN, CORRELATED };
+    size_t left_part;             // 任意两个 part 的索引，不限于相邻
+    size_t right_part;
     Kind kind;
     std::vector<JoinEqualitySpec> equalities;
 };
@@ -239,11 +270,16 @@ struct PatternJoinPlan {
 算法：
 1. 遍历 `MatchPatternGraph`，按作用域和绑定位置确定每个变量的 NEW/OUTER/REUSED，并分配 `VariableId`；
 2. 每个 part 在独立子作用域中绑定为局部算子；
-3. 相邻 part 按 `PatternPartConnection` 连接：
+3. 构造 **part connection graph**（任意两个 part 的 CARTESIAN/CORRELATED 关系）；
+4. 当前实现按 source order 把 connection graph 降成 left-deep join tree：
    - `CARTESIAN`：纯 `CrossProduct`；
    - `CORRELATED`：`CrossProduct + JoinEqualitySpec` 生成的 equality Filter；
-4. OPTIONAL：外层变量打包成 `CorrelatedSource`，与 part 序列 CrossProduct + 等值；
-5. 生成 `BoundLeftJoinOp`（correlation 用 `VariableId + ScopeId` 记录）。
+5. OPTIONAL：外层变量打包成 `CorrelatedSource`，与 part 序列 CrossProduct + 等值；
+6. 生成 `BoundLeftJoinOp`（correlation 用 `VariableId + ScopeId` 记录）。
+
+**PatternJoinPlan 的定位**：它是 Binder 内部的 **bound planning representation**，
+不是 AST-level 纯语义 IR；`PatternPartPlan.op` 已经是 `BoundLogicalOperator`。
+未来 join reorder 可在此 representation 与最终 `BoundLogicalPlan` 之间插入。
 
 **OPTIONAL predicate invariant**：
 与 OPTIONAL MATCH 关联的 pattern predicate 必须在 optional 右子计划语义域内求值
@@ -258,12 +294,23 @@ LeftJoin 之后的 WHERE 才属于外层查询语义。
 
 文件：`src/query/planner/binder/pattern/pattern_legality_analyzer.{hpp,cpp}`
 
-在绑定前对 `MatchPatternGraph` 做静态检查：
+职责 = **合法性检查 + 变量绑定分类**，不新增独立的 Resolver 模块：
+
+- 名字解析与变量分类：输出每个变量的 `NEW / OUTER / REUSED`；
 - 同一 part 内变量复用冲突（node/rel/path）；
 - 跨 part 类型冲突；
 - 输出 `VariableTypeConflict` / `VariableAlreadyBound`。
 
 这使绑定阶段可以安全地使用独立作用域，不再依赖“复用 ctx 时顺带发现错误”。
+
+**WHERE 的两类语义（必须区分）**：
+
+| 类别 | 出现位置 | 处理 |
+|------|----------|------|
+| Pattern predicate | `MATCH ... WHERE ...`、`OPTIONAL MATCH ... WHERE ...` | 属于 pattern 描述，进入 `PatternJoinPlanner` / OPTIONAL 右子计划 |
+| Clause filter | 独立 `WHERE ...`（WITH 之后） | 生成普通 `BoundFilterOp` |
+
+禁止把 pattern predicate 无条件提升为 post-MATCH/clause filter。
 
 ### 4.3 `JoinEqualityBuilder`（保留并收敛）
 
@@ -290,6 +337,9 @@ struct ScopeSlotKey {
     std::string name;         // 仅作为作用域内解析键
 };
 ```
+
+`ScopeSlotKey` 只回答“这个 scope 里名字 x 指向谁”；**变量身份**由
+`VariableId(=SlotId)` 回答。两者禁止混用。
 
 职责：
 - `BindContext` 新增 `ScopeId current_scope` 与 `ScopeId next_scope()`；
@@ -335,6 +385,16 @@ struct BoundEdgeFilter {
   - 不是 set equality，也不是 multiset equality；
   - 方向与路径遍历方向一致，不额外尝试反转列表。
 
+必须实现的单元测试例子：
+
+```
+[r1,r2]     == [r1,r2]      true
+[r1,r2]     == [r2,r1]      false
+[r1,r1,r2]  == [r1,r2]      false
+[r1,r2,r3]  == [r1,r2]      false
+[]          == [r1]         false（长度敏感）
+```
+
 ### 4.7 `LabelOrderContext`
 
 文件：`src/query/planner/binder/label_order_context.hpp`
@@ -347,6 +407,14 @@ struct BoundEdgeFilter {
 ### 4.8 副作用审计（D 类）
 
 先单独用 TCK 最小复现 Create3[3]、Unwind1[6]，定位是副作用计数、行序还是 batched write 合并问题，再决定是否新增 `SideEffectAccounting` 模块。不在本设计第一阶段实施。
+
+### 4.9 Join Graph 与 Join Order
+
+- `PatternPartConnection` 构成 **join graph**，不把 AST 顺序固化到 IR；
+- 当前实现阶段：`PatternJoinPlanner` 按 source order 将 join graph 降成 left-deep join tree；
+- 未来阶段：可在 `PatternJoinPlan` 与最终 `BoundLogicalPlan` 之间增加 join-order 决策，
+  基于 `PatternPartConnection` 和 cardinality 重排，IR 无需变化；
+- 本期**不实现** join reorder / bushy-tree 执行。
 
 ---
 
