@@ -1024,13 +1024,13 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             outer_slot = saved_it->second.slot_id;
             saved_outer_info = saved_it->second;
         } else {
-            auto all_it = ctx_.all_symbols.find(start_var_name);
-            if (all_it != ctx_.all_symbols.end()) {
+            SlotId sid = ctx_.lookupBinding(start_var_name);
+            if (sid != INVALID_SLOT_ID) {
                 is_correlated = true;
-                outer_slot = all_it->second;
+                outer_slot = sid;
                 saved_outer_info.name = start_var_name;
                 saved_outer_info.type = BoundType::Vertex();
-                saved_outer_info.slot_id = all_it->second;
+                saved_outer_info.slot_id = sid;
             }
         }
     }
@@ -1050,7 +1050,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                 return std::nullopt;
             }
             auto checkVar = [&](const std::optional<std::string>& var) {
-                if (var.has_value() && !saved_ctx.symbols.count(*var) && !ctx_.all_symbols.count(*var)) {
+                if (var.has_value() && !saved_ctx.symbols.count(*var) && ctx_.lookupBinding(*var) == INVALID_SLOT_ID) {
                     error("UndefinedVariable: variable '" + *var + "' not defined in pattern predicate");
                     return false;
                 }
@@ -1164,8 +1164,8 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
     // These need to be in the correlation BEFORE source_op is created so the
     // CorrelatedSource includes them in its output schema.
     for (const auto& var_name : extra_corr_vars) {
-        auto ait = ctx_.all_symbols.find(var_name);
-        if (ait == ctx_.all_symbols.end())
+        SlotId var_slot = ctx_.lookupBinding(var_name);
+        if (var_slot == INVALID_SLOT_ID)
             continue;
         // Skip variables already in the current scope (e.g. start var).
         if (ctx_.lookup(var_name))
@@ -1181,7 +1181,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         if (saved_it != saved_ctx.symbols.end())
             left_slot = saved_it->second.slot_id;
         else
-            left_slot = ait->second;
+            left_slot = var_slot;
         bool dup = (is_correlated && outer_slot == left_slot);
         for (const auto& [os, _] : correlation)
             if (os == left_slot) {
@@ -1641,13 +1641,13 @@ BoundExpression bindSimpleProjectionExpr(Binder& binder, const cypher::Expressio
     if (auto* var = std::get_if<std::unique_ptr<cypher::Variable>>(&proj_ast)) {
         const auto& name = (*var)->name;
         auto type_it = sub_var_types.find(name);
-        auto slot_it = binder.ctx().all_symbols.find(name);
-        if (type_it != sub_var_types.end() && slot_it != binder.ctx().all_symbols.end()) {
+        SlotId sid = binder.ctx().lookupBinding(name);
+        if (type_it != sub_var_types.end() && sid != INVALID_SLOT_ID) {
             BoundType topo = BoundType::clone(type_it->second);
             BoundTypeKind tk = topologyCounterpart(topo.kind);
             if (tk != topo.kind)
                 topo.kind = tk;
-            return BoundExpression(BoundColumnRef(0, topo, name, slot_it->second));
+            return BoundExpression(BoundColumnRef(0, topo, name, sid));
         }
     }
     // Literal
@@ -1670,12 +1670,12 @@ BoundExpression bindSimpleProjectionExpr(Binder& binder, const cypher::Expressio
         if (obj_var) {
             const auto& name = (*obj_var)->name;
             auto type_it = sub_var_types.find(name);
-            auto slot_it = binder.ctx().all_symbols.find(name);
-            if (type_it != sub_var_types.end() && slot_it != binder.ctx().all_symbols.end()) {
+            SlotId sid = binder.ctx().lookupBinding(name);
+            if (type_it != sub_var_types.end() && sid != INVALID_SLOT_ID) {
                 const auto& pname = (*pr)->property;
                 auto prop_ref = std::make_unique<BoundPropertyRef>();
                 prop_ref->property_name = pname;
-                prop_ref->object = BoundExpression(BoundColumnRef(0, type_it->second, name, slot_it->second));
+                prop_ref->object = BoundExpression(BoundColumnRef(0, type_it->second, name, sid));
 
                 if (type_it->second.kind == BoundTypeKind::VERTEX) {
                     // Resolve candidates across all labels so the evaluator

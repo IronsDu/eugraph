@@ -4,6 +4,7 @@
 #include "query/planner/bound_type.hpp"
 #include "query/planner/slot_id.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -61,6 +62,12 @@ struct BindContext {
     std::unordered_map<std::string, SlotId> all_symbols;
     /// Scope-aware binding record: (ScopeId, name) → SlotId.
     std::unordered_map<ScopeId, std::unordered_map<std::string, SlotId>> scoped_bindings;
+    /// Scope chain (root first). Used for visibility lookup.
+    struct ScopeInfo {
+        ScopeId id = kRootScope;
+        ScopeId parent = kRootScope;
+    };
+    std::vector<ScopeInfo> scope_stack{{kRootScope, kRootScope}};
     /// Current binding scope. Root scope is kRootScope.
     ScopeId current_scope = kRootScope;
     /// Next ScopeId to hand out. ScopeIds are never reused within a query.
@@ -88,13 +95,31 @@ struct BindContext {
     }
 
     /// Look up a binding in the current scope only. Returns INVALID_SLOT_ID
-    /// when absent. Scope-chain lookup will be added by ScopedSlotResolver.
+    /// when absent.
     SlotId lookupBindingInCurrentScope(const std::string& name) const {
         auto scope_it = scoped_bindings.find(current_scope);
         if (scope_it == scoped_bindings.end())
             return INVALID_SLOT_ID;
         auto it = scope_it->second.find(name);
         return it == scope_it->second.end() ? INVALID_SLOT_ID : it->second;
+    }
+
+    /// Visibility lookup: current scope, then parents.
+    SlotId lookupBinding(const std::string& name) const {
+        ScopeId scope = current_scope;
+        while (true) {
+            auto scope_it = scoped_bindings.find(scope);
+            if (scope_it != scoped_bindings.end()) {
+                auto it = scope_it->second.find(name);
+                if (it != scope_it->second.end())
+                    return it->second;
+            }
+            auto info_it = std::find_if(scope_stack.begin(), scope_stack.end(),
+                                        [scope](const ScopeInfo& s) { return s.id == scope; });
+            if (info_it == scope_stack.end() || info_it->parent == scope)
+                return INVALID_SLOT_ID;
+            scope = info_it->parent;
+        }
     }
 
     /// Register a new variable in the symbol table. Returns the assigned column index.
@@ -137,10 +162,11 @@ struct BindContext {
         std::unordered_map<std::string, ColumnInfo> symbols;
         uint32_t next_column_index = 0;
         ScopeId current_scope = kRootScope;
+        std::vector<ScopeInfo> scope_stack{{kRootScope, kRootScope}};
     };
 
     Snapshot save() const {
-        return {symbols, next_column_index, current_scope};
+        return {symbols, next_column_index, current_scope, scope_stack};
     }
 
     /// Restore binding state from a previously saved snapshot.
@@ -148,6 +174,7 @@ struct BindContext {
         symbols = snap.symbols;
         next_column_index = snap.next_column_index;
         current_scope = snap.current_scope;
+        scope_stack = snap.scope_stack;
     }
 
     /// Reset to an independent scope for EXISTS sub-plan binding.
@@ -155,7 +182,9 @@ struct BindContext {
     void beginSubScope() {
         symbols.clear();
         next_column_index = 0;
-        current_scope = next_scope_id++;
+        ScopeId child = next_scope_id++;
+        scope_stack.push_back({child, current_scope});
+        current_scope = child;
     }
 };
 
