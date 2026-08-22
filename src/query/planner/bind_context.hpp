@@ -55,11 +55,6 @@ struct BindContext {
     /// the bound tree (Aggregate output_names, Filter predicates) still
     /// reference their original slot_id.
     std::unordered_map<std::string, ColumnInfo> symbols;
-    /// Transitional cumulative index name → slot, first binding wins.
-    /// It must NOT be used for semantic identity resolution; use
-    /// scoped_bindings / current scope instead. Kept only until all
-    /// consumers migrate to ScopedSlotResolver.
-    std::unordered_map<std::string, SlotId> all_symbols;
     /// Scope-aware binding record: (ScopeId, name) → SlotId.
     std::unordered_map<ScopeId, std::unordered_map<std::string, SlotId>> scoped_bindings;
     /// Ordered log of bindings. Used to seed the planner's name-based
@@ -92,15 +87,10 @@ struct BindContext {
 
     /// Record a new binding in the current scope. A new binding must always
     /// carry a freshly allocated SlotId; callers must not reuse a slot across
-    /// bindings. `all_symbols` keeps first-write semantics only as a
-    /// transitional index and is not an identity source.
+    /// bindings.
     void registerBinding(const std::string& name, SlotId slot) {
         scoped_bindings[current_scope][name] = slot;
         binding_order.push_back({current_scope, name, slot});
-        // Transitional compatibility index. This is still last-write until
-        // all consumers migrate to scoped_bindings; it must not be treated as
-        // semantic identity.
-        all_symbols[name] = slot;
     }
 
     /// Look up a binding in the current scope only. Returns INVALID_SLOT_ID

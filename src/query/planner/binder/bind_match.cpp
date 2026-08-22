@@ -902,10 +902,9 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
                             [&](const auto& ptr) {
                                 using E = typename std::decay_t<decltype(ptr)>::element_type;
                                 if constexpr (std::is_same_v<E, cypher::Variable>) {
-                                    // Collect all grandparent-scope variables from
-                                    // all_symbols, even if they're currently visible
-                                    // (ctx_ is the parent scope before beginSubScope).
-                                    if (ctx_.all_symbols.count(ptr->name))
+                                    // Collect all grandparent-scope variables
+                                    // that are visible in the current chain.
+                                    if (ctx_.lookupBinding(ptr->name) != INVALID_SLOT_ID)
                                         extra_corr_vars.push_back(ptr->name);
                                 } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
                                     collect(ptr->left);
@@ -1077,7 +1076,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         ColumnInfo sub_info = saved_outer_info;
         sub_info.column_index = nextColumnIndex();
         // Reuse the outer variable's slot_id rather than allocating a new one:
-        // allocateNamedSlot would overwrite ctx_.all_symbols[start_var_name]
+        // allocateNamedSlot would allocate a fresh slot for start_var_name
         // and break the left side's makeSlotLayout, which still needs the
         // original slot to find the column in the left TupleSlotLayout.
         sub_idx = sub_info.column_index;
@@ -1173,7 +1172,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         // Use the slot from saved_ctx (caller scope) as the correlation
         // left_slot. saved_ctx was captured before beginSubScope and holds
         // the caller's symbol table, which is what the SemiJoin left layout
-        // will contain. all_symbols always holds the outermost slot, which
+        // will contain. lookupBinding resolves the nearest visible binding, which
         // is wrong for nested EXISTS (where the caller scope has a
         // different slot from the outermost scope).
         SlotId left_slot;
@@ -1607,7 +1606,7 @@ namespace {
 
 /// Resolve a Variable/property/Literal from a PatternComprehension projection
 /// AST into a BoundExpression. Since the sub-plan scope was already restored
-/// by bindExistsSubPlan, we use ctx_.all_symbols (permanent) for slot_id
+/// by bindExistsSubPlan, we use ctx_.lookupBinding (scope chain) for slot_id
 /// lookup and a map of sub-plan variable names → BoundType collected from
 /// the pattern definition.
 BoundExpression bindSimpleProjectionExpr(Binder& binder, const cypher::Expression& proj_ast,
@@ -1799,7 +1798,7 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
 
     // Bind projection expression. The sub-plan scope has been restored by
     // bindExistsSubPlan, so variables registered during spine construction
-    // are no longer in ctx_.symbols. However, ctx_.all_symbols retains
+    // are no longer in ctx_.symbols. However, ctx_.scoped_bindings retain
     // their globally-unique slot_ids. We resolve the slot_id and type by
     // collecting from the pattern definition (path var, chain vars, etc.),
     // then build a BoundColumnRef. The column_index (currently 0) will be
@@ -1848,7 +1847,7 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
     sub_plan = std::move(agg_op);
 
     // Allocate output slot and wrap in the Apply op. The unique name ties
-    // together: the all_symbols entry, the Apply op's Output struct (used by
+    // together: the scoped binding entry, the Apply op's Output struct (used by
     // column_rewrite to register the slot for downstream name resolution), and
     // the placeholder's output_name (used by column_rewrite to rewrite the
     // placeholder to a BoundColumnRef).
