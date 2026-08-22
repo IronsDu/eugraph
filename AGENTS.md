@@ -87,6 +87,21 @@
 - **测试纪律**：查询语义/Bolt/KV 编码变更，除单元测试外，按需运行 TCK 或驱动兼容性验证；TCK 基线变更必须先取得开发者确认，驱动兼容性结论不得虚报。
 - **性能影响**：涉及扫描范围、索引选择、批处理方式或并发行为的改动，必须在方案中说明预期影响；具体性能模式以对应设计文档为准。
 
+### Binder 身份模型不变量（修改 Binder/DPL 时强制遵守）
+
+> 完整设计见 `docs/query/engine/pattern-join-planner-design.md`。这些是跨模块硬约束，不是建议。
+
+1. **`name` 只是用户标签**：Cypher 变量名不参与语义身份判断。禁止以“同名即同变量”作为通用规则。
+2. **`VariableId` = Binder 分配的 `SlotId`**：语义身份是绑定槽；每个新绑定必须分配新 `SlotId`，跨作用域同名禁止复用。
+3. **`ScopeId` 是可见性概念**：`BindContext` 必须能回答“该变量在哪个作用域可见”；`save/restore` 必须恢复作用域信息。
+4. **`column_index` 是局部位置**：只属于某个 operator schema；DPL/物理层解析后再使用，Binder 不得把局部列号当作全局身份。
+5. **禁止恢复 `all_symbols` last-write 语义**：作用域内解析用 `(ScopeId, name)`，禁止用全局 name last-write 覆盖跨作用域绑定。
+6. **Pattern part 连接必须显式区分** `CARTESIAN` 与 `CORRELATED`；后者才允许携带 equality specs。
+7. **OPTIONAL MATCH 的 pattern predicate 必须留在 `BoundLeftJoinOp.right` 语义域**，禁止提升到 LeftJoin 之后。
+8. **varlen 绑定关系列表采用 sequence equality**：路径关系 ID 序列与列表逐元素相等（顺序、长度、重复次数都敏感），不是 set/multiset。
+9. **`__eq_left/right__` 是 DPL lowering 兼容机制**，不是 `PatternJoinPlan` 的语义 IR。
+10. **标签顺序是 presentation metadata**：不得写入 `VertexValue` 或存储编码。
+
 ---
 
 ## 三、安全策略

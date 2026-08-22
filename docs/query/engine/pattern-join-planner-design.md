@@ -4,6 +4,61 @@
 > 目标：把 MATCH / OPTIONAL MATCH / WHERE 中的 pattern 变量复用，
 > 统一建模为“关系式 join”，并用来源作用域稳定的 Slot 解析消除重复名歧义。
 
+## 〇、外部评审与采纳结论
+
+本文 v4 初稿经过外部评审，以下是逐条结论；**不采纳项也记录在此，防止未来再次争论**。
+
+| # | 评审建议 | 结论 | 说明 |
+|---|----------|------|------|
+| 1 | 四层身份模型 `name → VariableId → VariableBinding → SlotId → column_index` | **部分采纳** | 概念层采纳；实现层不立即新增第三个 ID 分配器，理由见下方“不采纳项” |
+| 2 | `PatternPartConnection { CARTESIAN, CORRELATED }` 显式区分 | 采纳 | `MATCH (a),(b)` 是 Cartesian；`MATCH (a)-->(b)` 是 Correlated |
+| 3 | `JoinEqualityBuilder` 只生成 equality，不推断“谁和谁 join” | 采纳 | 推断只保留为 MATCH-after-WITH 的便捷入口 |
+| 4 | OPTIONAL predicate 语义 invariant | 采纳 | predicate 必须属于右子计划语义域，禁止提升到 LeftJoin 之后 |
+| 5 | varlen 关系列表精确语义 | 采纳 | 定义为 **sequence equality**（顺序敏感，非 set/multiset） |
+| 6 | LabelOrder 不进入 `VertexValue` | 采纳 | 标签顺序是 presentation metadata，放 Projection/formatter |
+| 7 | `__eq_left/right` 降级为 lowering 兼容机制 | 采纳 | 不进入 `PatternJoinPlan` IR |
+| 8 | 先定义身份模型，再实现 ScopedSlotResolver | 采纳 | 迁移顺序已按此调整 |
+| 9 | 最终架构图 | 采纳 | 见“五、数据流与调用关系” |
+| 10 | 身份 invariants 写入 AGENTS.md | 采纳 | 见仓库根目录 AGENTS.md“Binder 身份模型不变量” |
+
+### 不采纳项：新增独立 `VariableId` 分配器
+
+评审建议：
+
+```text
+name
+  ↓
+VariableId
+  ↓
+VariableBinding
+  ↓
+SlotId
+```
+
+其中 `VariableId` 是独立的 semantic identity，不应等于 `ScopeId + name`，也不应等于 `SlotId`。
+
+**不采纳及理由：**
+
+1. 现有 `SlotId` 已经具备 VariableId 所需的三个性质：
+   - Binder 层每次绑定调用 `SlotAllocator::next()`，返回 query-global 唯一值；
+   - `SlotId` 在 query 生命周期内不可变；
+   - `BoundColumnRef` / `ColumnInfo` 已经携带 `slot_id`。
+2. 若再引入独立 `VariableId`，会产生四套编号并存：
+   `nextSlotId / nextInternalSlot / name_to_slot / VariableId`，
+   每个表达式、每个 ColumnInfo、每个 layout 都要增加一个字段并保持一致。
+3. 当前真正的缺陷不是“缺少 VariableId”，而是：
+   - `BindContext` 没有 `ScopeId`；
+   - `all_symbols` 是全局 last-write，跨作用域同名会覆盖；
+   - `save/restore` 不恢复 scope 栈，导致“谁在哪个 scope 可见”不可查询。
+4. 因此本设计采用等价但更小的方案：
+   - 新增 `ScopeId`（BindContext 单调递增）；
+   - 解析键为 `(ScopeId, name)`；
+   - **绑定身份仍复用 `SlotId`**，并定义为：
+     `using VariableId = SlotId;`（语义身份 = Binder 分配的绑定槽）；
+   - 每个新绑定强制分配新 SlotId，禁止跨 scope 复用同名 slot。
+5. 若未来出现需要区分“两个绑定但同一语义实体”的场景，再把 `VariableId` 升级为独立强类型；
+   该升级路径已预留（所有新代码通过 `VariableId` alias 引用，而不是直接写 `SlotId`）。
+
 ## 一、当前失败清单（14 个）
 
 | 场景 | 查询要点 | 根因分类 |
@@ -143,39 +198,57 @@ Create3[3]、Unwind1[6] 与 pattern join 无关，属于 CREATE/UNWIND 的副作
 - `BindContext` 作用域快照（外层可见变量）；
 - 是否为 OPTIONAL。
 
-输出：
+核心 IR：
+
 ```cpp
+using VariableId = SlotId; // 语义身份 = Binder 分配的绑定槽
+
 struct PatternVariableClass {
     enum Kind { NEW, OUTER, REUSED };
-    std::string name;
-    BoundType type;             // 拓扑类型优先
+    std::string name;            // 仅用于错误信息/调试
+    VariableId id;               // 语义身份
+    BoundType type;              // 拓扑类型优先
+    ScopeId source_scope;        // 来源作用域
+    uint32_t source_column;      // 来源列（物理列仍由 DPL 解析）
+};
+
+struct JoinEqualitySpec {
+    VariableId left;             // 不是 name，也不由同名推断
+    VariableId right;
+};
+
+struct PatternPartConnection {
+    enum Kind { CARTESIAN, CORRELATED };
     Kind kind;
-    ScopeId source_scope;       // 变量来源作用域
-    uint32_t source_column;     // 来源列
-    SlotId slot;
+    std::vector<JoinEqualitySpec> equalities;
 };
 
 struct PatternPartPlan {
-    // 本 part 输出的变量列表与列
     std::vector<PatternVariableClass> outputs;
-    BoundLogicalOperator op;    // 本 part 的局部逻辑计划
+    BoundLogicalOperator op;     // 本 part 局部计划
 };
 
 struct PatternJoinPlan {
     bool optional;
-    std::vector<PatternVariableClass> correlations; // CorrelatedSource 列
+    std::vector<PatternVariableClass> correlations;
     std::vector<PatternPartPlan> parts;
-    // 跨 part 等值约束：left_var == right_var
-    std::vector<JoinEqualitySpec> equalities;
+    std::vector<PatternPartConnection> connections;
 };
 ```
 
 算法：
-1. 遍历 `MatchPatternGraph` parts，确定每个变量的 NEW/OUTER/REUSED；
+1. 遍历 `MatchPatternGraph`，按作用域和绑定位置确定每个变量的 NEW/OUTER/REUSED，并分配 `VariableId`；
 2. 每个 part 在独立子作用域中绑定为局部算子；
-3. 相邻 part 通过 `JoinEqualityBuilder` 连接；
+3. 相邻 part 按 `PatternPartConnection` 连接：
+   - `CARTESIAN`：纯 `CrossProduct`；
+   - `CORRELATED`：`CrossProduct + JoinEqualitySpec` 生成的 equality Filter；
 4. OPTIONAL：外层变量打包成 `CorrelatedSource`，与 part 序列 CrossProduct + 等值；
-5. 生成 `BoundLeftJoinOp`（correlation 用 `ScopeSlot` 记录）。
+5. 生成 `BoundLeftJoinOp`（correlation 用 `VariableId + ScopeId` 记录）。
+
+**OPTIONAL predicate invariant**：
+与 OPTIONAL MATCH 关联的 pattern predicate 必须在 optional 右子计划语义域内求值
+（即在 `BoundLeftJoinOp.right` 内部），不得提升到 LeftJoin 之后；
+LeftJoin 之后的 WHERE 才属于外层查询语义。
 
 职责边界：
 - 不生成 WHERE 之外的其他算子；
@@ -194,28 +267,36 @@ struct PatternJoinPlan {
 
 ### 4.3 `JoinEqualityBuilder`（保留并收敛）
 
-现有 `Binder::bindCrossWithEqualities` 升级为该模块唯一入口：
-- 输入左右逻辑算子 + 左右 `BindContext::Snapshot`；
-- 输出 `Filter(CrossProduct)`；
-- 等值谓词仍使用 `__eq_left__name / __eq_right__name` 标记。
+文件：`src/query/planner/binder/join_equality_builder.{hpp,cpp}`
+
+- 输入：左右逻辑算子 + `std::vector<JoinEqualitySpec>`；
+- 输出：`Filter(CrossProduct)`；
+- **不根据左右 scope 的同名变量自行推断连接关系**；
+- 等值谓词 lowering 仍使用 `__eq_left__name / __eq_right__name` 标记（兼容机制，见 4.5）；
+- MATCH-after-WITH 保留一个便捷函数 `specsFromSameName(left_scope, right_scope)`，
+  该函数只表达“WITH 投影同名即同一绑定”这一种已被 TCK 验证的语义，不复用为通用推断。
 
 ### 4.4 `ScopedSlotResolver`
 
 文件：`src/query/optimizer/scoped_slot_resolver.{hpp,cpp}`
 
-核心数据：
+身份模型（与 AGENTS.md 的硬性不变量一致）：
+
 ```cpp
+using VariableId = SlotId;   // 语义身份 = Binder 分配的绑定槽
+
 struct ScopeSlotKey {
-    ScopeId scope;
-    std::string name;
+    ScopeId scope;            // 可见性作用域（BindContext 新增，单调递增）
+    std::string name;         // 仅作为作用域内解析键
 };
 ```
 
 职责：
-- `ensureSlot(scope, name)`：为“作用域 + 名字”分配/查找 SlotId；
+- `BindContext` 新增 `ScopeId current_scope` 与 `ScopeId next_scope()`；
+- `ensureSlot(ScopeSlotKey)`：新绑定强制分配新 SlotId；跨作用域同名禁止复用；
 - `canonicalSlot(slot)`：对象列提升时返回 canonical slot；
-- `planFor(scope, name)`：PEPlan 按 `ScopeSlotKey` 查找，而不是全局 name；
-- `var_slots` 的 last-write 改为 **当前作用域写入**，跨作用域同名不覆盖。
+- `planFor(ScopeSlotKey)`：PEPlan 按作用域键查找，而不是全局 name；
+- 删除 `all_symbols` last-write 语义，改为 `scoped_bindings: unordered_map<ScopeId, unordered_map<string, SlotId>>`。
 
 DPL 接入：
 - `ensureSlotsInExpr`、`allocateSlotsInOp`、`rewriteExpr` 改用 resolver；
@@ -227,7 +308,8 @@ DPL 接入：
 
 - `__eq_left__var` → 左子 layout/schema；
 - `__eq_right__var` → 右子 layout/schema + 左物理列数；
-- 只做列号映射，不构造谓词。
+- 只做列号映射，不构造谓词；
+- 该机制是 DPL/physical pipeline 的 **lowering 兼容层**，不进入 `PatternJoinPlan` IR。
 
 ### 4.6 `BoundEdgeFilter`
 
@@ -246,15 +328,21 @@ struct BoundEdgeFilter {
 
 - `BoundExpandOp` / `BoundVarLenExpandOp` 都持有该结构（替换现有布尔成员）；
 - 物理 `ExpandPhysicalOp` / `VarLenExpandPhysicalOp` 在编译期解析引用，执行期过滤；
-- 变长路径的边列表过滤：在 depth 达到后，比较路径边 ID 集合与列表 ID 集合。
+- **关系列表语义**：`MATCH (first)-[rs*]->(second)` 中 `rs` 是关系列表时，
+  候选路径的 relationship 必须与 `rs` 做 **sequence-level equality**：
+  - 按路径遍历顺序逐元素比较 EdgeId；
+  - 顺序敏感、长度必须相等、重复关系必须按重复次数匹配；
+  - 不是 set equality，也不是 multiset equality；
+  - 方向与路径遍历方向一致，不额外尝试反转列表。
 
 ### 4.7 `LabelOrderContext`
 
 文件：`src/query/planner/binder/label_order_context.hpp`
 
 - Binder 在绑定节点 pattern 时写入 `变量名 → 有序标签名列表`；
-- `VertexValue` 增加 `std::vector<LabelId> ordered_labels`（或仅 ProjectionExtract 携带）；
-- formatter 优先使用 ordered labels；存储编码不变。
+- 该信息作为 **Projection / Result metadata** 传播到 formatter；
+- **不修改 `VertexValue` / 存储编码**；`LabelIdSet` 继续表达存储语义的无序集合；
+- 只有输出格式化使用有序元数据，运行值对象不携带 query-specific metadata。
 
 ### 4.8 副作用审计（D 类）
 
@@ -293,14 +381,16 @@ PhysicalPlanner + PhysicalCrossRefResolver ──► PhysicalPlan
 
 ## 六、迁移计划
 
-1. **阶段 0**：落地本设计文档 + 回归基线；
-2. **阶段 1**：抽取 `JoinEqualityBuilder` / `PhysicalCrossRefResolver`（已有部分代码，整理接口）；
-3. **阶段 2**：实现 `ScopedSlotResolver`，替换 DPL name-based 解析；回归全部现有绿测；
-4. **阶段 3**：实现 `PatternLegalityAnalyzer` + `PatternJoinPlanner`，替换 `bindMatch` 多 part、`bindOptionalMatch`、WHERE pattern 路径；
-5. **阶段 4**：`BoundEdgeFilter` 统一 Expand/VarLen；
-6. **阶段 5**：`LabelOrderContext`；
-7. **阶段 6**：D 类副作用；
-8. **阶段 7**：全量 TCK + 报告。
+1. **阶段 0**：TCK / executor 回归基线，记录当前 14 失败快照；
+2. **阶段 1**：明确身份模型 `name / VariableId(=SlotId) / ScopeId / column_index`，加入 `BindContext::ScopeId`；
+3. **阶段 2**：实现 `ScopedSlotResolver`，删除 `all_symbols` last-write，回归全部现有绿测；
+4. **阶段 3**：抽取 `JoinEqualityBuilder`（显式 `JoinEqualitySpec`）+ `PhysicalCrossRefResolver`；
+5. **阶段 4**：实现 `PatternLegalityAnalyzer`；
+6. **阶段 5**：实现 `PatternJoinPlanner`，迁移 MATCH / OPTIONAL / WHERE pattern；
+7. **阶段 6**：`BoundEdgeFilter` 统一 Expand / VarLen（sequence semantics）；
+8. **阶段 7**：`LabelOrderContext`；
+9. **阶段 8**：D 类副作用；
+10. **阶段 9**：全量 TCK + 报告。
 
 每个阶段结束跑：
 `With1/With6/Match2/Match6` + 该阶段目标 feature + `query_executor_tests`。
