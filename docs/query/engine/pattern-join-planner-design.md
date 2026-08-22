@@ -88,6 +88,20 @@ SlotId
 3. 未来接入 cardinality 或成本模型时，可在 `PatternJoinPlanner` 与 `BoundLogicalPlan` 之间
    增加 join-order 阶段，IR 无需再改。
 
+### 第三轮评审结论（最终）
+
+第三轮评审给出 Approve / LGTM，并建议开工前补两个小点。结论如下：
+
+| # | 意见 | 结论 | 说明 |
+|---|------|------|------|
+| 1 | `LabelOrderContext` 用 `VariableId → ordered labels`，不用 `name → labels` | 采纳 | 与身份模型保持一致；formatter 需要 name 时再通过 output metadata 获取 |
+| 2 | 明确 `connection graph ≠ join order` | 采纳 | 写入 4.9 的 invariant |
+| 3 | 增加 Identity invariant tests（不是只测最终 query 结果） | 采纳 | 写入迁移计划测试策略 |
+| 4 | VarLen bound-list 不要 materialize 全路径后再比较，需增量检查 | 采纳 | 作为 4.6 的实现约束 |
+| 5 | `BoundColumnRef` 语义身份由 slot 唯一确定，scope 是 provenance/diagnostic | 采纳 | 同步写入 AGENTS.md 不变量 |
+
+本轮没有不采纳项。
+
 ## 一、当前失败清单（14 个）
 
 | 场景 | 查询要点 | 根因分类 |
@@ -395,11 +409,18 @@ struct BoundEdgeFilter {
 []          == [r1]         false（长度敏感）
 ```
 
+实现约束：VarLen 是图遍历热路径，禁止把每条候选路径 materialize 成完整
+EdgeId list 后再做全量比较；必须采用**增量约束检查**：
+- 扩展一步时用当前步 EdgeId 与列表前缀比较；
+- 只在路径长度等于列表长度且前缀全部匹配时输出；
+- 不满足前缀的候选尽早剪枝。
+
 ### 4.7 `LabelOrderContext`
 
 文件：`src/query/planner/binder/label_order_context.hpp`
 
-- Binder 在绑定节点 pattern 时写入 `变量名 → 有序标签名列表`；
+- Binder 在绑定节点 pattern 时写入 `VariableId → 有序标签名列表`；
+  formatter 需要显示名时，再通过该输出列的 `BoundColumnRef/name metadata` 获取；
 - 该信息作为 **Projection / Result metadata** 传播到 formatter；
 - **不修改 `VertexValue` / 存储编码**；`LabelIdSet` 继续表达存储语义的无序集合；
 - 只有输出格式化使用有序元数据，运行值对象不携带 query-specific metadata。
@@ -411,6 +432,8 @@ struct BoundEdgeFilter {
 ### 4.9 Join Graph 与 Join Order
 
 - `PatternPartConnection` 构成 **join graph**，不把 AST 顺序固化到 IR；
+- **Invariant：connection graph ≠ join order**。connection 是语义上的变量关联，
+  join tree 是 planner 的实现选择；
 - 当前实现阶段：`PatternJoinPlanner` 按 source order 将 join graph 降成 left-deep join tree；
 - 未来阶段：可在 `PatternJoinPlan` 与最终 `BoundLogicalPlan` 之间增加 join-order 决策，
   基于 `PatternPartConnection` 和 cardinality 重排，IR 无需变化；
@@ -462,6 +485,30 @@ PhysicalPlanner + PhysicalCrossRefResolver ──► PhysicalPlan
 
 每个阶段结束跑：
 `With1/With6/Match2/Match6` + 该阶段目标 feature + `query_executor_tests`。
+
+**Identity invariant tests**（阶段 1 起持续维护，不只测最终查询结果）：
+
+```cypher
+MATCH (a)
+OPTIONAL MATCH (a)-->(b)
+OPTIONAL MATCH (b)-->(a)
+RETURN a, b
+```
+
+断言：
+- outer `a.slot` == correlated `a.slot`；
+- first-optional local `b.slot` 仍被 second OPTIONAL 引用；
+- 不同作用域新绑定的 slot 互不相等。
+
+```cypher
+MATCH (a)
+WITH a AS x
+MATCH (x)-->(y)
+```
+
+断言：WITH 投影后的 `x` 仍解析到原 `a` 的 slot。
+
+这类测试直接验证身份模型，而不是“恰好返回正确结果”。
 
 ---
 

@@ -92,8 +92,8 @@
 > 完整设计见 `docs/query/engine/pattern-join-planner-design.md`。这些是跨模块硬约束，不是建议。
 
 1. **`name` 只是用户标签**：Cypher 变量名不参与语义身份判断。禁止以“同名即同变量”作为通用规则。
-2. **`VariableId` = Binder 分配的 `SlotId`**：语义身份是绑定槽；每个新绑定必须分配新 `SlotId`，跨作用域同名禁止复用。
-3. **`ScopeId` 是可见性概念**：`BindContext` 必须能回答“该变量在哪个作用域可见”；`save/restore` 必须恢复作用域信息。
+2. **`VariableId` = Binder 分配的 `SlotId`**：语义身份是绑定槽；每个新绑定必须分配新 `SlotId`，跨作用域同名禁止复用。**same slot = same semantic binding；different slot = different semantic binding**。
+3. **`ScopeId` 是可见性/provenance 概念**：`BindContext` 必须能回答“该变量在哪个作用域可见”；`save/restore` 必须恢复作用域信息。**Scope 不得作为 slot identity 的第二来源**，仅用于解析与诊断。
 4. **`column_index` 是局部位置**：只属于某个 operator schema；DPL/物理层解析后再使用，Binder 不得把局部列号当作全局身份。
 5. **禁止恢复 `all_symbols` last-write 语义**：作用域内解析用 `(ScopeId, name)`，禁止用全局 name last-write 覆盖跨作用域绑定。
 6. **Pattern part 连接必须显式区分** `CARTESIAN` 与 `CORRELATED`；后者才允许携带 equality specs。
