@@ -42,19 +42,29 @@ struct PropertyRequirement {
 
 /// Binding context — shared state during AST traversal.
 struct BindContext {
+    /// Monotonic identifier for a binding scope. Scope is a visibility /
+    /// provenance concept; the semantic identity of a variable is its
+    /// SlotId (VariableId), never ScopeId.
+    using ScopeId = uint32_t;
+    static constexpr ScopeId kRootScope = 0;
+
     /// Map from variable name to column information.
     /// Scope-local: WITH clauses reset this to just their outputs, so names
     /// projected by an earlier WITH disappear here even though operators in
     /// the bound tree (Aggregate output_names, Filter predicates) still
     /// reference their original slot_id.
     std::unordered_map<std::string, ColumnInfo> symbols;
-    /// Permanent record of every name → slot_id allocation made during
-    /// binding. Survives scope resets so the planner can recover the
-    /// binder's slot for an out-of-scope name (e.g. an Aggregate output
-    /// hidden by a subsequent WITH) instead of allocating a conflicting
-    /// fresh slot. Last write wins — the binder reuses slots for the same
-    /// name across scopes, so this is consistent with its allocation model.
+    /// Transitional cumulative index name → slot, first binding wins.
+    /// It must NOT be used for semantic identity resolution; use
+    /// scoped_bindings / current scope instead. Kept only until all
+    /// consumers migrate to ScopedSlotResolver.
     std::unordered_map<std::string, SlotId> all_symbols;
+    /// Scope-aware binding record: (ScopeId, name) → SlotId.
+    std::unordered_map<ScopeId, std::unordered_map<std::string, SlotId>> scoped_bindings;
+    /// Current binding scope. Root scope is kRootScope.
+    ScopeId current_scope = kRootScope;
+    /// Next ScopeId to hand out. ScopeIds are never reused within a query.
+    ScopeId next_scope_id = kRootScope + 1;
     /// Accumulated property requirements for projection pushdown.
     std::vector<PropertyRequirement> property_requirements;
     /// Ordered output columns from RETURN clause (populated by bindReturn).
@@ -64,6 +74,28 @@ struct BindContext {
     /// Global SlotId allocator.  SlotIds survive sub-scope resets
     /// (beginSubScope) — they are query-global, not scope-local.
     SlotAllocator slot_allocator;
+
+    /// Record a new binding in the current scope. A new binding must always
+    /// carry a freshly allocated SlotId; callers must not reuse a slot across
+    /// bindings. `all_symbols` keeps first-write semantics only as a
+    /// transitional index and is not an identity source.
+    void registerBinding(const std::string& name, SlotId slot) {
+        scoped_bindings[current_scope][name] = slot;
+        // Transitional compatibility index. This is still last-write until
+        // all consumers migrate to scoped_bindings; it must not be treated as
+        // semantic identity.
+        all_symbols[name] = slot;
+    }
+
+    /// Look up a binding in the current scope only. Returns INVALID_SLOT_ID
+    /// when absent. Scope-chain lookup will be added by ScopedSlotResolver.
+    SlotId lookupBindingInCurrentScope(const std::string& name) const {
+        auto scope_it = scoped_bindings.find(current_scope);
+        if (scope_it == scoped_bindings.end())
+            return INVALID_SLOT_ID;
+        auto it = scope_it->second.find(name);
+        return it == scope_it->second.end() ? INVALID_SLOT_ID : it->second;
+    }
 
     /// Register a new variable in the symbol table. Returns the assigned column index.
     uint32_t registerVariable(const std::string& name, BoundType type) {
@@ -104,16 +136,18 @@ struct BindContext {
     struct Snapshot {
         std::unordered_map<std::string, ColumnInfo> symbols;
         uint32_t next_column_index = 0;
+        ScopeId current_scope = kRootScope;
     };
 
     Snapshot save() const {
-        return {symbols, next_column_index};
+        return {symbols, next_column_index, current_scope};
     }
 
     /// Restore binding state from a previously saved snapshot.
     void restore(const Snapshot& snap) {
         symbols = snap.symbols;
         next_column_index = snap.next_column_index;
+        current_scope = snap.current_scope;
     }
 
     /// Reset to an independent scope for EXISTS sub-plan binding.
@@ -121,6 +155,7 @@ struct BindContext {
     void beginSubScope() {
         symbols.clear();
         next_column_index = 0;
+        current_scope = next_scope_id++;
     }
 };
 
