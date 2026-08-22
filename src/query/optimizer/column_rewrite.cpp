@@ -969,6 +969,28 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
         }
         return planForName(name);
     };
+    /// Scope-aware variant: when a ref carries scope provenance, name lookup
+    /// may only be used if it resolves to the SAME canonical slot. Otherwise
+    /// a same-named variable from another scope could hijack the ref.
+    auto planForRef = [&](const binder::BoundColumnRef& ref) -> const PEPlan* {
+        if (ref.scope_id == binder::INVALID_SCOPE_ID)
+            return planForSlot(ref.slot_id, ref.name);
+        if (ref.slot_id == binder::INVALID_SLOT_ID)
+            return nullptr;
+        binder::SlotId canon = resolver.canonicalOf(ref.slot_id);
+        if (canon != binder::INVALID_SLOT_ID) {
+            auto it = plans.find(canon);
+            if (it != plans.end())
+                return &it->second;
+        }
+        binder::SlotId name_slot = resolver.slotForName(ref.scope_id, ref.name);
+        if (name_slot == binder::INVALID_SLOT_ID)
+            return nullptr;
+        binder::SlotId name_canon = resolver.canonicalOf(name_slot);
+        if (name_canon != canon)
+            return nullptr;
+        return planForName(ref.name);
+    };
     bool changed = std::visit(
         [&](auto& val) -> bool {
             using T = std::decay_t<decltype(val)>;
@@ -981,7 +1003,11 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 binder::SlotId bind_slot = binder::INVALID_SLOT_ID;
                 if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object))
                     bind_slot = cref->slot_id;
-                const PEPlan* pi = planForSlot(bind_slot, var);
+                const PEPlan* pi = nullptr;
+                if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object))
+                    pi = planForRef(*cref);
+                else
+                    pi = planForSlot(bind_slot, var);
                 if (!pi)
                     return false;
 
@@ -1092,7 +1118,7 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 // a VertexValue.
                 if (!binder::isSemanticGraphKind(val.type.kind))
                     return false;
-                const PEPlan* pi = planForSlot(val.slot_id, val.name);
+                const PEPlan* pi = planForRef(val);
                 if (!pi)
                     return false;
                 binder::SlotId target =
