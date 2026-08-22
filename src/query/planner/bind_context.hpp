@@ -62,6 +62,14 @@ struct BindContext {
     std::unordered_map<std::string, SlotId> all_symbols;
     /// Scope-aware binding record: (ScopeId, name) → SlotId.
     std::unordered_map<ScopeId, std::unordered_map<std::string, SlotId>> scoped_bindings;
+    /// Ordered log of bindings. Used to seed the planner's name-based
+    /// var_slots in binding order until DPL consumes scoped_bindings directly.
+    struct BindingRecord {
+        ScopeId scope = kRootScope;
+        std::string name;
+        SlotId slot = INVALID_SLOT_ID;
+    };
+    std::vector<BindingRecord> binding_order;
     /// Scope chain (root first). Used for visibility lookup.
     struct ScopeInfo {
         ScopeId id = kRootScope;
@@ -88,6 +96,7 @@ struct BindContext {
     /// transitional index and is not an identity source.
     void registerBinding(const std::string& name, SlotId slot) {
         scoped_bindings[current_scope][name] = slot;
+        binding_order.push_back({current_scope, name, slot});
         // Transitional compatibility index. This is still last-write until
         // all consumers migrate to scoped_bindings; it must not be treated as
         // semantic identity.

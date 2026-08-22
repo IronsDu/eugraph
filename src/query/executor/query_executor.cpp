@@ -171,17 +171,16 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         if (info.slot_id != binder::INVALID_SLOT_ID)
             plan_ctx.var_slots[name] = info.slot_id;
     }
-    // Also seed from the binder's permanent record. WITH clauses narrow
+    // Also seed from the binder's ordered binding log. WITH clauses narrow
     // ctx().symbols to just their outputs, dropping variables projected by
     // earlier WITHs (e.g. `WITH x, count(*) AS foaf ... WITH x ...` drops
     // `foaf`). Operators in the bound tree (Aggregate output_names, Filter
     // predicates) still reference those slots, so the planner must know
-    // them — otherwise allocateAllSlots / makeSlotLayout allocate a fresh
-    // slot for the dropped name and the predicate's BoundColumnRef.slot_id
-    // no longer matches the layout.
-    for (const auto& [name, sid] : binder.ctx().all_symbols) {
-        if (sid != binder::INVALID_SLOT_ID)
-            plan_ctx.var_slots[name] = sid;
+    // them. Later bindings overwrite earlier ones to preserve the binder's
+    // existing slot-carry-forward behavior until ScopedSlotResolver lands.
+    for (const auto& binding : binder.ctx().binding_order) {
+        if (binding.slot != binder::INVALID_SLOT_ID)
+            plan_ctx.var_slots[binding.name] = binding.slot;
     }
     // Seed the planner's slot allocator to continue after the binder's slots.
     // Start from the next slot after the binder's allocation.
