@@ -1,6 +1,7 @@
 #pragma once
 
 #include "query/physical_plan/slot_layout.hpp"
+#include "query/planner/binder/join_equality.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
 #include "query/planner/bound_expression/bound_quantifier_expr.hpp"
 
@@ -32,7 +33,7 @@ private:
             // operands). Their column_index has already been offset to the
             // physical merged layout by the planner; a name-based slot lookup
             // could hit the duplicate left-side slot and overwrite it.
-            if (val.name.empty())
+            if (val.name.empty() || binder::isJoinEqualityRef(val.name))
                 return;
             int idx = layout_.getColumnIndex(val.slot_id);
             if (idx >= 0)

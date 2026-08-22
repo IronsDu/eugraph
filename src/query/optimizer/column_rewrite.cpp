@@ -1,5 +1,7 @@
 #include "query/optimizer/column_rewrite.hpp"
 
+#include "query/planner/binder/join_equality.hpp"
+
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_function_call.hpp"
 #include "query/planner/bound_expression/bound_map.hpp"
@@ -261,10 +263,10 @@ void ensureSlotsInExpr(const binder::BoundExpression& expr, NameSlotMap& name_to
                         ensureSlot(name_to_slot, alloc, var);
                 }
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
-                if (!val.name.empty())
+                if (!val.name.empty() && !binder::isJoinEqualityRef(val.name))
                     ensureSlot(name_to_slot, alloc, val.name);
             } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
-                if (!val.name.empty())
+                if (!val.name.empty() && !binder::isJoinEqualityRef(val.name))
                     ensureSlot(name_to_slot, alloc, val.name);
             }
         },
@@ -1078,7 +1080,10 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 // right operands) and must read the raw source column; PE
                 // promotion would redirect both operands to the same
                 // name-based object slot.
-                if (val.name.empty())
+                // Internal equality refs must read the raw source column; PE
+                // promotion would redirect both operands to the same
+                // name-based object slot.
+                if (val.name.empty() || binder::isJoinEqualityRef(val.name))
                     return false;
                 // Scalar aliases may reuse a graph variable's slot when the
                 // projection shadows it (`RETURN n.num AS n`). They must keep
