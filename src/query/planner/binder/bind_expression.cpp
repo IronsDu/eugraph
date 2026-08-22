@@ -143,7 +143,8 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                     error("UndefinedVariable: Variable '" + ptr->name + "' not defined");
                     return std::nullopt;
                 }
-                return BoundExpression(BoundColumnRef(col->column_index, col->type, ptr->name, col->slot_id));
+                return BoundExpression(
+                    BoundColumnRef(col->column_index, col->type, ptr->name, col->slot_id, col->scope_id));
             } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
                 return bindExpression(ptr->inner);
             } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {

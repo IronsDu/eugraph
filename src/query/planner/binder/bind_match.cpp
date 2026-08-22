@@ -787,8 +787,8 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 const ColumnInfo* edge_col = ctx_.lookup(edge_var);
                 if (!edge_col)
                     continue;
-                unique_call->args.push_back(
-                    BoundColumnRef(edge_col->column_index, edge_col->type, edge_var, edge_col->slot_id));
+                unique_call->args.push_back(BoundColumnRef(edge_col->column_index, edge_col->type, edge_var,
+                                                           edge_col->slot_id, edge_col->scope_id));
             }
             BoundFilterOp unique_filter;
             unique_filter.predicate = BoundExpression(std::move(unique_call));
