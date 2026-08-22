@@ -1966,6 +1966,89 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
         return left_join;
     }
 
+    // First node is new but later variables are bound. Carry the bound
+    // variables through a CorrelatedSource, bind the pattern independently and
+    // constrain the two sides with the shared cross-join equality helper.
+    if (!bound_vars.empty() && !first_node_bound) {
+        auto saved_ctx = ctx_.save();
+        ctx_.beginSubScope();
+
+        std::vector<BoundLeftJoinOp::Correlation> correlation;
+        BoundCorrelatedSourceOp source;
+        for (const auto& bound : bound_vars) {
+            ColumnInfo sub_info = bound.info;
+            // CorrelatedSource must keep topology values for vertices:
+            // declaring semantic Vertex makes ProjectionExtract promote the
+            // left column to an object slot and LeftJoin injects a
+            // default-invalid object (id 0) instead of the raw VertexRef.
+            if (sub_info.type.kind == BoundTypeKind::VERTEX)
+                sub_info.type = BoundType::VertexRef();
+            sub_info.column_index = nextColumnIndex();
+            uint32_t sub_idx = sub_info.column_index;
+            ctx_.symbols[bound.name] = sub_info;
+            BoundLeftJoinOp::Correlation corr;
+            corr.left_slot = bound.info.slot_id;
+            corr.left_column = bound.info.column_index;
+            corr.left_var = bound.name;
+            corr.right_column = sub_idx;
+            correlation.push_back(std::move(corr));
+            source.variables.push_back(bound.name);
+            source.types.push_back(sub_info.type);
+            source.column_indices.push_back(sub_idx);
+        }
+        BindContext::Snapshot source_scope = ctx_.save();
+        uint32_t source_cols = source_scope.next_column_index;
+
+        ctx_.beginSubScope();
+        auto pattern_plan = bindMatch(match, std::nullopt, /*skip_where=*/true);
+        if (!pattern_plan)
+            return std::nullopt;
+        BindContext::Snapshot pattern_scope = ctx_.save();
+
+        ctx_.restore(source_scope);
+        for (const auto& [name, info] : pattern_scope.symbols) {
+            if (seen.count(name) == 0) {
+                ColumnInfo merged = info;
+                merged.column_index += source_cols;
+                ctx_.symbols[name] = std::move(merged);
+            }
+        }
+        ctx_.next_column_index = source_cols + pattern_scope.next_column_index;
+
+        auto joined = bindCrossWithEqualities(BoundLogicalOperator(std::move(source)), std::move(*pattern_plan),
+                                              source_scope, pattern_scope);
+        if (!joined)
+            return std::nullopt;
+        BoundLogicalOperator right_plan = std::move(*joined);
+
+        if (match.where_pred) {
+            auto where_op = bindWhere(*match.where_pred, std::move(right_plan));
+            if (!where_op)
+                return std::nullopt;
+            right_plan = std::move(*where_op);
+        }
+
+        std::vector<std::pair<std::string, ColumnInfo>> new_vars;
+        for (const auto& [name, info] : pattern_scope.symbols) {
+            if (seen.count(name) == 0)
+                new_vars.emplace_back(name, info);
+        }
+        ctx_.restore(saved_ctx);
+
+        uint32_t col_offset = ctx_.next_column_index + source_cols;
+        for (auto& [name, info] : new_vars) {
+            info.column_index += col_offset;
+            ctx_.symbols[name] = std::move(info);
+        }
+        ctx_.next_column_index = col_offset + pattern_scope.next_column_index;
+
+        auto left_join = std::make_unique<BoundLeftJoinOp>();
+        left_join->left = std::move(current);
+        left_join->right = std::move(right_plan);
+        left_join->correlation = std::move(correlation);
+        return left_join;
+    }
+
     // Fallback: previous behavior for patterns whose first node is not
     // correlated, or when no variable is bound yet.
     const auto& first_node = match.patterns[0].element.node;

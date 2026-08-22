@@ -2075,9 +2075,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     std::vector<uint32_t> left_corr_cols;
                     left_corr_cols.reserve(v.correlation.size());
                     for (const auto& corr : v.correlation) {
-                        int pos = lr.slot_layout.getColumnIndex(corr.left_slot);
-                        if (pos < 0)
-                            pos = static_cast<int>(corr.left_column);
+                        // Prefer the binder column when it still points at the
+                        // same variable. PE may append an object column and a
+                        // name-based slot can resolve to that object instead
+                        // of the raw topology column CorrelatedSource needs.
+                        int pos = static_cast<int>(corr.left_column);
+                        if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size() ||
+                            lr.output_schema[pos] != corr.left_var)
+                            pos = lr.slot_layout.getColumnIndex(corr.left_slot);
                         if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size())
                             pos = findColumn(lr.output_schema, corr.left_var);
                         if (pos < 0) {
