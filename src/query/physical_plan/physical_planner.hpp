@@ -47,6 +47,8 @@ struct PlanContext {
     /// optimizer::allocateAllSlots at the start of planBound (covers all
     /// variable names in the bound tree, including aliases).
     optimizer::NameSlotMap var_slots;
+    /// Scope-aware binding records seeded from Binder::scoped_bindings.
+    optimizer::ScopedSlotMap scoped_var_slots;
     /// Alias slot → canonical slot map. Built by collectAliasSlotMap.
     optimizer::AliasSlotMap alias_map;
     /// Slot allocator for ProjectionExtract-appended columns.
@@ -64,7 +66,7 @@ struct PlanContext {
     /// lookup-or-allocate pattern in makeSlotLayout / Project per-item fallback
     /// and for the allocateAllSlots / lowerAliasPassthrough writers.
     optimizer::SlotResolver resolver() const {
-        return optimizer::SlotResolver(var_slots, alias_map);
+        return optimizer::SlotResolver(var_slots, alias_map, &scoped_var_slots);
     }
 };
 

@@ -182,6 +182,8 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         if (binding.slot != binder::INVALID_SLOT_ID)
             plan_ctx.var_slots[binding.name] = binding.slot;
     }
+    // Scope-aware records for DPL: (scope, name) → slot.
+    plan_ctx.scoped_var_slots = binder.ctx().scoped_bindings;
     // Seed the planner's slot allocator to continue after the binder's slots.
     // Start from the next slot after the binder's allocation.
     plan_ctx.slot_allocator.seed(binder.ctx().slot_allocator.current());

@@ -2,6 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "query/planner/bound_type.hpp"
+#include "query/planner/scope_id.hpp"
 #include "query/planner/slot_id.hpp"
 
 #include <algorithm>
@@ -22,6 +23,8 @@ struct ColumnInfo {
     uint32_t column_index = 0;
     /// Globally-unique logical slot (assigned by Binder, immutable).
     SlotId slot_id = INVALID_SLOT_ID;
+    /// Scope where this binding was created (provenance).
+    ScopeId scope_id = INVALID_SCOPE_ID;
     /// For columns sourced from specific labels (e.g., multi-label nodes).
     std::vector<LabelId> source_labels;
     std::optional<uint16_t> source_prop_id;
@@ -46,8 +49,8 @@ struct BindContext {
     /// Monotonic identifier for a binding scope. Scope is a visibility /
     /// provenance concept; the semantic identity of a variable is its
     /// SlotId (VariableId), never ScopeId.
-    using ScopeId = uint32_t;
-    static constexpr ScopeId kRootScope = 0;
+    using ScopeId = binder::ScopeId;
+    static constexpr ScopeId kRootScope = binder::kRootScope;
 
     /// Map from variable name to column information.
     /// Scope-local: WITH clauses reset this to just their outputs, so names
@@ -123,7 +126,8 @@ struct BindContext {
 
     /// Register a new variable in the symbol table. Returns the assigned column index.
     uint32_t registerVariable(const std::string& name, BoundType type) {
-        auto [it, inserted] = symbols.emplace(name, ColumnInfo{name, std::move(type), 0, 0, {}, std::nullopt, false});
+        auto [it, inserted] =
+            symbols.emplace(name, ColumnInfo{name, std::move(type), 0, 0, INVALID_SCOPE_ID, {}, std::nullopt, false});
         if (inserted) {
             // Assign column index only on first registration
             // (we use a separate pass to assign indices in order)
