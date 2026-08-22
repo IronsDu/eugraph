@@ -95,7 +95,7 @@
 2. **`VariableId` = Binder 分配的 `SlotId`**：语义身份是绑定槽；每个新绑定必须分配新 `SlotId`，跨作用域同名禁止复用。**same slot = same semantic binding；different slot = different semantic binding**。
 3. **`ScopeId` 是可见性/provenance 概念**：`BindContext` 必须能回答“该变量在哪个作用域可见”；`save/restore` 必须恢复作用域信息。**Scope 不得作为 slot identity 的第二来源**，仅用于解析与诊断。
 4. **`column_index` 是局部位置**：只属于某个 operator schema；DPL/物理层解析后再使用，Binder 不得把局部列号当作全局身份。
-5. **禁止恢复 `all_symbols` last-write 语义**：作用域内解析用 `(ScopeId, name)`，禁止用全局 name last-write 覆盖跨作用域绑定。
+5. **`all_symbols` 只允许在迁移期作为兼容索引存在**：当前实现仍保留 last-write 以兼容旧消费者；任何代码不得把它当作语义身份来源。ScopedSlotResolver 落地并迁移所有消费者后，必须删除该字段及 last-write 行为。
 6. **Pattern part 连接必须显式区分** `CARTESIAN` 与 `CORRELATED`；后者才允许携带 equality specs。
 7. **OPTIONAL MATCH 的 pattern predicate 必须留在 `BoundLeftJoinOp.right` 语义域**，禁止提升到 LeftJoin 之后。
 8. **varlen 绑定关系列表采用 sequence equality**：路径关系 ID 序列与列表逐元素相等（顺序、长度、重复次数都敏感），不是 set/multiset。
