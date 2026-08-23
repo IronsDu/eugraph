@@ -172,6 +172,7 @@ add_library(eugraph_query_engine STATIC
     src/query/planner/binder/bind_call.cpp
     src/query/planner/binder/bind_match.cpp
     src/query/planner/binder/pattern/pattern_graph.cpp
+    src/query/planner/binder/pattern/pattern_legality_analyzer.cpp
     src/query/planner/binder/bind_return.cpp
     src/query/planner/binder/bind_mutation.cpp
     src/query/planner/binder/bind_merge.cpp
@@ -498,6 +499,7 @@ if(EUGRAPH_BUILD_TESTS)
     # Query executor end-to-end tests
     add_executable(query_executor_tests
         tests/test_query_executor.cpp
+        tests/test_pattern_legality_analyzer.cpp
     )
 
     target_include_directories(query_executor_tests PRIVATE

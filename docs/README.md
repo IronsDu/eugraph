@@ -131,6 +131,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [SlotId 架构设计](query/engine/slot-id-design.md) | 全局唯一槽位标识符：动机、设计决策、物理布局映射、内部/用户槽位分区 |
 | [CrossProduct 相关变量等值约束](query/engine/cross-product-correlation.md) | WITH 后独立 MATCH / 多 pattern 同名变量的独立作用域绑定与实体 ID 等值约束设计 |
 | [Pattern 作用域与 Join 等值约束](query/engine/pattern-scope-join-design.md) | 剩余 TCK 失败的模块化设计：合法性前置分析、统一 Join 等值、OPTIONAL 关联、varlen 列表与标签顺序 |
+| [Pattern Join Planner 与作用域 Slot 重构](query/engine/pattern-join-planner-design.md) | v4 重构方案：统一 pattern join 模型、ScopedSlotResolver、BoundEdgeFilter、LabelOrderContext |
 | [物理算子审计](query/engine/physical-operator-audit.md) | 拓扑/语义类型分离的设计推理、PE 收敛历程、未落地方向（列裁剪、CBO） |
 
 ### 逻辑优化器

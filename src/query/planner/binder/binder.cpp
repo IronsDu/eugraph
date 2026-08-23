@@ -30,6 +30,58 @@ BoundCallOp* tryExtractCallOp(BoundLogicalOperator& op) {
     return nullptr;
 }
 
+/// Clone the subset of AST expressions used in inline pattern property
+/// filters (deferred binding above a cross join needs owned copies).
+cypher::Expression cloneInlineExpr(const cypher::Expression& expr) {
+    return std::visit(
+        [](const auto& ptr) -> cypher::Expression {
+            using T = std::decay_t<decltype(ptr)>;
+            using Elem = typename T::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::Literal>) {
+                return std::make_unique<cypher::Literal>(*ptr);
+            } else if constexpr (std::is_same_v<Elem, cypher::Parameter>) {
+                return std::make_unique<cypher::Parameter>(*ptr);
+            } else if constexpr (std::is_same_v<Elem, cypher::Variable>) {
+                return std::make_unique<cypher::Variable>(*ptr);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                auto c = std::make_unique<cypher::PropertyAccess>();
+                c->object = cloneInlineExpr(ptr->object);
+                c->property = ptr->property;
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                auto c = std::make_unique<cypher::BinaryOp>();
+                c->op = ptr->op;
+                c->left = cloneInlineExpr(ptr->left);
+                c->right = cloneInlineExpr(ptr->right);
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                auto c = std::make_unique<cypher::UnaryOp>();
+                c->op = ptr->op;
+                c->operand = cloneInlineExpr(ptr->operand);
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                auto c = std::make_unique<cypher::FunctionCall>();
+                c->name = ptr->name;
+                c->distinct = ptr->distinct;
+                for (const auto& arg : ptr->args)
+                    c->args.push_back(cloneInlineExpr(arg));
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                auto c = std::make_unique<cypher::ListExpr>();
+                for (const auto& e : ptr->elements)
+                    c->elements.push_back(cloneInlineExpr(e));
+                return c;
+            } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                auto c = std::make_unique<cypher::MapExpr>();
+                for (const auto& [k, v] : ptr->entries)
+                    c->entries.emplace_back(k, cloneInlineExpr(v));
+                return c;
+            }
+            return std::make_unique<cypher::Variable>("");
+        },
+        expr);
+}
+
 } // namespace
 
 BoundExpression Binder::makeEqualityExpr(const BoundColumnRef& left, const BoundColumnRef& right) {
@@ -303,10 +355,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
     for (size_t ci = 0; ci < query.clauses.size(); ++ci) {
         const auto& clause = query.clauses[ci];
-        bool prev_was_with =
-            ci > 0 && std::holds_alternative<std::unique_ptr<cypher::WithClause>>(query.clauses[ci - 1]);
         std::optional<BoundLogicalOperator> op = std::visit(
-            [this, &current, &first_clause, prev_was_with](const auto& ptr) -> std::optional<BoundLogicalOperator> {
+            [this, &current, &first_clause](const auto& ptr) -> std::optional<BoundLogicalOperator> {
                 using T = std::decay_t<decltype(ptr)>;
                 using Elem = typename T::element_type;
 
@@ -336,15 +386,54 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                         }
                     }
 
-                    if (needs_cross && prev_was_with) {
+                    if (needs_cross) {
                         auto left = std::move(*current);
                         BindContext::Snapshot left_scope = ctx_.save();
 
+                        // Preserve scalar bindings for inline pattern property
+                        // expressions (e.g. MATCH (n {x: outer})); graph-typed
+                        // variables stay fresh and join via equalities. Names
+                        // that occur in the pattern graph are excluded so the
+                        // pattern binder still allocates fresh right slots.
+                        std::unordered_set<std::string> pattern_vars;
+                        for (const auto& pp : ptr->patterns) {
+                            const auto& el = pp.element;
+                            if (el.node.variable)
+                                pattern_vars.insert(*el.node.variable);
+                            for (const auto& [rel_pat, node_pat] : el.chain) {
+                                if (rel_pat.variable)
+                                    pattern_vars.insert(*rel_pat.variable);
+                                if (node_pat.variable)
+                                    pattern_vars.insert(*node_pat.variable);
+                            }
+                        }
+                        auto is_scalar_for_inline = [&](const BoundType& type) {
+                            if (isSemanticGraphKind(type.kind) || isTopologyKind(type.kind))
+                                return false;
+                            if (type.kind == BoundTypeKind::LIST && type.element_type &&
+                                (isSemanticGraphKind(type.element_type->kind) ||
+                                 isTopologyKind(type.element_type->kind)))
+                                return false;
+                            return true;
+                        };
+                        std::vector<std::pair<std::string, ColumnInfo>> outer_scalars;
+                        for (const auto& [name, info] : ctx_.symbols) {
+                            if (pattern_vars.count(name) == 0 && is_scalar_for_inline(info.type))
+                                outer_scalars.emplace_back(name, info);
+                        }
+
                         ctx_.beginSubScope();
-                        auto right = bindMatch(*ptr, std::nullopt, /*skip_where=*/true);
+                        for (const auto& [name, info] : outer_scalars)
+                            ctx_.symbols[name] = info;
+                        auto right = bindMatch(*ptr, std::nullopt, /*skip_where=*/true, /*defer_inline_filters=*/true);
                         if (!right)
                             return std::nullopt;
                         BindContext::Snapshot right_scope = ctx_.save();
+                        // Outer scalar symbols were visible only for inline
+                        // property binding; they are not right-side outputs and
+                        // must not produce cross equalities.
+                        for (const auto& [name, info] : outer_scalars)
+                            right_scope.symbols.erase(name);
                         ctx_.restore(left_scope);
 
                         // Merge right-only variables into the outer scope with
@@ -365,29 +454,65 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                             return std::nullopt;
                         BoundLogicalOperator result = std::move(*joined);
 
-                        if (ptr->where_pred) {
-                            auto where_op = bindWhere(*ptr->where_pred, std::move(result));
-                            if (!where_op)
-                                return std::nullopt;
-                            result = std::move(*where_op);
+                        // Re-apply inline property filters above the cross join
+                        // so outer scalar references resolve against the left
+                        // side and fresh pattern variables against the right.
+                        auto apply_prop_filters =
+                            [&](const std::string& var, const cypher::PropertiesMap& props,
+                                BoundLogicalOperator child) -> std::optional<BoundLogicalOperator> {
+                            for (const auto& [prop_name, prop_expr] : props.entries) {
+                                auto var_expr = std::make_unique<cypher::Variable>();
+                                var_expr->name = var;
+                                auto prop_access = std::make_unique<cypher::PropertyAccess>();
+                                prop_access->object = std::move(var_expr);
+                                prop_access->property = prop_name;
+
+                                auto eq = std::make_unique<cypher::BinaryOp>();
+                                eq->op = cypher::BinaryOperator::EQ;
+                                eq->left = std::move(prop_access);
+                                eq->right = cloneInlineExpr(prop_expr);
+
+                                auto filter_pred = bindExpression(cypher::Expression(std::move(eq)));
+                                if (!filter_pred)
+                                    return std::nullopt;
+                                BoundFilterOp filter;
+                                filter.predicate = std::move(*filter_pred);
+                                filter.child = std::move(child);
+                                child = std::make_unique<BoundFilterOp>(std::move(filter));
+                            }
+                            return child;
+                        };
+
+                        for (const auto& pp : ptr->patterns) {
+                            const auto& el = pp.element;
+                            if (el.node.properties) {
+                                if (!el.node.variable)
+                                    return std::nullopt;
+                                auto next =
+                                    apply_prop_filters(*el.node.variable, *el.node.properties, std::move(result));
+                                if (!next)
+                                    return std::nullopt;
+                                result = std::move(*next);
+                            }
+                            for (const auto& [rel_pat, node_pat] : el.chain) {
+                                if (rel_pat.properties && rel_pat.variable) {
+                                    auto next =
+                                        apply_prop_filters(*rel_pat.variable, *rel_pat.properties, std::move(result));
+                                    if (!next)
+                                        return std::nullopt;
+                                    result = std::move(*next);
+                                }
+                                if (node_pat.properties) {
+                                    if (!node_pat.variable)
+                                        return std::nullopt;
+                                    auto next =
+                                        apply_prop_filters(*node_pat.variable, *node_pat.properties, std::move(result));
+                                    if (!next)
+                                        return std::nullopt;
+                                    result = std::move(*next);
+                                }
+                            }
                         }
-
-                        first_clause = false;
-                        return result;
-                    }
-
-                    if (needs_cross) {
-                        auto left = std::move(*current);
-                        auto right = bindMatch(*ptr, std::nullopt, /*skip_where=*/true);
-                        if (!right)
-                            return std::nullopt;
-
-                        auto join = std::make_unique<BoundBinaryJoinOp>();
-                        join->join_type = JoinType::Cross;
-                        join->left = std::move(left);
-                        join->right = std::move(*right);
-
-                        BoundLogicalOperator result = std::move(join);
 
                         if (ptr->where_pred) {
                             auto where_op = bindWhere(*ptr->where_pred, std::move(result));

@@ -87,6 +87,16 @@
 - **测试纪律**：查询语义/Bolt/KV 编码变更，除单元测试外，按需运行 TCK 或驱动兼容性验证；TCK 基线变更必须先取得开发者确认，驱动兼容性结论不得虚报。
 - **性能影响**：涉及扫描范围、索引选择、批处理方式或并发行为的改动，必须在方案中说明预期影响；具体性能模式以对应设计文档为准。
 
+### Binder 身份模型（修改 Binder/DPL 时强制遵守）
+
+> 完整不变量清单见 `docs/query/engine/pattern-join-planner-design.md` 第 4.4 节。
+> 以下只保留跨模块红线，细节不得在本文件重复维护。
+
+- **`VariableId = SlotId`**：语义身份是 Binder 分配的绑定槽；same slot = same semantic binding，different slot = different semantic binding。禁止以变量名或 `ScopeId + name` 作为语义身份。
+- **`ScopeId` 只用于可见性/provenance**：不是 slot identity 的第二来源；`save/restore` 必须恢复作用域信息。
+- **标签顺序是 presentation metadata**：不得写入 `VertexValue` 或存储编码。
+- 任何身份模型变更必须同步 `docs/query/engine/pattern-join-planner-design.md`。
+
 ---
 
 ## 三、安全策略

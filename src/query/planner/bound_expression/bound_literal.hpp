@@ -38,8 +38,12 @@ private:
             return BoundType::Time();
         if (std::holds_alternative<DurationValue>(v))
             return BoundType::Duration();
-        if (std::holds_alternative<ListValue>(v))
-            return BoundType::List(BoundType::Any());
+        if (std::holds_alternative<ListValue>(v)) {
+            const auto& lv = std::get<ListValue>(v);
+            if (lv.elements.empty())
+                return BoundType::List(BoundType::Any());
+            return BoundType::List(inferType(lv.elements.front().value));
+        }
         if (std::holds_alternative<MapValue>(v))
             return BoundType::Map(BoundType::String(), BoundType::Any());
         return BoundType::Null();

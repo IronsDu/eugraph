@@ -411,6 +411,8 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = combine(seed, val->path_handled_by_varlen ? 1u : 0u);
                 seed = hashBytes(seed, val->edge_variable);
                 seed = combine(seed, val->edge_column_index);
+                seed = combine(seed, val->bound_edge_list ? 1u : 0u);
+                seed = combine(seed, val->bound_edge_list_col_index);
                 for (const auto& [lid, pids] : val->edge_prop_filters) {
                     seed = combine(seed, static_cast<uint64_t>(lid));
                     for (const auto& [pid, pv] : pids) {

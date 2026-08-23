@@ -2,9 +2,12 @@
 
 #include "common/types/graph_types.hpp"
 #include "query/planner/bound_type.hpp"
+#include "query/planner/scope_id.hpp"
 #include "query/planner/slot_id.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -21,6 +24,8 @@ struct ColumnInfo {
     uint32_t column_index = 0;
     /// Globally-unique logical slot (assigned by Binder, immutable).
     SlotId slot_id = INVALID_SLOT_ID;
+    /// Scope where this binding was created (provenance).
+    ScopeId scope_id = INVALID_SCOPE_ID;
     /// For columns sourced from specific labels (e.g., multi-label nodes).
     std::vector<LabelId> source_labels;
     std::optional<uint16_t> source_prop_id;
@@ -42,19 +47,39 @@ struct PropertyRequirement {
 
 /// Binding context — shared state during AST traversal.
 struct BindContext {
+    /// Monotonic identifier for a binding scope. Scope is a visibility /
+    /// provenance concept; the semantic identity of a variable is its
+    /// SlotId (VariableId), never ScopeId.
+    using ScopeId = binder::ScopeId;
+    static constexpr ScopeId kRootScope = binder::kRootScope;
+
     /// Map from variable name to column information.
     /// Scope-local: WITH clauses reset this to just their outputs, so names
     /// projected by an earlier WITH disappear here even though operators in
     /// the bound tree (Aggregate output_names, Filter predicates) still
     /// reference their original slot_id.
     std::unordered_map<std::string, ColumnInfo> symbols;
-    /// Permanent record of every name → slot_id allocation made during
-    /// binding. Survives scope resets so the planner can recover the
-    /// binder's slot for an out-of-scope name (e.g. an Aggregate output
-    /// hidden by a subsequent WITH) instead of allocating a conflicting
-    /// fresh slot. Last write wins — the binder reuses slots for the same
-    /// name across scopes, so this is consistent with its allocation model.
-    std::unordered_map<std::string, SlotId> all_symbols;
+    /// Scope-aware binding record: (ScopeId, name) → SlotId.
+    /// Ordered maps keep iteration deterministic across processes/runs.
+    std::map<ScopeId, std::map<std::string, SlotId>> scoped_bindings;
+    /// Ordered log of bindings. Used to seed the planner's name-based
+    /// var_slots in binding order until DPL consumes scoped_bindings directly.
+    struct BindingRecord {
+        ScopeId scope = kRootScope;
+        std::string name;
+        SlotId slot = INVALID_SLOT_ID;
+    };
+    std::vector<BindingRecord> binding_order;
+    /// Scope chain (root first). Used for visibility lookup.
+    struct ScopeInfo {
+        ScopeId id = kRootScope;
+        ScopeId parent = kRootScope;
+    };
+    std::vector<ScopeInfo> scope_stack{{kRootScope, kRootScope}};
+    /// Current binding scope. Root scope is kRootScope.
+    ScopeId current_scope = kRootScope;
+    /// Next ScopeId to hand out. ScopeIds are never reused within a query.
+    ScopeId next_scope_id = kRootScope + 1;
     /// Accumulated property requirements for projection pushdown.
     std::vector<PropertyRequirement> property_requirements;
     /// Ordered output columns from RETURN clause (populated by bindReturn).
@@ -65,9 +90,62 @@ struct BindContext {
     /// (beginSubScope) — they are query-global, not scope-local.
     SlotAllocator slot_allocator;
 
+    /// Record a new binding in the current scope. A new binding must always
+    /// carry a freshly allocated SlotId; callers must not reuse a slot across
+    /// bindings.
+    void registerBinding(const std::string& name, SlotId slot) {
+        scoped_bindings[current_scope][name] = slot;
+        binding_order.push_back({current_scope, name, slot});
+    }
+
+    /// Look up a binding in the current scope only. Returns INVALID_SLOT_ID
+    /// when absent.
+    SlotId lookupBindingInCurrentScope(const std::string& name) const {
+        auto scope_it = scoped_bindings.find(current_scope);
+        if (scope_it == scoped_bindings.end())
+            return INVALID_SLOT_ID;
+        auto it = scope_it->second.find(name);
+        return it == scope_it->second.end() ? INVALID_SLOT_ID : it->second;
+    }
+
+    /// Visibility lookup: current scope, then parents.
+    SlotId lookupBinding(const std::string& name) const {
+        ScopeId scope = current_scope;
+        while (true) {
+            auto scope_it = scoped_bindings.find(scope);
+            if (scope_it != scoped_bindings.end()) {
+                auto it = scope_it->second.find(name);
+                if (it != scope_it->second.end())
+                    return it->second;
+            }
+            auto info_it = std::find_if(scope_stack.begin(), scope_stack.end(),
+                                        [scope](const ScopeInfo& s) { return s.id == scope; });
+            if (info_it == scope_stack.end() || info_it->parent == scope)
+                return INVALID_SLOT_ID;
+            scope = info_it->parent;
+        }
+    }
+
+    /// Latest binding for `name` across all scopes (highest ScopeId wins).
+    /// Only for projection-expression binding after a sub-scope was restored;
+    /// ordinary resolution must use lookupBinding().
+    SlotId lookupLatestBinding(const std::string& name) const {
+        SlotId latest = INVALID_SLOT_ID;
+        ScopeId latest_scope = kRootScope;
+        for (const auto& [scope, bindings] : scoped_bindings) {
+            auto it = bindings.find(name);
+            if (it != bindings.end() && scope >= latest_scope) {
+                latest = it->second;
+                latest_scope = scope;
+            }
+        }
+        return latest;
+    }
+
     /// Register a new variable in the symbol table. Returns the assigned column index.
     uint32_t registerVariable(const std::string& name, BoundType type) {
-        auto [it, inserted] = symbols.emplace(name, ColumnInfo{name, std::move(type), 0, 0, {}, std::nullopt, false});
+        auto [it, inserted] =
+            symbols.emplace(name, ColumnInfo{name, std::move(type), 0, 0, INVALID_SCOPE_ID, {}, std::nullopt, false});
         if (inserted) {
             // Assign column index only on first registration
             // (we use a separate pass to assign indices in order)
@@ -104,16 +182,20 @@ struct BindContext {
     struct Snapshot {
         std::unordered_map<std::string, ColumnInfo> symbols;
         uint32_t next_column_index = 0;
+        ScopeId current_scope = kRootScope;
+        std::vector<ScopeInfo> scope_stack{{kRootScope, kRootScope}};
     };
 
     Snapshot save() const {
-        return {symbols, next_column_index};
+        return {symbols, next_column_index, current_scope, scope_stack};
     }
 
     /// Restore binding state from a previously saved snapshot.
     void restore(const Snapshot& snap) {
         symbols = snap.symbols;
         next_column_index = snap.next_column_index;
+        current_scope = snap.current_scope;
+        scope_stack = snap.scope_stack;
     }
 
     /// Reset to an independent scope for EXISTS sub-plan binding.
@@ -121,6 +203,9 @@ struct BindContext {
     void beginSubScope() {
         symbols.clear();
         next_column_index = 0;
+        ScopeId child = next_scope_id++;
+        scope_stack.push_back({child, current_scope});
+        current_scope = child;
     }
 };
 

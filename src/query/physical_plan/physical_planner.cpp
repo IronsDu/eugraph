@@ -1361,6 +1361,15 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     int dst_existing = v.dst_variable.empty() ? -1 : findColumn(child_schema, v.dst_variable);
                     bool dst_bound = dst_existing >= 0;
 
+                    int edge_list_existing = -1;
+                    if (v.bound_edge_list) {
+                        edge_list_existing = findColumn(child_schema, v.edge_variable);
+                        if (edge_list_existing < 0) {
+                            return std::string("VarLenExpand: bound edge list '" + v.edge_variable +
+                                               "' not found in child schema");
+                        }
+                    }
+
                     Schema output_schema = child_schema;
                     if (!dst_bound) {
                         output_schema.push_back(v.dst_variable);
@@ -1372,8 +1381,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         output_schema.push_back(v.path_variable);
                         output_types.push_back(binder::BoundType::Path());
                     }
-                    // P2: add LIST<EDGE> column if edge variable is set
-                    if (!v.edge_variable.empty()) {
+                    // P2: add LIST<EDGE> column unless the edge variable is a
+                    // bound input list (already present in child schema).
+                    if (!v.edge_variable.empty() && !v.bound_edge_list) {
                         output_schema.push_back(v.edge_variable);
                         output_types.push_back(binder::BoundType::List(binder::BoundType::Edge()));
                     }
@@ -1382,7 +1392,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops, v.max_hops,
                         store, std::move(child_schema), std::vector<binder::BoundType>(output_types),
                         std::move(child_op), std::unordered_map<LabelId, std::vector<uint16_t>>{}, v.path_variable,
-                        v.edge_variable, v.edge_prop_filters, v.dst_label_ids, dst_bound, dst_existing);
+                        v.edge_variable, v.edge_prop_filters, v.dst_label_ids, dst_bound, dst_existing,
+                        v.bound_edge_list, edge_list_existing);
                     auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                           std::move(output_types), TupleSlotLayout{}};
                     // Phase D: VarLenExpand outputs VertexRef for dst; ProjectionExtract
@@ -2075,9 +2086,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     std::vector<uint32_t> left_corr_cols;
                     left_corr_cols.reserve(v.correlation.size());
                     for (const auto& corr : v.correlation) {
-                        int pos = lr.slot_layout.getColumnIndex(corr.left_slot);
-                        if (pos < 0)
-                            pos = static_cast<int>(corr.left_column);
+                        // Prefer the binder column when it still points at the
+                        // same variable. PE may append an object column and a
+                        // name-based slot can resolve to that object instead
+                        // of the raw topology column CorrelatedSource needs.
+                        int pos = static_cast<int>(corr.left_column);
+                        if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size() ||
+                            lr.output_schema[pos] != corr.left_var)
+                            pos = lr.slot_layout.getColumnIndex(corr.left_slot);
                         if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size())
                             pos = findColumn(lr.output_schema, corr.left_var);
                         if (pos < 0) {

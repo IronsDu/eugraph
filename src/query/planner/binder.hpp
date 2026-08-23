@@ -123,7 +123,7 @@ public:
     // ── Clause binding ──
     std::optional<BoundLogicalOperator> bindMatch(const cypher::MatchClause& match,
                                                   std::optional<BoundLogicalOperator> parent = std::nullopt,
-                                                  bool skip_where = false);
+                                                  bool skip_where = false, bool defer_inline_filters = false);
     std::optional<BoundLogicalOperator> bindReturn(const cypher::ReturnClause& ret, BoundLogicalOperator child);
     std::optional<BoundLogicalOperator>
     bindWhere(const cypher::Expression& pred, BoundLogicalOperator child,
@@ -241,15 +241,12 @@ public:
     SlotId nextSlotId() {
         return ctx_.slot_allocator.next();
     }
-    /// Allocate a fresh SlotId for `name` and record it in the permanent
-    /// all_symbols map. Use this whenever a slot is bound to a user-visible
-    /// name so the planner can recover the slot even after a later WITH
-    /// scope reset drops the name from ctx_.symbols. Callers that reuse an
-    /// existing slot (e.g. carry-forward at scope reset) do not need this —
-    /// the original allocation already recorded it.
+    /// Allocate a fresh SlotId for `name` and record it in the current scope.
+    /// A new binding must never reuse an existing slot; carry-forward paths
+    /// copy the existing ColumnInfo instead of calling this function.
     SlotId allocateNamedSlot(const std::string& name) {
         SlotId sid = nextSlotId();
-        ctx_.all_symbols[name] = sid;
+        ctx_.registerBinding(name, sid);
         return sid;
     }
     /// Allocate both column_index and slot_id atomically.

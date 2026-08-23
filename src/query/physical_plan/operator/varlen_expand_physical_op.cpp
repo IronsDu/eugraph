@@ -18,6 +18,20 @@ VertexId vertexIdFromValue(const Value& val) {
         return static_cast<VertexId>(std::get<int64_t>(val));
     return INVALID_VERTEX_ID;
 }
+
+std::vector<EdgeId> edgeIdsFromValue(const Value& val) {
+    std::vector<EdgeId> ids;
+    if (const auto* lv = std::get_if<ListValue>(&val)) {
+        for (const auto& item : lv->elements) {
+            const Value& ev = item.value;
+            if (const auto* e = std::get_if<EdgeValue>(&ev))
+                ids.push_back(e->id);
+            else if (const auto* k = std::get_if<EdgeKey>(&ev))
+                ids.push_back(k->id);
+        }
+    }
+    return ids;
+}
 } // anonymous namespace
 
 VarLenExpandPhysicalOp::~VarLenExpandPhysicalOp() = default;
@@ -175,6 +189,13 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         };
 
         for (size_t src_row = 0; src_row < rows.size(); ++src_row) {
+            std::vector<EdgeId> expected_edge_ids;
+            if (edge_list_bound_) {
+                if (edge_list_col_idx_ < 0 || static_cast<size_t>(edge_list_col_idx_) >= rows[src_row].size())
+                    continue;
+                expected_edge_ids = edgeIdsFromValue(rows[src_row][edge_list_col_idx_]);
+            }
+
             VertexId src_id = INVALID_VERTEX_ID;
             if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[src_row].size()) {
                 const auto& val = rows[src_row][src_col_idx_];
@@ -194,28 +215,33 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
 
             // Emit identity path when min_hops == 0 (zero-hop: src == dst)
             if (min_hops_ == 0 && co_await hasDstLabels(src_id)) {
+                bool emit_identity = true;
                 if (dst_bound_) {
                     VertexId bound_dst = vertexIdFromValue(rows[src_row][dst_col_idx_]);
                     if (bound_dst != src_id)
-                        continue;
+                        emit_identity = false;
                 }
-                OutputEntry identity_entry;
-                identity_entry.src_row = src_row;
-                identity_entry.dst_id = src_id;
-                if (!path_var_.empty()) {
-                    PathValue pv;
-                    const auto& src_val = rows[src_row][src_col_idx_];
-                    if (std::holds_alternative<VertexValue>(src_val)) {
-                        pv.elements.push_back(ValueStorage{src_val});
-                    } else {
-                        pv.elements.push_back(ValueStorage{Value(co_await loadVertex(src_id))});
+                if (edge_list_bound_ && !expected_edge_ids.empty())
+                    emit_identity = false;
+                if (emit_identity) {
+                    OutputEntry identity_entry;
+                    identity_entry.src_row = src_row;
+                    identity_entry.dst_id = src_id;
+                    if (!path_var_.empty()) {
+                        PathValue pv;
+                        const auto& src_val = rows[src_row][src_col_idx_];
+                        if (std::holds_alternative<VertexValue>(src_val)) {
+                            pv.elements.push_back(ValueStorage{src_val});
+                        } else {
+                            pv.elements.push_back(ValueStorage{Value(co_await loadVertex(src_id))});
+                        }
+                        identity_entry.path = std::move(pv);
                     }
-                    identity_entry.path = std::move(pv);
+                    if (!edge_var_.empty() && !edge_list_bound_) {
+                        identity_entry.edge_list = ListValue{};
+                    }
+                    output_buffer.push_back(std::move(identity_entry));
                 }
-                if (!edge_var_.empty()) {
-                    identity_entry.edge_list = ListValue{};
-                }
-                output_buffer.push_back(std::move(identity_entry));
             }
 
             // If only zero-hop requested, skip edge scanning and DFS
@@ -307,7 +333,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                         entry.path = std::move(pv);
                     }
                     // P2: build edge list for named edge variable
-                    if (!edge_var_.empty()) {
+                    if (!edge_var_.empty() && !edge_list_bound_) {
                         ListValue lv;
                         for (size_t si = 1; si < stack.size(); ++si) {
                             lv.elements.push_back(ValueStorage{Value(
@@ -321,12 +347,32 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                             co_await loadEdge(edge.edge_id, edge.edge_label_id, el_phys_src, el_phys_dst, edge.seq))});
                         entry.edge_list = std::move(lv);
                     }
+                    bool emit = true;
                     if (dst_bound_) {
                         VertexId bound_dst = vertexIdFromValue(rows[src_row][dst_col_idx_]);
                         if (bound_dst != edge.neighbor_id)
-                            continue;
+                            emit = false;
                     }
-                    output_buffer.push_back(std::move(entry));
+                    if (edge_list_bound_) {
+                        std::vector<EdgeId> path_ids;
+                        path_ids.reserve(stack.size());
+                        for (size_t si = 1; si < stack.size(); ++si)
+                            path_ids.push_back(stack[si].incoming_edge_id);
+                        path_ids.push_back(edge.edge_id);
+                        bool equal = path_ids.size() == expected_edge_ids.size();
+                        if (equal) {
+                            for (size_t pi = 0; pi < path_ids.size(); ++pi) {
+                                if (path_ids[pi] != expected_edge_ids[pi]) {
+                                    equal = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!equal)
+                            emit = false;
+                    }
+                    if (emit)
+                        output_buffer.push_back(std::move(entry));
 
                     if (output_buffer.size() >= DataChunk::DEFAULT_CAPACITY) {
                         // Build and yield a full DataChunk
@@ -375,7 +421,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                             }
                         }
                         // Fill edge list column if present
-                        if (!edge_var_.empty()) {
+                        if (!edge_var_.empty() && !edge_list_bound_) {
                             size_t edge_col_idx = input_cols + (dst_bound_ ? 0 : 1) + (path_var_.empty() ? 0 : 1);
                             for (size_t i = 0; i < output_buffer.size(); ++i) {
                                 output.setValue(edge_col_idx, i, Value(output_buffer[i].edge_list));
@@ -464,7 +510,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 }
             }
             // Fill edge list column if present
-            if (!edge_var_.empty()) {
+            if (!edge_var_.empty() && !edge_list_bound_) {
                 size_t edge_col_idx = input_cols + (dst_bound_ ? 0 : 1) + (path_var_.empty() ? 0 : 1);
                 for (size_t i = 0; i < output_buffer.size(); ++i) {
                     output.setValue(edge_col_idx, i, Value(output_buffer[i].edge_list));

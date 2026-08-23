@@ -6,6 +6,7 @@
 #include "query/planner/slot_id.hpp"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -95,6 +96,7 @@ using PlanRequirements = std::unordered_map<binder::SlotId, VariableRequirement>
 using PEPlans = std::unordered_map<binder::SlotId, PEPlan>;
 using AliasSlotMap = std::unordered_map<binder::SlotId, binder::SlotId>;
 using NameSlotMap = std::unordered_map<std::string, binder::SlotId>;
+using ScopedSlotMap = std::map<binder::ScopeId, std::map<std::string, binder::SlotId>>;
 using SourceTypes = std::unordered_map<binder::SlotId, binder::BoundTypeKind>;
 
 /// Resolve a slot through alias_map to its canonical root. Returns `slot`
@@ -119,7 +121,8 @@ binder::SlotId getCanonicalSlot(const AliasSlotMap& alias_map, binder::SlotId sl
 /// the only path.
 class SlotResolver {
 public:
-    SlotResolver(const NameSlotMap& names, const AliasSlotMap& aliases) : names_(names), aliases_(aliases) {}
+    SlotResolver(const NameSlotMap& names, const AliasSlotMap& aliases, const ScopedSlotMap* scoped = nullptr)
+        : names_(names), aliases_(aliases), scoped_(scoped) {}
 
     /// name → raw slot (no canonicalization). INVALID if name is empty/unknown.
     binder::SlotId slotForName(const std::string& name) const {
@@ -127,6 +130,20 @@ public:
             return binder::INVALID_SLOT_ID;
         auto it = names_.find(name);
         return it != names_.end() ? it->second : binder::INVALID_SLOT_ID;
+    }
+
+    /// scope + name → raw slot. Falls back to unscoped name map when the
+    /// scope is invalid or the scoped map has no entry for that scope.
+    binder::SlotId slotForName(binder::ScopeId scope, const std::string& name) const {
+        if (scoped_ && scope != binder::INVALID_SCOPE_ID) {
+            auto scope_it = scoped_->find(scope);
+            if (scope_it != scoped_->end()) {
+                auto it = scope_it->second.find(name);
+                if (it != scope_it->second.end())
+                    return it->second;
+            }
+        }
+        return slotForName(name);
     }
 
     /// slot → canonical slot (root of alias chain). Same slot if not aliased.
@@ -142,6 +159,33 @@ public:
         return slot == binder::INVALID_SLOT_ID ? binder::INVALID_SLOT_ID : canonicalOf(slot);
     }
 
+    /// scope + name → canonical slot. Same fallback rule as slotForName.
+    binder::SlotId canonicalForName(binder::ScopeId scope, const std::string& name) const {
+        binder::SlotId slot = slotForName(scope, name);
+        return slot == binder::INVALID_SLOT_ID ? binder::INVALID_SLOT_ID : canonicalOf(slot);
+    }
+
+    /// Ref-aware canonical lookup: bind-time slot is authoritative when the
+    /// ref carries scope provenance; otherwise use the legacy name path.
+    binder::SlotId canonicalForRef(const binder::BoundColumnRef& ref) const {
+        if (ref.scope_id != binder::INVALID_SCOPE_ID && ref.slot_id != binder::INVALID_SLOT_ID)
+            return canonicalOf(ref.slot_id);
+        return canonicalForName(ref.scope_id, ref.name);
+    }
+
+    /// True when `name` has bindings in more than one scope.
+    bool isAmbiguousName(const std::string& name) const {
+        if (!scoped_)
+            return false;
+        size_t count = 0;
+        for (const auto& [scope, bindings] : *scoped_) {
+            (void)scope;
+            if (bindings.count(name) != 0 && ++count > 1)
+                return true;
+        }
+        return false;
+    }
+
     const NameSlotMap& names() const {
         return names_;
     }
@@ -152,6 +196,7 @@ public:
 private:
     const NameSlotMap& names_;
     const AliasSlotMap& aliases_;
+    const ScopedSlotMap* scoped_ = nullptr;
 };
 
 /// Walk the bound tree and ensure every variable name (from BoundVariableRef,

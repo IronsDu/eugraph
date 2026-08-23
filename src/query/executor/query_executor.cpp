@@ -155,6 +155,8 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .requirements = {},
         .extraction_info = {},
         .var_slots = {},
+        .scoped_var_slots = {},
+        .label_order_by_name = {},
         .alias_map = {},
         .slot_allocator = {},
         .fresh_expands = {},
@@ -171,20 +173,28 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         if (info.slot_id != binder::INVALID_SLOT_ID)
             plan_ctx.var_slots[name] = info.slot_id;
     }
-    // Also seed from the binder's permanent record. WITH clauses narrow
+    // Also seed from the binder's ordered binding log. WITH clauses narrow
     // ctx().symbols to just their outputs, dropping variables projected by
     // earlier WITHs (e.g. `WITH x, count(*) AS foaf ... WITH x ...` drops
     // `foaf`). Operators in the bound tree (Aggregate output_names, Filter
     // predicates) still reference those slots, so the planner must know
-    // them — otherwise allocateAllSlots / makeSlotLayout allocate a fresh
-    // slot for the dropped name and the predicate's BoundColumnRef.slot_id
-    // no longer matches the layout.
-    for (const auto& [name, sid] : binder.ctx().all_symbols) {
-        if (sid != binder::INVALID_SLOT_ID)
-            plan_ctx.var_slots[name] = sid;
+    // them. Later bindings overwrite earlier ones to preserve the binder's
+    // existing slot-carry-forward behavior until ScopedSlotResolver lands.
+    for (const auto& binding : binder.ctx().binding_order) {
+        if (binding.slot != binder::INVALID_SLOT_ID)
+            plan_ctx.var_slots[binding.name] = binding.slot;
+    }
+    // Scope-aware records for DPL: (scope, name) → slot.
+    plan_ctx.scoped_var_slots = binder.ctx().scoped_bindings;
+    // Query-time label presentation order (source_labels are already in
+    // pattern order for bound node variables).
+    for (const auto& [name, info] : binder.ctx().symbols) {
+        if (!info.source_labels.empty())
+            plan_ctx.label_order_by_name[name] = info.source_labels;
     }
     // Seed the planner's slot allocator to continue after the binder's slots.
     // Start from the next slot after the binder's allocation.
+    ctx->label_order = plan_ctx.label_order_by_name;
     plan_ctx.slot_allocator.seed(binder.ctx().slot_allocator.current());
 
     // 2.5. Logical optimization

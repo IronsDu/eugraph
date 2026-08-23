@@ -1310,8 +1310,8 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         std::sort(sorted_symbols.begin(), sorted_symbols.end(),
                   [](const ColumnInfo* a, const ColumnInfo* b) { return a->name < b->name; });
         for (const auto* col_info : sorted_symbols) {
-            auto bound_expr = std::make_optional<BoundExpression>(
-                BoundColumnRef(col_info->column_index, col_info->type, col_info->name, col_info->slot_id));
+            auto bound_expr = std::make_optional<BoundExpression>(BoundColumnRef(
+                col_info->column_index, col_info->type, col_info->name, col_info->slot_id, col_info->scope_id));
             BoundProjectOp::ProjectItem proj_item;
             proj_item.expr = std::move(*bound_expr);
             proj_item.alias = col_info->name;
@@ -2352,8 +2352,8 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             std::sort(sorted_symbols.begin(), sorted_symbols.end(),
                       [](const ColumnInfo* a, const ColumnInfo* b) { return a->name < b->name; });
             for (const auto* col_info : sorted_symbols) {
-                auto bound_expr =
-                    BoundColumnRef(col_info->column_index, col_info->type, col_info->name, col_info->slot_id);
+                auto bound_expr = BoundColumnRef(col_info->column_index, col_info->type, col_info->name,
+                                                 col_info->slot_id, col_info->scope_id);
                 BoundProjectOp::ProjectItem proj_item;
                 proj_item.expr = std::move(bound_expr);
                 proj_item.alias = col_info->name;

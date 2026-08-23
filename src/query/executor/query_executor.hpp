@@ -40,6 +40,8 @@ struct StreamContext {
     std::unique_ptr<catalog::Catalog> catalog;
     std::unique_ptr<function::FunctionRegistry> func_registry;
     std::unique_ptr<binder::BoundStatement> bound_plan;
+    // Presentation metadata: per-column label order for vertex formatting.
+    std::unordered_map<std::string, std::vector<LabelId>> label_order;
 
     explicit StreamContext(IAsyncGraphDataStore& s) : store(s) {}
 };

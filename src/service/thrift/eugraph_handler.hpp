@@ -58,7 +58,8 @@ public:
 
 public:
     thrift_service::ResultValue valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
-                                              const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs);
+                                              const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs,
+                                              const std::vector<LabelId>& label_order = {});
 
 private:
     static ::eugraph::PropertyType toPropertyType(thrift_service::PropertyType t);
