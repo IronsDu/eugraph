@@ -1,6 +1,7 @@
 #pragma once
 
 #include "query/planner/bound_type.hpp"
+#include "query/planner/scope_id.hpp"
 
 #include <cstdint>
 #include <string>
@@ -20,13 +21,16 @@ struct BoundColumnRef {
     uint32_t column_index = 0;
     uint32_t slot_id = 0; // logical slot (0 = unassigned / not yet resolved)
     BoundType type;
-    std::string name; // original variable name (for debugging / error messages)
+    std::string name;                    // original variable name (for debugging / error messages)
+    ScopeId scope_id = INVALID_SCOPE_ID; // provenance; INVALID when unknown
 
     BoundColumnRef() : type(BoundType::Any()) {}
     BoundColumnRef(uint32_t idx, BoundType t, std::string n)
         : column_index(idx), type(std::move(t)), name(std::move(n)) {}
     BoundColumnRef(uint32_t idx, BoundType t, std::string n, uint32_t slot)
         : column_index(idx), slot_id(slot), type(std::move(t)), name(std::move(n)) {}
+    BoundColumnRef(uint32_t idx, BoundType t, std::string n, uint32_t slot, ScopeId scope)
+        : column_index(idx), slot_id(slot), type(std::move(t)), name(std::move(n)), scope_id(scope) {}
 };
 
 } // namespace binder

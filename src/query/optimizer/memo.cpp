@@ -692,6 +692,10 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->path_handled_by_varlen = val->path_handled_by_varlen;
                 c->edge_variable = val->edge_variable;
                 c->edge_column_index = val->edge_column_index;
+                c->edge_slot_id = val->edge_slot_id;
+                c->planner_edge_slot_id = val->planner_edge_slot_id;
+                c->bound_edge_list = val->bound_edge_list;
+                c->bound_edge_list_col_index = val->bound_edge_list_col_index;
                 c->edge_prop_filters = val->edge_prop_filters;
                 return c;
             }

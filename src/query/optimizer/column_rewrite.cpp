@@ -969,6 +969,40 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
         }
         return planForName(name);
     };
+    /// Scope-aware variant. The bind-time slot is authoritative when scope
+    /// provenance exists; name lookup is allowed only when it resolves to the
+    /// same canonical slot (so legacy refs without scope keep old behavior).
+    auto planForRef = [&](const binder::BoundColumnRef& ref) -> const PEPlan* {
+        if (ref.scope_id == binder::INVALID_SCOPE_ID)
+            return planForSlot(ref.slot_id, ref.name);
+        if (ref.slot_id == binder::INVALID_SLOT_ID)
+            return nullptr;
+        binder::SlotId canon = resolver.canonicalOf(ref.slot_id);
+        if (canon != binder::INVALID_SLOT_ID) {
+            auto it = plans.find(canon);
+            if (it != plans.end())
+                return &it->second;
+        }
+        // Scalar refs do not have cross-scope object-slot ambiguity; keep the
+        // legacy name fallback so UNION text projections and aggregate
+        // expressions continue to resolve through name-based plans.
+        if (!binder::isSemanticGraphKind(ref.type.kind) && !binder::isTopologyKind(ref.type.kind))
+            return planForName(ref.name);
+        // Only names bound in multiple scopes need the strict path.
+        if (!resolver.isAmbiguousName(ref.name))
+            return planForName(ref.name);
+        // Legacy global map is authoritative for carry-forward aliases whose
+        // scope_id still points at the pre-WITH scope.
+        binder::SlotId global_slot = resolver.slotForName(ref.name);
+        if (global_slot != binder::INVALID_SLOT_ID && resolver.canonicalOf(global_slot) == canon)
+            return planForName(ref.name);
+        binder::SlotId name_slot = resolver.slotForName(ref.scope_id, ref.name);
+        if (name_slot == binder::INVALID_SLOT_ID)
+            return nullptr;
+        if (resolver.canonicalOf(name_slot) != canon)
+            return nullptr;
+        return planForName(ref.name);
+    };
     bool changed = std::visit(
         [&](auto& val) -> bool {
             using T = std::decay_t<decltype(val)>;
@@ -981,7 +1015,11 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 binder::SlotId bind_slot = binder::INVALID_SLOT_ID;
                 if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object))
                     bind_slot = cref->slot_id;
-                const PEPlan* pi = planForSlot(bind_slot, var);
+                const PEPlan* pi = nullptr;
+                if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object))
+                    pi = planForRef(*cref);
+                else
+                    pi = planForSlot(bind_slot, var);
                 if (!pi)
                     return false;
 
@@ -1040,7 +1078,11 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                     binder::SlotId bind_slot = binder::INVALID_SLOT_ID;
                     if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object))
                         bind_slot = cref->slot_id;
-                    const PEPlan* pi = planForSlot(bind_slot, var);
+                    const PEPlan* pi = nullptr;
+                    if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object))
+                        pi = planForRef(*cref);
+                    else
+                        pi = planForSlot(bind_slot, var);
                     if (pi && pi->object_slot_id != binder::INVALID_SLOT_ID) {
                         if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object)) {
                             if (cref->slot_id != pi->object_slot_id) {
@@ -1092,7 +1134,7 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 // a VertexValue.
                 if (!binder::isSemanticGraphKind(val.type.kind))
                     return false;
-                const PEPlan* pi = planForSlot(val.slot_id, val.name);
+                const PEPlan* pi = planForRef(val);
                 if (!pi)
                     return false;
                 binder::SlotId target =

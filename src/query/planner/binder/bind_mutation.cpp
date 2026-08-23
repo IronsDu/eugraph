@@ -557,7 +557,7 @@ std::optional<BoundLogicalOperator> Binder::bindDelete(const cypher::DeleteClaus
             case BoundTypeKind::ANY:
                 // Path variables and entity collections must go through the
                 // expression path so the physical operator can expand them.
-                target.expr = BoundColumnRef(col->column_index, col->type, var_name, col->slot_id);
+                target.expr = BoundColumnRef(col->column_index, col->type, var_name, col->slot_id, col->scope_id);
                 del_op->targets.push_back(std::move(target));
                 continue;
             default:

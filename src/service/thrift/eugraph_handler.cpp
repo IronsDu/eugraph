@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <unordered_set>
 
 #include <folly/io/async/EventBaseManager.h>
 
@@ -74,8 +75,16 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
         auto rows = chunk->toRows();
         for (auto& row : rows) {
             eugraph::thrift_service::ResultRow row_resp;
-            for (auto& val : row) {
-                row_resp.values()->push_back(handler.valueToThrift(val, label_defs, edge_label_defs));
+            for (size_t col_idx = 0; col_idx < row.size(); ++col_idx) {
+                const auto& val = row[col_idx];
+                const std::vector<eugraph::LabelId>* order = nullptr;
+                if (col_idx < ctx->columns.size()) {
+                    auto it = ctx->label_order.find(ctx->columns[col_idx]);
+                    if (it != ctx->label_order.end())
+                        order = &it->second;
+                }
+                row_resp.values()->push_back(handler.valueToThrift(val, label_defs, edge_label_defs,
+                                                                   order ? *order : std::vector<eugraph::LabelId>{}));
             }
             thrift_batch.rows()->push_back(std::move(row_resp));
         }
@@ -405,7 +414,8 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
 
 thrift_service::ResultValue
 EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId, LabelDef>& label_defs,
-                              const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs) {
+                              const std::unordered_map<EdgeLabelId, EdgeLabelDef>& edge_label_defs,
+                              const std::vector<LabelId>& label_order) {
     thrift_service::ResultValue rv;
 
     if (std::holds_alternative<std::monostate>(val)) {
@@ -426,17 +436,24 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         if (v.labels.has_value() && !v.labels->empty()) {
             oss << ",\"labels\":[";
             bool first = true;
-            for (LabelId lid : *v.labels) {
+            std::unordered_set<LabelId> emitted;
+            auto emit_label = [&](LabelId lid) {
                 auto it = label_defs.find(lid);
-                if (it == label_defs.end())
-                    continue;
-                if (it->second.name == kAnonLabelName)
-                    continue;
+                if (it == label_defs.end() || it->second.name == kAnonLabelName)
+                    return;
+                if (!emitted.insert(lid).second)
+                    return;
                 if (!first)
                     oss << ',';
                 oss << '"' << it->second.name << '"';
                 first = false;
+            };
+            for (LabelId lid : label_order) {
+                if (v.labels->count(lid) != 0)
+                    emit_label(lid);
             }
+            for (LabelId lid : *v.labels)
+                emit_label(lid);
             oss << ']';
         }
         oss << ",\"properties\":[";
@@ -873,7 +890,9 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
     auto exec_ctx = co_await graph_service_.executeCypher(*query, params, *graph_name);
 
     thrift_service::QueryStreamMeta meta;
-    meta.columns() = std::move(exec_ctx.ctx->columns);
+    meta.columns() = exec_ctx.ctx->columns;
+    // The stream generator also needs column names to attach presentation
+    // metadata (label order); the assignment above copies, so ctx keeps them.
 
     auto gen = makeStreamGenerator(std::move(exec_ctx.ctx), std::move(exec_ctx.label_defs),
                                    std::move(exec_ctx.edge_label_defs), *this, t0);

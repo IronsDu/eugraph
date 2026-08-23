@@ -142,6 +142,7 @@ ColumnInfo Binder::makeColumnInfo(const std::string& name, BoundType type, std::
     info.type = std::move(type);
     info.column_index = ctx_.next_column_index > 0 ? ctx_.next_column_index - 1 : 0;
     info.slot_id = allocateNamedSlot(name);
+    info.scope_id = ctx_.current_scope;
     info.source_labels = std::move(source_labels);
     info.source_prop_id = source_prop_id;
     info.strong_typed = strong_typed;

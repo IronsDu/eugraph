@@ -40,6 +40,10 @@ struct BoundVarLenExpandOp {
     SlotId edge_slot_id = INVALID_SLOT_ID;
     /// Planner-assigned slot captured in allocateSlotsInOp (§6.2).
     SlotId planner_edge_slot_id = INVALID_SLOT_ID;
+    /// Bound LIST<EDGE> input present in child schema; VarLenExpand filters
+    /// paths to exactly this sequence and must not append an output column.
+    bool bound_edge_list = false;
+    uint32_t bound_edge_list_col_index = 0;
     // P3: inline edge property filter [{prop: value}]
     // Per edge-label: list of (prop_id, expected_value) equality checks
     std::unordered_map<EdgeLabelId, std::vector<std::pair<uint16_t, PropertyValue>>> edge_prop_filters;
