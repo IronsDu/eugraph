@@ -43,8 +43,24 @@ public:
 
     void compileExpressions(const TupleSlotLayout& input_layout) override {
         ExpressionCompiler compiler(input_layout);
-        for (auto& item : items_)
+        for (auto& item : items_) {
+            if (auto* ref = std::get_if<binder::BoundColumnRef>(&item.expr)) {
+                if (ref->column_index >= input_layout.size()) {
+                    auto pos = input_layout.getColumnIndex(ref->slot_id);
+                    if (pos < 0) {
+                        for (size_t ci = 0; ci < input_schema_.size(); ++ci) {
+                            if (input_schema_[ci] == ref->name) {
+                                pos = static_cast<int>(ci);
+                                break;
+                            }
+                        }
+                    }
+                    if (pos >= 0)
+                        ref->column_index = static_cast<uint32_t>(pos);
+                }
+            }
             compiler.compile(item.expr);
+        }
     }
     void deriveOutputLayout(const TupleSlotLayout& input_layout) override {
         // For WITH/RETURN: output slots come from the projected expressions.

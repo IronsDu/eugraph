@@ -173,15 +173,12 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         if (info.slot_id != binder::INVALID_SLOT_ID)
             plan_ctx.var_slots[name] = info.slot_id;
     }
-    // Also seed from the binder's ordered binding log. WITH clauses narrow
-    // ctx().symbols to just their outputs, dropping variables projected by
-    // earlier WITHs (e.g. `WITH x, count(*) AS foaf ... WITH x ...` drops
-    // `foaf`). Operators in the bound tree (Aggregate output_names, Filter
-    // predicates) still reference those slots, so the planner must know
-    // them. Later bindings overwrite earlier ones to preserve the binder's
-    // existing slot-carry-forward behavior until ScopedSlotResolver lands.
+    // Also seed from the binder's ordered binding log, but only for names
+    // absent from the final symbol table. WITH clauses narrow ctx().symbols
+    // to their outputs, and inner scopes may bind the same name to a fresh
+    // slot; neither must overwrite the visible outer binding.
     for (const auto& binding : binder.ctx().binding_order) {
-        if (binding.slot != binder::INVALID_SLOT_ID)
+        if (binding.slot != binder::INVALID_SLOT_ID && plan_ctx.var_slots.count(binding.name) == 0)
             plan_ctx.var_slots[binding.name] = binding.slot;
     }
     // Scope-aware records for DPL: (scope, name) → slot.
