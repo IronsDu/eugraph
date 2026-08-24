@@ -395,6 +395,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         }
 
         // Process chain: expand hops
+        std::string prev_edge_var;
         for (const auto& [rel_pat, node_pat] : element.chain) {
             if (!current)
                 break;
@@ -524,6 +525,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 varlen->direction = rel_pat.direction;
                 varlen->min_hops = min_hops;
                 varlen->max_hops = max_hops;
+                varlen->prev_edge_var = prev_edge_var;
 
                 // P1: handle named path variable. A single varlen hop can be
                 // produced directly by VarLenExpand; mixed fixed/varlen chains
@@ -607,6 +609,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     path_element_vars.push_back(*edge_var);
                 path_element_vars.push_back(dst_var);
 
+                prev_edge_var = edge_var.value_or("");
                 start_var = dst_var;
                 start_col = dst_col;
                 continue; // skip the normal Expand logic below
@@ -622,6 +625,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids))
                 return std::nullopt;
             match_edge_vars.push_back(edge_var);
+            prev_edge_var = edge_var;
 
             // Bind target node
             std::string dst_var;

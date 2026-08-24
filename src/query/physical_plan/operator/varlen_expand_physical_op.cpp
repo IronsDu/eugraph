@@ -19,6 +19,14 @@ VertexId vertexIdFromValue(const Value& val) {
     return INVALID_VERTEX_ID;
 }
 
+EdgeId edgeIdFromValue(const Value& val) {
+    if (const auto* e = std::get_if<EdgeValue>(&val))
+        return e->id;
+    if (const auto* k = std::get_if<EdgeKey>(&val))
+        return k->id;
+    return INVALID_EDGE_ID;
+}
+
 std::vector<EdgeId> edgeIdsFromValue(const Value& val) {
     std::vector<EdgeId> ids;
     if (const auto* lv = std::get_if<ListValue>(&val)) {
@@ -210,8 +218,18 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
             if (src_id == INVALID_VERTEX_ID)
                 continue;
 
+            EdgeId prev_edge_id = INVALID_EDGE_ID;
+            if (prev_edge_col_idx_ >= 0 && static_cast<size_t>(prev_edge_col_idx_) < rows[src_row].size()) {
+                prev_edge_id = edgeIdFromValue(rows[src_row][prev_edge_col_idx_]);
+            }
+
             // Collect initial edges from source vertex
             std::vector<DirectedEdgeEntry> start_edges = co_await scanAll(src_id);
+            if (prev_edge_id != INVALID_EDGE_ID) {
+                start_edges.erase(std::remove_if(start_edges.begin(), start_edges.end(),
+                                                 [&](const DirectedEdgeEntry& e) { return e.edge_id == prev_edge_id; }),
+                                  start_edges.end());
+            }
 
             // Emit identity path when min_hops == 0 (zero-hop: src == dst)
             if (min_hops_ == 0 && co_await hasDstLabels(src_id)) {
@@ -252,6 +270,8 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 continue;
 
             std::unordered_set<EdgeVisitKey, EdgeVisitKeyHash> visited_edges;
+            if (prev_edge_id != INVALID_EDGE_ID)
+                visited_edges.insert(EdgeVisitKey{prev_edge_id});
 
             std::vector<StackFrame> stack;
             stack.reserve(static_cast<size_t>(max_hops_) + 1);

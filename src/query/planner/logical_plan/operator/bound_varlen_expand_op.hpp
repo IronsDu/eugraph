@@ -40,6 +40,10 @@ struct BoundVarLenExpandOp {
     SlotId edge_slot_id = INVALID_SLOT_ID;
     /// Planner-assigned slot captured in allocateSlotsInOp (§6.2).
     SlotId planner_edge_slot_id = INVALID_SLOT_ID;
+    /// Previous fixed-hop edge column. VarLenExpand excludes this
+    /// relationship from the DFS visited set for path uniqueness.
+    std::string prev_edge_var;
+    uint32_t prev_edge_col_index = 0;
     /// Bound LIST<EDGE> input present in child schema; VarLenExpand filters
     /// paths to exactly this sequence and must not append an output column.
     bool bound_edge_list = false;
