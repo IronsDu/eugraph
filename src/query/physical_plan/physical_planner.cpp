@@ -1401,7 +1401,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         store, std::move(child_schema), std::vector<binder::BoundType>(output_types),
                         std::move(child_op), std::unordered_map<LabelId, std::vector<uint16_t>>{}, v.path_variable,
                         v.edge_variable, v.edge_prop_filters, v.dst_label_ids, dst_bound, dst_existing,
-                        v.bound_edge_list, edge_list_existing, v.prev_edge_var, prev_edge_existing);
+                        v.bound_edge_list, edge_list_existing, v.prev_edge_var, prev_edge_existing,
+                        v.dst_label_missing);
                     auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                           std::move(output_types), TupleSlotLayout{}};
                     // Phase D: VarLenExpand outputs VertexRef for dst; ProjectionExtract
