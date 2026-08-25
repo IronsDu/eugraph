@@ -281,6 +281,26 @@ GIVEN("^any graph$") {
     gCtx->createGraph(gCtx->graphName);
 }
 
+GIVEN("^the (.+) graph$", (const std::string& graph_name)) {
+    gCurrentStepText = "the " + graph_name + " graph";
+    gCtx->createGraph(gCtx->graphName);
+
+    if (graph_name == "empty" || graph_name == "any")
+        return;
+
+    const std::string script_path = "third_party/openCypher/tck/graphs/" + graph_name + "/" + graph_name + ".cypher";
+    std::ifstream in(script_path);
+    if (!in) {
+        GTEST_FAIL() << "Missing TCK graph fixture: " << script_path;
+        return;
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+
+    spdlog::info("[TCK] [{}] loading named graph '{}' from {}", gCtx->graphName, graph_name, script_path);
+    gCtx->executeQuery(ss.str());
+}
+
 // -----------------------------------------------------------------------
 // Setup query: "And having executed:"
 // -----------------------------------------------------------------------
