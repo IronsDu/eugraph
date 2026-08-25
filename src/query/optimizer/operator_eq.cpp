@@ -405,6 +405,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->dst_label_prop_ids != bv->dst_label_prop_ids)
                     return false;
+                if (av->dst_label_missing != bv->dst_label_missing)
+                    return false;
                 if (av->path_variable != bv->path_variable)
                     return false;
                 if (av->path_column_index != bv->path_column_index)

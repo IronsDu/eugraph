@@ -409,6 +409,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = hashBytes(seed, val->path_variable);
                 seed = combine(seed, val->path_column_index);
                 seed = combine(seed, val->path_handled_by_varlen ? 1u : 0u);
+                seed = combine(seed, val->dst_label_missing ? 1u : 0u);
                 seed = hashBytes(seed, val->edge_variable);
                 seed = combine(seed, val->edge_column_index);
                 seed = combine(seed, val->bound_edge_list ? 1u : 0u);

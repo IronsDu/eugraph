@@ -73,6 +73,8 @@ std::string VarLenExpandPhysicalOp::toString() const {
 }
 
 folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
+    if (dst_label_missing_)
+        co_return;
     auto child_gen = child_->executeChunk();
 
     auto dir = Direction::OUT;

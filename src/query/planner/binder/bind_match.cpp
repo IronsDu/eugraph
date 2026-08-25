@@ -521,6 +521,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 if (auto* dinfo = ctx_.lookup(dst_var))
                     varlen->dst_slot_id = dinfo->slot_id;
                 varlen->dst_label_ids = dst_labels;
+                varlen->dst_label_missing = !node_pat.labels.empty() && dst_labels.empty();
                 varlen->edge_label_ids = std::move(edge_label_ids);
                 varlen->direction = rel_pat.direction;
                 varlen->min_hops = min_hops;

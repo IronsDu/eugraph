@@ -29,6 +29,9 @@ struct BoundVarLenExpandOp {
     int64_t max_hops;
     std::unordered_map<LabelId, std::vector<uint16_t>> dst_label_prop_ids;
     std::vector<LabelId> dst_label_ids;
+    /// Pattern declared node labels but none exist in catalog; varlen must
+    /// return zero rows instead of treating empty label list as no filter.
+    bool dst_label_missing = false;
     // P1: named path variable (p = (a)-[*1..3]->(b))
     std::string path_variable;
     uint32_t path_column_index = 0;
