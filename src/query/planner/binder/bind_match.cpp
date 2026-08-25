@@ -522,11 +522,6 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     varlen->dst_slot_id = dinfo->slot_id;
                 varlen->dst_label_ids = dst_labels;
                 varlen->dst_label_missing = !node_pat.labels.empty() && dst_labels.empty();
-                fprintf(stderr, "[bind-missing] labels=%zu resolved=%zu flag=%d names=", node_pat.labels.size(),
-                        dst_labels.size(), varlen->dst_label_missing ? 1 : 0);
-                for (const auto& n : node_pat.labels)
-                    fprintf(stderr, "%s,", n.c_str());
-                fprintf(stderr, "\n");
                 varlen->edge_label_ids = std::move(edge_label_ids);
                 varlen->direction = rel_pat.direction;
                 varlen->min_hops = min_hops;
@@ -1415,19 +1410,11 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         uint32_t dst_col = dst_it->second.column_index;
         SlotId dst_slot = dst_it->second.slot_id;
 
-        BoundExpression left_ref =
-            BoundExpression(BoundColumnRef(dst_col, BoundType::VertexRef(), sc.sub_dst_var, dst_slot));
-        BoundExpression right_ref =
-            BoundExpression(BoundColumnRef(sc.saved_col, BoundType::VertexRef(), sc.saved_var, sc.saved_slot));
-        auto eq = std::make_unique<BoundBinaryOp>();
-        eq->op = cypher::BinaryOperator::EQ;
-        eq->left = std::move(left_ref);
-        eq->right = std::move(right_ref);
-        eq->result_type = BoundType::Bool();
-        eq->batch_fn = function::resolveBinaryBatchFn(eq->op, BoundTypeKind::VERTEX_REF, BoundTypeKind::VERTEX_REF);
+        BoundColumnRef left_ref(dst_col, BoundType::VertexRef(), sc.sub_dst_var, dst_slot);
+        BoundColumnRef right_ref(sc.saved_col, BoundType::VertexRef(), sc.saved_var, sc.saved_slot);
 
         BoundFilterOp filter;
-        filter.predicate = BoundExpression(std::move(eq));
+        filter.predicate = makeEqualityExpr(left_ref, right_ref);
         filter.child = std::move(*sub_plan);
         sub_plan = std::make_unique<BoundFilterOp>(std::move(filter));
     }

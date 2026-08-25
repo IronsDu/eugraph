@@ -2170,10 +2170,9 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         if (pos < 0 && ci < lr.output_schema.size())
                             pos = static_cast<int>(ci);
                         if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size()) {
-                            return std::string("PatternComprehensionApply: left slot " +
-                                               std::to_string(corr.left_slot) +
-                                               " not found in left slot layout (size " +
-                                               std::to_string(lr.slot_layout.size()) + ")");
+                            return std::string(
+                                "PatternComprehensionApply: left slot " + std::to_string(corr.left_slot) +
+                                " not found in left slot layout (size " + std::to_string(lr.slot_layout.size()) + ")");
                         }
                         left_corr_cols.push_back(static_cast<uint32_t>(pos));
                     }

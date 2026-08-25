@@ -677,7 +677,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 gt->right = BoundExpression(BoundLiteral(int64_t(0)));
                 gt->result_type = BoundType::Bool();
                 gt->batch_fn = function::resolveBinaryBatchFn(cypher::BinaryOperator::GT, BoundTypeKind::INT64,
-                                                               BoundTypeKind::INT64);
+                                                              BoundTypeKind::INT64);
                 return BoundExpression(std::move(gt));
             } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
                 // Placeholder binding: keep the AST pointer so the hoisting
