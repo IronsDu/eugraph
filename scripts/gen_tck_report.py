@@ -227,8 +227,8 @@ def main():
     w("")
     w("## 表达式类")
     w("")
-    w("| 类别 | 场景数 | 通过 | 失败 | 跳过 | 失败率 | 主要问题 |")
-    w("|------|--------|------|------|------|--------|---------|")
+    w("| 类别 | 场景数 | 通过 | 失败 | 跳过 | 失败率 | 是否通过 | 主要问题 |")
+    w("|------|--------|------|------|------|--------|---------|---------|")
 
     exp_cats = [
         ("Literals", "expressions/literals", ""),
@@ -266,15 +266,16 @@ def main():
 
     for name, t, p, f, s, fr, prob in exp_rows:
         rate = f"{fr*100:.1f}%"
-        emoji = "✅" if f == 0 and s == 0 else ""
-        desc = prob if f > 0 else (f"{s} skipped" if s > 0 else emoji)
-        w(f"| {name} | {t} | **{p}** | {f} | {s} | {rate} | {desc} |")
+        passed = f == 0 and s == 0
+        mark = "✅" if passed else "❌"
+        desc = "" if passed else (prob if prob else f"{s} skipped")
+        w(f"| {name} | {t} | **{p}** | {f} | {s} | {rate} | {mark} | {desc} |")
 
     w("")
     w("## 子句类")
     w("")
-    w("| 类别 | 场景数 | 通过 | 失败 | 跳过 | 失败率 | 主要问题 |")
-    w("|------|--------|------|------|------|--------|---------|")
+    w("| 类别 | 场景数 | 通过 | 失败 | 跳过 | 失败率 | 是否通过 | 主要问题 |")
+    w("|------|--------|------|------|------|--------|---------|---------|")
 
     clause_cats = [
         ("Match", [f"clauses/match/Match{i}" for i in range(1, 11)]
@@ -335,21 +336,26 @@ def main():
 
     for name, t, p, f, s, fr, prob in clause_rows:
         rate = f"{fr*100:.1f}%"
-        emoji = "✅" if f == 0 and s == 0 else ""
-        desc = prob if (f > 0 or s > 0) else emoji
-        w(f"| {name} | {t} | **{p}** | {f} | {s} | {rate} | {desc} |")
+        passed = f == 0 and s == 0
+        mark = "✅" if passed else "❌"
+        desc = "" if passed else (prob if prob else f"{s} skipped")
+        w(f"| {name} | {t} | **{p}** | {f} | {s} | {rate} | {mark} | {desc} |")
 
     w("")
     w("## useCases")
     w("")
-    w("| 类别 | 场景数 | 通过 | 失败 | 未定义 |")
-    w("|------|--------|------|------|--------|")
+    w("| 类别 | 场景数 | 通过 | 失败 | 未定义 | 失败率 | 是否通过 | 主要问题 |")
+    w("|------|--------|------|------|--------|--------|---------|---------|")
     for uc_name in ["countingSubgraphMatches", "triadicSelection"]:
         t, p, f, s = cf(f"useCases/{uc_name}", sf, ss, sk)
-        undef = sum(1 for s in step_data
-                    if s['status'] == 'UNDEFINED'
-                    and uc_name in scenario_to_feature.get(s['scenario'], ''))
-        w(f"| {uc_name} | {t} | **{p}** | {f} | {undef} |")
+        undef = sum(1 for x in step_data
+                    if x['status'] == 'UNDEFINED'
+                    and uc_name in scenario_to_feature.get(x['scenario'], ''))
+        fr = f / t if t > 0 else 0.0
+        passed = f == 0 and undef == 0
+        mark = "✅" if passed else "❌"
+        desc = "" if passed else (f"{f} failed" if f > 0 else f"{undef} undefined")
+        w(f"| {uc_name} | {t} | **{p}** | {f} | {undef} | {fr*100:.1f}% | {mark} | {desc} |")
 
     result = "\n".join(out) + "\n"
 
