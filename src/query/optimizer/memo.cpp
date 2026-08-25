@@ -687,6 +687,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->max_hops = val->max_hops;
                 c->dst_label_prop_ids = val->dst_label_prop_ids;
                 c->dst_label_ids = val->dst_label_ids;
+                c->dst_label_missing = val->dst_label_missing;
                 c->path_variable = val->path_variable;
                 c->path_column_index = val->path_column_index;
                 c->path_handled_by_varlen = val->path_handled_by_varlen;

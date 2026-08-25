@@ -409,6 +409,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = hashBytes(seed, val->path_variable);
                 seed = combine(seed, val->path_column_index);
                 seed = combine(seed, val->path_handled_by_varlen ? 1u : 0u);
+                seed = combine(seed, val->dst_label_missing ? 1u : 0u);
                 seed = hashBytes(seed, val->edge_variable);
                 seed = combine(seed, val->edge_column_index);
                 seed = combine(seed, val->bound_edge_list ? 1u : 0u);
@@ -539,9 +540,11 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
                 if (!val)
                     return;
-                for (const auto& [l, r] : val->correlation) {
-                    seed = combine(seed, l);
-                    seed = combine(seed, r);
+                for (const auto& c : val->correlation) {
+                    seed = combine(seed, c.left_slot);
+                    seed = combine(seed, c.left_column);
+                    seed = hashBytes(seed, c.left_var);
+                    seed = combine(seed, c.right_slot);
                 }
                 for (const auto& o : val->outputs) {
                     seed = combine(seed, o.slot_id);

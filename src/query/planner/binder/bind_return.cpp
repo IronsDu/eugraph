@@ -561,7 +561,7 @@ bool hoistPatternComprehensions(
     for (const auto* pc : pc_asts) {
         if (!seen.insert(pc).second)
             continue;
-        std::vector<std::pair<binder::SlotId, binder::SlotId>> corr;
+        std::vector<binder::BoundPatternComprehensionApplyOp::Correlation> corr;
         binder::SlotId out_slot = binder::INVALID_SLOT_ID;
         std::string out_name;
         binder::BoundType out_elem_type;
@@ -805,7 +805,7 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
     // see the same values as the original row-wise list comprehension.
     ctx_.beginSubScope();
     BoundCorrelatedSourceOp source;
-    std::vector<std::pair<SlotId, SlotId>> correlation;
+    std::vector<BoundPatternComprehensionApplyOp::Correlation> correlation;
     uint32_t col = 0;
     for (const auto& name : outer_vars) {
         auto it = saved.symbols.find(name);
@@ -823,7 +823,12 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
         source.types.push_back(BoundType::clone(ci.type));
         source.column_indices.push_back(ci.column_index);
         source.slot_ids.push_back(ci.slot_id);
-        correlation.emplace_back(ci.slot_id, ci.slot_id);
+        BoundPatternComprehensionApplyOp::Correlation corr2;
+        corr2.left_slot = ci.slot_id;
+        corr2.right_slot = ci.slot_id;
+        corr2.left_column = it->second.column_index;
+        corr2.left_var = name;
+        correlation.push_back(std::move(corr2));
     }
 
     // UNWIND list_expr AS loop_var.
