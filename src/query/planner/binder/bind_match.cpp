@@ -395,6 +395,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         }
 
         // Process chain: expand hops
+        std::string prev_edge_var;
         for (const auto& [rel_pat, node_pat] : element.chain) {
             if (!current)
                 break;
@@ -520,10 +521,12 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                 if (auto* dinfo = ctx_.lookup(dst_var))
                     varlen->dst_slot_id = dinfo->slot_id;
                 varlen->dst_label_ids = dst_labels;
+                varlen->dst_label_missing = !node_pat.labels.empty() && dst_labels.empty();
                 varlen->edge_label_ids = std::move(edge_label_ids);
                 varlen->direction = rel_pat.direction;
                 varlen->min_hops = min_hops;
                 varlen->max_hops = max_hops;
+                varlen->prev_edge_var = prev_edge_var;
 
                 // P1: handle named path variable. A single varlen hop can be
                 // produced directly by VarLenExpand; mixed fixed/varlen chains
@@ -607,6 +610,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
                     path_element_vars.push_back(*edge_var);
                 path_element_vars.push_back(dst_var);
 
+                prev_edge_var = edge_var.value_or("");
                 start_var = dst_var;
                 start_col = dst_col;
                 continue; // skip the normal Expand logic below
@@ -622,6 +626,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             if (!bindRelationshipPattern(rel_pat, edge_var, edge_col, edge_label_ids, edge_prop_ids))
                 return std::nullopt;
             match_edge_vars.push_back(edge_var);
+            prev_edge_var = edge_var;
 
             // Bind target node
             std::string dst_var;
@@ -1405,19 +1410,11 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
         uint32_t dst_col = dst_it->second.column_index;
         SlotId dst_slot = dst_it->second.slot_id;
 
-        BoundExpression left_ref =
-            BoundExpression(BoundColumnRef(dst_col, BoundType::VertexRef(), sc.sub_dst_var, dst_slot));
-        BoundExpression right_ref =
-            BoundExpression(BoundColumnRef(sc.saved_col, BoundType::VertexRef(), sc.saved_var, sc.saved_slot));
-        auto eq = std::make_unique<BoundBinaryOp>();
-        eq->op = cypher::BinaryOperator::EQ;
-        eq->left = std::move(left_ref);
-        eq->right = std::move(right_ref);
-        eq->result_type = BoundType::Bool();
-        eq->batch_fn = function::resolveBinaryBatchFn(eq->op, BoundTypeKind::VERTEX_REF, BoundTypeKind::VERTEX_REF);
+        BoundColumnRef left_ref(dst_col, BoundType::VertexRef(), sc.sub_dst_var, dst_slot);
+        BoundColumnRef right_ref(sc.saved_col, BoundType::VertexRef(), sc.saved_var, sc.saved_slot);
 
         BoundFilterOp filter;
-        filter.predicate = BoundExpression(std::move(eq));
+        filter.predicate = makeEqualityExpr(left_ref, right_ref);
         filter.child = std::move(*sub_plan);
         sub_plan = std::make_unique<BoundFilterOp>(std::move(filter));
     }
@@ -1741,8 +1738,8 @@ BoundExpression bindSimpleProjectionExpr(Binder& binder, const cypher::Expressio
 
 std::optional<BoundLogicalOperator>
 Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLogicalOperator child,
-                                 std::vector<std::pair<SlotId, SlotId>>& correlation, SlotId& out_slot,
-                                 std::string& out_name, BoundType& out_element_type) {
+                                 std::vector<BoundPatternComprehensionApplyOp::Correlation>& correlation,
+                                 SlotId& out_slot, std::string& out_name, BoundType& out_element_type) {
     // Reuse bindExistsSubPlan by synthesising an ExistsExpr wrapper. Pattern
     // binding, sub-scope management, and correlated-source wiring are
     // identical; we then append Project + Aggregate(collect) to collapse the
@@ -1801,8 +1798,19 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
     auto sub_plan = bindExistsSubPlan(synthetic, exists_corr);
     if (!sub_plan)
         return std::nullopt;
-    for (const auto& [l, r] : exists_corr)
-        correlation.emplace_back(static_cast<SlotId>(l), static_cast<SlotId>(r));
+    for (const auto& [l, r] : exists_corr) {
+        BoundPatternComprehensionApplyOp::Correlation corr;
+        corr.left_slot = static_cast<SlotId>(l);
+        corr.right_slot = static_cast<SlotId>(r);
+        for (const auto& [name, info] : ctx_.symbols) {
+            if (info.slot_id == corr.left_slot) {
+                corr.left_column = info.column_index;
+                corr.left_var = name;
+                break;
+            }
+        }
+        correlation.push_back(std::move(corr));
+    }
 
     // Bind projection expression. The sub-plan scope has been restored by
     // bindExistsSubPlan, so variables registered during spine construction

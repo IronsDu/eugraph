@@ -20,9 +20,17 @@ folly::coro::AsyncGenerator<DataChunk> CrossProductPhysicalOp::executeChunk() {
                 continue;
             size_t n_right = right_chunk->count;
 
-            DataChunk output;
-            output.setSchema(output_types_);
-            output.reserve(DataChunk::DEFAULT_CAPACITY);
+            auto makeOutput = [&]() {
+                DataChunk out;
+                for (size_t lc = 0; lc < left_cols; ++lc)
+                    out.addColumn(left_chunk->columns[lc].type);
+                for (size_t rc = 0; rc < right_cols; ++rc)
+                    out.addColumn(right_chunk->columns[rc].type);
+                out.reserve(DataChunk::DEFAULT_CAPACITY);
+                return out;
+            };
+
+            DataChunk output = makeOutput();
 
             for (size_t li = 0; li < n_left; ++li) {
                 for (size_t ri = 0; ri < n_right; ++ri) {
@@ -37,9 +45,7 @@ folly::coro::AsyncGenerator<DataChunk> CrossProductPhysicalOp::executeChunk() {
                     if (output.count >= DataChunk::DEFAULT_CAPACITY) {
                         output.sel = SelectionVector::identity(output.count);
                         co_yield std::move(output);
-                        output = DataChunk{};
-                        output.setSchema(output_types_);
-                        output.reserve(DataChunk::DEFAULT_CAPACITY);
+                        output = makeOutput();
                     }
                 }
             }

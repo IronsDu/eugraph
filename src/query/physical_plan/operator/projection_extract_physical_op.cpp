@@ -103,8 +103,12 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
 
         DataChunk output;
         output.columns.reserve(n_specs);
-        for (const auto& spec : specs_)
-            output.columns.push_back(Column::flat(spec.output_type.kind, row_count));
+        for (const auto& spec : specs_) {
+            binder::BoundTypeKind kind = spec.output_type.kind;
+            if (spec.kind == ColumnSpec::Kind::Passthrough && spec.source_col < chunk->columns.size())
+                kind = chunk->columns[spec.source_col].type;
+            output.columns.push_back(Column::flat(kind, row_count));
+        }
         output.count = row_count;
 
         // Per-row caches so multiple specs reading the same source column share

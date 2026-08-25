@@ -29,6 +29,9 @@ struct BoundVarLenExpandOp {
     int64_t max_hops;
     std::unordered_map<LabelId, std::vector<uint16_t>> dst_label_prop_ids;
     std::vector<LabelId> dst_label_ids;
+    /// Pattern declared node labels but none exist in catalog; varlen must
+    /// return zero rows instead of treating empty label list as no filter.
+    bool dst_label_missing = false;
     // P1: named path variable (p = (a)-[*1..3]->(b))
     std::string path_variable;
     uint32_t path_column_index = 0;
@@ -40,6 +43,10 @@ struct BoundVarLenExpandOp {
     SlotId edge_slot_id = INVALID_SLOT_ID;
     /// Planner-assigned slot captured in allocateSlotsInOp (§6.2).
     SlotId planner_edge_slot_id = INVALID_SLOT_ID;
+    /// Previous fixed-hop edge column. VarLenExpand excludes this
+    /// relationship from the DFS visited set for path uniqueness.
+    std::string prev_edge_var;
+    uint32_t prev_edge_col_index = 0;
     /// Bound LIST<EDGE> input present in child schema; VarLenExpand filters
     /// paths to exactly this sequence and must not append an output column.
     bool bound_edge_list = false;

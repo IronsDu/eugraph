@@ -405,6 +405,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->dst_label_prop_ids != bv->dst_label_prop_ids)
                     return false;
+                if (av->dst_label_missing != bv->dst_label_missing)
+                    return false;
                 if (av->path_variable != bv->path_variable)
                     return false;
                 if (av->path_column_index != bv->path_column_index)
@@ -418,6 +420,10 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->bound_edge_list != bv->bound_edge_list)
                     return false;
                 if (av->bound_edge_list_col_index != bv->bound_edge_list_col_index)
+                    return false;
+                if (av->prev_edge_var != bv->prev_edge_var)
+                    return false;
+                if (av->prev_edge_col_index != bv->prev_edge_col_index)
                     return false;
                 return av->edge_prop_filters == bv->edge_prop_filters;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {

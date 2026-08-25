@@ -1388,12 +1388,21 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         output_types.push_back(binder::BoundType::List(binder::BoundType::Edge()));
                     }
 
+                    int prev_edge_existing = -1;
+                    if (!v.prev_edge_var.empty()) {
+                        prev_edge_existing = findColumn(child_schema, v.prev_edge_var);
+                        if (prev_edge_existing < 0)
+                            return std::string("VarLenExpand: previous edge '" + v.prev_edge_var +
+                                               "' not found in child schema");
+                    }
+
                     auto result = std::make_unique<VarLenExpandPhysicalOp>(
                         v.src_variable, v.dst_variable, std::move(label_filters), v.direction, v.min_hops, v.max_hops,
                         store, std::move(child_schema), std::vector<binder::BoundType>(output_types),
                         std::move(child_op), std::unordered_map<LabelId, std::vector<uint16_t>>{}, v.path_variable,
                         v.edge_variable, v.edge_prop_filters, v.dst_label_ids, dst_bound, dst_existing,
-                        v.bound_edge_list, edge_list_existing);
+                        v.bound_edge_list, edge_list_existing, v.prev_edge_var, prev_edge_existing,
+                        v.dst_label_missing);
                     auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                           std::move(output_types), TupleSlotLayout{}};
                     // Phase D: VarLenExpand outputs VertexRef for dst; ProjectionExtract
@@ -2152,12 +2161,18 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // Resolve left side correlation slots to physical column positions.
                     std::vector<uint32_t> left_corr_cols;
                     left_corr_cols.reserve(v.correlation.size());
-                    for (const auto& [left_slot, _] : v.correlation) {
-                        int pos = lr.slot_layout.getColumnIndex(left_slot);
-                        if (pos < 0) {
-                            return std::string("PatternComprehensionApply: left slot " + std::to_string(left_slot) +
-                                               " not found in left slot layout (size " +
-                                               std::to_string(lr.slot_layout.size()) + ")");
+                    for (size_t ci = 0; ci < v.correlation.size(); ++ci) {
+                        const auto& corr = v.correlation[ci];
+                        int pos = static_cast<int>(corr.left_column);
+                        if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size() ||
+                            lr.output_schema[pos] != corr.left_var)
+                            pos = lr.slot_layout.getColumnIndex(corr.left_slot);
+                        if (pos < 0 && ci < lr.output_schema.size())
+                            pos = static_cast<int>(ci);
+                        if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size()) {
+                            return std::string(
+                                "PatternComprehensionApply: left slot " + std::to_string(corr.left_slot) +
+                                " not found in left slot layout (size " + std::to_string(lr.slot_layout.size()) + ")");
                         }
                         left_corr_cols.push_back(static_cast<uint32_t>(pos));
                     }

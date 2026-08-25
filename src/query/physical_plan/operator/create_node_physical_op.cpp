@@ -260,32 +260,34 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
     if (child_) {
         auto child_gen = child_->executeChunk();
         while (auto chunk = co_await child_gen.next()) {
+            // Buffer all created rows for this input chunk and yield only
+            // after the whole chunk is processed. Downstream operators may
+            // restart right-side scans per output chunk (CrossProduct), so
+            // partial mutation visibility would change MATCH cardinality.
+            DataChunk output;
+            for (size_t c = 0; c < chunk->numColumns(); ++c)
+                output.columns.push_back(Column::flat(chunk->columns[c].type, chunk->count));
+            Column vertex_col = Column::flat(binder::BoundTypeKind::VERTEX, chunk->count);
             for (size_t row = 0; row < chunk->count; ++row) {
                 VertexId vid = co_await meta_.nextVertexId();
                 auto label_props = buildLabelProps(evaluator, &*chunk, row);
 
                 bool ok = co_await insertVertex(vid, label_props);
-                if (ok) {
-                    // Preserve child columns + append new vertex column
-                    DataChunk output;
-                    for (size_t c = 0; c < chunk->numColumns(); ++c) {
-                        Column col = Column::flat(chunk->columns[c].type, 1);
-                        col.setValue(0, chunk->getValue(c, row));
-                        output.columns.push_back(std::move(col));
-                    }
-                    Column vertex_col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
-                    VertexValue vv;
-                    vv.id = vid;
-                    vv.labels = LabelIdSet(label_ids_.begin(), label_ids_.end());
-                    for (const auto& [lid, lp] : label_props) {
-                        vv.properties[lid] = lp;
-                    }
-                    vertex_col.setValue(0, Value(std::move(vv)));
-                    output.columns.push_back(std::move(vertex_col));
-                    output.count = 1;
-                    co_yield std::move(output);
-                }
+                if (!ok)
+                    continue;
+                for (size_t c = 0; c < chunk->numColumns(); ++c)
+                    output.columns[c].setValue(output.count, chunk->getValue(c, row));
+                VertexValue vv;
+                vv.id = vid;
+                vv.labels = LabelIdSet(label_ids_.begin(), label_ids_.end());
+                for (const auto& [lid, lp] : label_props)
+                    vv.properties[lid] = lp;
+                vertex_col.setValue(output.count, Value(std::move(vv)));
+                output.count++;
             }
+            output.columns.push_back(std::move(vertex_col));
+            if (output.count > 0)
+                co_yield std::move(output);
         }
     } else {
         // Standalone: create one vertex, no child columns

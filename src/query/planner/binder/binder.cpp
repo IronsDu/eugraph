@@ -84,6 +84,77 @@ cypher::Expression cloneInlineExpr(const cypher::Expression& expr) {
 
 } // namespace
 
+namespace {
+
+cypher::PatternPart cloneExistsPatternPart(const cypher::PatternPart& pp) {
+    cypher::PatternPart out;
+    out.variable = pp.variable;
+    out.element.node.variable = pp.element.node.variable;
+    out.element.node.labels = pp.element.node.labels;
+    if (pp.element.node.properties) {
+        out.element.node.properties = cypher::PropertiesMap{};
+        for (const auto& [k, v] : pp.element.node.properties->entries)
+            out.element.node.properties->entries.emplace_back(k, cloneInlineExpr(v));
+    }
+    for (const auto& [rel_pat, node_pat] : pp.element.chain) {
+        cypher::RelationshipPattern rel;
+        rel.variable = rel_pat.variable;
+        rel.rel_types = rel_pat.rel_types;
+        rel.direction = rel_pat.direction;
+        if (rel_pat.range)
+            rel.range = std::make_pair(cloneInlineExpr(rel_pat.range->first), cloneInlineExpr(rel_pat.range->second));
+        if (rel_pat.properties) {
+            rel.properties = cypher::PropertiesMap{};
+            for (const auto& [k, v] : rel_pat.properties->entries)
+                rel.properties->entries.emplace_back(k, cloneInlineExpr(v));
+        }
+        cypher::NodePattern node;
+        node.variable = node_pat.variable;
+        node.labels = node_pat.labels;
+        if (node_pat.properties) {
+            node.properties = cypher::PropertiesMap{};
+            for (const auto& [k, v] : node_pat.properties->entries)
+                node.properties->entries.emplace_back(k, cloneInlineExpr(v));
+        }
+        out.element.chain.emplace_back(std::move(rel), std::move(node));
+    }
+    return out;
+}
+
+cypher::PatternComprehension existsToPatternComprehension(const cypher::ExistsExpr& ex) {
+    cypher::PatternComprehension pc;
+    for (const auto& pp : ex.patterns)
+        pc.patterns.push_back(cloneExistsPatternPart(pp));
+    if (ex.where_pred)
+        pc.where_pred = cloneInlineExpr(*ex.where_pred);
+    return pc;
+}
+
+void collectExistsExprs(const cypher::Expression& expr, std::vector<const cypher::ExistsExpr*>& out) {
+    std::visit(
+        [&](const auto& ptr) {
+            using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                out.push_back(ptr.get());
+            } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                collectExistsExprs(ptr->left, out);
+                collectExistsExprs(ptr->right, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                collectExistsExprs(ptr->operand, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    collectExistsExprs(arg, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                collectExistsExprs(ptr->object, out);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                collectExistsExprs(ptr->inner, out);
+            }
+        },
+        expr);
+}
+
+} // namespace
+
 BoundExpression Binder::makeEqualityExpr(const BoundColumnRef& left, const BoundColumnRef& right) {
     auto isGraphEntity = [](BoundTypeKind kind) {
         return kind == BoundTypeKind::VERTEX || kind == BoundTypeKind::EDGE || kind == BoundTypeKind::PATH ||
@@ -673,7 +744,27 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
         return current;
     }
 
-    // No EXISTS: original behavior.
+    // No EXISTS: original behavior, with one extension — bare pattern
+    // predicates inside a mixed OR are hoisted as PatternComprehension list
+    // columns and bind as size(list) > 0.
+    {
+        std::vector<const cypher::ExistsExpr*> exists_exprs;
+        collectExistsExprs(pred, exists_exprs);
+        for (const auto* ex : exists_exprs) {
+            if (exists_as_list_.count(ex))
+                continue;
+            cypher::PatternComprehension pc = existsToPatternComprehension(*ex);
+            std::vector<BoundPatternComprehensionApplyOp::Correlation> corr;
+            SlotId out_slot = INVALID_SLOT_ID;
+            std::string out_name;
+            BoundType out_elem_type;
+            auto apply = bindPatternComprehension(pc, std::move(child), corr, out_slot, out_name, out_elem_type);
+            if (!apply)
+                return std::nullopt;
+            child = std::move(*apply);
+            exists_as_list_[ex] = std::make_tuple(out_slot, out_name, BoundType::List(std::move(out_elem_type)));
+        }
+    }
     auto bound_pred = bindExpression(pred);
     if (!bound_pred)
         return std::nullopt;

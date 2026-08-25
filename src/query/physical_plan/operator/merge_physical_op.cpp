@@ -1248,14 +1248,81 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     }
                 }
             } else {
-                auto found = co_await findMatchingNode(start_labels_, start_prop_filters_, start_pending_props_,
-                                                       &*chunk, row, evaluator);
-                if (found) {
-                    start_vid = *found;
+                std::vector<VertexId> bare_matches;
+                bool bare_merge = !has_relationship_ && start_labels_.empty() && start_prop_filters_.empty() &&
+                                  start_pending_props_.empty();
+                if (bare_merge) {
+                    auto all_gen = store_.scanAllVertices();
+                    while (auto batch = co_await all_gen.next()) {
+                        for (auto vid : *batch)
+                            bare_matches.push_back(vid);
+                    }
+                }
+                if (bare_merge && !bare_matches.empty()) {
+                    start_vid = INVALID_VERTEX_ID;
                 } else {
-                    start_vid = co_await createNode(start_labels_, start_prop_filters_, start_pending_props_, &*chunk,
-                                                    row, evaluator);
-                    start_created = true;
+                    auto found = co_await findMatchingNode(start_labels_, start_prop_filters_, start_pending_props_,
+                                                           &*chunk, row, evaluator);
+                    if (found) {
+                        start_vid = *found;
+                    } else {
+                        start_vid = co_await createNode(start_labels_, start_prop_filters_, start_pending_props_,
+                                                        &*chunk, row, evaluator);
+                        start_created = true;
+                    }
+                }
+
+                // Bare node MERGE `(n)` emits one row per existing vertex.
+                if (bare_merge && !bare_matches.empty()) {
+                    for (VertexId vid : bare_matches) {
+                        DataChunk merged;
+                        merged.count = 1;
+                        for (size_t c = 0; c < chunk->numColumns(); ++c) {
+                            Column col = Column::flat(chunk->columns[c].type, 1);
+                            col.setValue(0, chunk->getValue(c, row));
+                            merged.columns.push_back(std::move(col));
+                        }
+                        Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
+                        VertexValue matched_vv;
+                        matched_vv.id = vid;
+                        auto labels = co_await store_.getVertexLabels(vid);
+                        labels.erase(INVALID_LABEL_ID);
+                        matched_vv.labels = labels;
+                        for (auto lid : labels) {
+                            auto props = co_await store_.getVertexProperties(vid, lid);
+                            if (props)
+                                matched_vv.properties[lid] = std::move(*props);
+                        }
+                        col.setValue(0, Value(matched_vv));
+                        merged.columns.push_back(std::move(col));
+
+                        if (!on_match_items_.empty())
+                            co_await executeSetItems(on_match_items_, merged, evaluator, vid, INVALID_VERTEX_ID,
+                                                     INVALID_EDGE_ID);
+
+                        DataChunk output;
+                        output.count = 1;
+                        for (size_t c = 0; c < chunk->numColumns(); ++c) {
+                            Column out_col = Column::flat(chunk->columns[c].type, 1);
+                            out_col.setValue(0, chunk->getValue(c, row));
+                            output.columns.push_back(std::move(out_col));
+                        }
+                        {
+                            Column out_col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
+                            out_col.setValue(0, Value(matched_vv));
+                            output.columns.push_back(std::move(out_col));
+                        }
+                        if (path_variable_.has_value()) {
+                            Column out_col = Column::flat(binder::BoundTypeKind::PATH, 1);
+                            PathValue pv;
+                            ValueStorage start_vs{Value(matched_vv)};
+                            pv.elements = {start_vs};
+                            out_col.setValue(0, Value(pv));
+                            output.columns.push_back(std::move(out_col));
+                        }
+                        co_yield std::move(output);
+                    }
+                    continue;
                 }
             }
 

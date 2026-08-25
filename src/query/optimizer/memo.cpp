@@ -687,6 +687,7 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->max_hops = val->max_hops;
                 c->dst_label_prop_ids = val->dst_label_prop_ids;
                 c->dst_label_ids = val->dst_label_ids;
+                c->dst_label_missing = val->dst_label_missing;
                 c->path_variable = val->path_variable;
                 c->path_column_index = val->path_column_index;
                 c->path_handled_by_varlen = val->path_handled_by_varlen;
@@ -696,6 +697,8 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->planner_edge_slot_id = val->planner_edge_slot_id;
                 c->bound_edge_list = val->bound_edge_list;
                 c->bound_edge_list_col_index = val->bound_edge_list_col_index;
+                c->prev_edge_var = val->prev_edge_var;
+                c->prev_edge_col_index = val->prev_edge_col_index;
                 c->edge_prop_filters = val->edge_prop_filters;
                 return c;
             }
