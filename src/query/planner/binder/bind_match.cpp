@@ -1745,8 +1745,8 @@ BoundExpression bindSimpleProjectionExpr(Binder& binder, const cypher::Expressio
 
 std::optional<BoundLogicalOperator>
 Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLogicalOperator child,
-                                 std::vector<std::pair<SlotId, SlotId>>& correlation, SlotId& out_slot,
-                                 std::string& out_name, BoundType& out_element_type) {
+                                 std::vector<BoundPatternComprehensionApplyOp::Correlation>& correlation,
+                                 SlotId& out_slot, std::string& out_name, BoundType& out_element_type) {
     // Reuse bindExistsSubPlan by synthesising an ExistsExpr wrapper. Pattern
     // binding, sub-scope management, and correlated-source wiring are
     // identical; we then append Project + Aggregate(collect) to collapse the
@@ -1805,8 +1805,19 @@ Binder::bindPatternComprehension(const cypher::PatternComprehension& pc, BoundLo
     auto sub_plan = bindExistsSubPlan(synthetic, exists_corr);
     if (!sub_plan)
         return std::nullopt;
-    for (const auto& [l, r] : exists_corr)
-        correlation.emplace_back(static_cast<SlotId>(l), static_cast<SlotId>(r));
+    for (const auto& [l, r] : exists_corr) {
+        BoundPatternComprehensionApplyOp::Correlation corr;
+        corr.left_slot = static_cast<SlotId>(l);
+        corr.right_slot = static_cast<SlotId>(r);
+        for (const auto& [name, info] : ctx_.symbols) {
+            if (info.slot_id == corr.left_slot) {
+                corr.left_column = info.column_index;
+                corr.left_var = name;
+                break;
+            }
+        }
+        correlation.push_back(std::move(corr));
+    }
 
     // Bind projection expression. The sub-plan scope has been restored by
     // bindExistsSubPlan, so variables registered during spine construction

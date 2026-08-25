@@ -24,9 +24,17 @@ namespace binder {
 struct BoundPatternComprehensionApplyOp {
     BoundLogicalOperator left;
     BoundLogicalOperator right;
-    /// Pairs of (left_slot_id, right_slot_id) for correlated variables.
-    /// Same semantics as BoundSemiJoinOp::correlation.
-    std::vector<std::pair<SlotId, SlotId>> correlation;
+    struct Correlation {
+        SlotId left_slot = INVALID_SLOT_ID;
+        uint32_t left_column = 0;
+        std::string left_var;
+        SlotId right_slot = INVALID_SLOT_ID;
+        bool operator==(const Correlation& o) const {
+            return left_slot == o.left_slot && left_column == o.left_column && left_var == o.left_var &&
+                   right_slot == o.right_slot;
+        }
+    };
+    std::vector<Correlation> correlation;
 
     /// One entry per PatternComprehension sharing this Apply op. Order
     /// matches the right sub-plan's aggregate output order.

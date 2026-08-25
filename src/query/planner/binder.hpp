@@ -111,6 +111,7 @@ public:
     /// re-binds the original expression against the input scope so ORDER BY
     /// sees the projected value even though Sort is placed before Project.
     std::unordered_map<std::string, const cypher::Expression*> order_by_alias_subs_;
+    std::unordered_map<const cypher::ExistsExpr*, std::tuple<SlotId, std::string, BoundType>> exists_as_list_;
 
     void error(const std::string& msg) {
         errors_.push_back(msg);
@@ -192,11 +193,10 @@ public:
     /// carries (outer_slot, sub_slot) pairs (same semantics as bindExistsSubPlan).
     /// `out_element_type` is the projection's element type; the full result type
     /// is LIST(out_element_type).
-    std::optional<BoundLogicalOperator> bindPatternComprehension(const cypher::PatternComprehension& pc,
-                                                                 BoundLogicalOperator child,
-                                                                 std::vector<std::pair<SlotId, SlotId>>& correlation,
-                                                                 SlotId& out_slot, std::string& out_name,
-                                                                 BoundType& out_element_type);
+    std::optional<BoundLogicalOperator> bindPatternComprehension(
+        const cypher::PatternComprehension& pc, BoundLogicalOperator child,
+        std::vector<BoundPatternComprehensionApplyOp::Correlation>& correlation, SlotId& out_slot,
+        std::string& out_name, BoundType& out_element_type);
     /// Lower a top-level list comprehension whose projection / WHERE contains
     /// pattern comprehensions. The list comprehension is compiled into an
     /// outer PatternComprehensionApplyOp whose right sub-plan UNWINDs the

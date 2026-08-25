@@ -655,8 +655,30 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 }
                 return result;
             } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
-                error("UnexpectedSyntax: pattern expression is only allowed in WHERE clauses");
-                return std::nullopt;
+                auto patched = exists_as_list_.find(ptr.get());
+                if (patched == exists_as_list_.end()) {
+                    error("UnexpectedSyntax: pattern expression is only allowed in WHERE clauses");
+                    return std::nullopt;
+                }
+                const auto& [slot, name, type] = patched->second;
+                BoundColumnRef list_ref{0, type, name, slot};
+                const function::FunctionDef* size_def = func_registry_.lookup("size", {type});
+                if (!size_def) {
+                    error("UndefinedFunction: size(list) is not available for pattern predicate");
+                    return std::nullopt;
+                }
+                auto size_call = std::make_unique<BoundFunctionCall>();
+                size_call->func_def = size_def;
+                size_call->args.push_back(std::move(list_ref));
+                size_call->return_type = BoundType::Int64();
+                auto gt = std::make_unique<BoundBinaryOp>();
+                gt->op = cypher::BinaryOperator::GT;
+                gt->left = std::move(size_call);
+                gt->right = BoundExpression(BoundLiteral(int64_t(0)));
+                gt->result_type = BoundType::Bool();
+                gt->batch_fn = function::resolveBinaryBatchFn(cypher::BinaryOperator::GT, BoundTypeKind::INT64,
+                                                               BoundTypeKind::INT64);
+                return BoundExpression(std::move(gt));
             } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
                 // Placeholder binding: keep the AST pointer so the hoisting
                 // pass (bind_return / bind_with) can construct the
