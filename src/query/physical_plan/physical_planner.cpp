@@ -2160,10 +2160,17 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     // Resolve left side correlation slots to physical column positions.
                     std::vector<uint32_t> left_corr_cols;
                     left_corr_cols.reserve(v.correlation.size());
-                    for (const auto& [left_slot, _] : v.correlation) {
-                        int pos = lr.slot_layout.getColumnIndex(left_slot);
-                        if (pos < 0) {
-                            return std::string("PatternComprehensionApply: left slot " + std::to_string(left_slot) +
+                    for (size_t ci = 0; ci < v.correlation.size(); ++ci) {
+                        const auto& corr = v.correlation[ci];
+                        int pos = static_cast<int>(corr.left_column);
+                        if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size() ||
+                            lr.output_schema[pos] != corr.left_var)
+                            pos = lr.slot_layout.getColumnIndex(corr.left_slot);
+                        if (pos < 0 && ci < lr.output_schema.size())
+                            pos = static_cast<int>(ci);
+                        if (pos < 0 || static_cast<size_t>(pos) >= lr.output_schema.size()) {
+                            return std::string("PatternComprehensionApply: left slot " +
+                                               std::to_string(corr.left_slot) +
                                                " not found in left slot layout (size " +
                                                std::to_string(lr.slot_layout.size()) + ")");
                         }

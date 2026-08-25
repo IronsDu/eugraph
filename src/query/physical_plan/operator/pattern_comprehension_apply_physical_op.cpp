@@ -84,10 +84,9 @@ folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::exec
             }
         }
         for (auto& buf : list_buffers) {
-            SelectionVector identity;
-            identity.is_identity = true;
-            identity.count = static_cast<uint32_t>(n_left);
-            output.columns.push_back(Column::dict(buf, identity));
+            Column col(binder::BoundTypeKind::LIST);
+            col.buffer = buf;
+            output.columns.push_back(std::move(col));
         }
         output.count = n_left;
         output.sel = SelectionVector::identity(n_left);
