@@ -288,7 +288,10 @@ GIVEN("^the (.+) graph$", (const std::string& graph_name)) {
     if (graph_name == "empty" || graph_name == "any")
         return;
 
-    const std::string script_path = "third_party/openCypher/tck/graphs/" + graph_name + "/" + graph_name + ".cypher";
+#ifndef TCK_GRAPHS_DIR
+#define TCK_GRAPHS_DIR "third_party/openCypher/tck/graphs"
+#endif
+    const std::string script_path = std::string(TCK_GRAPHS_DIR) + "/" + graph_name + "/" + graph_name + ".cypher";
     std::ifstream in(script_path);
     if (!in) {
         GTEST_FAIL() << "Missing TCK graph fixture: " << script_path;

@@ -175,6 +175,10 @@ target_include_directories(tck_tests PRIVATE
     "${CUKE_STAGE}/include/messages"
 )
 
+target_compile_definitions(tck_tests PRIVATE
+    TCK_GRAPHS_DIR="${PROJECT_SOURCE_DIR}/third_party/openCypher/tck/graphs"
+)
+
 target_link_libraries(tck_tests PRIVATE
     tck_steps_lib
     ccr_runner
