@@ -12,6 +12,10 @@
 namespace eugraph {
 namespace compute {
 
+namespace detail {
+struct RowIndex;
+} // namespace detail
+
 enum class QuantifierKind {
     ALL,
     ANY,
@@ -25,10 +29,10 @@ enum class QuantifierKind {
 /// With per-Column DICTIONARY support, the evaluator reads logical rows
 /// directly via Column::getValue(logical_row) — Column handles its own
 /// FLAT/CONSTANT/DICTIONARY mapping internally.
-class VectorizedEvaluator {
+class ExpressionEvaluator {
 public:
-    VectorizedEvaluator() = default;
-    explicit VectorizedEvaluator(const function::EvalContext& eval_ctx) : eval_ctx_(eval_ctx) {}
+    ExpressionEvaluator() = default;
+    explicit ExpressionEvaluator(const function::EvalContext& eval_ctx) : eval_ctx_(eval_ctx) {}
 
     /// Evaluate a bound expression for all logical rows in the chunk.
     /// Result is written into `result` column (must be FLAT, pre-sized).
@@ -62,7 +66,11 @@ private:
 
     Column& acquireTempColumn(binder::BoundTypeKind type, size_t capacity);
 
-    void evalLiteral(const binder::BoundLiteral& lit, Column& result, size_t count);
+    Column& acquireTempConstant(binder::BoundTypeKind type, Value value);
+    bool tryEvaluateTypedBinaryColumns(const binder::BoundBinaryOp& op, const Column& lhs, const Column& rhs,
+                                       const detail::RowIndex& rows, Column& result);
+    bool tryEvaluateTypedUnaryColumn(const binder::BoundUnaryOp& op, const Column& operand,
+                                     const detail::RowIndex& rows, Column& result);
     void evalBinaryOp(const binder::BoundBinaryOp& op, const DataChunk& input, Column& result, size_t count);
     void evalUnaryOp(const binder::BoundUnaryOp& op, const DataChunk& input, Column& result, size_t count);
     void evalPropertyRef(const binder::BoundPropertyRef& ref, const DataChunk& input, Column& result, size_t count);

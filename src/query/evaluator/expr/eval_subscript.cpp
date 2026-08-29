@@ -1,4 +1,4 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_subscript.hpp"
@@ -64,7 +64,7 @@ Value pvToValue(const PropertyValue& pv) {
 
 } // namespace
 
-void VectorizedEvaluator::evalSubscript(const binder::BoundSubscript& sub, const DataChunk& input, Column& result,
+void ExpressionEvaluator::evalSubscript(const binder::BoundSubscript& sub, const DataChunk& input, Column& result,
                                         size_t count) {
     auto list_eval = evaluateInternal(sub.list, input);
     auto idx_eval = evaluateInternal(sub.index, input);

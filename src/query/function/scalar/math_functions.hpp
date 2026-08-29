@@ -23,15 +23,27 @@ inline Value absImpl(const Value& arg) {
     return Value{};
 }
 
-inline Value absScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    return absImpl(args[0]);
-}
+struct AbsIntOp {
+    static int64_t apply(int64_t v) {
+        return std::abs(v);
+    }
+};
+struct AbsDoubleOp {
+    static double apply(double v) {
+        return std::abs(v);
+    }
+};
 
 inline void absBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                        const EvalContext& /*ctx*/) {
-    for (size_t i = 0; i < count; i++) {
-        result.setValue(i, absImpl(args[0]->getValue(i)));
-    }
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::INT64)
+        typedUnaryBatch<int64_t, int64_t, AbsIntOp>(in, result, count);
+    else if (in.type == binder::BoundTypeKind::DOUBLE)
+        typedUnaryBatch<double, double, AbsDoubleOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; i++)
+            result.setValue(i, absImpl(in.getValue(i)));
 }
 
 // --- sqrt ---
@@ -46,24 +58,23 @@ inline Value sqrtImpl(const Value& arg) {
     return Value{};
 }
 
-inline Value sqrtScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    return sqrtImpl(args[0]);
-}
+struct SqrtOp {
+    static double apply(double v) {
+        return std::sqrt(v);
+    }
+};
 
 inline void sqrtBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                         const EvalContext& /*ctx*/) {
-    for (size_t i = 0; i < count; i++) {
-        result.setValue(i, sqrtImpl(args[0]->getValue(i)));
-    }
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::DOUBLE)
+        typedUnaryBatch<double, double, SqrtOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; i++)
+            result.setValue(i, sqrtImpl(in.getValue(i)));
 }
 
 // --- rand ---
-
-inline Value randScalarFn(const std::vector<Value>& /*args*/, const EvalContext& /*ctx*/) {
-    thread_local std::mt19937 gen(std::random_device{}());
-    thread_local std::uniform_real_distribution<double> dist(0.0, 1.0);
-    return Value(dist(gen));
-}
 
 inline void randBatchFn(const std::vector<const Column*>& /*args*/, Column& result, size_t count,
                         const EvalContext& /*ctx*/) {
@@ -92,15 +103,27 @@ inline Value signImpl(const Value& arg) {
     return Value{s};
 }
 
-inline Value signScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    return signImpl(args[0]);
-}
+struct SignIntOp {
+    static int64_t apply(int64_t v) {
+        return v > 0 ? 1 : (v < 0 ? -1 : 0);
+    }
+};
+struct SignDoubleOp {
+    static int64_t apply(double v) {
+        return v > 0 ? 1 : (v < 0 ? -1 : 0);
+    }
+};
 
 inline void signBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                         const EvalContext& /*ctx*/) {
-    for (size_t i = 0; i < count; i++) {
-        result.setValue(i, signImpl(args[0]->getValue(i)));
-    }
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::INT64)
+        typedUnaryBatch<int64_t, int64_t, SignIntOp>(in, result, count);
+    else if (in.type == binder::BoundTypeKind::DOUBLE)
+        typedUnaryBatch<double, int64_t, SignDoubleOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; i++)
+            result.setValue(i, signImpl(in.getValue(i)));
 }
 
 // --- ceil ---
@@ -115,15 +138,27 @@ inline Value ceilImpl(const Value& arg) {
     return Value{};
 }
 
-inline Value ceilScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    return ceilImpl(args[0]);
-}
+struct CeilIntOp {
+    static double apply(int64_t v) {
+        return std::ceil(static_cast<double>(v));
+    }
+};
+struct CeilDoubleOp {
+    static double apply(double v) {
+        return std::ceil(v);
+    }
+};
 
 inline void ceilBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                         const EvalContext& /*ctx*/) {
-    for (size_t i = 0; i < count; i++) {
-        result.setValue(i, ceilImpl(args[0]->getValue(i)));
-    }
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::INT64)
+        typedUnaryBatch<int64_t, double, CeilIntOp>(in, result, count);
+    else if (in.type == binder::BoundTypeKind::DOUBLE)
+        typedUnaryBatch<double, double, CeilDoubleOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; i++)
+            result.setValue(i, ceilImpl(in.getValue(i)));
 }
 
 } // namespace scalar

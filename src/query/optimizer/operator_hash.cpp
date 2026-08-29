@@ -187,7 +187,7 @@ uint64_t hashBoundExpression(const binder::BoundExpression& expr) {
                 seed = combine(seed, hashBoundExpression(val->left));
                 seed = combine(seed, hashBoundExpression(val->right));
                 seed = hashBoundType(seed, val->result_type);
-                // batch_fn is determined by op — skip
+                // fallback_fn is determined by op — skip
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
                 if (!val)
                     return;

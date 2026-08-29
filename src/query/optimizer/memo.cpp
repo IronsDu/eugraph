@@ -893,7 +893,7 @@ binder::BoundExpression cloneBoundExpression(const binder::BoundExpression& expr
                 c->left = cloneBoundExpression(val->left);
                 c->right = cloneBoundExpression(val->right);
                 c->result_type = val->result_type;
-                c->batch_fn = val->batch_fn;
+                c->fallback_fn = val->fallback_fn;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
                 if (!val)
@@ -902,7 +902,7 @@ binder::BoundExpression cloneBoundExpression(const binder::BoundExpression& expr
                 c->op = val->op;
                 c->operand = cloneBoundExpression(val->operand);
                 c->result_type = val->result_type;
-                c->batch_fn = val->batch_fn;
+                c->fallback_fn = val->fallback_fn;
                 return c;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
                 if (!val)

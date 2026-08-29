@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 #include "query/parser/ast.hpp"
 #include "query/physical_plan/expression_compiler.hpp"
 #include "query/physical_plan/operator/set_physical_op.hpp"
@@ -137,34 +137,34 @@ private:
     findMatchingNode(const std::vector<LabelId>& labels,
                      const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
                      const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
-                     const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator);
+                     const DataChunk* chunk, size_t row_idx, ExpressionEvaluator& evaluator);
 
     folly::coro::Task<VertexId>
     createNode(const std::vector<LabelId>& labels,
                const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
                const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
-               const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator);
+               const DataChunk* chunk, size_t row_idx, ExpressionEvaluator& evaluator);
 
     folly::coro::Task<std::optional<std::tuple<EdgeId, EdgeLabelId>>>
     findMatchingEdge(VertexId src_vid, VertexId dst_vid,
                      const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
-                     const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator);
+                     const DataChunk* chunk, size_t row_idx, ExpressionEvaluator& evaluator);
 
     /// Scan for ALL edges between src and dst that match the property filters.
     /// Returns a vector of (edge_id, edge_label_id) — may be empty.
     folly::coro::Task<std::vector<std::tuple<EdgeId, EdgeLabelId>>>
     findAllMatchingEdges(VertexId src_vid, VertexId dst_vid,
                          const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
-                         const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator);
+                         const DataChunk* chunk, size_t row_idx, ExpressionEvaluator& evaluator);
 
     folly::coro::Task<std::tuple<EdgeId, EdgeLabelId>>
     createEdge(VertexId src_vid, VertexId dst_vid,
                const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
                const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
-               const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator);
+               const DataChunk* chunk, size_t row_idx, ExpressionEvaluator& evaluator);
 
     folly::coro::Task<void> executeSetItems(const std::vector<SetPhysicalOp::BoundSetItem>& items,
-                                            const DataChunk& merged_chunk, VectorizedEvaluator& evaluator,
+                                            const DataChunk& merged_chunk, ExpressionEvaluator& evaluator,
                                             VertexId start_vid, VertexId end_vid, EdgeId edge_id);
 
     folly::coro::Task<void> executeSetPropertyItem(const SetPhysicalOp::BoundSetItem& item, const Value& val,

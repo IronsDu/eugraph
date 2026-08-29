@@ -1,9 +1,9 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 namespace eugraph {
 namespace compute {
 
-void VectorizedEvaluator::evalCase(const binder::BoundCase& case_expr, const DataChunk& input, Column& result,
+void ExpressionEvaluator::evalCase(const binder::BoundCase& case_expr, const DataChunk& input, Column& result,
                                    size_t count) {
     // Evaluate subject once if present (simple CASE: CASE expr WHEN val THEN ...)
     EvalResult subject_eval;

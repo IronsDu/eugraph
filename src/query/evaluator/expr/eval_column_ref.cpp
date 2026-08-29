@@ -1,11 +1,11 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace compute {
 
-VectorizedEvaluator::EvalResult VectorizedEvaluator::evalColumnRef(const binder::BoundColumnRef& ref,
+ExpressionEvaluator::EvalResult ExpressionEvaluator::evalColumnRef(const binder::BoundColumnRef& ref,
                                                                    const DataChunk& input) {
     if (ref.column_index < input.columns.size()) {
         return {&input.columns[ref.column_index], false};

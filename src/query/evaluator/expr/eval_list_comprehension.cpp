@@ -1,9 +1,9 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 namespace eugraph {
 namespace compute {
 
-void VectorizedEvaluator::evalListComprehension(const binder::BoundListComprehension& lc, const DataChunk& input,
+void ExpressionEvaluator::evalListComprehension(const binder::BoundListComprehension& lc, const DataChunk& input,
                                                 Column& result, size_t count) {
     auto list_eval = evaluateInternal(lc.list_expr, input);
 

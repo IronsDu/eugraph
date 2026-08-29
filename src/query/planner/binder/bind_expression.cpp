@@ -5,7 +5,8 @@
 #include <unordered_set>
 
 #include "common/types/temporal_value.hpp"
-#include "query/function/batch_ops.hpp"
+#include "query/planner/binder/bind_binary_op.hpp"
+#include "query/planner/binder/bind_unary_op.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
 #include "query/planner/bound_expression/bound_map.hpp"
 #include "query/planner/bound_expression/bound_slice.hpp"
@@ -168,7 +169,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 bin->left = std::move(*left);
                 bin->right = std::move(*right);
                 bin->result_type = std::move(result_type);
-                bin->batch_fn = function::resolveBinaryBatchFn(bin->op, left_type.kind, right_type.kind);
+                bin->fallback_fn = resolveBinaryFallbackFn(bin->op, left_type.kind, right_type.kind);
                 return BoundExpression(std::move(bin));
             } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
                 auto operand = bindExpression(ptr->operand);
@@ -187,7 +188,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 un->op = ptr->op;
                 un->operand = std::move(*operand);
                 un->result_type = std::move(result_type);
-                un->batch_fn = function::resolveUnaryBatchFn(un->op, operand_type.kind);
+                un->fallback_fn = resolveUnaryFallbackFn(un->op, operand_type.kind);
                 return BoundExpression(std::move(un));
             } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
                 // Look up in function registry
@@ -676,8 +677,8 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 gt->left = std::move(size_call);
                 gt->right = BoundExpression(BoundLiteral(int64_t(0)));
                 gt->result_type = BoundType::Bool();
-                gt->batch_fn = function::resolveBinaryBatchFn(cypher::BinaryOperator::GT, BoundTypeKind::INT64,
-                                                              BoundTypeKind::INT64);
+                gt->fallback_fn =
+                    resolveBinaryFallbackFn(cypher::BinaryOperator::GT, BoundTypeKind::INT64, BoundTypeKind::INT64);
                 return BoundExpression(std::move(gt));
             } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
                 // Placeholder binding: keep the AST pointer so the hoisting

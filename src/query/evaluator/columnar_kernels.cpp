@@ -1,20 +1,12 @@
-#include "query/function/batch_ops.hpp"
-#include "query/function/compare_ops.hpp"
+#include "query/evaluator/columnar_kernels.hpp"
 
 #include "common/types/temporal_value.hpp"
 
 #include <cmath>
 
 namespace eugraph {
-
-namespace {
-bool isTemporalType(binder::BoundTypeKind k) {
-    return k == binder::BoundTypeKind::DATETIME || k == binder::BoundTypeKind::TIME ||
-           k == binder::BoundTypeKind::DURATION;
-}
-} // namespace
-namespace function {
-namespace {
+namespace compute {
+namespace detail {
 
 // ==================== Generic (type-agnostic) binary batch functions ====================
 
@@ -173,7 +165,6 @@ void listConcatBatch(const Column& left, const Column& right, Column& result, si
 // On first element that differs, the result is determined by that element's ordering.
 // If all elements equal, the longer list is "greater".
 // Null elements propagate: if any comparison returns unknown, the overall result is null.
-namespace {
 
 // Returns true/false/null for left CMP right on list values.
 // Cmp should be a functor on int: e.g., std::greater<int> for >, std::less<int> for <, etc.
@@ -213,8 +204,6 @@ void listCmpBatchImpl(const Column& left, const Column& right, Column& result, s
     }
 }
 
-} // namespace
-
 void listGteBatch(const Column& left, const Column& right, Column& result, size_t count) {
     listCmpBatchImpl<std::greater_equal<int>>(left, right, result, count, true);
 }
@@ -230,8 +219,6 @@ void listLtBatch(const Column& left, const Column& right, Column& result, size_t
 
 // ==================== Generic numeric dispatch (ANY + ANY fallback) ====================
 
-namespace {
-
 // Extract numeric values for arithmetic: promotes int64→double when mixed.
 // Returns nullopt when either operand is non-numeric (not int64/double).
 inline std::optional<std::pair<double, double>> numericPair(const Value& lv, const Value& rv) {
@@ -245,8 +232,6 @@ inline std::optional<std::pair<double, double>> numericPair(const Value& lv, con
         return std::pair{static_cast<double>(std::get<int64_t>(lv)), static_cast<double>(std::get<int64_t>(rv))};
     return std::nullopt;
 }
-
-} // namespace
 
 void genericAddBatch(const Column& left, const Column& right, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
@@ -271,7 +256,7 @@ void genericAddBatch(const Column& left, const Column& right, Column& result, si
                 result.setValue(i, Value(std::move(res)));
             }
         } else if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
-            result.setValue(i, Value(std::get<int64_t>(lv) + std::get<int64_t>(rv)));
+            result.setValue(i, Value(AddOp::apply(std::get<int64_t>(lv), std::get<int64_t>(rv))));
         else if (std::holds_alternative<std::string>(lv) && std::holds_alternative<std::string>(rv))
             result.setValue(i, Value(std::get<std::string>(lv) + std::get<std::string>(rv)));
         else if (std::holds_alternative<DurationValue>(lv) || std::holds_alternative<DurationValue>(rv) ||
@@ -471,38 +456,15 @@ DEF_GENERIC_CMP_BATCH(genericGteBatch, >=)
 // ==================== Int64 arithmetic batch functions ====================
 
 void int64AddBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
-            result.setValue(i, Value(std::get<int64_t>(lv) + std::get<int64_t>(rv)));
-        } else {
-            result.setNull(i);
-        }
-    }
+    numericBinaryValueBatch<int64_t, AddOp>(left, right, result, count);
 }
 
 void int64SubBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
-            result.setValue(i, Value(std::get<int64_t>(lv) - std::get<int64_t>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericBinaryValueBatch<int64_t, SubOp>(left, right, result, count);
 }
 
 void int64MulBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
-            result.setValue(i, Value(std::get<int64_t>(lv) * std::get<int64_t>(rv)));
-        else {
-            result.setNull(i);
-        }
-    }
+    numericBinaryValueBatch<int64_t, MulOp>(left, right, result, count);
 }
 
 void int64DivBatch(const Column& left, const Column& right, Column& result, size_t count) {
@@ -548,36 +510,15 @@ void int64PowBatch(const Column& left, const Column& right, Column& result, size
 // ==================== Double arithmetic batch functions ====================
 
 void doubleAddBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
-            result.setValue(i, Value(std::get<double>(lv) + std::get<double>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericBinaryValueBatch<double, AddOp>(left, right, result, count);
 }
 
 void doubleSubBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
-            result.setValue(i, Value(std::get<double>(lv) - std::get<double>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericBinaryValueBatch<double, SubOp>(left, right, result, count);
 }
 
 void doubleMulBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
-            result.setValue(i, Value(std::get<double>(lv) * std::get<double>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericBinaryValueBatch<double, MulOp>(left, right, result, count);
 }
 
 void doubleDivBatch(const Column& left, const Column& right, Column& result, size_t count) {
@@ -672,95 +613,37 @@ void boolGteBatch(const Column& left, const Column& right, Column& result, size_
 // ==================== Int64 comparison batch functions ====================
 
 void int64LtBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
-            result.setValue(i, Value(std::get<int64_t>(lv) < std::get<int64_t>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericCmpValueBatch<int64_t, LtOp>(left, right, result, count);
 }
 
 void int64GtBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
-            bool cmp = std::get<int64_t>(lv) > std::get<int64_t>(rv);
-            result.setValue(i, Value(cmp));
-        } else {
-            result.setNull(i);
-        }
-    }
+    numericCmpValueBatch<int64_t, GtOp>(left, right, result, count);
 }
 
 void int64LteBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
-            result.setValue(i, Value(std::get<int64_t>(lv) <= std::get<int64_t>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericCmpValueBatch<int64_t, LeOp>(left, right, result, count);
 }
 
 void int64GteBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
-            result.setValue(i, Value(std::get<int64_t>(lv) >= std::get<int64_t>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericCmpValueBatch<int64_t, GteOp>(left, right, result, count);
 }
 
 // ==================== Double comparison batch functions ====================
 
 void doubleLtBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
-            result.setValue(i, Value(std::get<double>(lv) < std::get<double>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericCmpValueBatch<double, LtOp>(left, right, result, count);
 }
 
 void doubleGtBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
-            result.setValue(i, Value(std::get<double>(lv) > std::get<double>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericCmpValueBatch<double, GtOp>(left, right, result, count);
 }
 
 void doubleLteBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
-            result.setValue(i, Value(std::get<double>(lv) <= std::get<double>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericCmpValueBatch<double, LeOp>(left, right, result, count);
 }
 
 void doubleGteBatch(const Column& left, const Column& right, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value lv = left.getValue(i);
-        Value rv = right.getValue(i);
-        if (std::holds_alternative<double>(lv) && std::holds_alternative<double>(rv))
-            result.setValue(i, Value(std::get<double>(lv) >= std::get<double>(rv)));
-        else
-            result.setNull(i);
-    }
+    numericCmpValueBatch<double, GteOp>(left, right, result, count);
 }
 
 // ==================== String batch functions ====================
@@ -878,23 +761,11 @@ void boolNotBatch(const Column& operand, Column& result, size_t count) {
 }
 
 void int64NegateBatch(const Column& operand, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value ov = operand.getValue(i);
-        if (std::holds_alternative<int64_t>(ov))
-            result.setValue(i, Value(-std::get<int64_t>(ov)));
-        else
-            result.setNull(i);
-    }
+    numericNegateValueBatch<int64_t, NegOp>(operand, result, count);
 }
 
 void doubleNegateBatch(const Column& operand, Column& result, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        Value ov = operand.getValue(i);
-        if (std::holds_alternative<double>(ov))
-            result.setValue(i, Value(-std::get<double>(ov)));
-        else
-            result.setNull(i);
-    }
+    numericNegateValueBatch<double, NegOp>(operand, result, count);
 }
 
 void isNullBatch(const Column& operand, Column& result, size_t count) {
@@ -1307,376 +1178,6 @@ void temporalDivBatch(const Column& left, const Column& right, Column& result, s
     }
 }
 
-} // anonymous namespace
-
-// ==================== Resolver functions ====================
-
-binder::BinaryBatchFn resolveBinaryBatchFn(cypher::BinaryOperator op, binder::BoundTypeKind left_type,
-                                           binder::BoundTypeKind right_type) {
-    using BO = cypher::BinaryOperator;
-    using BTK = binder::BoundTypeKind;
-
-    // EQ / NEQ — generic, works for all types via Value comparison
-    if (op == BO::EQ)
-        return genericEqBatch;
-    if (op == BO::NEQ)
-        return genericNeqBatch;
-
-    // AND / OR / XOR — bool extraction
-    if (op == BO::AND)
-        return boolAndBatch;
-    if (op == BO::OR)
-        return boolOrBatch;
-    if (op == BO::XOR)
-        return boolXorBatch;
-
-    // IN — scalar IN list -> bool
-    if (op == BO::IN)
-        return inBatch;
-
-    // STARTS_WITH / ENDS_WITH / CONTAINS: accept any types.
-    // Non-string operands return null at runtime via the string batch functions.
-    if (op == BO::STARTS_WITH)
-        return stringStartsWithBatch;
-    if (op == BO::ENDS_WITH)
-        return stringEndsWithBatch;
-    if (op == BO::CONTAINS)
-        return stringContainsBatch;
-
-    // Bool ordered comparison (true > false).
-    if (left_type == BTK::BOOL && right_type == BTK::BOOL) {
-        switch (op) {
-        case BO::LT:
-            return boolLtBatch;
-        case BO::GT:
-            return boolGtBatch;
-        case BO::LTE:
-            return boolLteBatch;
-        case BO::GTE:
-            return boolGteBatch;
-        default:
-            return nullptr;
-        }
-    }
-
-    // String-specific operations (accept NULL for null operands)
-    if ((left_type == BTK::STRING || left_type == BTK::NULL_TYPE) &&
-        (right_type == BTK::STRING || right_type == BTK::NULL_TYPE)) {
-        switch (op) {
-        case BO::ADD:
-            return stringConcatBatch;
-        case BO::LT:
-            return stringLtBatch;
-        case BO::GT:
-            return stringGtBatch;
-        case BO::LTE:
-            return stringLteBatch;
-        case BO::GTE:
-            return stringGteBatch;
-        default:
-            return nullptr;
-        }
-    }
-
-    // Int64-specific operations
-    if (left_type == BTK::INT64 && right_type == BTK::INT64) {
-        switch (op) {
-        case BO::ADD:
-            return int64AddBatch;
-        case BO::SUB:
-            return int64SubBatch;
-        case BO::MUL:
-            return int64MulBatch;
-        case BO::DIV:
-            return int64DivBatch;
-        case BO::MOD:
-            return int64ModBatch;
-        case BO::POW:
-            return int64PowBatch;
-        case BO::LT:
-            return int64LtBatch;
-        case BO::GT:
-            return int64GtBatch;
-        case BO::LTE:
-            return int64LteBatch;
-        case BO::GTE:
-            return int64GteBatch;
-        default:
-            return nullptr;
-        }
-    }
-
-    // Double-specific operations
-    if (left_type == BTK::DOUBLE && right_type == BTK::DOUBLE) {
-        switch (op) {
-        case BO::ADD:
-            return doubleAddBatch;
-        case BO::SUB:
-            return doubleSubBatch;
-        case BO::MUL:
-            return doubleMulBatch;
-        case BO::DIV:
-            return doubleDivBatch;
-        case BO::MOD:
-            return doubleModBatch;
-        case BO::POW:
-            return doublePowBatch;
-        case BO::LT:
-            return doubleLtBatch;
-        case BO::GT:
-            return doubleGtBatch;
-        case BO::LTE:
-            return doubleLteBatch;
-        case BO::GTE:
-            return doubleGteBatch;
-        default:
-            return nullptr;
-        }
-    }
-
-    // INT64+DOUBLE cross-type: promote int64→double at runtime.
-    if ((left_type == BTK::INT64 && right_type == BTK::DOUBLE) ||
-        (left_type == BTK::DOUBLE && right_type == BTK::INT64)) {
-        switch (op) {
-        case BO::ADD:
-            return genericAddBatch;
-        case BO::SUB:
-            return genericSubBatch;
-        case BO::MUL:
-            return genericMulBatch;
-        case BO::DIV:
-            return genericDivBatch;
-        case BO::MOD:
-            return genericModBatch;
-        case BO::POW:
-            return genericPowBatch;
-        case BO::LT:
-            return genericLtBatch;
-        case BO::GT:
-            return genericGtBatch;
-        case BO::LTE:
-            return genericLteBatch;
-        case BO::GTE:
-            return genericGteBatch;
-        default:
-            return nullptr;
-        }
-    }
-
-    // Temporal * number / Temporal / number (must precede ANY fallback
-    // so that ANY-typed temporal properties dispatch correctly).
-    // Only intercept MUL/DIV; other ops fall through to generic dispatch.
-    if ((isTemporalType(left_type) || left_type == BTK::ANY) &&
-        (right_type == BTK::INT64 || right_type == BTK::DOUBLE)) {
-        switch (op) {
-        case BO::MUL:
-            return temporalMulBatch;
-        case BO::DIV:
-            return temporalDivBatch;
-        default:
-            break;
-        }
-    }
-
-    // number * Temporal (commutative MUL, accept ANY as temporal)
-    if ((left_type == BTK::INT64 || left_type == BTK::DOUBLE) &&
-        (isTemporalType(right_type) || right_type == BTK::ANY)) {
-        switch (op) {
-        case BO::MUL:
-            return temporalMulBatch;
-        default:
-            break;
-        }
-    }
-
-    // ANY-type fallback: properties stored as ANY need runtime dispatch.
-    // ANY + concrete → use concrete type's batch function.
-    // ANY + ANY → use generic dispatch that inspects runtime Value types.
-    if (left_type == BTK::ANY || right_type == BTK::ANY) {
-        auto concrete = (left_type != BTK::ANY) ? left_type : (right_type != BTK::ANY) ? right_type : BTK::ANY;
-        switch (concrete) {
-        case BTK::INT64:
-            switch (op) {
-            case BO::ADD:
-                return genericAddBatch;
-            case BO::SUB:
-                return genericSubBatch;
-            case BO::MUL:
-                return genericMulBatch;
-            case BO::DIV:
-                return genericDivBatch;
-            case BO::MOD:
-                return genericModBatch;
-            case BO::POW:
-                return genericPowBatch;
-            case BO::LT:
-                return genericLtBatch;
-            case BO::GT:
-                return genericGtBatch;
-            case BO::LTE:
-                return genericLteBatch;
-            case BO::GTE:
-                return genericGteBatch;
-            default:
-                return nullptr;
-            }
-        case BTK::DOUBLE:
-            switch (op) {
-            case BO::ADD:
-                return genericAddBatch;
-            case BO::SUB:
-                return doubleSubBatch;
-            case BO::MUL:
-                return genericMulBatch;
-            case BO::DIV:
-                return genericDivBatch;
-            case BO::MOD:
-                return doubleModBatch;
-            case BO::POW:
-                return doublePowBatch;
-            case BO::LT:
-                return doubleLtBatch;
-            case BO::GT:
-                return doubleGtBatch;
-            case BO::LTE:
-                return doubleLteBatch;
-            case BO::GTE:
-                return doubleGteBatch;
-            default:
-                return nullptr;
-            }
-        case BTK::STRING:
-            switch (op) {
-            case BO::ADD:
-                return genericAddBatch;
-            case BO::LT:
-                return stringLtBatch;
-            case BO::GT:
-                return stringGtBatch;
-            case BO::LTE:
-                return stringLteBatch;
-            case BO::GTE:
-                return stringGteBatch;
-            default:
-                return nullptr;
-            }
-        case BTK::BOOL:
-            switch (op) {
-            case BO::LT:
-                return boolLtBatch;
-            case BO::GT:
-                return boolGtBatch;
-            case BO::LTE:
-                return boolLteBatch;
-            case BO::GTE:
-                return boolGteBatch;
-            default:
-                return nullptr;
-            }
-        case BTK::ANY: // both sides are ANY — runtime type dispatch
-            switch (op) {
-            case BO::ADD:
-                return genericAddBatch;
-            case BO::SUB:
-                return genericSubBatch;
-            case BO::MUL:
-                return genericMulBatch;
-            case BO::DIV:
-                return genericDivBatch;
-            case BO::MOD:
-                return genericModBatch;
-            case BO::POW:
-                return genericPowBatch;
-            case BO::LT:
-                return genericLtBatch;
-            case BO::GT:
-                return genericGtBatch;
-            case BO::LTE:
-                return genericLteBatch;
-            case BO::GTE:
-                return genericGteBatch;
-            default:
-                return nullptr;
-            }
-        default:
-            break;
-        }
-    }
-
-    // Temporal: accept ANY as temporal (for property round-trip)
-    bool left_temporal = (isTemporalType(left_type) || left_type == BTK::ANY);
-    bool right_temporal = (isTemporalType(right_type) || right_type == BTK::ANY);
-
-    // Temporal-specific: TEMPORAL + TEMPORAL (or ANY variants)
-    if (left_temporal && right_temporal) {
-        switch (op) {
-        case BO::LT:
-            return temporalLtBatch;
-        case BO::GT:
-            return temporalGtBatch;
-        case BO::LTE:
-            return temporalLteBatch;
-        case BO::GTE:
-            return temporalGteBatch;
-        case BO::ADD:
-            return temporalAddBatch;
-        case BO::SUB:
-            return temporalSubBatch;
-        default:
-            return nullptr;
-        }
-    }
-
-    // List-specific operations (accept ANY for property round-trip)
-    // Must be after temporal checks so temporal+ANY ADD is correctly dispatched
-    if ((left_type == BTK::LIST || left_type == BTK::ANY) || (right_type == BTK::LIST || right_type == BTK::ANY)) {
-        if (op == BO::ADD)
-            return listConcatBatch;
-        // Ordered comparison for list types (LT/GT/LTE/GTE)
-        if ((left_type == BTK::LIST || left_type == BTK::ANY) && (right_type == BTK::LIST || right_type == BTK::ANY)) {
-            switch (op) {
-            case BO::LT:
-                return listLtBatch;
-            case BO::GT:
-                return listGtBatch;
-            case BO::LTE:
-                return listLteBatch;
-            case BO::GTE:
-                return listGteBatch;
-            default:
-                break;
-            }
-        }
-    }
-
-    // Unhandled type combination: for ordered comparison, return null (incomparable types).
-    if (op == BO::LT || op == BO::GT || op == BO::LTE || op == BO::GTE)
-        return nullCmpBatch;
-
-    return nullptr;
-}
-
-binder::UnaryBatchFn resolveUnaryBatchFn(cypher::UnaryOperator op, binder::BoundTypeKind operand_type) {
-    using UO = cypher::UnaryOperator;
-    using BTK = binder::BoundTypeKind;
-
-    switch (op) {
-    case UO::NOT:
-        return boolNotBatch;
-    case UO::NEGATE:
-        if (operand_type == BTK::INT64)
-            return int64NegateBatch;
-        if (operand_type == BTK::DOUBLE)
-            return doubleNegateBatch;
-        return nullptr;
-    case UO::IS_NULL:
-        return isNullBatch;
-    case UO::IS_NOT_NULL:
-        return isNotNullBatch;
-    default:
-        return nullptr;
-    }
-}
-
-} // namespace function
+} // namespace detail
+} // namespace compute
 } // namespace eugraph

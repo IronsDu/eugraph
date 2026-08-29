@@ -2,12 +2,18 @@
 
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
+#include "query/function/scalar/support/typed_batch.hpp"
 
 #include <cctype>
 
 namespace eugraph {
 namespace function {
 namespace scalar {
+
+inline Value ltrimImpl(const Value& arg);
+inline Value rtrimImpl(const Value& arg);
+inline Value toUpperImpl(const Value& arg);
+inline Value toLowerImpl(const Value& arg);
 
 // --- trim ---
 
@@ -24,18 +30,52 @@ inline Value trimImpl(const Value& arg) {
     return Value{s.substr(start, end - start + 1)};
 }
 
-inline Value trimScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty())
-        return Value{};
-    return trimImpl(args[0]);
-}
+struct TrimOp {
+    static std::string apply(std::string v) {
+        const Value out = trimImpl(Value(std::move(v)));
+        return isNull(out) ? std::string{} : std::get<std::string>(out);
+    }
+};
+struct LTrimOp {
+    static std::string apply(std::string v) {
+        const Value out = ltrimImpl(Value(std::move(v)));
+        return isNull(out) ? std::string{} : std::get<std::string>(out);
+    }
+};
+struct RTrimOp {
+    static std::string apply(std::string v) {
+        const Value out = rtrimImpl(Value(std::move(v)));
+        return isNull(out) ? std::string{} : std::get<std::string>(out);
+    }
+};
+struct UpperOp {
+    static std::string apply(std::string v) {
+        const Value out = toUpperImpl(Value(std::move(v)));
+        return isNull(out) ? std::string{} : std::get<std::string>(out);
+    }
+};
+struct LowerOp {
+    static std::string apply(std::string v) {
+        const Value out = toLowerImpl(Value(std::move(v)));
+        return isNull(out) ? std::string{} : std::get<std::string>(out);
+    }
+};
+struct ReverseStringOp {
+    static std::string apply(std::string v) {
+        std::reverse(v.begin(), v.end());
+        return v;
+    }
+};
 
 inline void trimBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty())
         return;
-    const auto& col = *args[0];
-    for (size_t i = 0; i < count; ++i)
-        result.setValue(i, trimImpl(col.getValue(i)));
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::STRING)
+        typedUnaryBatch<std::string, std::string, TrimOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, trimImpl(in.getValue(i)));
 }
 
 // --- ltrim ---
@@ -52,18 +92,15 @@ inline Value ltrimImpl(const Value& arg) {
     return Value{s.substr(start)};
 }
 
-inline Value ltrimScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty())
-        return Value{};
-    return ltrimImpl(args[0]);
-}
-
 inline void ltrimBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty())
         return;
-    const auto& col = *args[0];
-    for (size_t i = 0; i < count; ++i)
-        result.setValue(i, ltrimImpl(col.getValue(i)));
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::STRING)
+        typedUnaryBatch<std::string, std::string, LTrimOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, ltrimImpl(in.getValue(i)));
 }
 
 // --- rtrim ---
@@ -80,18 +117,15 @@ inline Value rtrimImpl(const Value& arg) {
     return Value{s.substr(0, end + 1)};
 }
 
-inline Value rtrimScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty())
-        return Value{};
-    return rtrimImpl(args[0]);
-}
-
 inline void rtrimBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty())
         return;
-    const auto& col = *args[0];
-    for (size_t i = 0; i < count; ++i)
-        result.setValue(i, rtrimImpl(col.getValue(i)));
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::STRING)
+        typedUnaryBatch<std::string, std::string, RTrimOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, rtrimImpl(in.getValue(i)));
 }
 
 // --- split ---
@@ -117,12 +151,6 @@ inline Value splitImpl(const Value& str_val, const Value& sep_val) {
         pos = next + sep.size();
     }
     return Value{std::move(lv)};
-}
-
-inline Value splitScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.size() < 2)
-        return Value{};
-    return splitImpl(args[0], args[1]);
 }
 
 inline void splitBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
@@ -155,12 +183,6 @@ inline Value replaceImpl(const Value& str_val, const Value& old_val, const Value
     return Value{std::move(s)};
 }
 
-inline Value replaceScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.size() < 3)
-        return Value{};
-    return replaceImpl(args[0], args[1], args[2]);
-}
-
 inline void replaceBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.size() < 3)
         return;
@@ -189,18 +211,6 @@ inline Value substringImpl(const Value& str_val, int64_t start, int64_t length) 
     if (ulen > remaining)
         ulen = remaining;
     return Value{s.substr(ustart, ulen)};
-}
-
-inline Value substringScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.size() < 2)
-        return Value{};
-    if (isNull(args[1]))
-        return Value{};
-    auto start = std::get<int64_t>(args[1]);
-    int64_t length = -1;
-    if (args.size() >= 3 && !isNull(args[2]))
-        length = std::get<int64_t>(args[2]);
-    return substringImpl(args[0], start, length);
 }
 
 inline void substringBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
@@ -242,14 +252,6 @@ inline Value leftImpl(const Value& str_val, int64_t n) {
     return Value{s.substr(0, un)};
 }
 
-inline Value leftScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.size() < 2)
-        return Value{};
-    if (isNull(args[1]))
-        return Value{};
-    return leftImpl(args[0], std::get<int64_t>(args[1]));
-}
-
 inline void leftBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.size() < 2)
         return;
@@ -281,14 +283,6 @@ inline Value rightImpl(const Value& str_val, int64_t n) {
     return Value{s.substr(s.size() - un)};
 }
 
-inline Value rightScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.size() < 2)
-        return Value{};
-    if (isNull(args[1]))
-        return Value{};
-    return rightImpl(args[0], std::get<int64_t>(args[1]));
-}
-
 inline void rightBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.size() < 2)
         return;
@@ -316,18 +310,15 @@ inline Value toUpperImpl(const Value& arg) {
     return Value{std::move(s)};
 }
 
-inline Value toUpperScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty())
-        return Value{};
-    return toUpperImpl(args[0]);
-}
-
 inline void toUpperBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty())
         return;
-    const auto& col = *args[0];
-    for (size_t i = 0; i < count; ++i)
-        result.setValue(i, toUpperImpl(col.getValue(i)));
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::STRING)
+        typedUnaryBatch<std::string, std::string, UpperOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, toUpperImpl(in.getValue(i)));
 }
 
 // --- toLower ---
@@ -342,18 +333,15 @@ inline Value toLowerImpl(const Value& arg) {
     return Value{std::move(s)};
 }
 
-inline Value toLowerScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty())
-        return Value{};
-    return toLowerImpl(args[0]);
-}
-
 inline void toLowerBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty())
         return;
-    const auto& col = *args[0];
-    for (size_t i = 0; i < count; ++i)
-        result.setValue(i, toLowerImpl(col.getValue(i)));
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::STRING)
+        typedUnaryBatch<std::string, std::string, LowerOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, toLowerImpl(in.getValue(i)));
 }
 
 } // namespace scalar

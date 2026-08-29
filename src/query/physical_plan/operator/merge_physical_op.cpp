@@ -3,7 +3,7 @@
 #include "common/types/graph_types.hpp"
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 #include "query/function/scalar/graph_functions.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
 
@@ -11,7 +11,7 @@
 
 namespace {
 
-eugraph::Value evaluateExpr(eugraph::compute::VectorizedEvaluator& evaluator,
+eugraph::Value evaluateExpr(eugraph::compute::ExpressionEvaluator& evaluator,
                             const eugraph::binder::BoundExpression& expr, const eugraph::DataChunk* chunk,
                             size_t row_idx) {
     if (chunk && chunk->count > 0) {
@@ -346,7 +346,7 @@ folly::coro::Task<std::optional<VertexId>>
 MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
                                   const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
                                   const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
-                                  const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
+                                  const DataChunk* chunk, size_t row_idx, ExpressionEvaluator& evaluator) {
     // Check created_vertices first
     for (auto vid : created_vertices_) {
         bool match = true;
@@ -606,7 +606,7 @@ folly::coro::Task<VertexId>
 MergePhysicalOp::createNode(const std::vector<LabelId>& labels,
                             const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
                             const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
-                            const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
+                            const DataChunk* chunk, size_t row_idx, ExpressionEvaluator& evaluator) {
     VertexId vid = co_await meta_.nextVertexId();
 
     // Build properties per label
@@ -663,7 +663,7 @@ MergePhysicalOp::createNode(const std::vector<LabelId>& labels,
 folly::coro::Task<std::optional<std::tuple<EdgeId, EdgeLabelId>>>
 MergePhysicalOp::findMatchingEdge(VertexId src_vid, VertexId dst_vid,
                                   const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
-                                  const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
+                                  const DataChunk* chunk, size_t row_idx, ExpressionEvaluator& evaluator) {
     EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
 
     // Check created_edges set first
@@ -729,7 +729,7 @@ MergePhysicalOp::findMatchingEdge(VertexId src_vid, VertexId dst_vid,
 folly::coro::Task<std::vector<std::tuple<EdgeId, EdgeLabelId>>>
 MergePhysicalOp::findAllMatchingEdges(VertexId src_vid, VertexId dst_vid,
                                       const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
-                                      const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
+                                      const DataChunk* chunk, size_t row_idx, ExpressionEvaluator& evaluator) {
     EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
 
     // Check created_edges set first
@@ -795,7 +795,7 @@ folly::coro::Task<std::tuple<EdgeId, EdgeLabelId>>
 MergePhysicalOp::createEdge(VertexId src_vid, VertexId dst_vid,
                             const std::vector<std::pair<uint16_t, binder::BoundExpression>>& prop_filters,
                             const std::vector<std::pair<std::string, binder::BoundExpression>>& pending_props,
-                            const DataChunk* chunk, size_t row_idx, VectorizedEvaluator& evaluator) {
+                            const DataChunk* chunk, size_t row_idx, ExpressionEvaluator& evaluator) {
     EdgeLabelId effective_elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
     if (effective_elid == INVALID_EDGE_LABEL_ID && edge_label_name_.has_value()) {
         auto it = edge_label_name_to_id_.find(*edge_label_name_);
@@ -841,7 +841,7 @@ MergePhysicalOp::createEdge(VertexId src_vid, VertexId dst_vid,
 }
 
 folly::coro::Task<void> MergePhysicalOp::executeSetItems(const std::vector<SetPhysicalOp::BoundSetItem>& items,
-                                                         const DataChunk& merged_chunk, VectorizedEvaluator& evaluator,
+                                                         const DataChunk& merged_chunk, ExpressionEvaluator& evaluator,
                                                          VertexId start_vid, VertexId end_vid, EdgeId edge_id) {
     for (const auto& item : items) {
         Value val;
@@ -1112,7 +1112,7 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
 }
 
 folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
-    VectorizedEvaluator evaluator(eval_ctx_);
+    ExpressionEvaluator evaluator(eval_ctx_);
 
     // Phase 1: ensure label tables exist
     co_await ensureLabelTables(start_labels_);

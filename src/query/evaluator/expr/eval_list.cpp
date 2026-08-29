@@ -1,11 +1,11 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 #include "query/planner/bound_expression/bound_list.hpp"
 
 namespace eugraph {
 namespace compute {
 
-VectorizedEvaluator::EvalResult VectorizedEvaluator::evalList(const binder::BoundList& list, const DataChunk& input) {
+ExpressionEvaluator::EvalResult ExpressionEvaluator::evalList(const binder::BoundList& list, const DataChunk& input) {
     size_t count = input.numRows();
     auto& col = acquireTempColumn(binder::BoundTypeKind::LIST, count);
     for (size_t i = 0; i < count; ++i) {

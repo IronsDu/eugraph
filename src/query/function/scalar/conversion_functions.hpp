@@ -43,12 +43,6 @@ inline Value toIntegerImpl(const Value& arg) {
     return Value{};
 }
 
-inline Value toIntegerScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return toIntegerImpl(args[0]);
-}
-
 inline void toIntegerBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                              const EvalContext& /*ctx*/) {
     if (args.empty())
@@ -87,12 +81,6 @@ inline Value toFloatImpl(const Value& arg) {
         std::holds_alternative<EdgeValue>(arg) || std::holds_alternative<PathValue>(arg))
         throw std::runtime_error("TypeError: InvalidArgumentValue");
     return Value{};
-}
-
-inline Value toFloatScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return toFloatImpl(args[0]);
 }
 
 inline void toFloatBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
@@ -143,12 +131,6 @@ inline Value toStringImpl(const Value& arg) {
     return Value{};
 }
 
-inline Value toStringScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return toStringImpl(args[0]);
-}
-
 inline void toStringBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                             const EvalContext& /*ctx*/) {
     if (args.empty())
@@ -181,12 +163,6 @@ inline Value toBooleanImpl(const Value& arg) {
         std::holds_alternative<EdgeValue>(arg) || std::holds_alternative<PathValue>(arg))
         throw std::runtime_error("TypeError: InvalidArgumentValue");
     return Value{};
-}
-
-inline Value toBooleanScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return toBooleanImpl(args[0]);
 }
 
 inline void toBooleanBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,

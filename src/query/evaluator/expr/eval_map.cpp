@@ -1,11 +1,11 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 #include "query/planner/bound_expression/bound_map.hpp"
 
 namespace eugraph {
 namespace compute {
 
-void VectorizedEvaluator::evalMap(const binder::BoundMap& map, const DataChunk& input, Column& result, size_t count) {
+void ExpressionEvaluator::evalMap(const binder::BoundMap& map, const DataChunk& input, Column& result, size_t count) {
     for (size_t i = 0; i < count; ++i) {
         MapValue mv;
         for (const auto& [key, expr] : map.entries) {

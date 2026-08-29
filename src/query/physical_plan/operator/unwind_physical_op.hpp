@@ -1,7 +1,7 @@
 #pragma once
 
 #include "query/dataset/data_chunk.hpp"
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/expression_compiler.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"

@@ -2,7 +2,7 @@
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "common/types/temporal_value.hpp"
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/operator/mutation_mirror.hpp"
 #include <spdlog/spdlog.h>
 
@@ -117,7 +117,7 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
 
         // Pre-evaluate all value expressions for this chunk.
         std::vector<std::vector<Value>> value_results(items_.size());
-        VectorizedEvaluator evaluator(eval_ctx_);
+        ExpressionEvaluator evaluator(eval_ctx_);
         for (size_t idx = 0; idx < items_.size(); ++idx) {
             if (items_[idx].value.has_value()) {
                 auto col = Column::flat(binder::BoundTypeKind::ANY, n);

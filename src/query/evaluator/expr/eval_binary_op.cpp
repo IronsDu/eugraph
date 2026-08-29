@@ -1,11 +1,13 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/columnar_kernels.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
 namespace compute {
+using namespace eugraph::compute::detail;
 
-void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const DataChunk& input, Column& result,
+void ExpressionEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const DataChunk& input, Column& result,
                                        size_t count) {
     auto left = evaluateInternal(op.left, input);
     auto right = evaluateInternal(op.right, input);
@@ -78,9 +80,58 @@ void VectorizedEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
         return;
     }
 
-    if (op.batch_fn) {
-        op.batch_fn(*left.column, *right.column, result, count);
+    // The operand columns are already evaluated; run the typed fast path on
+    // their runtime representation when possible.
+    const detail::RowIndex rows =
+        (!left.is_temp && !right.is_temp) ? chunkRows(input) : detail::RowIndex{nullptr, count};
+    if (tryEvaluateTypedBinaryColumns(op, *left.column, *right.column, rows, result))
+        return;
+
+    if (op.fallback_fn) {
+        op.fallback_fn(*left.column, *right.column, result, count);
     }
+}
+
+bool ExpressionEvaluator::tryEvaluateTypedBinaryColumns(const binder::BoundBinaryOp& op, const Column& lhs,
+                                                        const Column& rhs, const detail::RowIndex& rows,
+                                                        Column& result) {
+    using BTK = binder::BoundTypeKind;
+
+    if (lhs.type == BTK::INT64 && rhs.type == BTK::INT64) {
+        if (op.op == cypher::BinaryOperator::ADD)
+            return typedBinaryEval<int64_t, int64_t, AddOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::SUB)
+            return typedBinaryEval<int64_t, int64_t, SubOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::MUL)
+            return typedBinaryEval<int64_t, int64_t, MulOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::LT)
+            return typedBinaryEval<int64_t, uint8_t, LtOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::GT)
+            return typedBinaryEval<int64_t, uint8_t, GtOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::LTE)
+            return typedBinaryEval<int64_t, uint8_t, LeOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::GTE)
+            return typedBinaryEval<int64_t, uint8_t, GteOp>(lhs, rhs, rows, result);
+        return false;
+    }
+    if (lhs.type == BTK::DOUBLE && rhs.type == BTK::DOUBLE) {
+        if (op.op == cypher::BinaryOperator::ADD)
+            return typedBinaryEval<double, double, AddOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::SUB)
+            return typedBinaryEval<double, double, SubOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::MUL)
+            return typedBinaryEval<double, double, MulOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::LT)
+            return typedBinaryEval<double, uint8_t, LtOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::GT)
+            return typedBinaryEval<double, uint8_t, GtOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::LTE)
+            return typedBinaryEval<double, uint8_t, LeOp>(lhs, rhs, rows, result);
+        if (op.op == cypher::BinaryOperator::GTE)
+            return typedBinaryEval<double, uint8_t, GteOp>(lhs, rhs, rows, result);
+        return false;
+    }
+    return false;
 }
 
 } // namespace compute

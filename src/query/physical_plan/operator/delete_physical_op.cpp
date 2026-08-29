@@ -1,7 +1,7 @@
 #include "query/physical_plan/operator/delete_physical_op.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/dataset/row.hpp"
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/expression_compiler.hpp"
 
 #include <stdexcept>
@@ -73,7 +73,7 @@ void collectDeleteEntities(const Value& value, std::vector<DeleteEntity>& out) {
     }
 }
 
-Value evaluateDeleteExpr(VectorizedEvaluator& evaluator, const binder::BoundExpression& expr, const DataChunk& chunk,
+Value evaluateDeleteExpr(ExpressionEvaluator& evaluator, const binder::BoundExpression& expr, const DataChunk& chunk,
                          size_t row_idx) {
     DataChunk single;
     single.count = 1;
@@ -99,7 +99,7 @@ void DeletePhysicalOp::compileExpressions(const TupleSlotLayout& input_layout) {
 
 folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
     auto child_gen = child_->executeChunk();
-    VectorizedEvaluator evaluator(eval_ctx_);
+    ExpressionEvaluator evaluator(eval_ctx_);
 
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();

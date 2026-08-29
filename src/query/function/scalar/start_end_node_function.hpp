@@ -32,12 +32,6 @@ inline Value endNodeImpl(const Value& arg) {
     throw std::runtime_error("TypeError: InvalidArgumentValue");
 }
 
-inline Value startNodeScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return startNodeImpl(args[0]);
-}
-
 inline void startNodeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                              const EvalContext& /*ctx*/) {
     if (args.empty())
@@ -45,12 +39,6 @@ inline void startNodeBatchFn(const std::vector<const Column*>& args, Column& res
     const auto& arg_col = *args[0];
     for (size_t i = 0; i < count; ++i)
         result.setValue(i, startNodeImpl(arg_col.getValue(i)));
-}
-
-inline Value endNodeScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return endNodeImpl(args[0]);
 }
 
 inline void endNodeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,

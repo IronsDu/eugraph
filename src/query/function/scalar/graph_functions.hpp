@@ -46,12 +46,6 @@ inline Value labelsImpl(const Value& arg, const EvalContext& ctx) {
     throw std::runtime_error("TypeError: InvalidArgumentValue");
 }
 
-inline Value labelsScalarFn(const std::vector<Value>& args, const EvalContext& ctx) {
-    if (args.empty())
-        return Value{};
-    return labelsImpl(args[0], ctx);
-}
-
 inline void labelsBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                           const EvalContext& ctx) {
     if (args.empty())

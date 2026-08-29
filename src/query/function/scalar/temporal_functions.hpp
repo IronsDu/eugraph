@@ -668,15 +668,6 @@ inline Value dateImpl(const Value& arg) {
     return Value{};
 }
 
-inline Value dateScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty()) {
-        DateTimeValue tv;
-        tv.kind = DateTimeKind::DATE;
-        return Value{tv};
-    }
-    return dateImpl(args[0]);
-}
-
 inline void dateBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty()) {
         DateTimeValue tv;
@@ -747,15 +738,6 @@ inline Value localtimeImpl(const Value& arg) {
     }
 
     return Value{};
-}
-
-inline Value localtimeScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty()) {
-        TimeValue tv;
-        tv.kind = TimeKind::LOCAL_TIME;
-        return Value{tv};
-    }
-    return localtimeImpl(args[0]);
 }
 
 inline void localtimeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
@@ -980,15 +962,6 @@ inline Value localdatetimeImpl(const Value& arg) {
     return Value{};
 }
 
-inline Value localdatetimeScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty()) {
-        DateTimeValue tv;
-        tv.kind = DateTimeKind::LOCAL_DATETIME;
-        return Value{tv};
-    }
-    return localdatetimeImpl(args[0]);
-}
-
 inline void localdatetimeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                                  const EvalContext&) {
     if (args.empty()) {
@@ -1182,15 +1155,6 @@ inline Value datetimeImpl(const Value& arg) {
     return Value{};
 }
 
-inline Value datetimeScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty()) {
-        DateTimeValue tv;
-        tv.kind = DateTimeKind::DATETIME;
-        return Value{tv};
-    }
-    return datetimeImpl(args[0]);
-}
-
 inline void datetimeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty()) {
         DateTimeValue tv;
@@ -1270,12 +1234,6 @@ inline Value durationImpl(const Value& arg) {
         return Value{parseDurationFromString(std::get<std::string>(arg))};
 
     return Value{};
-}
-
-inline Value durationScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty())
-        return Value{DurationValue{}};
-    return durationImpl(args[0]);
 }
 
 inline void durationBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
@@ -1593,15 +1551,6 @@ inline Value temporalAccessorImpl(const Value& tv_val, int64_t field_raw) {
     return Value{};
 }
 
-inline Value temporalAccessorScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.size() < 2)
-        return Value{};
-    if (!std::holds_alternative<int64_t>(args[1]))
-        return Value{};
-    auto field_raw = std::get<int64_t>(args[1]);
-    return temporalAccessorImpl(args[0], field_raw);
-}
-
 inline void temporalAccessorBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                                     const EvalContext&) {
     if (args.size() < 2)
@@ -1884,34 +1833,6 @@ inline Value temporalTruncateImpl(const Value& temporal_val, const std::string& 
 }
 
 template <int TargetKindRaw, bool IsTimeKind = false>
-inline Value temporalTruncateScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.size() < 2)
-        return Value{};
-    if (!std::holds_alternative<std::string>(args[0]))
-        return Value{};
-    std::string unit = std::get<std::string>(args[0]);
-    Value fields = (args.size() >= 3) ? args[2] : Value{};
-
-    Value temporal_val = args[1];
-    if constexpr (IsTimeKind) {
-        if (std::holds_alternative<DateTimeValue>(temporal_val)) {
-            auto dtv = std::get<DateTimeValue>(temporal_val);
-            TimeValue tv;
-            tv.kind = TimeKind::LOCAL_TIME;
-            tv.hour = dtv.hour;
-            tv.minute = dtv.minute;
-            tv.second = dtv.second;
-            tv.nanos = dtv.nanos;
-            tv.tz_offset_sec = dtv.tz_offset_sec;
-            tv.tz_name = dtv.tz_name;
-            temporal_val = Value{tv};
-        }
-    }
-
-    return temporalTruncateImpl(temporal_val, unit, fields, TargetKindRaw);
-}
-
-template <int TargetKindRaw, bool IsTimeKind = false>
 inline void temporalTruncateBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                                     const EvalContext&) {
     if (args.size() < 2)
@@ -1947,45 +1868,6 @@ namespace {
 // (durationBetween is now in temporal_value.cpp as a public function)
 
 } // namespace
-
-inline Value durationBetweenScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.size() < 2)
-        return Value{};
-
-    // DateTimeValue x DateTimeValue
-    if (std::holds_alternative<DateTimeValue>(args[0]) && std::holds_alternative<DateTimeValue>(args[1]))
-        return Value{durationBetween(std::get<DateTimeValue>(args[0]), std::get<DateTimeValue>(args[1]))};
-
-    // TimeValue x TimeValue
-    if (std::holds_alternative<TimeValue>(args[0]) && std::holds_alternative<TimeValue>(args[1]))
-        return Value{durationBetween(std::get<TimeValue>(args[0]), std::get<TimeValue>(args[1]))};
-
-    // Cross-type: convert DateTimeValue to TimeValue and compare time components only
-    auto toTime = [](const Value& v) -> std::optional<TimeValue> {
-        if (std::holds_alternative<DateTimeValue>(v)) {
-            const auto& dtv = std::get<DateTimeValue>(v);
-            TimeValue tv;
-            tv.kind = (dtv.kind == DateTimeKind::DATETIME) ? TimeKind::TIME : TimeKind::LOCAL_TIME;
-            tv.hour = dtv.hour;
-            tv.minute = dtv.minute;
-            tv.second = dtv.second;
-            tv.nanos = dtv.nanos;
-            tv.tz_offset_sec = dtv.tz_offset_sec;
-            tv.tz_name = dtv.tz_name;
-            return tv;
-        }
-        if (std::holds_alternative<TimeValue>(v))
-            return std::get<TimeValue>(v);
-        return std::nullopt;
-    };
-
-    auto a = toTime(args[0]);
-    auto b = toTime(args[1]);
-    if (a && b)
-        return Value{durationBetween(*a, *b)};
-
-    return Value{};
-}
 
 inline void durationBetweenBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                                    const EvalContext&) {
@@ -2030,57 +1912,6 @@ inline void durationBetweenBatchFn(const std::vector<const Column*>& args, Colum
 }
 
 // duration.inMonths: normalize duration to months
-inline Value durationInMonthsScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.size() < 2)
-        return Value{};
-
-    if (std::holds_alternative<DateTimeValue>(args[0]) && std::holds_alternative<DateTimeValue>(args[1])) {
-        auto dur = durationBetween(std::get<DateTimeValue>(args[0]), std::get<DateTimeValue>(args[1]));
-        // Normalize days and seconds into months: duration.inMonths returns months only
-        static constexpr double kDaysPerMonth = 365.2425 / 12.0;
-        double total_days =
-            static_cast<double>(dur.months) * kDaysPerMonth + static_cast<double>(dur.days) +
-            (static_cast<double>(dur.seconds) + static_cast<double>(dur.nanos) / 1'000'000'000.0) / 86400.0;
-        dur.months = static_cast<int64_t>(std::trunc(total_days / kDaysPerMonth));
-        dur.days = 0;
-        dur.seconds = 0;
-        dur.nanos = 0;
-        return Value{dur};
-    }
-
-    // Cross-type or Time-only: convert to TimeValues, compute duration, then normalize
-    auto toTime = [](const Value& v) -> std::optional<TimeValue> {
-        if (std::holds_alternative<DateTimeValue>(v)) {
-            const auto& dtv = std::get<DateTimeValue>(v);
-            TimeValue tv;
-            tv.kind = (dtv.kind == DateTimeKind::DATETIME) ? TimeKind::TIME : TimeKind::LOCAL_TIME;
-            tv.hour = dtv.hour;
-            tv.minute = dtv.minute;
-            tv.second = dtv.second;
-            tv.nanos = dtv.nanos;
-            tv.tz_offset_sec = dtv.tz_offset_sec;
-            tv.tz_name = dtv.tz_name;
-            return tv;
-        }
-        if (std::holds_alternative<TimeValue>(v))
-            return std::get<TimeValue>(v);
-        return std::nullopt;
-    };
-
-    auto a = toTime(args[0]);
-    auto b = toTime(args[1]);
-    if (a && b) {
-        auto dur = durationBetween(*a, *b);
-        dur.days = 0;
-        dur.months = 0;
-        dur.seconds = 0;
-        dur.nanos = 0;
-        return Value{dur};
-    }
-
-    return Value{};
-}
-
 inline void durationInMonthsBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                                     const EvalContext&) {
     if (args.size() < 2)
@@ -2345,19 +2176,6 @@ inline void durationInDaysBatchFn(const std::vector<const Column*>& args, Column
 }
 
 // ==================== datetime.fromepoch / datetime.fromepochmillis ====================
-
-inline Value datetimeFromEpochScalarFn(const std::vector<Value>& args, const EvalContext&) {
-    if (args.empty())
-        return Value{};
-    int64_t seconds = 0;
-    int64_t nanos = 0;
-    if (args.size() >= 1 && std::holds_alternative<int64_t>(args[0]))
-        seconds = std::get<int64_t>(args[0]);
-    if (args.size() >= 2 && std::holds_alternative<int64_t>(args[1]))
-        nanos = std::get<int64_t>(args[1]);
-    auto dtv = datetimeFromEpoch(seconds, nanos);
-    return Value{dtv};
-}
 
 inline void datetimeFromEpochBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                                      const EvalContext&) {

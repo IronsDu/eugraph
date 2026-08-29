@@ -125,6 +125,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [查询引擎](query/engine/query-engine-design.md) | 逻辑计划、物理计划、Catalog、FunctionRegistry、BoundExpression、DataChunk、向量化求值 |
+| [表达式求值 Benchmarks](query/engine/evaluator-benchmarks.md) | google benchmark 基线、优化前后对比与运行方法 |
 | [执行模型](query/engine/execution-model.md) | Pull-based 火山模型、协程调度、IO/Compute 分离、流式执行、关键不变量 |
 | [事务模型](query/engine/transaction-model.md) | 事务生命周期、snapshot isolation、流式事务、批量操作事务 |
 | [ProjectionExtract 按需属性物化设计](query/engine/projection-extract-design.md) | 需求驱动的属性物化：SlotId 系统、六阶段管线、PEPlan、ColumnSpec |

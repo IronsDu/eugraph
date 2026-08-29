@@ -16,7 +16,7 @@ folly::coro::AsyncGenerator<DataChunk> UnwindPhysicalOp::executeChunk() {
     size_t output_row = 0;
 
     while (auto chunk = co_await gen.next()) {
-        VectorizedEvaluator eval(eval_ctx_);
+        ExpressionEvaluator eval(eval_ctx_);
 
         // Evaluate the list expression for all rows in this chunk
         Column list_col(binder::BoundTypeKind::LIST);
