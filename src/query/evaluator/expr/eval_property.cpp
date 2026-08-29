@@ -231,28 +231,6 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
     if (!obj.column)
         return;
 
-    // If no known vertex label defines this property, every row must be
-    // NULL. Short-circuit before touching per-row storage or LabelDefs.
-    if (eval_ctx_.label_defs) {
-        bool property_defined = false;
-        for (const auto& [lid, def] : *eval_ctx_.label_defs) {
-            for (const auto& pd : def.properties) {
-                if (pd.name == ref.property) {
-                    property_defined = true;
-                    break;
-                }
-            }
-            if (property_defined)
-                break;
-        }
-        if (!property_defined) {
-            result.reserve(count);
-            for (size_t i = 0; i < count; ++i)
-                result.setNull(i);
-            return;
-        }
-    }
-
     auto pvToValue = [](const PropertyValue& pv) -> Value {
         if (std::holds_alternative<bool>(pv))
             return Value(std::get<bool>(pv));
@@ -330,7 +308,6 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     return pd.id;
                 }
             }
-            index.emplace(ref.property, kMissingProp);
             return kMissingProp;
         }
 
@@ -343,7 +320,6 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                         return pd.id;
                     }
                 }
-                index.emplace(ref.property, kMissingProp);
             }
         }
         return kMissingProp;
@@ -399,6 +375,26 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     const auto& pv = props_vec[prop_id];
                     if (pv.has_value())
                         r = pvToValue(*pv);
+                }
+            }
+            // Fallback: DDL may have created the property mid-query after the
+            // static LabelDef snapshot was taken. Reload from meta to preserve
+            // dynamic-property visibility for freshly created labels/props.
+            if (std::holds_alternative<std::monostate>(r) && eval_ctx_.meta) {
+                for (const auto& [label_id, props_vec] : vertex.properties) {
+                    if (props_vec.empty())
+                        continue;
+                    auto fresh_ldef = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(label_id));
+                    if (fresh_ldef) {
+                        for (const auto& pd : fresh_ldef->properties) {
+                            if (pd.name == ref.property && pd.id < props_vec.size() && props_vec[pd.id].has_value()) {
+                                r = pvToValue(*props_vec[pd.id]);
+                                break;
+                            }
+                        }
+                        if (!std::holds_alternative<std::monostate>(r))
+                            break;
+                    }
                 }
             }
         } else if (std::holds_alternative<EdgeValue>(ov)) {
