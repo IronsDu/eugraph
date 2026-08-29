@@ -111,6 +111,43 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
         }
         output.count = row_count;
 
+        // Prefetch edge properties per LoadEdgeProp spec in one IO dispatch,
+        // instead of awaiting a single-edge fetch for every row.
+        std::vector<std::vector<std::optional<PropertyValue>>> edge_prop_cache(n_specs);
+        for (size_t i = 0; i < n_specs; ++i) {
+            const auto& spec = specs_[i];
+            if (spec.kind != ColumnSpec::Kind::LoadEdgeProp)
+                continue;
+            std::vector<EdgeId> ids;
+            ids.reserve(row_count);
+            std::vector<size_t> row_map;
+            row_map.reserve(row_count);
+            for (size_t row = 0; row < row_count; ++row) {
+                const auto& v = chunk->columns[spec.source_col].getValue(row);
+                EdgeId eid = INVALID_EDGE_ID;
+                EdgeLabelId elid = INVALID_EDGE_LABEL_ID;
+                if (std::holds_alternative<EdgeKey>(v)) {
+                    const auto& ek = std::get<EdgeKey>(v);
+                    eid = ek.id;
+                    elid = ek.label_id;
+                } else if (std::holds_alternative<EdgeValue>(v)) {
+                    const auto& ev = std::get<EdgeValue>(v);
+                    eid = ev.id;
+                    elid = ev.label_id;
+                }
+                if (eid != INVALID_EDGE_ID && elid != INVALID_EDGE_LABEL_ID && elid == spec.edge_label_id) {
+                    ids.push_back(eid);
+                    row_map.push_back(row);
+                }
+            }
+            edge_prop_cache[i].resize(row_count);
+            if (ids.empty())
+                continue;
+            auto values = co_await store_.getEdgePropertyBatch(spec.edge_label_id, ids, spec.prop_id);
+            for (size_t j = 0; j < ids.size() && j < values.size(); ++j)
+                edge_prop_cache[i][row_map[j]] = std::move(values[j]);
+        }
+
         // Per-row caches so multiple specs reading the same source column share
         // the resolved id and (for Construct*) the constructed entity.
         // Per-row entity caches avoid re-issuing labels+properties I/O when
@@ -152,9 +189,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::LoadEdgeProp: {
-                    EdgeId eid = resolveEdgeId(*chunk, spec.source_col, row, rc.eid_col, rc.eid, rc.eid_label);
-                    if (eid != INVALID_EDGE_ID && rc.eid_label != INVALID_EDGE_LABEL_ID) {
-                        auto pv = co_await store_.getEdgeProperty(rc.eid_label, eid, spec.prop_id);
+                    if (row < edge_prop_cache[i].size()) {
+                        const auto& pv = edge_prop_cache[i][row];
                         if (pv.has_value())
                             output.columns[i].setValue(row, propertyValueToValue(*pv));
                         else

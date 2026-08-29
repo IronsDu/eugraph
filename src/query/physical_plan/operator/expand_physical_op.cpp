@@ -57,6 +57,34 @@ std::string ExpandPhysicalOp::toString() const {
 }
 
 folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
+    if (full_edge_scan_) {
+        for (EdgeLabelId lid : full_scan_labels_) {
+            auto edge_gen = store_.scanEdgesByType(lid, std::nullopt, std::nullopt);
+            while (auto edge_batch = co_await edge_gen.next()) {
+                const size_t n = edge_batch->size();
+                DataChunk out;
+                out.count = n;
+                out.addColumn(output_types_[0].kind);             // src vertex reference
+                out.addColumn(binder::BoundTypeKind::EDGE_KEY);   // edge
+                out.addColumn(binder::BoundTypeKind::VERTEX_REF); // dst
+                out.columns[0].reserve(n);
+                out.columns[1].reserve(n);
+                out.columns[2].reserve(n);
+                auto* src_data = out.columns[0].buffer->vertex_ref_data.data();
+                auto* edge_data = out.columns[1].buffer->edge_key_data.data();
+                auto* dst_data = out.columns[2].buffer->vertex_ref_data.data();
+                for (size_t i = 0; i < n; ++i) {
+                    const auto& e = (*edge_batch)[i];
+                    src_data[i] = VertexRef(e.src_vertex_id);
+                    edge_data[i] = EdgeKey(e.edge_id, e.src_vertex_id, e.dst_vertex_id, lid, e.seq);
+                    dst_data[i] = VertexRef(e.dst_vertex_id);
+                }
+                co_yield std::move(out);
+            }
+        }
+        co_return;
+    }
+
     auto child_gen = child_->executeChunk();
 
     auto dir = Direction::OUT;

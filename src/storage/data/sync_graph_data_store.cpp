@@ -558,6 +558,39 @@ std::optional<PropertyValue> SyncGraphDataStore::getEdgeProperty(GraphTxnHandle 
     return ValueCodec::decode(*val);
 }
 
+std::vector<std::optional<PropertyValue>> SyncGraphDataStore::getEdgePropertyBatch(GraphTxnHandle txn,
+                                                                                   EdgeLabelId label_id,
+                                                                                   const std::vector<EdgeId>& edge_ids,
+                                                                                   uint16_t prop_id) {
+    std::vector<std::optional<PropertyValue>> out;
+    out.reserve(edge_ids.size());
+    auto session = getSession(txn);
+    if (!session) {
+        out.resize(edge_ids.size());
+        return out;
+    }
+
+    auto cursor = openCursor(session, epropTable(label_id));
+    if (!cursor) {
+        out.resize(edge_ids.size());
+        return out;
+    }
+
+    auto* c = cursor.get();
+    std::string key;
+    for (EdgeId eid : edge_ids) {
+        key = KeyCodec::encodeEPropKey(eid, prop_id);
+        setItem(c, key);
+        int ret = c->search(c);
+        if (ret != 0) {
+            out.emplace_back(std::nullopt);
+            continue;
+        }
+        out.emplace_back(ValueCodec::decode(getValueFromCursor(c)));
+    }
+    return out;
+}
+
 bool SyncGraphDataStore::putEdgeProperty(GraphTxnHandle txn, EdgeLabelId label_id, EdgeId eid, uint16_t prop_id,
                                          const PropertyValue& value) {
     auto session = getSession(txn);
