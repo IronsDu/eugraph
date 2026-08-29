@@ -1,7 +1,7 @@
 #pragma once
 
 #include "query/dataset/row.hpp"
-#include "query/function/compare_ops.hpp"
+#include "query/evaluator/columnar_kernels.hpp"
 #include "query/function/function_def.hpp"
 
 #include <cstdint>

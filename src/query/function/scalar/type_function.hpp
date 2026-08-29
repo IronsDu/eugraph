@@ -25,12 +25,6 @@ inline Value typeImpl(const Value& arg, const EvalContext& ctx) {
     throw std::runtime_error("TypeError: InvalidArgumentValue");
 }
 
-inline Value typeScalarFn(const std::vector<Value>& args, const EvalContext& ctx) {
-    if (args.empty())
-        return Value{};
-    return typeImpl(args[0], ctx);
-}
-
 inline void typeBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext& ctx) {
     if (args.empty())
         return;

@@ -1,4 +1,4 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 #include "query/planner/bound_expression/bound_slice.hpp"
 
@@ -45,7 +45,7 @@ void finishSlice(const ListValue& lv, int64_t from_idx, int64_t to_idx, Column& 
 }
 } // namespace
 
-void VectorizedEvaluator::evalSlice(const binder::BoundSlice& slice, const DataChunk& input, Column& result,
+void ExpressionEvaluator::evalSlice(const binder::BoundSlice& slice, const DataChunk& input, Column& result,
                                     size_t count) {
     auto list_eval = evaluateInternal(slice.list, input);
     if (!list_eval.column)

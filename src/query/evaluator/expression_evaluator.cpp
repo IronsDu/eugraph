@@ -1,4 +1,4 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 #include <stdexcept>
 
@@ -7,7 +7,7 @@ namespace compute {
 
 // ==================== Public API ====================
 
-void VectorizedEvaluator::evaluate(const binder::BoundExpression& expr, const DataChunk& input, Column& result) {
+void ExpressionEvaluator::evaluate(const binder::BoundExpression& expr, const DataChunk& input, Column& result) {
     size_t count = input.numRows();
     result.reserve(count);
 
@@ -23,7 +23,7 @@ void VectorizedEvaluator::evaluate(const binder::BoundExpression& expr, const Da
     }
 }
 
-void VectorizedEvaluator::evaluatePredicate(const binder::BoundExpression& expr, const DataChunk& input,
+void ExpressionEvaluator::evaluatePredicate(const binder::BoundExpression& expr, const DataChunk& input,
                                             std::vector<bool>& result) {
     size_t count = input.numRows();
     result.resize(count, false);
@@ -44,12 +44,18 @@ void VectorizedEvaluator::evaluatePredicate(const binder::BoundExpression& expr,
 
 // ==================== Internal ====================
 
-Column& VectorizedEvaluator::acquireTempColumn(binder::BoundTypeKind type, size_t capacity) {
+Column& ExpressionEvaluator::acquireTempColumn(binder::BoundTypeKind type, size_t capacity) {
     temp_columns_.push_back(Column::flat(type, capacity));
     return temp_columns_.back();
 }
 
-VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const binder::BoundExpression& expr,
+Column& ExpressionEvaluator::acquireTempConstant(binder::BoundTypeKind type, Value value) {
+    temp_columns_.push_back(Column::constant(std::move(value)));
+    temp_columns_.back().type = type;
+    return temp_columns_.back();
+}
+
+ExpressionEvaluator::EvalResult ExpressionEvaluator::evaluateInternal(const binder::BoundExpression& expr,
                                                                       const DataChunk& input) {
     return std::visit(
         [this, &input](const auto& val) -> EvalResult {
@@ -57,17 +63,16 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
             size_t count = input.numRows();
 
             if constexpr (std::is_same_v<T, binder::BoundLiteral>) {
-                auto& col = acquireTempColumn(val.type.kind, count);
-                evalLiteral(val, col, count);
+                auto& col = acquireTempConstant(val.type.kind, val.value);
                 return {&col, true};
             } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
                 return evalColumnRef(val, input);
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
                 throw std::runtime_error(
-                    "BoundVariableRef reached VectorizedEvaluator — must be resolved to BoundColumnRef at bind time");
+                    "BoundVariableRef reached ExpressionEvaluator — must be resolved to BoundColumnRef at bind time");
             } else if constexpr (std::is_same_v<T, binder::BoundParameter>) {
                 throw std::runtime_error(
-                    "BoundParameter reached VectorizedEvaluator — must be substituted at bind time");
+                    "BoundParameter reached ExpressionEvaluator — must be substituted at bind time");
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
                 auto& col = acquireTempColumn(val->result_type.kind, count);
                 evalBinaryOp(*val, input, col, count);
@@ -140,7 +145,7 @@ VectorizedEvaluator::EvalResult VectorizedEvaluator::evaluateInternal(const bind
                 evalSlice(*val, input, col, count);
                 return {&col, true};
             } else {
-                throw std::runtime_error("Unknown BoundExpression variant in VectorizedEvaluator");
+                throw std::runtime_error("Unknown BoundExpression variant in ExpressionEvaluator");
             }
         },
         expr);

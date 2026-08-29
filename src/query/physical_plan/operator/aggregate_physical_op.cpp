@@ -1,6 +1,6 @@
 #include "query/physical_plan/operator/aggregate_physical_op.hpp"
 #include "query/dataset/row.hpp"
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -24,7 +24,7 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
     bool has_aggregates = !aggregates_.empty();
 
     auto child_gen = child_->executeChunk();
-    VectorizedEvaluator evaluator(eval_ctx_);
+    ExpressionEvaluator evaluator(eval_ctx_);
 
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
@@ -163,7 +163,7 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                 }
                 DataChunk eval_chunk;
                 eval_chunk.count = 1;
-                VectorizedEvaluator out_eval(eval_ctx_);
+                ExpressionEvaluator out_eval(eval_ctx_);
                 out_eval.aggregate_substitutions = &subs;
                 auto result_col = Column::flat(binder::BoundTypeKind::ANY, 1);
                 out_eval.evaluate(agg.arguments[0], eval_chunk, result_col);
@@ -206,7 +206,7 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
                 }
                 DataChunk eval_chunk;
                 eval_chunk.count = 1;
-                VectorizedEvaluator out_eval(eval_ctx_);
+                ExpressionEvaluator out_eval(eval_ctx_);
                 out_eval.aggregate_substitutions = &subs;
                 auto result_col = Column::flat(binder::BoundTypeKind::ANY, 1);
                 out_eval.evaluate(agg.arguments[0], eval_chunk, result_col);

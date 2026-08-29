@@ -3,7 +3,8 @@
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_call_op.hpp"
 
-#include "query/function/batch_ops.hpp"
+#include "query/planner/binder/bind_binary_op.hpp"
+#include "query/planner/binder/bind_unary_op.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -182,12 +183,12 @@ BoundExpression Binder::makeEqualityExpr(const BoundColumnRef& left, const Bound
         };
         bin->left = wrapId(left);
         bin->right = wrapId(right);
-        bin->batch_fn =
-            function::resolveBinaryBatchFn(cypher::BinaryOperator::EQ, BoundTypeKind::INT64, BoundTypeKind::INT64);
+        bin->fallback_fn =
+            resolveBinaryFallbackFn(cypher::BinaryOperator::EQ, BoundTypeKind::INT64, BoundTypeKind::INT64);
     } else {
         bin->left = BoundExpression(left);
         bin->right = BoundExpression(right);
-        bin->batch_fn = function::resolveBinaryBatchFn(cypher::BinaryOperator::EQ, left.type.kind, right.type.kind);
+        bin->fallback_fn = resolveBinaryFallbackFn(cypher::BinaryOperator::EQ, left.type.kind, right.type.kind);
     }
     return BoundExpression(std::move(bin));
 }
@@ -259,8 +260,8 @@ std::optional<BoundLogicalOperator> Binder::bindCrossWithEqualities(BoundLogical
             and_op->left = std::move(acc);
             and_op->right = std::move(equalities[i]);
             and_op->result_type = BoundType::Bool();
-            and_op->batch_fn =
-                function::resolveBinaryBatchFn(cypher::BinaryOperator::AND, BoundTypeKind::BOOL, BoundTypeKind::BOOL);
+            and_op->fallback_fn =
+                resolveBinaryFallbackFn(cypher::BinaryOperator::AND, BoundTypeKind::BOOL, BoundTypeKind::BOOL);
             acc = BoundExpression(std::move(and_op));
         }
         predicate = std::move(acc);

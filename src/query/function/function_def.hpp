@@ -43,11 +43,13 @@ struct EvalContext {
     class IAsyncGraphMetaStore* meta = nullptr;
 };
 
-/// Scalar function execution callback: takes argument values and context, returns result.
+/// Scalar function execution callback (kept only as an adapter source for
+/// functions that have not been migrated to a native columnar fn yet).
 using ScalarFn = std::function<Value(const std::vector<Value>&, const EvalContext&)>;
 
-/// Batch scalar function: processes all rows at once.
-using BatchScalarFn =
+/// Columnar function entry point: the only execution callback registered on
+/// a FunctionDef.
+using FunctionFn =
     std::function<void(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&)>;
 
 /// Aggregate state factory.
@@ -69,11 +71,9 @@ struct FunctionDef {
     bool is_aggregate = false;
     bool has_variadic_args = false; // e.g. coalesce(...)
 
-    // Scalar execution callback (non-null for scalar functions).
-    ScalarFn scalar_fn;
-
-    // Batch scalar execution callback (processes all rows at once).
-    BatchScalarFn batch_scalar_fn;
+    // The single function entry point. Always non-null for registered
+    // scalar functions.
+    FunctionFn fn;
 
     // Aggregate callbacks (non-null for aggregate functions).
     AggInitFn agg_init;

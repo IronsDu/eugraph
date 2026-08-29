@@ -66,24 +66,6 @@ inline Value lengthImpl(const Value& arg) {
 }
 
 /// Unified scalar callbacks for FunctionRegistry.
-inline Value nodesScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return nodesImpl(args[0]);
-}
-
-inline Value relationshipsScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return relationshipsImpl(args[0]);
-}
-
-inline Value lengthScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return lengthImpl(args[0]);
-}
-
 /// Batch scalar callbacks.
 
 inline void nodesBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,

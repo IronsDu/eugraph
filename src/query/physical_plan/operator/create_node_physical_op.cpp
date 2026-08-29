@@ -2,7 +2,7 @@
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/dataset/row.hpp"
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
 #include <spdlog/spdlog.h>
 
@@ -15,7 +15,7 @@ eugraph::LabelId getAnonLabelId(const std::unordered_map<eugraph::LabelId, eugra
     return eugraph::INVALID_LABEL_ID;
 }
 
-eugraph::Value evaluateExpr(eugraph::compute::VectorizedEvaluator& evaluator,
+eugraph::Value evaluateExpr(eugraph::compute::ExpressionEvaluator& evaluator,
                             const eugraph::binder::BoundExpression& expr, const eugraph::DataChunk* chunk,
                             size_t row_idx) {
     if (chunk && chunk->count > 0) {
@@ -248,7 +248,7 @@ folly::coro::Task<void> CreateNodePhysicalOp::prepareAnon_() {
 }
 
 folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
-    VectorizedEvaluator evaluator(eval_ctx_);
+    ExpressionEvaluator evaluator(eval_ctx_);
 
     spdlog::info("[CreateNode] executeChunk: label_names.size()={}, label_ids.size()={}, "
                  "pending_props.size()={}",
@@ -312,7 +312,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
 }
 
 std::vector<std::pair<LabelId, Properties>>
-CreateNodePhysicalOp::buildLabelProps(VectorizedEvaluator& evaluator, const DataChunk* chunk, size_t row_idx) {
+CreateNodePhysicalOp::buildLabelProps(ExpressionEvaluator& evaluator, const DataChunk* chunk, size_t row_idx) {
     std::vector<std::pair<LabelId, Properties>> result;
 
     for (auto lid : label_ids_) {

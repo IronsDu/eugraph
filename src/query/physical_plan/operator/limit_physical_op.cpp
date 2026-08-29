@@ -1,7 +1,7 @@
 #include "query/physical_plan/operator/limit_physical_op.hpp"
 
 #include "query/dataset/data_chunk.hpp"
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/expression_compiler.hpp"
 
 #include <stdexcept>
@@ -19,7 +19,7 @@ int64_t evaluateLimit(const binder::BoundExpression& expr, const function::EvalC
     DataChunk chunk;
     chunk.count = 1;
     Column result_col = Column::flat(binder::BoundTypeKind::ANY, 1);
-    VectorizedEvaluator evaluator(eval_ctx);
+    ExpressionEvaluator evaluator(eval_ctx);
     evaluator.evaluate(expr, chunk, result_col);
     const Value& value = result_col.getValue(0);
     if (!std::holds_alternative<int64_t>(value))

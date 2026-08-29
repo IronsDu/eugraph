@@ -2,7 +2,7 @@
 
 #include "query/planner/binder/pattern/pattern_graph.hpp"
 
-#include "query/function/batch_ops.hpp"
+#include "query/planner/binder/bind_binary_op.hpp"
 #include "query/planner/bound_expression/bound_literal.hpp"
 #include "query/planner/logical_plan/operator/bound_aggregate_op.hpp"
 

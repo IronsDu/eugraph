@@ -18,7 +18,7 @@
 namespace eugraph {
 namespace compute {
 
-class VectorizedEvaluator;
+class ExpressionEvaluator;
 
 class CreateNodePhysicalOp : public PhysicalOperator {
 public:
@@ -72,7 +72,7 @@ private:
     // Non-coroutine helper: keeps BoundExpression temporaries out of any
     // coroutine frame (GCC 13 ICE workaround).
     void appendPropExpr_(LabelId lid, uint16_t pid, binder::BoundExpression expr);
-    std::vector<std::pair<LabelId, Properties>> buildLabelProps(VectorizedEvaluator& evaluator, const DataChunk* chunk,
+    std::vector<std::pair<LabelId, Properties>> buildLabelProps(ExpressionEvaluator& evaluator, const DataChunk* chunk,
                                                                 size_t row_idx);
     folly::coro::Task<bool> insertVertex(VertexId vid, const std::vector<std::pair<LabelId, Properties>>& label_props);
 

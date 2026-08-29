@@ -1,4 +1,4 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 #include "query/catalog/catalog.hpp"
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
@@ -10,7 +10,7 @@
 namespace eugraph {
 namespace compute {
 
-void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, const DataChunk& input, Column& result,
+void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, const DataChunk& input, Column& result,
                                           size_t count) {
     auto obj = evaluateInternal(ref.object, input);
     if (!obj.column)
@@ -225,7 +225,7 @@ void VectorizedEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
     }
 }
 
-void VectorizedEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPropertyRef& ref, const DataChunk& input,
+void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPropertyRef& ref, const DataChunk& input,
                                                  Column& result, size_t count) {
     auto obj = evaluateInternal(ref.object, input);
     if (!obj.column)

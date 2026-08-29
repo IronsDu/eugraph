@@ -1,9 +1,9 @@
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 namespace eugraph {
 namespace compute {
 
-void VectorizedEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_column_index,
+void ExpressionEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_column_index,
                                              const binder::BoundExpression& list_expr,
                                              const std::optional<binder::BoundExpression>& where_pred,
                                              const DataChunk& input, Column& result, size_t count) {

@@ -3,6 +3,7 @@
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
+#include "query/function/scalar/support/typed_batch.hpp"
 
 #include <algorithm>
 
@@ -19,12 +20,6 @@ inline Value lastImpl(const Value& arg) {
     if (lv.elements.empty())
         return Value{};
     return lv.elements.back().value;
-}
-
-inline Value lastScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return lastImpl(args[0]);
 }
 
 inline void lastBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
@@ -46,12 +41,6 @@ inline Value headImpl(const Value& arg) {
     if (lv.elements.empty())
         return Value{};
     return lv.elements.front().value;
-}
-
-inline Value headScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return headImpl(args[0]);
 }
 
 inline void headBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
@@ -77,20 +66,39 @@ inline Value tailImpl(const Value& arg) {
     return Value{std::move(result)};
 }
 
-inline Value tailScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return tailImpl(args[0]);
-}
+struct TailOp {
+    static ListValue apply(const ListValue& v) {
+        ListValue out;
+        if (v.elements.size() > 1)
+            out.elements.assign(v.elements.begin() + 1, v.elements.end());
+        return out;
+    }
+};
+struct ReverseListOp {
+    static ListValue apply(const ListValue& v) {
+        ListValue out;
+        out.elements.reserve(v.elements.size());
+        for (auto it = v.elements.rbegin(); it != v.elements.rend(); ++it)
+            out.elements.push_back(*it);
+        return out;
+    }
+};
+struct SizeListOp {
+    static int64_t apply(const ListValue& v) {
+        return static_cast<int64_t>(v.elements.size());
+    }
+};
 
 inline void tailBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                         const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
-    const auto& arg_col = *args[0];
-    for (size_t i = 0; i < count; ++i) {
-        result.setValue(i, tailImpl(arg_col.getValue(i)));
-    }
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::LIST)
+        typedUnaryBatch<ListValue, ListValue, TailOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, tailImpl(in.getValue(i)));
 }
 
 // --- reverse ---
@@ -104,20 +112,16 @@ inline Value reverseImpl(const Value& arg) {
     return Value{std::move(result)};
 }
 
-inline Value reverseScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return reverseImpl(args[0]);
-}
-
 inline void reverseBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                            const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
-    const auto& arg_col = *args[0];
-    for (size_t i = 0; i < count; ++i) {
-        result.setValue(i, reverseImpl(arg_col.getValue(i)));
-    }
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::LIST)
+        typedUnaryBatch<ListValue, ListValue, ReverseListOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, reverseImpl(in.getValue(i)));
 }
 
 // --- reverse for strings ---
@@ -130,12 +134,6 @@ inline Value reverseStringImpl(const Value& arg) {
     std::string s = std::get<std::string>(arg);
     std::reverse(s.begin(), s.end());
     return Value{std::move(s)};
-}
-
-inline Value reverseStringScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{};
-    return reverseStringImpl(args[0]);
 }
 
 inline void reverseStringBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
@@ -165,27 +163,16 @@ inline Value sizeStringImpl(const Value& arg) {
     return Value{static_cast<int64_t>(std::get<std::string>(arg).size())};
 }
 
-inline Value sizeScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {
-    if (args.empty())
-        return Value{int64_t(0)};
-    const auto& v = args[0];
-    if (isNull(v))
-        return Value{};
-    if (std::holds_alternative<ListValue>(v))
-        return sizeListImpl(v);
-    if (std::holds_alternative<std::string>(v))
-        return sizeStringImpl(v);
-    return Value{};
-}
-
 inline void sizeListBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
                             const EvalContext& /*ctx*/) {
     if (args.empty())
         return;
-    const auto& arg_col = *args[0];
-    for (size_t i = 0; i < count; ++i) {
-        result.setValue(i, sizeListImpl(arg_col.getValue(i)));
-    }
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::LIST)
+        typedUnaryBatch<ListValue, int64_t, SizeListOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, sizeListImpl(in.getValue(i)));
 }
 
 inline void sizeStringBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,

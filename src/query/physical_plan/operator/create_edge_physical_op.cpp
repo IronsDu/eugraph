@@ -2,14 +2,14 @@
 #include "common/types/constants.hpp"
 #include "common/types/graph_types.hpp"
 #include "query/dataset/row.hpp"
-#include "query/evaluator/vectorized_evaluator.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
 #include "storage/kv/value_codec.hpp"
 
 #include <spdlog/spdlog.h>
 
 namespace {
-eugraph::Value evaluateExpr(eugraph::compute::VectorizedEvaluator& evaluator,
+eugraph::Value evaluateExpr(eugraph::compute::ExpressionEvaluator& evaluator,
                             const eugraph::binder::BoundExpression& expr, const eugraph::DataChunk* chunk,
                             size_t row_idx) {
     if (chunk && chunk->count > 0) {
@@ -46,7 +46,7 @@ namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
-    VectorizedEvaluator evaluator(eval_ctx_);
+    ExpressionEvaluator evaluator(eval_ctx_);
 
     if (!child_)
         co_return;

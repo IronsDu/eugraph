@@ -37,124 +37,59 @@ void FunctionRegistry::registerBuiltins() {
 
 namespace {
 Value edgeUniqueScalar(const std::vector<Value>& args, const EvalContext& ctx);
+
+function::FunctionFn scalarToBatch(function::ScalarFn scalar) {
+    return [scalar = std::move(scalar)](const std::vector<const Column*>& args, Column& result, size_t count,
+                                        const function::EvalContext& ctx) {
+        result.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            std::vector<Value> values;
+            values.reserve(args.size());
+            for (const auto* col : args) {
+                values.push_back(col ? col->getValue(i) : Value{});
+            }
+            result.setValue(i, scalar(values, ctx));
+        }
+    };
 }
+} // namespace
 
 void FunctionRegistry::registerScalarBuiltins() {
     using binder::BoundType;
 
     // id(Vertex) -> Int64
-    functions_["id"].push_back({"id",
-                                {BoundType::Vertex()},
-                                BoundType::Int64(),
-                                false,
-                                false,
-                                scalar::idScalarFn,
-                                scalar::idBatchFn,
-                                {},
-                                {},
-                                {}});
+    functions_["id"].push_back(
+        {"id", {BoundType::Vertex()}, BoundType::Int64(), false, false, scalar::idBatchFn, {}, {}, {}});
     // id(VertexRef) -> Int64
-    functions_["id"].push_back({"id",
-                                {BoundType::VertexRef()},
-                                BoundType::Int64(),
-                                false,
-                                false,
-                                scalar::idScalarFn,
-                                scalar::idBatchFn,
-                                {},
-                                {},
-                                {}});
+    functions_["id"].push_back(
+        {"id", {BoundType::VertexRef()}, BoundType::Int64(), false, false, scalar::idBatchFn, {}, {}, {}});
     // id(Edge) -> Int64
-    functions_["id"].push_back({"id",
-                                {BoundType::Edge()},
-                                BoundType::Int64(),
-                                false,
-                                false,
-                                scalar::idScalarFn,
-                                scalar::idBatchFn,
-                                {},
-                                {},
-                                {}});
+    functions_["id"].push_back(
+        {"id", {BoundType::Edge()}, BoundType::Int64(), false, false, scalar::idBatchFn, {}, {}, {}});
     // id(EdgeKey) -> Int64
-    functions_["id"].push_back({"id",
-                                {BoundType::EdgeKey()},
-                                BoundType::Int64(),
-                                false,
-                                false,
-                                scalar::idScalarFn,
-                                scalar::idBatchFn,
-                                {},
-                                {},
-                                {}});
+    functions_["id"].push_back(
+        {"id", {BoundType::EdgeKey()}, BoundType::Int64(), false, false, scalar::idBatchFn, {}, {}, {}});
 
     // abs(Int64) -> Int64
-    functions_["abs"].push_back({"abs",
-                                 {BoundType::Int64()},
-                                 BoundType::Int64(),
-                                 false,
-                                 false,
-                                 scalar::absScalarFn,
-                                 scalar::absBatchFn,
-                                 {},
-                                 {},
-                                 {}});
+    functions_["abs"].push_back(
+        {"abs", {BoundType::Int64()}, BoundType::Int64(), false, false, scalar::absBatchFn, {}, {}, {}});
     // abs(Double) -> Double
-    functions_["abs"].push_back({"abs",
-                                 {BoundType::Double()},
-                                 BoundType::Double(),
-                                 false,
-                                 false,
-                                 scalar::absScalarFn,
-                                 scalar::absBatchFn,
-                                 {},
-                                 {},
-                                 {}});
+    functions_["abs"].push_back(
+        {"abs", {BoundType::Double()}, BoundType::Double(), false, false, scalar::absBatchFn, {}, {}, {}});
 
     // ceil(Int64) -> Double
-    functions_["ceil"].push_back({"ceil",
-                                  {BoundType::Int64()},
-                                  BoundType::Double(),
-                                  false,
-                                  false,
-                                  scalar::ceilScalarFn,
-                                  scalar::ceilBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["ceil"].push_back(
+        {"ceil", {BoundType::Int64()}, BoundType::Double(), false, false, scalar::ceilBatchFn, {}, {}, {}});
     // ceil(Double) -> Double
-    functions_["ceil"].push_back({"ceil",
-                                  {BoundType::Double()},
-                                  BoundType::Double(),
-                                  false,
-                                  false,
-                                  scalar::ceilScalarFn,
-                                  scalar::ceilBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["ceil"].push_back(
+        {"ceil", {BoundType::Double()}, BoundType::Double(), false, false, scalar::ceilBatchFn, {}, {}, {}});
 
     // sign(Int64) -> Int64
-    functions_["sign"].push_back({"sign",
-                                  {BoundType::Int64()},
-                                  BoundType::Int64(),
-                                  false,
-                                  false,
-                                  scalar::signScalarFn,
-                                  scalar::signBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["sign"].push_back(
+        {"sign", {BoundType::Int64()}, BoundType::Int64(), false, false, scalar::signBatchFn, {}, {}, {}});
     // sign(Double) -> Int64 (Cypher: returns -1/0/1 as integer)
-    functions_["sign"].push_back({"sign",
-                                  {BoundType::Double()},
-                                  BoundType::Int64(),
-                                  false,
-                                  false,
-                                  scalar::signScalarFn,
-                                  scalar::signBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["sign"].push_back(
+        {"sign", {BoundType::Double()}, BoundType::Int64(), false, false, scalar::signBatchFn, {}, {}, {}});
 
     // nodes(Path) -> List<Vertex>
     functions_["nodes"].push_back({"nodes",
@@ -162,7 +97,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                    BoundType::List(BoundType::Vertex()),
                                    false,
                                    false,
-                                   scalar::nodesScalarFn,
                                    scalar::nodesBatchFn,
                                    {},
                                    {},
@@ -174,83 +108,34 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            BoundType::List(BoundType::Edge()),
                                            false,
                                            false,
-                                           scalar::relationshipsScalarFn,
                                            scalar::relationshipsBatchFn,
                                            {},
                                            {},
                                            {}});
 
     // length(Path) -> Int64
-    functions_["length"].push_back({"length",
-                                    {BoundType::Path()},
-                                    BoundType::Int64(),
-                                    false,
-                                    false,
-                                    scalar::lengthScalarFn,
-                                    scalar::lengthBatchFn,
-                                    {},
-                                    {},
-                                    {}});
+    functions_["length"].push_back(
+        {"length", {BoundType::Path()}, BoundType::Int64(), false, false, scalar::lengthBatchFn, {}, {}, {}});
 
     // type(Edge) -> String
-    functions_["type"].push_back({"type",
-                                  {BoundType::Edge()},
-                                  BoundType::String(),
-                                  false,
-                                  false,
-                                  scalar::typeScalarFn,
-                                  scalar::typeBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["type"].push_back(
+        {"type", {BoundType::Edge()}, BoundType::String(), false, false, scalar::typeBatchFn, {}, {}, {}});
 
     // startNode(Edge) -> Vertex
-    functions_["startNode"].push_back({"startNode",
-                                       {BoundType::Edge()},
-                                       BoundType::Vertex(),
-                                       false,
-                                       false,
-                                       scalar::startNodeScalarFn,
-                                       scalar::startNodeBatchFn,
-                                       {},
-                                       {},
-                                       {}});
+    functions_["startNode"].push_back(
+        {"startNode", {BoundType::Edge()}, BoundType::Vertex(), false, false, scalar::startNodeBatchFn, {}, {}, {}});
 
     // endNode(Edge) -> Vertex
-    functions_["endNode"].push_back({"endNode",
-                                     {BoundType::Edge()},
-                                     BoundType::Vertex(),
-                                     false,
-                                     false,
-                                     scalar::endNodeScalarFn,
-                                     scalar::endNodeBatchFn,
-                                     {},
-                                     {},
-                                     {}});
+    functions_["endNode"].push_back(
+        {"endNode", {BoundType::Edge()}, BoundType::Vertex(), false, false, scalar::endNodeBatchFn, {}, {}, {}});
 
     // last(List<Any>) -> Any
-    functions_["last"].push_back({"last",
-                                  {BoundType::List(BoundType::Any())},
-                                  BoundType::Any(),
-                                  false,
-                                  false,
-                                  scalar::lastScalarFn,
-                                  scalar::lastBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["last"].push_back(
+        {"last", {BoundType::List(BoundType::Any())}, BoundType::Any(), false, false, scalar::lastBatchFn, {}, {}, {}});
 
     // head(List<Any>) -> Any
-    functions_["head"].push_back({"head",
-                                  {BoundType::List(BoundType::Any())},
-                                  BoundType::Any(),
-                                  false,
-                                  false,
-                                  scalar::headScalarFn,
-                                  scalar::headBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["head"].push_back(
+        {"head", {BoundType::List(BoundType::Any())}, BoundType::Any(), false, false, scalar::headBatchFn, {}, {}, {}});
 
     // tail(List<Any>) -> List<Any>
     functions_["tail"].push_back({"tail",
@@ -258,7 +143,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   BoundType::List(BoundType::Any()),
                                   false,
                                   false,
-                                  scalar::tailScalarFn,
                                   scalar::tailBatchFn,
                                   {},
                                   {},
@@ -270,7 +154,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                      BoundType::List(BoundType::Any()),
                                      false,
                                      false,
-                                     scalar::reverseScalarFn,
                                      scalar::reverseBatchFn,
                                      {},
                                      {},
@@ -282,7 +165,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                      BoundType::String(),
                                      false,
                                      false,
-                                     scalar::reverseStringScalarFn,
                                      scalar::reverseStringBatchFn,
                                      {},
                                      {},
@@ -294,39 +176,21 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   BoundType::Int64(),
                                   false,
                                   false,
-                                  scalar::sizeScalarFn,
                                   scalar::sizeListBatchFn,
                                   {},
                                   {},
                                   {}});
 
     // size(String) -> Int64
-    functions_["size"].push_back({"size",
-                                  {BoundType::String()},
-                                  BoundType::Int64(),
-                                  false,
-                                  false,
-                                  scalar::sizeScalarFn,
-                                  scalar::sizeStringBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["size"].push_back(
+        {"size", {BoundType::String()}, BoundType::Int64(), false, false, scalar::sizeStringBatchFn, {}, {}, {}});
 
     // sqrt(Double) -> Double
-    functions_["sqrt"].push_back({"sqrt",
-                                  {BoundType::Double()},
-                                  BoundType::Double(),
-                                  false,
-                                  false,
-                                  scalar::sqrtScalarFn,
-                                  scalar::sqrtBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["sqrt"].push_back(
+        {"sqrt", {BoundType::Double()}, BoundType::Double(), false, false, scalar::sqrtBatchFn, {}, {}, {}});
 
     // rand() -> Double
-    functions_["rand"].push_back(
-        {"rand", {}, BoundType::Double(), false, false, scalar::randScalarFn, scalar::randBatchFn, {}, {}, {}});
+    functions_["rand"].push_back({"rand", {}, BoundType::Double(), false, false, scalar::randBatchFn, {}, {}, {}});
 
     // range(Any, Any) -> List<Int64>
     // Cypher defers argument type validation to runtime (ArgumentError /
@@ -336,7 +200,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                    BoundType::List(BoundType::Int64()),
                                    false,
                                    false,
-                                   scalar::rangeScalarFn,
                                    scalar::rangeBatchFn,
                                    {},
                                    {},
@@ -348,51 +211,26 @@ void FunctionRegistry::registerScalarBuiltins() {
                                    BoundType::List(BoundType::Int64()),
                                    false,
                                    false,
-                                   scalar::rangeScalarFn,
                                    scalar::rangeBatchFn,
                                    {},
                                    {},
                                    {}});
 
     // toInteger(Any) -> Int64
-    functions_["toInteger"].push_back({"toInteger",
-                                       {},
-                                       BoundType::Int64(),
-                                       false,
-                                       true,
-                                       scalar::toIntegerScalarFn,
-                                       scalar::toIntegerBatchFn,
-                                       {},
-                                       {},
-                                       {}});
+    functions_["toInteger"].push_back(
+        {"toInteger", {}, BoundType::Int64(), false, true, scalar::toIntegerBatchFn, {}, {}, {}});
 
     // toFloat(Any) -> Double
     functions_["toFloat"].push_back(
-        {"toFloat", {}, BoundType::Double(), false, true, scalar::toFloatScalarFn, scalar::toFloatBatchFn, {}, {}, {}});
+        {"toFloat", {}, BoundType::Double(), false, true, scalar::toFloatBatchFn, {}, {}, {}});
 
     // toBoolean(Any) -> Boolean
-    functions_["toBoolean"].push_back({"toBoolean",
-                                       {},
-                                       BoundType::Bool(),
-                                       false,
-                                       true,
-                                       scalar::toBooleanScalarFn,
-                                       scalar::toBooleanBatchFn,
-                                       {},
-                                       {},
-                                       {}});
+    functions_["toBoolean"].push_back(
+        {"toBoolean", {}, BoundType::Bool(), false, true, scalar::toBooleanBatchFn, {}, {}, {}});
 
     // toString(Any) -> String
-    functions_["toString"].push_back({"toString",
-                                      {BoundType::Any()},
-                                      BoundType::String(),
-                                      false,
-                                      false,
-                                      scalar::toStringScalarFn,
-                                      scalar::toStringBatchFn,
-                                      {},
-                                      {},
-                                      {}});
+    functions_["toString"].push_back(
+        {"toString", {BoundType::Any()}, BoundType::String(), false, false, scalar::toStringBatchFn, {}, {}, {}});
 
     // labels(Vertex) -> List<String>
     functions_["labels"].push_back({"labels",
@@ -400,7 +238,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                     BoundType::List(BoundType::String()),
                                     false,
                                     false,
-                                    scalar::labelsScalarFn,
                                     scalar::labelsBatchFn,
                                     {},
                                     {},
@@ -412,7 +249,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                     BoundType::List(BoundType::String()),
                                     false,
                                     false,
-                                    scalar::labelsScalarFn,
                                     scalar::labelsBatchFn,
                                     {},
                                     {},
@@ -424,7 +260,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   BoundType::List(BoundType::String()),
                                   false,
                                   false,
-                                  scalar::keysScalarFn,
                                   scalar::keysBatchFn,
                                   {},
                                   {},
@@ -436,7 +271,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   BoundType::List(BoundType::String()),
                                   false,
                                   false,
-                                  scalar::keysScalarFn,
                                   scalar::keysBatchFn,
                                   {},
                                   {},
@@ -448,7 +282,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   BoundType::List(BoundType::String()),
                                   false,
                                   false,
-                                  scalar::keysScalarFn,
                                   scalar::keysBatchFn,
                                   {},
                                   {},
@@ -460,7 +293,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                         BoundType::Map(BoundType::String(), BoundType::Any()),
                                         false,
                                         false,
-                                        scalar::propertiesScalarFn,
                                         scalar::propertiesBatchFn,
                                         {},
                                         {},
@@ -472,7 +304,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                         BoundType::Map(BoundType::String(), BoundType::Any()),
                                         false,
                                         false,
-                                        scalar::propertiesScalarFn,
                                         scalar::propertiesBatchFn,
                                         {},
                                         {},
@@ -484,7 +315,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                         BoundType::Map(BoundType::String(), BoundType::Any()),
                                         false,
                                         false,
-                                        scalar::propertiesScalarFn,
                                         scalar::propertiesBatchFn,
                                         {},
                                         {},
@@ -493,40 +323,16 @@ void FunctionRegistry::registerScalarBuiltins() {
     // --- String functions ---
 
     // trim(String) -> String
-    functions_["trim"].push_back({"trim",
-                                  {BoundType::String()},
-                                  BoundType::String(),
-                                  false,
-                                  false,
-                                  scalar::trimScalarFn,
-                                  scalar::trimBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["trim"].push_back(
+        {"trim", {BoundType::String()}, BoundType::String(), false, false, scalar::trimBatchFn, {}, {}, {}});
 
     // ltrim(String) -> String
-    functions_["ltrim"].push_back({"ltrim",
-                                   {BoundType::String()},
-                                   BoundType::String(),
-                                   false,
-                                   false,
-                                   scalar::ltrimScalarFn,
-                                   scalar::ltrimBatchFn,
-                                   {},
-                                   {},
-                                   {}});
+    functions_["ltrim"].push_back(
+        {"ltrim", {BoundType::String()}, BoundType::String(), false, false, scalar::ltrimBatchFn, {}, {}, {}});
 
     // rtrim(String) -> String
-    functions_["rtrim"].push_back({"rtrim",
-                                   {BoundType::String()},
-                                   BoundType::String(),
-                                   false,
-                                   false,
-                                   scalar::rtrimScalarFn,
-                                   scalar::rtrimBatchFn,
-                                   {},
-                                   {},
-                                   {}});
+    functions_["rtrim"].push_back(
+        {"rtrim", {BoundType::String()}, BoundType::String(), false, false, scalar::rtrimBatchFn, {}, {}, {}});
 
     // split(String, String) -> List<String>
     functions_["split"].push_back({"split",
@@ -534,7 +340,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                    BoundType::List(BoundType::String()),
                                    false,
                                    false,
-                                   scalar::splitScalarFn,
                                    scalar::splitBatchFn,
                                    {},
                                    {},
@@ -546,7 +351,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                      BoundType::String(),
                                      false,
                                      false,
-                                     scalar::replaceScalarFn,
                                      scalar::replaceBatchFn,
                                      {},
                                      {},
@@ -558,7 +362,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                        BoundType::String(),
                                        false,
                                        false,
-                                       scalar::substringScalarFn,
                                        scalar::substringBatchFn,
                                        {},
                                        {},
@@ -570,7 +373,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                        BoundType::String(),
                                        false,
                                        false,
-                                       scalar::substringScalarFn,
                                        scalar::substringBatchFn,
                                        {},
                                        {},
@@ -582,7 +384,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                   BoundType::String(),
                                   false,
                                   false,
-                                  scalar::leftScalarFn,
                                   scalar::leftBatchFn,
                                   {},
                                   {},
@@ -594,148 +395,85 @@ void FunctionRegistry::registerScalarBuiltins() {
                                    BoundType::String(),
                                    false,
                                    false,
-                                   scalar::rightScalarFn,
                                    scalar::rightBatchFn,
                                    {},
                                    {},
                                    {}});
 
     // toUpper(String) -> String
-    functions_["toUpper"].push_back({"toUpper",
-                                     {BoundType::String()},
-                                     BoundType::String(),
-                                     false,
-                                     false,
-                                     scalar::toUpperScalarFn,
-                                     scalar::toUpperBatchFn,
-                                     {},
-                                     {},
-                                     {}});
+    functions_["toUpper"].push_back(
+        {"toUpper", {BoundType::String()}, BoundType::String(), false, false, scalar::toUpperBatchFn, {}, {}, {}});
 
     // toLower(String) -> String
-    functions_["toLower"].push_back({"toLower",
-                                     {BoundType::String()},
-                                     BoundType::String(),
-                                     false,
-                                     false,
-                                     scalar::toLowerScalarFn,
-                                     scalar::toLowerBatchFn,
-                                     {},
-                                     {},
-                                     {}});
+    functions_["toLower"].push_back(
+        {"toLower", {BoundType::String()}, BoundType::String(), false, false, scalar::toLowerBatchFn, {}, {}, {}});
 
     // --- Coalesce ---
 
     // coalesce(Any...) -> Any
     functions_["coalesce"].push_back(
-        {"coalesce", {}, BoundType::Any(), false, true, scalar::coalesceScalarFn, scalar::coalesceBatchFn, {}, {}, {}});
+        {"coalesce", {}, BoundType::Any(), false, true, scalar::coalesceBatchFn, {}, {}, {}});
 
     // --- Temporal constructors ---
 
     // date() -> DateTime (0-arg: epoch 1970-01-01)
-    functions_["date"].push_back(
-        {"date", {}, BoundType::DateTime(), false, true, scalar::dateScalarFn, scalar::dateBatchFn, {}, {}, {}});
+    functions_["date"].push_back({"date", {}, BoundType::DateTime(), false, true, scalar::dateBatchFn, {}, {}, {}});
     // date(MAP<STRING, ANY>) -> DateTime
     functions_["date"].push_back({"date",
                                   {BoundType::Map(BoundType::String(), BoundType::Any())},
                                   BoundType::DateTime(),
                                   false,
                                   false,
-                                  scalar::dateScalarFn,
                                   scalar::dateBatchFn,
                                   {},
                                   {},
                                   {}});
     // date(STRING) -> DateTime
-    functions_["date"].push_back({"date",
-                                  {BoundType::String()},
-                                  BoundType::DateTime(),
-                                  false,
-                                  false,
-                                  scalar::dateScalarFn,
-                                  scalar::dateBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["date"].push_back(
+        {"date", {BoundType::String()}, BoundType::DateTime(), false, false, scalar::dateBatchFn, {}, {}, {}});
 
     // localtime() -> Time (0-arg: epoch 00:00:00)
-    functions_["localtime"].push_back({"localtime",
-                                       {},
-                                       BoundType::Time(),
-                                       false,
-                                       true,
-                                       scalar::localtimeScalarFn,
-                                       scalar::localtimeBatchFn,
-                                       {},
-                                       {},
-                                       {}});
+    functions_["localtime"].push_back(
+        {"localtime", {}, BoundType::Time(), false, true, scalar::localtimeBatchFn, {}, {}, {}});
     // localtime(MAP<STRING, ANY>) -> Time
     functions_["localtime"].push_back({"localtime",
                                        {BoundType::Map(BoundType::String(), BoundType::Any())},
                                        BoundType::Time(),
                                        false,
                                        false,
-                                       scalar::localtimeScalarFn,
                                        scalar::localtimeBatchFn,
                                        {},
                                        {},
                                        {}});
     // localtime(STRING) -> Time
-    functions_["localtime"].push_back({"localtime",
-                                       {BoundType::String()},
-                                       BoundType::Time(),
-                                       false,
-                                       false,
-                                       scalar::localtimeScalarFn,
-                                       scalar::localtimeBatchFn,
-                                       {},
-                                       {},
-                                       {}});
+    functions_["localtime"].push_back(
+        {"localtime", {BoundType::String()}, BoundType::Time(), false, false, scalar::localtimeBatchFn, {}, {}, {}});
 
     // time() -> Time (0-arg: epoch 00:00:00Z)
-    functions_["time"].push_back(
-        {"time", {}, BoundType::Time(), false, true, scalar::timeScalarFn, scalar::timeBatchFn, {}, {}, {}});
+    functions_["time"].push_back({"time", {}, BoundType::Time(), false, true, scalar::timeBatchFn, {}, {}, {}});
     // time(MAP<STRING, ANY>) -> Time
     functions_["time"].push_back({"time",
                                   {BoundType::Map(BoundType::String(), BoundType::Any())},
                                   BoundType::Time(),
                                   false,
                                   false,
-                                  scalar::timeScalarFn,
                                   scalar::timeBatchFn,
                                   {},
                                   {},
                                   {}});
     // time(STRING) -> Time
-    functions_["time"].push_back({"time",
-                                  {BoundType::String()},
-                                  BoundType::Time(),
-                                  false,
-                                  false,
-                                  scalar::timeScalarFn,
-                                  scalar::timeBatchFn,
-                                  {},
-                                  {},
-                                  {}});
+    functions_["time"].push_back(
+        {"time", {BoundType::String()}, BoundType::Time(), false, false, scalar::timeBatchFn, {}, {}, {}});
 
     // localdatetime() -> DateTime (0-arg: epoch 1970-01-01T00:00:00)
-    functions_["localdatetime"].push_back({"localdatetime",
-                                           {},
-                                           BoundType::DateTime(),
-                                           false,
-                                           true,
-                                           scalar::localdatetimeScalarFn,
-                                           scalar::localdatetimeBatchFn,
-                                           {},
-                                           {},
-                                           {}});
+    functions_["localdatetime"].push_back(
+        {"localdatetime", {}, BoundType::DateTime(), false, true, scalar::localdatetimeBatchFn, {}, {}, {}});
     // localdatetime(MAP<STRING, ANY>) -> DateTime
     functions_["localdatetime"].push_back({"localdatetime",
                                            {BoundType::Map(BoundType::String(), BoundType::Any())},
                                            BoundType::DateTime(),
                                            false,
                                            false,
-                                           scalar::localdatetimeScalarFn,
                                            scalar::localdatetimeBatchFn,
                                            {},
                                            {},
@@ -746,45 +484,27 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            BoundType::DateTime(),
                                            false,
                                            false,
-                                           scalar::localdatetimeScalarFn,
                                            scalar::localdatetimeBatchFn,
                                            {},
                                            {},
                                            {}});
 
     // datetime() -> DateTime (0-arg: epoch 1970-01-01T00:00:00Z)
-    functions_["datetime"].push_back({"datetime",
-                                      {},
-                                      BoundType::DateTime(),
-                                      false,
-                                      true,
-                                      scalar::datetimeScalarFn,
-                                      scalar::datetimeBatchFn,
-                                      {},
-                                      {},
-                                      {}});
+    functions_["datetime"].push_back(
+        {"datetime", {}, BoundType::DateTime(), false, true, scalar::datetimeBatchFn, {}, {}, {}});
     // datetime(MAP<STRING, ANY>) -> DateTime
     functions_["datetime"].push_back({"datetime",
                                       {BoundType::Map(BoundType::String(), BoundType::Any())},
                                       BoundType::DateTime(),
                                       false,
                                       false,
-                                      scalar::datetimeScalarFn,
                                       scalar::datetimeBatchFn,
                                       {},
                                       {},
                                       {}});
     // datetime(STRING) -> DateTime
-    functions_["datetime"].push_back({"datetime",
-                                      {BoundType::String()},
-                                      BoundType::DateTime(),
-                                      false,
-                                      false,
-                                      scalar::datetimeScalarFn,
-                                      scalar::datetimeBatchFn,
-                                      {},
-                                      {},
-                                      {}});
+    functions_["datetime"].push_back(
+        {"datetime", {BoundType::String()}, BoundType::DateTime(), false, false, scalar::datetimeBatchFn, {}, {}, {}});
 
     // duration(MAP<STRING, ANY>) -> Duration
     functions_["duration"].push_back({"duration",
@@ -792,22 +512,13 @@ void FunctionRegistry::registerScalarBuiltins() {
                                       BoundType::Duration(),
                                       false,
                                       false,
-                                      scalar::durationScalarFn,
                                       scalar::durationBatchFn,
                                       {},
                                       {},
                                       {}});
     // duration(STRING) -> Duration
-    functions_["duration"].push_back({"duration",
-                                      {BoundType::String()},
-                                      BoundType::Duration(),
-                                      false,
-                                      false,
-                                      scalar::durationScalarFn,
-                                      scalar::durationBatchFn,
-                                      {},
-                                      {},
-                                      {}});
+    functions_["duration"].push_back(
+        {"duration", {BoundType::String()}, BoundType::Duration(), false, false, scalar::durationBatchFn, {}, {}, {}});
 
     // __temporal_field__(ANY, INT64) -> Any
     functions_["__temporal_field__"].push_back({"__temporal_field__",
@@ -815,7 +526,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 BoundType::Any(),
                                                 false,
                                                 false,
-                                                scalar::temporalAccessorScalarFn,
                                                 scalar::temporalAccessorBatchFn,
                                                 {},
                                                 {},
@@ -826,7 +536,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 BoundType::Any(),
                                                 false,
                                                 false,
-                                                scalar::temporalAccessorScalarFn,
                                                 scalar::temporalAccessorBatchFn,
                                                 {},
                                                 {},
@@ -837,7 +546,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 BoundType::Any(),
                                                 false,
                                                 false,
-                                                scalar::temporalAccessorScalarFn,
                                                 scalar::temporalAccessorBatchFn,
                                                 {},
                                                 {},
@@ -851,7 +559,6 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::DateTime(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATE), false>,
          scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATE), false>,
          {},
          {},
@@ -862,7 +569,6 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::DateTime(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATE), false>,
          scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATE), false>,
          {},
          {},
@@ -873,7 +579,6 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::DateTime(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATETIME), false>,
          scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATETIME), false>,
          {},
          {},
@@ -884,7 +589,6 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::DateTime(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::DATETIME), false>,
          scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::DATETIME), false>,
          {},
          {},
@@ -894,7 +598,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            BoundType::Time(),
                                            false,
                                            false,
-                                           scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::TIME), true>,
                                            scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::TIME), true>,
                                            {},
                                            {},
@@ -904,7 +607,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                            BoundType::Time(),
                                            false,
                                            false,
-                                           scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::TIME), true>,
                                            scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::TIME), true>,
                                            {},
                                            {},
@@ -915,7 +617,6 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::Time(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME), true>,
          scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME), true>,
          {},
          {},
@@ -926,7 +627,6 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::Time(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME), true>,
          scalar::temporalTruncateBatchFn<static_cast<uint8_t>(TimeKind::LOCAL_TIME), true>,
          {},
          {},
@@ -937,7 +637,6 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::DateTime(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME), false>,
          scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME), false>,
          {},
          {},
@@ -948,7 +647,6 @@ void FunctionRegistry::registerScalarBuiltins() {
          BoundType::DateTime(),
          false,
          false,
-         scalar::temporalTruncateScalarFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME), false>,
          scalar::temporalTruncateBatchFn<static_cast<uint8_t>(DateTimeKind::LOCAL_DATETIME), false>,
          {},
          {},
@@ -960,7 +658,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                               BoundType::Duration(),
                                               false,
                                               false,
-                                              scalar::durationBetweenScalarFn,
                                               scalar::durationBetweenBatchFn,
                                               {},
                                               {},
@@ -971,7 +668,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                               BoundType::Duration(),
                                               false,
                                               false,
-                                              scalar::durationBetweenScalarFn,
                                               scalar::durationBetweenBatchFn,
                                               {},
                                               {},
@@ -982,7 +678,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                               BoundType::Duration(),
                                               false,
                                               false,
-                                              scalar::durationBetweenScalarFn,
                                               scalar::durationBetweenBatchFn,
                                               {},
                                               {},
@@ -993,7 +688,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                               BoundType::Duration(),
                                               false,
                                               false,
-                                              scalar::durationBetweenScalarFn,
                                               scalar::durationBetweenBatchFn,
                                               {},
                                               {},
@@ -1005,7 +699,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                BoundType::Duration(),
                                                false,
                                                false,
-                                               scalar::durationInMonthsScalarFn,
                                                scalar::durationInMonthsBatchFn,
                                                {},
                                                {},
@@ -1016,7 +709,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                BoundType::Duration(),
                                                false,
                                                false,
-                                               scalar::durationInMonthsScalarFn,
                                                scalar::durationInMonthsBatchFn,
                                                {},
                                                {},
@@ -1027,7 +719,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                BoundType::Duration(),
                                                false,
                                                false,
-                                               scalar::durationInMonthsScalarFn,
                                                scalar::durationInMonthsBatchFn,
                                                {},
                                                {},
@@ -1038,7 +729,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                BoundType::Duration(),
                                                false,
                                                false,
-                                               scalar::durationInMonthsScalarFn,
                                                scalar::durationInMonthsBatchFn,
                                                {},
                                                {},
@@ -1050,7 +740,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 BoundType::Duration(),
                                                 false,
                                                 false,
-                                                scalar::durationInSecondsScalarFn,
                                                 scalar::durationInSecondsBatchFn,
                                                 {},
                                                 {},
@@ -1061,7 +750,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 BoundType::Duration(),
                                                 false,
                                                 false,
-                                                scalar::durationInSecondsScalarFn,
                                                 scalar::durationInSecondsBatchFn,
                                                 {},
                                                 {},
@@ -1072,7 +760,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 BoundType::Duration(),
                                                 false,
                                                 false,
-                                                scalar::durationInSecondsScalarFn,
                                                 scalar::durationInSecondsBatchFn,
                                                 {},
                                                 {},
@@ -1083,7 +770,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 BoundType::Duration(),
                                                 false,
                                                 false,
-                                                scalar::durationInSecondsScalarFn,
                                                 scalar::durationInSecondsBatchFn,
                                                 {},
                                                 {},
@@ -1095,7 +781,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                              BoundType::Duration(),
                                              false,
                                              false,
-                                             scalar::durationInDaysScalarFn,
                                              scalar::durationInDaysBatchFn,
                                              {},
                                              {},
@@ -1106,7 +791,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                              BoundType::Duration(),
                                              false,
                                              false,
-                                             scalar::durationInDaysScalarFn,
                                              scalar::durationInDaysBatchFn,
                                              {},
                                              {},
@@ -1117,7 +801,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                              BoundType::Duration(),
                                              false,
                                              false,
-                                             scalar::durationInDaysScalarFn,
                                              scalar::durationInDaysBatchFn,
                                              {},
                                              {},
@@ -1128,7 +811,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                              BoundType::Duration(),
                                              false,
                                              false,
-                                             scalar::durationInDaysScalarFn,
                                              scalar::durationInDaysBatchFn,
                                              {},
                                              {},
@@ -1140,7 +822,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 BoundType::DateTime(),
                                                 false,
                                                 false,
-                                                scalar::datetimeFromEpochScalarFn,
                                                 scalar::datetimeFromEpochBatchFn,
                                                 {},
                                                 {},
@@ -1151,7 +832,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                 BoundType::DateTime(),
                                                 false,
                                                 false,
-                                                scalar::datetimeFromEpochScalarFn,
                                                 scalar::datetimeFromEpochBatchFn,
                                                 {},
                                                 {},
@@ -1163,7 +843,6 @@ void FunctionRegistry::registerScalarBuiltins() {
                                                       BoundType::DateTime(),
                                                       false,
                                                       false,
-                                                      scalar::datetimeFromEpochMillisScalarFn,
                                                       scalar::datetimeFromEpochMillisBatchFn,
                                                       {},
                                                       {},
@@ -1171,7 +850,8 @@ void FunctionRegistry::registerScalarBuiltins() {
 
     // No-arg temporal accessor functions
     auto regNoArg = [this](const std::string& name, BoundType return_type, auto scalarFn, bool is_aggregate = false) {
-        functions_[name].push_back({name, {}, return_type, is_aggregate, false, scalarFn, {}, {}, {}, {}});
+        functions_[name].push_back(
+            {name, {}, return_type, is_aggregate, false, scalarToBatch(function::ScalarFn(scalarFn)), {}, {}, {}, {}});
     };
 
     regNoArg("date.transaction", BoundType::DateTime(), scalar::dateTransactionScalarFn);
@@ -1196,7 +876,7 @@ void FunctionRegistry::registerScalarBuiltins() {
     edge_unique.name = "__edge_unique";
     edge_unique.return_type = BoundType::Bool();
     edge_unique.has_variadic_args = true;
-    edge_unique.scalar_fn = edgeUniqueScalar;
+    edge_unique.fn = scalarToBatch(edgeUniqueScalar);
     functions_["__edge_unique"].push_back(std::move(edge_unique));
 }
 
@@ -1210,7 +890,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          BoundType::Int64(),
          true,
          true,
-         {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::CountState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) {
@@ -1230,7 +909,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          true,
          false,
          {},
-         {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::Int64SumState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) {
              static_cast<aggregate::Int64SumState&>(s).add(args[0]);
@@ -1243,7 +921,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          BoundType::Double(),
          true,
          false,
-         {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::DoubleSumState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) {
@@ -1259,7 +936,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          true,
          false,
          {},
-         {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::AvgState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::AvgState&>(s).add(args[0]); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::AvgState&>(s).finalize(); }});
@@ -1270,7 +946,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          BoundType::Double(),
          true,
          false,
-         {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::AvgState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::AvgState&>(s).add(args[0]); },
@@ -1284,7 +959,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          true,
          true,
          {},
-         {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::MinState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::MinState&>(s).add(args[0]); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::MinState&>(s).finalize(); }});
@@ -1296,7 +970,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          BoundType::Any(),
          true,
          true,
-         {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::MaxState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::MaxState&>(s).add(args[0]); },
@@ -1310,7 +983,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          true,
          true,
          {},
-         {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::CollectState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) { static_cast<aggregate::CollectState&>(s).add(args[0]); },
          [](const AggStateBase& s) -> Value { return static_cast<const aggregate::CollectState&>(s).finalize(); }});
@@ -1322,7 +994,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          BoundType::Double(),
          true,
          false,
-         {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::PercentileDiscState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) {
@@ -1340,7 +1011,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          BoundType::Int64(),
          true,
          false,
-         {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::PercentileDiscState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) {
@@ -1360,7 +1030,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          true,
          false,
          {},
-         {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::PercentileContState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) {
              auto& st = static_cast<aggregate::PercentileContState&>(s);
@@ -1377,7 +1046,6 @@ void FunctionRegistry::registerAggregateBuiltins() {
          BoundType::Double(),
          true,
          false,
-         {},
          {},
          []() -> std::unique_ptr<AggStateBase> { return std::make_unique<aggregate::PercentileContState>(); },
          [](AggStateBase& s, const std::vector<Value>& args) {

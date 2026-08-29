@@ -10,6 +10,7 @@ endif()
 
 # Options
 option(EUGRAPH_BUILD_TESTS "Build unit tests" ON)
+option(EUGRAPH_ENABLE_BENCHMARK "Build benchmark targets" OFF)
 option(EUGRAPH_ENABLE_CCACHE "Enable ccache for faster rebuilds" OFF)
 option(EUGRAPH_UNITY_BUILD "Enable unity builds to reduce compilation time" OFF)
 
@@ -166,7 +167,9 @@ target_link_libraries(eugraph_metadata PUBLIC
 add_library(eugraph_query_engine STATIC
     src/common/types/temporal_value.cpp
     src/query/catalog/catalog.cpp
-    src/query/function/batch_ops.cpp
+    src/query/planner/binder/bind_binary_op.cpp
+    src/query/planner/binder/bind_unary_op.cpp
+    src/query/evaluator/columnar_kernels.cpp
     src/query/function/function_registry.cpp
     src/query/planner/binder/binder.cpp
     src/query/planner/binder/bind_call.cpp
@@ -181,8 +184,7 @@ add_library(eugraph_query_engine STATIC
     src/query/planner/binder/bind_projection.cpp
     src/query/planner/bound_logical_plan.cpp
     src/query/planner/column_resolver.cpp
-    src/query/evaluator/vectorized_evaluator.cpp
-    src/query/evaluator/expr/eval_literal.cpp
+    src/query/evaluator/expression_evaluator.cpp
     src/query/evaluator/expr/eval_unary_op.cpp
     src/query/evaluator/expr/eval_column_ref.cpp
     src/query/evaluator/expr/eval_list.cpp
@@ -519,6 +521,24 @@ if(EUGRAPH_BUILD_TESTS)
 
     add_dependencies(query_executor_tests wiredtiger_ext)
     gtest_add_tests(TARGET query_executor_tests)
+
+    # Typed expression evaluator tests
+    add_executable(evaluator_typed_tests
+        tests/test_evaluator_typed.cpp
+    )
+
+    target_include_directories(evaluator_typed_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+    )
+
+    target_link_libraries(evaluator_typed_tests PRIVATE
+        eugraph_query_engine
+        Folly::folly
+        GTest::gtest
+        GTest::gtest_main
+    )
+
+    gtest_add_tests(TARGET evaluator_typed_tests)
 
     # Optimizer tests
     add_executable(optimizer_tests
@@ -876,4 +896,9 @@ if(EUGRAPH_BUILD_TESTS)
             message(STATUS "pytest not found — skipping Bolt integration tests")
         endif()
     endif()
+endif()
+
+if(EUGRAPH_ENABLE_BENCHMARK)
+    find_package(benchmark CONFIG REQUIRED)
+    add_subdirectory(benchmark/evaluator)
 endif()

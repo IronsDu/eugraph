@@ -1,8 +1,8 @@
 #include "query/physical_plan/operator/sort_physical_op.hpp"
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
-#include "query/evaluator/vectorized_evaluator.hpp"
-#include "query/function/compare_ops.hpp"
+#include "query/evaluator/columnar_kernels.hpp"
+#include "query/evaluator/expression_evaluator.hpp"
 
 #include <algorithm>
 #include <numeric>
@@ -17,7 +17,7 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
     size_t num_cols = 0;
 
     auto child_gen = child_->executeChunk();
-    VectorizedEvaluator evaluator(eval_ctx_);
+    ExpressionEvaluator evaluator(eval_ctx_);
 
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();
