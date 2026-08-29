@@ -1340,7 +1340,7 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
 
                     bool full_edge_scan = v.direction == cypher::RelationshipDirection::UNDIRECTED && !edge_bound &&
                                           !dst_bound && child_schema.size() == 1 && v.dst_label_ids.empty() &&
-                                          v.src_variable.empty();
+                                          (v.src_variable.empty() || v.src_variable.starts_with("__anon_"));
                     std::vector<EdgeLabelId> full_scan_labels;
                     if (full_edge_scan) {
                         if (v.edge_label_ids.empty()) {

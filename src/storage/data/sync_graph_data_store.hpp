@@ -57,6 +57,9 @@ public:
 
     // Vertex Labels
     LabelIdSet getVertexLabels(GraphTxnHandle txn, VertexId vid) override;
+    std::vector<LabelIdSet> getVertexLabelsBatch(GraphTxnHandle txn, const std::vector<VertexId>& vids) override;
+    std::vector<std::optional<Properties>> getVertexPropertiesBatch(GraphTxnHandle txn, LabelId label_id,
+                                                                    const std::vector<VertexId>& vids) override;
     bool addVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) override;
     bool removeVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) override;
 

@@ -64,6 +64,9 @@ public:
     // ==================== Vertex Labels ====================
 
     virtual LabelIdSet getVertexLabels(GraphTxnHandle txn, VertexId vid) = 0;
+    virtual std::vector<LabelIdSet> getVertexLabelsBatch(GraphTxnHandle txn, const std::vector<VertexId>& vids) = 0;
+    virtual std::vector<std::optional<Properties>> getVertexPropertiesBatch(GraphTxnHandle txn, LabelId label_id,
+                                                                            const std::vector<VertexId>& vids) = 0;
     virtual bool addVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) = 0;
     virtual bool removeVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) = 0;
 

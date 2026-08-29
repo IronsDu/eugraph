@@ -405,6 +405,79 @@ LabelIdSet SyncGraphDataStore::getVertexLabels(GraphTxnHandle txn, VertexId vid)
     return labels;
 }
 
+std::vector<LabelIdSet> SyncGraphDataStore::getVertexLabelsBatch(GraphTxnHandle txn,
+                                                                 const std::vector<VertexId>& vids) {
+    std::vector<LabelIdSet> out(vids.size());
+    auto session = getSession(txn);
+    if (!session)
+        return out;
+
+    auto cursor = openCursor(session, TABLE_LABEL_REVERSE);
+    if (!cursor)
+        return out;
+    auto* c = cursor.get();
+    std::string prefix;
+    for (size_t i = 0; i < vids.size(); ++i) {
+        prefix = KeyCodec::encodeLabelReversePrefix(vids[i]);
+        setItem(c, prefix);
+        int exact = 0;
+        int ret = c->search_near(c, &exact);
+        if (ret == WT_NOTFOUND)
+            continue;
+        if (ret != 0 || exact < 0)
+            ret = c->next(c);
+        while (ret == 0) {
+            std::string key = getKeyFromCursor(c);
+            if (!key.starts_with(prefix))
+                break;
+            auto [_, label_id] = KeyCodec::decodeLabelReverseKey(key);
+            out[i].insert(label_id);
+            ret = c->next(c);
+        }
+    }
+    return out;
+}
+
+std::vector<std::optional<Properties>>
+SyncGraphDataStore::getVertexPropertiesBatch(GraphTxnHandle txn, LabelId label_id, const std::vector<VertexId>& vids) {
+    std::vector<std::optional<Properties>> out(vids.size());
+    auto session = getSession(txn);
+    if (!session)
+        return out;
+
+    auto cursor = openCursor(session, vpropTable(label_id));
+    if (!cursor)
+        return out;
+    auto* c = cursor.get();
+    std::string prefix;
+    for (size_t i = 0; i < vids.size(); ++i) {
+        prefix = KeyCodec::encodeVPropPrefix(vids[i]);
+        setItem(c, prefix);
+        int exact = 0;
+        int ret = c->search_near(c, &exact);
+        if (ret == WT_NOTFOUND)
+            continue;
+        if (ret != 0 || exact < 0)
+            ret = c->next(c);
+        Properties props;
+        bool found = false;
+        while (ret == 0) {
+            std::string key = getKeyFromCursor(c);
+            if (!key.starts_with(prefix))
+                break;
+            auto [_, prop_id] = KeyCodec::decodeVPropKey(key);
+            if (prop_id >= props.size())
+                props.resize(prop_id + 1);
+            props[prop_id] = ValueCodec::decode(getValueFromCursor(c));
+            found = true;
+            ret = c->next(c);
+        }
+        if (found)
+            out[i] = std::move(props);
+    }
+    return out;
+}
+
 bool SyncGraphDataStore::addVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) {
     auto session = getSession(txn);
     if (!session)

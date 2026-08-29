@@ -51,6 +51,7 @@ public:
         co_return std::nullopt;
     }
     virtual folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) = 0;
+    virtual folly::coro::Task<std::vector<LabelIdSet>> getVertexLabelsBatch(const std::vector<VertexId>& vids) = 0;
 
     // Edge Properties
     virtual folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) = 0;
