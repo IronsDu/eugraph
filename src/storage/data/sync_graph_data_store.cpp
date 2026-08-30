@@ -34,6 +34,20 @@ std::string getKeyFromCursor(WT_CURSOR* cursor) {
     return std::string(static_cast<const char*>(item.data), item.size);
 }
 
+std::string_view getKeyViewFromCursor(WT_CURSOR* cursor) {
+    WT_ITEM item;
+    std::memset(&item, 0, sizeof(item));
+    cursor->get_key(cursor, &item);
+    return std::string_view(static_cast<const char*>(item.data), item.size);
+}
+
+std::string_view getValueViewFromCursor(WT_CURSOR* cursor) {
+    WT_ITEM item;
+    std::memset(&item, 0, sizeof(item));
+    cursor->get_value(cursor, &item);
+    return std::string_view(static_cast<const char*>(item.data), item.size);
+}
+
 } // anonymous namespace
 
 // ==================== Lifecycle ====================
@@ -847,15 +861,15 @@ EdgeScanCursorImpl::~EdgeScanCursorImpl() = default;
 
 void EdgeScanCursorImpl::readCurrent() {
     auto* c = cursor_.get();
-    currentKey_ = getKeyFromCursor(c);
-    if (!currentKey_.starts_with(prefix_)) {
+    const auto key = getKeyViewFromCursor(c);
+    if (!key.starts_with(prefix_)) {
         valid_ = false;
         return;
     }
 
-    currentValue_ = getValueFromCursor(c);
-    auto decoded = KeyCodec::decodeEdgeIndexKey(currentKey_);
-    current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(currentValue_)};
+    const auto value = getValueViewFromCursor(c);
+    auto decoded = KeyCodec::decodeEdgeIndexKey(key);
+    current_ = {decoded.neighbor_id, decoded.edge_label_id, decoded.seq, ValueCodec::decodeU64(value)};
     valid_ = true;
 }
 
@@ -968,15 +982,15 @@ EdgeTypeScanCursorImpl::~EdgeTypeScanCursorImpl() = default;
 
 void EdgeTypeScanCursorImpl::readCurrent() {
     auto* c = cursor_.get();
-    currentKey_ = getKeyFromCursor(c);
-    if (!prefix_.empty() && !currentKey_.starts_with(prefix_)) {
+    const auto key = getKeyViewFromCursor(c);
+    if (!prefix_.empty() && !key.starts_with(prefix_)) {
         valid_ = false;
         return;
     }
 
-    currentValue_ = getValueFromCursor(c);
-    auto decoded = KeyCodec::decodeEdgeTypeIndexKey(currentKey_);
-    current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq, ValueCodec::decodeU64(currentValue_)};
+    const auto value = getValueViewFromCursor(c);
+    auto decoded = KeyCodec::decodeEdgeTypeIndexKey(key);
+    current_ = {decoded.src_vertex_id, decoded.dst_vertex_id, decoded.seq, ValueCodec::decodeU64(value)};
     valid_ = true;
 }
 

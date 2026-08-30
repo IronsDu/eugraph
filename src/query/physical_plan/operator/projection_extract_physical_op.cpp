@@ -122,30 +122,71 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             ids.reserve(row_count);
             std::vector<size_t> row_map;
             row_map.reserve(row_count);
+            std::unordered_map<EdgeId, size_t> first_row_for_id;
+            const Column& src_col = chunk->columns[spec.source_col];
+            const bool src_edge_keys =
+                src_col.form == VectorForm::FLAT && src_col.buffer && !src_col.buffer->edge_key_data.empty();
+            const bool src_edge_values =
+                src_col.form == VectorForm::FLAT && src_col.buffer && !src_col.buffer->edge_data.empty();
             for (size_t row = 0; row < row_count; ++row) {
-                const auto& v = chunk->columns[spec.source_col].getValue(row);
                 EdgeId eid = INVALID_EDGE_ID;
                 EdgeLabelId elid = INVALID_EDGE_LABEL_ID;
-                if (std::holds_alternative<EdgeKey>(v)) {
-                    const auto& ek = std::get<EdgeKey>(v);
+                if (src_edge_keys) {
+                    const auto& ek = src_col.buffer->edge_key_data[row];
                     eid = ek.id;
                     elid = ek.label_id;
-                } else if (std::holds_alternative<EdgeValue>(v)) {
-                    const auto& ev = std::get<EdgeValue>(v);
+                } else if (src_edge_values) {
+                    const auto& ev = src_col.buffer->edge_data[row];
                     eid = ev.id;
                     elid = ev.label_id;
+                } else {
+                    const auto& v = src_col.getValue(row);
+                    if (std::holds_alternative<EdgeKey>(v)) {
+                        const auto& ek = std::get<EdgeKey>(v);
+                        eid = ek.id;
+                        elid = ek.label_id;
+                    } else if (std::holds_alternative<EdgeValue>(v)) {
+                        const auto& ev = std::get<EdgeValue>(v);
+                        eid = ev.id;
+                        elid = ev.label_id;
+                    }
                 }
-                if (eid != INVALID_EDGE_ID && elid != INVALID_EDGE_LABEL_ID && elid == spec.edge_label_id) {
+                if (eid == INVALID_EDGE_ID || elid != spec.edge_label_id)
+                    continue;
+                auto [it, inserted] = first_row_for_id.emplace(eid, ids.size());
+                if (!inserted) {
+                    row_map.push_back(it->second);
+                } else {
                     ids.push_back(eid);
-                    row_map.push_back(row);
+                    row_map.push_back(ids.size() - 1);
                 }
             }
             edge_prop_cache[i].resize(row_count);
             if (ids.empty())
                 continue;
             auto values = co_await store_.getEdgePropertyBatch(spec.edge_label_id, ids, spec.prop_id);
-            for (size_t j = 0; j < ids.size() && j < values.size(); ++j)
-                edge_prop_cache[i][row_map[j]] = std::move(values[j]);
+            for (size_t row = 0; row < row_count; ++row) {
+                if (row < row_map.size() && row_map[row] < values.size())
+                    edge_prop_cache[i][row] = std::move(values[row_map[row]]);
+            }
+
+            // If every present value is an integer, publish the output column
+            // as typed INT64 so downstream predicates avoid Value dispatch.
+            bool any_value = false;
+            bool all_int64 = true;
+            for (const auto& pv : edge_prop_cache[i]) {
+                if (!pv.has_value())
+                    continue;
+                any_value = true;
+                if (!std::holds_alternative<int64_t>(*pv)) {
+                    all_int64 = false;
+                    break;
+                }
+            }
+            if (any_value && all_int64) {
+                output.columns[i].type = binder::BoundTypeKind::INT64;
+                output.columns[i].buffer->int64_data.resize(row_count);
+            }
         }
 
         // Prefetch vertex labels + full properties for ConstructVertex specs in
@@ -277,10 +318,14 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 case ColumnSpec::Kind::LoadEdgeProp: {
                     if (row < edge_prop_cache[i].size()) {
                         const auto& pv = edge_prop_cache[i][row];
-                        if (pv.has_value())
-                            output.columns[i].setValue(row, propertyValueToValue(*pv));
-                        else
+                        if (!pv.has_value()) {
                             output.columns[i].setNull(row);
+                        } else if (output.columns[i].type == binder::BoundTypeKind::INT64 &&
+                                   std::holds_alternative<int64_t>(*pv)) {
+                            output.columns[i].buffer->int64_data[row] = std::get<int64_t>(*pv);
+                        } else {
+                            output.columns[i].setValue(row, propertyValueToValue(*pv));
+                        }
                     } else {
                         output.columns[i].setNull(row);
                     }

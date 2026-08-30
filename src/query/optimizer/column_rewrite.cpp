@@ -730,9 +730,28 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                 if (v) {
                     for (const auto& k : v->group_keys)
                         collectExprReqs(k, reqs, resolver);
-                    for (const auto& agg : v->aggregates)
-                        for (const auto& arg : agg.arguments)
-                            collectExprReqs(arg, reqs, resolver);
+                    for (const auto& agg : v->aggregates) {
+                        for (const auto& arg : agg.arguments) {
+                            // count(n) only needs non-null rows. A bare
+                            // VertexRef/EdgeKey/Path column is enough; do not
+                            // force whole-object materialization (labels + all
+                            // properties) for every scanned entity.
+                            bool bare_graph_ref = false;
+                            if (agg.function_name == "count") {
+                                if (auto* cref = std::get_if<binder::BoundColumnRef>(&arg)) {
+                                    bare_graph_ref = cref->type.kind == binder::BoundTypeKind::VERTEX ||
+                                                     cref->type.kind == binder::BoundTypeKind::EDGE ||
+                                                     cref->type.kind == binder::BoundTypeKind::PATH;
+                                } else if (auto* vref = std::get_if<binder::BoundVariableRef>(&arg)) {
+                                    bare_graph_ref = vref->type.kind == binder::BoundTypeKind::VERTEX ||
+                                                     vref->type.kind == binder::BoundTypeKind::EDGE ||
+                                                     vref->type.kind == binder::BoundTypeKind::PATH;
+                                }
+                            }
+                            if (!bare_graph_ref)
+                                collectExprReqs(arg, reqs, resolver);
+                        }
+                    }
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (v) {

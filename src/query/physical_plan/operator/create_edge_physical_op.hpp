@@ -42,6 +42,9 @@ public:
         return "CreateEdge(variable=" + variable_ + ", src_col=" + std::to_string(src_col_idx_) +
                ", dst_col=" + std::to_string(dst_col_idx_) + ")";
     }
+    bool mayHaveSideEffects() const override {
+        return true;
+    }
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
     }

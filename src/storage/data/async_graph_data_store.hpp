@@ -268,7 +268,7 @@ public:
     folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry>>
     scanEdgesByType(EdgeLabelId label_id, std::optional<VertexId> src_filter,
                     std::optional<VertexId> dst_filter) override {
-        constexpr size_t BATCH = 65536;
+        constexpr size_t BATCH = 1024;
         auto txn = txn_;
         auto cursor = co_await io_.dispatch([this, txn, label_id, src_filter, dst_filter]() {
             return store_.createEdgeTypeScanCursor(txn, label_id, src_filter, dst_filter);

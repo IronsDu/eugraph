@@ -35,6 +35,33 @@ public:
         return {};
     }
 
+    /// Whether this subtree can perform writes/DDL. LIMIT drains its child
+    /// only when this returns true; pure reads can stop early.
+    virtual bool mayHaveSideEffects() const {
+        for (const auto* child : children()) {
+            if (child && child->mayHaveSideEffects())
+                return true;
+        }
+        return false;
+    }
+
+    /// Whether this operator preserves row count exactly (no filtering or
+    /// deduplication), so an ancestor LIMIT can be pushed through it.
+    virtual bool supportsLimitPushdown() const {
+        return false;
+    }
+
+    /// Push a row bound from an ancestor LIMIT into this pure-read subtree.
+    /// Only operators that preserve row count propagate the hint.
+    virtual void setLimitHint(size_t limit) {
+        if (!supportsLimitPushdown())
+            return;
+        for (const auto* child : children()) {
+            if (child)
+                const_cast<PhysicalOperator*>(child)->setLimitHint(limit);
+        }
+    }
+
     void setOutputSchema(Schema schema, std::vector<binder::BoundType> types) {
         output_schema_ = std::move(schema);
         output_types_ = std::move(types);

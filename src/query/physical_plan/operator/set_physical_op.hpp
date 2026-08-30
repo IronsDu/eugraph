@@ -55,6 +55,9 @@ public:
     std::string toString() const override {
         return "Set(items=" + std::to_string(items_.size()) + ")";
     }
+    bool mayHaveSideEffects() const override {
+        return true;
+    }
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
     }

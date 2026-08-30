@@ -58,10 +58,16 @@ std::string ExpandPhysicalOp::toString() const {
 
 folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
     if (full_edge_scan_) {
+        size_t remaining_rows = limit_hint_.value_or(std::numeric_limits<size_t>::max());
         for (EdgeLabelId lid : full_scan_labels_) {
+            if (remaining_rows == 0)
+                break;
             auto edge_gen = store_.scanEdgesByType(lid, std::nullopt, std::nullopt);
-            while (auto edge_batch = co_await edge_gen.next()) {
-                const size_t n = edge_batch->size();
+            while (remaining_rows > 0) {
+                auto edge_batch = co_await edge_gen.next();
+                if (!edge_batch.has_value())
+                    break;
+                const size_t n = std::min(edge_batch->size(), remaining_rows);
                 DataChunk out;
                 out.count = n;
                 out.addColumn(output_types_[0].kind);             // src vertex reference
@@ -79,7 +85,17 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     edge_data[i] = EdgeKey(e.edge_id, e.src_vertex_id, e.dst_vertex_id, lid, e.seq);
                     dst_data[i] = VertexRef(e.dst_vertex_id);
                 }
+                if (direction_ == cypher::RelationshipDirection::UNDIRECTED)
+                    remaining_rows = (remaining_rows > n) ? remaining_rows - n : 0;
+                else
+                    remaining_rows = (remaining_rows > n) ? remaining_rows - n : 0;
                 co_yield std::move(out);
+
+                if (remaining_rows == 0)
+                    break;
+
+                if (direction_ != cypher::RelationshipDirection::UNDIRECTED)
+                    continue;
 
                 // UNDIRECTED semantics: an asymmetric edge matches once from
                 // each endpoint. The type index stores the physical direction
@@ -89,8 +105,11 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     if ((*edge_batch)[i].src_vertex_id != (*edge_batch)[i].dst_vertex_id)
                         ++reverse_count;
                 }
-                if (reverse_count == 0)
+                if (reverse_count == 0) {
+                    if (remaining_rows == 0)
+                        break;
                     continue;
+                }
 
                 DataChunk reverse;
                 reverse.count = reverse_count;
@@ -113,7 +132,10 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     rdst_data[w] = VertexRef(e.src_vertex_id);
                     ++w;
                 }
+                remaining_rows = (remaining_rows > reverse_count) ? remaining_rows - reverse_count : 0;
                 co_yield std::move(reverse);
+                if (remaining_rows == 0)
+                    break;
             }
         }
         co_return;
