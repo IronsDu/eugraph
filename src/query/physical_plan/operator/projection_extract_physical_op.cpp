@@ -120,8 +120,7 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 continue;
             std::vector<EdgeId> ids;
             ids.reserve(row_count);
-            std::vector<size_t> row_map;
-            row_map.reserve(row_count);
+            std::vector<size_t> value_for_row(row_count, SIZE_MAX);
             std::unordered_map<EdgeId, size_t> first_row_for_id;
             const Column& src_col = chunk->columns[spec.source_col];
             const bool src_edge_keys =
@@ -155,10 +154,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     continue;
                 auto [it, inserted] = first_row_for_id.emplace(eid, ids.size());
                 if (!inserted) {
-                    row_map.push_back(it->second);
+                    value_for_row[row] = it->second;
                 } else {
                     ids.push_back(eid);
-                    row_map.push_back(ids.size() - 1);
+                    value_for_row[row] = ids.size() - 1;
                 }
             }
             edge_prop_cache[i].resize(row_count);
@@ -166,8 +165,9 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 continue;
             auto values = co_await store_.getEdgePropertyBatch(spec.edge_label_id, ids, spec.prop_id);
             for (size_t row = 0; row < row_count; ++row) {
-                if (row < row_map.size() && row_map[row] < values.size())
-                    edge_prop_cache[i][row] = std::move(values[row_map[row]]);
+                const size_t vidx = value_for_row[row];
+                if (vidx != SIZE_MAX && vidx < values.size())
+                    edge_prop_cache[i][row] = std::move(values[vidx]);
             }
 
             // If every present value is an integer, publish the output column
