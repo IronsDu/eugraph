@@ -166,8 +166,10 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             auto values = co_await store_.getEdgePropertyBatch(spec.edge_label_id, ids, spec.prop_id);
             for (size_t row = 0; row < row_count; ++row) {
                 const size_t vidx = value_for_row[row];
+                // Duplicate rows share one value slot; copy (not move) so
+                // every row keeps the property value.
                 if (vidx != SIZE_MAX && vidx < values.size())
-                    edge_prop_cache[i][row] = std::move(values[vidx]);
+                    edge_prop_cache[i][row] = values[vidx];
             }
 
             // If every present value is an integer, publish the output column
