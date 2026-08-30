@@ -37,6 +37,9 @@ public:
     }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
+    bool supportsLimitPushdown() const override {
+        return true;
+    }
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
     }

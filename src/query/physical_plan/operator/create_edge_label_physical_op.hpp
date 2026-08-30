@@ -34,6 +34,9 @@ public:
     std::string toString() const override {
         return "CreateEdgeLabel(name=" + label_name_ + ")";
     }
+    bool mayHaveSideEffects() const override {
+        return true;
+    }
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
     }

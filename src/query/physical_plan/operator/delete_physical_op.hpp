@@ -48,6 +48,9 @@ public:
     std::string toString() const override {
         return "Delete(targets=" + std::to_string(targets_.size()) + (detach_ ? ", detach" : "") + ")";
     }
+    bool mayHaveSideEffects() const override {
+        return true;
+    }
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
     }

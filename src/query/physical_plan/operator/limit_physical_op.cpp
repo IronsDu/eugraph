@@ -45,14 +45,19 @@ folly::coro::AsyncGenerator<DataChunk> LimitPhysicalOp::executeChunk() {
         remaining = evaluateLimit(*expr_, eval_ctx_);
     }
 
+    if (remaining > 0 && !child_->mayHaveSideEffects())
+        child_->setLimitHint(static_cast<size_t>(remaining));
+
     auto child_gen = child_->executeChunk();
 
     // LIMIT 0: consume all child data (triggering side-effect operators like
     // DELETE / REMOVE) but yield nothing.  Cypher semantics require mutations
     // to execute regardless of LIMIT 0 — LIMIT only affects the result set.
     if (remaining == 0) {
-        while (auto chunk = co_await child_gen.next()) {
-            // discard — side effects already executed inside the child pipeline
+        if (child_->mayHaveSideEffects()) {
+            while (auto chunk = co_await child_gen.next()) {
+                // discard — side effects already executed inside the child pipeline
+            }
         }
         co_return;
     }
@@ -101,8 +106,10 @@ folly::coro::AsyncGenerator<DataChunk> LimitPhysicalOp::executeChunk() {
         // but upstream write operators (CREATE / SET / DELETE / MERGE) must
         // still execute for every input row. Drain the rest of the child.
         if (remaining <= 0) {
-            while (auto rest = co_await child_gen.next()) {
-                // discard — side effects already executed inside child pipeline
+            if (child_->mayHaveSideEffects()) {
+                while (auto rest = co_await child_gen.next()) {
+                    // discard — side effects already executed inside child pipeline
+                }
             }
             co_return;
         }

@@ -412,16 +412,28 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
                 while (auto batch = co_await edges.next()) {
                     if (!batch)
                         continue;
+                    std::vector<VertexId> src_ids;
+                    std::vector<VertexId> dst_ids;
+                    src_ids.reserve(batch->size());
+                    dst_ids.reserve(batch->size());
                     for (const auto& edge : *batch) {
-                        auto src_labels = co_await data_store_->getVertexLabels(edge.src_vertex_id);
-                        for (LabelId lid : src_labels) {
-                            if (virtual_ids.count(lid))
-                                start_labels.insert(lid);
+                        src_ids.push_back(edge.src_vertex_id);
+                        dst_ids.push_back(edge.dst_vertex_id);
+                    }
+                    auto src_labels_batch = co_await data_store_->getVertexLabelsBatch(src_ids);
+                    auto dst_labels_batch = co_await data_store_->getVertexLabelsBatch(dst_ids);
+                    for (size_t i = 0; i < batch->size(); ++i) {
+                        if (i < src_labels_batch.size()) {
+                            for (LabelId lid : src_labels_batch[i]) {
+                                if (virtual_ids.count(lid))
+                                    start_labels.insert(lid);
+                            }
                         }
-                        auto dst_labels = co_await data_store_->getVertexLabels(edge.dst_vertex_id);
-                        for (LabelId lid : dst_labels) {
-                            if (virtual_ids.count(lid))
-                                end_labels.insert(lid);
+                        if (i < dst_labels_batch.size()) {
+                            for (LabelId lid : dst_labels_batch[i]) {
+                                if (virtual_ids.count(lid))
+                                    end_labels.insert(lid);
+                            }
                         }
                     }
                 }

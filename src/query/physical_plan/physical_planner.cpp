@@ -1338,9 +1338,14 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         output_types.push_back(binder::BoundType::VertexRef());
                     }
 
-                    bool full_edge_scan = v.direction == cypher::RelationshipDirection::UNDIRECTED && !edge_bound &&
-                                          !dst_bound && child_schema.size() == 1 && v.dst_label_ids.empty() &&
-                                          (v.src_variable.empty() || v.src_variable.starts_with("__anon_"));
+                    const bool anon_src = v.src_variable.empty() || v.src_variable.starts_with("__anon_");
+                    const bool child_is_all_node_scan = std::holds_alternative<binder::BoundScanOp>(v.child);
+                    const bool directed_single_label =
+                        v.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT && !v.edge_label_ids.empty();
+                    bool full_edge_scan =
+                        (v.direction == cypher::RelationshipDirection::UNDIRECTED || directed_single_label) &&
+                        !edge_bound && !dst_bound && child_schema.size() == 1 && v.dst_label_ids.empty() && anon_src &&
+                        child_is_all_node_scan;
                     std::vector<EdgeLabelId> full_scan_labels;
                     if (full_edge_scan) {
                         if (v.edge_label_ids.empty()) {

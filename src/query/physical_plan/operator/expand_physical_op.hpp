@@ -63,6 +63,9 @@ public:
     }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
+    void setLimitHint(size_t limit) override {
+        limit_hint_ = limit_hint_.has_value() ? std::min(*limit_hint_, limit) : limit;
+    }
     std::vector<const PhysicalOperator*> children() const override {
         return {child_.get()};
     }
@@ -87,6 +90,7 @@ private:
     int edge_col_idx_ = -1;
     std::vector<EdgeLabelId> full_scan_labels_;
     bool full_edge_scan_ = false;
+    std::optional<size_t> limit_hint_;
 };
 
 } // namespace compute
