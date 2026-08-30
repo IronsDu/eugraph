@@ -57,6 +57,9 @@ public:
 
     // Vertex Labels
     LabelIdSet getVertexLabels(GraphTxnHandle txn, VertexId vid) override;
+    std::vector<LabelIdSet> getVertexLabelsBatch(GraphTxnHandle txn, const std::vector<VertexId>& vids) override;
+    std::vector<std::optional<Properties>> getVertexPropertiesBatch(GraphTxnHandle txn, LabelId label_id,
+                                                                    const std::vector<VertexId>& vids) override;
     bool addVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) override;
     bool removeVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) override;
 
@@ -78,6 +81,9 @@ public:
     std::optional<Properties> getEdgeProperties(GraphTxnHandle txn, EdgeLabelId label_id, EdgeId eid) override;
     std::optional<PropertyValue> getEdgeProperty(GraphTxnHandle txn, EdgeLabelId label_id, EdgeId eid,
                                                  uint16_t prop_id) override;
+    std::vector<std::optional<PropertyValue>> getEdgePropertyBatch(GraphTxnHandle txn, EdgeLabelId label_id,
+                                                                   const std::vector<EdgeId>& edge_ids,
+                                                                   uint16_t prop_id);
     bool putEdgeProperty(GraphTxnHandle txn, EdgeLabelId label_id, EdgeId eid, uint16_t prop_id,
                          const PropertyValue& value) override;
     bool deleteEdgeProperty(GraphTxnHandle txn, EdgeLabelId label_id, EdgeId eid, uint16_t prop_id) override;

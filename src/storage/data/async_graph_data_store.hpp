@@ -100,6 +100,48 @@ public:
         co_return result;
     }
 
+    folly::coro::Task<std::vector<LabelIdSet>> getVertexLabelsBatch(const std::vector<VertexId>& vids) override {
+        auto txn = txn_;
+        auto ids = vids;
+        auto result = co_await io_.dispatch(
+            [this, txn, ids = std::move(ids)]() { return store_.getVertexLabelsBatch(txn, ids); });
+        co_return std::move(result);
+    }
+
+    folly::coro::Task<std::vector<std::optional<Properties>>>
+    batchGetVertexProperties(const std::vector<VertexId>& vids, LabelId label_id,
+                             const std::vector<uint16_t>& projection) override {
+        auto txn = txn_;
+        auto ids = vids;
+        auto proj = projection;
+        auto result = co_await io_.dispatch([this, txn, label_id, ids = std::move(ids), proj = std::move(proj)]() {
+            if (proj.empty())
+                return store_.getVertexPropertiesBatch(txn, label_id, ids);
+            std::vector<std::optional<Properties>> out;
+            out.reserve(ids.size());
+            for (VertexId vid : ids) {
+                {
+                    Properties props;
+                    props.resize(*std::max_element(proj.begin(), proj.end()) + 1);
+                    bool found = false;
+                    for (uint16_t pid : proj) {
+                        auto pv = store_.getVertexProperty(txn, vid, label_id, pid);
+                        if (pv) {
+                            props[pid] = std::move(*pv);
+                            found = true;
+                        }
+                    }
+                    if (found)
+                        out.emplace_back(std::move(props));
+                    else
+                        out.emplace_back(std::nullopt);
+                }
+            }
+            return out;
+        });
+        co_return std::move(result);
+    }
+
     // ==================== Edge Properties ====================
 
     folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) override {
@@ -134,6 +176,16 @@ public:
                     return std::nullopt;
                 return props;
             });
+        co_return std::move(result);
+    }
+
+    folly::coro::Task<std::vector<std::optional<PropertyValue>>>
+    getEdgePropertyBatch(EdgeLabelId label_id, const std::vector<EdgeId>& edge_ids, uint16_t prop_id) override {
+        auto txn = txn_;
+        auto ids = edge_ids;
+        auto result = co_await io_.dispatch([this, txn, label_id, ids = std::move(ids), prop_id]() {
+            return store_.getEdgePropertyBatch(txn, label_id, ids, prop_id);
+        });
         co_return std::move(result);
     }
 
@@ -188,7 +240,7 @@ public:
 
     folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
     scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) override {
-        constexpr size_t BATCH = 1024;
+        constexpr size_t BATCH = 65536;
         auto txn = txn_;
         auto cursor = co_await io_.dispatch([this, txn, vid, direction, label_filter]() {
             return store_.createEdgeScanCursor(txn, vid, direction, label_filter);
@@ -216,7 +268,7 @@ public:
     folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry>>
     scanEdgesByType(EdgeLabelId label_id, std::optional<VertexId> src_filter,
                     std::optional<VertexId> dst_filter) override {
-        constexpr size_t BATCH = 1024;
+        constexpr size_t BATCH = 65536;
         auto txn = txn_;
         auto cursor = co_await io_.dispatch([this, txn, label_id, src_filter, dst_filter]() {
             return store_.createEdgeTypeScanCursor(txn, label_id, src_filter, dst_filter);

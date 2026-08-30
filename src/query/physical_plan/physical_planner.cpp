@@ -1338,11 +1338,25 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         output_types.push_back(binder::BoundType::VertexRef());
                     }
 
+                    bool full_edge_scan = v.direction == cypher::RelationshipDirection::UNDIRECTED && !edge_bound &&
+                                          !dst_bound && child_schema.size() == 1 && v.dst_label_ids.empty() &&
+                                          (v.src_variable.empty() || v.src_variable.starts_with("__anon_"));
+                    std::vector<EdgeLabelId> full_scan_labels;
+                    if (full_edge_scan) {
+                        if (v.edge_label_ids.empty()) {
+                            for (const auto& [lid, def] : ctx.edge_label_defs)
+                                full_scan_labels.push_back(lid);
+                        } else {
+                            full_scan_labels = v.edge_label_ids;
+                        }
+                    }
+
                     auto result = std::make_unique<ExpandPhysicalOp>(
                         v.src_variable, v.dst_variable, v.edge_variable, std::move(label_filters), v.direction, store,
                         std::move(child_schema), std::vector<binder::BoundType>(output_types), std::move(child_op),
                         std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, v.dst_label_ids,
-                        dst_bound, edge_bound, dst_existing, edge_existing);
+                        dst_bound, edge_bound, dst_existing, edge_existing, std::move(full_scan_labels),
+                        full_edge_scan);
                     auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                           std::move(output_types), TupleSlotLayout{}};
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);

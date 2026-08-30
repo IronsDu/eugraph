@@ -76,6 +76,7 @@ private:
     void evalPropertyRef(const binder::BoundPropertyRef& ref, const DataChunk& input, Column& result, size_t count);
     void evalDynamicPropertyRef(const binder::BoundDynamicPropertyRef& ref, const DataChunk& input, Column& result,
                                 size_t count);
+    std::unordered_map<LabelId, std::unordered_map<std::string, uint16_t>> dyn_prop_index_cache_;
     void evalFunctionCall(const binder::BoundFunctionCall& fc, const DataChunk& input, Column& result, size_t count);
 
     /// Return a reference to an input column (no real evaluation). Falls back

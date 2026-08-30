@@ -111,6 +111,129 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
         }
         output.count = row_count;
 
+        // Prefetch edge properties per LoadEdgeProp spec in one IO dispatch,
+        // instead of awaiting a single-edge fetch for every row.
+        std::vector<std::vector<std::optional<PropertyValue>>> edge_prop_cache(n_specs);
+        for (size_t i = 0; i < n_specs; ++i) {
+            const auto& spec = specs_[i];
+            if (spec.kind != ColumnSpec::Kind::LoadEdgeProp)
+                continue;
+            std::vector<EdgeId> ids;
+            ids.reserve(row_count);
+            std::vector<size_t> row_map;
+            row_map.reserve(row_count);
+            for (size_t row = 0; row < row_count; ++row) {
+                const auto& v = chunk->columns[spec.source_col].getValue(row);
+                EdgeId eid = INVALID_EDGE_ID;
+                EdgeLabelId elid = INVALID_EDGE_LABEL_ID;
+                if (std::holds_alternative<EdgeKey>(v)) {
+                    const auto& ek = std::get<EdgeKey>(v);
+                    eid = ek.id;
+                    elid = ek.label_id;
+                } else if (std::holds_alternative<EdgeValue>(v)) {
+                    const auto& ev = std::get<EdgeValue>(v);
+                    eid = ev.id;
+                    elid = ev.label_id;
+                }
+                if (eid != INVALID_EDGE_ID && elid != INVALID_EDGE_LABEL_ID && elid == spec.edge_label_id) {
+                    ids.push_back(eid);
+                    row_map.push_back(row);
+                }
+            }
+            edge_prop_cache[i].resize(row_count);
+            if (ids.empty())
+                continue;
+            auto values = co_await store_.getEdgePropertyBatch(spec.edge_label_id, ids, spec.prop_id);
+            for (size_t j = 0; j < ids.size() && j < values.size(); ++j)
+                edge_prop_cache[i][row_map[j]] = std::move(values[j]);
+        }
+
+        // Prefetch vertex labels + full properties for ConstructVertex specs in
+        // batch, instead of one labels fetch and one properties fetch per row.
+        std::vector<std::vector<std::optional<VertexValue>>> vertex_ctor_cache(n_specs);
+        for (size_t i = 0; i < n_specs; ++i) {
+            const auto& spec = specs_[i];
+            if (spec.kind != ColumnSpec::Kind::ConstructVertex)
+                continue;
+            vertex_ctor_cache[i].resize(row_count);
+
+            std::vector<VertexId> ref_vids;
+            std::vector<size_t> ref_rows;
+            std::vector<size_t> anon_rows;
+            for (size_t row = 0; row < row_count; ++row) {
+                const auto& v = chunk->columns[spec.source_col].getValue(row);
+                if (std::holds_alternative<VertexValue>(v)) {
+                    VertexValue vv = std::get<VertexValue>(v);
+                    if (vv.labels.has_value()) {
+                        LabelIdSet labels = *vv.labels;
+                        labels.erase(INVALID_LABEL_ID);
+                        vv.labels = std::move(labels);
+                    }
+                    vertex_ctor_cache[i][row] = std::move(vv);
+                    if (anon_label_id_ != INVALID_LABEL_ID &&
+                        !vertex_ctor_cache[i][row]->properties.count(anon_label_id_))
+                        anon_rows.push_back(row);
+                } else {
+                    VertexId vid = INVALID_VERTEX_ID;
+                    if (std::holds_alternative<VertexRef>(v))
+                        vid = std::get<VertexRef>(v).id;
+                    else if (std::holds_alternative<int64_t>(v))
+                        vid = static_cast<VertexId>(std::get<int64_t>(v));
+                    if (vid == INVALID_VERTEX_ID)
+                        continue;
+                    ref_vids.push_back(vid);
+                    ref_rows.push_back(row);
+                }
+            }
+
+            if (!ref_vids.empty()) {
+                auto labels_batch = co_await store_.getVertexLabelsBatch(ref_vids);
+                std::unordered_map<LabelId, std::vector<size_t>> rows_by_label;
+                for (size_t j = 0; j < ref_vids.size() && j < labels_batch.size(); ++j) {
+                    VertexValue vv;
+                    vv.id = ref_vids[j];
+                    LabelIdSet labels = labels_batch[j];
+                    labels.erase(INVALID_LABEL_ID);
+                    vv.labels = labels;
+                    vertex_ctor_cache[i][ref_rows[j]] = std::move(vv);
+                    for (LabelId lid : labels)
+                        rows_by_label[lid].push_back(j);
+                }
+
+                for (const auto& [lid, local_rows] : rows_by_label) {
+                    std::vector<VertexId> ids;
+                    ids.reserve(local_rows.size());
+                    for (size_t j : local_rows)
+                        ids.push_back(ref_vids[j]);
+                    auto props = co_await store_.batchGetVertexProperties(ids, lid, {});
+                    for (size_t j = 0; j < ids.size() && j < props.size(); ++j) {
+                        if (props[j].has_value())
+                            vertex_ctor_cache[i][ref_rows[local_rows[j]]]->properties[lid] = std::move(*props[j]);
+                    }
+                }
+
+                if (anon_label_id_ != INVALID_LABEL_ID) {
+                    auto anon_props = co_await store_.batchGetVertexProperties(ref_vids, anon_label_id_, {});
+                    for (size_t j = 0; j < ref_vids.size() && j < anon_props.size(); ++j) {
+                        if (anon_props[j].has_value())
+                            vertex_ctor_cache[i][ref_rows[j]]->properties[anon_label_id_] = std::move(*anon_props[j]);
+                    }
+                }
+            }
+
+            if (!anon_rows.empty()) {
+                std::vector<VertexId> ids;
+                ids.reserve(anon_rows.size());
+                for (size_t row : anon_rows)
+                    ids.push_back(vertex_ctor_cache[i][row]->id);
+                auto anon_props = co_await store_.batchGetVertexProperties(ids, anon_label_id_, {});
+                for (size_t j = 0; j < ids.size() && j < anon_props.size(); ++j) {
+                    if (anon_props[j].has_value())
+                        vertex_ctor_cache[i][anon_rows[j]]->properties[anon_label_id_] = std::move(*anon_props[j]);
+                }
+            }
+        }
+
         // Per-row caches so multiple specs reading the same source column share
         // the resolved id and (for Construct*) the constructed entity.
         // Per-row entity caches avoid re-issuing labels+properties I/O when
@@ -152,9 +275,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::LoadEdgeProp: {
-                    EdgeId eid = resolveEdgeId(*chunk, spec.source_col, row, rc.eid_col, rc.eid, rc.eid_label);
-                    if (eid != INVALID_EDGE_ID && rc.eid_label != INVALID_EDGE_LABEL_ID) {
-                        auto pv = co_await store_.getEdgeProperty(rc.eid_label, eid, spec.prop_id);
+                    if (row < edge_prop_cache[i].size()) {
+                        const auto& pv = edge_prop_cache[i][row];
                         if (pv.has_value())
                             output.columns[i].setValue(row, propertyValueToValue(*pv));
                         else
@@ -193,57 +315,11 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::ConstructVertex: {
-                    auto vit = rc.vertex_obj.find(spec.source_col);
-                    if (vit == rc.vertex_obj.end()) {
-                        auto src_val = chunk->columns[spec.source_col].getValue(row);
-                        // Source may already be a constructed VertexValue (e.g. from
-                        // CreateNode / Merge). Rebuilding from store via
-                        // getVertexProperties(vid, lid) only loads properties for
-                        // known labels and would silently drop label-less
-                        // properties (e.g. CREATE (n {x:1}) RETURN n.x). Use the
-                        // source object directly in that case.
-                        if (std::holds_alternative<VertexValue>(src_val)) {
-                            VertexValue vv = std::get<VertexValue>(src_val);
-                            if (vv.labels.has_value()) {
-                                LabelIdSet labels = *vv.labels;
-                                labels.erase(INVALID_LABEL_ID);
-                                rc.labels.emplace(spec.source_col, std::move(labels));
-                            }
-                            // REMOVE n:L 把属性迁移到 __anon__ 后，vertex 的 labels
-                            // 集合里没有 __anon__（迁移只写存储、不动 label 关联），
-                            // 上面的 vv.properties 因此不会包含 __anon__ 下的副本。
-                            // 这里补查一次，保证 properties(n) 能看到迁移后的属性。
-                            if (anon_label_id_ != INVALID_LABEL_ID && vv.properties.count(anon_label_id_) == 0) {
-                                auto anon_props = co_await store_.getVertexProperties(vv.id, anon_label_id_);
-                                if (anon_props.has_value())
-                                    vv.properties[anon_label_id_] = std::move(*anon_props);
-                            }
-                            vit = rc.vertex_obj.emplace(spec.source_col, std::move(vv)).first;
-                        } else {
-                            VertexId vid = resolveVertexId(*chunk, spec.source_col, row, rc.vid_col, rc.vid);
-                            if (vid == INVALID_VERTEX_ID)
-                                break;
-                            VertexValue vv;
-                            vv.id = vid;
-                            auto labels = co_await store_.getVertexLabels(vid);
-                            labels.erase(INVALID_LABEL_ID);
-                            vv.labels = labels;
-                            for (auto lid : labels) {
-                                auto props = co_await store_.getVertexProperties(vid, lid);
-                                if (props.has_value())
-                                    vv.properties[lid] = std::move(*props);
-                            }
-                            // 同上：补查 __anon__ 下的迁移属性。
-                            if (anon_label_id_ != INVALID_LABEL_ID && vv.properties.count(anon_label_id_) == 0) {
-                                auto anon_props = co_await store_.getVertexProperties(vid, anon_label_id_);
-                                if (anon_props.has_value())
-                                    vv.properties[anon_label_id_] = std::move(*anon_props);
-                            }
-                            rc.labels.emplace(spec.source_col, std::move(labels));
-                            vit = rc.vertex_obj.emplace(spec.source_col, std::move(vv)).first;
-                        }
+                    if (row < vertex_ctor_cache[i].size() && vertex_ctor_cache[i][row].has_value()) {
+                        output.columns[i].setValue(row, Value(*vertex_ctor_cache[i][row]));
+                    } else {
+                        output.columns[i].setNull(row);
                     }
-                    output.columns[i].setValue(row, Value(vit->second));
                     break;
                 }
                 case ColumnSpec::Kind::ConstructEdge: {

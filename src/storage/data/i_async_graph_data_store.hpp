@@ -51,6 +51,7 @@ public:
         co_return std::nullopt;
     }
     virtual folly::coro::Task<LabelIdSet> getVertexLabels(VertexId vid) = 0;
+    virtual folly::coro::Task<std::vector<LabelIdSet>> getVertexLabelsBatch(const std::vector<VertexId>& vids) = 0;
 
     // Edge Properties
     virtual folly::coro::Task<std::optional<Properties>> getEdgeProperties(EdgeLabelId label_id, EdgeId eid) = 0;
@@ -67,6 +68,10 @@ public:
             co_return (*props)[prop_id];
         co_return std::nullopt;
     }
+    /// Batch single-property fetch for multiple edges (same label, same property).
+    /// Reduces N+1 coroutine/IO dispatch overhead in projection extraction.
+    virtual folly::coro::Task<std::vector<std::optional<PropertyValue>>>
+    getEdgePropertyBatch(EdgeLabelId label_id, const std::vector<EdgeId>& edge_ids, uint16_t prop_id) = 0;
 
     /// Batch vertex property fetch for multiple vertices (same label, same projection).
     /// Reduces N+1 call overhead in Expand operator.

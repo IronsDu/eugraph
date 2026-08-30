@@ -285,8 +285,52 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
         return Value{};
     };
 
+    constexpr uint16_t kMissingProp = std::numeric_limits<uint16_t>::max();
+    auto propIdFor = [&](LabelId label_id) -> uint16_t {
+        auto& index = dyn_prop_index_cache_[label_id];
+        auto hit = index.find(ref.property);
+        if (hit != index.end())
+            return hit->second;
+
+        const LabelDef* ldef = nullptr;
+        if (eval_ctx_.label_defs) {
+            auto it = eval_ctx_.label_defs->find(label_id);
+            if (it != eval_ctx_.label_defs->end())
+                ldef = &it->second;
+        }
+        if (!ldef)
+            ldef = eval_ctx_.catalog->lookupLabel(label_id);
+
+        if (ldef) {
+            for (const auto& pd : ldef->properties) {
+                if (pd.name == ref.property) {
+                    index.emplace(ref.property, pd.id);
+                    return pd.id;
+                }
+            }
+            return kMissingProp;
+        }
+
+        if (eval_ctx_.meta) {
+            auto loaded = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(label_id));
+            if (loaded) {
+                for (const auto& pd : loaded->properties) {
+                    if (pd.name == ref.property) {
+                        index.emplace(ref.property, pd.id);
+                        return pd.id;
+                    }
+                }
+            }
+        }
+        return kMissingProp;
+    };
+
     for (size_t i = 0; i < count; ++i) {
-        Value ov = obj.column->getValue(i);
+        Value ov;
+        if (obj.column->form == VectorForm::FLAT && obj.column->buffer && !obj.column->buffer->vertex_data.empty())
+            ov = obj.column->buffer->vertex_data[i];
+        else
+            ov = obj.column->getValue(i);
         Value r;
         if (std::holds_alternative<VertexValue>(ov)) {
             auto& vertex = const_cast<VertexValue&>(std::get<VertexValue>(ov));
@@ -326,38 +370,16 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                 }
             }
             for (const auto& [label_id, props_vec] : vertex.properties) {
-                const LabelDef* ldef = nullptr;
-                if (eval_ctx_.label_defs) {
-                    auto it = eval_ctx_.label_defs->find(label_id);
-                    if (it != eval_ctx_.label_defs->end())
-                        ldef = &it->second;
-                }
-                if (!ldef)
-                    ldef = eval_ctx_.catalog->lookupLabel(label_id);
-                // Dynamic labels (e.g. __anon__) may only be in the meta store.
-                if (!ldef && eval_ctx_.meta) {
-                    auto loaded = folly::coro::blockingWait(eval_ctx_.meta->getLabelDefById(label_id));
-                    if (loaded) {
-                        auto& inserted = label_def_cache_.emplace_back(std::make_unique<LabelDef>(std::move(*loaded)));
-                        ldef = inserted.get();
-                    }
-                }
-                if (!ldef)
-                    continue;
-                for (const auto& pd : ldef->properties) {
-                    if (pd.name == ref.property) {
-                        if (pd.id < props_vec.size()) {
-                            const auto& pv = props_vec[pd.id];
-                            if (pv.has_value())
-                                r = pvToValue(*pv);
-                        }
-                        goto found;
-                    }
+                const uint16_t prop_id = propIdFor(label_id);
+                if (prop_id != kMissingProp && prop_id < props_vec.size()) {
+                    const auto& pv = props_vec[prop_id];
+                    if (pv.has_value())
+                        r = pvToValue(*pv);
                 }
             }
-        found:;
-            // Fallback: if the cached LabelDef had no property definitions, try
-            // reloading from meta store (which may have been updated by DDL mid-query).
+            // Fallback: DDL may have created the property mid-query after the
+            // static LabelDef snapshot was taken. Reload from meta to preserve
+            // dynamic-property visibility for freshly created labels/props.
             if (std::holds_alternative<std::monostate>(r) && eval_ctx_.meta) {
                 for (const auto& [label_id, props_vec] : vertex.properties) {
                     if (props_vec.empty())
