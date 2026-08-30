@@ -80,6 +80,40 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     dst_data[i] = VertexRef(e.dst_vertex_id);
                 }
                 co_yield std::move(out);
+
+                // UNDIRECTED semantics: an asymmetric edge matches once from
+                // each endpoint. The type index stores the physical direction
+                // only, so emit a reversed copy for every non-self edge.
+                size_t reverse_count = 0;
+                for (size_t i = 0; i < n; ++i) {
+                    if ((*edge_batch)[i].src_vertex_id != (*edge_batch)[i].dst_vertex_id)
+                        ++reverse_count;
+                }
+                if (reverse_count == 0)
+                    continue;
+
+                DataChunk reverse;
+                reverse.count = reverse_count;
+                reverse.addColumn(output_types_[0].kind);
+                reverse.addColumn(binder::BoundTypeKind::EDGE_KEY);
+                reverse.addColumn(binder::BoundTypeKind::VERTEX_REF);
+                reverse.columns[0].reserve(reverse_count);
+                reverse.columns[1].reserve(reverse_count);
+                reverse.columns[2].reserve(reverse_count);
+                auto* rsrc_data = reverse.columns[0].buffer->vertex_ref_data.data();
+                auto* redge_data = reverse.columns[1].buffer->edge_key_data.data();
+                auto* rdst_data = reverse.columns[2].buffer->vertex_ref_data.data();
+                size_t w = 0;
+                for (size_t i = 0; i < n; ++i) {
+                    const auto& e = (*edge_batch)[i];
+                    if (e.src_vertex_id == e.dst_vertex_id)
+                        continue;
+                    rsrc_data[w] = VertexRef(e.dst_vertex_id);
+                    redge_data[w] = EdgeKey(e.edge_id, e.dst_vertex_id, e.src_vertex_id, lid, e.seq);
+                    rdst_data[w] = VertexRef(e.src_vertex_id);
+                    ++w;
+                }
+                co_yield std::move(reverse);
             }
         }
         co_return;
