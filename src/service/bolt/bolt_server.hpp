@@ -142,7 +142,7 @@ public:
     ListenerAcceptCallback(BoltServer* server, folly::EventBase* evb) : server_(server), evb_(evb) {}
 
     void connectionAccepted(folly::NetworkSocket fd, const folly::SocketAddress& clientAddr,
-                            AcceptInfo info) noexcept override {
+                            AcceptInfo /*info*/) noexcept override {
         server_->handleAccepted(fd, clientAddr, evb_);
     }
     void acceptError(const std::exception& ex) noexcept override;
