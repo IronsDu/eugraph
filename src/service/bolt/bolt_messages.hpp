@@ -37,6 +37,7 @@ constexpr uint8_t FAILURE = 0x7F;
 // Result types
 constexpr uint8_t NODE = 0x4E;
 constexpr uint8_t RELATIONSHIP = 0x52;
+constexpr uint8_t UNBOUND_RELATIONSHIP = 0x72;
 constexpr uint8_t PATH = 0x50;
 
 // Temporal types (v5.0+)

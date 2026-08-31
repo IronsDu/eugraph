@@ -258,8 +258,33 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
                 last_node_id = node.id;
             } else if (std::holds_alternative<EdgeValue>(elem)) {
                 const auto& edge = std::get<EdgeValue>(elem);
-                auto edge_bolt = valueToBolt(elem, label_defs, edge_label_defs, bolt_version);
-                rels.push_back(PS{std::move(edge_bolt)});
+
+                std::string type_name;
+                auto elit = edge_label_defs.find(edge.label_id);
+                if (elit != edge_label_defs.end())
+                    type_name = elit->second.name;
+
+                std::unordered_map<std::string, PS> props;
+                if (edge.properties.has_value() && elit != edge_label_defs.end()) {
+                    for (const auto& pd : elit->second.properties) {
+                        if (pd.id < edge.properties->size()) {
+                            const auto& pv = (*edge.properties)[pd.id];
+                            if (pv.has_value())
+                                props[pd.name] = PS{propertyToBolt(*pv, bolt_version)};
+                        }
+                    }
+                }
+
+                // PATH relationships use the unbound relationship signature:
+                // id, type, properties and, in Bolt v5, element_id.
+                packstream::PackStreamStruct rel_s;
+                rel_s.tag = tags::UNBOUND_RELATIONSHIP;
+                rel_s.fields.push_back(PS{static_cast<int64_t>(edge.id)});
+                rel_s.fields.push_back(PS{std::move(type_name)});
+                rel_s.fields.push_back(PS{std::move(props)});
+                if (boltMajorVersion(bolt_version) >= 5)
+                    rel_s.fields.push_back(PS{std::to_string(static_cast<int64_t>(edge.id))});
+                rels.push_back(PS{std::move(rel_s)});
                 int64_t rel_index = static_cast<int64_t>(rels.size());
                 pending_rel = edge.src_id == last_node_id ? rel_index : -rel_index;
             }

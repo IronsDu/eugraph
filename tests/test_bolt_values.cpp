@@ -512,3 +512,70 @@ TEST_F(BoltValueMappingTest, ConvertDuration) {
     EXPECT_EQ(std::get<int64_t>(s.fields[2].value), 7200);
     EXPECT_EQ(std::get<int64_t>(s.fields[3].value), 500000);
 }
+
+// ==================== Path encoding ====================
+
+TEST_F(BoltValueMappingTest, ConvertPathRelationshipIsUnbound) {
+    VertexValue a;
+    a.id = 1;
+    a.labels = LabelIdSet{1};
+    VertexValue b;
+    b.id = 2;
+    b.labels = LabelIdSet{1};
+
+    EdgeValue e;
+    e.id = 100;
+    e.src_id = 1;
+    e.dst_id = 2;
+    e.label_id = 10;
+    e.properties = Properties(1);
+    (*e.properties)[0] = PropertyValue{int64_t{2020}};
+
+    PathValue path;
+    path.elements.push_back(ValueStorage{Value(std::move(a))});
+    path.elements.push_back(ValueStorage{Value(std::move(e))});
+    path.elements.push_back(ValueStorage{Value(std::move(b))});
+
+    auto result = valueToBolt(Value(std::move(path)), label_defs_, edge_label_defs_);
+    ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
+    auto& path_struct = std::get<packstream::PackStreamStruct>(result);
+    EXPECT_EQ(path_struct.tag, tags::PATH);
+    ASSERT_EQ(path_struct.fields.size(), 3u);
+
+    auto& nodes = std::get<PSList>(path_struct.fields[0].value);
+    auto& rels = std::get<PSList>(path_struct.fields[1].value);
+    auto& sequence = std::get<PSList>(path_struct.fields[2].value);
+    ASSERT_EQ(nodes.size(), 2u);
+    ASSERT_EQ(rels.size(), 1u);
+    ASSERT_EQ(sequence.size(), 2u);
+
+    auto& rel = std::get<packstream::PackStreamStruct>(rels[0].value);
+    EXPECT_EQ(rel.tag, tags::UNBOUND_RELATIONSHIP);
+    ASSERT_EQ(rel.fields.size(), 4u);
+    EXPECT_EQ(std::get<int64_t>(rel.fields[0].value), 100);         // id
+    EXPECT_EQ(std::get<std::string>(rel.fields[1].value), "KNOWS"); // type
+    EXPECT_EQ(std::get<std::string>(rel.fields[3].value), "100");   // element_id
+
+    EXPECT_EQ(std::get<int64_t>(sequence[0].value), 1); // rel index
+    EXPECT_EQ(std::get<int64_t>(sequence[1].value), 1); // next node index
+}
+
+TEST_F(BoltValueMappingTest, ConvertStandaloneRelationshipKeepsFullStruct) {
+    EdgeValue e;
+    e.id = 100;
+    e.src_id = 1;
+    e.dst_id = 2;
+    e.label_id = 10;
+    e.properties = Properties(1);
+    (*e.properties)[0] = PropertyValue{int64_t{2020}};
+
+    auto result = valueToBolt(Value(std::move(e)), label_defs_, edge_label_defs_);
+    ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
+    auto& rel = std::get<packstream::PackStreamStruct>(result);
+    EXPECT_EQ(rel.tag, tags::RELATIONSHIP);
+    ASSERT_EQ(rel.fields.size(), 8u);
+    EXPECT_EQ(std::get<int64_t>(rel.fields[0].value), 100);
+    EXPECT_EQ(std::get<int64_t>(rel.fields[1].value), 1);
+    EXPECT_EQ(std::get<int64_t>(rel.fields[2].value), 2);
+    EXPECT_EQ(std::get<std::string>(rel.fields[3].value), "KNOWS");
+}

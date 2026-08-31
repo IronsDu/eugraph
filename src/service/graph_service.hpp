@@ -34,6 +34,9 @@ public:
     explicit GraphService(GraphManager& gm) : gm_(gm) {}
 
     GraphInstance* resolveGraph(const std::string& name);
+    /// Executor used for Cypher evaluation; Bolt uses it to run query
+    /// coroutines off the socket EventBase.
+    folly::Executor* computeExecutor();
 
     // Graph lifecycle
     GraphEntry createGraph(const std::string& name);
