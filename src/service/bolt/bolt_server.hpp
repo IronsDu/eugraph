@@ -9,6 +9,7 @@
 #include <folly/io/async/EventBaseManager.h>
 
 #include <atomic>
+#include <deque>
 #include <memory>
 #include <thread>
 #include <unordered_set>
@@ -47,6 +48,8 @@ public:
 private:
     void processHandshake();
     void processMessage();
+    void dispatchMessage(std::vector<uint8_t> message);
+    void finishMessage(std::vector<uint8_t> response);
     void sendResponse(std::vector<uint8_t> data);
     void closeConnection();
 
@@ -80,6 +83,12 @@ private:
     std::unique_ptr<folly::IOBuf> write_buf_;
     bool writing_ = false;
     std::vector<uint8_t> message_accumulator_;
+
+    // Messages are decoded on the socket EventBase. Query processing is
+    // suspended via coroutines, so keep a FIFO of decoded messages and run
+    // one BoltSession coroutine at a time per connection.
+    std::deque<std::vector<uint8_t>> pending_messages_;
+    bool message_processing_ = false;
 };
 
 /// Bolt protocol TCP server.

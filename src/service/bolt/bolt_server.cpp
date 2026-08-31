@@ -3,7 +3,8 @@
 #include "service/bolt/packstream/decoder.hpp"
 #include "service/bolt/websocket.hpp"
 
-#include <folly/experimental/coro/BlockingWait.h>
+#include <folly/coro/Invoke.h>
+#include <folly/coro/Task.h>
 #include <folly/io/async/EventBaseManager.h>
 #include <spdlog/spdlog.h>
 
@@ -170,29 +171,15 @@ void BoltConnection::processMessage() {
                 continue;
             }
 
-            // Decode the assembled message
-            std::vector<uint8_t> response;
-            try {
-                response = folly::coro::blockingWait(
-                    session_.processMessage(message_accumulator_.data(), message_accumulator_.size()));
-            } catch (const packstream::DecodeError& e) {
-                spdlog::error("[bolt] decode error: {}", e.what());
-                response = session_.makeFailure("ProtocolError", e.what());
-            } catch (const std::exception& e) {
-                spdlog::error("[bolt] session error: {}", e.what());
-                response = session_.makeFailure("DatabaseError", e.what());
-            }
-
+            // Hand the assembled message to the coroutine pipeline and
+            // return immediately. This read callback must not block the
+            // EventBase; other Bolt connections share this thread.
+            std::vector<uint8_t> message = std::move(message_accumulator_);
             message_accumulator_.clear();
-
-            if (session_.isClosed()) {
-                if (!response.empty())
-                    sendResponse(std::move(response));
-                closeConnection();
-                return;
-            }
-
-            sendResponse(std::move(response));
+            if (message_processing_)
+                pending_messages_.push_back(std::move(message));
+            else
+                dispatchMessage(std::move(message));
             // Continue loop for pipelined messages
         } else {
             // Data chunk
@@ -226,8 +213,70 @@ void BoltConnection::processMessage() {
     }
 }
 
+void BoltConnection::dispatchMessage(std::vector<uint8_t> message) {
+    message_processing_ = true;
+    auto self = shared_from_this();
+
+    // Run BoltSession/query evaluation on the graph compute pool so the
+    // socket EventBase stays free for other connections. Responses and
+    // per-connection bookkeeping are marshalled back to this socket's
+    // EventBase via SemiFuture::via.
+    folly::Executor* compute = service_.computeExecutor();
+    folly::Executor* fallback = socket_->getEventBase();
+    if (!compute)
+        compute = fallback;
+    folly::Executor::KeepAlive<> compute_ka = compute;
+
+    auto task = folly::coro::co_invoke(
+        [self, message = std::move(message)]() mutable -> folly::coro::Task<std::vector<uint8_t>> {
+            try {
+                co_return co_await self->session_.processMessage(message.data(), message.size());
+            } catch (const packstream::DecodeError& e) {
+                spdlog::error("[bolt] decode error: {}", e.what());
+                co_return self->session_.makeFailure("ProtocolError", e.what());
+            } catch (const std::exception& e) {
+                spdlog::error("[bolt] session error: {}", e.what());
+                co_return self->session_.makeFailure("DatabaseError", e.what());
+            }
+        });
+    std::move(task)
+        .scheduleOn(std::move(compute_ka))
+        .start()
+        .via(socket_->getEventBase())
+        .thenTry([self](folly::Try<std::vector<uint8_t>>&& result) {
+            std::vector<uint8_t> response;
+            if (result.hasValue()) {
+                response = std::move(result.value());
+            } else if (result.hasException()) {
+                spdlog::error("[bolt] async message failed: {}", result.exception().what());
+            }
+            self->finishMessage(std::move(response));
+        });
+}
+
+void BoltConnection::finishMessage(std::vector<uint8_t> response) {
+    if (phase_ == Phase::CLOSED)
+        return;
+
+    if (session_.isClosed()) {
+        if (!response.empty())
+            sendResponse(std::move(response));
+        closeConnection();
+        return;
+    }
+
+    sendResponse(std::move(response));
+    message_processing_ = false;
+
+    if (!pending_messages_.empty()) {
+        auto next = std::move(pending_messages_.front());
+        pending_messages_.pop_front();
+        dispatchMessage(std::move(next));
+    }
+}
+
 void BoltConnection::sendResponse(std::vector<uint8_t> data) {
-    if (data.empty())
+    if (data.empty() || phase_ == Phase::CLOSED || !socket_)
         return;
 
     // Streaming PULL responses are already Bolt chunked, possibly containing

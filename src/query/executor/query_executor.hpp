@@ -62,6 +62,10 @@ public:
     folly::coro::Task<std::shared_ptr<StreamContext>>
     prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params = {});
 
+    folly::Executor* computeExecutor() const {
+        return compute_pool_.get();
+    }
+
 private:
     folly::coro::Task<void> handleIndexDdl(const IndexDdlStatement& stmt, ExecutionResult& result);
     IAsyncGraphDataStore& async_data_;

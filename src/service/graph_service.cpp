@@ -121,6 +121,11 @@ std::vector<ProcedureShowEntry> builtinProcedureShowEntries() {
 
 } // namespace
 
+folly::Executor* GraphService::computeExecutor() {
+    auto* inst = gm_.getGraph(GraphManager::kDefaultGraphName);
+    return inst && inst->executor ? inst->executor->computeExecutor() : nullptr;
+}
+
 GraphInstance* GraphService::resolveGraph(const std::string& name) {
     auto* inst = gm_.getGraph(name);
     if (!inst)
