@@ -35,7 +35,7 @@ def test_java_driver_path_return():
         env=env,
     )
     assert java.returncode == 0, java.stderr or java.stdout
-    assert "Java driver path test passed" in java.stdout
+    assert "Java driver integration test passed" in java.stdout
 
 
 if __name__ == "__main__":
