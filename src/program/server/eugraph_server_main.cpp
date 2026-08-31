@@ -25,6 +25,7 @@ struct ServerConfig {
     std::string data_dir = "./eugraph-data";
     int compute_threads = 4;
     int io_threads = 4;
+    int bolt_io_threads = 1;
 };
 
 static ServerConfig parseArgs(int argc, char* argv[]) {
@@ -39,11 +40,14 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
             config.compute_threads = std::atoi(argv[++i]);
         } else if ((arg == "--bolt-port") && i + 1 < argc) {
             config.bolt_port = std::atoi(argv[++i]);
+        } else if ((arg == "--bolt-io-threads") && i + 1 < argc) {
+            config.bolt_io_threads = std::atoi(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: eugraph-server [options]\n"
                       << "Options:\n"
                       << "  --port, -p <port>        Server port (default: 9090)\n"
                       << "  --bolt-port <port>      Bolt protocol port (default: 7687, 0 to disable)\n"
+                      << "  --bolt-io-threads <n>   Bolt EventBase threads (default: 1)\n"
                       << "  --data-dir, -d <path>    Data directory (default: ./eugraph-data)\n"
                       << "  --threads, -t <count>    Compute threads (default: 4)\n"
                       << "  --help, -h               Show this help\n";
@@ -93,8 +97,8 @@ int main(int argc, char* argv[]) {
     // Start Bolt protocol server (if enabled)
     std::unique_ptr<service::bolt::BoltServer> bolt_server;
     if (config.bolt_port > 0) {
-        bolt_server =
-            std::make_unique<service::bolt::BoltServer>(*graph_service, static_cast<uint16_t>(config.bolt_port));
+        bolt_server = std::make_unique<service::bolt::BoltServer>(
+            *graph_service, static_cast<uint16_t>(config.bolt_port), static_cast<size_t>(config.bolt_io_threads));
         bolt_server->start();
         spdlog::info("Bolt server listening on port {}...", config.bolt_port);
     }

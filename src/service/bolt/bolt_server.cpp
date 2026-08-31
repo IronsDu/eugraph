@@ -14,6 +14,13 @@ namespace eugraph {
 namespace service {
 namespace bolt {
 
+struct ListenerState {
+    std::shared_ptr<folly::EventBase> evb;
+    std::shared_ptr<folly::AsyncServerSocket> socket;
+    std::unique_ptr<ListenerAcceptCallback> accept_callback;
+    std::thread thread;
+};
+
 // ==================== BoltConnection ====================
 
 BoltConnection::BoltConnection(folly::AsyncSocket::UniquePtr socket, service::GraphService& service)
@@ -518,7 +525,8 @@ void BoltConnection::processWsFrame() {
 
 // ==================== BoltServer ====================
 
-BoltServer::BoltServer(service::GraphService& service, uint16_t port) : service_(service), port_(port) {}
+BoltServer::BoltServer(service::GraphService& service, uint16_t port, size_t io_threads)
+    : service_(service), port_(port), io_threads_(io_threads > 0 ? io_threads : 1) {}
 
 BoltServer::~BoltServer() {
     stop();
@@ -528,60 +536,74 @@ void BoltServer::start() {
     if (running_.exchange(true))
         return;
 
-    thread_ = std::thread([this]() {
-        evb_ = folly::EventBaseManager::get()->getEventBase();
+    for (size_t i = 0; i < io_threads_; ++i) {
+        auto state = std::make_unique<ListenerState>();
+        state->evb = std::make_shared<folly::EventBase>();
 
-        server_socket_ = folly::AsyncServerSocket::newSocket(evb_);
-        server_socket_->setReusePortEnabled(true);
-
+        state->socket = folly::AsyncServerSocket::newSocket(state->evb.get());
+        state->socket->setReusePortEnabled(true);
         folly::SocketAddress addr;
         addr.setFromLocalPort(port_);
-        server_socket_->bind(addr);
-        server_socket_->listen(128);
-        server_socket_->addAcceptCallback(this, evb_);
-        server_socket_->startAccepting();
+        state->socket->bind(addr);
+        state->socket->listen(128);
+        state->accept_callback = std::make_unique<ListenerAcceptCallback>(this, state->evb.get());
+        state->socket->addAcceptCallback(state->accept_callback.get(), state->evb.get());
+        state->socket->startAccepting();
 
-        spdlog::info("[bolt] server listening on port {}", port_);
-
-        evb_->loopForever();
-
-        spdlog::info("[bolt] server stopped");
-    });
+        state->thread = std::thread([evb = state->evb]() { evb->loopForever(); });
+        listeners_.push_back(std::move(state));
+        spdlog::info("[bolt] listener {} started on port {}", i, port_);
+    }
 }
 
 void BoltServer::stop() {
     if (!running_.exchange(false))
         return;
 
-    if (evb_) {
-        evb_->terminateLoopSoon();
+    for (auto& state : listeners_) {
+        if (state->evb)
+            state->evb->terminateLoopSoon();
     }
-    if (thread_.joinable()) {
-        thread_.join();
+    for (auto& state : listeners_) {
+        if (state->thread.joinable())
+            state->thread.join();
     }
-    server_socket_.reset();
-    // Close all active connections
-    auto conns = std::move(active_connections_);
+    listeners_.clear();
+
+    std::vector<std::shared_ptr<BoltConnection>> conns;
+    {
+        std::lock_guard<std::mutex> lock(connections_mu_);
+        conns.assign(active_connections_.begin(), active_connections_.end());
+        active_connections_.clear();
+    }
     for (auto& conn : conns) {
         conn->server_ = nullptr;
         conn->closeConnection();
     }
 }
 
-void BoltServer::connectionAccepted(folly::NetworkSocket fd, const folly::SocketAddress& clientAddr,
-                                    AcceptInfo /*info*/) noexcept {
+void BoltServer::handleAccepted(folly::NetworkSocket fd, const folly::SocketAddress& clientAddr,
+                                folly::EventBase* evb) noexcept {
     spdlog::info("[bolt] accepted connection from {}", clientAddr.describe());
 
-    auto async_socket = folly::AsyncSocket::newSocket(evb_, fd);
+    auto async_socket = folly::AsyncSocket::newSocket(evb, fd);
     auto conn = std::make_shared<BoltConnection>(std::move(async_socket), service_);
     conn->server_ = this;
     conn->setBookmarkGenerator([this]() { return nextBookmark(); });
     conn->setBoltPort(port_);
-    active_connections_.insert(conn);
+    {
+        std::lock_guard<std::mutex> lock(connections_mu_);
+        active_connections_.insert(conn);
+    }
     conn->start();
 }
 
+void ListenerAcceptCallback::acceptError(const std::exception& ex) noexcept {
+    spdlog::error("[bolt] accept error: {}", ex.what());
+}
+
 void BoltServer::removeConnection(BoltConnection* conn) {
+    std::lock_guard<std::mutex> lock(connections_mu_);
     // Linear search: typical deployment has few connections
     for (auto it = active_connections_.begin(); it != active_connections_.end(); ++it) {
         if (it->get() == conn) {
@@ -589,10 +611,6 @@ void BoltServer::removeConnection(BoltConnection* conn) {
             return;
         }
     }
-}
-
-void BoltServer::acceptError(const std::exception& ex) noexcept {
-    spdlog::error("[bolt] accept error: {}", ex.what());
 }
 
 } // namespace bolt

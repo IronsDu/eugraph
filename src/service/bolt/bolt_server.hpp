@@ -11,6 +11,7 @@
 #include <atomic>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <unordered_set>
 
@@ -19,6 +20,7 @@ namespace service {
 namespace bolt {
 
 class BoltServer;
+struct ListenerState;
 
 /// Manages per-connection Bolt protocol state and I/O.
 /// Each connection gets one BoltConnection.
@@ -93,10 +95,10 @@ private:
 
 /// Bolt protocol TCP server.
 /// Listens on the given port and accepts Neo4j driver connections.
-class BoltServer : public folly::AsyncServerSocket::AcceptCallback {
+class BoltServer {
 public:
-    BoltServer(service::GraphService& service, uint16_t port);
-    ~BoltServer() override;
+    BoltServer(service::GraphService& service, uint16_t port, size_t io_threads = 1);
+    ~BoltServer();
 
     BoltServer(const BoltServer&) = delete;
     BoltServer& operator=(const BoltServer&) = delete;
@@ -111,11 +113,6 @@ public:
         return port_;
     }
 
-    // AcceptCallback
-    void connectionAccepted(folly::NetworkSocket fd, const folly::SocketAddress& clientAddr,
-                            AcceptInfo /*info*/) noexcept override;
-    void acceptError(const std::exception& ex) noexcept override;
-
     void removeConnection(BoltConnection* conn);
 
     uint64_t nextBookmark() {
@@ -123,15 +120,36 @@ public:
     }
 
 private:
+    friend class ListenerAcceptCallback;
+
+    void handleAccepted(folly::NetworkSocket fd, const folly::SocketAddress& clientAddr,
+                        folly::EventBase* evb) noexcept;
+
     service::GraphService& service_;
     uint16_t port_;
+    size_t io_threads_ = 1;
 
-    folly::EventBase* evb_ = nullptr;
-    std::shared_ptr<folly::AsyncServerSocket> server_socket_;
-    std::thread thread_;
+    std::vector<std::unique_ptr<ListenerState>> listeners_;
     std::atomic<bool> running_{false};
     std::atomic<uint64_t> bookmark_counter_{0};
+
+    std::mutex connections_mu_;
     std::unordered_set<std::shared_ptr<BoltConnection>> active_connections_;
+};
+
+class ListenerAcceptCallback : public folly::AsyncServerSocket::AcceptCallback {
+public:
+    ListenerAcceptCallback(BoltServer* server, folly::EventBase* evb) : server_(server), evb_(evb) {}
+
+    void connectionAccepted(folly::NetworkSocket fd, const folly::SocketAddress& clientAddr,
+                            AcceptInfo info) noexcept override {
+        server_->handleAccepted(fd, clientAddr, evb_);
+    }
+    void acceptError(const std::exception& ex) noexcept override;
+
+private:
+    BoltServer* server_;
+    folly::EventBase* evb_;
 };
 
 } // namespace bolt
