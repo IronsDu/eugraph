@@ -30,6 +30,8 @@ struct StreamContext {
     folly::coro::AsyncGenerator<DataChunk> gen;
     GraphTxnHandle txn = INVALID_GRAPH_TXN;
     IAsyncGraphDataStore& store;
+    // Owns the transaction-bound store used by the physical plan.
+    std::unique_ptr<IAsyncGraphDataStore> query_store;
     bool should_commit = true;
     // Owned by StreamContext so references in physical operators remain valid
     std::unordered_map<LabelId, LabelDef> label_defs;

@@ -28,6 +28,10 @@ public:
         txn_ = txn;
     }
 
+    std::unique_ptr<IAsyncGraphDataStore> forkTransaction(GraphTxnHandle txn) override {
+        return std::make_unique<AsyncGraphDataStore>(store_, io_, txn);
+    }
+
     // ==================== Transaction ====================
 
     folly::coro::Task<GraphTxnHandle> beginTran() override {

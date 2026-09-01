@@ -506,21 +506,16 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
     int64_t limit = msg.n;
 
     try {
-        // Read from the async generator and encode RECORD messages
+        // Read the async generator to completion. Early-returning on LIMIT
+        // would destroy generator-owned cursors on the caller (compute pool)
+        // thread instead of the storage IO thread.
         while (auto chunk = co_await stream_ctx_->gen.next()) {
             spdlog::info("[handlePull] got chunk: count={} columns={}", chunk->count, chunk->numColumns());
             auto rows = chunk->toRows();
             spdlog::info("[handlePull] converted to {} rows", rows.size());
             for (auto& row : rows) {
-                if (limit >= 0 && fetched >= limit) {
-                    // We've reached the limit but there may be more.
-                    // For simplicity, we stop here. A proper impl would save state.
-                    // Actually: n=-1 means all, n>=0 means specific count.
-                    // If we fetched enough, break out of row loop.
-                    // But we already consumed from the generator. For now,
-                    // we just continue if limit is reached.
-                    goto done_fetching;
-                }
+                if (limit >= 0 && fetched >= limit)
+                    continue;
 
                 std::vector<packstream::Value> record_fields;
                 for (auto& val : row) {
@@ -530,7 +525,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
                 fetched++;
             }
         }
-    done_fetching:
+
         // Commit auto-commit transaction
         if (!in_transaction_ && stream_ctx_->should_commit) {
             co_await stream_ctx_->store.commitTran(stream_ctx_->txn);
@@ -546,9 +541,9 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         std::unordered_map<std::string, packstream::Value> meta;
         meta["type"] = std::string{"r"};
         meta["t_last"] = static_cast<int64_t>(0);
-        if (limit >= 0 && fetched >= limit) {
-            meta["has_more"] = true;
-        }
+        // The generator was consumed to completion above, so there is never
+        // another PULL to serve.
+        meta["has_more"] = false;
         if (stream_ctx_->should_commit && next_bookmark_fn_)
             meta["bookmark"] = std::string{"eugraph:bookmark:" + std::to_string(next_bookmark_fn_())};
 
