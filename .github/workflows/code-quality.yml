@@ -51,7 +51,47 @@ jobs:
           git \
           pkg-config \
           ninja-build \
-          ccache
+          ccache \
+          maven \
+          python3 \
+          python3-pip \
+          python3-venv
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - name: Install Neo4j Java driver
+      run: |
+        mkdir -p "$RUNNER_TEMP/neo4j-driver"
+        cat > "$RUNNER_TEMP/neo4j-driver/pom.xml" <<'EOF'
+        <project xmlns="http://maven.apache.org/POM/4.0.0">
+          <modelVersion>4.0.0</modelVersion>
+          <groupId>eugraph</groupId>
+          <artifactId>bolt-java-driver</artifactId>
+          <version>1.0</version>
+          <dependencies>
+            <dependency>
+              <groupId>org.neo4j.driver</groupId>
+              <artifactId>neo4j-java-driver</artifactId>
+              <version>5.28.14</version>
+            </dependency>
+          </dependencies>
+        </project>
+        EOF
+        mvn -q -f "$RUNNER_TEMP/neo4j-driver/pom.xml" dependency:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/neo4j-driver/lib"
+        sudo mkdir -p /usr/share/neo4j/lib
+        sudo cp "$RUNNER_TEMP/neo4j-driver/lib/"*.jar /usr/share/neo4j/lib/
+
+    - name: Install Python test dependencies (Bolt integration tests)
+      run: pip install neo4j pytest --break-system-packages
 
     - name: Export GitHub Actions cache environment variables
       uses: actions/github-script@v7
@@ -192,7 +232,47 @@ jobs:
           git \
           pkg-config \
           ninja-build \
-          ccache
+          ccache \
+          maven \
+          python3 \
+          python3-pip \
+          python3-venv
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - name: Install Neo4j Java driver
+      run: |
+        mkdir -p "$RUNNER_TEMP/neo4j-driver"
+        cat > "$RUNNER_TEMP/neo4j-driver/pom.xml" <<'EOF'
+        <project xmlns="http://maven.apache.org/POM/4.0.0">
+          <modelVersion>4.0.0</modelVersion>
+          <groupId>eugraph</groupId>
+          <artifactId>bolt-java-driver</artifactId>
+          <version>1.0</version>
+          <dependencies>
+            <dependency>
+              <groupId>org.neo4j.driver</groupId>
+              <artifactId>neo4j-java-driver</artifactId>
+              <version>5.28.14</version>
+            </dependency>
+          </dependencies>
+        </project>
+        EOF
+        mvn -q -f "$RUNNER_TEMP/neo4j-driver/pom.xml" dependency:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/neo4j-driver/lib"
+        sudo mkdir -p /usr/share/neo4j/lib
+        sudo cp "$RUNNER_TEMP/neo4j-driver/lib/"*.jar /usr/share/neo4j/lib/
+
+    - name: Install Python test dependencies (Bolt integration tests)
+      run: pip install neo4j pytest --break-system-packages
 
     - name: Export GitHub Actions cache environment variables
       uses: actions/github-script@v7
@@ -284,7 +364,13 @@ jobs:
           build-essential \
           git \
           pkg-config \
-          ninja-build
+          ninja-build \
+          python3 \
+          python3-pip \
+          python3-venv
+
+    - name: Install Python test dependencies (Bolt integration tests)
+      run: pip install neo4j pytest --break-system-packages
 
     - name: Export GitHub Actions cache environment variables
       uses: actions/github-script@v7
@@ -366,7 +452,13 @@ jobs:
           git \
           pkg-config \
           ninja-build \
-          ccache
+          ccache \
+          python3 \
+          python3-pip \
+          python3-venv
+
+    - name: Install Python test dependencies (Bolt integration tests)
+      run: pip install neo4j pytest --break-system-packages
 
     - name: Export GitHub Actions cache environment variables
       uses: actions/github-script@v7

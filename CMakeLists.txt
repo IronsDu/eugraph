@@ -870,6 +870,32 @@ if(EUGRAPH_BUILD_TESTS)
                 LABELS "bolt;integration;python"
             )
 
+            # Bolt Java driver integration test — requires eugraph-server, a JDK,
+            # and the official neo4j-java-driver jars (e.g. from cypher-shell).
+            find_program(JAVA_EXECUTABLE java)
+            find_file(NEO4J_JAVA_DRIVER_JAR
+                NAMES neo4j-java-driver-5.28.14.jar
+                HINTS /usr/share/cypher-shell/lib /usr/share/neo4j/lib)
+            if(JAVA_EXECUTABLE AND NEO4J_JAVA_DRIVER_JAR)
+                get_filename_component(NEO4J_JAVA_DRIVER_LIB_DIR "${NEO4J_JAVA_DRIVER_JAR}" DIRECTORY)
+                set(BOLT_JAVA_TEST_SCRIPT "${PROJECT_SOURCE_DIR}/tests/bolt/test_java_driver_integration.py")
+                add_test(NAME bolt_java_driver_integration_tests
+                    COMMAND bash "${PROJECT_SOURCE_DIR}/scripts/run-bolt-java-tests.sh"
+                        "$<TARGET_FILE:eugraph-server>"
+                        "${PYTEST_EXECUTABLE}"
+                        "${BOLT_JAVA_TEST_SCRIPT}"
+                        "${JAVA_EXECUTABLE}"
+                        "${NEO4J_JAVA_DRIVER_LIB_DIR}"
+                    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+                )
+                set_tests_properties(bolt_java_driver_integration_tests PROPERTIES
+                    TIMEOUT 600
+                    LABELS "bolt;integration;java"
+                )
+            else()
+                message(STATUS "java or neo4j-java-driver not found — skipping Bolt Java driver integration test")
+            endif()
+
             # Bolt JS WebSocket driver integration tests — requires eugraph-server,
             # neo4j-driver (browser bundle), node, and npm.
             find_program(NODE_EXECUTABLE node)
