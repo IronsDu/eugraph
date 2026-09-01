@@ -328,3 +328,25 @@ test('explicit transaction rollback', async () => {
 
   assert.equal(records[0].get('cnt'), 0);
 });
+
+test('concurrent browser-like Bolt sessions', async () => {
+  const queries = [
+    'RETURN 1 AS n',
+    'MATCH (n) RETURN count(n) AS c',
+    'CALL db.labels() YIELD label RETURN label',
+    'CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType',
+    'CALL db.schema.visualization() YIELD nodes, relationships RETURN size(nodes)',
+  ];
+
+  const tasks = Array.from({ length: 8 }, () =>
+    run(async (session) => {
+      for (const query of queries) {
+        await session.run(query).then((result) => result.records.length);
+      }
+      return true;
+    })
+  );
+
+  const results = await Promise.all(tasks);
+  assert.equal(results.every((ok) => ok === true), true);
+});

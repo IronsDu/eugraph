@@ -601,3 +601,37 @@ class TestTransactions:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---------------------------------------------------------------------------
+# Concurrency tests
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrency:
+    """Multiple Bolt clients must execute concurrently without corrupting
+    transaction state or crashing the server."""
+
+    QUERIES = [
+        "RETURN 1 AS n",
+        "MATCH (n) RETURN count(n) AS c",
+        "CALL db.labels() YIELD label RETURN label",
+        "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType",
+        "CALL db.schema.visualization() YIELD nodes, relationships RETURN size(nodes)",
+    ]
+
+    def test_concurrent_browser_like_workload(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+
+        def worker(_):
+            with make_session(driver) as session:
+                for query in self.QUERIES:
+                    list(session.run(query))
+
+        try:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(worker, range(8)))
+        finally:
+            driver.close()

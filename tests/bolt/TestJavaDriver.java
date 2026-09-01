@@ -166,7 +166,32 @@ public class TestJavaDriver {
         session.run("MATCH (n:JavaTx) DETACH DELETE n").consume();
     }
 
-    public static void main(String[] args) {
+    private static void testConcurrentQueries(Driver driver) throws Exception {
+        String[] queries = {
+            "RETURN 1 AS n",
+            "MATCH (n) RETURN count(n) AS c",
+            "CALL db.labels() YIELD label RETURN label",
+            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType",
+            "CALL db.schema.visualization() YIELD nodes, relationships RETURN size(nodes)",
+        };
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(8);
+        java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < 8; ++i) {
+            futures.add(pool.submit(() -> {
+                try (Session session = driver.session()) {
+                    for (String query : queries) {
+                        session.run(query).consume();
+                    }
+                }
+            }));
+        }
+        for (java.util.concurrent.Future<?> future : futures) {
+            future.get();
+        }
+        pool.shutdown();
+    }
+
+    public static void main(String[] args) throws Exception {
         String uri = "bolt://127.0.0.1:" + System.getenv("EUGRAPH_BOLT_PORT");
         try (Driver driver = GraphDatabase.driver(uri, AuthTokens.basic("eugraph", "eugraph"));
                 Session session = driver.session()) {
@@ -177,6 +202,7 @@ public class TestJavaDriver {
             testParameters(session);
             testProcedures(session);
             testTransactions(session);
+            testConcurrentQueries(driver);
         }
         System.out.println("Java driver integration test passed");
     }
