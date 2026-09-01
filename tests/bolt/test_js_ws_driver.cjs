@@ -350,3 +350,22 @@ test('concurrent browser-like Bolt sessions', async () => {
   const results = await Promise.all(tasks);
   assert.equal(results.every((ok) => ok === true), true);
 });
+
+
+test('concurrent PULL 25 sessions', async () => {
+  const driver = createDriver();
+  const tasks = Array.from({ length: 4 }, () => {
+    const session = driver.session({
+      database: TEST_DATABASE,
+      fetchSize: 25,
+    });
+    return session
+      .run('UNWIND range(1, 5000) AS i RETURN i')
+      .then((result) => result.records)
+      .then((records) => records.length === 25)
+      .finally(() => session.close());
+  });
+  const results = await Promise.all(tasks);
+  await driver.close();
+  assert.equal(results.every((ok) => ok === true), true);
+});

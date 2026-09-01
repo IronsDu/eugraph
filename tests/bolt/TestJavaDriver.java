@@ -166,6 +166,32 @@ public class TestJavaDriver {
         session.run("MATCH (n:JavaTx) DETACH DELETE n").consume();
     }
 
+    private static void testPartialPull25(Driver driver) throws Exception {
+        org.neo4j.driver.SessionConfig config = org.neo4j.driver.SessionConfig.builder()
+                .withFetchSize(25)
+                .build();
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < 4; ++i) {
+            futures.add(pool.submit(() -> {
+                try (Session session = driver.session(config)) {
+                    Result result = session.run("UNWIND range(1, 5000) AS i RETURN i");
+                    int fetched = 0;
+                    while (fetched < 25 && result.hasNext()) {
+                        result.next();
+                        ++fetched;
+                    }
+                    check(fetched == 25, "partial PULL 25 failed");
+                    // Leave the remaining stream unconsumed when the session closes.
+                }
+            }));
+        }
+        for (java.util.concurrent.Future<?> future : futures) {
+            future.get();
+        }
+        pool.shutdown();
+    }
+
     private static void testConcurrentQueries(Driver driver) throws Exception {
         String[] queries = {
             "RETURN 1 AS n",
@@ -203,6 +229,7 @@ public class TestJavaDriver {
             testProcedures(session);
             testTransactions(session);
             testConcurrentQueries(driver);
+            testPartialPull25(driver);
         }
         System.out.println("Java driver integration test passed");
     }
