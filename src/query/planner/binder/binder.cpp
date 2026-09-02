@@ -432,6 +432,12 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                 using T = std::decay_t<decltype(ptr)>;
                 using Elem = typename T::element_type;
 
+                if constexpr (std::is_same_v<Elem, cypher::CreateClause> || std::is_same_v<Elem, cypher::MergeClause> ||
+                              std::is_same_v<Elem, cypher::SetClause> || std::is_same_v<Elem, cypher::RemoveClause> ||
+                              std::is_same_v<Elem, cypher::DeleteClause>) {
+                    ctx_.has_mutation = true;
+                }
+
                 if constexpr (std::is_same_v<Elem, cypher::MatchClause>) {
                     if (!first_clause && !current) {
                         error("Cannot have MATCH without preceding context");
@@ -797,7 +803,15 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
                     } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundUnaryOp>>) {
                         collectVars(e->operand);
                     } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundPropertyRef>>) {
-                        collectVars(e->object);
+                        // Binding a property access already registered precise
+                        // per-(label, prop) requirements. Walking into its
+                        // object here would add every property of every vertex
+                        // label to the variable; applyProjectionPushdown then
+                        // misattributes those label ids to an edge variable,
+                        // materializing bogus edge property columns.
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundDynamicPropertyRef>>) {
+                        // Dynamic refs rely on whole-vertex/edge construction
+                        // via collectPlanRequirements, not on this pass.
                     } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundLabelCast>>) {
                         collectVars(e->object);
                     }

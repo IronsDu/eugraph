@@ -8,6 +8,78 @@ namespace compute {
 
 namespace {
 
+enum class StaticTruth {
+    Unknown,
+    False,
+    True
+};
+
+bool objectIsGraphEntity(const binder::BoundExpression& object) {
+    const binder::BoundType* type = nullptr;
+    if (auto* cref = std::get_if<binder::BoundColumnRef>(&object))
+        type = &cref->type;
+    else if (auto* vref = std::get_if<binder::BoundVariableRef>(&object))
+        type = &vref->type;
+    if (!type)
+        return false;
+    switch (type->kind) {
+    case binder::BoundTypeKind::VERTEX:
+    case binder::BoundTypeKind::EDGE:
+    case binder::BoundTypeKind::VERTEX_REF:
+    case binder::BoundTypeKind::EDGE_KEY:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool isStaticNullProperty(const binder::BoundExpression& expr) {
+    if (auto* pr = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr)) {
+        return *pr && (*pr)->candidates.empty() && !(*pr)->property_name.empty() && objectIsGraphEntity((*pr)->object);
+    }
+    return false;
+}
+
+StaticTruth staticTruthOf(const binder::BoundExpression& expr) {
+    if (auto* un = std::get_if<std::unique_ptr<binder::BoundUnaryOp>>(&expr)) {
+        if (!*un)
+            return StaticTruth::Unknown;
+        if ((*un)->op == cypher::UnaryOperator::IS_NULL && isStaticNullProperty((*un)->operand))
+            return StaticTruth::True;
+        if ((*un)->op == cypher::UnaryOperator::IS_NOT_NULL && isStaticNullProperty((*un)->operand))
+            return StaticTruth::False;
+        if ((*un)->op == cypher::UnaryOperator::NOT) {
+            auto inner = staticTruthOf((*un)->operand);
+            if (inner == StaticTruth::True)
+                return StaticTruth::False;
+            if (inner == StaticTruth::False)
+                return StaticTruth::True;
+        }
+        return StaticTruth::Unknown;
+    }
+    if (auto* bin = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr)) {
+        if (!*bin)
+            return StaticTruth::Unknown;
+        if ((*bin)->op == cypher::BinaryOperator::AND) {
+            auto left = staticTruthOf((*bin)->left);
+            auto right = staticTruthOf((*bin)->right);
+            if (left == StaticTruth::False || right == StaticTruth::False)
+                return StaticTruth::False;
+            if (left == StaticTruth::True && right == StaticTruth::True)
+                return StaticTruth::True;
+        } else if ((*bin)->op == cypher::BinaryOperator::OR) {
+            auto left = staticTruthOf((*bin)->left);
+            auto right = staticTruthOf((*bin)->right);
+            if (left == StaticTruth::True || right == StaticTruth::True)
+                return StaticTruth::True;
+            if (left == StaticTruth::False && right == StaticTruth::False)
+                return StaticTruth::False;
+        }
+        return StaticTruth::Unknown;
+    }
+    return StaticTruth::Unknown;
+}
+
 void resolveCrossEqualityRefs(binder::BoundExpression& expr, const TupleSlotLayout& left_layout,
                               const TupleSlotLayout& right_layout, const Schema& left_schema,
                               const Schema& right_schema, uint32_t left_cols) {
@@ -101,6 +173,22 @@ void FilterPhysicalOp::compileExpressions(const TupleSlotLayout& input_layout) {
 }
 
 folly::coro::AsyncGenerator<DataChunk> FilterPhysicalOp::executeChunk() {
+    // Read-only statements can short-circuit predicates that are statically
+    // false/true against the bind-time schema. This avoids executing a full
+    // scan only to discard every row (e.g. a relationship property that no
+    // edge label defines).
+    if (eval_ctx_.allow_static_schema_pruning) {
+        auto truth = staticTruthOf(predicate_);
+        if (truth == StaticTruth::False)
+            co_return;
+        if (truth == StaticTruth::True) {
+            auto child_gen = child_->executeChunk();
+            while (auto chunk = co_await child_gen.next())
+                co_yield std::move(*chunk);
+            co_return;
+        }
+    }
+
     auto child_gen = child_->executeChunk();
 
     while (auto chunk = co_await child_gen.next()) {
