@@ -133,9 +133,12 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     ctx->catalog = std::move(catalog);
     ctx->func_registry = std::move(func_registry);
 
-    // Begin transaction
+    // Begin transaction. Fork a dedicated store wrapper so concurrent
+    // queries can never overwrite each other's transaction handle.
     GraphTxnHandle txn = co_await async_data_.beginTran();
-    async_data_.setTransaction(txn);
+    auto query_store = async_data_.forkTransaction(txn);
+    IAsyncGraphDataStore& query_data = *query_store;
+    ctx->query_store = std::move(query_store);
 
     // Store label/edge_label defs + name→id maps in StreamContext so physical operator
     // raw pointers remain valid throughout streaming consumption
@@ -203,7 +206,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     PhysicalPlanner physical_planner;
     std::variant<std::unique_ptr<PhysicalOperator>, std::string> phys_result = std::string("");
     if (bound_stmt->plan.chosen) {
-        phys_result = physical_planner.planChosen(*bound_stmt->plan.chosen, async_data_, async_meta_, plan_ctx);
+        phys_result = physical_planner.planChosen(*bound_stmt->plan.chosen, query_data, async_meta_, plan_ctx);
         if (std::holds_alternative<std::string>(phys_result)) {
             // planChosen failed — log and fall through to planBound rather than
             // aborting the whole query. The RBO path produces a known-good plan.
@@ -213,11 +216,11 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         }
     }
     if (!bound_stmt->plan.chosen || std::holds_alternative<std::string>(phys_result)) {
-        phys_result = physical_planner.planBound(bound_stmt->plan, async_data_, async_meta_, plan_ctx);
+        phys_result = physical_planner.planBound(bound_stmt->plan, query_data, async_meta_, plan_ctx);
     }
     if (std::holds_alternative<std::string>(phys_result)) {
         ctx->error = std::get<std::string>(phys_result);
-        co_await async_data_.rollbackTran(txn);
+        co_await query_data.rollbackTran(txn);
         co_return ctx;
     }
     auto& phys_op = std::get<std::unique_ptr<PhysicalOperator>>(phys_result);
@@ -308,7 +311,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
             });
         ctx->gen = wrapRowBatchToChunkGenerator(std::move(explain_row_gen));
 
-        co_await async_data_.rollbackTran(txn);
+        co_await query_data.rollbackTran(txn);
         ctx->should_commit = false;
         co_return ctx;
     }

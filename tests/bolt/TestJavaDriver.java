@@ -166,7 +166,58 @@ public class TestJavaDriver {
         session.run("MATCH (n:JavaTx) DETACH DELETE n").consume();
     }
 
-    public static void main(String[] args) {
+    private static void testPartialPull25(Driver driver) throws Exception {
+        org.neo4j.driver.SessionConfig config = org.neo4j.driver.SessionConfig.builder()
+                .withFetchSize(25)
+                .build();
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < 4; ++i) {
+            futures.add(pool.submit(() -> {
+                try (Session session = driver.session(config)) {
+                    Result result = session.run("UNWIND range(1, 5000) AS i RETURN i");
+                    int fetched = 0;
+                    while (fetched < 25 && result.hasNext()) {
+                        result.next();
+                        ++fetched;
+                    }
+                    check(fetched == 25, "partial PULL 25 failed");
+                    // Leave the remaining stream unconsumed when the session closes.
+                }
+            }));
+        }
+        for (java.util.concurrent.Future<?> future : futures) {
+            future.get();
+        }
+        pool.shutdown();
+    }
+
+    private static void testConcurrentQueries(Driver driver) throws Exception {
+        String[] queries = {
+            "RETURN 1 AS n",
+            "MATCH (n) RETURN count(n) AS c",
+            "CALL db.labels() YIELD label RETURN label",
+            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType",
+            "CALL db.schema.visualization() YIELD nodes, relationships RETURN size(nodes)",
+        };
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(8);
+        java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < 8; ++i) {
+            futures.add(pool.submit(() -> {
+                try (Session session = driver.session()) {
+                    for (String query : queries) {
+                        session.run(query).consume();
+                    }
+                }
+            }));
+        }
+        for (java.util.concurrent.Future<?> future : futures) {
+            future.get();
+        }
+        pool.shutdown();
+    }
+
+    public static void main(String[] args) throws Exception {
         String uri = "bolt://127.0.0.1:" + System.getenv("EUGRAPH_BOLT_PORT");
         try (Driver driver = GraphDatabase.driver(uri, AuthTokens.basic("eugraph", "eugraph"));
                 Session session = driver.session()) {
@@ -177,6 +228,8 @@ public class TestJavaDriver {
             testParameters(session);
             testProcedures(session);
             testTransactions(session);
+            testConcurrentQueries(driver);
+            testPartialPull25(driver);
         }
         System.out.println("Java driver integration test passed");
     }

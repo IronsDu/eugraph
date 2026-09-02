@@ -25,6 +25,9 @@ public:
     virtual folly::coro::Task<bool> commitTran(GraphTxnHandle txn) = 0;
     virtual folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) = 0;
     virtual void setTransaction(GraphTxnHandle txn) = 0;
+    /// Create an isolated view bound to one transaction. Concurrent query
+    /// streams each own one so transaction handles never leak across calls.
+    virtual std::unique_ptr<IAsyncGraphDataStore> forkTransaction(GraphTxnHandle txn) = 0;
 
     // ==================== DDL ====================
 
