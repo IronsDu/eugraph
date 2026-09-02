@@ -248,7 +248,12 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     ids.reserve(local_rows.size());
                     for (size_t j : local_rows)
                         ids.push_back(ref_vids[j]);
-                    auto props = co_await store_.batchGetVertexProperties(ids, lid, {});
+                    std::vector<uint16_t> projection;
+                    for (const auto& [plid, pid] : spec.project_props) {
+                        if (plid == lid)
+                            projection.push_back(pid);
+                    }
+                    auto props = co_await store_.batchGetVertexProperties(ids, lid, projection);
                     for (size_t j = 0; j < ids.size() && j < props.size(); ++j) {
                         if (props[j].has_value())
                             vertex_ctor_cache[i][ref_rows[local_rows[j]]]->properties[lid] = std::move(*props[j]);

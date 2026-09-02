@@ -66,6 +66,9 @@ struct ColumnSpec {
     EdgeLabelId edge_label_id = INVALID_EDGE_LABEL_ID;
     /// Property id for LoadVertexProp / LoadEdgeProp.
     uint16_t prop_id = 0;
+    /// Optional projection for ConstructVertex: only fetch these
+    /// (label, prop) pairs. Empty means fetch all properties.
+    std::vector<std::pair<LabelId, uint16_t>> project_props;
 };
 
 /// Unified schema-reshaping operator that loads vertex/edge properties and

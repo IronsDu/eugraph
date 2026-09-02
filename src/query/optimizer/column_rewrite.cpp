@@ -1661,6 +1661,7 @@ PEPlans buildExtractionInfo(const PlanRequirements& reqs, const SourceTypes& sou
             } else {
                 pi.object_slot_id = alloc.nextInternal();
             }
+            pi.construct_vertex_props = r.vertex_props;
             plans[slot] = std::move(pi);
             continue;
         }

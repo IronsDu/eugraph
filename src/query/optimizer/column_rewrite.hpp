@@ -65,6 +65,11 @@ struct PEPlan {
     binder::SlotId labels_slot_id = binder::INVALID_SLOT_ID;
     /// Slot id for LoadEdgeType column (need_edge_type).
     binder::SlotId type_slot_id = binder::INVALID_SLOT_ID;
+
+    /// Property projection for a ConstructVertex column. Empty means "all
+    /// properties" (RETURN n). When set, only these (label, prop) pairs are
+    /// fetched; this is the multi-candidate property case such as n.name.
+    std::vector<std::pair<LabelId, uint16_t>> construct_vertex_props;
 };
 
 /// Per-variable requirement collected by scanning downstream operators.

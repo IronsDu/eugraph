@@ -222,6 +222,8 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
                 s.output_type = col_is_edge ? binder::BoundType::Edge() : binder::BoundType::Vertex();
                 s.source_col = col;
                 s.slot_id = pi.object_slot_id;
+                if (!col_is_edge)
+                    s.project_props = pi.construct_vertex_props;
                 ctx.var_slots[s.output_name] = pi.object_slot_id;
                 emitSpec(std::move(s));
                 emitted_slots.insert(pi.object_slot_id);

@@ -2958,6 +2958,23 @@ TEST_F(QueryExecutorTest, VarLenExpandExact2Hops) {
     EXPECT_EQ(result.rows.size(), 2u);
 }
 
+TEST_F(QueryExecutorTest, MissingVertexPropertyIsNotNullIsStaticFalse) {
+    insertTestVertices();
+
+    auto result = execSync(*executor_, "MATCH (n) WHERE n.noSuchProperty IS NOT NULL RETURN n");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 0u);
+}
+
+TEST_F(QueryExecutorTest, MissingVertexPropertyIsNullIsStaticTrue) {
+    insertTestVertices();
+
+    auto result = execSync(*executor_, "MATCH (n) WHERE n.noSuchProperty IS NULL RETURN count(n) AS c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 5);
+}
+
 TEST_F(QueryExecutorTest, MissingEdgePropertyIsNotNullIsStaticFalse) {
     insertTestEdges();
 
