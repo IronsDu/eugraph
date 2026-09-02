@@ -87,6 +87,16 @@ std::string ProjectionExtractPhysicalOp::toString() const {
         case ColumnSpec::Kind::ConstructEdge:
             s += "ctor-edge";
             break;
+        case ColumnSpec::Kind::LoadVertexPropCoalesce:
+            s += "vprop-coalesce[";
+            for (size_t c = 0; c < sp.coalesce_candidates.size(); ++c) {
+                if (c > 0)
+                    s += ",";
+                s += std::to_string(sp.coalesce_candidates[c].first) + "." +
+                     std::to_string(sp.coalesce_candidates[c].second);
+            }
+            s += "]";
+            break;
         }
         s += ">";
     }
@@ -188,6 +198,50 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             if (any_value && all_int64) {
                 output.columns[i].type = binder::BoundTypeKind::INT64;
                 output.columns[i].buffer->int64_data.resize(row_count);
+            }
+        }
+
+        // Prefetch coalesced multi-candidate vertex properties.
+        std::vector<std::vector<std::optional<PropertyValue>>> vertex_coalesce_cache(n_specs);
+        for (size_t i = 0; i < n_specs; ++i) {
+            const auto& spec = specs_[i];
+            if (spec.kind != ColumnSpec::Kind::LoadVertexPropCoalesce)
+                continue;
+            vertex_coalesce_cache[i].resize(row_count);
+
+            std::vector<VertexId> ref_vids;
+            std::vector<size_t> ref_rows;
+            size_t vid_cache_col = SIZE_MAX;
+            VertexId vid_cache = INVALID_VERTEX_ID;
+            for (size_t row = 0; row < row_count; ++row) {
+                VertexId vid = resolveVertexId(*chunk, spec.source_col, row, vid_cache_col, vid_cache);
+                if (vid == INVALID_VERTEX_ID)
+                    continue;
+                ref_vids.push_back(vid);
+                ref_rows.push_back(row);
+            }
+            if (ref_vids.empty())
+                continue;
+
+            auto labels_batch = co_await store_.getVertexLabelsBatch(ref_vids);
+            for (const auto& [lid, pid] : spec.coalesce_candidates) {
+                std::vector<VertexId> ids;
+                std::vector<size_t> rows;
+                for (size_t j = 0; j < ref_vids.size() && j < labels_batch.size(); ++j) {
+                    if (labels_batch[j].contains(lid)) {
+                        ids.push_back(ref_vids[j]);
+                        rows.push_back(ref_rows[j]);
+                    }
+                }
+                if (ids.empty())
+                    continue;
+                auto values = co_await store_.batchGetVertexProperties(ids, lid, {pid});
+                for (size_t j = 0; j < ids.size() && j < values.size(); ++j) {
+                    if (!values[j].has_value() || values[j]->size() <= pid || !(*values[j])[pid].has_value())
+                        continue;
+                    if (!vertex_coalesce_cache[i][rows[j]].has_value())
+                        vertex_coalesce_cache[i][rows[j]] = (*values[j])[pid];
+                }
             }
         }
 
@@ -320,6 +374,13 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     } else {
                         output.columns[i].setNull(row);
                     }
+                    break;
+                }
+                case ColumnSpec::Kind::LoadVertexPropCoalesce: {
+                    if (row < vertex_coalesce_cache[i].size() && vertex_coalesce_cache[i][row].has_value())
+                        output.columns[i].setValue(row, propertyValueToValue(*vertex_coalesce_cache[i][row]));
+                    else
+                        output.columns[i].setNull(row);
                     break;
                 }
                 case ColumnSpec::Kind::LoadEdgeProp: {

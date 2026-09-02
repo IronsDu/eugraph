@@ -48,6 +48,10 @@ struct ColumnSpec {
         /// Construct a full EdgeValue (properties). Triggered by RETURN r,
         /// BoundDynamicPropertyRef on edges.
         ConstructEdge,
+        /// Coalesced flat property column over several vertex labels.
+        /// Candidates are fetched per label and the first value whose label
+        /// is present on the row wins; avoids constructing a VertexValue.
+        LoadVertexPropCoalesce,
     };
 
     Kind kind = Kind::Passthrough;
@@ -69,6 +73,8 @@ struct ColumnSpec {
     /// Optional projection for ConstructVertex: only fetch these
     /// (label, prop) pairs. Empty means fetch all properties.
     std::vector<std::pair<LabelId, uint16_t>> project_props;
+    /// Candidates for LoadVertexPropCoalesce.
+    std::vector<std::pair<LabelId, uint16_t>> coalesce_candidates;
 };
 
 /// Unified schema-reshaping operator that loads vertex/edge properties and
