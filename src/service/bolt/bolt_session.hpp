@@ -8,6 +8,7 @@
 
 #include <folly/coro/Task.h>
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -80,6 +81,10 @@ private:
     service::GraphService& service_;
     SessionState state_ = SessionState::CONNECTING;
     uint32_t negotiated_version_ = 0;
+
+    /// Steady-clock timestamp when the current RUN was received. Used to
+    /// report Bolt t_first/t_last timing metadata.
+    std::chrono::steady_clock::time_point query_start_;
 
     // Current query execution context (set by RUN, consumed by PULL)
     std::shared_ptr<compute::StreamContext> stream_ctx_;
