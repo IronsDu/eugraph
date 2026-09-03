@@ -480,7 +480,8 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
 /// canonical slot. Variable references are resolved + canonicalized via
 /// `resolver`.
 void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs, const SlotResolver& resolver,
-                     const std::string& loop_var_skip = "") {
+                     const std::string& loop_var_skip = "",
+                     const std::unordered_map<LabelId, LabelDef>* label_defs = nullptr) {
     // Per-variant leaf work + scope-context updates. We carry
     // `current_skip` by reference so the list-comprehension family — which
     // introduces a fresh per-iteration variable — can update it before
@@ -516,16 +517,14 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                     }
                     for (const auto& cand : ptr->candidates)
                         vr.edge_props.emplace_back(EdgeLabelId{cand.label_id}, cand.prop_id);
-                } else {
+                } else if (ptr->candidates.size() > 1) {
                     // Multi-candidate vertex property access (e.g. n.name on
-                    // an unlabeled n with name present on Person, City, __anon__).
-                    // The flat-column rewrite picks ONE candidate's slot, but
-                    // each row's vertex only carries the property under its
-                    // actual label. Force whole-vertex construction so the
-                    // runtime evaluator iterates candidates on VertexValue.
-                    if (ptr->candidates.size() > 1) {
-                        vr.need_whole_vertex = true;
-                    }
+                    // an unlabeled n with name present on Person and City).
+                    // Lower to one coalesced flat column that picks the value
+                    // whose label is actually present on the row.
+                    for (const auto& cand : ptr->candidates)
+                        vr.coalesce_vertex_props[ptr->property_name].emplace_back(cand.label_id, cand.prop_id);
+                } else {
                     for (const auto& cand : ptr->candidates)
                         vr.vertex_props.emplace_back(cand.label_id, cand.prop_id);
                 }
@@ -557,14 +556,27 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
                             obj_kind = vref->type.kind;
                         else if (auto* cref = std::get_if<binder::BoundColumnRef>(&ptr->object))
                             obj_kind = cref->type.kind;
-                        if (obj_kind == binder::BoundTypeKind::EDGE || obj_kind == binder::BoundTypeKind::EDGE_KEY)
+                        if (obj_kind == binder::BoundTypeKind::EDGE || obj_kind == binder::BoundTypeKind::EDGE_KEY) {
                             reqs[canon].need_whole_edge = true;
-                        else if (obj_kind == binder::BoundTypeKind::VERTEX ||
-                                 obj_kind == binder::BoundTypeKind::VERTEX_REF)
-                            reqs[canon].need_whole_vertex = true;
+                        } else if (obj_kind == binder::BoundTypeKind::VERTEX ||
+                                   obj_kind == binder::BoundTypeKind::VERTEX_REF) {
+                            bool resolved = false;
+                            if (label_defs) {
+                                for (const auto& [lid, ldef] : *label_defs) {
+                                    for (const auto& pd : ldef.properties) {
+                                        if (pd.name == ptr->property) {
+                                            reqs[canon].coalesce_vertex_props[ptr->property].emplace_back(lid, pd.id);
+                                            resolved = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if (!resolved)
+                                reqs[canon].need_whole_vertex = true;
+                        }
                     }
                 }
-                collectExprReqs(ptr->object, reqs, resolver, current_skip);
+                collectExprReqs(ptr->object, reqs, resolver, current_skip, label_defs);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
                 if (!ptr)
                     return;
@@ -682,13 +694,15 @@ void collectExprReqs(const binder::BoundExpression& expr, PlanRequirements& reqs
             }
         },
         expr);
-    forEachSubExpr(expr,
-                   [&](const binder::BoundExpression& child) { collectExprReqs(child, reqs, resolver, current_skip); });
+    forEachSubExpr(expr, [&](const binder::BoundExpression& child) {
+        collectExprReqs(child, reqs, resolver, current_skip, label_defs);
+    });
 }
 
 /// Walk the BoundLogicalOperator tree and accumulate requirements. Keyed by
 /// canonical slot (variable refs canonicalized through resolver).
-void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& reqs, const SlotResolver& resolver) {
+void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& reqs, const SlotResolver& resolver,
+                   const std::unordered_map<LabelId, LabelDef>* label_defs) {
     std::visit(
         [&](const auto& v) {
             using T = std::decay_t<decltype(v)>;
@@ -703,7 +717,7 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
                 if (v)
-                    collectExprReqs(v->predicate, reqs, resolver);
+                    collectExprReqs(v->predicate, reqs, resolver, "", label_defs);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                 if (v) {
                     for (const auto& item : v->items) {
@@ -718,18 +732,18 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                                     reqs[canon].need_whole_edge = true;
                             }
                         }
-                        collectExprReqs(item.expr, reqs, resolver);
+                        collectExprReqs(item.expr, reqs, resolver, "", label_defs);
                     }
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
                 if (v) {
                     for (const auto& item : v->items)
-                        collectExprReqs(item.expr, reqs, resolver);
+                        collectExprReqs(item.expr, reqs, resolver, "", label_defs);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
                 if (v) {
                     for (const auto& k : v->group_keys)
-                        collectExprReqs(k, reqs, resolver);
+                        collectExprReqs(k, reqs, resolver, "", label_defs);
                     for (const auto& agg : v->aggregates) {
                         for (const auto& arg : agg.arguments) {
                             // count(n) only needs non-null rows. A bare
@@ -749,7 +763,7 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                                 }
                             }
                             if (!bare_graph_ref)
-                                collectExprReqs(arg, reqs, resolver);
+                                collectExprReqs(arg, reqs, resolver, "", label_defs);
                         }
                     }
                 }
@@ -781,7 +795,7 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 if (v)
-                    collectExprReqs(v->list_expr, reqs, resolver);
+                    collectExprReqs(v->list_expr, reqs, resolver, "", label_defs);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>>) {
                 if (v) {
                     for (const auto& item : v->items) {
@@ -793,7 +807,7 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                             }
                         }
                         if (item.value_expr)
-                            collectExprReqs(*item.value_expr, reqs, resolver);
+                            collectExprReqs(*item.value_expr, reqs, resolver, "", label_defs);
                     }
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>>) {
@@ -812,7 +826,7 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                 if (v) {
                     for (const auto& t : v->targets) {
                         if (t.expr) {
-                            collectExprReqs(*t.expr, reqs, resolver);
+                            collectExprReqs(*t.expr, reqs, resolver, "", label_defs);
                         } else if (!t.variable_name.empty()) {
                             binder::SlotId canon = resolver.canonicalForName(t.variable_name);
                             if (canon != binder::INVALID_SLOT_ID) {
@@ -850,32 +864,32 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                         setWhole(v->edge_var, true);
                     }
                     for (const auto& [prop_name, expr] : v->start_pending_props)
-                        collectExprReqs(expr, reqs, resolver);
+                        collectExprReqs(expr, reqs, resolver, "", label_defs);
                     for (const auto& [prop_name, expr] : v->edge_pending_props)
-                        collectExprReqs(expr, reqs, resolver);
+                        collectExprReqs(expr, reqs, resolver, "", label_defs);
                     for (const auto& [prop_name, expr] : v->end_pending_props)
-                        collectExprReqs(expr, reqs, resolver);
+                        collectExprReqs(expr, reqs, resolver, "", label_defs);
                     for (const auto& [prop_id, expr] : v->start_prop_filters)
-                        collectExprReqs(expr, reqs, resolver);
+                        collectExprReqs(expr, reqs, resolver, "", label_defs);
                     for (const auto& [prop_id, expr] : v->edge_prop_filters)
-                        collectExprReqs(expr, reqs, resolver);
+                        collectExprReqs(expr, reqs, resolver, "", label_defs);
                     for (const auto& [prop_id, expr] : v->end_prop_filters)
-                        collectExprReqs(expr, reqs, resolver);
+                        collectExprReqs(expr, reqs, resolver, "", label_defs);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
                 if (v) {
                     for (const auto& [prop_id, expr] : v->properties)
-                        collectExprReqs(expr, reqs, resolver);
+                        collectExprReqs(expr, reqs, resolver, "", label_defs);
                     for (const auto& [prop_name, expr] : v->pending_props)
-                        collectExprReqs(expr, reqs, resolver);
+                        collectExprReqs(expr, reqs, resolver, "", label_defs);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v) {
                     for (const auto& [lid, props] : v->label_properties)
                         for (const auto& [prop_id, expr] : props)
-                            collectExprReqs(expr, reqs, resolver);
+                            collectExprReqs(expr, reqs, resolver, "", label_defs);
                     for (const auto& [prop_name, expr] : v->pending_props)
-                        collectExprReqs(expr, reqs, resolver);
+                        collectExprReqs(expr, reqs, resolver, "", label_defs);
                 }
             }
             // Leaves (Scan/LabelScan/Singleton/CorrelatedSource) and pure-passthrough
@@ -884,7 +898,7 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
         },
         op);
 
-    forEachChild(op, [&](const auto& child) { collectOpReqs(child, reqs, resolver); });
+    forEachChild(op, [&](const auto& child) { collectOpReqs(child, reqs, resolver, label_defs); });
 }
 
 void dedupeVarReqs(VariableRequirement& r) {
@@ -894,6 +908,8 @@ void dedupeVarReqs(VariableRequirement& r) {
     };
     dedupe(r.vertex_props);
     dedupe(r.edge_props);
+    for (auto& [prop, candidates] : r.coalesce_vertex_props)
+        dedupe(candidates);
 }
 
 void collectSourceTypesOp(const binder::BoundLogicalOperator& op, SourceTypes& types, const SlotResolver& resolver) {
@@ -1048,6 +1064,16 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                 else if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object))
                     is_edge = (cref->type.kind == binder::BoundTypeKind::EDGE);
 
+                // Multi-candidate vertex property: rewrite the whole
+                // BoundPropertyRef to the coalesced flat column.
+                if (!is_edge && val->candidates.size() > 1) {
+                    auto co = pi->coalesce_vertices.find(val->property_name);
+                    if (co != pi->coalesce_vertices.end()) {
+                        expr = binder::BoundColumnRef{0, co->second.type, var, co->second.slot_id};
+                        return true;
+                    }
+                }
+
                 // Covering case: object column exists → rewrite the inner
                 // BoundColumnRef/BoundVariableRef to point at the object slot,
                 // and keep the BoundPropertyRef wrapper so the runtime
@@ -1102,6 +1128,13 @@ bool rewriteExpr(binder::BoundExpression& expr, const PEPlans& plans, const Slot
                         pi = planForRef(*cref);
                     else
                         pi = planForSlot(bind_slot, var);
+                    if (pi) {
+                        auto co = pi->coalesce_vertices.find(val->property);
+                        if (co != pi->coalesce_vertices.end()) {
+                            expr = binder::BoundColumnRef{0, co->second.type, var, co->second.slot_id};
+                            return true;
+                        }
+                    }
                     if (pi && pi->object_slot_id != binder::INVALID_SLOT_ID) {
                         if (auto* cref = std::get_if<binder::BoundColumnRef>(&val->object)) {
                             if (cref->slot_id != pi->object_slot_id) {
@@ -1602,9 +1635,10 @@ binder::SlotId getCanonicalSlot(const AliasSlotMap& alias_map, binder::SlotId sl
 }
 
 PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& root, const SlotResolver& resolver,
-                                         const NameSlotMap* fresh_expands) {
+                                         const NameSlotMap* fresh_expands,
+                                         const std::unordered_map<LabelId, LabelDef>* label_defs) {
     PlanRequirements reqs;
-    collectOpReqs(root, reqs, resolver);
+    collectOpReqs(root, reqs, resolver, label_defs);
     // When a name was reintroduced by a descendant Expand after WITH
     // aliasing, canonicalForName follows the alias chain to a different
     // slot. The fresh binding must have its own PEPlan so RETURN-level
@@ -1619,8 +1653,18 @@ PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& roo
             }
         }
     }
-    for (auto& [slot, r] : reqs)
+    for (auto& [slot, r] : reqs) {
+        // Coalesced columns replace their flat per-label property columns.
+        for (const auto& [prop, candidates] : r.coalesce_vertex_props) {
+            r.vertex_props.erase(std::remove_if(r.vertex_props.begin(), r.vertex_props.end(),
+                                                [&](const auto& cand) {
+                                                    return std::find(candidates.begin(), candidates.end(), cand) !=
+                                                           candidates.end();
+                                                }),
+                                 r.vertex_props.end());
+        }
         dedupeVarReqs(r);
+    }
     return reqs;
 }
 
@@ -1661,6 +1705,11 @@ PEPlans buildExtractionInfo(const PlanRequirements& reqs, const SourceTypes& sou
             } else {
                 pi.object_slot_id = alloc.nextInternal();
             }
+            // A whole-vertex Construct column must carry every property of the
+            // entity (RETURN n, path elements, dynamic property access). The
+            // precise property list in r.vertex_props is only for flat
+            // per-label loads / coalesced property columns, not for limiting
+            // full vertex construction.
             plans[slot] = std::move(pi);
             continue;
         }
@@ -1674,6 +1723,14 @@ PEPlans buildExtractionInfo(const PlanRequirements& reqs, const SourceTypes& sou
         pi.edge_prop_slot_ids.reserve(pi.edge_prop_order.size());
         for (size_t i = 0; i < pi.edge_prop_order.size(); ++i)
             pi.edge_prop_slot_ids.push_back(alloc.nextInternal());
+
+        for (const auto& [prop, candidates] : r.coalesce_vertex_props) {
+            PEPlan::CoalesceVertex co;
+            co.candidates = candidates;
+            co.slot_id = alloc.nextInternal();
+            co.type = binder::BoundType::Any();
+            pi.coalesce_vertices[prop] = std::move(co);
+        }
 
         if (r.need_vertex_labels)
             pi.labels_slot_id = alloc.nextInternal();

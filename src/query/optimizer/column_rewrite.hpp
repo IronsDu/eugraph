@@ -65,6 +65,17 @@ struct PEPlan {
     binder::SlotId labels_slot_id = binder::INVALID_SLOT_ID;
     /// Slot id for LoadEdgeType column (need_edge_type).
     binder::SlotId type_slot_id = binder::INVALID_SLOT_ID;
+
+    /// Multi-candidate vertex properties lowered to one coalesced flat
+    /// column per property name. The PE operator fetches all candidates and
+    /// returns a scalar when exactly one present label has the property, or
+    /// a list when multiple present labels define it.
+    struct CoalesceVertex {
+        std::vector<std::pair<LabelId, uint16_t>> candidates;
+        binder::SlotId slot_id = binder::INVALID_SLOT_ID;
+        binder::BoundType type;
+    };
+    std::map<std::string, CoalesceVertex> coalesce_vertices;
 };
 
 /// Per-variable requirement collected by scanning downstream operators.
@@ -83,12 +94,14 @@ struct VariableRequirement {
     bool need_edge_type = false;
     /// (label_id, prop_id) list for vertex property access. De-duplicated.
     std::vector<std::pair<LabelId, uint16_t>> vertex_props;
+    /// Multi-candidate vertex properties grouped by property name.
+    std::map<std::string, std::vector<std::pair<LabelId, uint16_t>>> coalesce_vertex_props;
     /// (edge_label_id, prop_id) list for edge property access. De-duplicated.
     std::vector<std::pair<EdgeLabelId, uint16_t>> edge_props;
 
     bool empty() const {
         return !need_whole_vertex && !need_whole_edge && !need_vertex_labels && !need_edge_type &&
-               vertex_props.empty() && edge_props.empty();
+               vertex_props.empty() && edge_props.empty() && coalesce_vertex_props.empty();
     }
 };
 
@@ -228,7 +241,8 @@ NameSlotMap buildFreshExpandMap(const binder::BoundLogicalOperator& root);
 /// keyed under the fresh expand slot so PEPlans are created for reintroduced
 /// names that differ from the alias-chain result (§6.2).
 PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& root, const SlotResolver& resolver,
-                                         const NameSlotMap* fresh_expands = nullptr);
+                                         const NameSlotMap* fresh_expands = nullptr,
+                                         const std::unordered_map<LabelId, LabelDef>* label_defs = nullptr);
 
 /// Walk the bound plan and record, for each source slot, the BoundTypeKind of
 /// the column produced by its defining operator. This tells buildExtractionInfo

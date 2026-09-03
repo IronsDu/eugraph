@@ -259,6 +259,23 @@ static PlanOperatorResult dispatchProjectionExtract(PlanOperatorResult&& child_r
             any_load = true;
         }
 
+        // Coalesced multi-candidate vertex property loads.
+        for (const auto& [prop, co] : pi.coalesce_vertices) {
+            if (emitted_slots.count(co.slot_id))
+                continue;
+            ColumnSpec s;
+            s.kind = ColumnSpec::Kind::LoadVertexPropCoalesce;
+            s.source_col = col;
+            s.output_name = peName(co.slot_id);
+            s.slot_id = co.slot_id;
+            s.output_type = co.type;
+            s.coalesce_candidates = co.candidates;
+            ctx.var_slots[s.output_name] = co.slot_id;
+            emitSpec(std::move(s));
+            emitted_slots.insert(co.slot_id);
+            any_load = true;
+        }
+
         // Edge prop loads.
         for (size_t i = 0; i < pi.edge_prop_order.size(); ++i) {
             auto [elid, pid] = pi.edge_prop_order[i];
@@ -619,6 +636,150 @@ static PropertyType boundExprToPropertyType(const binder::BoundExpression& expr)
     }
 }
 
+// ==================== Read-Only Property Label Pruning ====================
+
+static void addPruneHint(std::unordered_map<std::string, PlanContext::StaticPruneHint>& hints, const std::string& var,
+                         std::vector<LabelId> vertex_labels, std::vector<EdgeLabelId> edge_labels) {
+    auto& hint = hints[var];
+    for (LabelId lid : vertex_labels) {
+        if (std::find(hint.vertex_labels.begin(), hint.vertex_labels.end(), lid) == hint.vertex_labels.end())
+            hint.vertex_labels.push_back(lid);
+    }
+    for (EdgeLabelId elid : edge_labels) {
+        if (std::find(hint.edge_labels.begin(), hint.edge_labels.end(), elid) == hint.edge_labels.end())
+            hint.edge_labels.push_back(elid);
+    }
+}
+
+static std::vector<LabelId> collectStaticVertexPruneLabels(PlanContext& ctx, const binder::BoundExpression& expr) {
+    std::vector<LabelId> labels;
+    if (auto* un = std::get_if<std::unique_ptr<binder::BoundUnaryOp>>(&expr)) {
+        if (!*un || (*un)->op != cypher::UnaryOperator::IS_NOT_NULL)
+            return labels;
+        auto* cref = std::get_if<binder::BoundColumnRef>(&(*un)->operand);
+        if (!cref)
+            return labels;
+        for (const auto& [source_slot, plan] : ctx.extraction_info) {
+            for (size_t i = 0; i < plan.prop_slot_ids.size() && i < plan.prop_order.size(); ++i) {
+                if (plan.prop_slot_ids[i] == cref->slot_id) {
+                    LabelId lid = plan.prop_order[i].first;
+                    if (std::find(labels.begin(), labels.end(), lid) == labels.end())
+                        labels.push_back(lid);
+                }
+            }
+            for (const auto& [prop, co] : plan.coalesce_vertices) {
+                if (co.slot_id == cref->slot_id) {
+                    for (const auto& [lid, pid] : co.candidates) {
+                        if (std::find(labels.begin(), labels.end(), lid) == labels.end())
+                            labels.push_back(lid);
+                    }
+                }
+            }
+        }
+    }
+    return labels;
+}
+
+static std::vector<EdgeLabelId> collectStaticEdgePruneLabels(PlanContext& ctx, const binder::BoundExpression& expr) {
+    std::vector<EdgeLabelId> labels;
+    if (auto* un = std::get_if<std::unique_ptr<binder::BoundUnaryOp>>(&expr)) {
+        if (!*un || (*un)->op != cypher::UnaryOperator::IS_NOT_NULL)
+            return labels;
+        auto* cref = std::get_if<binder::BoundColumnRef>(&(*un)->operand);
+        if (!cref)
+            return labels;
+        for (const auto& [source_slot, plan] : ctx.extraction_info) {
+            for (size_t i = 0; i < plan.edge_prop_slot_ids.size() && i < plan.edge_prop_order.size(); ++i) {
+                if (plan.edge_prop_slot_ids[i] == cref->slot_id) {
+                    EdgeLabelId elid = plan.edge_prop_order[i].first;
+                    if (std::find(labels.begin(), labels.end(), elid) == labels.end())
+                        labels.push_back(elid);
+                }
+            }
+        }
+    }
+    return labels;
+}
+
+static void collectStaticPruneHints(const binder::BoundExpression& expr, PlanContext& ctx,
+                                    std::unordered_map<std::string, PlanContext::StaticPruneHint>& hints) {
+    if (auto* un = std::get_if<std::unique_ptr<binder::BoundUnaryOp>>(&expr)) {
+        if (!*un || (*un)->op != cypher::UnaryOperator::IS_NOT_NULL)
+            return;
+        if (auto* dr = std::get_if<std::unique_ptr<binder::BoundDynamicPropertyRef>>(&(*un)->operand)) {
+            if (!*dr)
+                return;
+            std::string var;
+            const binder::BoundType* type = nullptr;
+            if (auto* cref = std::get_if<binder::BoundColumnRef>(&(*dr)->object)) {
+                var = cref->name;
+                type = &cref->type;
+            } else if (auto* vref = std::get_if<binder::BoundVariableRef>(&(*dr)->object)) {
+                var = vref->name;
+                type = &vref->type;
+            }
+            if (var.empty() || !type)
+                return;
+            if (type->kind == binder::BoundTypeKind::VERTEX || type->kind == binder::BoundTypeKind::VERTEX_REF) {
+                std::vector<LabelId> labels;
+                for (const auto& [lid, ldef] : ctx.label_defs) {
+                    for (const auto& pd : ldef.properties) {
+                        if (pd.name == (*dr)->property) {
+                            labels.push_back(lid);
+                            break;
+                        }
+                    }
+                }
+                addPruneHint(hints, var, std::move(labels), {});
+            } else if (type->kind == binder::BoundTypeKind::EDGE || type->kind == binder::BoundTypeKind::EDGE_KEY) {
+                std::vector<EdgeLabelId> labels;
+                for (const auto& [elid, eldef] : ctx.edge_label_defs) {
+                    for (const auto& pd : eldef.properties) {
+                        if (pd.name == (*dr)->property) {
+                            labels.push_back(elid);
+                            break;
+                        }
+                    }
+                }
+                addPruneHint(hints, var, {}, std::move(labels));
+            }
+            return;
+        }
+        auto* pr = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&(*un)->operand);
+        if (!pr || !*pr || (*pr)->candidates.empty())
+            return;
+        std::string var;
+        const binder::BoundType* type = nullptr;
+        if (auto* cref = std::get_if<binder::BoundColumnRef>(&(*pr)->object)) {
+            var = cref->name;
+            type = &cref->type;
+        } else if (auto* vref = std::get_if<binder::BoundVariableRef>(&(*pr)->object)) {
+            var = vref->name;
+            type = &vref->type;
+        }
+        if (var.empty() || !type)
+            return;
+        if (type->kind == binder::BoundTypeKind::VERTEX || type->kind == binder::BoundTypeKind::VERTEX_REF) {
+            std::vector<LabelId> labels;
+            for (const auto& cand : (*pr)->candidates)
+                labels.push_back(cand.label_id);
+            addPruneHint(hints, var, std::move(labels), {});
+        } else if (type->kind == binder::BoundTypeKind::EDGE || type->kind == binder::BoundTypeKind::EDGE_KEY) {
+            std::vector<EdgeLabelId> labels;
+            for (const auto& cand : (*pr)->candidates)
+                labels.push_back(EdgeLabelId{cand.label_id});
+            addPruneHint(hints, var, {}, std::move(labels));
+        }
+        return;
+    }
+    if (auto* bin = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr)) {
+        if (!*bin || (*bin)->op != cypher::BinaryOperator::AND)
+            return;
+        collectStaticPruneHints((*bin)->left, ctx, hints);
+        collectStaticPruneHints((*bin)->right, ctx, hints);
+    }
+}
+
 // ==================== Bound Plan Index Scan Optimization ====================
 
 /// Extract AND-chain of BoundBinaryOp conditions from a BoundExpression.
@@ -957,7 +1118,8 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
     // from every downstream consumer (Project / Filter / Sort / Aggregate /
     // Set / Remove / Delete / Merge). Variable references are canonicalized
     // through alias_map before keying the result.
-    ctx.requirements = optimizer::collectPlanRequirements(bound_plan.root, ctx.resolver(), &fresh_expands);
+    ctx.requirements =
+        optimizer::collectPlanRequirements(bound_plan.root, ctx.resolver(), &fresh_expands, &ctx.label_defs);
 
     // Phase 2 (Decide): Allocate slot_ids for every appended PE column.
     // source_types tells the Decide phase which source columns are already
@@ -1209,7 +1371,7 @@ PhysicalPlanner::planChosen(const optimizer::ChosenPlan& chosen, IAsyncGraphData
     binder::BoundLogicalOperator materialized = materializeChosen(chosen);
     optimizer::allocateAllSlots(materialized, ctx.var_slots, ctx.slot_allocator);
     ctx.alias_map = optimizer::collectAliasSlotMap(materialized, ctx.var_slots);
-    ctx.requirements = optimizer::collectPlanRequirements(materialized, ctx.resolver());
+    ctx.requirements = optimizer::collectPlanRequirements(materialized, ctx.resolver(), nullptr, &ctx.label_defs);
     auto source_types = optimizer::collectSourceTypes(materialized, ctx.resolver());
     ctx.extraction_info =
         optimizer::buildExtractionInfo(ctx.requirements, source_types, ctx.resolver(), ctx.slot_allocator);
@@ -1283,9 +1445,16 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_schema.push_back(val.variable);
                     output_types.push_back(binder::BoundType::VertexRef());
                 }
+                std::vector<LabelId> prune_labels;
+                if (ctx.eval_ctx.allow_static_schema_pruning) {
+                    auto hint = ctx.static_prune_hints.find(val.variable);
+                    if (hint != ctx.static_prune_hints.end())
+                        prune_labels = hint->second.vertex_labels;
+                }
                 auto result = std::make_unique<AllNodeScanPhysicalOp>(
                     val.variable, std::vector<binder::BoundType>(output_types), store, ctx.label_name_to_id,
-                    ctx.label_defs, anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
+                    ctx.label_defs, anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{},
+                    std::move(prune_labels));
                 TupleSlotLayout scan_layout = makeSlotLayout(output_schema, ctx);
                 auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                       std::move(output_types), std::move(scan_layout)};
@@ -1467,7 +1636,34 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         }
                     }
 
+                    // Read-only IS NOT NULL property filters can restrict the
+                    // scans below the filter to labels that define the property.
+                    auto saved_prune_hints = ctx.static_prune_hints;
+                    if (ctx.eval_ctx.allow_static_schema_pruning)
+                        collectStaticPruneHints(v.predicate, ctx, ctx.static_prune_hints);
+                    if (auto* scan_ptr = std::get_if<binder::BoundScanOp>(&v.child)) {
+                        if (!scan_ptr->variable.empty()) {
+                            auto labels = collectStaticVertexPruneLabels(ctx, v.predicate);
+                            if (!labels.empty())
+                                ctx.static_prune_hints[scan_ptr->variable].vertex_labels = std::move(labels);
+                        }
+                    }
+
+                    if (auto* expand_ptr = std::get_if<std::unique_ptr<binder::BoundExpandOp>>(&v.child)) {
+                        if (expand_ptr && *expand_ptr && !(*expand_ptr)->edge_variable.empty()) {
+                            auto hint = ctx.static_prune_hints.find((*expand_ptr)->edge_variable);
+                            if (hint != ctx.static_prune_hints.end() && !hint->second.edge_labels.empty()) {
+                                (*expand_ptr)->edge_label_ids = hint->second.edge_labels;
+                            } else {
+                                auto edge_labels = collectStaticEdgePruneLabels(ctx, v.predicate);
+                                if (!edge_labels.empty())
+                                    (*expand_ptr)->edge_label_ids = std::move(edge_labels);
+                            }
+                        }
+                    }
+
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
+                    ctx.static_prune_hints = std::move(saved_prune_hints);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
                     auto cr = extractChildResult(std::move(child_result));

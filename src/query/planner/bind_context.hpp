@@ -53,6 +53,10 @@ struct BindContext {
     using ScopeId = binder::ScopeId;
     static constexpr ScopeId kRootScope = binder::kRootScope;
 
+    /// Set when any mutation clause (CREATE/MERGE/SET/REMOVE/DELETE) is
+    /// bound anywhere in the statement, including subqueries.
+    bool has_mutation = false;
+
     /// Map from variable name to column information.
     /// Scope-local: WITH clauses reset this to just their outputs, so names
     /// projected by an earlier WITH disappear here even though operators in

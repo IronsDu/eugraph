@@ -41,6 +41,9 @@ struct EvalContext {
     class IAsyncGraphDataStore* store = nullptr;
     /// Meta store for label lookups during lazy loading.
     class IAsyncGraphMetaStore* meta = nullptr;
+    /// True for read-only statements: a property reference that binds to no
+    /// label/edge-label can be treated as statically NULL by filters.
+    bool allow_static_schema_pruning = false;
 };
 
 /// Scalar function execution callback (kept only as an adapter source for

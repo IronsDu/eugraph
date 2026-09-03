@@ -163,11 +163,15 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
         .alias_map = {},
         .slot_allocator = {},
         .fresh_expands = {},
+        .static_prune_hints = {},
         .func_registry = ctx->func_registry.get(),
     };
 
     plan_ctx.eval_ctx.catalog = ctx->catalog.get();
     plan_ctx.eval_ctx.label_defs = &ctx->label_defs;
+    // Static property pruning is only valid when the statement itself cannot
+    // create labels/properties between bind time and execution time.
+    plan_ctx.eval_ctx.allow_static_schema_pruning = !binder.ctx().has_mutation;
 
     // Populate variable → SlotId mapping from the Binder's symbol table.
     // This covers ALL variables (including intermediate anon edges/nodes),

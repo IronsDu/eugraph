@@ -60,6 +60,15 @@ struct PlanContext {
     /// emit Construct columns for names that canonicalForName would
     /// conflate with an alias chain (§6.2).
     optimizer::NameSlotMap fresh_expands;
+    /// Candidate label / edge-label scan restriction derived from read-only
+    /// IS NOT NULL property filters. Only labels that actually define the
+    /// property need to be scanned; rows for all other labels evaluate to
+    /// false under the bind-time schema.
+    struct StaticPruneHint {
+        std::vector<LabelId> vertex_labels;
+        std::vector<EdgeLabelId> edge_labels;
+    };
+    std::unordered_map<std::string, StaticPruneHint> static_prune_hints = {};
     /// Built-in function catalog, used by dbms.functions() procedure rows.
     const function::FunctionRegistry* func_registry = nullptr;
 
