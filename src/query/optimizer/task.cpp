@@ -144,9 +144,15 @@ void EGroupTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     group.exploring = true;
     group.explored = false;
 
-    if (!group.logical_exprs.empty()) {
-        ExprId first_eid = group.logical_exprs.front();
-        queue.push(std::make_unique<OExprTask>(first_eid, /*explore=*/true, memo, context_id_, /*last=*/true));
+    // Explore every logical expression. Columbia only explores the first and
+    // relies on transformation-rule confluence; eugraph's FilterPushdown is
+    // not confluent, so each expression must receive its own explore pass.
+    // The last O_EXPR of the cascade must always close E_GROUP, regardless of
+    // whether the E_GROUP task itself was marked Last.
+    for (size_t i = group.logical_exprs.size(); i > 0; --i) {
+        ExprId eid = group.logical_exprs[i - 1];
+        bool is_last = (i == group.logical_exprs.size());
+        queue.push(std::make_unique<OExprTask>(eid, /*explore=*/true, memo, context_id_, is_last));
     }
 }
 
@@ -203,7 +209,10 @@ void OExprTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
         last_ = has_last;
     }
 
-    // Push E_GROUP for child inputs that haven't been explored.
+    // Push E_GROUP for child inputs that have not been explored yet. Columbia
+    // only explores non-leaf pattern inputs, but eugraph's current rule set
+    // and search-space construction rely on child exploration to complete
+    // before transformation rules fire (see WithWhere2 TCK regression).
     for (GroupId child_gid : expr.child_groups) {
         Group& child_group = memo.getGroup(child_gid);
         if (child_group.explored || child_group.exploring || child_group.optimized)

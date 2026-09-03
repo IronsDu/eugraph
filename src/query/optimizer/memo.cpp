@@ -16,6 +16,26 @@
 namespace eugraph {
 namespace optimizer {
 
+namespace {
+
+bool isEnricherTag(PhysicalOpTag tag) {
+    return tag == PhysicalOpTag::VertexEnrich || tag == PhysicalOpTag::EdgeEnrich || tag == PhysicalOpTag::PathEnrich ||
+           tag == PhysicalOpTag::VertexPropertyExtract || tag == PhysicalOpTag::EdgePropertyExtract ||
+           tag == PhysicalOpTag::PathPropertyExtract;
+}
+
+void mergeOnlyVariablesProducedBy(VarRequirements& dst, const VarRequirements& src, const LogProp& input_lp) {
+    std::unordered_set<std::string> produced;
+    for (const auto& col : input_lp.columns)
+        produced.insert(col.variable);
+    for (const auto& [var, req] : src) {
+        if (produced.count(var))
+            dst[var].merge(req);
+    }
+}
+
+} // namespace
+
 // ============================================================
 // Helper: setChild — rebuild child reference in a BoundLogicalOperator
 // ============================================================
@@ -290,10 +310,10 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid, const PhysProp& pro
         binder::BoundLogicalOperator result =
             expr.isPhysical() ? cloneBoundLogicalOperator(expr.physOp().source) : cloneBoundLogicalOperator(expr.op);
 
-        // Children: recurse with PhysProp{} (any-property), matching
-        // extractChosen's winner-chain walk. Previously this called the
-        // no-prop overload, which silently fell back to RBO for subtrees
-        // — making plan.root diverge from plan.chosen when winners exist.
+        // copyOut feeds the planBound RBO fallback path, which re-derives all
+        // materialization requirements itself. Keep child recursion at
+        // "any" here; extracting the CBO winner chain with per-input
+        // properties is extractChosen's responsibility.
         if (expr.child_groups.size() == 1) {
             auto child = copyOut(expr.child_groups[0], PhysProp{});
             setChild(result, std::move(child));
@@ -361,9 +381,10 @@ std::unique_ptr<ChosenPlan> Memo::extractChosen(GroupId root_gid, const PhysProp
         // operator's per-input declaration and what the parent context
         // demands transitively. Must mirror OInputsTask::inputRequiredProp.
         VarRequirements child_mat;
+        const LogProp& child_lp = getGroup(child_gid).getLogProp(*this, catalog_);
         if (i < expr.physOp().required_input_mat.size())
-            mergeVarRequirements(child_mat, expr.physOp().required_input_mat[i]);
-        mergeVarRequirements(child_mat, prop.materializations());
+            mergeOnlyVariablesProducedBy(child_mat, expr.physOp().required_input_mat[i], child_lp);
+        mergeOnlyVariablesProducedBy(child_mat, prop.materializations(), child_lp);
         // Enricher enforcers themselves contribute their output to the
         // transitively-required materializations for their (recursive)
         // input — but Enrichers don't *require* materialization from
@@ -376,12 +397,7 @@ std::unique_ptr<ChosenPlan> Memo::extractChosen(GroupId root_gid, const PhysProp
             expr.physOp().tag != PhysicalOpTag::PathPropertyExtract) {
             // Self-referential non-enforcer expr — unusual; leave as-is.
         }
-        bool is_enricher = expr.physOp().tag == PhysicalOpTag::VertexEnrich ||
-                           expr.physOp().tag == PhysicalOpTag::EdgeEnrich ||
-                           expr.physOp().tag == PhysicalOpTag::PathEnrich ||
-                           expr.physOp().tag == PhysicalOpTag::VertexPropertyExtract ||
-                           expr.physOp().tag == PhysicalOpTag::EdgePropertyExtract ||
-                           expr.physOp().tag == PhysicalOpTag::PathPropertyExtract;
+        bool is_enricher = isEnricherTag(expr.physOp().tag);
         if (is_enricher) {
             // Enricher/Extract's input is topology form — require "any".
             child_mat.clear();
@@ -548,6 +564,8 @@ GroupId Memo::mergeGroups(GroupId g1, GroupId g2) {
 }
 
 GroupExpr* Memo::insertExpr(std::unique_ptr<GroupExpr> expr, GroupId target_group) {
+    if (expr->id == INVALID_EXPR_ID)
+        expr->id = newExprId();
     expr->group_id = target_group;
     GroupExpr* raw = expr.get();
     exprs_.push_back(std::move(expr));
@@ -564,6 +582,8 @@ GroupExpr* Memo::insertPhysExpr(std::unique_ptr<GroupExpr> expr, GroupId target_
     if (auto* dup = findPhysDuplicate(expr->physOp(), expr->child_groups))
         return dup;
 
+    if (expr->id == INVALID_EXPR_ID)
+        expr->id = newExprId();
     expr->group_id = target_group;
     GroupExpr* raw = expr.get();
     exprs_.push_back(std::move(expr));
@@ -662,8 +682,7 @@ ExprId Memo::insertEnricherEnforcer(GroupId g, const VarRequirements& req_mat) {
         phys->tag = tag;
         phys->enrich_variable = var;
         phys->output_mat = output;
-        ExprId eid = newExprId();
-        auto gexpr = std::make_unique<GroupExpr>(eid, g, std::move(phys), std::vector<GroupId>{g});
+        auto gexpr = std::make_unique<GroupExpr>(INVALID_EXPR_ID, g, std::move(phys), std::vector<GroupId>{g});
         return insertPhysExpr(std::move(gexpr), g)->id;
     }
 
@@ -689,8 +708,7 @@ ExprId Memo::insertEnricherEnforcer(GroupId g, const VarRequirements& req_mat) {
     phys->tag = tag;
     phys->enrich_variable.clear(); // combined: all variables live in output_mat
     phys->output_mat = std::move(output);
-    ExprId eid = newExprId();
-    auto gexpr = std::make_unique<GroupExpr>(eid, g, std::move(phys), std::vector<GroupId>{g});
+    auto gexpr = std::make_unique<GroupExpr>(INVALID_EXPR_ID, g, std::move(phys), std::vector<GroupId>{g});
     return insertPhysExpr(std::move(gexpr), g)->id;
 }
 

@@ -193,6 +193,54 @@ TEST(FilterPushdownTest, FilterAboveProjectNotPushed) {
     ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundProjectOp>>(filt->child));
 }
 
+TEST(FilterPushdownTest, FilterAboveFilterIsPushed) {
+    // Adjacent filters commute. FilterOuter(FilterInner(X)) can be rewritten
+    // to FilterInner(FilterOuter(X)); the penetration table must include Filter.
+    auto inner = std::make_unique<BoundFilterOp>();
+    inner->predicate = BoundLiteral(false);
+    inner->child = makeLabelScan("n", 0);
+
+    auto outer = std::make_unique<BoundFilterOp>();
+    outer->predicate = BoundLiteral(true);
+    outer->child = BoundLogicalOperator(std::move(inner));
+
+    // Rule-level check: condition accepts Filter as penetrable and substitute
+    // moves the outer predicate below the original inner Filter.
+    {
+        Memo memo;
+        auto inner_copy = std::make_unique<BoundFilterOp>();
+        inner_copy->predicate = BoundLiteral(false);
+        inner_copy->child = makeLabelScan("n", 0);
+        auto outer_copy = std::make_unique<BoundFilterOp>();
+        outer_copy->predicate = BoundLiteral(true);
+        outer_copy->child = BoundLogicalOperator(std::move(inner_copy));
+        BoundLogicalOperator root(std::move(outer_copy));
+        auto gid = memo.copyIn(root);
+        GroupExpr& outer_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+        FilterPushdownRule rule;
+        EXPECT_TRUE(rule.condition(outer_expr, memo));
+
+        auto subs = rule.substitute(outer_expr, memo);
+        ASSERT_EQ(subs.size(), 1u);
+        const auto& pushed_root = subs[0]->op;
+        ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(pushed_root));
+        const auto& pushed_filter = std::get<std::unique_ptr<BoundFilterOp>>(pushed_root);
+        ASSERT_TRUE(std::holds_alternative<BoundLiteral>(pushed_filter->predicate));
+        EXPECT_EQ(std::get<BoundLiteral>(pushed_filter->predicate).value, Value(false));
+    }
+
+    BoundLogicalPlan plan;
+    plan.root = BoundLogicalOperator(std::move(outer));
+
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan);
+
+    // Optimizer must remain stable with adjacent filters; exact root winner is
+    // cost-dependent, so only require a valid optimized plan here.
+    ASSERT_FALSE(plan.root.valueless_by_exception());
+    ASSERT_NE(plan.chosen, nullptr);
+}
+
 TEST(FilterPushdownTest, FilterAboveLimitNotPushed) {
     // Cypher: MATCH ... WITH ... LIMIT 1 WHERE ... RETURN ...
     // Binder places Filter ABOVE Limit; pushing it below Limit changes which
@@ -284,6 +332,44 @@ TEST(FilterPushdownTest, FilterAboveSkipNotPushed) {
     EXPECT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
     ASSERT_EQ(plan.chosen->children.size(), 1u);
     EXPECT_EQ(plan.chosen->children[0]->tag, PhysicalOpTag::Skip);
+}
+
+TEST(FilterPushdownTest, SubstituteEnumeratesAllPenetrableChildExprs) {
+    // If the child group contains several equivalent penetrable expressions,
+    // FilterPushdown must produce one substitute per expression, not just
+    // for logical_exprs.back().
+    Memo memo;
+    auto scan = makeLabelScan("n", 0);
+    auto scan_gid = memo.copyIn(scan);
+
+    auto make_expand = [&](const std::string& edge, const std::string& dst) {
+        auto e = std::make_unique<BoundExpandOp>();
+        e->src_variable = "n";
+        e->src_column_index = 0;
+        e->edge_variable = edge;
+        e->edge_column_index = 1;
+        e->dst_variable = dst;
+        e->dst_column_index = 2;
+        return e;
+    };
+
+    auto e1 = make_expand("r1", "m1");
+    GroupExpr* first = memo.createGroupWithExpr(BoundLogicalOperator(std::move(e1)), {scan_gid});
+    GroupId child_gid = first->group_id;
+
+    auto e2 = make_expand("r2", "m2");
+    auto ge2 = std::make_unique<GroupExpr>(memo.newExprId(), child_gid, BoundLogicalOperator(std::move(e2)),
+                                           std::vector<GroupId>{scan_gid});
+    memo.insertExpr(std::move(ge2), child_gid);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundLiteral(true);
+    GroupExpr* filter_expr = memo.createGroupWithExpr(BoundLogicalOperator(std::move(filter)), {child_gid});
+
+    FilterPushdownRule rule;
+    EXPECT_TRUE(rule.condition(*filter_expr, memo));
+    auto subs = rule.substitute(*filter_expr, memo);
+    EXPECT_EQ(subs.size(), 2u);
 }
 
 TEST(FilterPushdownTest, NoFilterNoChange) {
@@ -1561,6 +1647,26 @@ TEST(TaskQueueTest, LIFOOrderingPopsMostRecentFirst) {
     EXPECT_EQ(g2.groupId(), GroupId{2});
     EXPECT_EQ(g3.groupId(), GroupId{1});
     EXPECT_EQ(t4, nullptr); // empty queue returns nullptr, not throws
+}
+
+TEST(TaskExplorationTest, EGroupExploresEveryLogicalExpr) {
+    Memo memo;
+    auto scan1 = makeLabelScanWithLabel("n", 0, LabelId{1});
+    auto scan2 = makeLabelScanWithLabel("m", 1, LabelId{2});
+    auto gid = memo.createGroupWithExpr(std::move(scan1), {})->group_id;
+    memo.insertExpr(std::make_unique<GroupExpr>(memo.newExprId(), gid, std::move(scan2), std::vector<GroupId>{}), gid);
+
+    RuleSet rules;
+    TaskQueue queue;
+    EGroupTask task(gid, /*context_id=*/0);
+    task.perform(memo, rules, queue);
+
+    int oexpr_count = 0;
+    while (auto follow_up = queue.pop()) {
+        if (dynamic_cast<OExprTask*>(follow_up.get()))
+            ++oexpr_count;
+    }
+    EXPECT_EQ(oexpr_count, 2);
 }
 
 TEST(TaskStateTest, LastApplyRuleConditionFailureStillClosesExploration) {
