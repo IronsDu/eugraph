@@ -68,7 +68,7 @@ struct PlanContext {
         std::vector<LabelId> vertex_labels;
         std::vector<EdgeLabelId> edge_labels;
     };
-    std::unordered_map<std::string, StaticPruneHint> static_prune_hints;
+    std::unordered_map<std::string, StaticPruneHint> static_prune_hints = {};
     /// Built-in function catalog, used by dbms.functions() procedure rows.
     const function::FunctionRegistry* func_registry = nullptr;
 

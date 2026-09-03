@@ -49,8 +49,9 @@ struct ColumnSpec {
         /// BoundDynamicPropertyRef on edges.
         ConstructEdge,
         /// Coalesced flat property column over several vertex labels.
-        /// Candidates are fetched per label and the first value whose label
-        /// is present on the row wins; avoids constructing a VertexValue.
+        /// Candidates are fetched per label; returns a scalar when only one
+        /// present label has the property, or a list when several do.
+        /// Avoids constructing a VertexValue.
         LoadVertexPropCoalesce,
     };
 
@@ -70,9 +71,6 @@ struct ColumnSpec {
     EdgeLabelId edge_label_id = INVALID_EDGE_LABEL_ID;
     /// Property id for LoadVertexProp / LoadEdgeProp.
     uint16_t prop_id = 0;
-    /// Optional projection for ConstructVertex: only fetch these
-    /// (label, prop) pairs. Empty means fetch all properties.
-    std::vector<std::pair<LabelId, uint16_t>> project_props;
     /// Candidates for LoadVertexPropCoalesce.
     std::vector<std::pair<LabelId, uint16_t>> coalesce_candidates;
 };

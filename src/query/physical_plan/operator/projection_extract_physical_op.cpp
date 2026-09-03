@@ -201,8 +201,11 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             }
         }
 
-        // Prefetch coalesced multi-candidate vertex properties.
-        std::vector<std::vector<std::optional<PropertyValue>>> vertex_coalesce_cache(n_specs);
+        // Prefetch coalesced multi-candidate vertex properties. Each row may
+        // have values from several present labels; the runtime semantics are
+        // scalar if exactly one label has the property, or a list if multiple
+        // labels on the same vertex define it.
+        std::vector<std::vector<std::vector<PropertyValue>>> vertex_coalesce_cache(n_specs);
         for (size_t i = 0; i < n_specs; ++i) {
             const auto& spec = specs_[i];
             if (spec.kind != ColumnSpec::Kind::LoadVertexPropCoalesce)
@@ -211,9 +214,12 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
 
             std::vector<VertexId> ref_vids;
             std::vector<size_t> ref_rows;
-            size_t vid_cache_col = SIZE_MAX;
-            VertexId vid_cache = INVALID_VERTEX_ID;
             for (size_t row = 0; row < row_count; ++row) {
+                // resolveVertexId caches only by source column, so the cache
+                // must be reset for each row to avoid reusing the previous
+                // row's VertexId for every later row.
+                size_t vid_cache_col = SIZE_MAX;
+                VertexId vid_cache = INVALID_VERTEX_ID;
                 VertexId vid = resolveVertexId(*chunk, spec.source_col, row, vid_cache_col, vid_cache);
                 if (vid == INVALID_VERTEX_ID)
                     continue;
@@ -239,8 +245,7 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 for (size_t j = 0; j < ids.size() && j < values.size(); ++j) {
                     if (!values[j].has_value() || values[j]->size() <= pid || !(*values[j])[pid].has_value())
                         continue;
-                    if (!vertex_coalesce_cache[i][rows[j]].has_value())
-                        vertex_coalesce_cache[i][rows[j]] = (*values[j])[pid];
+                    vertex_coalesce_cache[i][rows[j]].push_back((*values[j])[pid].value());
                 }
             }
         }
@@ -302,12 +307,7 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     ids.reserve(local_rows.size());
                     for (size_t j : local_rows)
                         ids.push_back(ref_vids[j]);
-                    std::vector<uint16_t> projection;
-                    for (const auto& [plid, pid] : spec.project_props) {
-                        if (plid == lid)
-                            projection.push_back(pid);
-                    }
-                    auto props = co_await store_.batchGetVertexProperties(ids, lid, projection);
+                    auto props = co_await store_.batchGetVertexProperties(ids, lid, {});
                     for (size_t j = 0; j < ids.size() && j < props.size(); ++j) {
                         if (props[j].has_value())
                             vertex_ctor_cache[i][ref_rows[local_rows[j]]]->properties[lid] = std::move(*props[j]);
@@ -377,10 +377,22 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexPropCoalesce: {
-                    if (row < vertex_coalesce_cache[i].size() && vertex_coalesce_cache[i][row].has_value())
-                        output.columns[i].setValue(row, propertyValueToValue(*vertex_coalesce_cache[i][row]));
-                    else
+                    if (row < vertex_coalesce_cache[i].size()) {
+                        const auto& values = vertex_coalesce_cache[i][row];
+                        if (values.empty()) {
+                            output.columns[i].setNull(row);
+                        } else if (values.size() == 1) {
+                            output.columns[i].setValue(row, propertyValueToValue(values[0]));
+                        } else {
+                            ListValue lv;
+                            lv.elements.reserve(values.size());
+                            for (const auto& pv : values)
+                                lv.elements.push_back(ValueStorage{propertyValueToValue(pv)});
+                            output.columns[i].setValue(row, Value(std::move(lv)));
+                        }
+                    } else {
                         output.columns[i].setNull(row);
+                    }
                     break;
                 }
                 case ColumnSpec::Kind::LoadEdgeProp: {

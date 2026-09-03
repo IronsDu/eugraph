@@ -66,14 +66,10 @@ struct PEPlan {
     /// Slot id for LoadEdgeType column (need_edge_type).
     binder::SlotId type_slot_id = binder::INVALID_SLOT_ID;
 
-    /// Property projection for a ConstructVertex column. Empty means "all
-    /// properties" (RETURN n). When set, only these (label, prop) pairs are
-    /// fetched; this is the multi-candidate property case such as n.name.
-    std::vector<std::pair<LabelId, uint16_t>> construct_vertex_props;
-
     /// Multi-candidate vertex properties lowered to one coalesced flat
-    /// column per property name. The PE operator fetches only these
-    /// candidates and picks the first value whose label is present.
+    /// column per property name. The PE operator fetches all candidates and
+    /// returns a scalar when exactly one present label has the property, or
+    /// a list when multiple present labels define it.
     struct CoalesceVertex {
         std::vector<std::pair<LabelId, uint16_t>> candidates;
         binder::SlotId slot_id = binder::INVALID_SLOT_ID;

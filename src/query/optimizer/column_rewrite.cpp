@@ -908,6 +908,8 @@ void dedupeVarReqs(VariableRequirement& r) {
     };
     dedupe(r.vertex_props);
     dedupe(r.edge_props);
+    for (auto& [prop, candidates] : r.coalesce_vertex_props)
+        dedupe(candidates);
 }
 
 void collectSourceTypesOp(const binder::BoundLogicalOperator& op, SourceTypes& types, const SlotResolver& resolver) {
@@ -1703,7 +1705,11 @@ PEPlans buildExtractionInfo(const PlanRequirements& reqs, const SourceTypes& sou
             } else {
                 pi.object_slot_id = alloc.nextInternal();
             }
-            pi.construct_vertex_props = r.vertex_props;
+            // A whole-vertex Construct column must carry every property of the
+            // entity (RETURN n, path elements, dynamic property access). The
+            // precise property list in r.vertex_props is only for flat
+            // per-label loads / coalesced property columns, not for limiting
+            // full vertex construction.
             plans[slot] = std::move(pi);
             continue;
         }
