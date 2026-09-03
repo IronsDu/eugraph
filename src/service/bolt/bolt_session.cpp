@@ -6,6 +6,14 @@ namespace eugraph {
 namespace service {
 namespace bolt {
 
+namespace {
+
+int64_t elapsedMs(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+}
+
+} // namespace
+
 // ==================== Handshake ====================
 
 std::vector<uint8_t> BoltSession::negotiateHandshake(const uint8_t* data, size_t len) {
@@ -405,6 +413,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
         co_return makeFailure("ProtocolError", "Unexpected RUN in current state");
     }
 
+    query_start_ = std::chrono::steady_clock::now();
+
     // Convert Bolt parameters to internal Values
     std::unordered_map<std::string, Value> params;
     for (auto& [key, val] : msg.parameters) {
@@ -446,7 +456,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
         for (auto& col : stream_ctx_->columns)
             field_list.push_back({col});
         meta["fields"] = std::move(field_list);
-        meta["t_first"] = static_cast<int64_t>(0);
+        meta["t_first"] = elapsedMs(query_start_);
 
         // State transition
         if (state_ == SessionState::TX_READY) {
@@ -504,6 +514,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
     std::vector<uint8_t> response;
     int64_t fetched = 0;
     int64_t limit = msg.n;
+    bool have_first_record = false;
+    std::chrono::steady_clock::time_point first_record_at;
 
     try {
         // Read the async generator to completion. Early-returning on LIMIT
@@ -516,6 +528,11 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
             for (auto& row : rows) {
                 if (limit >= 0 && fetched >= limit)
                     continue;
+
+                if (!have_first_record) {
+                    have_first_record = true;
+                    first_record_at = std::chrono::steady_clock::now();
+                }
 
                 std::vector<packstream::Value> record_fields;
                 for (auto& val : row) {
@@ -540,7 +557,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         // Build success metadata
         std::unordered_map<std::string, packstream::Value> meta;
         meta["type"] = std::string{"r"};
-        meta["t_last"] = static_cast<int64_t>(0);
+        meta["t_first"] = have_first_record ? elapsedMs(first_record_at) : elapsedMs(query_start_);
+        meta["t_last"] = elapsedMs(query_start_);
         // The generator was consumed to completion above, so there is never
         // another PULL to serve.
         meta["has_more"] = false;
