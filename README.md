@@ -1,25 +1,35 @@
 # EuGraph
 
+![OpenCypher TCK](https://img.shields.io/badge/OpenCypher%20TCK-3847%20passed%2C%200%20failed-brightgreen)
+![CALL](https://img.shields.io/badge/CALL%2FProcedure-Not%20Yet-yellow)
+
 单机图数据库：
 
-- 实现 [openCypher](https://opencypher.org/) 查询语言（尚未 100% 覆盖 openCypher 标准），并做了若干扩展
+- 支持 [openCypher](https://opencypher.org/) 查询语言，并做了若干扩展
 - 实现 Neo4j Bolt 协议，任意 Neo4j 官方/社区驱动可直接连接
 
 ## 特性
 
 ### 查询语言：openCypher（含扩展）
 
+openCypher TCK 覆盖情况：全部已执行场景通过；目前未实现的场景集中在 `CALL` / 存储过程相关能力。详细分类结果见 [docs/tests/tck-results.md](docs/tests/tck-results.md)。
+
 **扩展**（在 openCypher 基础上新增）
 
 - `EXPLAIN` 前缀（`EXPLAIN MATCH ...`）
-- 标签转型操作符 `::`（`n::Label` / `n::Label.prop`）
+- 多标签与强弱模式混合属性访问
+  - **便捷模式 / 弱模式**：`n.name` 自动在所有标签（含隐藏的 `__anon__`）中查找属性；单个标签命中返回标量，多个标签同名冲突时合并为列表返回
+  - **强模式 / 类型安全模式**：`n::Label` / `n::Label.prop`，在编译期校验属性是否存在，并只访问指定标签下的属性；也支持 `SET n::Label.prop = ...`
+  - 支持多标签节点 `(n:A:B)`、`CREATE (n:A:B {...})`、`SET n:Label` 等
+  - 详见 [docs/features/multi-label-design.md](docs/features/multi-label-design.md)
 - 额外数值字面量格式：十六进制（`0xFF`）、八进制（`0o17`）、下划线分隔（`1_000_000`）—— 标准 openCypher 仅支持十进制和科学计数法
 
-**Neo4j 扩展中有但暂未实现的**（这些不在 openCypher 标准，但 Neo4j 用户可能期望）
+**暂未实现 / 远期规划**
 
-- `LOAD CSV`（项目另有独立的 `eugraph-loader` CSV 批量导入工具替代）
-- `FOREACH`
-- `PROFILE`（已有 `EXPLAIN`，`PROFILE` 暂未实现）
+- `CALL` / 存储过程
+- Neo4j 扩展中的 `LOAD CSV`（项目另有独立的 `eugraph-loader` CSV 批量导入工具替代）
+- Neo4j 扩展中的 `FOREACH`
+- Neo4j 扩展中的 `PROFILE`（已有 `EXPLAIN`，`PROFILE` 暂未实现）
 
 ### Neo4j Bolt 协议支持
 
