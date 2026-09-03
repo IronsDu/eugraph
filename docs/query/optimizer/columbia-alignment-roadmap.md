@@ -89,6 +89,92 @@
 - [ ] **P2-7 BINDERY 多 binding / rule subsumption mask 未实现**（`OptRule::fullMatch` 当前无调用）。
 - [x] **P2-8 `LogicalOptimizer` 重复调用会重复注册 rules 并复用 Memo**（optimize 入口重置 memo/rules）。
 
+## 剩余两项待办的深度说明
+
+### P2-3：O_GROUP 非 any 属性路径 + Sort Enforcer
+
+**作用**：Cascades 的优化上下文除了代价上界，还携带“要求哪种物理属性”（`PhysProp`）。Columbia 的
+`O_GROUP` 在遇到 sorted 等非 any 需求时，会同时做两件事：用当前属性优化一遍；用 any 优化出最便宜的
+未排序计划，再在它上面插入 Sort Enforcer 升级为有序计划，最后按代价比较“原生有序”与“any+Sort”。
+
+**当前状态**：`PhysProp` 已定义 sort order，但根 context 固定 any，`O_INPUTS` 不传播排序需求，
+`O_GROUP` 没有 enforcer + any-context 分支，也没有规则能产出 sorted winner。当前 `ORDER BY` 查询
+正确，是因为逻辑计划里本身有 `BoundSortOp`，直接被实现成 `SortPhysicalOp`，并不经过这套属性机制。
+
+**影响评估**：
+- 当前：无正确性影响，该路径实际是死代码。
+- 未来触发点：
+  1. 索引序扫描替代 Sort（`ORDER BY age LIMIT n` 借助 age 索引避免全排序）；
+  2. Sort-merge join 需要知道子计划是否有序；
+  3. 避免上层 ORDER BY 与下层已有有序计划的重复排序；
+  4. 手工构造 sorted context 的测试/扩展会选不出 plan 并回退 RBO。
+
+### P2-7：BINDERY 多 binding + Rule Subsumption Mask
+
+**BINDERY 的作用**：Columbia 的 BINDERY 会把规则 pattern 的每个非叶子输入绑定到 group 内所有等价
+表达式，枚举出全部 binding，再对每个 binding 分别执行 condition/substitute。例如结合律 pattern
+`(L1 join L2) join L3` 应匹配组内所有左深 join。
+
+**当前状态**：`OptRule::fullMatch` 存在但无调用；`ApplyRuleTask` 只做根类型 `topMatch` 后对单个
+GroupExpr 执行规则；FilterPushdown 自己只看 `logical_exprs.back()`。当前规则集全部是“单算子 →
+单算子”或单步下推，所以够用。
+
+**影响评估**：
+- 当前：无正确性影响，现有规则不需要多 binding。
+- 未来触发点：加入 Join 交换律/结合律、多层 transformation、或一个 group 内有多个等价表达式时，
+  只处理一个表达式会漏掉大量合法计划，搜索空间不完整，选不出最优计划。
+
+**Subsumption mask 的作用**：让规则声明“应用完我之后，新表达式上哪些规则不必再触发”，防止
+交换律/结合律等规则互相反复生成对方，导致不收敛或搜索爆炸。
+
+**当前状态**：`GroupExpr::rule_mask` 只表达“某规则在该表达式上是否已触发”，新表达式 mask 始终为 0，
+没有规则间 subsumption 声明。
+
+**影响评估**：
+- 当前：FilterPushdown 单调下推，实现规则单次触发，无循环风险。
+- 未来触发点：加入可互相重写的规则群后，优化循环可能长期不收敛，最终撞上
+  `kMaxIterations = 100000` 提前终止；或者 Memo 膨胀、优化时间暴涨。结果通常仍正确，但可能
+  表现为复杂 join 查询突然变慢或优化超时。
+
+## 第三轮核对：其余 Columbia 差异（新增观察）
+
+以下差异不影响当前规则集的正确性，先记录供后续规则扩展时一并处理：
+
+- [ ] **R-1 O_EXPR 无条件探索全部 child group**
+  `OExprTask::perform` 对所有 child 都推 `EGroupTask`；Columbia 只为规则 original pattern 中非叶子
+  输入推 E_GROUP。当前是过度探索，大计划会增加搜索开销。
+- [ ] **R-2 E_GROUP 只探索 first logical expr**
+  Columbia 也这么做，但依赖 transformation rule 的合流性；eugraph 靠 O_GROUP 遍历全部 logical expr
+  兜底。引入非合流多规则后，explore 阶段可能在 condition 之前不完整。
+- [ ] **R-3 FilterPushdown 只看 child group 的最后一个 logical expr**
+  组内有多个等价表达式时可能漏掉可下推形态或选到非代表性形态。当前组通常只有 1 个表达式，影响小。
+- [ ] **R-4 文档与实现不一致：Filter 自身可穿透**
+  `cascades-optimizer.md` 可穿透表标记 Filter ✅，但 `isPenetrable` 没有 `OptNodeType::Filter`。
+  相邻 Filter 合并/下推当前不会发生（性能优化缺口，不是语义 bug）。
+- [ ] **R-5 clone 与 hash/eq 的 slot 字段不一致**
+  hash/eq 已纳入 `BoundExpandOp`/`BoundVarLenExpandOp` 的 binder slot 字段，但
+  `cloneBoundLogicalOperator` 仍未拷贝这些字段。规则 substitute 产生的克隆会以 INVALID slot 参与
+  dedup，可能漏合并，增加重复表达式。
+- [ ] **R-6 extractChosen 未按 child schema 过滤 materialization 需求**
+  `OInputsTask::inputRequiredProp` 已过滤，但 `extractChosen` 仍把父需求全集塞给每个 child，随后靠
+  any-fallback 解包。物化需求复杂时 chosen 树可能与 winner 链不一致。
+- [ ] **R-7 copyOut(prop) 的子节点仍统一按 any 递归**
+  本轮只修了根 winner 选择；子节点属性传播尚未镜像 `extractChosen`。
+- [ ] **R-8 O_INPUTS 仍把每个新 winner 直接 done=true**
+  Columbia 只在最后一个 O_INPUTS 收尾时才 SetDone。当前靠 LIFO 原子性 + searchCircle 未完成防护规避，
+  但多 context/重入场景下语义仍与 Columbia 不完全一致。
+- [ ] **R-9 输入 group 的 context 上界仍为 infinity**
+  本轮只收紧当前 context；Columbia 会为每个输入计算 `InputBd = LocalUB - CostSoFar + InputCost`。
+  跨输入剪枝能力仍弱。
+- [ ] **R-10 混合类型多变量 Enricher 使用近似 tag**
+  多变量 Enricher 合并为一个 PhysicalExpr 时，混合 vertex/edge/path 只能选一个 tag 参与 cost model。
+  当前仅影响代价精度。
+- [ ] **R-11 InterestingProps / Context::done / const-group 短路未实现或未接线**
+  `InterestingProps` 无调用；`Context::done` 无使用；O_GROUP 的 const group 快速路径只有注释没有代码。
+- [ ] **R-12 Group::getLogProp 仅支持 logical_exprs**
+  physical-only group 会得到空 LogProp。当前 Enricher 插入原 group 规避了该限制；未来若做真正的
+  enforcer chain（每个 enforcer 一个 group）需要先补物理 group 的逻辑属性推导。
+
 ## 已确认的验证基线
 
 - 修复前：
