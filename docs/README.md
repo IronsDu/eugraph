@@ -141,6 +141,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [Cascades 优化器](query/optimizer/cascades-optimizer.md) | Memo、GroupExpr、Task 驱动优化、规则系统、FilterPushdown |
+| [Columbia 对齐改造路线图](query/optimizer/columbia-alignment-roadmap.md) | 与 Columbia 参考实现逐项差异、修复进度与验证用例 |
 
 ## RPC 服务
 

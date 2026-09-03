@@ -14,10 +14,14 @@ bool isPenetrable(OptNodeType type) {
     case OptNodeType::VarLenExpand:
     case OptNodeType::PathBuild:
     case OptNodeType::Sort:
-    case OptNodeType::Skip:
-    case OptNodeType::Limit:
     case OptNodeType::Distinct:
         return true;
+    // LIMIT and SKIP are NOT penetrable: Filter(Limit(n, X)) -> Limit(n, Filter(X))
+    // and Filter(Skip(n, X)) -> Skip(n, Filter(X)) change which rows are
+    // truncated/skipped, so the transformation is not semantics-preserving.
+    case OptNodeType::Skip:
+    case OptNodeType::Limit:
+        return false;
     default:
         return false;
     }

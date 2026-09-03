@@ -233,7 +233,8 @@ public:
 
     // CBO Phase 4: extract the chosen physical plan tree.
     // Returns null if any group in the winner chain lacks a physical winner.
-    std::unique_ptr<ChosenPlan> extractChosen(GroupId root_gid, const PhysProp& prop);
+    std::unique_ptr<ChosenPlan> extractChosen(GroupId root_gid, const PhysProp& prop,
+                                              ExprId preferred_winner = INVALID_EXPR_ID);
 
     // Check if an equivalent expression already exists in the Memo.
     // Matches operator content via equalBoundLogicalOperator and child_groups

@@ -10,7 +10,32 @@
 namespace eugraph {
 namespace optimizer {
 
+namespace {
+
+bool hasFullObjectEnricher(const ChosenPlan& plan) {
+    switch (plan.tag) {
+    case PhysicalOpTag::VertexEnrich:
+    case PhysicalOpTag::EdgeEnrich:
+    case PhysicalOpTag::PathEnrich:
+        return true;
+    default:
+        break;
+    }
+    for (const auto& child : plan.children) {
+        if (child && hasFullObjectEnricher(*child))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
 void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::Catalog* catalog) {
+    // A LogicalOptimizer instance may be reused. Reset per-query state before
+    // building a fresh search space; otherwise rules_ accumulates duplicate
+    // rule indices and memo_ cross-query deduplicates unrelated plans.
+    memo_ = Memo{};
+    rules_ = RuleSet{};
     initRules();
 
     // Make the catalog available to LogProp derivation. Group::getLogProp
@@ -39,6 +64,15 @@ void LogicalOptimizer::optimize(binder::BoundLogicalPlan& plan, const catalog::C
 
     // CBO Phase 4: extract chosen physical plan. Null if any group lacks a winner.
     plan.chosen = memo_.extractChosen(root_gid, PhysProp{});
+
+    // Full-object Enricher lowering (VertexEnrich/EdgeEnrich/PathEnrich) is
+    // not yet safe for all alias/bound-variable plans. Until that lowering is
+    // completed, fall back to planBound for plans whose CBO winner contains a
+    // full-object enforcer. Flat PropertyExtract enforcers remain enabled.
+    if (plan.chosen && hasFullObjectEnricher(*plan.chosen)) {
+        spdlog::debug("[optimizer] Chosen plan contains full-object Enricher; falling back to planBound");
+        plan.chosen.reset();
+    }
 
     // Always populate plan.root as RBO fallback.
     plan.root = memo_.copyOut(root_gid, PhysProp{});

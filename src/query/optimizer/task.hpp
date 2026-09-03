@@ -148,12 +148,15 @@ public:
     ApplyRuleTask(int rule_idx, ExprId expr_id, bool explore, int context_id = 0, bool last = false)
         : Task(context_id, last), rule_idx_(rule_idx), expr_id_(expr_id), explore_(explore) {}
 
+    ~ApplyRuleTask() override;
+
     void perform(Memo& memo, RuleSet& rules, TaskQueue& queue) override;
 
 private:
     int rule_idx_;
     ExprId expr_id_;
     bool explore_;
+    Memo* memo_ = nullptr; // set in perform() so the destructor can close the group
 };
 
 // ============================================================

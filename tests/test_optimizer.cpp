@@ -193,6 +193,99 @@ TEST(FilterPushdownTest, FilterAboveProjectNotPushed) {
     ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundProjectOp>>(filt->child));
 }
 
+TEST(FilterPushdownTest, FilterAboveLimitNotPushed) {
+    // Cypher: MATCH ... WITH ... LIMIT 1 WHERE ... RETURN ...
+    // Binder places Filter ABOVE Limit; pushing it below Limit changes which
+    // rows the limit sees and therefore changes query results.
+    auto limit = std::make_unique<BoundLimitOp>();
+    limit->constant = 1;
+    limit->child = makeLabelScan("n", 0);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(limit));
+    filter->predicate = BoundLiteral(true);
+
+    // Rule-level check: the pattern must not be considered applicable.
+    {
+        Memo memo;
+        auto limit_copy = std::make_unique<BoundLimitOp>();
+        limit_copy->constant = 1;
+        limit_copy->child = makeLabelScan("n", 0);
+
+        auto filter_copy = std::make_unique<BoundFilterOp>();
+        filter_copy->child = BoundLogicalOperator(std::move(limit_copy));
+        filter_copy->predicate = BoundLiteral(true);
+
+        BoundLogicalOperator rule_root(std::move(filter_copy));
+        auto gid = memo.copyIn(rule_root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+        FilterPushdownRule rule;
+        EXPECT_FALSE(rule.condition(filter_expr, memo));
+    }
+
+    BoundLogicalPlan plan;
+    plan.root = BoundLogicalOperator(std::move(filter));
+
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan);
+
+    // Filter must stay above Limit in both the RBO tree and the CBO winner.
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(plan.root));
+    auto& filt = std::get<std::unique_ptr<BoundFilterOp>>(plan.root);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundLimitOp>>(filt->child));
+
+    ASSERT_NE(plan.chosen, nullptr);
+    EXPECT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
+    ASSERT_EQ(plan.chosen->children.size(), 1u);
+    EXPECT_EQ(plan.chosen->children[0]->tag, PhysicalOpTag::Limit);
+}
+
+TEST(FilterPushdownTest, FilterAboveSkipNotPushed) {
+    // Cypher: MATCH ... WITH ... SKIP 1 WHERE ... RETURN ...
+    // Filter(Skip(X)) -> Skip(Filter(X)) changes which rows are skipped.
+    auto skip = std::make_unique<BoundSkipOp>();
+    skip->constant = 1;
+    skip->child = makeLabelScan("n", 0);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->child = BoundLogicalOperator(std::move(skip));
+    filter->predicate = BoundLiteral(true);
+
+    // Rule-level check: the pattern must not be considered applicable.
+    {
+        Memo memo;
+        auto skip_copy = std::make_unique<BoundSkipOp>();
+        skip_copy->constant = 1;
+        skip_copy->child = makeLabelScan("n", 0);
+
+        auto filter_copy = std::make_unique<BoundFilterOp>();
+        filter_copy->child = BoundLogicalOperator(std::move(skip_copy));
+        filter_copy->predicate = BoundLiteral(true);
+
+        BoundLogicalOperator rule_root(std::move(filter_copy));
+        auto gid = memo.copyIn(rule_root);
+        GroupExpr& filter_expr = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+        FilterPushdownRule rule;
+        EXPECT_FALSE(rule.condition(filter_expr, memo));
+    }
+
+    BoundLogicalPlan plan;
+    plan.root = BoundLogicalOperator(std::move(filter));
+
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan);
+
+    // Filter must stay above Skip in both the RBO tree and the CBO winner.
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundFilterOp>>(plan.root));
+    auto& filt = std::get<std::unique_ptr<BoundFilterOp>>(plan.root);
+    ASSERT_TRUE(std::holds_alternative<std::unique_ptr<BoundSkipOp>>(filt->child));
+
+    ASSERT_NE(plan.chosen, nullptr);
+    EXPECT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
+    ASSERT_EQ(plan.chosen->children.size(), 1u);
+    EXPECT_EQ(plan.chosen->children[0]->tag, PhysicalOpTag::Skip);
+}
+
 TEST(FilterPushdownTest, NoFilterNoChange) {
     // Build: Project → LabelScan (no Filter)
     auto project = std::make_unique<BoundProjectOp>();
@@ -328,6 +421,116 @@ TEST(MemoContentHashTest, HashDiffersWhenContentDiffers) {
     auto b = makeLabelScanWithLabel("n", 0, LabelId{2});
     EXPECT_NE(hashBoundLogicalOperator(a), hashBoundLogicalOperator(b));
     EXPECT_FALSE(equalBoundLogicalOperator(a, b));
+}
+
+TEST(MemoContentHashTest, DistinctColumnRefSlotsDoNotMerge) {
+    // SlotId is the semantic binding identity: same name/column/type with
+    // different slot_id must NOT be deduplicated into one group.
+    auto make_filter = [](SlotId slot) {
+        auto f = std::make_unique<BoundFilterOp>();
+        f->predicate = BoundColumnRef(0, BoundType::Vertex(), "n", slot);
+        f->child = makeLabelScan("n", 0);
+        return BoundLogicalOperator(std::move(f));
+    };
+
+    Memo memo;
+    auto t10 = make_filter(SlotId{10});
+    auto g10 = memo.copyIn(t10);
+    auto t20 = make_filter(SlotId{20});
+    auto g20 = memo.copyIn(t20);
+
+    EXPECT_NE(g10, g20);
+}
+
+TEST(MemoContentHashTest, DistinctCorrelatedSourceSlotsDoNotMerge) {
+    auto make_source = [](SlotId slot) {
+        BoundCorrelatedSourceOp src;
+        src.variables = {"n"};
+        src.types = {BoundType::Vertex()};
+        src.column_indices = {0};
+        src.slot_ids = {slot};
+        return BoundLogicalOperator(std::move(src));
+    };
+
+    Memo memo;
+    auto s10 = make_source(SlotId{10});
+    auto g10 = memo.copyIn(s10);
+    auto s20 = make_source(SlotId{20});
+    auto g20 = memo.copyIn(s20);
+
+    EXPECT_NE(g10, g20);
+}
+
+TEST(MemoContentHashTest, DistinctExpandDstLabelsDoNotMerge) {
+    auto make_expand = [](LabelId dst_label) {
+        auto e = std::make_unique<BoundExpandOp>();
+        e->src_variable = "a";
+        e->src_column_index = 0;
+        e->edge_variable = "r";
+        e->edge_column_index = 1;
+        e->dst_variable = "b";
+        e->dst_column_index = 2;
+        e->dst_label_ids = {dst_label};
+        e->child = makeLabelScan("a", 0);
+        return BoundLogicalOperator(std::move(e));
+    };
+
+    Memo memo;
+    auto e1 = make_expand(LabelId{1});
+    auto g1 = memo.copyIn(e1);
+    auto e2 = make_expand(LabelId{2});
+    auto g2 = memo.copyIn(e2);
+
+    EXPECT_NE(g1, g2);
+}
+
+TEST(MemoContentHashTest, DistinctVarLenDstLabelsDoNotMerge) {
+    auto make_varlen = [](LabelId dst_label) {
+        auto e = std::make_unique<BoundVarLenExpandOp>();
+        e->src_variable = "a";
+        e->src_column_index = 0;
+        e->dst_variable = "b";
+        e->dst_column_index = 1;
+        e->dst_label_ids = {dst_label};
+        e->min_hops = 1;
+        e->max_hops = 3;
+        e->child = makeLabelScan("a", 0);
+        return BoundLogicalOperator(std::move(e));
+    };
+
+    Memo memo;
+    auto e1 = make_varlen(LabelId{1});
+    auto g1 = memo.copyIn(e1);
+    auto e2 = make_varlen(LabelId{2});
+    auto g2 = memo.copyIn(e2);
+
+    EXPECT_NE(g1, g2);
+}
+
+TEST(MemoContentHashTest, DistinctMergeSetItemsDoNotMerge) {
+    auto make_merge = [](const std::string& prop_name) {
+        auto m = std::make_unique<BoundMergeOp>();
+        m->start_var = "n";
+        m->has_relationship = false;
+        m->child = makeLabelScan("n", 0);
+
+        BoundSetOp::SetItem item;
+        item.kind = BoundSetOp::ItemKind::SET_PROPERTY;
+        item.target_variable = "n";
+        item.prop_name = prop_name;
+        item.prop_id = 1;
+        item.value_expr = BoundExpression(BoundLiteral(int64_t{1}));
+        m->on_create_items.push_back(std::move(item));
+        return BoundLogicalOperator(std::move(m));
+    };
+
+    Memo memo;
+    auto m1 = make_merge("p1");
+    auto g1 = memo.copyIn(m1);
+    auto m2 = make_merge("p2");
+    auto g2 = memo.copyIn(m2);
+
+    EXPECT_NE(g1, g2);
 }
 
 TEST(MemoContentHashTest, FilterPredicateEquality) {
@@ -934,6 +1137,29 @@ TEST(ChosenPlanTest, ThreeLevelPlanProducesThreeLevelChosen) {
     }
 }
 
+// ==================== Optimizer Reuse Tests ====================
+
+TEST(OptimizerReuseTest, SecondRunProducesUsablePlan) {
+    auto make_plan = []() {
+        auto filter = std::make_unique<BoundFilterOp>();
+        filter->predicate = BoundLiteral(true);
+        filter->child = makeLabelScanWithLabel("n", 0, LabelId{1});
+        BoundLogicalPlan plan;
+        plan.root = BoundLogicalOperator(std::move(filter));
+        return plan;
+    };
+
+    LogicalOptimizer optimizer;
+    BoundLogicalPlan first = make_plan();
+    optimizer.optimize(first);
+    BoundLogicalPlan second = make_plan();
+    optimizer.optimize(second);
+
+    ASSERT_FALSE(second.root.valueless_by_exception());
+    ASSERT_NE(second.chosen, nullptr);
+    EXPECT_EQ(second.chosen->tag, PhysicalOpTag::Filter);
+}
+
 // ==================== Framework Property Tests ====================
 //
 // These tests verify framework invariants rather than specific operator
@@ -1135,11 +1361,52 @@ TEST(FrameworkPropertyTest, WinnerChainReferencesValidExprs) {
     walk(root_gid);
 }
 
+// ==================== Context Upper Bound Tests ====================
+
+TEST(UpperBoundTest, WinnerUpdatesContextUpperBound) {
+    // Columbia O_INPUTS tightens the current context's upper bound whenever a
+    // cheaper winner is registered (tasks.cpp:1384). This enables pruning in
+    // subsequent input optimization. The optimizer must not leave the root
+    // context at infinity after finding a finite-cost winner.
+    Memo memo;
+    RuleSet rules;
+    rules.addRule(std::make_unique<ImplLabelScanRule>());
+
+    auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+    BoundLogicalOperator root(std::move(scan));
+    auto root_gid = memo.copyIn(root);
+
+    Context root_ctx(PhysProp{}, Cost::infinity());
+    int ctx_id = memo.addContext(std::move(root_ctx));
+
+    TaskQueue queue;
+    queue.push(std::make_unique<OGroupTask>(root_gid, ctx_id, /*last=*/true));
+    int iterations = 0;
+    while (!queue.empty() && ++iterations < 256)
+        queue.pop()->perform(memo, rules, queue);
+
+    ASSERT_LT(ctx_id, static_cast<int>(memo.contexts().size()));
+    const Context& ctx = memo.contexts()[ctx_id];
+    EXPECT_FALSE(ctx.getUpperBound().isInfinity());
+}
+
 // ==================== SearchCircle 4 Case Tests ====================
 //
 // Columbia O_GROUP::perform lines 195-275 distinguishes 4 cases via
 // search_circle. We test each case directly against Group::searchCircle
 // to lock the contract.
+
+TEST(SearchCircleTest, UndoneWinnerSignalsMoreSearch) {
+    // Columbia search_circle asserts Winner->GetDone(). A winner that is
+    // still under construction must never terminate O_GROUP as a final plan.
+    Group g(GroupId{0});
+    g.newWinner(PhysProp{}, ExprId{10}, Cost(5.0), /*done=*/false);
+    Context ctx(PhysProp{}, Cost(100.0));
+
+    bool more = false;
+    EXPECT_FALSE(g.searchCircle(ctx, more));
+    EXPECT_TRUE(more);
+}
 
 TEST(SearchCircleTest, NoWinnerSignalsMoreSearch) {
     // Case (3): no winner for this property → moreSearch=true, return false
@@ -1237,6 +1504,24 @@ TEST(PatternMatchTest, TopMatchIgnoresPatternChildren) {
     EXPECT_FALSE(filter_rule.topMatch(expr));
 }
 
+TEST(ImplRuleTest, UnionRuleDoesNotUseCrossProductTag) {
+    auto uo = std::make_unique<BoundUnionOp>();
+    uo->all = false;
+    uo->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    uo->right = makeLabelScanWithLabel("b", 1, LabelId{1});
+
+    Memo memo;
+    auto root = BoundLogicalOperator(std::move(uo));
+    auto gid = memo.copyIn(root);
+    GroupExpr& expr = memo.getExpr(memo.getGroup(gid).logical_exprs.front());
+
+    ImplUnionRule rule;
+    auto subs = rule.substitute(expr, memo);
+    ASSERT_EQ(subs.size(), 1u);
+    ASSERT_TRUE(subs[0]->isPhysical());
+    EXPECT_EQ(subs[0]->physOp().tag, PhysicalOpTag::Union);
+}
+
 TEST(PatternMatchTest, ImplRulesDeclareExpectedPatternShape) {
     // Lock the pattern() contract for representative impl rules.
     // ImplLabelScanRule's pattern is a leaf (no children) — empty
@@ -1276,6 +1561,34 @@ TEST(TaskQueueTest, LIFOOrderingPopsMostRecentFirst) {
     EXPECT_EQ(g2.groupId(), GroupId{2});
     EXPECT_EQ(g3.groupId(), GroupId{1});
     EXPECT_EQ(t4, nullptr); // empty queue returns nullptr, not throws
+}
+
+TEST(TaskStateTest, LastApplyRuleConditionFailureStillClosesExploration) {
+    // Columbia APPLY_RULE::~APPLY_RULE closes the group when the last
+    // scheduled rule produces no follow-up task. Here FilterPushdownRule
+    // top-matches Filter(LabelScan) but condition()==false (LabelScan is not
+    // penetrable), so the last ApplyRuleTask must still mark E_GROUP done.
+    Memo memo;
+    RuleSet rules;
+    rules.addRule(std::make_unique<FilterPushdownRule>());
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundLiteral(true);
+    filter->child = makeLabelScanWithLabel("n", 0, LabelId{1});
+
+    BoundLogicalOperator root(std::move(filter));
+    auto gid = memo.copyIn(root);
+
+    TaskQueue queue;
+    queue.push(std::make_unique<EGroupTask>(gid, /*context_id=*/0));
+    int iterations = 0;
+    while (!queue.empty() && ++iterations < 128) {
+        queue.pop()->perform(memo, rules, queue);
+    }
+
+    Group& group = memo.getGroup(gid);
+    EXPECT_FALSE(group.exploring);
+    EXPECT_TRUE(group.explored);
 }
 
 // ==================== Group Merge Tests ====================
@@ -1327,6 +1640,116 @@ TEST(GroupMergeTest, LogicalExprsUnionAfterMerge) {
     // The other group is now empty
     GroupId other = (merged == g1) ? g2 : g1;
     EXPECT_TRUE(memo.getGroup(other).logical_exprs.empty());
+}
+
+TEST(GroupMergeTest, FindDuplicateSurvivesAfterChildReroute) {
+    // mergeGroups rewrites parent GroupExpr::child_groups from g2 -> g1.
+    // The global hash table must be rebuilt as well, otherwise a later
+    // findDuplicate(op, {g1}) misses an already-existing expression and
+    // creates a duplicate search-space entry.
+    auto scan1 = makeLabelScanWithLabel("a", 0, LabelId{1});
+    auto scan2 = makeLabelScanWithLabel("b", 0, LabelId{2});
+
+    Memo memo;
+    auto g1 = memo.copyIn(scan1);
+    auto g2 = memo.copyIn(scan2);
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = BoundLiteral(true);
+    GroupExpr* parent = memo.createGroupWithExpr(BoundLogicalOperator(std::move(filter)), {g2});
+
+    // Sanity: before merge the hash index finds the parent expression.
+    auto filter_copy = std::make_unique<BoundFilterOp>();
+    filter_copy->predicate = BoundLiteral(true);
+    EXPECT_EQ(memo.findDuplicate(BoundLogicalOperator(std::move(filter_copy)), {g2}), parent);
+
+    memo.mergeGroups(g1, g2);
+    EXPECT_EQ(memo.getExpr(parent->id).child_groups, std::vector<GroupId>{g1});
+
+    auto filter_after = std::make_unique<BoundFilterOp>();
+    filter_after->predicate = BoundLiteral(true);
+    EXPECT_EQ(memo.findDuplicate(BoundLogicalOperator(std::move(filter_after)), {g1}), parent);
+}
+
+TEST(GroupMergeTest, WinnersMergedIntoSurvivor) {
+    // Winner-circle entries belong to the group, not just the expression list.
+    // Merging g2 into g1 must carry g2's winners into g1.
+    auto scan1 = makeLabelScanWithLabel("a", 0, LabelId{1});
+    auto scan2 = makeLabelScanWithLabel("b", 0, LabelId{2});
+
+    Memo memo;
+    auto g1 = memo.copyIn(scan1);
+    auto g2 = memo.copyIn(scan2);
+
+    ExprId winning_plan = memo.getGroup(g2).logical_exprs.back();
+    memo.getGroup(g2).newWinner(PhysProp{}, winning_plan, Cost(5.0), /*done=*/true);
+
+    memo.mergeGroups(g1, g2);
+
+    Winner* merged_winner = memo.getGroup(g1).getWinner(PhysProp{});
+    ASSERT_NE(merged_winner, nullptr);
+    EXPECT_EQ(merged_winner->plan(), winning_plan);
+    EXPECT_TRUE(merged_winner->done());
+    EXPECT_EQ(merged_winner->cost().value(), 5.0);
+}
+
+TEST(MemoDedupTest, CreateGroupWithExprDoesNotDuplicate) {
+    auto op1 = makeLabelScanWithLabel("n", 0, LabelId{1});
+    auto op2 = makeLabelScanWithLabel("n", 0, LabelId{1});
+
+    Memo memo;
+    GroupExpr* first = memo.createGroupWithExpr(std::move(op1), {});
+    GroupExpr* second = memo.createGroupWithExpr(std::move(op2), {});
+
+    EXPECT_EQ(second, first);
+    EXPECT_EQ(second->group_id, first->group_id);
+}
+
+TEST(MemoDedupTest, InsertPhysExprDoesNotDuplicate) {
+    Memo memo;
+    auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+    GroupId gid = memo.createGroupWithExpr(std::move(scan), {})->group_id;
+
+    auto make_phys = [&]() {
+        auto phys = std::make_unique<PhysicalExpr>();
+        phys->tag = PhysicalOpTag::LabelScan;
+        phys->source = makeLabelScanWithLabel("n", 0, LabelId{1});
+        return std::make_unique<GroupExpr>(memo.newExprId(), gid, std::move(phys), std::vector<GroupId>{});
+    };
+
+    GroupExpr* first = memo.insertPhysExpr(make_phys(), gid);
+    GroupExpr* second = memo.insertPhysExpr(make_phys(), gid);
+
+    EXPECT_EQ(second, first);
+    EXPECT_EQ(second->id, first->id);
+}
+
+TEST(MemoCopyOutTest, SatisfyingWinnerPreferredOverExactFallback) {
+    // copyOut(gid, prop) must use satisfying-winner lookup. A winner that
+    // provides more than requested (materialized LabelScan) is a valid plan
+    // for "any"; exact-match lookup would silently fall back to the RBO tree.
+    Memo memo;
+    auto logical_scan = makeLabelScanWithLabel("logical_scan", 0, LabelId{1});
+    auto gid = memo.copyIn(logical_scan);
+
+    auto phys = std::make_unique<PhysicalExpr>();
+    phys->tag = PhysicalOpTag::LabelScan;
+    phys->source = makeLabelScanWithLabel("physical_scan", 1, LabelId{1});
+    auto ge = std::make_unique<GroupExpr>(memo.newExprId(), gid, std::move(phys), std::vector<GroupId>{});
+    ExprId pid = ge->id;
+    memo.insertPhysExpr(std::move(ge), gid);
+
+    PhysProp provided;
+    {
+        VarRequirements mat;
+        mat["n"].need_props[LabelId{1}] = {10};
+        provided.setMaterializations(std::move(mat));
+    }
+    memo.getGroup(gid).newWinner(provided, pid, Cost(3.0), /*done=*/true);
+
+    binder::BoundLogicalOperator out = memo.copyOut(gid, PhysProp{});
+    ASSERT_TRUE(std::holds_alternative<binder::BoundLabelScanOp>(out));
+    EXPECT_EQ(std::get<binder::BoundLabelScanOp>(out).variable, "physical_scan");
 }
 
 // ============================================================
@@ -1787,6 +2210,63 @@ TEST(EnricherE2ETest, OptimizerEmitsVertexEnrichForPropertyAccess) {
     // VertexPropertyExtract's child should be the LabelScan.
     const ChosenPlan& enrich_child = *filter_child.children[0];
     EXPECT_EQ(enrich_child.tag, PhysicalOpTag::LabelScan);
+}
+
+TEST(EnricherE2ETest, MultiVariableJoinProducesChosenPlan) {
+    // Filter referencing a.p and b.p over CrossJoin(LabelScan(a), LabelScan(b)).
+    // The optimizer must compute per-input materialization requirements (a for
+    // the left child, b for the right child), materialize each side, and still
+    // produce a ChosenPlan. Before the fix the full parent requirement was
+    // pushed into both join inputs and no join winner was registered, so
+    // plan.chosen was null.
+    auto join = std::make_unique<BoundBinaryJoinOp>();
+    join->join_type = JoinType::Cross;
+    join->left = makeLabelScanWithLabel("a", 0, LabelId{1});
+    join->right = makeLabelScanWithLabel("b", 1, LabelId{1});
+
+    auto mk_prop = [](const std::string& var, uint16_t pid) {
+        auto pr = std::make_unique<BoundPropertyRef>();
+        pr->property_name = "p";
+        pr->object = BoundVariableRef(var, BoundType::Vertex());
+        BoundPropertyRef::ResolvedProperty cand;
+        cand.label_id = LabelId{1};
+        cand.prop_id = pid;
+        cand.type = BoundType::Int64();
+        pr->candidates.push_back(cand);
+        return BoundExpression(std::move(pr));
+    };
+    auto mk_and = [](BoundExpression lhs, BoundExpression rhs) {
+        auto bin = std::make_unique<BoundBinaryOp>();
+        bin->op = cypher::BinaryOperator::AND;
+        bin->left = std::move(lhs);
+        bin->right = std::move(rhs);
+        return BoundExpression(std::move(bin));
+    };
+
+    auto filter = std::make_unique<BoundFilterOp>();
+    filter->predicate = mk_and(mk_prop("a", 10), mk_prop("b", 11));
+    filter->child = BoundLogicalOperator(std::move(join));
+
+    BoundLogicalPlan plan;
+    plan.root = BoundLogicalOperator(std::move(filter));
+
+    LogicalOptimizer optimizer;
+    optimizer.optimize(plan);
+
+    ASSERT_NE(plan.chosen, nullptr);
+    EXPECT_EQ(plan.chosen->tag, PhysicalOpTag::Filter);
+
+    // Filter's input is the materialized form of the join: a combined
+    // VertexPropertyExtract enforcer carrying BOTH a and b requirements.
+    ASSERT_EQ(plan.chosen->children.size(), 1u);
+    const ChosenPlan& materialized = *plan.chosen->children[0];
+    EXPECT_EQ(materialized.tag, PhysicalOpTag::VertexPropertyExtract);
+    EXPECT_TRUE(materialized.enrich_output.count("a"));
+    EXPECT_TRUE(materialized.enrich_output.count("b"));
+
+    // The enforcer wraps the topology-stage CrossProduct.
+    ASSERT_EQ(materialized.children.size(), 1u);
+    EXPECT_EQ(materialized.children[0]->tag, PhysicalOpTag::CrossProduct);
 }
 
 TEST(EnricherE2ETest, NoEnricherWhenNoPropertyAccess) {

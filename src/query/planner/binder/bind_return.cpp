@@ -2036,6 +2036,12 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     // filter placement (before vs after projection).
     bool where_has_projected_ref = false;
 
+    // WHERE syntactically follows SKIP/LIMIT in a WITH clause. When either is
+    // present, deferring WHERE until after Limit/Skip/Distinct is required for
+    // correct semantics: filtering before LIMIT/SKIP changes which rows are
+    // truncated or skipped.
+    bool defer_where_until_after_row_limit = wc.skip.has_value() || wc.limit.has_value();
+
     // Collect output names and types for scope reset
     std::vector<std::pair<std::string, BoundType>> with_outputs;
 
@@ -2277,7 +2283,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 }
             }
         }
-        if (wc.where_pred && !where_has_projected_ref) {
+        if (wc.where_pred && !where_has_projected_ref && !defer_where_until_after_row_limit) {
             auto where_op = bindWhere(*wc.where_pred, std::move(child));
             if (!where_op)
                 return std::nullopt;
@@ -2334,7 +2340,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
 
         // If WHERE only uses old-scope variables, bind and insert it BEFORE
         // the projection (e.g. WITH types[i] AS x WHERE i <> j).
-        if (wc.where_pred && !where_has_projected_ref) {
+        if (wc.where_pred && !where_has_projected_ref && !defer_where_until_after_row_limit) {
             auto where_op = bindWhere(*wc.where_pred, std::move(child));
             if (!where_op)
                 return std::nullopt;
@@ -2463,15 +2469,6 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         ctx_.symbols[with_outputs[i].first] = std::move(info);
     }
 
-    // WHERE that references projected variables (e.g. WITH x+1 AS y WHERE y > 0)
-    // must be placed AFTER the projection so projected columns are visible.
-    if (where_has_projected_ref && wc.where_pred) {
-        auto where_op = bindWhere(*wc.where_pred, std::move(current));
-        if (!where_op)
-            return std::nullopt;
-        current = std::move(*where_op);
-    }
-
     // ORDER BY for aggregating WITH.  (Non-aggregating WITH handles ORDER BY
     // inside the projection branch above, placing Sort before Project so that
     // input-scope variables remain visible.)
@@ -2561,6 +2558,17 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
         auto distinct = std::make_unique<BoundDistinctOp>();
         distinct->child = std::move(current);
         current = std::move(distinct);
+    }
+
+    // WHERE that references projected variables, or any WHERE when SKIP/LIMIT
+    // is present, must be placed after Project/OrderBy/Skip/Limit/Distinct.
+    // Both the old scope (not yet reset below) and temporary projected aliases
+    // are visible here.
+    if (wc.where_pred && (where_has_projected_ref || defer_where_until_after_row_limit)) {
+        auto where_op = bindWhere(*wc.where_pred, std::move(current));
+        if (!where_op)
+            return std::nullopt;
+        current = std::move(*where_op);
     }
 
     // WHERE: must be bound against the union of old-scope and projected

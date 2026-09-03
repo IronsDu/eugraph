@@ -299,7 +299,8 @@ Filter(LEAF)  — 匹配有一个子节点的 Filter
 | VarLenExpand | ✅\* | 保留已有列，新增 dst/path/edge 列 |
 | PathBuild | ✅\* | 保留已有列，新增路径列 |
 | Filter | ✅ | 不改变 schema |
-| Sort / Skip / Limit / Distinct | ✅ | 不改变 schema |
+| Sort / Distinct | ✅ | 不改变 schema |
+| Skip / Limit | ❌ | `Filter(Limit)`、`Filter(Skip)` 交换会改变截断/跳过语义 |
 | Aggregate | ❌ | 改变 schema |
 | Project | ❌ | 可能丢弃所需列 |
 | LabelScan / Scan | ❌ | 叶子节点，Filter 停在此上方 |
@@ -517,7 +518,7 @@ CBO 扩展需要增加 `E_GROUP` Task（探索子 Group 的所有等价表达式
 - ⚠️ CM — 当前单值 Cost，Columbia 有 CPU/IO/mem 多维常量。要更精确 cost 时再补。
 - ⚠️ ITEM::FindLogProp — 表达式级 selectivity 估算缺失，当前用默认常量。要精确 Filter 选择率时再补。
 
-**结论**：优化器框架与 Columbia 已对齐。剩余 ⚠️ 项全是"等用到再补"的能力增强（PHYS_PROP 多 key 传播、多维 Cost、表达式选择率），不影响框架正确性。`wcol.cpp`（Windows GUI）、`supp.cpp`（hash 工具）、`expr.cpp`（EXPR 树节点）属于 Columbia 内部实现细节，已被 eugraph 用 std::unordered_map / BoundLogicalOperator 内嵌树替代，无需对齐。
+**结论**：优化器框架主体与 Columbia 对齐，但后续核对发现若干正确性差距（Filter 穿透 LIMIT/SKIP、mergeGroups 哈希未重建、ApplyRule Last 收尾缺失、hash/eq 漏字段、多变量 materialization 需求传播与 Enricher 链错误）。这些问题的清单、根因、进度与验证用例统一记录在 [columbia-alignment-roadmap.md](columbia-alignment-roadmap.md)，本节历史结论以该路线图为准。`wcol.cpp`（Windows GUI）、`supp.cpp`（hash 工具）、`expr.cpp`（EXPR 树节点）属于 Columbia 内部实现细节，已被 eugraph 用 std::unordered_map / BoundLogicalOperator 内嵌树替代，无需对齐。
 
 **测试覆盖**（`tests/test_optimizer.cpp`，61 例）：
 - 数据结构 / 行为单元测试 46 例（Memo / FilterPushdown / MemoContentHash / CBOPlumbing / LogProp / CostModel / ImplRule / ChosenPlan）

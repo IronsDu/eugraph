@@ -154,6 +154,18 @@ uint64_t hashOptExpr(uint64_t seed, const std::optional<binder::BoundExpression>
     return seed;
 }
 
+uint64_t hashSetItem(uint64_t seed, const binder::BoundSetOp::SetItem& it) {
+    seed = combine(seed, static_cast<uint64_t>(it.kind));
+    seed = hashBytes(seed, it.target_variable);
+    seed = hashBytes(seed, it.prop_name);
+    seed = combine(seed, it.prop_id.has_value() ? static_cast<uint64_t>(*it.prop_id) : 0xFFFFu);
+    seed = hashOptExpr(seed, it.value_expr);
+    seed = combine(seed, it.label_id.has_value() ? static_cast<uint64_t>(*it.label_id) : 0u);
+    seed = combine(seed, it.strong_mode ? 1u : 0u);
+    seed = combine(seed, it.is_add_assign ? 1u : 0u);
+    return seed;
+}
+
 } // namespace
 
 uint64_t hashBoundExpression(const binder::BoundExpression& expr) {
@@ -167,6 +179,8 @@ uint64_t hashBoundExpression(const binder::BoundExpression& expr) {
                 seed = hashBoundType(seed, val.type);
             } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
                 seed = combine(seed, val.column_index);
+                seed = combine(seed, val.slot_id);
+                seed = combine(seed, val.scope_id);
                 seed = hashBytes(seed, val.name);
                 seed = hashBoundType(seed, val.type);
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
@@ -299,6 +313,8 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     seed = hashBoundType(seed, t);
                 for (auto c : val.column_indices)
                     seed = combine(seed, c);
+                for (auto sid : val.slot_ids)
+                    seed = combine(seed, sid);
             } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
                 seed = hashBytes(seed, val.variable);
                 seed = combine(seed, val.column_index);
@@ -375,15 +391,20 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     return;
                 seed = hashBytes(seed, val->src_variable);
                 seed = combine(seed, val->src_column_index);
+                seed = combine(seed, val->src_slot_id);
                 seed = hashBytes(seed, val->edge_variable);
                 seed = combine(seed, val->edge_column_index);
+                seed = combine(seed, val->edge_slot_id);
                 seed = hashBytes(seed, val->dst_variable);
                 seed = combine(seed, val->dst_column_index);
+                seed = combine(seed, val->dst_slot_id);
                 for (auto l : val->edge_label_ids)
                     seed = combine(seed, static_cast<uint64_t>(l));
                 seed = combine(seed, static_cast<uint64_t>(val->direction));
                 for (auto p : val->edge_prop_ids)
                     seed = combine(seed, p);
+                for (auto l : val->dst_label_ids)
+                    seed = combine(seed, static_cast<uint64_t>(l));
                 for (const auto& [lid, pids] : val->dst_label_prop_ids) {
                     seed = combine(seed, static_cast<uint64_t>(lid));
                     for (auto p : pids)
@@ -396,6 +417,7 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = combine(seed, val->src_column_index);
                 seed = hashBytes(seed, val->dst_variable);
                 seed = combine(seed, val->dst_column_index);
+                seed = combine(seed, val->dst_slot_id);
                 for (auto l : val->edge_label_ids)
                     seed = combine(seed, static_cast<uint64_t>(l));
                 seed = combine(seed, static_cast<uint64_t>(val->direction));
@@ -406,12 +428,15 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     for (auto p : pids)
                         seed = combine(seed, p);
                 }
+                for (auto l : val->dst_label_ids)
+                    seed = combine(seed, static_cast<uint64_t>(l));
                 seed = hashBytes(seed, val->path_variable);
                 seed = combine(seed, val->path_column_index);
                 seed = combine(seed, val->path_handled_by_varlen ? 1u : 0u);
                 seed = combine(seed, val->dst_label_missing ? 1u : 0u);
                 seed = hashBytes(seed, val->edge_variable);
                 seed = combine(seed, val->edge_column_index);
+                seed = combine(seed, val->edge_slot_id);
                 seed = combine(seed, val->bound_edge_list ? 1u : 0u);
                 seed = combine(seed, val->bound_edge_list_col_index);
                 seed = hashBytes(seed, val->prev_edge_var);
@@ -446,6 +471,8 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     seed = hashBytes(seed, yi);
                 for (const auto& n : val->output_names)
                     seed = hashBytes(seed, n);
+                for (const auto& t : val->output_types)
+                    seed = hashBoundType(seed, t);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (!val)
                     return;
@@ -485,16 +512,8 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>>) {
                 if (!val)
                     return;
-                for (const auto& it : val->items) {
-                    seed = combine(seed, static_cast<uint64_t>(it.kind));
-                    seed = hashBytes(seed, it.target_variable);
-                    seed = hashBytes(seed, it.prop_name);
-                    seed = combine(seed, it.prop_id.has_value() ? *it.prop_id : 0xFFFFu);
-                    seed = hashOptExpr(seed, it.value_expr);
-                    seed = combine(seed, it.label_id.has_value() ? static_cast<uint64_t>(*it.label_id) : 0u);
-                    seed = combine(seed, it.strong_mode ? 1u : 0u);
-                    seed = combine(seed, it.is_add_assign ? 1u : 0u);
-                }
+                for (const auto& it : val->items)
+                    seed = hashSetItem(seed, it);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>>) {
                 if (!val)
                     return;
@@ -598,6 +617,10 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                     seed = hashBytes(seed, n);
                     seed = combine(seed, hashBoundExpression(expr));
                 }
+                for (const auto& item : val->on_create_items)
+                    seed = hashSetItem(seed, item);
+                for (const auto& item : val->on_match_items)
+                    seed = hashSetItem(seed, item);
             }
         },
         op);

@@ -52,6 +52,10 @@ Cost findLocalCost(PhysicalOpTag tag, const LogProp& group_lp, const std::vector
     case PhysicalOpTag::LeftJoin:
         return Cost(input0Card() + input1Card());
 
+    // Union: concatenate both inputs
+    case PhysicalOpTag::Union:
+        return Cost(input0Card() + input1Card());
+
     // Sort: n log n
     case PhysicalOpTag::Sort: {
         double n = input0Card();

@@ -68,6 +68,24 @@ bool eqOptExpr(const std::optional<binder::BoundExpression>& a, const std::optio
     return equalBoundExpression(*a, *b);
 }
 
+bool eqSetItem(const binder::BoundSetOp::SetItem& a, const binder::BoundSetOp::SetItem& b) {
+    if (a.kind != b.kind)
+        return false;
+    if (a.target_variable != b.target_variable)
+        return false;
+    if (a.prop_name != b.prop_name)
+        return false;
+    if (a.prop_id != b.prop_id)
+        return false;
+    if (!eqOptExpr(a.value_expr, b.value_expr))
+        return false;
+    if (a.label_id != b.label_id)
+        return false;
+    if (a.strong_mode != b.strong_mode)
+        return false;
+    return a.is_add_assign == b.is_add_assign;
+}
+
 } // namespace
 
 bool equalBoundExpression(const binder::BoundExpression& a, const binder::BoundExpression& b) {
@@ -80,7 +98,8 @@ bool equalBoundExpression(const binder::BoundExpression& a, const binder::BoundE
             if constexpr (std::is_same_v<T, binder::BoundLiteral>) {
                 return av.value == bv.value && eqBoundType(av.type, bv.type);
             } else if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
-                return av.column_index == bv.column_index && av.name == bv.name && eqBoundType(av.type, bv.type);
+                return av.column_index == bv.column_index && av.slot_id == bv.slot_id && av.scope_id == bv.scope_id &&
+                       av.name == bv.name && eqBoundType(av.type, bv.type);
             } else if constexpr (std::is_same_v<T, binder::BoundVariableRef>) {
                 return av.name == bv.name && eqBoundType(av.type, bv.type);
             } else if constexpr (std::is_same_v<T, binder::BoundParameter>) {
@@ -259,7 +278,7 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 for (size_t i = 0; i < av.types.size(); ++i)
                     if (!eqBoundType(av.types[i], bv.types[i]))
                         return false;
-                return av.column_indices == bv.column_indices;
+                return av.column_indices == bv.column_indices && av.slot_ids == bv.slot_ids;
             } else if constexpr (std::is_same_v<T, binder::BoundScanOp>) {
                 if (av.variable != bv.variable)
                     return false;
@@ -369,19 +388,27 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->src_column_index != bv->src_column_index)
                     return false;
+                if (av->src_slot_id != bv->src_slot_id)
+                    return false;
                 if (av->edge_variable != bv->edge_variable)
                     return false;
                 if (av->edge_column_index != bv->edge_column_index)
                     return false;
+                if (av->edge_slot_id != bv->edge_slot_id)
+                    return false;
                 if (av->dst_variable != bv->dst_variable)
                     return false;
                 if (av->dst_column_index != bv->dst_column_index)
+                    return false;
+                if (av->dst_slot_id != bv->dst_slot_id)
                     return false;
                 if (av->edge_label_ids != bv->edge_label_ids)
                     return false;
                 if (av->direction != bv->direction)
                     return false;
                 if (av->edge_prop_ids != bv->edge_prop_ids)
+                    return false;
+                if (av->dst_label_ids != bv->dst_label_ids)
                     return false;
                 return av->dst_label_prop_ids == bv->dst_label_prop_ids;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
@@ -395,6 +422,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     return false;
                 if (av->dst_column_index != bv->dst_column_index)
                     return false;
+                if (av->dst_slot_id != bv->dst_slot_id)
+                    return false;
                 if (av->edge_label_ids != bv->edge_label_ids)
                     return false;
                 if (av->direction != bv->direction)
@@ -404,6 +433,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->max_hops != bv->max_hops)
                     return false;
                 if (av->dst_label_prop_ids != bv->dst_label_prop_ids)
+                    return false;
+                if (av->dst_label_ids != bv->dst_label_ids)
                     return false;
                 if (av->dst_label_missing != bv->dst_label_missing)
                     return false;
@@ -416,6 +447,8 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->edge_variable != bv->edge_variable)
                     return false;
                 if (av->edge_column_index != bv->edge_column_index)
+                    return false;
+                if (av->edge_slot_id != bv->edge_slot_id)
                     return false;
                 if (av->bound_edge_list != bv->bound_edge_list)
                     return false;
@@ -693,6 +726,16 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                     if (!equalBoundExpression(av->end_pending_props[i].second, bv->end_pending_props[i].second))
                         return false;
                 }
+                if (av->on_create_items.size() != bv->on_create_items.size())
+                    return false;
+                for (size_t i = 0; i < av->on_create_items.size(); ++i)
+                    if (!eqSetItem(av->on_create_items[i], bv->on_create_items[i]))
+                        return false;
+                if (av->on_match_items.size() != bv->on_match_items.size())
+                    return false;
+                for (size_t i = 0; i < av->on_match_items.size(); ++i)
+                    if (!eqSetItem(av->on_match_items[i], bv->on_match_items[i]))
+                        return false;
                 return true;
             }
             return false;
