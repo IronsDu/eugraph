@@ -1,6 +1,7 @@
 #include "query/optimizer/memo.hpp"
 
 #include <algorithm>
+#include <unordered_set>
 
 #include "query/optimizer/operator_eq.hpp"
 #include "query/optimizer/operator_hash.hpp"
@@ -275,8 +276,13 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
 binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid, const PhysProp& prop) {
     Group& group = getGroup(root_gid);
 
-    // CBO: try winner's circle first
+    // CBO: try winner's circle first. Prefer an exact-property winner so
+    // self-referential Enricher winners are not picked for "any" and cause
+    // recursive copyOut. Fall back to satisfying lookup for winners that
+    // provide a superset of the requested property.
     Winner* winner = group.getWinner(prop);
+    if (!winner || !winner->done() || winner->plan() == INVALID_EXPR_ID)
+        winner = group.getSatisfyingWinner(prop);
     if (winner && winner->done() && winner->plan() != INVALID_EXPR_ID) {
         GroupExpr& expr = getExpr(winner->plan());
         // For physical expressions, use the cloned source operator;
@@ -321,9 +327,19 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid, const PhysProp& pro
     return copyOut(root_gid);
 }
 
-std::unique_ptr<ChosenPlan> Memo::extractChosen(GroupId root_gid, const PhysProp& prop) {
+std::unique_ptr<ChosenPlan> Memo::extractChosen(GroupId root_gid, const PhysProp& prop, ExprId preferred_winner) {
     Group& group = getGroup(root_gid);
-    Winner* winner = group.getSatisfyingWinner(prop);
+    Winner* winner = nullptr;
+    if (preferred_winner != INVALID_EXPR_ID) {
+        for (Winner& w : group.winners) {
+            if (w.plan() == preferred_winner && w.done() && w.physProp().satisfies(prop)) {
+                winner = &w;
+                break;
+            }
+        }
+    }
+    if (!winner)
+        winner = group.getSatisfyingWinner(prop);
     if (!winner || !winner->done() || winner->plan() == INVALID_EXPR_ID) {
         return nullptr;
     }
@@ -360,14 +376,34 @@ std::unique_ptr<ChosenPlan> Memo::extractChosen(GroupId root_gid, const PhysProp
             expr.physOp().tag != PhysicalOpTag::PathPropertyExtract) {
             // Self-referential non-enforcer expr — unusual; leave as-is.
         }
-        if (expr.physOp().tag == PhysicalOpTag::VertexEnrich || expr.physOp().tag == PhysicalOpTag::EdgeEnrich ||
-            expr.physOp().tag == PhysicalOpTag::PathEnrich ||
-            expr.physOp().tag == PhysicalOpTag::VertexPropertyExtract ||
-            expr.physOp().tag == PhysicalOpTag::EdgePropertyExtract ||
-            expr.physOp().tag == PhysicalOpTag::PathPropertyExtract) {
+        bool is_enricher = expr.physOp().tag == PhysicalOpTag::VertexEnrich ||
+                           expr.physOp().tag == PhysicalOpTag::EdgeEnrich ||
+                           expr.physOp().tag == PhysicalOpTag::PathEnrich ||
+                           expr.physOp().tag == PhysicalOpTag::VertexPropertyExtract ||
+                           expr.physOp().tag == PhysicalOpTag::EdgePropertyExtract ||
+                           expr.physOp().tag == PhysicalOpTag::PathPropertyExtract;
+        if (is_enricher) {
             // Enricher/Extract's input is topology form — require "any".
             child_mat.clear();
         }
+
+        // Enrichers are inserted into the SAME group they wrap, so their
+        // child_groups entry is a self-reference. Following that self-edge
+        // through getSatisfyingWinner(any) can pick the enforcer again and
+        // recurse forever. Instead, unwrap through the group's exact
+        // any-property topology winner.
+        if (is_enricher && child_gid == root_gid) {
+            Winner* topology = group.getWinner(PhysProp{});
+            if (!topology || !topology->done() || topology->plan() == INVALID_EXPR_ID || topology->plan() == expr.id) {
+                return nullptr;
+            }
+            auto child_plan = extractChosen(child_gid, PhysProp{}, topology->plan());
+            if (!child_plan)
+                return nullptr;
+            plan->children.push_back(std::move(child_plan));
+            continue;
+        }
+
         PhysProp child_prop;
         child_prop.setMaterializations(std::move(child_mat));
         auto child_plan = extractChosen(child_gid, child_prop);
@@ -421,12 +457,67 @@ GroupExpr* Memo::findPhysDuplicate(const PhysicalExpr& phys, const std::vector<G
 }
 
 GroupId Memo::mergeGroups(GroupId g1, GroupId g2) {
+    if (g1 == g2)
+        return g1;
+
     // Merge the larger group into the smaller one
     if (g1 > g2)
         std::swap(g1, g2);
 
     Group& to_group = getGroup(g1);
     Group& from_group = getGroup(g2);
+
+    // The global hash index depends on child_groups. Unregister every
+    // expression whose child reference is about to be rewritten, rewrite it,
+    // then register it again under the new hash. Without this step
+    // findDuplicate misses already-existing expressions after a merge.
+    for (auto& expr : exprs_) {
+        bool references_merged_group = false;
+        for (GroupId cg : expr->child_groups) {
+            if (cg == g2) {
+                references_merged_group = true;
+                break;
+            }
+        }
+        if (!references_merged_group)
+            continue;
+
+        unregisterInHash(*expr);
+        for (GroupId& cg : expr->child_groups) {
+            if (cg == g2)
+                cg = g1;
+        }
+        registerInHash(expr->id);
+    }
+
+    // Winner-circle entries are group state and must survive the merge.
+    for (const Winner& w : from_group.winners) {
+        Winner* existing = to_group.getWinner(w.physProp());
+        if (!existing) {
+            to_group.winners.push_back(w);
+            continue;
+        }
+        bool from_has_plan = w.plan() != INVALID_EXPR_ID;
+        bool to_has_plan = existing->plan() != INVALID_EXPR_ID;
+        if ((!to_has_plan && from_has_plan) || (to_has_plan && from_has_plan && w.cost() < existing->cost())) {
+            existing->setPlan(w.plan());
+            existing->setCost(w.cost());
+            existing->setDone(w.done());
+        }
+    }
+    from_group.winners.clear();
+
+    // Requirements are group-level metadata as well. If both sides have
+    // requirements, union them conservatively.
+    if (from_group.requirementsValid()) {
+        if (!to_group.requirementsValid()) {
+            to_group.setRequirements(from_group.requirements());
+        } else {
+            VarRequirements merged = to_group.requirements();
+            mergeVarRequirements(merged, from_group.requirements());
+            to_group.setRequirements(std::move(merged));
+        }
+    }
 
     for (ExprId eid : from_group.logical_exprs) {
         exprs_[eid]->group_id = g1;
@@ -440,18 +531,16 @@ GroupId Memo::mergeGroups(GroupId g1, GroupId g2) {
     }
     from_group.physical_exprs.clear();
 
-    // Update all parent GroupExprs that reference the merged-away group (g2)
-    // to now reference the surviving group (g1).
-    for (auto& expr : exprs_) {
-        for (GroupId& cg : expr->child_groups) {
-            if (cg == g2)
-                cg = g1;
-        }
-    }
+    // State flags: the survivor is only fully explored/optimized when both
+    // sides were; if either side is still in flight, the survivor is too.
+    to_group.explored = to_group.explored && from_group.explored;
+    to_group.optimized = to_group.optimized && from_group.optimized;
+    to_group.exploring = to_group.exploring || from_group.exploring;
+    to_group.optimizing = to_group.optimizing || from_group.optimizing;
+    to_group.changed = to_group.changed || from_group.changed;
 
     // Invalidate LogProp on both groups — g1 gained new expressions,
     // g2's parents_ cascade handles groups that previously derived from g2.
-    to_group.changed = true;
     to_group.invalidateLogProp(*this);
     from_group.invalidateLogProp(*this);
 
@@ -472,6 +561,9 @@ GroupExpr* Memo::insertExpr(std::unique_ptr<GroupExpr> expr, GroupId target_grou
 }
 
 GroupExpr* Memo::insertPhysExpr(std::unique_ptr<GroupExpr> expr, GroupId target_group) {
+    if (auto* dup = findPhysDuplicate(expr->physOp(), expr->child_groups))
+        return dup;
+
     expr->group_id = target_group;
     GroupExpr* raw = expr.get();
     exprs_.push_back(std::move(expr));
@@ -511,69 +603,101 @@ ExprId Memo::insertEnricherEnforcer(GroupId g, const VarRequirements& req_mat) {
 
     const LogProp& lp = group.getLogProp(*this, catalog_);
 
-    // Insert one enforcer per non-empty variable.
-    // - need_entire → full Enricher (VertexEnrich/EdgeEnrich/PathEnrich)
-    // - only need_props/need_labels → flat PropertyExtract
-    ExprId last_enforcer_id = INVALID_EXPR_ID;
-    for (const auto& [var, req] : req_mat) {
-        if (req.empty())
-            continue;
-
-        // Mutable copy for need_entire expansion.
-        MaterializationReq mut_req = req;
-
-        // Determine the base tag from the variable's type in the schema.
-        PhysicalOpTag base_vertex = PhysicalOpTag::VertexEnrich;
-        PhysicalOpTag base_edge = PhysicalOpTag::EdgeEnrich;
-        PhysicalOpTag base_path = PhysicalOpTag::PathEnrich;
-        PhysicalOpTag base_tag = base_vertex;
+    auto baseTagFor = [&](const std::string& var) {
         for (const auto& col : lp.columns) {
             if (col.variable != var)
                 continue;
-            if (col.type_kind == binder::BoundTypeKind::EDGE || col.type_kind == binder::BoundTypeKind::EDGE_KEY) {
-                base_tag = base_edge;
-            } else if (col.type_kind == binder::BoundTypeKind::PATH ||
-                       col.type_kind == binder::BoundTypeKind::PATH_TOPOLOGY) {
-                base_tag = base_path;
-            }
+            if (col.type_kind == binder::BoundTypeKind::EDGE || col.type_kind == binder::BoundTypeKind::EDGE_KEY)
+                return PhysicalOpTag::EdgeEnrich;
+            if (col.type_kind == binder::BoundTypeKind::PATH || col.type_kind == binder::BoundTypeKind::PATH_TOPOLOGY)
+                return PhysicalOpTag::PathEnrich;
             break;
         }
+        return PhysicalOpTag::VertexEnrich;
+    };
 
-        // Choose Enricher vs PropertyExtract based on need_entire flag.
-        PhysicalOpTag tag;
-        if (mut_req.need_entire) {
-            tag = base_tag;
-            if (catalog_) {
-                const auto& labels = catalog_->allLabels();
-                for (const auto& [lid, ldef] : labels) {
-                    for (const auto& pd : ldef.properties)
-                        mut_req.need_props[lid].insert(pd.id);
-                }
-            }
-        } else {
-            // PropertyExtract: downgrade Enricher tag to the corresponding extract tag.
-            if (base_tag == PhysicalOpTag::EdgeEnrich)
-                tag = PhysicalOpTag::EdgePropertyExtract;
-            else if (base_tag == PhysicalOpTag::PathEnrich)
-                tag = PhysicalOpTag::PathPropertyExtract;
-            else
-                tag = PhysicalOpTag::VertexPropertyExtract;
+    auto expandNeedEntire = [&](MaterializationReq req) {
+        if (!req.need_entire || !catalog_)
+            return req;
+        const auto& labels = catalog_->allLabels();
+        for (const auto& [lid, ldef] : labels) {
+            for (const auto& pd : ldef.properties)
+                req.need_props[lid].insert(pd.id);
         }
+        return req;
+    };
+
+    auto makeTag = [&](PhysicalOpTag base, bool need_entire) {
+        if (need_entire)
+            return base;
+        if (base == PhysicalOpTag::EdgeEnrich)
+            return PhysicalOpTag::EdgePropertyExtract;
+        if (base == PhysicalOpTag::PathEnrich)
+            return PhysicalOpTag::PathPropertyExtract;
+        return PhysicalOpTag::VertexPropertyExtract;
+    };
+
+    // Materialize one combined enforcer for multi-variable requirements.
+    // materializeChosen applies the whole enrich_output map to the wrapped
+    // topology plan, so a single physical GroupExpr can satisfy every
+    // variable. The tag is only a cost-model approximation for mixed
+    // vertex/edge/path requirements.
+    std::vector<std::pair<std::string, MaterializationReq>> needed;
+    for (const auto& [var, req] : req_mat) {
+        if (!req.empty())
+            needed.emplace_back(var, expandNeedEntire(req));
+    }
+    if (needed.empty())
+        return INVALID_EXPR_ID;
+
+    PhysicalOpTag tag;
+    VarRequirements output;
+    if (needed.size() == 1) {
+        const auto& [var, req] = needed.front();
+        PhysicalOpTag base = baseTagFor(var);
+        tag = makeTag(base, req.need_entire);
+        output[var] = req;
 
         auto phys = std::make_unique<PhysicalExpr>();
         phys->tag = tag;
         phys->enrich_variable = var;
-        phys->output_mat[var] = mut_req;
-
+        phys->output_mat = output;
         ExprId eid = newExprId();
         auto gexpr = std::make_unique<GroupExpr>(eid, g, std::move(phys), std::vector<GroupId>{g});
-        GroupExpr* raw = insertPhysExpr(std::move(gexpr), g);
-        last_enforcer_id = raw->id;
+        return insertPhysExpr(std::move(gexpr), g)->id;
     }
-    return last_enforcer_id;
+
+    bool any_entire = false;
+    bool any_edge = false;
+    bool any_path = false;
+    for (const auto& [var, req] : needed) {
+        any_entire = any_entire || req.need_entire;
+        PhysicalOpTag base = baseTagFor(var);
+        any_edge = any_edge || base == PhysicalOpTag::EdgeEnrich;
+        any_path = any_path || base == PhysicalOpTag::PathEnrich;
+        output[var] = req;
+    }
+
+    PhysicalOpTag base = PhysicalOpTag::VertexEnrich;
+    if (any_edge && !any_path)
+        base = PhysicalOpTag::EdgeEnrich;
+    else if (any_path && !any_edge)
+        base = PhysicalOpTag::PathEnrich;
+    tag = makeTag(base, any_entire);
+
+    auto phys = std::make_unique<PhysicalExpr>();
+    phys->tag = tag;
+    phys->enrich_variable.clear(); // combined: all variables live in output_mat
+    phys->output_mat = std::move(output);
+    ExprId eid = newExprId();
+    auto gexpr = std::make_unique<GroupExpr>(eid, g, std::move(phys), std::vector<GroupId>{g});
+    return insertPhysExpr(std::move(gexpr), g)->id;
 }
 
 GroupExpr* Memo::createGroupWithExpr(binder::BoundLogicalOperator op, std::vector<GroupId> child_groups) {
+    if (auto* dup = findDuplicate(op, child_groups))
+        return dup;
+
     GroupId gid = newGroupId();
     ExprId eid = newExprId();
     auto expr = std::make_unique<GroupExpr>(eid, gid, std::move(op), std::move(child_groups));
@@ -1092,6 +1216,15 @@ bool Group::searchCircle(const Context& ctx, bool& moreSearch) const {
 
     // No winner for this property → case (3): more search needed
     if (!winner) {
+        moreSearch = true;
+        return false;
+    }
+
+    // An under-construction winner (Done=false) is not a final answer.
+    // Columbia asserts this invariant in search_circle; we degrade gracefully
+    // by requesting more search instead of terminating O_GROUP prematurely.
+    if (!winner->done() && winner->plan() != INVALID_EXPR_ID) {
+        // A non-null plan that is still being costed is not final.
         moreSearch = true;
         return false;
     }

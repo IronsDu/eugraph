@@ -1,9 +1,24 @@
 #include "query/optimizer/task.hpp"
 
 #include <algorithm>
+#include <unordered_set>
 
 namespace eugraph {
 namespace optimizer {
+
+namespace {
+
+void mergeOnlyVariablesProducedBy(VarRequirements& dst, const VarRequirements& src, const LogProp& input_lp) {
+    std::unordered_set<std::string> produced;
+    for (const auto& col : input_lp.columns)
+        produced.insert(col.variable);
+    for (const auto& [var, req] : src) {
+        if (produced.count(var))
+            dst[var].merge(req);
+    }
+}
+
+} // namespace
 
 // ============================================================
 // OGroupTask — matches Columbia O_GROUP::perform
@@ -232,6 +247,7 @@ OExprTask::~OExprTask() {
 // ApplyRuleTask — matches Columbia APPLY_RULE::perform
 // ============================================================
 void ApplyRuleTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
+    memo_ = &memo; // re-arm for destructor — perform always runs before destruction
     GroupExpr& expr = memo.getExpr(expr_id_);
     const auto& rule = rules.rules()[rule_idx_];
 
@@ -296,6 +312,39 @@ void ApplyRuleTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
     }
 }
 
+ApplyRuleTask::~ApplyRuleTask() {
+    // Columbia APPLY_RULE::~APPLY_RULE closes the group when the last
+    // scheduled rule produced no follow-up task (condition()==false, all
+    // substitutes duplicate, or an empty substitute list). Without this, the
+    // Last flag is lost and the group remains exploring/optimizing forever.
+    if (!last_ || !memo_)
+        return;
+
+    Group& group = memo_->getGroup(memo_->getExpr(expr_id_).group_id);
+    if (explore_) {
+        group.explored = true;
+        group.exploring = false;
+        return;
+    }
+
+    if (group.changed) {
+        // New logical expressions appeared during this round; keep the group
+        // open so a later O_GROUP round optimizes them too.
+        group.optimized = false;
+        group.optimizing = false;
+        group.changed = false;
+    } else {
+        if (context_id_ >= 0 && context_id_ < static_cast<int>(memo_->contexts().size())) {
+            const Context& ctx = memo_->contexts()[context_id_];
+            Winner* w = group.getWinner(ctx.getPhysProp());
+            if (w)
+                w->setDone(true);
+        }
+        group.optimized = true;
+        group.optimizing = false;
+    }
+}
+
 // ============================================================
 // OInputsTask — costs a physical expression by optimizing inputs
 //
@@ -345,13 +394,16 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         PhysProp provided;
         provided.setMaterializations(expr.physOp().output_mat);
         group.newWinner(provided, expr_id_, localCost, /*done=*/true);
+        if (provided.satisfies(localReqdProp))
+            memo.contexts()[context_id_].setUpperBound(localCost);
         return;
     }
 
     // Build per-input required materializations: union of what this operator
-    // declares per-input and what the parent context demands transitively.
-    // Conservative: the full parent materialization is passed down to every
-    // input. Refinement using schema visibility can come later.
+    // declares for that input and the subset of the parent demand that this
+    // input can actually produce. Variables produced by the other join side
+    // (or introduced by this operator) are intentionally NOT passed down —
+    // an Enricher wrapping THIS group will satisfy them instead.
     //
     // Enricher enforcers are exempt: they PROVIDE materialization (so they
     // satisfy the parent's demand themselves) and their input is the same
@@ -365,9 +417,10 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
             return PhysProp{}; // any — enricher/extract provides its own materializations
         }
         VarRequirements mat;
+        const LogProp& input_lp = memo.getGroup(expr.child_groups[i]).getLogProp(memo, memo.getCatalog());
         if (i < static_cast<int>(expr.physOp().required_input_mat.size()))
-            mergeVarRequirements(mat, expr.physOp().required_input_mat[i]);
-        mergeVarRequirements(mat, localReqdMat);
+            mergeOnlyVariablesProducedBy(mat, expr.physOp().required_input_mat[i], input_lp);
+        mergeOnlyVariablesProducedBy(mat, localReqdMat, input_lp);
         PhysProp p;
         p.setMaterializations(std::move(mat));
         return p;
@@ -394,10 +447,17 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
             if (inputProp.hasMaterializations()) {
                 ExprId enforcer_id = memo.insertEnricherEnforcer(expr.child_groups[i], inputProp.materializations());
                 if (enforcer_id != INVALID_EXPR_ID) {
+                    GroupExpr& enforcer_expr = memo.getExpr(enforcer_id);
+                    PhysProp provided;
+                    provided.setMaterializations(enforcer_expr.physOp().output_mat);
+                    if (!provided.satisfies(inputProp)) {
+                        impossible = true;
+                        break;
+                    }
+
                     // Cost the enforcer: local cost (input cardinality) +
                     // wrapped "any"-winner cost.
                     LogProp child_lp = ig.getLogProp(memo, memo.getCatalog());
-                    GroupExpr& enforcer_expr = memo.getExpr(enforcer_id);
                     Cost enforcer_local = findLocalCost(enforcer_expr.physOp().tag, child_lp, {child_lp});
                     Winner* any_w = ig.getWinner(PhysProp{});
                     Cost wrapped =
@@ -438,16 +498,20 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         return;
     }
 
-    // Phase B: before registering, verify this operator's output satisfies
-    // what the parent requires. Operators that cannot satisfy (e.g. a
-    // topology-stage Scan asked to provide materialized data) are skipped —
-    // an Enricher enforcer in this group will satisfy it instead.
-    {
-        PhysProp provided;
-        provided.setMaterializations(expr.physOp().output_mat);
-        if (!provided.satisfies(localReqdProp)) {
+    // Phase B: verify this operator's output satisfies what the parent
+    // requires. If it cannot, register the plan under what it ACTUALLY
+    // provides (usually "any") so the parent can wrap it with an Enricher.
+    // Skipping registration entirely (the old behavior) left non-materialising
+    // join groups without an any-winner, which made parent-side enforcer
+    // insertion impossible.
+    PhysProp provided;
+    provided.setMaterializations(expr.physOp().output_mat);
+    if (!provided.satisfies(localReqdProp)) {
+        Winner* providedWinner = group.getWinner(provided);
+        if (providedWinner && providedWinner->plan() != INVALID_EXPR_ID && totalCost >= providedWinner->cost())
             return;
-        }
+        group.newWinner(provided, expr_id_, totalCost, /*done=*/true);
+        return;
     }
 
     // Compute local cost via Phase 3 cost model
@@ -475,6 +539,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     }
 
     group.newWinner(localReqdProp, expr_id_, totalCost, /*done=*/true);
+    memo.contexts()[context_id_].setUpperBound(totalCost);
 }
 
 OInputsTask::~OInputsTask() {

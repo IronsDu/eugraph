@@ -2686,6 +2686,32 @@ TEST_F(QueryExecutorWithTest, WithWhere) {
     EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "Carol");
 }
 
+// WHERE appears after LIMIT in the WITH clause. The binder correctly places
+// Filter above Limit; the optimizer must NOT push the filter below Limit.
+TEST_F(QueryExecutorWithTest, WithLimitBeforeWhereKeepsFilterAboveLimit) {
+    insertPersonData(); // Alice(25), Bob(30), Carol(35), scanned in vid order.
+
+    auto result = execSync(*executor_, "MATCH (n:Person) WITH n LIMIT 1 WHERE n.age > 28 RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    // Correct semantics: LIMIT picks Alice first, then WHERE drops her => 0 rows.
+    // Pushing the filter below LIMIT would return Bob.
+    EXPECT_EQ(result.rows.size(), 0u);
+}
+
+// Same invariant for SKIP: Filter must stay above Skip.
+TEST_F(QueryExecutorWithTest, WithSkipLimitBeforeWhereKeepsFilterAboveSkip) {
+    insertPersonData(); // Alice(25), Bob(30), Carol(35), scanned in vid order.
+
+    auto result = execSync(*executor_, "MATCH (n:Person) WITH n SKIP 1 LIMIT 1 WHERE n.age > 28 RETURN n.name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+
+    // Correct semantics: SKIP/LIMIT selects Bob, then WHERE keeps Bob.
+    // Pushing the filter below SKIP would skip Bob and return Carol (or nothing).
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "Bob");
+}
+
 // ==================== Additional WITH tests from Cypher semantics review ====================
 
 // Test 1: WITH aggregation with GROUP BY — equivalent to SQL GROUP BY + select aggregates

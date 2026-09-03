@@ -37,6 +37,7 @@ enum class PhysicalOpTag {
     CrossProduct,
     SemiJoin,
     LeftJoin,
+    Union,
     // Streaming
     Sort,
     Limit,

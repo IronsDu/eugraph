@@ -180,7 +180,7 @@ PatternNode ImplUnionRule::pattern() const {
     return {OptNodeType::Union, {{}, {}}};
 }
 std::vector<std::unique_ptr<GroupExpr>> ImplUnionRule::substitute(GroupExpr& expr, Memo& memo) const {
-    return makePhysicalExpr(expr, memo, PhysicalOpTag::CrossProduct);
+    return makePhysicalExpr(expr, memo, PhysicalOpTag::Union);
 }
 
 } // namespace optimizer
