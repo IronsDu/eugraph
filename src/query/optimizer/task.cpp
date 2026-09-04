@@ -389,6 +389,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     // Copy required properties upfront — the loop below calls memo.addContext()
     // which may reallocate the contexts vector and invalidate this reference.
     PhysProp localReqdProp = ctx.getPhysProp();
+    Cost localUpperBound = ctx.getUpperBound();
     const VarRequirements& localReqdMat = localReqdProp.materializations();
 
     int arity = static_cast<int>(expr.child_groups.size());
@@ -516,7 +517,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
             PhysProp inputProp = inputRequiredProp(i);
             Winner* w = ig.getSatisfyingWinner(inputProp);
             if (!(w && w->done() && w->plan() != INVALID_EXPR_ID) && !ig.optimized && !ig.optimizing) {
-                Cost inputBound = ctx.getUpperBound();
+                Cost inputBound = localUpperBound;
                 if (!inputBound.isInfinity()) {
                     Cost costSoFar = localCost + totalCost;
                     inputBound = inputBound - costSoFar;
@@ -550,7 +551,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     totalCost = totalCost + localCost;
 
     // Check upper bound
-    const Cost& localUB = ctx.getUpperBound();
+    const Cost& localUB = localUpperBound;
     if (!localUB.isInfinity() && totalCost >= localUB) {
         return;
     }
