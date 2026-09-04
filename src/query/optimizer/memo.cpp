@@ -1291,6 +1291,20 @@ const LogProp& Group::getLogProp(Memo& memo, const catalog::Catalog* catalog) {
         return log_prop_;
 
     if (logical_exprs.empty()) {
+        // Physical-only groups occur when an Enricher enforcer is inserted
+        // into a group that has no logical expression yet. The enforcer does
+        // not change cardinality or schema, so derive from its wrapped child.
+        if (!physical_exprs.empty()) {
+            GroupExpr& pe = memo.getExpr(physical_exprs.front());
+            if (isEnricherTag(pe.physOp().tag) && pe.child_groups.size() == 1) {
+                Group& child = memo.getGroup(pe.child_groups[0]);
+                log_prop_ = child.getLogProp(memo, catalog);
+                child.parents_.insert(id);
+                log_prop_valid_ = true;
+                return log_prop_;
+            }
+        }
+
         log_prop_.cardinality = 0.0;
         log_prop_.columns.clear();
         log_prop_.valid = true;

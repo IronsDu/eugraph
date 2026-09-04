@@ -349,6 +349,13 @@ ApplyRuleTask::~ApplyRuleTask() {
             if (w)
                 w->setDone(true);
         }
+        // Leaf/fallback winners may be registered under a different PhysProp
+        // (e.g. topology-form "any") than the local context. The final
+        // O_INPUTS of the round makes every completed winner visible.
+        for (Winner& w : group.winners) {
+            if (!w.done())
+                w.setDone(true);
+        }
         group.optimized = true;
         group.optimizing = false;
     }
@@ -402,11 +409,21 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         Cost localCost = findLocalCost(expr.physOp().tag, group_lp, {});
         PhysProp provided;
         provided.setMaterializations(expr.physOp().output_mat);
-        group.newWinner(provided, expr_id_, localCost, /*done=*/true);
+        group.newWinner(provided, expr_id_, localCost, /*done=*/last_);
         if (provided.satisfies(localReqdProp))
             memo.contexts()[context_id_].setUpperBound(localCost);
         return;
     }
+
+    // Local cost is needed before pushing child O_GROUP tasks so we can
+    // compute each child's remaining upper bound (Columbia InputBd).
+    LogProp group_lp = group.getLogProp(memo, memo.getCatalog());
+    std::vector<LogProp> input_lps;
+    input_lps.reserve(arity);
+    for (int i = 0; i < arity; i++) {
+        input_lps.push_back(memo.getGroup(expr.child_groups[i]).getLogProp(memo, memo.getCatalog()));
+    }
+    Cost localCost = findLocalCost(expr.physOp().tag, group_lp, input_lps);
 
     // Build per-input required materializations: union of what this operator
     // declares for that input and the subset of the parent demand that this
@@ -499,7 +516,14 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
             PhysProp inputProp = inputRequiredProp(i);
             Winner* w = ig.getSatisfyingWinner(inputProp);
             if (!(w && w->done() && w->plan() != INVALID_EXPR_ID) && !ig.optimized && !ig.optimizing) {
-                Context inputCtx(inputProp, Cost::infinity());
+                Cost inputBound = ctx.getUpperBound();
+                if (!inputBound.isInfinity()) {
+                    Cost costSoFar = localCost + totalCost;
+                    inputBound = inputBound - costSoFar;
+                    if (inputBound < Cost(0.0))
+                        inputBound = Cost::infinity();
+                }
+                Context inputCtx(inputProp, inputBound);
                 int inputCtxId = memo.addContext(std::move(inputCtx));
                 queue.push(std::make_unique<OGroupTask>(expr.child_groups[i], inputCtxId, /*last=*/true));
             }
@@ -519,18 +543,10 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         Winner* providedWinner = group.getWinner(provided);
         if (providedWinner && providedWinner->plan() != INVALID_EXPR_ID && totalCost >= providedWinner->cost())
             return;
-        group.newWinner(provided, expr_id_, totalCost, /*done=*/true);
+        group.newWinner(provided, expr_id_, totalCost, /*done=*/last_);
         return;
     }
 
-    // Compute local cost via Phase 3 cost model
-    LogProp group_lp = group.getLogProp(memo, memo.getCatalog());
-    std::vector<LogProp> input_lps;
-    input_lps.reserve(arity);
-    for (int i = 0; i < arity; i++) {
-        input_lps.push_back(memo.getGroup(expr.child_groups[i]).getLogProp(memo, memo.getCatalog()));
-    }
-    Cost localCost = findLocalCost(expr.physOp().tag, group_lp, input_lps);
     totalCost = totalCost + localCost;
 
     // Check upper bound
@@ -547,7 +563,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         }
     }
 
-    group.newWinner(localReqdProp, expr_id_, totalCost, /*done=*/true);
+    group.newWinner(localReqdProp, expr_id_, totalCost, /*done=*/last_);
     memo.contexts()[context_id_].setUpperBound(totalCost);
 }
 
@@ -575,6 +591,13 @@ OInputsTask::~OInputsTask() {
             Winner* w = group.getWinner(ctx.getPhysProp());
             if (w)
                 w->setDone(true);
+        }
+        // Leaf/fallback winners may be registered under a different PhysProp
+        // (e.g. topology-form "any") than the local context. The final
+        // O_INPUTS of the round makes every completed winner visible.
+        for (Winner& w : group.winners) {
+            if (!w.done())
+                w.setDone(true);
         }
         group.optimized = true;
         group.optimizing = false;

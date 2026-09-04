@@ -948,6 +948,26 @@ TEST(LogPropTest, LimitDoesNotExceedInput) {
     EXPECT_DOUBLE_EQ(lp.cardinality, input_lp.cardinality);
 }
 
+TEST(LogPropTest, PhysicalOnlyEnricherGroupDerivesFromChild) {
+    Memo memo;
+    auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+    auto base_gid = memo.copyIn(scan);
+    const LogProp& base_lp = memo.getGroup(base_gid).getLogProp(memo, nullptr);
+
+    GroupId enforcer_gid = memo.newGroupId();
+    auto phys = std::make_unique<PhysicalExpr>();
+    phys->tag = PhysicalOpTag::VertexPropertyExtract;
+    phys->source = binder::BoundSingletonOp{};
+    phys->enrich_variable = "n";
+    auto ge =
+        std::make_unique<GroupExpr>(INVALID_EXPR_ID, enforcer_gid, std::move(phys), std::vector<GroupId>{base_gid});
+    memo.insertPhysExpr(std::move(ge), enforcer_gid);
+
+    const LogProp& enforcer_lp = memo.getGroup(enforcer_gid).getLogProp(memo, nullptr);
+    EXPECT_EQ(enforcer_lp.cardinality, base_lp.cardinality);
+    EXPECT_EQ(enforcer_lp.columns.size(), base_lp.columns.size());
+}
+
 TEST(LogPropTest, LazyDerivationCaches) {
     Memo memo;
     auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
@@ -1447,7 +1467,92 @@ TEST(FrameworkPropertyTest, WinnerChainReferencesValidExprs) {
     walk(root_gid);
 }
 
+// ==================== Winner Done Semantics Tests ====================
+
+TEST(WinnerDoneTest, NonLastOInputsLeavesWinnerUndone) {
+    Memo memo;
+    auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+    auto gid = memo.copyIn(scan);
+
+    auto phys = std::make_unique<PhysicalExpr>();
+    phys->tag = PhysicalOpTag::LabelScan;
+    phys->source = makeLabelScanWithLabel("n", 0, LabelId{1});
+    auto ge = std::make_unique<GroupExpr>(INVALID_EXPR_ID, gid, std::move(phys), std::vector<GroupId>{});
+    ExprId pid = memo.insertPhysExpr(std::move(ge), gid)->id;
+
+    Context ctx(PhysProp{}, Cost::infinity());
+    int ctx_id = memo.addContext(std::move(ctx));
+    OInputsTask task(pid, ctx_id, /*last=*/false);
+    RuleSet rules;
+    TaskQueue queue;
+    task.perform(memo, rules, queue);
+
+    Winner* w = memo.getGroup(gid).getWinner(PhysProp{});
+    ASSERT_NE(w, nullptr);
+    EXPECT_EQ(w->plan(), pid);
+    EXPECT_FALSE(w->done());
+}
+
+TEST(WinnerDoneTest, LastOInputsMarksWinnerDone) {
+    Memo memo;
+    auto scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+    auto gid = memo.copyIn(scan);
+
+    auto phys = std::make_unique<PhysicalExpr>();
+    phys->tag = PhysicalOpTag::LabelScan;
+    phys->source = makeLabelScanWithLabel("n", 0, LabelId{1});
+    auto ge = std::make_unique<GroupExpr>(INVALID_EXPR_ID, gid, std::move(phys), std::vector<GroupId>{});
+    ExprId pid = memo.insertPhysExpr(std::move(ge), gid)->id;
+
+    Context ctx(PhysProp{}, Cost::infinity());
+    int ctx_id = memo.addContext(std::move(ctx));
+    OInputsTask task(pid, ctx_id, /*last=*/true);
+    RuleSet rules;
+    TaskQueue queue;
+    task.perform(memo, rules, queue);
+
+    Winner* w = memo.getGroup(gid).getWinner(PhysProp{});
+    ASSERT_NE(w, nullptr);
+    EXPECT_EQ(w->plan(), pid);
+    EXPECT_TRUE(w->done());
+}
+
 // ==================== Context Upper Bound Tests ====================
+
+TEST(InputBoundTest, InputContextUsesRemainingUpperBound) {
+    // O_INPUTS should pass LocalUB - CostSoFar to uncosted child groups,
+    // not infinity.
+    Memo memo;
+
+    auto child_scan = makeLabelScanWithLabel("n", 0, LabelId{1});
+    auto child_gid = memo.copyIn(child_scan);
+
+    auto parent_logical = std::make_unique<BoundFilterOp>();
+    parent_logical->predicate = BoundLiteral(true);
+    auto parent_gid = memo.createGroupWithExpr(BoundLogicalOperator(std::move(parent_logical)), {child_gid})->group_id;
+
+    auto phys = std::make_unique<PhysicalExpr>();
+    phys->tag = PhysicalOpTag::Filter;
+    auto src = std::make_unique<BoundFilterOp>();
+    src->predicate = BoundLiteral(true);
+    phys->source = BoundLogicalOperator(std::move(src));
+    auto ge =
+        std::make_unique<GroupExpr>(INVALID_EXPR_ID, parent_gid, std::move(phys), std::vector<GroupId>{child_gid});
+    ExprId pid = memo.insertPhysExpr(std::move(ge), parent_gid)->id;
+
+    Context ctx(PhysProp{}, Cost(10000.0));
+    int ctx_id = memo.addContext(std::move(ctx));
+
+    RuleSet rules;
+    TaskQueue queue;
+    OInputsTask task(pid, ctx_id, /*last=*/true);
+    task.perform(memo, rules, queue);
+
+    ASSERT_EQ(memo.contexts().size(), 2u);
+    const Context& child_ctx = memo.contexts().back();
+    EXPECT_FALSE(child_ctx.getUpperBound().isInfinity());
+    EXPECT_LT(child_ctx.getUpperBound().value(), 10000.0);
+}
 
 TEST(UpperBoundTest, WinnerUpdatesContextUpperBound) {
     // Columbia O_INPUTS tightens the current context's upper bound whenever a

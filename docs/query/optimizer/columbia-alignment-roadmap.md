@@ -161,10 +161,10 @@ GroupExpr 执行规则；FilterPushdown 自己只看 `logical_exprs.back()`。�
   any-fallback 解包。物化需求复杂时 chosen 树可能与 winner 链不一致。
 - [ ] **R-7 copyOut(prop) 的子节点仍统一按 any 递归**
   本轮只修了根 winner 选择；子节点属性传播尚未镜像 `extractChosen`。
-- [ ] **R-8 O_INPUTS 仍把每个新 winner 直接 done=true**
+- [x] **R-8 O_INPUTS 仍把每个新 winner 直接 done=true**（非 Last O_INPUTS 保持 undone，最终任务统一置 done）
   Columbia 只在最后一个 O_INPUTS 收尾时才 SetDone。当前靠 LIFO 原子性 + searchCircle 未完成防护规避，
   但多 context/重入场景下语义仍与 Columbia 不完全一致。
-- [ ] **R-9 输入 group 的 context 上界仍为 infinity**
+- [x] **R-9 输入 group 的 context 上界仍为 infinity**（输入 context 使用 LocalUB - CostSoFar）
   本轮只收紧当前 context；Columbia 会为每个输入计算 `InputBd = LocalUB - CostSoFar + InputCost`。
   跨输入剪枝能力仍弱。
 - [ ] **R-10 混合类型多变量 Enricher 使用近似 tag**
@@ -173,7 +173,7 @@ GroupExpr 执行规则；FilterPushdown 自己只看 `logical_exprs.back()`。�
 - [ ] **R-11 InterestingProps / Context::done / const-group 短路未实现或未接线**
   `InterestingProps` 无调用；`Context::done` 无使用；O_GROUP 的 const group 快速路径只有注释没有代码。
 - [x] **R-13 dedup 短路导致的 ExprId 空洞**（生产路径改为 INVALID id + insert 时分配；避免 duplicate 后 id 间隙越界）
-- [ ] **R-12 Group::getLogProp 仅支持 logical_exprs**
+- [x] **R-12 Group::getLogProp 仅支持 logical_exprs**（Enricher physical-only group 从 child 推导）
   physical-only group 会得到空 LogProp。当前 Enricher 插入原 group 规避了该限制；未来若做真正的
   enforcer chain（每个 enforcer 一个 group）需要先补物理 group 的逻辑属性推导。
 
@@ -184,9 +184,9 @@ GroupExpr 执行规则；FilterPushdown 自己只看 `logical_exprs.back()`。�
   - P2 新增 6 项全部红（UpperBound、UndoneWinner、Dedup×2、copyOut satisfying、Union tag）。
   - `QueryExecutorWithTest.WithLimit/Skip...` 2 项红（实际返回 Bob/Carol，期望 0 行/Bob）。
 - 修复后：
-  - `optimizer_tests` 105/105 通过。
+  - `optimizer_tests` 109/109 通过。
   - `query_executor_tests` 496/496 通过（含 `TckWith7Scenario1BoundEndpoint` 回归）。
   - TCK 定向回归通过：`with-skip-limit`、`with-where`、`with-orderBy` 合计 320/320。
 - 全量验证（本分支最终）：
   - CTest 单元/集成（排除 tck_tests 与外部驱动集成）：1028 个测试，100% 通过，4 个 LoaderIntegration 按预期 Skip。
-  - 全量 TCK：3897 scenarios，3845 passed，52 undefined（均为 CALL/procedure 未实现场景），0 failed；执行耗时 13m05s。
+  - 全量 TCK：3897 scenarios，3845 passed，52 undefined（均为 CALL/procedure 未实现场景），0 failed；R-8/R-9/R-12 批次后复跑耗时 12m57s。
