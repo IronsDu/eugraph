@@ -34,6 +34,7 @@ jobs:
     name: Address Sanitizer
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
 
     steps:
