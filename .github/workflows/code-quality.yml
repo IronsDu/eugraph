@@ -147,9 +147,11 @@ jobs:
           -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
           -DVCPKG_TARGET_TRIPLET=x64-linux-release \
           -DEUGRAPH_ENABLE_CCACHE=ON \
-          -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
-          -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
-          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
+          -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+          -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+          -DCMAKE_CXX_FLAGS_DEBUG="-O0" \
+          -DCMAKE_C_FLAGS_DEBUG="-O0" \
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address -s" \
           -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=address"
 
     - name: Build
