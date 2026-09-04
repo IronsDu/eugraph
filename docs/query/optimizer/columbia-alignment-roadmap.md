@@ -142,28 +142,29 @@ GroupExpr 执行规则；FilterPushdown 自己只看 `logical_exprs.back()`。�
 
 - [ ] **R-1 O_EXPR 无条件探索全部 child group**
   `OExprTask::perform` 对所有 child 都推 `EGroupTask`；Columbia 只为规则 original pattern 中非叶子
-  输入推 E_GROUP。当前是过度探索，大计划会增加搜索开销。
-- [ ] **R-2 E_GROUP 只探索 first logical expr**
+  输入推 E_GROUP。曾尝试按 pattern 收紧，但导致 `WithWhere2` 复杂 WITH WHERE 查询 TCK 回归
+  （0 行 vs 预期 2 行），说明当前规则/搜索空间构造仍依赖 child exploration 先完成，暂保持无条件探索。
+- [x] **R-2 E_GROUP 只探索 first logical expr**（改为遍历全部 logical expr）
   Columbia 也这么做，但依赖 transformation rule 的合流性；eugraph 靠 O_GROUP 遍历全部 logical expr
   兜底。引入非合流多规则后，explore 阶段可能在 condition 之前不完整。
-- [ ] **R-3 FilterPushdown 只看 child group 的最后一个 logical expr**
+- [x] **R-3 FilterPushdown 只看 child group 的最后一个 logical expr**（substitute 枚举全部可穿透 child）
   组内有多个等价表达式时可能漏掉可下推形态或选到非代表性形态。当前组通常只有 1 个表达式，影响小。
-- [ ] **R-4 文档与实现不一致：Filter 自身可穿透**
+- [x] **R-4 文档与实现不一致：Filter 自身可穿透**（isPenetrable 增加 Filter）
   `cascades-optimizer.md` 可穿透表标记 Filter ✅，但 `isPenetrable` 没有 `OptNodeType::Filter`。
   相邻 Filter 合并/下推当前不会发生（性能优化缺口，不是语义 bug）。
 - [ ] **R-5 clone 与 hash/eq 的 slot 字段不一致**
   hash/eq 已纳入 `BoundExpandOp`/`BoundVarLenExpandOp` 的 binder slot 字段，但
   `cloneBoundLogicalOperator` 仍未拷贝这些字段。规则 substitute 产生的克隆会以 INVALID slot 参与
   dedup，可能漏合并，增加重复表达式。
-- [ ] **R-6 extractChosen 未按 child schema 过滤 materialization 需求**
+- [x] **R-6 extractChosen 未按 child schema 过滤 materialization 需求**
   `OInputsTask::inputRequiredProp` 已过滤，但 `extractChosen` 仍把父需求全集塞给每个 child，随后靠
   any-fallback 解包。物化需求复杂时 chosen 树可能与 winner 链不一致。
 - [ ] **R-7 copyOut(prop) 的子节点仍统一按 any 递归**
   本轮只修了根 winner 选择；子节点属性传播尚未镜像 `extractChosen`。
-- [ ] **R-8 O_INPUTS 仍把每个新 winner 直接 done=true**
+- [x] **R-8 O_INPUTS 仍把每个新 winner 直接 done=true**（非 Last O_INPUTS 保持 undone，最终任务统一置 done）
   Columbia 只在最后一个 O_INPUTS 收尾时才 SetDone。当前靠 LIFO 原子性 + searchCircle 未完成防护规避，
   但多 context/重入场景下语义仍与 Columbia 不完全一致。
-- [ ] **R-9 输入 group 的 context 上界仍为 infinity**
+- [x] **R-9 输入 group 的 context 上界仍为 infinity**（输入 context 使用 LocalUB - CostSoFar）
   本轮只收紧当前 context；Columbia 会为每个输入计算 `InputBd = LocalUB - CostSoFar + InputCost`。
   跨输入剪枝能力仍弱。
 - [ ] **R-10 混合类型多变量 Enricher 使用近似 tag**
@@ -171,7 +172,8 @@ GroupExpr 执行规则；FilterPushdown 自己只看 `logical_exprs.back()`。�
   当前仅影响代价精度。
 - [ ] **R-11 InterestingProps / Context::done / const-group 短路未实现或未接线**
   `InterestingProps` 无调用；`Context::done` 无使用；O_GROUP 的 const group 快速路径只有注释没有代码。
-- [ ] **R-12 Group::getLogProp 仅支持 logical_exprs**
+- [x] **R-13 dedup 短路导致的 ExprId 空洞**（生产路径改为 INVALID id + insert 时分配；避免 duplicate 后 id 间隙越界）
+- [x] **R-12 Group::getLogProp 仅支持 logical_exprs**（Enricher physical-only group 从 child 推导）
   physical-only group 会得到空 LogProp。当前 Enricher 插入原 group 规避了该限制；未来若做真正的
   enforcer chain（每个 enforcer 一个 group）需要先补物理 group 的逻辑属性推导。
 
@@ -182,6 +184,9 @@ GroupExpr 执行规则；FilterPushdown 自己只看 `logical_exprs.back()`。�
   - P2 新增 6 项全部红（UpperBound、UndoneWinner、Dedup×2、copyOut satisfying、Union tag）。
   - `QueryExecutorWithTest.WithLimit/Skip...` 2 项红（实际返回 Bob/Carol，期望 0 行/Bob）。
 - 修复后：
-  - `optimizer_tests` 102/102 通过。
+  - `optimizer_tests` 109/109 通过。
   - `query_executor_tests` 496/496 通过（含 `TckWith7Scenario1BoundEndpoint` 回归）。
   - TCK 定向回归通过：`with-skip-limit`、`with-where`、`with-orderBy` 合计 320/320。
+- 全量验证（本分支最终）：
+  - CTest 单元/集成（排除 tck_tests 与外部驱动集成）：1028 个测试，100% 通过，4 个 LoaderIntegration 按预期 Skip。
+  - 全量 TCK：3897 scenarios，3845 passed，52 undefined（均为 CALL/procedure 未实现场景），0 failed；R-8/R-9/R-12 批次后复跑耗时 12m57s。

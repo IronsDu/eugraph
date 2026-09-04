@@ -70,7 +70,10 @@ jobs:
         ${{ github.workspace }}/vcpkg/vcpkg version
 
     - name: Configure CMake
-      run: cmake --preset=release
+      # CI-only: strip final test/server binaries to keep runner disk usage
+      # within GitHub's limits. Debug symbols are not needed for green/red
+      # test results; local debug builds remain unchanged.
+      run: cmake --preset=release -DCMAKE_EXE_LINKER_FLAGS="-s"
 
     - name: Build
       run: cmake --build --preset=release

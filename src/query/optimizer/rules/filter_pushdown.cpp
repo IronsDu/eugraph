@@ -13,6 +13,7 @@ bool isPenetrable(OptNodeType type) {
     case OptNodeType::Expand:
     case OptNodeType::VarLenExpand:
     case OptNodeType::PathBuild:
+    case OptNodeType::Filter:
     case OptNodeType::Sort:
     case OptNodeType::Distinct:
         return true;
@@ -130,6 +131,30 @@ std::unordered_set<std::string> introducedVariableNames(const binder::BoundLogic
 
 } // namespace
 
+namespace {
+
+bool canPushThroughPredicate(const binder::BoundExpression& predicate, const binder::BoundLogicalOperator& child_op) {
+    OptNodeType child_type = nodeTypeFromVariantIndex(child_op.index());
+    if (!isPenetrable(child_type))
+        return false;
+
+    // Pushing a Filter through an operator that introduces new variables is
+    // only safe if the predicate does not reference any of those variables.
+    auto introduced = introducedVariableNames(child_op);
+    if (introduced.empty())
+        return true;
+
+    std::unordered_set<std::string> referenced;
+    collectColumnNames(predicate, referenced);
+    for (const auto& name : introduced) {
+        if (referenced.count(name))
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
 bool FilterPushdownRule::condition(GroupExpr& expr, Memo& memo) const {
     if (expr.child_groups.empty())
         return false;
@@ -138,69 +163,43 @@ bool FilterPushdownRule::condition(GroupExpr& expr, Memo& memo) const {
     if (child_group.logical_exprs.empty())
         return false;
 
-    ExprId child_eid = child_group.logical_exprs.back();
-    GroupExpr& child_expr = memo.getExpr(child_eid);
-    OptNodeType child_type = nodeTypeFromVariantIndex(child_expr.op.index());
-
-    if (!isPenetrable(child_type))
-        return false;
-
-    // Pushing a Filter through an operator that introduces new variables is
-    // only safe if the predicate does not reference any of those variables.
-    // Otherwise the pushed Filter would be placed where those variables are
-    // not yet in scope, leaving dangling column references.
     const auto& filter_op = std::get<std::unique_ptr<binder::BoundFilterOp>>(expr.op);
-    auto introduced = introducedVariableNames(child_expr.op);
-    if (!introduced.empty()) {
-        std::unordered_set<std::string> referenced;
-        collectColumnNames(filter_op->predicate, referenced);
-        for (const auto& name : introduced) {
-            if (referenced.count(name))
-                return false;
-        }
+    for (ExprId child_eid : child_group.logical_exprs) {
+        GroupExpr& child_expr = memo.getExpr(child_eid);
+        if (canPushThroughPredicate(filter_op->predicate, child_expr.op))
+            return true;
     }
-
-    return true;
+    return false;
 }
 
 std::vector<std::unique_ptr<GroupExpr>> FilterPushdownRule::substitute(GroupExpr& expr, Memo& memo) const {
-    // Single-step pushdown: Filter(Child(X)) → Child(Filter(X))
-    //
-    // 1. Move the predicate from the original Filter
-    // 2. Move the child operator data from the child GroupExpr
-    // 3. Create a new group with a Filter whose child is the child-of-child
-    // 4. Create a new GroupExpr for the child operator whose child is the new Filter group
-    // 5. Return the child operator GroupExpr (to be inserted into original group)
-
-    // Step 1: Clone predicate from the original Filter (do NOT move — original stays in Memo)
+    // Single-step pushdown: Filter(Child(X)) → Child(Filter(X)), for every
+    // equivalent Child expression in the child group that can be penetrated.
     auto& filter_op = std::get<std::unique_ptr<binder::BoundFilterOp>>(expr.op);
     auto predicate = cloneBoundExpression(filter_op->predicate);
 
-    // Step 2: Get child GroupExpr
     GroupId child_gid = expr.child_groups[0];
     Group& child_group = memo.getGroup(child_gid);
-    ExprId child_eid = child_group.logical_exprs.back();
-    GroupExpr& child_expr = memo.getExpr(child_eid);
-
-    // Clone the child operator data (do NOT move — original stays in Memo for other rules)
-    binder::BoundLogicalOperator child_op = cloneBoundLogicalOperator(child_expr.op);
-    auto grandchild_groups = child_expr.child_groups;
-
-    // Step 3: Create a new group with the pushed-down Filter
-    auto new_filter_op = std::make_unique<binder::BoundFilterOp>();
-    new_filter_op->predicate = std::move(predicate);
-
-    GroupExpr* filter_gexpr =
-        memo.createGroupWithExpr(binder::BoundLogicalOperator(std::move(new_filter_op)), grandchild_groups);
-
-    // Step 4: Create new GroupExpr for the child operator, pointing to new Filter group
-    std::vector<GroupId> new_child_groups = {filter_gexpr->group_id};
-
-    auto result =
-        std::make_unique<GroupExpr>(memo.newExprId(), expr.group_id, std::move(child_op), std::move(new_child_groups));
 
     std::vector<std::unique_ptr<GroupExpr>> results;
-    results.push_back(std::move(result));
+    for (ExprId child_eid : child_group.logical_exprs) {
+        GroupExpr& child_expr = memo.getExpr(child_eid);
+        if (!canPushThroughPredicate(filter_op->predicate, child_expr.op))
+            continue;
+
+        binder::BoundLogicalOperator child_op = cloneBoundLogicalOperator(child_expr.op);
+        auto grandchild_groups = child_expr.child_groups;
+
+        auto new_filter_op = std::make_unique<binder::BoundFilterOp>();
+        new_filter_op->predicate = cloneBoundExpression(predicate);
+
+        GroupExpr* filter_gexpr =
+            memo.createGroupWithExpr(binder::BoundLogicalOperator(std::move(new_filter_op)), grandchild_groups);
+
+        std::vector<GroupId> new_child_groups = {filter_gexpr->group_id};
+        results.push_back(std::make_unique<GroupExpr>(INVALID_EXPR_ID, expr.group_id, std::move(child_op),
+                                                      std::move(new_child_groups)));
+    }
     return results;
 }
 

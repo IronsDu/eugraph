@@ -34,6 +34,7 @@ jobs:
     name: Address Sanitizer
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
 
     steps:
@@ -146,9 +147,11 @@ jobs:
           -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
           -DVCPKG_TARGET_TRIPLET=x64-linux-release \
           -DEUGRAPH_ENABLE_CCACHE=ON \
-          -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
-          -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
-          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
+          -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+          -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+          -DCMAKE_CXX_FLAGS_DEBUG="-O0" \
+          -DCMAKE_C_FLAGS_DEBUG="-O0" \
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address -s" \
           -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=address"
 
     - name: Build
@@ -327,9 +330,11 @@ jobs:
           -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
           -DVCPKG_TARGET_TRIPLET=x64-linux-release \
           -DEUGRAPH_ENABLE_CCACHE=ON \
-          -DCMAKE_CXX_FLAGS="-fsanitize=undefined -g" \
-          -DCMAKE_C_FLAGS="-fsanitize=undefined -g" \
-          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined" \
+          -DCMAKE_CXX_FLAGS="-fsanitize=undefined" \
+          -DCMAKE_C_FLAGS="-fsanitize=undefined" \
+          -DCMAKE_CXX_FLAGS_DEBUG="-O0" \
+          -DCMAKE_C_FLAGS_DEBUG="-O0" \
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined -s" \
           -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=undefined"
 
     - name: Build
@@ -514,7 +519,10 @@ jobs:
           -DVCPKG_TARGET_TRIPLET=x64-linux-release \
           -DEUGRAPH_ENABLE_CCACHE=ON \
           -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror" \
-          -DCMAKE_C_FLAGS="-Wall -Wextra -Werror"
+          -DCMAKE_C_FLAGS="-Wall -Wextra -Werror" \
+          -DCMAKE_CXX_FLAGS_DEBUG="-O0" \
+          -DCMAKE_C_FLAGS_DEBUG="-O0" \
+          -DCMAKE_EXE_LINKER_FLAGS="-s"
 
     - name: Build
       run: |

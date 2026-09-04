@@ -57,6 +57,11 @@ public:
             value_ += o.value_;
         return *this;
     }
+    Cost operator-(const Cost& o) const {
+        if (isInfinity() || o.isInfinity())
+            return infinity();
+        return Cost(value_ - o.value_);
+    }
 
     double value() const {
         return value_;

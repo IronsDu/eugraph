@@ -144,9 +144,15 @@ void EGroupTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     group.exploring = true;
     group.explored = false;
 
-    if (!group.logical_exprs.empty()) {
-        ExprId first_eid = group.logical_exprs.front();
-        queue.push(std::make_unique<OExprTask>(first_eid, /*explore=*/true, memo, context_id_, /*last=*/true));
+    // Explore every logical expression. Columbia only explores the first and
+    // relies on transformation-rule confluence; eugraph's FilterPushdown is
+    // not confluent, so each expression must receive its own explore pass.
+    // The last O_EXPR of the cascade must always close E_GROUP, regardless of
+    // whether the E_GROUP task itself was marked Last.
+    for (size_t i = group.logical_exprs.size(); i > 0; --i) {
+        ExprId eid = group.logical_exprs[i - 1];
+        bool is_last = (i == group.logical_exprs.size());
+        queue.push(std::make_unique<OExprTask>(eid, /*explore=*/true, memo, context_id_, is_last));
     }
 }
 
@@ -203,7 +209,10 @@ void OExprTask::perform(Memo& memo, RuleSet& rules, TaskQueue& queue) {
         last_ = has_last;
     }
 
-    // Push E_GROUP for child inputs that haven't been explored.
+    // Push E_GROUP for child inputs that have not been explored yet. Columbia
+    // only explores non-leaf pattern inputs, but eugraph's current rule set
+    // and search-space construction rely on child exploration to complete
+    // before transformation rules fire (see WithWhere2 TCK regression).
     for (GroupId child_gid : expr.child_groups) {
         Group& child_group = memo.getGroup(child_gid);
         if (child_group.explored || child_group.exploring || child_group.optimized)
@@ -340,6 +349,13 @@ ApplyRuleTask::~ApplyRuleTask() {
             if (w)
                 w->setDone(true);
         }
+        // Leaf/fallback winners may be registered under a different PhysProp
+        // (e.g. topology-form "any") than the local context. The final
+        // O_INPUTS of the round makes every completed winner visible.
+        for (Winner& w : group.winners) {
+            if (!w.done())
+                w.setDone(true);
+        }
         group.optimized = true;
         group.optimizing = false;
     }
@@ -373,6 +389,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
     // Copy required properties upfront — the loop below calls memo.addContext()
     // which may reallocate the contexts vector and invalidate this reference.
     PhysProp localReqdProp = ctx.getPhysProp();
+    Cost localUpperBound = ctx.getUpperBound();
     const VarRequirements& localReqdMat = localReqdProp.materializations();
 
     int arity = static_cast<int>(expr.child_groups.size());
@@ -393,11 +410,21 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         Cost localCost = findLocalCost(expr.physOp().tag, group_lp, {});
         PhysProp provided;
         provided.setMaterializations(expr.physOp().output_mat);
-        group.newWinner(provided, expr_id_, localCost, /*done=*/true);
+        group.newWinner(provided, expr_id_, localCost, /*done=*/last_);
         if (provided.satisfies(localReqdProp))
             memo.contexts()[context_id_].setUpperBound(localCost);
         return;
     }
+
+    // Local cost is needed before pushing child O_GROUP tasks so we can
+    // compute each child's remaining upper bound (Columbia InputBd).
+    LogProp group_lp = group.getLogProp(memo, memo.getCatalog());
+    std::vector<LogProp> input_lps;
+    input_lps.reserve(arity);
+    for (int i = 0; i < arity; i++) {
+        input_lps.push_back(memo.getGroup(expr.child_groups[i]).getLogProp(memo, memo.getCatalog()));
+    }
+    Cost localCost = findLocalCost(expr.physOp().tag, group_lp, input_lps);
 
     // Build per-input required materializations: union of what this operator
     // declares for that input and the subset of the parent demand that this
@@ -490,7 +517,14 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
             PhysProp inputProp = inputRequiredProp(i);
             Winner* w = ig.getSatisfyingWinner(inputProp);
             if (!(w && w->done() && w->plan() != INVALID_EXPR_ID) && !ig.optimized && !ig.optimizing) {
-                Context inputCtx(inputProp, Cost::infinity());
+                Cost inputBound = localUpperBound;
+                if (!inputBound.isInfinity()) {
+                    Cost costSoFar = localCost + totalCost;
+                    inputBound = inputBound - costSoFar;
+                    if (inputBound < Cost(0.0))
+                        inputBound = Cost::infinity();
+                }
+                Context inputCtx(inputProp, inputBound);
                 int inputCtxId = memo.addContext(std::move(inputCtx));
                 queue.push(std::make_unique<OGroupTask>(expr.child_groups[i], inputCtxId, /*last=*/true));
             }
@@ -510,22 +544,14 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         Winner* providedWinner = group.getWinner(provided);
         if (providedWinner && providedWinner->plan() != INVALID_EXPR_ID && totalCost >= providedWinner->cost())
             return;
-        group.newWinner(provided, expr_id_, totalCost, /*done=*/true);
+        group.newWinner(provided, expr_id_, totalCost, /*done=*/last_);
         return;
     }
 
-    // Compute local cost via Phase 3 cost model
-    LogProp group_lp = group.getLogProp(memo, memo.getCatalog());
-    std::vector<LogProp> input_lps;
-    input_lps.reserve(arity);
-    for (int i = 0; i < arity; i++) {
-        input_lps.push_back(memo.getGroup(expr.child_groups[i]).getLogProp(memo, memo.getCatalog()));
-    }
-    Cost localCost = findLocalCost(expr.physOp().tag, group_lp, input_lps);
     totalCost = totalCost + localCost;
 
     // Check upper bound
-    const Cost& localUB = ctx.getUpperBound();
+    const Cost& localUB = localUpperBound;
     if (!localUB.isInfinity() && totalCost >= localUB) {
         return;
     }
@@ -538,7 +564,7 @@ void OInputsTask::perform(Memo& memo, RuleSet& /*rules*/, TaskQueue& queue) {
         }
     }
 
-    group.newWinner(localReqdProp, expr_id_, totalCost, /*done=*/true);
+    group.newWinner(localReqdProp, expr_id_, totalCost, /*done=*/last_);
     memo.contexts()[context_id_].setUpperBound(totalCost);
 }
 
@@ -566,6 +592,13 @@ OInputsTask::~OInputsTask() {
             Winner* w = group.getWinner(ctx.getPhysProp());
             if (w)
                 w->setDone(true);
+        }
+        // Leaf/fallback winners may be registered under a different PhysProp
+        // (e.g. topology-form "any") than the local context. The final
+        // O_INPUTS of the round makes every completed winner visible.
+        for (Winner& w : group.winners) {
+            if (!w.done())
+                w.setDone(true);
         }
         group.optimized = true;
         group.optimizing = false;

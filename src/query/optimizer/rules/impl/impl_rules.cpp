@@ -32,7 +32,7 @@ static std::vector<std::unique_ptr<GroupExpr>> makePhysicalExpr(GroupExpr& expr,
         }
     }
 
-    auto ge = std::make_unique<GroupExpr>(memo.newExprId(), expr.group_id, std::move(phys), expr.child_groups);
+    auto ge = std::make_unique<GroupExpr>(INVALID_EXPR_ID, expr.group_id, std::move(phys), expr.child_groups);
     std::vector<std::unique_ptr<GroupExpr>> result;
     result.push_back(std::move(ge));
     return result;

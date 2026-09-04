@@ -89,6 +89,16 @@ public:
         return false;
     }
 
+    // Whether input `input_index` must be explored (E_GROUP) before this rule
+    // is applied. Columbia derives this from the original pattern: only
+    // non-leaf pattern children require exploring the corresponding group.
+    virtual bool requiresChildExploration(size_t input_index) const {
+        const PatternNode& p = pattern();
+        if (input_index >= p.children.size())
+            return false;
+        return !p.children[input_index].children.empty();
+    }
+
     int index() const {
         return index_;
     }
