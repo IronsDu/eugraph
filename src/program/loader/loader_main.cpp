@@ -1,25 +1,17 @@
 #include "program/loader/csv_loader.hpp"
 #include "program/shell/rpc_client.hpp"
 
+#include <args.hxx>
+
 #include <folly/init/Init.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
-
-static void printUsage() {
-    fmt::print("Usage: eugraph-loader --host <host> --port <port> --data-dir <path> [options]\n");
-    fmt::print("  --host                Server address (default: 127.0.0.1)\n");
-    fmt::print("  --port                Server port (default: 9090)\n");
-    fmt::print("  --data-dir            Path to CSV data directory\n");
-    fmt::print("  --batch-size          Records per RPC batch (default: 500)\n");
-    fmt::print("  --eventbase-threads   Number of EventBase/RPC client threads (default: 1)\n");
-    fmt::print("  --concurrency         Max parallel CSV file loading tasks (default: 1)\n");
-    fmt::print("  --loader-concurrency  Alias of --concurrency\n");
-}
 
 int main(int argc, char* argv[]) {
     // Parse our args before folly::Init to avoid gflags conflicts
@@ -30,33 +22,49 @@ int main(int argc, char* argv[]) {
     int eventbase_threads = 1;
     int concurrency = 1;
 
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "--host" && i + 1 < argc) {
-            host = argv[++i];
-        } else if (arg == "--port" && i + 1 < argc) {
-            port = std::stoi(argv[++i]);
-        } else if (arg == "--data-dir" && i + 1 < argc) {
-            data_dir = argv[++i];
-        } else if (arg == "--batch-size" && i + 1 < argc) {
-            batch_size = std::stoi(argv[++i]);
-        } else if ((arg == "--eventbase-threads" || arg == "--rpc-threads") && i + 1 < argc) {
-            eventbase_threads = std::stoi(argv[++i]);
-        } else if ((arg == "--concurrency" || arg == "--loader-concurrency") && i + 1 < argc) {
-            concurrency = std::stoi(argv[++i]);
-        } else if (arg == "--help") {
-            printUsage();
-            return 0;
-        }
+    args::ArgumentParser parser("EuGraph CSV loader.");
+    args::HelpFlag help(parser, "help", "Show this help menu", {"help"});
+    args::ValueFlag<std::string> host_flag(parser, "host", "Server address (default: 127.0.0.1)", {"host"}, host);
+    args::ValueFlag<int> port_flag(parser, "port", "Server port (default: 9090)", {"port"}, port);
+    args::ValueFlag<std::string> data_dir_flag(parser, "path", "Path to CSV data directory", {"data-dir"},
+                                               args::Options::Required);
+    args::ValueFlag<int> batch_size_flag(parser, "n", "Records per RPC batch (default: 500)", {"batch-size"},
+                                         batch_size);
+    args::ValueFlag<int> eventbase_threads_flag(parser, "n", "Number of EventBase/RPC client threads (default: 1)",
+                                                {"eventbase-threads", "rpc-threads"}, eventbase_threads);
+    args::ValueFlag<int> concurrency_flag(parser, "n", "Max parallel CSV file loading tasks (default: 1)",
+                                          {"concurrency", "loader-concurrency"}, concurrency);
+
+    try {
+        parser.ParseCLI(argc, argv);
+    } catch (const args::Help&) {
+        std::cout << parser;
+        return 0;
+    } catch (const args::ParseError& e) {
+        std::cerr << e.what() << '\n';
+        std::cerr << parser;
+        return 1;
+    } catch (const args::ValidationError& e) {
+        std::cerr << e.what() << '\n';
+        std::cerr << parser;
+        return 1;
     }
 
+    host = args::get(host_flag);
+    port = args::get(port_flag);
+    data_dir = args::get(data_dir_flag);
+    batch_size = args::get(batch_size_flag);
+    eventbase_threads = args::get(eventbase_threads_flag);
+    concurrency = args::get(concurrency_flag);
+
     if (data_dir.empty()) {
-        fmt::print(stderr, "Error: --data-dir is required\n");
-        printUsage();
+        std::cerr << "Error: --data-dir must not be empty\n";
+        std::cerr << parser;
         return 1;
     }
     if (batch_size <= 0 || eventbase_threads <= 0 || concurrency <= 0) {
-        fmt::print(stderr, "Error: --batch-size/--eventbase-threads/--concurrency must be positive\n");
+        std::cerr << "Error: --batch-size/--eventbase-threads/--concurrency must be positive\n";
+        std::cerr << parser;
         return 1;
     }
 

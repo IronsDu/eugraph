@@ -1,5 +1,7 @@
 #include "program/shell/shell_repl.hpp"
 
+#include <args.hxx>
+
 #include <folly/init/Init.h>
 
 #include <cstdlib>
@@ -10,21 +12,28 @@ using namespace eugraph::shell;
 
 static ShellConfig parseArgs(int argc, char* argv[]) {
     ShellConfig config;
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if ((arg == "--host" || arg == "-h") && i + 1 < argc) {
-            config.host = argv[++i];
-        } else if ((arg == "--port" || arg == "-p") && i + 1 < argc) {
-            config.port = std::atoi(argv[++i]);
-        } else if (arg == "--help") {
-            std::cout << "Usage: eugraph-shell [options]\n"
-                      << "Options:\n"
-                      << "  --host, -h <host>      Server host (default: 127.0.0.1)\n"
-                      << "  --port, -p <port>      Server port (default: 9090)\n"
-                      << "  --help                 Show this help\n";
-            std::exit(0);
-        }
+    args::ArgumentParser parser("EuGraph shell.");
+    args::HelpFlag help(parser, "help", "Show this help menu", {"help"});
+    args::ValueFlag<std::string> host(parser, "host", "Server host (default: 127.0.0.1)", {'h', "host"}, config.host);
+    args::ValueFlag<int> port(parser, "port", "Server port (default: 9090)", {'p', "port"}, config.port);
+
+    try {
+        parser.ParseCLI(argc, argv);
+    } catch (const args::Help&) {
+        std::cout << parser;
+        std::exit(0);
+    } catch (const args::ParseError& e) {
+        std::cerr << e.what() << '\n';
+        std::cerr << parser;
+        std::exit(1);
+    } catch (const args::ValidationError& e) {
+        std::cerr << e.what() << '\n';
+        std::cerr << parser;
+        std::exit(1);
     }
+
+    config.host = args::get(host);
+    config.port = args::get(port);
     return config;
 }
 
