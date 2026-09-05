@@ -6,6 +6,8 @@
 
 #include <thrift/lib/cpp2/server/ThriftServer.h>
 
+#include <args.hxx>
+
 #include <folly/init/Init.h>
 #include <spdlog/spdlog.h>
 
@@ -35,40 +37,47 @@ struct ServerConfig {
 
 static ServerConfig parseArgs(int argc, char* argv[]) {
     ServerConfig config;
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if ((arg == "--port" || arg == "-p") && i + 1 < argc) {
-            config.port = std::atoi(argv[++i]);
-        } else if ((arg == "--data-dir" || arg == "-d") && i + 1 < argc) {
-            config.data_dir = argv[++i];
-        } else if ((arg == "--threads" || arg == "-t") && i + 1 < argc) {
-            config.compute_threads = std::atoi(argv[++i]);
-        } else if ((arg == "--bolt-port") && i + 1 < argc) {
-            config.bolt_port = std::atoi(argv[++i]);
-        } else if ((arg == "--bolt-io-threads") && i + 1 < argc) {
-            config.bolt_io_threads = std::atoi(argv[++i]);
-        } else if ((arg == "--wt-cache-size-mb") && i + 1 < argc) {
-            config.wt_cache_size_mb = std::atoi(argv[++i]);
-        } else if ((arg == "--wt-evict-threads-max") && i + 1 < argc) {
-            config.wt_evict_threads_max = std::atoi(argv[++i]);
-        } else if ((arg == "--wt-txn-sync") && i + 1 < argc) {
-            config.wt_txn_sync = argv[++i];
-        } else if (arg == "--help" || arg == "-h") {
-            std::cout << "Usage: eugraph-server [options]\n"
-                      << "Options:\n"
-                      << "  --port, -p <port>        Server port (default: 9090)\n"
-                      << "  --bolt-port <port>      Bolt protocol port (default: 7687, 0 to disable)\n"
-                      << "  --bolt-io-threads <n>   Bolt EventBase threads (default: 1)\n"
-                      << "  --data-dir, -d <path>    Data directory (default: ./eugraph-data)\n"
-                      << "  --threads, -t <count>    Compute threads (default: 4)\n"
-                      << "  --wt-cache-size-mb <n>  WiredTiger data cache size in MB (default: 256)\n"
-                      << "  --wt-evict-threads-max <n>\n"
-                      << "                           WiredTiger max eviction threads (default: 4)\n"
-                      << "  --wt-txn-sync <mode>    WiredTiger commit sync: fsync|none (default: fsync)\n"
-                      << "  --help, -h               Show this help\n";
-            std::exit(0);
-        }
+    args::ArgumentParser parser("EuGraph server.");
+    args::HelpFlag help(parser, "help", "Show this help menu", {'h', "help"});
+    args::ValueFlag<int> port(parser, "port", "Server port (default: 9090)", {'p', "port"}, config.port);
+    args::ValueFlag<int> bolt_port(parser, "port", "Bolt protocol port (default: 7687, 0 to disable)", {"bolt-port"},
+                                   config.bolt_port);
+    args::ValueFlag<int> bolt_io_threads(parser, "n", "Bolt EventBase threads (default: 1)", {"bolt-io-threads"},
+                                         config.bolt_io_threads);
+    args::ValueFlag<std::string> data_dir(parser, "path", "Data directory (default: ./eugraph-data)", {'d', "data-dir"},
+                                          config.data_dir);
+    args::ValueFlag<int> threads(parser, "count", "Compute threads (default: 4)", {'t', "threads"},
+                                 config.compute_threads);
+    args::ValueFlag<int> wt_cache_size_mb(parser, "n", "WiredTiger data cache size in MB (default: 256)",
+                                          {"wt-cache-size-mb"}, config.wt_cache_size_mb);
+    args::ValueFlag<int> wt_evict_threads_max(parser, "n", "WiredTiger max eviction threads (default: 4)",
+                                              {"wt-evict-threads-max"}, config.wt_evict_threads_max);
+    args::ValueFlag<std::string> wt_txn_sync(parser, "mode", "WiredTiger commit sync: fsync|none (default: fsync)",
+                                             {"wt-txn-sync"}, config.wt_txn_sync);
+
+    try {
+        parser.ParseCLI(argc, argv);
+    } catch (const args::Help&) {
+        std::cout << parser;
+        std::exit(0);
+    } catch (const args::ParseError& e) {
+        std::cerr << e.what() << '\n';
+        std::cerr << parser;
+        std::exit(1);
+    } catch (const args::ValidationError& e) {
+        std::cerr << e.what() << '\n';
+        std::cerr << parser;
+        std::exit(1);
     }
+
+    config.port = args::get(port);
+    config.bolt_port = args::get(bolt_port);
+    config.bolt_io_threads = args::get(bolt_io_threads);
+    config.data_dir = args::get(data_dir);
+    config.compute_threads = args::get(threads);
+    config.wt_cache_size_mb = args::get(wt_cache_size_mb);
+    config.wt_evict_threads_max = args::get(wt_evict_threads_max);
+    config.wt_txn_sync = args::get(wt_txn_sync);
     return config;
 }
 

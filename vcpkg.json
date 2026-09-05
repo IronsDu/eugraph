@@ -4,6 +4,7 @@
   "description": "A distributed graph database supporting Cypher query language",
   "dependencies": [
     "antlr4",
+    "args",
     "rocksdb",
     "gtest",
     "spdlog",
