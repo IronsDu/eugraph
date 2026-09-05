@@ -15,8 +15,14 @@ eugraph-server --port 9090 --data-dir ./eugraph-data --threads 4
 | `--port, -p` | 9090 | 监听端口 |
 | `--data-dir, -d` | `./eugraph-data` | 数据存储目录 |
 | `--threads, -t` | 4 | 计算线程数 |
+| `--wt-cache-size-mb` | 256 | WiredTiger data cache 大小（MB） |
+| `--wt-evict-threads-max` | 4 | WiredTiger 最大 eviction 线程数 |
+| `--wt-txn-sync` | fsync | WiredTiger commit 同步策略：`fsync` 或 `none` |
 
 `--threads` 控制 compute 线程数（IO 线程数固定为 4）。数据文件分别在 `{data_dir}/data` 和 `{data_dir}/meta`。
+
+> `--wt-txn-sync none` 会关闭 WiredTiger commit 级 fsync，写入更快，但崩溃时可能丢失最近一段事务。
+> 适合纯导入场景；正式在线服务建议保持默认 `fsync`。
 
 ## 典型流程
 

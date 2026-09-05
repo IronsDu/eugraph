@@ -537,30 +537,81 @@ folly::coro::Task<std::vector<EdgeLabelDef>> AsyncGraphMetaStore::listEdgeLabels
 
 // ==================== ID allocation ====================
 
+namespace {
+constexpr VertexId kVertexIdCacheChunk = 16384;
+constexpr EdgeId kEdgeIdCacheChunk = 16384;
+} // namespace
+
 folly::coro::Task<VertexId> AsyncGraphMetaStore::nextVertexId() {
-    VertexId id = schema_.next_vertex_id++;
-    co_await saveNextIds();
-    co_return id;
+    co_return co_await nextVertexIdRange(1);
 }
 
 folly::coro::Task<EdgeId> AsyncGraphMetaStore::nextEdgeId() {
-    EdgeId id = schema_.next_edge_id++;
-    co_await saveNextIds();
-    co_return id;
+    co_return co_await nextEdgeIdRange(1);
 }
 
 folly::coro::Task<VertexId> AsyncGraphMetaStore::nextVertexIdRange(uint64_t count) {
-    VertexId start = schema_.next_vertex_id;
-    schema_.next_vertex_id += count;
-    co_await saveNextIds();
-    co_return start;
+    VertexId start;
+
+    // Fast path: take IDs from an already-reserved in-memory cache.
+    {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        if (vertex_cache_next_ + count <= vertex_cache_end_) {
+            start = vertex_cache_next_;
+            vertex_cache_next_ += count;
+            co_return start;
+        }
+    }
+
+    // Slow path: serialize cache refills and only persist once per chunk.
+    auto refill_lock = co_await refill_mu_.co_scoped_lock();
+    {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        if (vertex_cache_next_ + count <= vertex_cache_end_) {
+            start = vertex_cache_next_;
+            vertex_cache_next_ += count;
+            co_return start;
+        }
+    }
+    co_await refillVertexIdCache(count);
+    {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        start = vertex_cache_next_;
+        vertex_cache_next_ += count;
+        co_return start;
+    }
 }
 
 folly::coro::Task<EdgeId> AsyncGraphMetaStore::nextEdgeIdRange(uint64_t count) {
-    EdgeId start = schema_.next_edge_id;
-    schema_.next_edge_id += count;
-    co_await saveNextIds();
-    co_return start;
+    EdgeId start;
+
+    // Fast path: take IDs from an already-reserved in-memory cache.
+    {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        if (edge_cache_next_ + count <= edge_cache_end_) {
+            start = edge_cache_next_;
+            edge_cache_next_ += count;
+            co_return start;
+        }
+    }
+
+    // Slow path: serialize cache refills and only persist once per chunk.
+    auto refill_lock = co_await refill_mu_.co_scoped_lock();
+    {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        if (edge_cache_next_ + count <= edge_cache_end_) {
+            start = edge_cache_next_;
+            edge_cache_next_ += count;
+            co_return start;
+        }
+    }
+    co_await refillEdgeIdCache(count);
+    {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        start = edge_cache_next_;
+        edge_cache_next_ += count;
+        co_return start;
+    }
 }
 
 // ==================== __anon__ lightweight prop allocation ====================
@@ -614,11 +665,57 @@ folly::coro::Task<uint16_t> AsyncGraphMetaStore::getOrCreateAnonPropId(const std
 
 // ==================== Private ====================
 
+folly::coro::Task<void> AsyncGraphMetaStore::refillVertexIdCache(uint64_t count) {
+    VertexId cache_start;
+    VertexId chunk;
+    {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        if (vertex_cache_next_ + count <= vertex_cache_end_)
+            co_return;
+        chunk = count > kVertexIdCacheChunk ? count : kVertexIdCacheChunk;
+        cache_start = schema_.next_vertex_id;
+        schema_.next_vertex_id += chunk;
+    }
+
+    // Persist the new high-water mark before exposing the cached range to callers.
+    co_await saveNextIds();
+
+    {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        vertex_cache_next_ = cache_start;
+        vertex_cache_end_ = cache_start + chunk;
+    }
+}
+
+folly::coro::Task<void> AsyncGraphMetaStore::refillEdgeIdCache(uint64_t count) {
+    EdgeId cache_start;
+    EdgeId chunk;
+    {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        if (edge_cache_next_ + count <= edge_cache_end_)
+            co_return;
+        chunk = count > kEdgeIdCacheChunk ? count : kEdgeIdCacheChunk;
+        cache_start = schema_.next_edge_id;
+        schema_.next_edge_id += chunk;
+    }
+
+    // Persist the new high-water mark before exposing the cached range to callers.
+    co_await saveNextIds();
+
+    {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        edge_cache_next_ = cache_start;
+        edge_cache_end_ = cache_start + chunk;
+    }
+}
+
 folly::coro::Task<void> AsyncGraphMetaStore::saveNextIds() {
-    auto encoded = MetadataCodec::encodeNextIds(schema_.next_vertex_id, schema_.next_edge_id, schema_.next_label_id,
-                                                schema_.next_edge_label_id);
-    co_await io_->get().dispatchVoid(
-        [this, encoded = std::move(encoded)]() { store_->get().metadataPut("M|next_ids", encoded); });
+    co_await io_->get().dispatchVoid([this]() {
+        std::lock_guard<std::mutex> lock(id_mu_);
+        auto encoded = MetadataCodec::encodeNextIds(schema_.next_vertex_id, schema_.next_edge_id, schema_.next_label_id,
+                                                    schema_.next_edge_label_id);
+        store_->get().metadataPut("M|next_ids", encoded);
+    });
 }
 
 } // namespace eugraph

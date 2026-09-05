@@ -57,7 +57,11 @@ SyncGraphDataStore::~SyncGraphDataStore() {
 }
 
 bool SyncGraphDataStore::open(const std::string& db_path) {
-    if (!openConnection(db_path))
+    return open(db_path, "");
+}
+
+bool SyncGraphDataStore::open(const std::string& db_path, const std::string& wt_extra_config) {
+    if (!openConnection(db_path, wt_extra_config))
         return false;
 
     if (!ensureGlobalTable(defaultSession_.get(), TABLE_LABEL_REVERSE) ||
@@ -280,25 +284,25 @@ bool SyncGraphDataStore::insertVertex(GraphTxnHandle txn, VertexId vid,
         return false;
 
     auto ve_key = KeyCodec::encodeVertexExistenceKey(vid);
-    if (!tablePut(session, TABLE_VERTEX_EXISTENCE, ve_key, {}))
+    if (!tablePutTxn(txn, session, TABLE_VERTEX_EXISTENCE, ve_key, {}))
         return false;
 
     for (const auto& [label_id, props] : label_props) {
         if (label_id == INVALID_LABEL_ID)
             continue;
         auto lr_key = KeyCodec::encodeLabelReverseKey(vid, label_id);
-        if (!tablePut(session, TABLE_LABEL_REVERSE, lr_key, {}))
+        if (!tablePutTxn(txn, session, TABLE_LABEL_REVERSE, lr_key, {}))
             return false;
 
         auto lf_key = KeyCodec::encodeLabelForwardKey(vid);
-        if (!tablePut(session, labelFwdTable(label_id), lf_key, {}))
+        if (!tablePutTxn(txn, session, labelFwdTable(label_id), lf_key, {}))
             return false;
 
         for (uint16_t prop_id = 0; prop_id < props.size(); ++prop_id) {
             if (props[prop_id].has_value()) {
                 auto vp_key = KeyCodec::encodeVPropKey(vid, prop_id);
                 auto vp_val = ValueCodec::encode(props[prop_id].value());
-                if (!tablePut(session, vpropTable(label_id), vp_key, vp_val))
+                if (!tablePutTxn(txn, session, vpropTable(label_id), vp_key, vp_val))
                     return false;
             }
         }
@@ -560,22 +564,22 @@ bool SyncGraphDataStore::insertEdge(GraphTxnHandle txn, EdgeId eid, VertexId src
     auto edge_id_val = ValueCodec::encodeU64(eid);
 
     KeyCodec::EdgeIndexKey out_key{src_id, Direction::OUT, label_id, dst_id, seq};
-    if (!tablePut(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(out_key), edge_id_val))
+    if (!tablePutTxn(txn, session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(out_key), edge_id_val))
         return false;
 
     KeyCodec::EdgeIndexKey in_key{dst_id, Direction::IN, label_id, src_id, seq};
-    if (!tablePut(session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(in_key), edge_id_val))
+    if (!tablePutTxn(txn, session, TABLE_EDGE_INDEX, KeyCodec::encodeEdgeIndexKey(in_key), edge_id_val))
         return false;
 
     KeyCodec::EdgeTypeIndexKey type_key{src_id, dst_id, seq};
-    if (!tablePut(session, etypeTable(label_id), KeyCodec::encodeEdgeTypeIndexKey(type_key), edge_id_val))
+    if (!tablePutTxn(txn, session, etypeTable(label_id), KeyCodec::encodeEdgeTypeIndexKey(type_key), edge_id_val))
         return false;
 
     for (uint16_t prop_id = 0; prop_id < props.size(); ++prop_id) {
         if (props[prop_id].has_value()) {
             auto ep_key = KeyCodec::encodeEPropKey(eid, prop_id);
             auto ep_val = ValueCodec::encode(props[prop_id].value());
-            if (!tablePut(session, epropTable(label_id), ep_key, ep_val))
+            if (!tablePutTxn(txn, session, epropTable(label_id), ep_key, ep_val))
                 return false;
         }
     }

@@ -66,12 +66,22 @@ void createEdgeLabels(shell::EuGraphRpcClient& client, const std::vector<EdgeTyp
 CsvIdMap loadVertices(shell::EuGraphRpcClient& client, const std::vector<CsvFileInfo>& vertex_files,
                       const std::vector<LabelSchema>& label_schemas, int batch_size);
 
+// Load all vertex files with a pool of RPC clients (each owns an EventBase) and bounded concurrency.
+CsvIdMap loadVertices(const std::vector<shell::EuGraphRpcClient*>& clients,
+                      const std::vector<CsvFileInfo>& vertex_files, const std::vector<LabelSchema>& label_schemas,
+                      int batch_size, int concurrency);
+
 // Create unique indexes on ID properties for all labels (after vertices loaded).
 void createUniqueIdIndexes(shell::EuGraphRpcClient& client, const std::vector<LabelSchema>& schemas);
 
 // Load all edge files using the CSV ID mapping.
 void loadEdges(shell::EuGraphRpcClient& client, const std::vector<CsvFileInfo>& edge_files,
                const std::vector<EdgeTypeSchema>& edge_schemas, const CsvIdMap& id_map, int batch_size);
+
+// Load all edge files with a pool of RPC clients (each owns an EventBase) and bounded concurrency.
+void loadEdges(const std::vector<shell::EuGraphRpcClient*>& clients, const std::vector<CsvFileInfo>& edge_files,
+               const std::vector<EdgeTypeSchema>& edge_schemas, const CsvIdMap& id_map, int batch_size,
+               int concurrency);
 
 } // namespace loader
 } // namespace eugraph

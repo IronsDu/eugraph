@@ -4,6 +4,8 @@
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
 
+#include <folly/coro/Mutex.h>
+
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -73,10 +75,24 @@ public:
 
 private:
     folly::coro::Task<void> saveNextIds();
+    folly::coro::Task<void> refillVertexIdCache(uint64_t count);
+    folly::coro::Task<void> refillEdgeIdCache(uint64_t count);
 
     std::optional<std::reference_wrapper<ISyncGraphMetaStore>> store_;
     std::optional<std::reference_wrapper<IoScheduler>> io_;
     GraphSchema schema_;
+
+    // Fast-path in-memory ID caches. The persisted high-water mark in schema_ is
+    // advanced by a chunk when a cache is empty, so normal batch imports do not
+    // need to persist M|next_ids on every RPC batch.
+    VertexId vertex_cache_next_ = 0;
+    VertexId vertex_cache_end_ = 0;
+    EdgeId edge_cache_next_ = 0;
+    EdgeId edge_cache_end_ = 0;
+
+    // Serializes cache refill + next-id persistence across concurrent import requests.
+    std::mutex id_mu_;
+    folly::coro::Mutex refill_mu_;
 
     // Lightweight __anon__ prop_id allocation
     std::mutex anon_prop_mu_;

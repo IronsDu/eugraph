@@ -6,14 +6,19 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <memory>
 #include <string>
+#include <vector>
 
 static void printUsage() {
-    fmt::print("Usage: eugraph-loader --host <host> --port <port> --data-dir <path> [--batch-size <N>]\n");
-    fmt::print("  --host       Server address (default: 127.0.0.1)\n");
-    fmt::print("  --port       Server port (default: 9090)\n");
-    fmt::print("  --data-dir   Path to CSV data directory\n");
-    fmt::print("  --batch-size Records per RPC batch (default: 500)\n");
+    fmt::print("Usage: eugraph-loader --host <host> --port <port> --data-dir <path> [options]\n");
+    fmt::print("  --host                Server address (default: 127.0.0.1)\n");
+    fmt::print("  --port                Server port (default: 9090)\n");
+    fmt::print("  --data-dir            Path to CSV data directory\n");
+    fmt::print("  --batch-size          Records per RPC batch (default: 500)\n");
+    fmt::print("  --eventbase-threads   Number of EventBase/RPC client threads (default: 1)\n");
+    fmt::print("  --concurrency         Max parallel CSV file loading tasks (default: 1)\n");
+    fmt::print("  --loader-concurrency  Alias of --concurrency\n");
 }
 
 int main(int argc, char* argv[]) {
@@ -22,6 +27,8 @@ int main(int argc, char* argv[]) {
     int port = 9090;
     std::string data_dir;
     int batch_size = 500;
+    int eventbase_threads = 1;
+    int concurrency = 1;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -33,6 +40,10 @@ int main(int argc, char* argv[]) {
             data_dir = argv[++i];
         } else if (arg == "--batch-size" && i + 1 < argc) {
             batch_size = std::stoi(argv[++i]);
+        } else if ((arg == "--eventbase-threads" || arg == "--rpc-threads") && i + 1 < argc) {
+            eventbase_threads = std::stoi(argv[++i]);
+        } else if ((arg == "--concurrency" || arg == "--loader-concurrency") && i + 1 < argc) {
+            concurrency = std::stoi(argv[++i]);
         } else if (arg == "--help") {
             printUsage();
             return 0;
@@ -42,6 +53,10 @@ int main(int argc, char* argv[]) {
     if (data_dir.empty()) {
         fmt::print(stderr, "Error: --data-dir is required\n");
         printUsage();
+        return 1;
+    }
+    if (batch_size <= 0 || eventbase_threads <= 0 || concurrency <= 0) {
+        fmt::print(stderr, "Error: --batch-size/--eventbase-threads/--concurrency must be positive\n");
         return 1;
     }
 
@@ -70,13 +85,30 @@ int main(int argc, char* argv[]) {
     auto edge_schemas = eugraph::loader::buildEdgeTypeSchemas(edge_files);
     spdlog::info("[loader] {} labels, {} edge types", label_schemas.size(), edge_schemas.size());
 
-    // Step 3: Connect to server
+    // Step 3: Connect to server. The first client is used for DDL and indexes;
+    // additional clients are used only for parallel data loading.
     eugraph::shell::EuGraphRpcClient client(host, port);
     if (!client.connect()) {
         spdlog::error("[loader] Failed to connect to server at {}:{}", host, port);
         return 1;
     }
-    spdlog::info("[loader] Connected to {}:{}", host, port);
+
+    std::vector<std::unique_ptr<eugraph::shell::EuGraphRpcClient>> extra_clients;
+    std::vector<eugraph::shell::EuGraphRpcClient*> clients;
+    clients.reserve(eventbase_threads);
+    clients.push_back(&client);
+    for (int i = 1; i < eventbase_threads; i++) {
+        auto extra = std::make_unique<eugraph::shell::EuGraphRpcClient>(host, port);
+        if (!extra->connect()) {
+            spdlog::error("[loader] Failed to connect extra EventBase client at {}:{}", host, port);
+            return 1;
+        }
+        extra_clients.push_back(std::move(extra));
+        clients.push_back(extra_clients.back().get());
+    }
+
+    spdlog::info("[loader] Connected to {}:{} with {} EventBase client(s), concurrency={}", host, port, clients.size(),
+                 concurrency);
 
     // Step 4: Create labels and edge labels
     spdlog::info("[loader] Creating labels...");
@@ -86,7 +118,7 @@ int main(int argc, char* argv[]) {
 
     // Step 5: Load vertex data
     spdlog::info("[loader] Loading vertex data...");
-    auto id_map = eugraph::loader::loadVertices(client, vertex_files, label_schemas, batch_size);
+    auto id_map = eugraph::loader::loadVertices(clients, vertex_files, label_schemas, batch_size, concurrency);
     spdlog::info("[loader] Vertex loading complete. {} labels in ID map", id_map.size());
 
     // Step 5.5: Create unique indexes on ID properties
@@ -95,7 +127,7 @@ int main(int argc, char* argv[]) {
 
     // Step 6: Load edge data
     spdlog::info("[loader] Loading edge data...");
-    eugraph::loader::loadEdges(client, edge_files, edge_schemas, id_map, batch_size);
+    eugraph::loader::loadEdges(clients, edge_files, edge_schemas, id_map, batch_size, concurrency);
     spdlog::info("[loader] Edge loading complete.");
 
     spdlog::info("[loader] All data loaded successfully.");
