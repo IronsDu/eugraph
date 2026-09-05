@@ -42,7 +42,7 @@ public:
     GraphManager& operator=(const GraphManager&) = delete;
 
     bool init(const std::string& data_dir, int io_threads, int compute_threads,
-              int checkpoint_interval_sec = kDefaultCheckpointIntervalSec);
+              int checkpoint_interval_sec = kDefaultCheckpointIntervalSec, const std::string& data_wt_config = "");
     void shutdown();
 
     GraphEntry createGraph(const std::string& name);
@@ -60,6 +60,7 @@ private:
     int io_threads_ = 4;
     int compute_threads_ = 4;
     int checkpoint_interval_sec_ = kDefaultCheckpointIntervalSec;
+    std::string data_wt_config_;
     std::shared_ptr<IoScheduler> io_scheduler_;
 
     CatalogStore catalog_;

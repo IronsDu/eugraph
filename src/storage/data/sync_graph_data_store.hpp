@@ -27,6 +27,7 @@ public:
 
     // Lifecycle
     bool open(const std::string& db_path) override;
+    bool open(const std::string& db_path, const std::string& wt_extra_config);
     void close() override;
     bool isOpen() const override;
 

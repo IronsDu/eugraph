@@ -16,11 +16,13 @@ GraphManager::~GraphManager() {
     }
 }
 
-bool GraphManager::init(const std::string& data_dir, int io_threads, int compute_threads, int checkpoint_interval_sec) {
+bool GraphManager::init(const std::string& data_dir, int io_threads, int compute_threads, int checkpoint_interval_sec,
+                        const std::string& data_wt_config) {
     data_dir_ = data_dir;
     io_threads_ = io_threads;
     compute_threads_ = compute_threads;
     checkpoint_interval_sec_ = checkpoint_interval_sec;
+    data_wt_config_ = data_wt_config;
 
     auto t0 = std::chrono::steady_clock::now();
 
@@ -197,7 +199,7 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstance(uint32_t graph_id
     instance->name = name;
 
     instance->sync_data = std::make_unique<SyncGraphDataStore>();
-    if (!instance->sync_data->open(data_dir)) {
+    if (!instance->sync_data->open(data_dir, data_wt_config_)) {
         spdlog::error("Failed to open data store for graph '{}' at {}", name, data_dir);
         return nullptr;
     }

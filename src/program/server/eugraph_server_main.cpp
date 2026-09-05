@@ -9,12 +9,14 @@
 #include <folly/init/Init.h>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 
 using namespace eugraph;
 using namespace eugraph::compute;
@@ -26,6 +28,9 @@ struct ServerConfig {
     int compute_threads = 4;
     int io_threads = 4;
     int bolt_io_threads = 1;
+    int wt_cache_size_mb = 256;
+    int wt_evict_threads_max = 4;
+    std::string wt_txn_sync = "fsync";
 };
 
 static ServerConfig parseArgs(int argc, char* argv[]) {
@@ -42,6 +47,12 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
             config.bolt_port = std::atoi(argv[++i]);
         } else if ((arg == "--bolt-io-threads") && i + 1 < argc) {
             config.bolt_io_threads = std::atoi(argv[++i]);
+        } else if ((arg == "--wt-cache-size-mb") && i + 1 < argc) {
+            config.wt_cache_size_mb = std::atoi(argv[++i]);
+        } else if ((arg == "--wt-evict-threads-max") && i + 1 < argc) {
+            config.wt_evict_threads_max = std::atoi(argv[++i]);
+        } else if ((arg == "--wt-txn-sync") && i + 1 < argc) {
+            config.wt_txn_sync = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: eugraph-server [options]\n"
                       << "Options:\n"
@@ -50,6 +61,10 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
                       << "  --bolt-io-threads <n>   Bolt EventBase threads (default: 1)\n"
                       << "  --data-dir, -d <path>    Data directory (default: ./eugraph-data)\n"
                       << "  --threads, -t <count>    Compute threads (default: 4)\n"
+                      << "  --wt-cache-size-mb <n>  WiredTiger data cache size in MB (default: 256)\n"
+                      << "  --wt-evict-threads-max <n>\n"
+                      << "                           WiredTiger max eviction threads (default: 4)\n"
+                      << "  --wt-txn-sync <mode>    WiredTiger commit sync: fsync|none (default: fsync)\n"
                       << "  --help, -h               Show this help\n";
             std::exit(0);
         }
@@ -64,12 +79,32 @@ int main(int argc, char* argv[]) {
 
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [thread %t] [%l] %v");
 
+    if (config.wt_cache_size_mb <= 0 || config.wt_evict_threads_max <= 0) {
+        spdlog::error("--wt-cache-size-mb and --wt-evict-threads-max must be positive");
+        return 1;
+    }
+
+    std::string txn_sync_cfg;
+    if (config.wt_txn_sync == "none") {
+        txn_sync_cfg = "transaction_sync=(enabled=false)";
+    } else if (config.wt_txn_sync == "fsync") {
+        txn_sync_cfg = "transaction_sync=(enabled=true,method=fsync)";
+    } else {
+        spdlog::error("--wt-txn-sync must be either 'fsync' or 'none'");
+        return 1;
+    }
+
+    std::string data_wt_config = fmt::format("cache_size={}MB,eviction=(threads_max={}),{}", config.wt_cache_size_mb,
+                                             config.wt_evict_threads_max, txn_sync_cfg);
+
     spdlog::info("Starting EuGraph server...");
     spdlog::info("  Port: {}", config.port);
     spdlog::info("  Data dir: {}", config.data_dir);
+    spdlog::info("  WiredTiger data config: {}", data_wt_config);
 
     auto graph_manager = std::make_shared<GraphManager>();
-    if (!graph_manager->init(config.data_dir, config.io_threads, config.compute_threads)) {
+    if (!graph_manager->init(config.data_dir, config.io_threads, config.compute_threads,
+                             GraphManager::kDefaultCheckpointIntervalSec, data_wt_config)) {
         spdlog::error("Failed to initialize graph manager");
         return 1;
     }

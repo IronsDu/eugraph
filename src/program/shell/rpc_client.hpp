@@ -7,6 +7,7 @@
 #include <folly/io/async/EventBase.h>
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace eugraph {
@@ -63,6 +64,7 @@ private:
     std::unique_ptr<folly::EventBase> evb_;
     std::thread evb_thread_;
     std::unique_ptr<apache::thrift::Client<thrift_service::EuGraphService>> client_;
+    std::mutex rpc_mutex_;
 };
 
 } // namespace shell

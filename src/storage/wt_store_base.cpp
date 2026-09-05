@@ -79,7 +79,7 @@ void WtStoreBase::closeConnection() {
     conn_.close();
 }
 
-bool WtStoreBase::openConnection(const std::string& db_path) {
+bool WtStoreBase::openConnection(const std::string& db_path, const std::string& extra_config) {
     if (conn_)
         return true;
 
@@ -95,7 +95,15 @@ bool WtStoreBase::openConnection(const std::string& db_path) {
     // Enable WAL with fsync on commit for crash durability.
     // transaction_sync=(enabled=true) is required: without it, log records are
     // only buffered in memory and flushed on checkpoint or clean shutdown.
-    if (!conn_.open(db_path, "create,log=(enabled=true),transaction_sync=(enabled=true,method=fsync)")) {
+    std::string wt_config = "create,log=(enabled=true)";
+    if (extra_config.empty()) {
+        wt_config += ",transaction_sync=(enabled=true,method=fsync)";
+    } else {
+        wt_config += ",";
+        wt_config += extra_config;
+    }
+
+    if (!conn_.open(db_path, wt_config.c_str())) {
         return false;
     }
 
@@ -128,6 +136,47 @@ WT_SESSION* WtStoreBase::getSession(GraphTxnHandle txn) {
 
 WtCursor WtStoreBase::openCursor(WT_SESSION* session, const std::string& table_name) {
     return WtCursor(session, table_name);
+}
+
+WtCursor* WtStoreBase::getTxnCursor(GraphTxnHandle txn, WT_SESSION* session, const std::string& table_name) {
+    if (txn == INVALID_GRAPH_TXN)
+        return nullptr;
+
+    std::lock_guard<std::mutex> lock(txnMutex_);
+    auto it = txns_.find(txn);
+    if (it == txns_.end())
+        return nullptr;
+
+    auto& cursors = it->second->cursors;
+    auto cur = cursors.find(table_name);
+    if (cur != cursors.end()) {
+        return cur->second ? &cur->second : nullptr;
+    }
+
+    auto [inserted, _] = cursors.emplace(std::piecewise_construct, std::forward_as_tuple(table_name),
+                                         std::forward_as_tuple(session, table_name));
+    if (!inserted->second) {
+        cursors.erase(inserted);
+        return nullptr;
+    }
+    return &inserted->second;
+}
+
+bool WtStoreBase::tablePutTxn(GraphTxnHandle txn, WT_SESSION* session, const std::string& table, std::string_view key,
+                              std::string_view value) {
+    WtCursor* cursor = getTxnCursor(txn, session, table);
+    if (!cursor)
+        return tablePut(session, table, key, value);
+
+    setItem(cursor->get(), key);
+    setValueItem(cursor->get(), value);
+    int ret = cursor->get()->insert(cursor->get());
+
+    if (ret != 0) {
+        spdlog::error("tablePutTxn failed on {}: error {}", table, ret);
+        return false;
+    }
+    return true;
 }
 
 void WtStoreBase::closeTxnCursors(TxnState* state) {

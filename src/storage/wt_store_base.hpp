@@ -38,7 +38,9 @@ protected:
     };
 
     /// Open WT connection and default session.
-    bool openConnection(const std::string& db_path);
+    /// extra_config is appended to the base WT config; when empty, the durable
+    /// fsync commit default is applied.
+    bool openConnection(const std::string& db_path, const std::string& extra_config = "");
 
     /// Close WT connection and default session.
     void closeConnection();
@@ -49,8 +51,14 @@ protected:
     /// Open a cursor on a table.
     WtCursor openCursor(WT_SESSION* session, const std::string& table_name);
 
+    /// Get a cached cursor for a transaction table (opens one on first use).
+    WtCursor* getTxnCursor(GraphTxnHandle txn, WT_SESSION* session, const std::string& table_name);
+
     /// Table-level KV operations.
     bool tablePut(WT_SESSION* session, const std::string& table, std::string_view key, std::string_view value);
+    /// Transaction-aware put that reuses a cursor cached in TxnState.
+    bool tablePutTxn(GraphTxnHandle txn, WT_SESSION* session, const std::string& table, std::string_view key,
+                     std::string_view value);
     std::optional<std::string> tableGet(WT_SESSION* session, const std::string& table, std::string_view key);
     bool tableDel(WT_SESSION* session, const std::string& table, std::string_view key);
     void tableScan(WT_SESSION* session, const std::string& table, std::string_view prefix,

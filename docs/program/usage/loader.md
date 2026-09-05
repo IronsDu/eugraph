@@ -14,12 +14,21 @@
 eugraph-loader --host 127.0.0.1 --port 9090 --data-dir ./csv-data --batch-size 500
 ```
 
+并行装载示例：
+
+```bash
+eugraph-loader --host 127.0.0.1 --port 9090 --data-dir ./csv-data \
+    --batch-size 500 --eventbase-threads 4 --concurrency 4
+```
+
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--host` | 127.0.0.1 | Server 地址 |
 | `--port` | 9090 | Server 端口 |
 | `--data-dir` | **必填** | CSV 文件所在目录 |
 | `--batch-size` | 500 | 每 RPC 批次的记录数 |
+| `--eventbase-threads` | 1 | 创建多少个独立 RPC EventBase 客户端/连接 |
+| `--concurrency` | 1 | 最多并行装载多少个 CSV 文件；`--loader-concurrency` 是同义别名 |
 
 ---
 
