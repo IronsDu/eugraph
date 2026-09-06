@@ -158,6 +158,7 @@ uint64_t hashSetItem(uint64_t seed, const binder::BoundSetOp::SetItem& it) {
     seed = combine(seed, static_cast<uint64_t>(it.kind));
     seed = hashBytes(seed, it.target_variable);
     seed = hashBytes(seed, it.prop_name);
+    seed = hashBytes(seed, it.label);
     seed = combine(seed, it.prop_id.has_value() ? static_cast<uint64_t>(*it.prop_id) : 0xFFFFu);
     seed = hashOptExpr(seed, it.value_expr);
     seed = combine(seed, it.label_id.has_value() ? static_cast<uint64_t>(*it.label_id) : 0u);

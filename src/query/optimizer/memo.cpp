@@ -737,6 +737,7 @@ binder::BoundSetOp::SetItem cloneSetItem(const binder::BoundSetOp::SetItem& item
     ci.kind = item.kind;
     ci.target_variable = item.target_variable;
     ci.prop_name = item.prop_name;
+    ci.label = item.label;
     ci.prop_id = item.prop_id;
     ci.value_expr = item.value_expr.has_value()
                         ? std::optional<binder::BoundExpression>(cloneBoundExpression(*item.value_expr))
