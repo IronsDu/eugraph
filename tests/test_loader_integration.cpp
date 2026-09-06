@@ -198,6 +198,7 @@ TEST_F(LoaderIntegrationTest, FullLoadAndVerify) {
 
     auto label_schemas = loader::buildLabelSchemas(vertex_files);
     auto edge_schemas = loader::buildEdgeTypeSchemas(edge_files);
+    auto merged_label_props = loader::buildMergedLabelProperties(label_schemas);
 
     // Create labels and edge labels
     loader::createLabels(*client_, label_schemas);
@@ -211,25 +212,25 @@ TEST_F(LoaderIntegrationTest, FullLoadAndVerify) {
     EXPECT_GE(edge_labels.size(), 9); // at least 9 distinct edge types
 
     // Load vertices
-    auto id_map = loader::loadVertices(*client_, vertex_files, label_schemas, 200);
-    EXPECT_EQ(id_map.size(), 8); // 8 labels with vertex data
+    auto id_maps = loader::loadVertices(*client_, vertex_files, label_schemas, merged_label_props, 200);
+    EXPECT_EQ(id_maps.group_id_map.size(), 8u); // 8 vertex files / groups with vertex data
 
     // Verify vertex counts via Cypher (use LIMIT 1 + rows_affected since count() may not be supported)
-    for (const auto& [label_name, label_map] : id_map) {
-        auto result = execCypher("MATCH (n:" + label_name + ") RETURN n LIMIT 1");
-        EXPECT_TRUE(result.error.empty()) << "Query error for " << label_name << ": " << result.error;
+    for (const auto& [group_name, group_map] : id_maps.group_id_map) {
+        auto result = execCypher("MATCH (n:" + group_name + ") RETURN n LIMIT 1");
+        EXPECT_TRUE(result.error.empty()) << "Query error for " << group_name << ": " << result.error;
         // Just verify we can scan - exact count checked via rows_affected
     }
 
     // Load edges
-    loader::loadEdges(*client_, edge_files, edge_schemas, id_map, 200);
+    loader::loadEdges(*client_, edge_files, edge_schemas, id_maps, 200);
 
     // Verify edge counts via Cypher (expand)
     auto edge_result = execCypher("MATCH (a)-[r]->(b) RETURN r LIMIT 1");
     EXPECT_TRUE(edge_result.error.empty()) << "Edge query error: " << edge_result.error;
 
     int64_t total_v = 0;
-    for (const auto& [_, m] : id_map)
+    for (const auto& [_, m] : id_maps.group_id_map)
         total_v += m.size();
     std::cout << "[LOADER TEST] Total vertices: " << total_v << "\n";
 }
@@ -252,12 +253,13 @@ TEST_F(LoaderIntegrationTest, EdgeConnectivity) {
 
     auto label_schemas = loader::buildLabelSchemas(vertex_files);
     auto edge_schemas = loader::buildEdgeTypeSchemas(edge_files);
+    auto merged_label_props = loader::buildMergedLabelProperties(label_schemas);
 
     loader::createLabels(*client_, label_schemas);
     loader::createEdgeLabels(*client_, edge_schemas);
 
-    auto id_map = loader::loadVertices(*client_, vertex_files, label_schemas, 200);
-    loader::loadEdges(*client_, edge_files, edge_schemas, id_map, 200);
+    auto id_maps = loader::loadVertices(*client_, vertex_files, label_schemas, merged_label_props, 200);
+    loader::loadEdges(*client_, edge_files, edge_schemas, id_maps, 200);
 
     // Verify: expand knows edges
     auto knows_result = execCypher("MATCH (:person)-[r:knows]->(:person) RETURN r LIMIT 1");

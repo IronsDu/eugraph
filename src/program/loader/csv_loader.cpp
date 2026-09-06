@@ -702,19 +702,7 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const CsvFileInfo& fi, c
     spdlog::info("[loader] Loaded {} vertices for file '{}'", total, fi.path.string());
 }
 
-std::vector<int> buildVertexPropertyColumns(const std::vector<std::string>& headers, const LabelSchema& schema) {
-    std::vector<int> cols;
-    for (int i = 0; i < static_cast<int>(headers.size()); i++) {
-        HeaderToken ht = parseHeaderToken(headers[i]);
-        if (ht.kind == HeaderKind::LABEL)
-            continue;
-        cols.push_back(i);
-    }
-    // Ensure size matches properties (ID column included, label excluded).
-    return cols;
-}
-
-std::vector<int> buildEdgePropertyColumns(const std::vector<std::string>& headers, const EdgeTypeSchema& schema) {
+std::vector<int> buildEdgePropertyColumns(const std::vector<std::string>& headers) {
     std::vector<int> cols;
     for (int i = 0; i < static_cast<int>(headers.size()); i++) {
         HeaderToken ht = parseHeaderToken(headers[i]);
@@ -849,7 +837,7 @@ void loadOneEdgeFile(shell::EuGraphRpcClient& client, const CsvFileInfo& fi, con
     const auto& src_map = src_map_it->second;
     const auto& dst_map = dst_map_it->second;
 
-    std::vector<int> prop_cols = buildEdgePropertyColumns(headers, schema);
+    std::vector<int> prop_cols = buildEdgePropertyColumns(headers);
 
     std::vector<thrift_service::EdgeRecord> batch;
     batch.reserve(batch_size);
