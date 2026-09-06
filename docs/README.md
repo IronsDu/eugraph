@@ -72,7 +72,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | Neo4j Bolt 协议支持 | [service/neo4j-bolt-protocol.md] | `src/service/bolt/`, `src/service/graph_service.*` |
 | 修改 Shell 交互 | [program/design/server-shell-design.md] | `src/program/shell/` |
 | 添加二级索引 | [storage/index_design.md], [storage/kv-encoding.md] | `src/storage/` |
-| 数据导入/CSV 加载 | [program/usage/loader.md], [program/design/loader-design.md], [program/design/loader-multi-label-import.md] | `src/program/loader/` |
+| 数据导入/CSV 加载 | [program/usage/loader.md], [program/design/loader-design.md] | `src/program/loader/` |
 | 事务/MVCC | [query/engine/transaction-model.md], [storage/interfaces.md] | `src/storage/` |
 | 执行模型/协程/流式 | [query/engine/execution-model.md], [query/engine/query-engine-design.md] | `src/storage/io_scheduler.hpp`, `executor/` |
 | 元数据/Schema 管理 | [storage/metadata-service-design.md] | `src/storage/meta/`, `src/storage/graph_schema.hpp` |
