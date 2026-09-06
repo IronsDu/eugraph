@@ -112,6 +112,76 @@ cypher::Expression cloneExpression(const cypher::Expression& expr) {
 }
 } // anonymous namespace
 
+namespace {
+
+/// Collect every variable name mentioned in an expression tree.
+/// This is intentionally expression-shape complete: OPTIONAL MATCH WHERE and
+/// EXISTS disjunctions use it to discover outer variables that must be
+/// correlated into the right sub-plan, regardless of the expression node type
+/// (ListExpr, ParenExpr, CaseExpr, subscripts, slices, quantifiers, ...).
+void collectExpressionVariableNames(const cypher::Expression& expr, std::vector<std::string>& out) {
+    std::visit(
+        [&](const auto& ptr) {
+            using T = std::decay_t<decltype(ptr)>;
+            using E = typename T::element_type;
+            if constexpr (std::is_same_v<E, cypher::Variable>) {
+                out.push_back(ptr->name);
+            } else if constexpr (std::is_same_v<E, cypher::PropertyAccess>) {
+                collectExpressionVariableNames(ptr->object, out);
+            } else if constexpr (std::is_same_v<E, cypher::LabelCastExpr>) {
+                collectExpressionVariableNames(ptr->object, out);
+            } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
+                collectExpressionVariableNames(ptr->left, out);
+                collectExpressionVariableNames(ptr->right, out);
+            } else if constexpr (std::is_same_v<E, cypher::UnaryOp>) {
+                collectExpressionVariableNames(ptr->operand, out);
+            } else if constexpr (std::is_same_v<E, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    collectExpressionVariableNames(arg, out);
+            } else if constexpr (std::is_same_v<E, cypher::ListExpr>) {
+                for (const auto& elem : ptr->elements)
+                    collectExpressionVariableNames(elem, out);
+            } else if constexpr (std::is_same_v<E, cypher::MapExpr>) {
+                for (const auto& [_, v] : ptr->entries)
+                    collectExpressionVariableNames(v, out);
+            } else if constexpr (std::is_same_v<E, cypher::CaseExpr>) {
+                if (ptr->subject)
+                    collectExpressionVariableNames(*ptr->subject, out);
+                for (const auto& [w, t] : ptr->when_thens) {
+                    collectExpressionVariableNames(w, out);
+                    collectExpressionVariableNames(t, out);
+                }
+                if (ptr->else_expr)
+                    collectExpressionVariableNames(*ptr->else_expr, out);
+            } else if constexpr (std::is_same_v<E, cypher::SubscriptExpr>) {
+                collectExpressionVariableNames(ptr->list, out);
+                collectExpressionVariableNames(ptr->index, out);
+            } else if constexpr (std::is_same_v<E, cypher::SliceExpr>) {
+                collectExpressionVariableNames(ptr->list, out);
+                if (ptr->from)
+                    collectExpressionVariableNames(*ptr->from, out);
+                if (ptr->to)
+                    collectExpressionVariableNames(*ptr->to, out);
+            } else if constexpr (std::is_same_v<E, cypher::AllExpr> || std::is_same_v<E, cypher::AnyExpr> ||
+                                 std::is_same_v<E, cypher::NoneExpr> || std::is_same_v<E, cypher::SingleExpr>) {
+                collectExpressionVariableNames(ptr->list_expr, out);
+                if (ptr->where_pred)
+                    collectExpressionVariableNames(*ptr->where_pred, out);
+            } else if constexpr (std::is_same_v<E, cypher::ListComprehension>) {
+                collectExpressionVariableNames(ptr->list_expr, out);
+                if (ptr->where_pred)
+                    collectExpressionVariableNames(*ptr->where_pred, out);
+                if (ptr->projection)
+                    collectExpressionVariableNames(*ptr->projection, out);
+            } else if constexpr (std::is_same_v<E, cypher::ParenExpr>) {
+                collectExpressionVariableNames(ptr->inner, out);
+            }
+        },
+        expr);
+}
+
+} // anonymous namespace
+
 // ==================== Pattern-graph semantic pre-pass ====================
 
 namespace {
@@ -1464,64 +1534,7 @@ Binder::bindExistsOrAsSemiJoin(const std::vector<std::pair<const cypher::ExistsE
             outer_names.push_back(name);
     } else {
         std::function<void(const cypher::Expression&)> collectExprVars;
-        collectExprVars = [&](const cypher::Expression& expr) {
-            std::visit(
-                [&](const auto& ptr) {
-                    using T = std::decay_t<decltype(ptr)>;
-                    using E = typename T::element_type;
-                    if constexpr (std::is_same_v<E, cypher::Variable>) {
-                        outer_names.push_back(ptr->name);
-                    } else if constexpr (std::is_same_v<E, cypher::PropertyAccess>) {
-                        collectExprVars(ptr->object);
-                    } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
-                        collectExprVars(ptr->left);
-                        collectExprVars(ptr->right);
-                    } else if constexpr (std::is_same_v<E, cypher::UnaryOp>) {
-                        collectExprVars(ptr->operand);
-                    } else if constexpr (std::is_same_v<E, cypher::FunctionCall>) {
-                        for (const auto& arg : ptr->args)
-                            collectExprVars(arg);
-                    } else if constexpr (std::is_same_v<E, cypher::ListExpr>) {
-                        for (const auto& elem : ptr->elements)
-                            collectExprVars(elem);
-                    } else if constexpr (std::is_same_v<E, cypher::MapExpr>) {
-                        for (const auto& [_, v] : ptr->entries)
-                            collectExprVars(v);
-                    } else if constexpr (std::is_same_v<E, cypher::CaseExpr>) {
-                        if (ptr->subject)
-                            collectExprVars(*ptr->subject);
-                        for (const auto& [w, t] : ptr->when_thens) {
-                            collectExprVars(w);
-                            collectExprVars(t);
-                        }
-                        if (ptr->else_expr)
-                            collectExprVars(*ptr->else_expr);
-                    } else if constexpr (std::is_same_v<E, cypher::SubscriptExpr>) {
-                        collectExprVars(ptr->list);
-                        collectExprVars(ptr->index);
-                    } else if constexpr (std::is_same_v<E, cypher::SliceExpr>) {
-                        collectExprVars(ptr->list);
-                        if (ptr->from)
-                            collectExprVars(*ptr->from);
-                        if (ptr->to)
-                            collectExprVars(*ptr->to);
-                    } else if constexpr (std::is_same_v<E, cypher::AllExpr> || std::is_same_v<E, cypher::AnyExpr> ||
-                                         std::is_same_v<E, cypher::NoneExpr> || std::is_same_v<E, cypher::SingleExpr>) {
-                        collectExprVars(ptr->list_expr);
-                        if (ptr->where_pred)
-                            collectExprVars(*ptr->where_pred);
-                    } else if constexpr (std::is_same_v<E, cypher::ListComprehension>) {
-                        collectExprVars(ptr->list_expr);
-                        if (ptr->where_pred)
-                            collectExprVars(*ptr->where_pred);
-                        if (ptr->projection)
-                            collectExprVars(*ptr->projection);
-                    } else if constexpr (std::is_same_v<E, cypher::ParenExpr>) {
-                        collectExprVars(ptr->inner);
-                    }
-                },
-                expr);
-        };
+        collectExprVars = [&](const cypher::Expression& expr) { collectExpressionVariableNames(expr, outer_names); };
         auto collectPatternVars = [&](const cypher::PatternPart& pp) {
             if (pp.element.node.variable)
                 outer_names.push_back(*pp.element.node.variable);
@@ -1922,30 +1935,10 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
     // appear in the pattern graph itself (e.g. WHERE r <> r2).
     std::unordered_set<std::string> where_names;
     std::function<void(const cypher::Expression&)> collect_where_vars = [&](const cypher::Expression& expr) {
-        std::visit(
-            [&](const auto& ptr) {
-                using E = typename std::decay_t<decltype(ptr)>::element_type;
-                if constexpr (std::is_same_v<E, cypher::Variable>) {
-                    where_names.insert(ptr->name);
-                } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
-                    collect_where_vars(ptr->left);
-                    collect_where_vars(ptr->right);
-                } else if constexpr (std::is_same_v<E, cypher::UnaryOp>) {
-                    collect_where_vars(ptr->operand);
-                } else if constexpr (std::is_same_v<E, cypher::FunctionCall>) {
-                    for (auto& arg : ptr->args)
-                        collect_where_vars(arg);
-                } else if constexpr (std::is_same_v<E, cypher::PropertyAccess>) {
-                    collect_where_vars(ptr->object);
-                } else if constexpr (std::is_same_v<E, cypher::ListComprehension>) {
-                    collect_where_vars(ptr->list_expr);
-                    if (ptr->where_pred)
-                        collect_where_vars(*ptr->where_pred);
-                    if (ptr->projection)
-                        collect_where_vars(*ptr->projection);
-                }
-            },
-            expr);
+        std::vector<std::string> vars;
+        collectExpressionVariableNames(expr, vars);
+        for (const auto& name : vars)
+            where_names.insert(name);
     };
     if (match.where_pred)
         collect_where_vars(*match.where_pred);

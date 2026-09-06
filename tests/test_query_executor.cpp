@@ -2135,6 +2135,33 @@ TEST_F(QueryExecutorMultiLabelTest, SetVertexLabelAutoCreate) {
     EXPECT_FALSE(has_empty);
 }
 
+TEST_F(QueryExecutorMultiLabelTest, OptionalMatchWhereListExprCorrelatesOuterVars) {
+    // Regression: OPTIONAL MATCH WHERE with an outer variable inside a list
+    // expression used to fail with UndefinedVariable because the binder only
+    // collected variables from a subset of expression shapes.
+    auto r1 = execSync(*executor_, "CREATE (p:Person {name: 'Alice'}), (e:Employee {name: 'Bob'}) "
+                                   "WITH p, e "
+                                   "OPTIONAL MATCH (p)-[r]-(x) "
+                                   "WHERE x.name IN [p.name, e.name] "
+                                   "RETURN count(x) AS c");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_EQ(r1.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r1.rows[0][0]), 0);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, OptionalMatchWhereParenExprCorrelatesOuterVars) {
+    // Regression: parenthesized WHERE predicates must also have their outer
+    // variables correlated into the right sub-plan.
+    auto r1 = execSync(*executor_, "CREATE (p:Person {name: 'Alice'}), (e:Employee {name: 'Bob'}) "
+                                   "WITH p, e "
+                                   "OPTIONAL MATCH (p)-[r]-(x) "
+                                   "WHERE (x.name = p.name OR x.name = e.name) "
+                                   "RETURN count(x) AS c");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_EQ(r1.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r1.rows[0][0]), 0);
+}
+
 TEST_F(QueryExecutorMultiLabelTest, RemoveVertexLabel) {
     // CREATE (n:Person), SET n:Employee, then REMOVE n:Employee
     auto r1 = execSync(*executor_, "CREATE (n:Person) SET n:Employee");
@@ -7722,6 +7749,14 @@ TEST_F(QueryExecutorTest, CeilFunctionRegistered) {
     ASSERT_EQ(result.rows.size(), 1u);
     ASSERT_TRUE(std::holds_alternative<double>(result.rows[0][0]));
     EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 2.0);
+}
+
+TEST_F(QueryExecutorTest, FloorFunctionRegistered) {
+    auto result = execSync(*executor_, "RETURN floor(1.2)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<double>(result.rows[0][0]));
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 1.0);
 }
 
 TEST_F(QueryExecutorTest, ReturnImplicitColumnPreservesSourceText) {

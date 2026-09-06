@@ -84,6 +84,13 @@ void FunctionRegistry::registerScalarBuiltins() {
     functions_["ceil"].push_back(
         {"ceil", {BoundType::Double()}, BoundType::Double(), false, false, scalar::ceilBatchFn, {}, {}, {}});
 
+    // floor(Int64) -> Double
+    functions_["floor"].push_back(
+        {"floor", {BoundType::Int64()}, BoundType::Double(), false, false, scalar::floorBatchFn, {}, {}, {}});
+    // floor(Double) -> Double
+    functions_["floor"].push_back(
+        {"floor", {BoundType::Double()}, BoundType::Double(), false, false, scalar::floorBatchFn, {}, {}, {}});
+
     // sign(Int64) -> Int64
     functions_["sign"].push_back(
         {"sign", {BoundType::Int64()}, BoundType::Int64(), false, false, scalar::signBatchFn, {}, {}, {}});
