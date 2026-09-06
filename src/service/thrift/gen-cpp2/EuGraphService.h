@@ -157,8 +157,8 @@ class ServiceHandler<::eugraph::thrift_service::EuGraphService> : public apache:
 namespace detail {
 template <> struct TSchemaAssociation<::eugraph::thrift_service::EuGraphService, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = -8015408025894363945;
-  static constexpr ::std::string_view definitionKey = {"\x10\xd6\x90\xa3\xea\x9e\x11\x60\x5f\xb8\xd3\x92\x68\x6a\x30\xee", 16};
+  static constexpr int64_t programId = 7580036639856744772;
+  static constexpr ::std::string_view definitionKey = {"\x27\xb3\xcb\x56\x9c\x2d\xbd\x0d\xa2\x5b\x83\xd0\xb6\x5b\x3c\x42", 16};
 };
 }
 } // namespace apache::thrift

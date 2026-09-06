@@ -61,10 +61,13 @@ public:
                                                             const std::unordered_map<std::string, Value>& params,
                                                             const std::string& graph_name);
 
-    /// Batch insert vertices. entries[i].props corresponds to label property positions.
+    /// Batch insert vertices. entries[i].props corresponds to primary label
+    /// property positions; entries[i].extra_labels are added as pure labels
+    /// (empty property set). The primary label is the batch label_name.
     struct BatchVertexEntry {
         VertexId vid;
         std::vector<PropertyValue> props;
+        std::vector<std::string> extra_labels;
     };
 
     folly::coro::Task<std::vector<VertexId>> batchInsertVertices(const std::string& label_name,

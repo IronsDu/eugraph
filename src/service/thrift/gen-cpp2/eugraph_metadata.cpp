@@ -233,8 +233,8 @@ StructMetadata<::eugraph::thrift_service::VertexRecord>::gen(ThriftMetadata& met
   eugraph_VertexRecord.name() = "eugraph.VertexRecord";
   eugraph_VertexRecord.is_union() = false;
   static const auto* const
-  eugraph_VertexRecord_fields = new std::array<EncodedThriftField, 1>{ {
-    { 1, "properties", false, std::make_unique<List>(std::make_unique<Union<::eugraph::thrift_service::PropertyValueThrift>>("eugraph.PropertyValueThrift")), std::vector<ThriftConstStruct>{ }},  }};
+  eugraph_VertexRecord_fields = new std::array<EncodedThriftField, 2>{ {
+    { 1, "properties", false, std::make_unique<List>(std::make_unique<Union<::eugraph::thrift_service::PropertyValueThrift>>("eugraph.PropertyValueThrift")), std::vector<ThriftConstStruct>{ }},    { 2, "labels", false, std::make_unique<List>(std::make_unique<Primitive>(ThriftPrimitiveType::THRIFT_STRING_TYPE)), std::vector<ThriftConstStruct>{ }},  }};
   for (const auto& f : *eugraph_VertexRecord_fields) {
     ::apache::thrift::metadata::ThriftField field;
     field.id() = f.id;
