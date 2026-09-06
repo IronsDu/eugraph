@@ -238,3 +238,21 @@ Neo4j 原版 `(m:Message {id:$messageId})` 会命中 `Message(id)` 约束索引�
 - Loader 多标签 + CLI 映射 + Neo4j 表头解析已生效：**原版 LDBC 查询无需改写关系类型和 `:Message` 标签**。
 - 能执行的查询中，Q2/Q8/Q11 已经接近或优于 Neo4j；short-2/4/5/6/7 仍明显慢于 Neo4j，是需要继续优化的重点。
 - Q12 结果不一致（空结果），需要单独排查正确性问题。
+
+### 7.5 Q3 与 Q12 排查结论（2026-09-06）
+
+**Q3 返回 0 行的根因**：
+
+- 复现：`MATCH (c:Country {name:'Germany'}) WITH c MATCH (n) RETURN count(*)` 返回 0；而 `MATCH (c:Country) WITH c MATCH (n) RETURN count(*)` 返回 36,362,268。
+- 差异点：`Country(name)` 走 IndexScan。IndexScan 命中后，`WITH c` 需要把整顶点物化；但对“行级标签”（City/Country 等通过 `:LABEL` 追加的标签）上的 IndexScan，整顶点物化（`RETURN c`、`labels(c)`）会丢行；`RETURN c.id` 等属性投影则正常。
+- 影响：Q3 第一步 `MATCH (countryX:Country {name:...}) ... WITH countryX, countryY ...` 中 `WITH` 拿不到整顶点，所以后续 MATCH 输入为空，最终返回 0 行。
+- 同类现象：`MATCH (x:Message {id:...}) RETURN x` 也返回空（Message 是 Comment/Post 的追加标签），而 `RETURN x.id` 正常。
+
+**Q12 结果不一致的根因**：
+
+- 复现：`WITH collect(tag.id) AS tags` 之后的第二个 MATCH，`count(*)` 有行，但投影 `friend.firstName`、`tag2.name` 等属性全为 `null`。
+- 对比：同一个查询在 Neo4j 上返回 2 行，属性正常（Tom_Cruise / Jackie_Chan）。
+- 差异点：同样与“WITH 之后 MATCH 的 ProjectionExtract”相关：WITH 携带 list 后，后续 MATCH 的属性物化没有正确回填到输出列。
+- 这解释了 Q12 在 EuGraph 上出现 `tagNames=[]`、`replyCount=0`（聚合前的输入列是 null）。
+
+**初步结论**：Q3/Q12 的正确性问题不是 loader 数据错误，而是查询引擎在 **IndexScan 后的整顶点物化** 与 **WITH 后 MATCH 的属性物化** 两个场景存在缺陷；建议下一步优先修 ProjectionExtract / IndexScan 对追加标签的整顶点物化。
