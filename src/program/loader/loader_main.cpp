@@ -137,7 +137,8 @@ int main(int argc, char* argv[]) {
 
     auto label_schemas = eugraph::loader::buildLabelSchemas(vertex_files);
     auto edge_schemas = eugraph::loader::buildEdgeTypeSchemas(edge_files);
-    spdlog::info("[loader] {} labels, {} edge types", label_schemas.size(), edge_schemas.size());
+    auto merged_label_props = eugraph::loader::buildMergedLabelProperties(label_schemas);
+    spdlog::info("[loader] {} vertex files, {} edge types", label_schemas.size(), edge_schemas.size());
 
     eugraph::shell::EuGraphRpcClient client(host, port);
     if (!client.connect()) {
@@ -168,7 +169,8 @@ int main(int argc, char* argv[]) {
     eugraph::loader::createEdgeLabels(client, edge_schemas);
 
     spdlog::info("[loader] Loading vertex data...");
-    auto id_maps = eugraph::loader::loadVertices(clients, vertex_files, label_schemas, batch_size, concurrency);
+    auto id_maps = eugraph::loader::loadVertices(clients, vertex_files, label_schemas, merged_label_props, batch_size,
+                                                 concurrency);
     spdlog::info("[loader] Vertex loading complete. {} groups in ID map", id_maps.group_id_map.size());
 
     spdlog::info("[loader] Creating unique indexes on ID properties...");

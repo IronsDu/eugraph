@@ -40,7 +40,8 @@ struct PropertyInfo {
 };
 
 struct LabelSchema {
-    std::string name;                     // primary label (schema key)
+    std::string file_key;                 // unique key for this vertex file
+    std::string name;                     // default primary label (first file-level label)
     std::vector<std::string> labels;      // file-level labels (first is primary)
     std::string group;                    // ID space / group name
     std::vector<PropertyInfo> properties; // excludes id and :LABEL columns
@@ -79,6 +80,11 @@ thrift_service::PropertyValueThrift toThriftValue(const std::string& value, CsvC
 // Build label schemas from vertex files (reads headers + samples).
 std::vector<LabelSchema> buildLabelSchemas(const std::vector<CsvFileInfo>& vertex_files);
 
+// Merge property definitions per label across vertex files. The returned
+// order is the order in which properties are declared on the server label.
+std::unordered_map<std::string, std::vector<PropertyInfo>>
+buildMergedLabelProperties(const std::vector<LabelSchema>& schemas);
+
 // Build edge type schemas from edge files (reads headers + samples).
 std::vector<EdgeTypeSchema> buildEdgeTypeSchemas(const std::vector<CsvFileInfo>& edge_files);
 
@@ -90,11 +96,14 @@ void createEdgeLabels(shell::EuGraphRpcClient& client, const std::vector<EdgeTyp
 
 // Load all vertex files, return CSV ID mapping and label->group mapping.
 LoadedIdMaps loadVertices(shell::EuGraphRpcClient& client, const std::vector<CsvFileInfo>& vertex_files,
-                          const std::vector<LabelSchema>& label_schemas, int batch_size);
+                          const std::vector<LabelSchema>& label_schemas,
+                          const std::unordered_map<std::string, std::vector<PropertyInfo>>& merged_label_props,
+                          int batch_size);
 
 // Load all vertex files with a pool of RPC clients (each owns an EventBase) and bounded concurrency.
 LoadedIdMaps loadVertices(const std::vector<shell::EuGraphRpcClient*>& clients,
                           const std::vector<CsvFileInfo>& vertex_files, const std::vector<LabelSchema>& label_schemas,
+                          const std::unordered_map<std::string, std::vector<PropertyInfo>>& merged_label_props,
                           int batch_size, int concurrency);
 
 // Create unique indexes on ID properties for all labels (after vertices loaded).

@@ -256,3 +256,26 @@ Neo4j 原版 `(m:Message {id:$messageId})` 会命中 `Message(id)` 约束索引�
 - 这解释了 Q12 在 EuGraph 上出现 `tagNames=[]`、`replyCount=0`（聚合前的输入列是 null）。
 
 **初步结论**：Q3/Q12 的正确性问题不是 loader 数据错误，而是查询引擎在 **IndexScan 后的整顶点物化** 与 **WITH 后 MATCH 的属性物化** 两个场景存在缺陷；建议下一步优先修 ProjectionExtract / IndexScan 对追加标签的整顶点物化。
+
+### 7.6 行级标签优先 + 原版标签顺序复测（2026-09-06 晚）
+
+> 导入调整：`Place`/`Organisation` 的 `:LABEL` 行级标签排到主标签位；`Comment`/`Post` 保持 Neo4j 原版顺序 `Comment:Message`、`Post:Message`（属性仍存放在 Comment/Post 下，不做属性复制）。
+
+导入后验证：
+- `MATCH (p:Post) RETURN p` 属性顺序正确；
+- `MATCH (c:Country {name:'Germany'}) RETURN c` 能返回整顶点；
+- `MATCH (c:Country {name:'Germany'}) WITH c MATCH (n) RETURN count(*)` 正常（327588）。
+
+本轮结果：
+
+| Query | 行数 | 耗时(ms) | 备注 |
+|-------|-----:|---------:|------|
+| complex-4（原版） | 10 | 4140 | 与 Neo4j 原版结果一致 |
+| short-4（改写 UNION ALL） | 1 | 1740 | 结果正确；仍慢，计划为 LabelScan+Filter，未走 id 索引 |
+| short-5（改写 UNION ALL） | 1 | 480 | 结果正确；同上 |
+| short-6（改写 UNION ALL） | 1 | 480 | 结果正确；同上 |
+| short-7（改写 UNION ALL） | 0 | 470 | 结果正确；同上 |
+
+说明：short-4~7 改写为 `UNION ALL` 两个标签扫描（Comment / Post）后结果正确，但 `EXPLAIN` 显示 `{id:...}` 过滤仍走 `LabelScan + Filter`，因为 `ProjectionExtract` 插在 `Filter` 和 `LabelScan` 之间，`Filter(LabelScan) -> IndexScan` 的优化没有触发。这是后续需要修的 planner/优化器问题。
+
+Q3 原版本轮未重跑（避免重查询）。Q12 仍受 WITH 后 MATCH 属性物化缺陷影响，结果仍为空。

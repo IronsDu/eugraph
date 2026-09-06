@@ -243,12 +243,10 @@ thrift_service::PropertyValueThrift toThriftValue(const std::string& value, CsvC
 }
 
 std::vector<LabelSchema> buildLabelSchemas(const std::vector<CsvFileInfo>& vertex_files) {
-    std::unordered_map<std::string, LabelSchema> schema_map;
+    std::vector<LabelSchema> result;
 
     for (const auto& fi : vertex_files) {
         std::string primary = fi.label;
-        if (schema_map.count(primary))
-            continue;
 
         std::ifstream ifs(fi.path);
         std::string header_line;
@@ -257,6 +255,7 @@ std::vector<LabelSchema> buildLabelSchemas(const std::vector<CsvFileInfo>& verte
 
         auto headers = parseCsvLine(header_line);
         LabelSchema schema;
+        schema.file_key = fi.path.string();
         schema.name = primary;
         schema.labels = fi.labels.empty() ? std::vector<std::string>{primary} : fi.labels;
         schema.group = fi.path.stem().string();
@@ -322,13 +321,9 @@ std::vector<LabelSchema> buildLabelSchemas(const std::vector<CsvFileInfo>& verte
             schema.properties.push_back(std::move(pi));
         }
 
-        schema_map[primary] = std::move(schema);
-    }
-
-    std::vector<LabelSchema> result;
-    for (auto& [_, schema] : schema_map) {
         result.push_back(std::move(schema));
     }
+
     return result;
 }
 
@@ -417,10 +412,34 @@ std::vector<EdgeTypeSchema> buildEdgeTypeSchemas(const std::vector<CsvFileInfo>&
     return result;
 }
 
-void createLabels(shell::EuGraphRpcClient& client, const std::vector<LabelSchema>& schemas) {
+std::unordered_map<std::string, std::vector<PropertyInfo>>
+buildMergedLabelProperties(const std::vector<LabelSchema>& schemas) {
+    std::unordered_map<std::string, std::vector<PropertyInfo>> merged;
     for (const auto& schema : schemas) {
-        std::vector<thrift_service::PropertyDefThrift> props;
-        for (const auto& pi : schema.properties) {
+        for (const auto& label : schema.labels) {
+            auto& props = merged[label];
+            for (const auto& pi : schema.properties) {
+                bool found = false;
+                for (const auto& existing : props) {
+                    if (existing.name == pi.name) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    props.push_back(pi);
+            }
+        }
+    }
+    return merged;
+}
+
+void createLabels(shell::EuGraphRpcClient& client, const std::vector<LabelSchema>& schemas) {
+    auto merged = buildMergedLabelProperties(schemas);
+
+    for (const auto& [label, props] : merged) {
+        std::vector<thrift_service::PropertyDefThrift> thrift_props;
+        for (const auto& pi : props) {
             thrift_service::PropertyDefThrift pd;
             pd.name() = pi.name;
             switch (pi.type) {
@@ -447,13 +466,10 @@ void createLabels(shell::EuGraphRpcClient& client, const std::vector<LabelSchema
                 break;
             }
             pd.is_required() = false;
-            props.push_back(std::move(pd));
+            thrift_props.push_back(std::move(pd));
         }
-
-        for (const auto& label : schema.labels) {
-            spdlog::info("[loader] Creating label '{}' with {} properties", label, props.size());
-            client.createLabel(label, props, "default");
-        }
+        spdlog::info("[loader] Creating label '{}' with {} properties", label, thrift_props.size());
+        client.createLabel(label, thrift_props, "default");
     }
 }
 
@@ -504,11 +520,12 @@ using VertexSchemaMap = std::unordered_map<std::string, const LabelSchema*>;
 using EdgeSchemaMap = std::unordered_map<std::string, const EdgeTypeSchema*>;
 
 void loadOneVertexFile(shell::EuGraphRpcClient& client, const CsvFileInfo& fi, const VertexSchemaMap& schema_map,
+                       const std::unordered_map<std::string, std::vector<PropertyInfo>>& merged_label_props,
                        int batch_size, CsvIdMap& group_map,
                        std::unordered_map<std::string, std::string>& label_to_group) {
-    auto it = schema_map.find(fi.label);
+    auto it = schema_map.find(fi.path.string());
     if (it == schema_map.end()) {
-        spdlog::warn("[loader] No schema for label '{}', skipping {}", fi.label, fi.path.string());
+        spdlog::warn("[loader] No schema for file '{}', skipping", fi.path.string());
         return;
     }
     const auto& schema = *it->second;
@@ -581,27 +598,30 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const CsvFileInfo& fi, c
         prop_cols.push_back(i);
     }
 
-    std::vector<int64_t> csv_ids;
-    std::vector<thrift_service::VertexRecord> batch;
-    csv_ids.reserve(batch_size);
-    batch.reserve(batch_size);
+    struct BatchState {
+        std::vector<int64_t> csv_ids;
+        std::vector<thrift_service::VertexRecord> records;
+    };
+    std::unordered_map<std::string, BatchState> batches;
     int total = 0;
 
     auto& file_label_map = group_map[schema.group];
     for (const auto& label : schema.labels)
         label_to_group[label] = schema.group;
 
-    auto flush_batch = [&]() {
-        if (batch.empty())
+    auto flush_batch = [&](const std::string& primary_label) {
+        auto batch_it = batches.find(primary_label);
+        if (batch_it == batches.end() || batch_it->second.records.empty())
             return;
-        auto result = client.batchInsertVertices(schema.name, std::move(batch), "default");
-        for (size_t i = 0; i < result.vertex_ids()->size() && i < csv_ids.size(); i++) {
-            file_label_map[csv_ids[i]] = static_cast<uint64_t>((*result.vertex_ids())[i]);
+        auto& batch = batch_it->second;
+        auto result = client.batchInsertVertices(primary_label, std::move(batch.records), "default");
+        for (size_t i = 0; i < result.vertex_ids()->size() && i < batch.csv_ids.size(); i++) {
+            file_label_map[batch.csv_ids[i]] = static_cast<uint64_t>((*result.vertex_ids())[i]);
         }
-        csv_ids.clear();
-        batch.clear();
-        csv_ids.reserve(batch_size);
-        batch.reserve(batch_size);
+        batch.csv_ids.clear();
+        batch.records.clear();
+        batch.csv_ids.reserve(batch_size);
+        batch.records.reserve(batch_size);
     };
 
     std::string line;
@@ -611,44 +631,75 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const CsvFileInfo& fi, c
             continue;
 
         int64_t csv_id = std::stoll(fields[schema.id_col]);
-        csv_ids.push_back(csv_id);
+
+        std::string row_label;
+        if (schema.label_col >= 0 && schema.label_col < static_cast<int>(fields.size()))
+            row_label = trim(fields[schema.label_col]);
+
+        // Row-level labels take precedence as primary label so properties
+        // land under the label used by query index access (City/Country/...).
+        std::string primary_label = !row_label.empty() ? row_label : schema.name;
 
         thrift_service::VertexRecord rec;
         auto& props = *rec.properties();
         auto& labels = *rec.labels();
 
-        // Full label set: primary first, then file-level extras, then row label.
-        labels.push_back(schema.name);
+        labels.push_back(primary_label);
         for (const auto& label : schema.labels) {
-            if (label != schema.name)
+            if (label != primary_label)
                 labels.push_back(label);
         }
-        if (schema.label_col >= 0 && schema.label_col < static_cast<int>(fields.size())) {
-            std::string row_label = trim(fields[schema.label_col]);
-            if (!row_label.empty()) {
+        if (!row_label.empty()) {
+            if (std::find(labels.begin(), labels.end(), row_label) == labels.end())
                 labels.push_back(row_label);
-                label_to_group[row_label] = schema.group;
+            label_to_group[row_label] = schema.group;
+        }
+
+        // Map file-schema properties to the primary label's property order
+        // (properties are stored under the primary label with its own prop IDs).
+        auto order_it = merged_label_props.find(primary_label);
+        std::vector<thrift_service::PropertyValueThrift> ordered_props;
+        if (order_it != merged_label_props.end()) {
+            ordered_props.resize(order_it->second.size());
+            for (size_t i = 0; i < schema.properties.size(); i++) {
+                const auto& pi = schema.properties[i];
+                int csv_col = prop_cols[i];
+                for (size_t j = 0; j < order_it->second.size(); j++) {
+                    if (order_it->second[j].name == pi.name) {
+                        if (csv_col < static_cast<int>(fields.size())) {
+                            ordered_props[j] = toThriftValue(fields[csv_col], pi.type);
+                        } else {
+                            ordered_props[j] = thrift_service::PropertyValueThrift{};
+                        }
+                        break;
+                    }
+                }
+            }
+            props = std::move(ordered_props);
+        } else {
+            for (size_t i = 0; i < schema.properties.size(); i++) {
+                int csv_col = prop_cols[i];
+                if (csv_col < static_cast<int>(fields.size())) {
+                    props.push_back(toThriftValue(fields[csv_col], schema.properties[i].type));
+                } else {
+                    props.push_back(thrift_service::PropertyValueThrift{});
+                }
             }
         }
 
-        for (size_t i = 0; i < schema.properties.size(); i++) {
-            int csv_col = prop_cols[i];
-            if (csv_col < static_cast<int>(fields.size())) {
-                props.push_back(toThriftValue(fields[csv_col], schema.properties[i].type));
-            } else {
-                props.push_back(thrift_service::PropertyValueThrift{});
-            }
-        }
-
-        batch.push_back(std::move(rec));
+        auto& batch = batches[primary_label];
+        batch.csv_ids.push_back(csv_id);
+        batch.records.push_back(std::move(rec));
         total++;
 
-        if (static_cast<int>(batch.size()) >= batch_size)
-            flush_batch();
+        if (static_cast<int>(batch.records.size()) >= batch_size)
+            flush_batch(primary_label);
     }
 
-    flush_batch();
-    spdlog::info("[loader] Loaded {} vertices for label '{}'", total, fi.label);
+    for (auto& [primary_label, batch] : batches)
+        flush_batch(primary_label);
+
+    spdlog::info("[loader] Loaded {} vertices for file '{}'", total, fi.path.string());
 }
 
 std::vector<int> buildVertexPropertyColumns(const std::vector<std::string>& headers, const LabelSchema& schema) {
@@ -676,10 +727,11 @@ std::vector<int> buildEdgePropertyColumns(const std::vector<std::string>& header
 
 LoadedIdMaps loadVertices(const std::vector<shell::EuGraphRpcClient*>& clients,
                           const std::vector<CsvFileInfo>& vertex_files, const std::vector<LabelSchema>& label_schemas,
+                          const std::unordered_map<std::string, std::vector<PropertyInfo>>& merged_label_props,
                           int batch_size, int concurrency) {
     VertexSchemaMap schema_map;
     for (const auto& s : label_schemas)
-        schema_map[s.name] = &s;
+        schema_map[s.file_key] = &s;
 
     LoadedIdMaps maps;
     std::mutex maps_mu;
@@ -687,7 +739,8 @@ LoadedIdMaps loadVertices(const std::vector<shell::EuGraphRpcClient*>& clients,
     runFilesParallel(clients, vertex_files.size(), concurrency, [&](shell::EuGraphRpcClient& client, size_t index) {
         CsvIdMap group_map;
         std::unordered_map<std::string, std::string> label_to_group;
-        loadOneVertexFile(client, vertex_files[index], schema_map, batch_size, group_map, label_to_group);
+        loadOneVertexFile(client, vertex_files[index], schema_map, merged_label_props, batch_size, group_map,
+                          label_to_group);
         std::lock_guard<std::mutex> lock(maps_mu);
         for (auto& [group, m] : group_map) {
             auto& dest = maps.group_id_map[group];
@@ -702,20 +755,33 @@ LoadedIdMaps loadVertices(const std::vector<shell::EuGraphRpcClient*>& clients,
 }
 
 LoadedIdMaps loadVertices(shell::EuGraphRpcClient& client, const std::vector<CsvFileInfo>& vertex_files,
-                          const std::vector<LabelSchema>& label_schemas, int batch_size) {
+                          const std::vector<LabelSchema>& label_schemas,
+                          const std::unordered_map<std::string, std::vector<PropertyInfo>>& merged_label_props,
+                          int batch_size) {
     std::vector<shell::EuGraphRpcClient*> clients{&client};
-    return loadVertices(clients, vertex_files, label_schemas, batch_size, 1);
+    return loadVertices(clients, vertex_files, label_schemas, merged_label_props, batch_size, 1);
 }
 
 // ==================== Unique indexes ====================
 
 void createUniqueIdIndexes(shell::EuGraphRpcClient& client, const std::vector<LabelSchema>& schemas) {
+    std::unordered_set<std::string> seen_labels;
+    std::unordered_map<std::string, std::string> id_prop_names;
     for (const auto& schema : schemas) {
-        if (schema.properties.empty())
-            continue;
-
-        const auto& id_prop_name = schema.properties[0].name;
         for (const auto& label : schema.labels) {
+            if (!schema.properties.empty() && id_prop_names.find(label) == id_prop_names.end())
+                id_prop_names[label] = schema.properties[0].name;
+        }
+    }
+
+    for (const auto& schema : schemas) {
+        for (const auto& label : schema.labels) {
+            if (!seen_labels.insert(label).second)
+                continue;
+            if (schema.properties.empty())
+                continue;
+
+            const auto& id_prop_name = id_prop_names[label];
             std::string index_name = fmt::format("idx_{}_{}_unique", label, id_prop_name);
             std::string query =
                 fmt::format("CREATE UNIQUE INDEX {} FOR (n:{}) ON (n.{})", index_name, label, id_prop_name);
@@ -731,6 +797,7 @@ void createUniqueIdIndexes(shell::EuGraphRpcClient& client, const std::vector<La
     }
 }
 
+// ==================== Edge loading ====================
 // ==================== Edge loading ====================
 
 void loadOneEdgeFile(shell::EuGraphRpcClient& client, const CsvFileInfo& fi, const EdgeSchemaMap& schema_map,
