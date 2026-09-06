@@ -213,6 +213,8 @@ Neo4j 原版 `(m:Message {id:$messageId})` 会命中 `Message(id)` 约束索引�
 | Query | 行数 | 耗时(ms) | 备注 |
 |-------|-----:|---------:|------|
 | complex-2  | 20 | 36.5 | 原版，正常 |
+| complex-3  | 0 | 11.2 | 原版；返回 0 行，Neo4j 为 1 行（friendId=987），正确性待查 |
+| complex-7  | ERR | 3.6 | 原版；SyntaxError: UnexpectedSyntax，疑似 `not((liker)-[:KNOWS]-(person))` 模式谓词不支持 |
 | complex-8  | 20 | 123.6 | 原版，正常 |
 | complex-9  | 超时 | >40000 | 原版，超时；未继续等待 |
 | complex-11 | 10 | 163.6 | 原版，正常 |
@@ -227,7 +229,6 @@ Neo4j 原版 `(m:Message {id:$messageId})` 会命中 `Message(id)` 约束索引�
 
 ### 7.3 未执行 / 不适用
 
-- complex-3、complex-7：按你的要求本轮未执行，避免机器卡死。
 - complex-1、complex-13：原版依赖 `shortestPath`，EuGraph 尚不支持。
 - complex-10：原版依赖 pattern comprehension，EuGraph 尚不支持。
 - complex-14：原版依赖 `allShortestPaths` + `reduce`，EuGraph 尚不支持。
