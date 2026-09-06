@@ -161,6 +161,41 @@ inline void ceilBatchFn(const std::vector<const Column*>& args, Column& result, 
             result.setValue(i, ceilImpl(in.getValue(i)));
 }
 
+// --- floor ---
+
+inline Value floorImpl(const Value& arg) {
+    if (isNull(arg))
+        return Value{};
+    if (std::holds_alternative<double>(arg))
+        return Value(std::floor(std::get<double>(arg)));
+    if (std::holds_alternative<int64_t>(arg))
+        return Value(std::floor(static_cast<double>(std::get<int64_t>(arg))));
+    return Value{};
+}
+
+struct FloorIntOp {
+    static double apply(int64_t v) {
+        return std::floor(static_cast<double>(v));
+    }
+};
+struct FloorDoubleOp {
+    static double apply(double v) {
+        return std::floor(v);
+    }
+};
+
+inline void floorBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
+                         const EvalContext& /*ctx*/) {
+    const Column& in = *args[0];
+    if (in.type == binder::BoundTypeKind::INT64)
+        typedUnaryBatch<int64_t, double, FloorIntOp>(in, result, count);
+    else if (in.type == binder::BoundTypeKind::DOUBLE)
+        typedUnaryBatch<double, double, FloorDoubleOp>(in, result, count);
+    else
+        for (size_t i = 0; i < count; i++)
+            result.setValue(i, floorImpl(in.getValue(i)));
+}
+
 } // namespace scalar
 } // namespace function
 } // namespace eugraph
