@@ -87,6 +87,12 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [Shell 使用](program/usage/shell.md) | eugraph-shell 启动参数、命令列表、交互示例 |
 | [CSV Loader 使用](program/usage/loader.md) | LDBC SNB 格式导入、schema 推断、批量 RPC 插入 |
 
+## 性能测试
+
+| 文档 | 说明 |
+|------|------|
+| [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 导入、LDBC 查询耗时对比、慢查询分析 |
+
 
 ## 格式化
 运行 `./scripts/check-format.sh --fix` 可自动格式化所有源码（`.cpp/.h/.hpp`），检查用 `./scripts/check-format.sh`。

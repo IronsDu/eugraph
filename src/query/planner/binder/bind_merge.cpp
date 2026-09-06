@@ -77,6 +77,7 @@ bool bindMergeSetItem(const cypher::SetItem& item, BoundSetOp::SetItem& bound_it
     }
     case cypher::SetItemKind::SET_LABELS: {
         bound_item.kind = BoundSetOp::ItemKind::SET_LABELS;
+        bound_item.label = item.label;
         LabelId lid = catalog.labelNameToId(item.label);
         if (lid != INVALID_LABEL_ID)
             bound_item.label_id = lid;

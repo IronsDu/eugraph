@@ -22,6 +22,7 @@ struct BoundSetOp {
         ItemKind kind;
         std::string target_variable;
         std::string prop_name;
+        std::string label;
         std::optional<uint16_t> prop_id;
         std::optional<BoundExpression> value_expr;
         std::optional<LabelId> label_id;

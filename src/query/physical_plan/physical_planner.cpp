@@ -2022,7 +2022,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         bsi.is_add_assign = si.is_add_assign;
                         bsi.resolved_label_id = si.label_id;
                         bsi.resolved_prop_id = si.prop_id;
-                        if (si.label_id) {
+                        bsi.label = si.label;
+                        if (bsi.label.empty() && si.label_id) {
                             for (auto& [name, id] : ctx.label_name_to_id) {
                                 if (id == *si.label_id) {
                                     bsi.label = name;
@@ -2449,7 +2450,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             bsi.is_add_assign = si.is_add_assign;
                             bsi.resolved_label_id = si.label_id;
                             bsi.resolved_prop_id = si.prop_id;
-                            if (si.label_id) {
+                            bsi.label = si.label;
+                            if (bsi.label.empty() && si.label_id) {
                                 for (auto& [name, id] : ctx.label_name_to_id) {
                                     if (id == *si.label_id) {
                                         bsi.label = name;

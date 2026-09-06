@@ -2109,6 +2109,32 @@ TEST_F(QueryExecutorMultiLabelTest, SetVertexLabel) {
     ASSERT_TRUE(result.error.empty()) << result.error;
 }
 
+TEST_F(QueryExecutorMultiLabelTest, SetVertexLabelAutoCreate) {
+    // SET n:Message should auto-create the label with the correct name
+    // even when Message was not pre-registered in the catalog.
+    auto r1 = execSync(*executor_, "CREATE (n:Person) SET n:Message");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:Message) RETURN labels(n)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<ListValue>(r2.rows[0][0]));
+    auto labels = std::get<ListValue>(r2.rows[0][0]);
+    bool has_message = false;
+    bool has_empty = false;
+    for (const auto& elem : labels.elements) {
+        if (std::holds_alternative<std::string>(elem.value)) {
+            const auto& name = std::get<std::string>(elem.value);
+            if (name == "Message")
+                has_message = true;
+            if (name.empty())
+                has_empty = true;
+        }
+    }
+    EXPECT_TRUE(has_message);
+    EXPECT_FALSE(has_empty);
+}
+
 TEST_F(QueryExecutorMultiLabelTest, RemoveVertexLabel) {
     // CREATE (n:Person), SET n:Employee, then REMOVE n:Employee
     auto r1 = execSync(*executor_, "CREATE (n:Person) SET n:Employee");
