@@ -516,6 +516,37 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const CsvFileInfo& fi, c
     // Pre-create row-level labels from the :LABEL column so multi-label batch
     // insertion never hits "Label not found" during the data pass.
     if (schema.label_col >= 0) {
+        std::vector<thrift_service::PropertyDefThrift> label_props;
+        for (const auto& pi : schema.properties) {
+            thrift_service::PropertyDefThrift pd;
+            pd.name() = pi.name;
+            switch (pi.type) {
+            case CsvColumnType::INT64:
+                pd.type() = thrift_service::PropertyType::INT64;
+                break;
+            case CsvColumnType::DOUBLE:
+                pd.type() = thrift_service::PropertyType::DOUBLE;
+                break;
+            case CsvColumnType::STRING:
+                pd.type() = thrift_service::PropertyType::STRING;
+                break;
+            case CsvColumnType::BOOL:
+                pd.type() = thrift_service::PropertyType::BOOL;
+                break;
+            case CsvColumnType::STRING_ARRAY:
+                pd.type() = thrift_service::PropertyType::STRING_ARRAY;
+                break;
+            case CsvColumnType::INT64_ARRAY:
+                pd.type() = thrift_service::PropertyType::INT64_ARRAY;
+                break;
+            case CsvColumnType::DOUBLE_ARRAY:
+                pd.type() = thrift_service::PropertyType::DOUBLE_ARRAY;
+                break;
+            }
+            pd.is_required() = false;
+            label_props.push_back(std::move(pd));
+        }
+
         std::ifstream pre(fi.path);
         std::string pre_header;
         if (std::getline(pre, pre_header)) {
@@ -530,7 +561,7 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const CsvFileInfo& fi, c
                 }
             }
             for (const auto& row_label : row_labels)
-                client.createLabel(row_label, {}, "default");
+                client.createLabel(row_label, label_props, "default");
         }
     }
 

@@ -186,3 +186,54 @@ Neo4j 原版 `(m:Message {id:$messageId})` 会命中 `Message(id)` 约束索引�
 | complex-3 | 多 Expand/LeftJoin + 缺 join order/边索引 | join order 调优、varlen 剪枝 |
 | complex-13 | 无 shortestPath 算子，近似算法固有开销 | 实现 shortestPath |
 
+
+## 7. Loader 多标签改造后复测（原版 LDBC 查询，CLI 导入 converted 数据集）
+
+> 日期：2026-09-06
+> 分支：`feature/loader-multi-label-import`
+> 数据：`neo4j-local/import-converted`（Neo4j import 风格表头）
+> 导入方式：`eugraph-loader --nodes=... --relationships=... --delimiter '|'`
+> 时间口径：单次、未预热；未注明“改写”的均为 **LDBC 原版查询文本**（关系类型 `HAS_CREATOR` 等、`:Message` 标签均直接可用）。
+
+### 7.1 导入校验
+
+| 校验项 | 结果 |
+|---|---|
+| 节点数 | 327,588 ✅ |
+| 边数 | 1,477,965 ✅ |
+| Comment / Post | 151,043 / 135,701 ✅ |
+| Message（多标签） | 286,744 ✅ |
+| City / Country / Company / University（`:LABEL`） | 1343 / 111 / 1575 / 6380 ✅ |
+| 关系类型 `HAS_CREATOR` / `KNOWS` | 151,043 / 14,073 ✅ |
+
+导入后已创建与 Neo4j 侧一致的查询索引：`Message(creationDate)`、`Post(creationDate)`、`Country(name)`、`Tag(name)`、`TagClass(name)`、`Person(firstName)`；loader 已为每个标签创建 `id` 唯一索引。
+
+### 7.2 原版查询执行结果（EuGraph，CLI 导入数据）
+
+| Query | 行数 | 耗时(ms) | 备注 |
+|-------|-----:|---------:|------|
+| complex-2  | 20 | 36.5 | 原版，正常 |
+| complex-8  | 20 | 123.6 | 原版，正常 |
+| complex-9  | 超时 | >40000 | 原版，超时；未继续等待 |
+| complex-11 | 10 | 163.6 | 原版，正常 |
+| complex-12 | 1 | 9.6 | 原版；结果为空 tagNames/replyCount=0，与 Neo4j 原版（2 行）不一致，待查 |
+| short-1 | 1 | 39.6 | 原版，正常 |
+| short-2 | 10 | 8341.2 | 原版，慢（Neo4j 63.2ms） |
+| short-3 | 3 | 6.6 | 原版，正常 |
+| short-4 | 1 | 1774.5 | 原版，慢（Neo4j 25.6ms） |
+| short-5 | 1 | 492.8 | 原版，慢（Neo4j 26.5ms） |
+| short-6 | 1 | 496.0 | 原版，慢（Neo4j 48.5ms） |
+| short-7 | 0 | 510.8 | 原版，慢（Neo4j 67.9ms） |
+
+### 7.3 未执行 / 不适用
+
+- complex-3、complex-7：按你的要求本轮未执行，避免机器卡死。
+- complex-1、complex-13：原版依赖 `shortestPath`，EuGraph 尚不支持。
+- complex-10：原版依赖 pattern comprehension，EuGraph 尚不支持。
+- complex-14：原版依赖 `allShortestPaths` + `reduce`，EuGraph 尚不支持。
+
+### 7.4 结论
+
+- Loader 多标签 + CLI 映射 + Neo4j 表头解析已生效：**原版 LDBC 查询无需改写关系类型和 `:Message` 标签**。
+- 能执行的查询中，Q2/Q8/Q11 已经接近或优于 Neo4j；short-2/4/5/6/7 仍明显慢于 Neo4j，是需要继续优化的重点。
+- Q12 结果不一致（空结果），需要单独排查正确性问题。
