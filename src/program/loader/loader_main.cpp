@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,35 +16,63 @@ static void printUsage() {
     fmt::print("  --host                Server address (default: 127.0.0.1)\n");
     fmt::print("  --port                Server port (default: 9090)\n");
     fmt::print("  --data-dir            Path to CSV data directory\n");
+    fmt::print("  --nodes=Label[:Label...]=file    Explicit vertex file mapping (repeatable)\n");
+    fmt::print("  --relationships=TYPE=file        Explicit edge file mapping (repeatable)\n");
+    fmt::print("  --delimiter           CSV delimiter (default: '|'; only '|' supported)\n");
     fmt::print("  --batch-size          Records per RPC batch (default: 500)\n");
     fmt::print("  --eventbase-threads   Number of EventBase/RPC client threads (default: 1)\n");
     fmt::print("  --concurrency         Max parallel CSV file loading tasks (default: 1)\n");
     fmt::print("  --loader-concurrency  Alias of --concurrency\n");
 }
 
+static std::string resolvePath(const std::string& data_dir, const std::string& file) {
+    std::filesystem::path p(file);
+    if (p.is_absolute())
+        return file;
+    return (std::filesystem::path(data_dir) / p).string();
+}
+
 int main(int argc, char* argv[]) {
-    // Parse our args before folly::Init to avoid gflags conflicts
     std::string host = "127.0.0.1";
     int port = 9090;
     std::string data_dir;
     int batch_size = 500;
     int eventbase_threads = 1;
     int concurrency = 1;
+    std::vector<std::string> node_specs;
+    std::vector<std::string> rel_specs;
+    std::string delimiter = "|";
+
+    auto take_value = [&](int& i, const std::string& arg) -> std::string {
+        if (arg.find('=') != std::string::npos) {
+            return arg.substr(arg.find('=') + 1);
+        }
+        if (i + 1 < argc) {
+            return argv[++i];
+        }
+        return "";
+    };
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if (arg == "--host" && i + 1 < argc) {
-            host = argv[++i];
-        } else if (arg == "--port" && i + 1 < argc) {
-            port = std::stoi(argv[++i]);
-        } else if (arg == "--data-dir" && i + 1 < argc) {
-            data_dir = argv[++i];
-        } else if (arg == "--batch-size" && i + 1 < argc) {
-            batch_size = std::stoi(argv[++i]);
-        } else if ((arg == "--eventbase-threads" || arg == "--rpc-threads") && i + 1 < argc) {
-            eventbase_threads = std::stoi(argv[++i]);
-        } else if ((arg == "--concurrency" || arg == "--loader-concurrency") && i + 1 < argc) {
-            concurrency = std::stoi(argv[++i]);
+        if (arg.rfind("--host", 0) == 0) {
+            host = take_value(i, arg);
+        } else if (arg.rfind("--port", 0) == 0) {
+            port = std::stoi(take_value(i, arg));
+        } else if (arg.rfind("--data-dir", 0) == 0) {
+            data_dir = take_value(i, arg);
+        } else if (arg.rfind("--batch-size", 0) == 0) {
+            batch_size = std::stoi(take_value(i, arg));
+        } else if (arg.rfind("--eventbase-threads", 0) == 0 || arg.rfind("--rpc-threads", 0) == 0) {
+            eventbase_threads = std::stoi(take_value(i, arg));
+        } else if (arg.rfind("--concurrency", 0) == 0 || arg.rfind("--loader-concurrency", 0) == 0) {
+            concurrency = std::stoi(take_value(i, arg));
+        } else if (arg.rfind("--nodes", 0) == 0) {
+            node_specs.push_back(take_value(i, arg));
+        } else if (arg.rfind("--relationships", 0) == 0) {
+            rel_specs.push_back(take_value(i, arg));
+        } else if (arg.rfind("--delimiter", 0) == 0) {
+            delimiter = take_value(i, arg);
         } else if (arg == "--help") {
             printUsage();
             return 0;
@@ -55,38 +84,62 @@ int main(int argc, char* argv[]) {
         printUsage();
         return 1;
     }
+    if (delimiter != "|") {
+        fmt::print(stderr, "Error: only '|' delimiter is currently supported\n");
+        return 1;
+    }
     if (batch_size <= 0 || eventbase_threads <= 0 || concurrency <= 0) {
         fmt::print(stderr, "Error: --batch-size/--eventbase-threads/--concurrency must be positive\n");
         return 1;
     }
 
-    // folly::Init only needs program name; our custom flags confuse gflags
     int folly_argc = 1;
     folly::Init init(&folly_argc, &argv);
-
     spdlog::set_level(spdlog::level::info);
 
-    // Step 1: Scan and classify CSV files
-    spdlog::info("[loader] Scanning CSV files in: {}", data_dir);
-    auto files = eugraph::loader::scanCsvFiles(data_dir);
-
     std::vector<eugraph::loader::CsvFileInfo> vertex_files, edge_files;
-    for (const auto& f : files) {
-        if (f.is_vertex) {
-            vertex_files.push_back(f);
-        } else {
-            edge_files.push_back(f);
+
+    if (!node_specs.empty() || !rel_specs.empty()) {
+        spdlog::info("[loader] CLI mode: {} node specs, {} relationship specs", node_specs.size(), rel_specs.size());
+        for (const auto& spec : node_specs) {
+            eugraph::loader::CsvFileInfo info;
+            std::string error;
+            if (!eugraph::loader::parseNodeSpec(spec, info, error)) {
+                spdlog::error("[loader] {}", error);
+                return 1;
+            }
+            info.path = resolvePath(data_dir, info.path.string());
+            vertex_files.push_back(std::move(info));
+        }
+        for (const auto& spec : rel_specs) {
+            eugraph::loader::CsvFileInfo info;
+            std::string error;
+            if (!eugraph::loader::parseRelationshipSpec(spec, info, error)) {
+                spdlog::error("[loader] {}", error);
+                return 1;
+            }
+            info.path = resolvePath(data_dir, info.path.string());
+            edge_files.push_back(std::move(info));
+        }
+    } else {
+        spdlog::info("[loader] Scanning CSV files in: {}", data_dir);
+        auto files = eugraph::loader::scanCsvFiles(data_dir);
+        for (const auto& f : files) {
+            if (f.is_vertex) {
+                vertex_files.push_back(f);
+            } else {
+                edge_files.push_back(f);
+            }
         }
     }
+
     spdlog::info("[loader] Found {} vertex files, {} edge files", vertex_files.size(), edge_files.size());
 
-    // Step 2: Build schemas
     auto label_schemas = eugraph::loader::buildLabelSchemas(vertex_files);
     auto edge_schemas = eugraph::loader::buildEdgeTypeSchemas(edge_files);
-    spdlog::info("[loader] {} labels, {} edge types", label_schemas.size(), edge_schemas.size());
+    auto merged_label_props = eugraph::loader::buildMergedLabelProperties(label_schemas);
+    spdlog::info("[loader] {} vertex files, {} edge types", label_schemas.size(), edge_schemas.size());
 
-    // Step 3: Connect to server. The first client is used for DDL and indexes;
-    // additional clients are used only for parallel data loading.
     eugraph::shell::EuGraphRpcClient client(host, port);
     if (!client.connect()) {
         spdlog::error("[loader] Failed to connect to server at {}:{}", host, port);
@@ -110,24 +163,21 @@ int main(int argc, char* argv[]) {
     spdlog::info("[loader] Connected to {}:{} with {} EventBase client(s), concurrency={}", host, port, clients.size(),
                  concurrency);
 
-    // Step 4: Create labels and edge labels
     spdlog::info("[loader] Creating labels...");
     eugraph::loader::createLabels(client, label_schemas);
     spdlog::info("[loader] Creating edge labels...");
     eugraph::loader::createEdgeLabels(client, edge_schemas);
 
-    // Step 5: Load vertex data
     spdlog::info("[loader] Loading vertex data...");
-    auto id_map = eugraph::loader::loadVertices(clients, vertex_files, label_schemas, batch_size, concurrency);
-    spdlog::info("[loader] Vertex loading complete. {} labels in ID map", id_map.size());
+    auto id_maps = eugraph::loader::loadVertices(clients, vertex_files, label_schemas, merged_label_props, batch_size,
+                                                 concurrency);
+    spdlog::info("[loader] Vertex loading complete. {} groups in ID map", id_maps.group_id_map.size());
 
-    // Step 5.5: Create unique indexes on ID properties
     spdlog::info("[loader] Creating unique indexes on ID properties...");
     eugraph::loader::createUniqueIdIndexes(client, label_schemas);
 
-    // Step 6: Load edge data
     spdlog::info("[loader] Loading edge data...");
-    eugraph::loader::loadEdges(clients, edge_files, edge_schemas, id_map, batch_size, concurrency);
+    eugraph::loader::loadEdges(clients, edge_files, edge_schemas, id_maps, batch_size, concurrency);
     spdlog::info("[loader] Edge loading complete.");
 
     spdlog::info("[loader] All data loaded successfully.");

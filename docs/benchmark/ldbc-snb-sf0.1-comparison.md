@@ -186,3 +186,96 @@ Neo4j 原版 `(m:Message {id:$messageId})` 会命中 `Message(id)` 约束索引�
 | complex-3 | 多 Expand/LeftJoin + 缺 join order/边索引 | join order 调优、varlen 剪枝 |
 | complex-13 | 无 shortestPath 算子，近似算法固有开销 | 实现 shortestPath |
 
+
+## 7. Loader 多标签改造后复测（原版 LDBC 查询，CLI 导入 converted 数据集）
+
+> 日期：2026-09-06
+> 分支：`feature/loader-multi-label-import`
+> 数据：`neo4j-local/import-converted`（Neo4j import 风格表头）
+> 导入方式：`eugraph-loader --nodes=... --relationships=... --delimiter '|'`
+> 时间口径：单次、未预热；未注明“改写”的均为 **LDBC 原版查询文本**（关系类型 `HAS_CREATOR` 等、`:Message` 标签均直接可用）。
+
+### 7.1 导入校验
+
+| 校验项 | 结果 |
+|---|---|
+| 节点数 | 327,588 ✅ |
+| 边数 | 1,477,965 ✅ |
+| Comment / Post | 151,043 / 135,701 ✅ |
+| Message（多标签） | 286,744 ✅ |
+| City / Country / Company / University（`:LABEL`） | 1343 / 111 / 1575 / 6380 ✅ |
+| 关系类型 `HAS_CREATOR` / `KNOWS` | 151,043 / 14,073 ✅ |
+
+导入后已创建与 Neo4j 侧一致的查询索引：`Message(creationDate)`、`Post(creationDate)`、`Country(name)`、`Tag(name)`、`TagClass(name)`、`Person(firstName)`；loader 已为每个标签创建 `id` 唯一索引。
+
+### 7.2 原版查询执行结果（EuGraph，CLI 导入数据）
+
+| Query | 行数 | 耗时(ms) | 备注 |
+|-------|-----:|---------:|------|
+| complex-2  | 20 | 36.5 | 原版，正常 |
+| complex-3  | 0 | 11.2 | 原版；返回 0 行，Neo4j 为 1 行（friendId=987），正确性待查 |
+| complex-7  | ERR | 3.6 | 原版；SyntaxError: UnexpectedSyntax，疑似 `not((liker)-[:KNOWS]-(person))` 模式谓词不支持 |
+| complex-8  | 20 | 123.6 | 原版，正常 |
+| complex-9  | 超时 | >40000 | 原版，超时；未继续等待 |
+| complex-11 | 10 | 163.6 | 原版，正常 |
+| complex-12 | 1 | 9.6 | 原版；结果为空 tagNames/replyCount=0，与 Neo4j 原版（2 行）不一致，待查 |
+| short-1 | 1 | 39.6 | 原版，正常 |
+| short-2 | 10 | 8341.2 | 原版，慢（Neo4j 63.2ms） |
+| short-3 | 3 | 6.6 | 原版，正常 |
+| short-4 | 1 | 1774.5 | 原版，慢（Neo4j 25.6ms） |
+| short-5 | 1 | 492.8 | 原版，慢（Neo4j 26.5ms） |
+| short-6 | 1 | 496.0 | 原版，慢（Neo4j 48.5ms） |
+| short-7 | 0 | 510.8 | 原版，慢（Neo4j 67.9ms） |
+
+### 7.3 未执行 / 不适用
+
+- complex-1、complex-13：原版依赖 `shortestPath`，EuGraph 尚不支持。
+- complex-10：原版依赖 pattern comprehension，EuGraph 尚不支持。
+- complex-14：原版依赖 `allShortestPaths` + `reduce`，EuGraph 尚不支持。
+
+### 7.4 结论
+
+- Loader 多标签 + CLI 映射 + Neo4j 表头解析已生效：**原版 LDBC 查询无需改写关系类型和 `:Message` 标签**。
+- 能执行的查询中，Q2/Q8/Q11 已经接近或优于 Neo4j；short-2/4/5/6/7 仍明显慢于 Neo4j，是需要继续优化的重点。
+- Q12 结果不一致（空结果），需要单独排查正确性问题。
+
+### 7.5 Q3 与 Q12 排查结论（2026-09-06）
+
+**Q3 返回 0 行的根因**：
+
+- 复现：`MATCH (c:Country {name:'Germany'}) WITH c MATCH (n) RETURN count(*)` 返回 0；而 `MATCH (c:Country) WITH c MATCH (n) RETURN count(*)` 返回 36,362,268。
+- 差异点：`Country(name)` 走 IndexScan。IndexScan 命中后，`WITH c` 需要把整顶点物化；但对“行级标签”（City/Country 等通过 `:LABEL` 追加的标签）上的 IndexScan，整顶点物化（`RETURN c`、`labels(c)`）会丢行；`RETURN c.id` 等属性投影则正常。
+- 影响：Q3 第一步 `MATCH (countryX:Country {name:...}) ... WITH countryX, countryY ...` 中 `WITH` 拿不到整顶点，所以后续 MATCH 输入为空，最终返回 0 行。
+- 同类现象：`MATCH (x:Message {id:...}) RETURN x` 也返回空（Message 是 Comment/Post 的追加标签），而 `RETURN x.id` 正常。
+
+**Q12 结果不一致的根因**：
+
+- 复现：`WITH collect(tag.id) AS tags` 之后的第二个 MATCH，`count(*)` 有行，但投影 `friend.firstName`、`tag2.name` 等属性全为 `null`。
+- 对比：同一个查询在 Neo4j 上返回 2 行，属性正常（Tom_Cruise / Jackie_Chan）。
+- 差异点：同样与“WITH 之后 MATCH 的 ProjectionExtract”相关：WITH 携带 list 后，后续 MATCH 的属性物化没有正确回填到输出列。
+- 这解释了 Q12 在 EuGraph 上出现 `tagNames=[]`、`replyCount=0`（聚合前的输入列是 null）。
+
+**初步结论**：Q3/Q12 的正确性问题不是 loader 数据错误，而是查询引擎在 **IndexScan 后的整顶点物化** 与 **WITH 后 MATCH 的属性物化** 两个场景存在缺陷；建议下一步优先修 ProjectionExtract / IndexScan 对追加标签的整顶点物化。
+
+### 7.6 行级标签优先 + 原版标签顺序复测（2026-09-06 晚）
+
+> 导入调整：`Place`/`Organisation` 的 `:LABEL` 行级标签排到主标签位；`Comment`/`Post` 保持 Neo4j 原版顺序 `Comment:Message`、`Post:Message`（属性仍存放在 Comment/Post 下，不做属性复制）。
+
+导入后验证：
+- `MATCH (p:Post) RETURN p` 属性顺序正确；
+- `MATCH (c:Country {name:'Germany'}) RETURN c` 能返回整顶点；
+- `MATCH (c:Country {name:'Germany'}) WITH c MATCH (n) RETURN count(*)` 正常（327588）。
+
+本轮结果：
+
+| Query | 行数 | 耗时(ms) | 备注 |
+|-------|-----:|---------:|------|
+| complex-4（原版） | 10 | 4140 | 与 Neo4j 原版结果一致 |
+| short-4（改写 UNION ALL） | 1 | 1740 | 结果正确；仍慢，计划为 LabelScan+Filter，未走 id 索引 |
+| short-5（改写 UNION ALL） | 1 | 480 | 结果正确；同上 |
+| short-6（改写 UNION ALL） | 1 | 480 | 结果正确；同上 |
+| short-7（改写 UNION ALL） | 0 | 470 | 结果正确；同上 |
+
+说明：short-4~7 改写为 `UNION ALL` 两个标签扫描（Comment / Post）后结果正确，但 `EXPLAIN` 显示 `{id:...}` 过滤仍走 `LabelScan + Filter`，因为 `ProjectionExtract` 插在 `Filter` 和 `LabelScan` 之间，`Filter(LabelScan) -> IndexScan` 的优化没有触发。这是后续需要修的 planner/优化器问题。
+
+Q3 原版本轮未重跑（避免重查询）。Q12 仍受 WITH 后 MATCH 属性物化缺陷影响，结果仍为空。

@@ -259,17 +259,21 @@ THRIFT_DATA_MEMBER const std::array<int, 4> TStructDataStorage<::eugraph::thrift
 }};
 
 THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift_service::VertexRecord>::name = "VertexRecord";
-THRIFT_DATA_MEMBER const std::array<std::string_view, 1> TStructDataStorage<::eugraph::thrift_service::VertexRecord>::fields_names = { {
+THRIFT_DATA_MEMBER const std::array<std::string_view, 2> TStructDataStorage<::eugraph::thrift_service::VertexRecord>::fields_names = { {
   "properties"sv,
+  "labels"sv,
 }};
-THRIFT_DATA_MEMBER const std::array<int16_t, 1> TStructDataStorage<::eugraph::thrift_service::VertexRecord>::fields_ids = { {
+THRIFT_DATA_MEMBER const std::array<int16_t, 2> TStructDataStorage<::eugraph::thrift_service::VertexRecord>::fields_ids = { {
   1,
+  2,
 }};
-THRIFT_DATA_MEMBER const std::array<protocol::TType, 1> TStructDataStorage<::eugraph::thrift_service::VertexRecord>::fields_types = { {
+THRIFT_DATA_MEMBER const std::array<protocol::TType, 2> TStructDataStorage<::eugraph::thrift_service::VertexRecord>::fields_types = { {
+  TType::T_LIST,
   TType::T_LIST,
 }};
-THRIFT_DATA_MEMBER const std::array<int, 1> TStructDataStorage<::eugraph::thrift_service::VertexRecord>::isset_indexes = { {
+THRIFT_DATA_MEMBER const std::array<int, 2> TStructDataStorage<::eugraph::thrift_service::VertexRecord>::isset_indexes = { {
   0,
+  1,
 }};
 
 THRIFT_DATA_MEMBER const std::string_view TStructDataStorage<::eugraph::thrift_service::EdgeRecord>::name = "EdgeRecord";

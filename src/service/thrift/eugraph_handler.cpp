@@ -1069,6 +1069,8 @@ EuGraphHandler::co_batchInsertVertices(std::unique_ptr<std::string> label_name,
         for (const auto& pv : *rec.properties()) {
             entry.props.push_back(thriftToPropertyValue(pv));
         }
+        for (const auto& label : *rec.labels())
+            entry.extra_labels.push_back(label);
         entries.push_back(std::move(entry));
     }
 

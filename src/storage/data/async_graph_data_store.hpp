@@ -701,12 +701,13 @@ public:
 
     // ==================== Batch Write ====================
 
-    folly::coro::Task<void> batchInsertVertices(LabelId label_id, std::vector<BatchVertexEntry> entries) override {
-        co_await io_.dispatchVoid([this, label_id, entries = std::move(entries)]() {
+    folly::coro::Task<void> batchInsertVertices(std::vector<BatchVertexEntry> entries) override {
+        co_await io_.dispatchVoid([this, entries = std::move(entries)]() {
             auto txn = store_.beginTransaction();
             for (const auto& e : entries) {
-                std::pair<LabelId, Properties> lp{label_id, e.props};
-                store_.insertVertex(txn, e.vid, std::span<const std::pair<LabelId, Properties>>{&lp, 1});
+                store_.insertVertex(
+                    txn, e.vid,
+                    std::span<const std::pair<LabelId, Properties>>{e.label_props.data(), e.label_props.size()});
             }
             store_.commitTransaction(txn);
         });
