@@ -489,7 +489,7 @@ def main():
         shutil.rmtree(args.data_dir)
 
     # ---- Start server ----
-    server_cmd = [args.server_bin, "--port", str(args.port),
+    server_cmd = [args.server_bin, "--port", str(args.port), "--bolt-port", "0",
                   "--data-dir", args.data_dir]
     print(f"[run_tck] Starting server: {' '.join(server_cmd)}", flush=True)
 

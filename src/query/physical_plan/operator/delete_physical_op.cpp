@@ -3,6 +3,8 @@
 #include "query/dataset/row.hpp"
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/expression_compiler.hpp"
+#include "query/physical_plan/operator/edge_index_maintenance.hpp"
+#include "query/physical_plan/operator/vertex_index_maintenance.hpp"
 
 #include <stdexcept>
 #include <unordered_set>
@@ -138,9 +140,13 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
             for (const auto& entity : entities) {
                 if (!entity.is_edge)
                     continue;
-                if (deleted_edges.insert(entity.edge_id).second)
+                if (deleted_edges.insert(entity.edge_id).second) {
+                    auto edge_index_entries = co_await collectEdgeIndexEntries(store_, edge_label_defs_, entity.edge_id,
+                                                                               entity.edge_label_id);
+                    co_await deleteEdgeIndexEntries(store_, edge_index_entries);
                     co_await store_.deleteEdge(entity.edge_id, entity.edge_label_id, entity.edge_src, entity.edge_dst,
                                                entity.seq);
+                }
             }
 
             // Pass 2: delete vertices.
@@ -191,6 +197,8 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
                         throw std::runtime_error("ConstraintVerificationFailed: DeleteConnectedNode: "
                                                  "node has connected edges");
                 }
+                auto index_entries = co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+                co_await deleteVertexIndexEntries(store_, index_entries);
                 co_await store_.deleteVertex(vid);
             }
 

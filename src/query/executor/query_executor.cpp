@@ -334,38 +334,86 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
             result.error = "Label not found: " + stmt.label_name;
             co_return;
         }
-        // Resolve all property names to property IDs
-        std::vector<uint16_t> prop_ids;
-        for (const auto& pn : stmt.property_names) {
-            bool found = false;
-            for (const auto& p : label_def->properties) {
-                if (p.name == pn) {
-                    prop_ids.push_back(p.id);
-                    found = true;
-                    break;
+
+        std::vector<IndexAccessorDef> accessors;
+        for (const auto& src : stmt.accessors) {
+            IndexAccessorDef acc;
+            acc.is_strong = src.is_strong;
+            acc.property_name = src.property_name;
+            if (src.is_strong) {
+                auto source_opt = co_await async_meta_.getLabelId(src.source_label);
+                if (!source_opt.has_value()) {
+                    result.error = "Source label not found: " + src.source_label;
+                    co_return;
                 }
+                acc.source_label_id = *source_opt;
             }
-            if (!found) {
-                result.error = "Property not found: " + pn;
-                co_return;
-            }
+            accessors.push_back(std::move(acc));
+        }
+        if (accessors.empty()) {
+            result.error = "Index has no property accessors";
+            co_return;
         }
 
-        bool ok =
-            co_await async_meta_.createVertexIndex(stmt.index_name, stmt.label_name, stmt.property_names, stmt.unique);
+        bool ok = co_await async_meta_.createVertexIndexWithAccessors(stmt.index_name, stmt.label_name, accessors,
+                                                                      stmt.unique);
         if (!ok) {
             result.error = "Failed to create index (duplicate name?)";
             co_return;
         }
 
-        auto table = vidxCompositeTable(label_def->id, prop_ids);
+        const auto& schema = async_meta_.schema();
+        auto idx_def = schema.findIndexByName(stmt.index_name);
+        if (!idx_def) {
+            result.error = "Created index not found in schema: " + stmt.index_name;
+            co_return;
+        }
+
+        auto table = vidxTableById(idx_def->index_id);
         ok = co_await async_data_.createIndex(table);
         if (!ok) {
             result.error = "Failed to create index storage table";
             co_return;
         }
 
-        // Backfill: scan existing vertices and insert composite index entries
+        // Pre-resolve strong accessors to prop ids.
+        struct ResolvedAccessor {
+            bool is_strong;
+            LabelId source_label_id;
+            uint16_t source_prop_id;
+            std::string property_name;
+        };
+        std::vector<ResolvedAccessor> resolved;
+        for (const auto& acc : idx_def->accessors) {
+            ResolvedAccessor ra;
+            ra.is_strong = acc.is_strong;
+            ra.property_name = acc.property_name;
+            ra.source_label_id = acc.source_label_id;
+            ra.source_prop_id = UINT16_MAX;
+            if (acc.is_strong) {
+                auto src = schema.getLabel(acc.source_label_id);
+                if (!src) {
+                    result.error = "Source label not found for index '" + stmt.index_name + "'";
+                    co_return;
+                }
+                bool found = false;
+                for (const auto& pd : src->properties) {
+                    if (pd.name == acc.property_name) {
+                        ra.source_prop_id = pd.id;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    result.error =
+                        "Property not found in source label for index '" + stmt.index_name + "': " + acc.property_name;
+                    co_return;
+                }
+            }
+            resolved.push_back(std::move(ra));
+        }
+
+        // Backfill.
         bool hasConflict = false;
         {
             GraphTxnHandle txn = co_await async_data_.beginTran();
@@ -375,20 +423,64 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 auto gen = async_data_.scanVerticesByLabel(label_def->id);
                 while (auto batch = co_await gen.next()) {
                     for (auto vid : *batch) {
-                        auto props_opt = co_await async_data_.getVertexProperties(vid, label_def->id);
-                        if (!props_opt.has_value())
-                            continue;
-                        auto& props = *props_opt;
-                        // Collect all indexed property values; skip if any is missing
                         std::vector<PropertyValue> values;
                         bool allPresent = true;
-                        for (auto pid : prop_ids) {
-                            if (pid < props.size() && props[pid].has_value()) {
-                                values.push_back(props[pid].value());
+                        bool conflict = false;
+
+                        auto vertex_labels = co_await async_data_.getVertexLabels(vid);
+                        for (const auto& ra : resolved) {
+                            if (ra.is_strong) {
+                                auto props_opt = co_await async_data_.getVertexProperties(vid, ra.source_label_id);
+                                if (!props_opt || ra.source_prop_id >= props_opt->size() ||
+                                    !(*props_opt)[ra.source_prop_id].has_value()) {
+                                    allPresent = false;
+                                    break;
+                                }
+                                values.push_back((*props_opt)[ra.source_prop_id].value());
                             } else {
-                                allPresent = false;
-                                break;
+                                std::optional<PropertyValue> found_value;
+                                for (LabelId lid : vertex_labels) {
+                                    auto lab = schema.getLabel(lid);
+                                    if (!lab)
+                                        continue;
+                                    uint16_t pid = UINT16_MAX;
+                                    for (const auto& pd : lab->properties) {
+                                        if (pd.name == ra.property_name) {
+                                            pid = pd.id;
+                                            break;
+                                        }
+                                    }
+                                    if (pid == UINT16_MAX)
+                                        continue;
+                                    auto props_opt = co_await async_data_.getVertexProperties(vid, lid);
+                                    if (!props_opt || pid >= props_opt->size() || !(*props_opt)[pid].has_value())
+                                        continue;
+                                    const auto& candidate = (*props_opt)[pid].value();
+                                    if (found_value.has_value()) {
+                                        if (!(found_value.value() == candidate)) {
+                                            conflict = true;
+                                            break;
+                                        }
+                                    } else {
+                                        found_value = candidate;
+                                    }
+                                }
+                                if (conflict) {
+                                    spdlog::warn("Index '{}' weak accessor '{}' has conflicting values on vertex {}",
+                                                 stmt.index_name, ra.property_name, vid);
+                                    break;
+                                }
+                                if (!found_value.has_value()) {
+                                    allPresent = false;
+                                    break;
+                                }
+                                values.push_back(found_value.value());
                             }
+                        }
+
+                        if (conflict) {
+                            hasConflict = true;
+                            break;
                         }
                         if (!allPresent)
                             continue;
@@ -414,7 +506,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
 
         if (hasConflict) {
             ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
-            result.error = "Unique index creation failed: duplicate values found during backfill";
+            result.error = "Index creation failed: conflicting values or duplicate values during backfill";
             co_return;
         }
 
@@ -437,7 +529,9 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         }
         // Resolve all property names to property IDs
         std::vector<uint16_t> prop_ids;
-        for (const auto& pn : stmt.property_names) {
+        std::vector<std::string> prop_names;
+        for (const auto& acc : stmt.accessors) {
+            const auto& pn = acc.property_name;
             bool found = false;
             for (const auto& p : edge_label_def->properties) {
                 if (p.name == pn) {
@@ -450,10 +544,10 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 result.error = "Property not found: " + pn;
                 co_return;
             }
+            prop_names.push_back(pn);
         }
 
-        bool ok =
-            co_await async_meta_.createEdgeIndex(stmt.index_name, stmt.label_name, stmt.property_names, stmt.unique);
+        bool ok = co_await async_meta_.createEdgeIndex(stmt.index_name, stmt.label_name, prop_names, stmt.unique);
         if (!ok) {
             result.error = "Failed to create edge index (duplicate name?)";
             co_return;
@@ -535,11 +629,19 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         result.rows.push_back(std::move(row));
 
     } else if (stmt.type == IndexDdlStatement::DROP_INDEX) {
+        const auto& schema = async_meta_.schema();
+        auto idx_def = schema.findIndexByName(stmt.index_name);
+        std::string new_table;
+        if (idx_def && idx_def->index_id != 0)
+            new_table = vidxTableById(idx_def->index_id);
+
         bool ok = co_await async_meta_.dropIndex(stmt.index_name);
         if (!ok) {
             result.error = "Failed to drop index: " + stmt.index_name;
             co_return;
         }
+        if (!new_table.empty())
+            co_await async_data_.dropIndex(new_table);
         result.columns.push_back("result");
         Row row;
         row.push_back(std::string("Index dropped: " + stmt.index_name));

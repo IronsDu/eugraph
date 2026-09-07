@@ -155,6 +155,11 @@ public:
     scanVerticesByIndexRangeComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
                                       const std::optional<std::vector<PropertyValue>>& start,
                                       const std::optional<std::vector<PropertyValue>>& end) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexIdRange(uint32_t index_id, const std::optional<std::vector<PropertyValue>>& start,
+                               const std::optional<std::vector<PropertyValue>>& end) = 0;
 
     // Edge Index Scan
     virtual folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>

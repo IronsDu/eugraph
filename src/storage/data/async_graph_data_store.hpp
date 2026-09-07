@@ -557,6 +557,52 @@ public:
         }
     }
 
+    folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values) override {
+        constexpr size_t BATCH = 1024;
+        auto txn = txn_;
+        std::string table = vidxTableById(index_id);
+        auto vals = values;
+        while (true) {
+            std::vector<VertexId> batch;
+            co_await io_.dispatchVoid([this, txn, &table, &vals, &batch]() {
+                store_.scanIndexEquality(txn, table, vals, [&](uint64_t entity_id) {
+                    batch.push_back(entity_id);
+                    return batch.size() < BATCH;
+                });
+            });
+            if (batch.empty())
+                co_return;
+            co_yield std::move(batch);
+            if (batch.size() < BATCH)
+                co_return;
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexIdRange(uint32_t index_id, const std::optional<std::vector<PropertyValue>>& start,
+                               const std::optional<std::vector<PropertyValue>>& end) override {
+        constexpr size_t BATCH = 1024;
+        auto txn = txn_;
+        std::string table = vidxTableById(index_id);
+        auto s = start;
+        auto e = end;
+        while (true) {
+            std::vector<VertexId> batch;
+            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
+                store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
+                    batch.push_back(entity_id);
+                    return batch.size() < BATCH;
+                });
+            });
+            if (batch.empty())
+                co_return;
+            co_yield std::move(batch);
+            if (batch.size() < BATCH)
+                co_return;
+        }
+    }
+
     // ==================== Edge Index Scan ====================
 
     folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>

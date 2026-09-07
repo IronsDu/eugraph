@@ -279,3 +279,27 @@ Neo4j 原版 `(m:Message {id:$messageId})` 会命中 `Message(id)` 约束索引�
 说明：short-4~7 改写为 `UNION ALL` 两个标签扫描（Comment / Post）后结果正确，但 `EXPLAIN` 显示 `{id:...}` 过滤仍走 `LabelScan + Filter`，因为 `ProjectionExtract` 插在 `Filter` 和 `LabelScan` 之间，`Filter(LabelScan) -> IndexScan` 的优化没有触发。这是后续需要修的 planner/优化器问题。
 
 Q3 原版本轮未重跑（避免重查询）。Q12 仍受 WITH 后 MATCH 属性物化缺陷影响，结果仍为空。
+
+### 7.7 弱模式索引 + 点查优化复测（2026-09-07）
+
+> 索引改造：`Message(id)` / `Message(creationDate)` 这类标签不定义该属性也能建索引（弱模式），
+> planner 能识别列重写后的属性过滤并触发 IndexScan。
+
+导入和索引与 7.6 一致，另建 `idx_Message_id_unique`（loader 自带）与 `message_creationDate` 弱索引。
+
+结果（Bolt 7688，server 见 `/tmp/eugraph-server-dbg2.log`）：
+
+| Query | 行数 | 耗时(ms) | 说明 |
+|-------|-----:|---------:|------|
+| short-4 原版 `(m:Message {id})`（Comment id） | 1 | 6.0 | 此前 ~1770ms；计划为 IndexScan |
+| short-4 原版（Post id） | 1 | 2.1 | 计划为 IndexScan |
+| short-5 原版 | 1 | 5.2 | 此前 UNION 改写 ~480ms |
+| short-6 原版（Post id） | 1 | 4.0 | 此前 UNION 改写 ~480ms |
+
+`EXPLAIN MATCH (m:Message) WHERE m.id = ...` 已确认计划从 `Filter(ProjectionExtract(LabelScan))`
+变为 `ProjectionExtract(IndexScan)`。
+
+short-7 复测：此前 6.3/7.5 表格里 <1s 的结果用的是 **无回复 messageId=618475290625**（返回 0 行）。
+本轮该参数原版为 **18.8ms**；改用“有回复的 messageId=1030792151049”后，原版和 UNION ALL 改写版均超过 60s
+（瓶颈是 `OPTIONAL MATCH (m)-[:HAS_CREATOR]->(a:Person)-[r:KNOWS]-(p)`，与 Message 点查索引无关）。
+该查询仍需后续优化 OPTIONAL MATCH + 无方向关系模式。

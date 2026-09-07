@@ -797,19 +797,48 @@ static void collectBoundConditions(const binder::BoundExpression& pred,
 }
 
 struct BoundIndexableCondition {
-    uint16_t prop_id;
+    LabelId label_id = INVALID_LABEL_ID;
+    uint16_t prop_id = 0;
+    std::string property_name;
     cypher::BinaryOperator op;
     PropertyValue value;
 };
 
-/// Try to extract a property=value condition from a BoundBinaryOp.
-static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const binder::BoundBinaryOp& binop) {
-    if (!std::holds_alternative<std::unique_ptr<binder::BoundPropertyRef>>(binop.left))
-        return std::nullopt;
-    auto& prop_ref = std::get<std::unique_ptr<binder::BoundPropertyRef>>(binop.left);
-    if (prop_ref->candidates.empty())
-        return std::nullopt;
+/// Resolve a BoundColumnRef produced by ProjectionExtract lowering back to
+/// the property name / (label_id, prop_id) it was derived from.
+static std::optional<std::pair<std::string, std::pair<LabelId, uint16_t>>>
+resolveColumnProperty(const PlanContext& ctx, const binder::BoundColumnRef& ref) {
+    for (const auto& [canonical_slot, pe] : ctx.extraction_info) {
+        (void)canonical_slot;
+        for (size_t i = 0; i < pe.prop_slot_ids.size(); ++i) {
+            if (pe.prop_slot_ids[i] == ref.slot_id) {
+                const auto& [lid, pid] = pe.prop_order[i];
+                auto lit = ctx.label_defs.find(lid);
+                if (lit == ctx.label_defs.end())
+                    return std::nullopt;
+                for (const auto& pd : lit->second.properties) {
+                    if (pd.id == pid)
+                        return std::make_pair(pd.name, std::make_pair(lid, pid));
+                }
+                return std::nullopt;
+            }
+        }
+        for (const auto& [prop_name, co] : pe.coalesce_vertices) {
+            if (co.slot_id == ref.slot_id) {
+                LabelId lid = co.candidates.empty() ? INVALID_LABEL_ID : co.candidates[0].first;
+                uint16_t pid = co.candidates.empty() ? 0 : co.candidates[0].second;
+                return std::make_pair(prop_name, std::make_pair(lid, pid));
+            }
+        }
+    }
+    return std::nullopt;
+}
 
+/// Try to extract a property=value condition from a BoundBinaryOp.
+/// Accepts both unlowered BoundPropertyRef and the BoundColumnRef form that
+/// column-rewrite produces for flat property columns.
+static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const binder::BoundBinaryOp& binop,
+                                                                       const PlanContext& ctx) {
     if (!std::holds_alternative<binder::BoundLiteral>(binop.right))
         return std::nullopt;
     auto& lit = std::get<binder::BoundLiteral>(binop.right);
@@ -818,22 +847,61 @@ static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const bin
     if (std::holds_alternative<std::monostate>(pv))
         return std::nullopt;
 
-    return BoundIndexableCondition{prop_ref->candidates[0].prop_id, binop.op, std::move(pv)};
+    BoundIndexableCondition cond;
+    cond.op = binop.op;
+    cond.value = std::move(pv);
+
+    if (std::holds_alternative<std::unique_ptr<binder::BoundPropertyRef>>(binop.left)) {
+        auto& prop_ref = std::get<std::unique_ptr<binder::BoundPropertyRef>>(binop.left);
+        if (prop_ref->candidates.empty())
+            return std::nullopt;
+        cond.label_id = prop_ref->candidates[0].label_id;
+        cond.prop_id = prop_ref->candidates[0].prop_id;
+        cond.property_name = prop_ref->property_name;
+        return cond;
+    }
+
+    if (std::holds_alternative<binder::BoundColumnRef>(binop.left)) {
+        auto resolved = resolveColumnProperty(ctx, std::get<binder::BoundColumnRef>(binop.left));
+        if (!resolved)
+            return std::nullopt;
+        cond.property_name = resolved->first;
+        cond.label_id = resolved->second.first;
+        cond.prop_id = resolved->second.second;
+        return cond;
+    }
+
+    return std::nullopt;
 }
 
 std::optional<PlanOperatorResult>
 PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                                    const std::vector<const binder::BoundBinaryOp*>& conditions, LabelId label_id,
                                    const LabelDef& label_def, IAsyncGraphDataStore& store, PlanContext& ctx) {
-    std::unordered_map<uint16_t, BoundIndexableCondition> prop_conditions;
+    std::unordered_map<std::string, BoundIndexableCondition> prop_conditions;
     for (auto* cond : conditions) {
-        auto extracted = tryExtractBoundCondition(*cond);
+        auto extracted = tryExtractBoundCondition(*cond, ctx);
         if (extracted.has_value())
-            prop_conditions[extracted->prop_id] = std::move(*extracted);
+            prop_conditions[extracted->property_name] = std::move(*extracted);
     }
 
     if (prop_conditions.empty())
         return std::nullopt;
+
+    using ScanMode = IndexScanPhysicalOp::ScanMode;
+    auto make_index_scan = [&](const LabelDef::IndexDef& idx, ScanMode mode, std::vector<PropertyValue> eq_values,
+                               std::optional<std::vector<PropertyValue>> range_start,
+                               std::optional<std::vector<PropertyValue>> range_end,
+                               std::vector<binder::BoundType> output_types) -> std::unique_ptr<IndexScanPhysicalOp> {
+        if (idx.index_id != 0) {
+            return std::make_unique<IndexScanPhysicalOp>(
+                scan_op.variable, idx.index_id, idx.prop_ids, mode, std::move(eq_values), std::move(range_start),
+                std::move(range_end), std::move(output_types), store, ctx.label_defs);
+        }
+        return std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, mode,
+                                                     std::move(eq_values), std::move(range_start), std::move(range_end),
+                                                     std::move(output_types), store, ctx.label_defs);
+    };
 
     for (const auto& idx : label_def.indexes) {
         if (idx.state != IndexState::PUBLIC)
@@ -845,14 +913,18 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
         std::optional<PropertyValue> range_start;
         std::optional<PropertyValue> range_end;
 
-        for (size_t i = 0; i < idx.prop_ids.size(); ++i) {
-            uint16_t pid = idx.prop_ids[i];
-            auto it = prop_conditions.find(pid);
+        // Accessor path. Conditions are matched by property name; strong
+        // accessors additionally require the source label match.
+        for (size_t i = 0; i < idx.accessors.size(); ++i) {
+            const auto& acc = idx.accessors[i];
+            auto it = prop_conditions.find(acc.property_name);
             if (it == prop_conditions.end())
                 break;
-
             auto& cond = it->second;
-            if (i < idx.prop_ids.size() - 1) {
+            if (acc.is_strong && cond.label_id != acc.source_label_id)
+                break;
+
+            if (i < idx.accessors.size() - 1) {
                 if (cond.op != cypher::BinaryOperator::EQ)
                     break;
                 eq_values.push_back(std::move(cond.value));
@@ -875,11 +947,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
             }
         }
 
-        if (match_count == 0)
+        if (match_count == 0 || match_count != idx.accessors.size())
             continue;
-
-        using ScanMode = IndexScanPhysicalOp::ScanMode;
-        std::unique_ptr<IndexScanPhysicalOp> result;
 
         Schema output_schema;
         std::vector<binder::BoundType> output_types;
@@ -887,13 +956,12 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
             output_schema.push_back(scan_op.variable);
             output_types.push_back(binder::BoundType::VertexRef());
         }
-
         auto result_output_types = output_types;
 
+        std::unique_ptr<IndexScanPhysicalOp> result;
         if (!last_is_range) {
-            result = std::make_unique<IndexScanPhysicalOp>(scan_op.variable, label_id, idx.prop_ids, ScanMode::EQUALITY,
-                                                           std::move(eq_values), std::nullopt, std::nullopt,
-                                                           std::move(output_types), store, ctx.label_defs);
+            result = make_index_scan(idx, IndexScanPhysicalOp::ScanMode::EQUALITY, std::move(eq_values), std::nullopt,
+                                     std::nullopt, std::move(output_types));
         } else {
             std::optional<std::vector<PropertyValue>> composite_start;
             std::optional<std::vector<PropertyValue>> composite_end;
@@ -909,9 +977,8 @@ PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                 end_vec.push_back(std::move(*range_end));
                 composite_end = std::move(end_vec);
             }
-            result = std::make_unique<IndexScanPhysicalOp>(
-                scan_op.variable, label_id, idx.prop_ids, ScanMode::RANGE, std::vector<PropertyValue>{},
-                std::move(composite_start), std::move(composite_end), std::move(output_types), store, ctx.label_defs);
+            result = make_index_scan(idx, IndexScanPhysicalOp::ScanMode::RANGE, std::vector<PropertyValue>{},
+                                     std::move(composite_start), std::move(composite_end), std::move(output_types));
         }
 
         auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
@@ -927,7 +994,7 @@ std::optional<PlanOperatorResult> PhysicalPlanner::tryBoundEdgeIndexScan(
     EdgeLabelId label_id, const EdgeLabelDef& edge_label_def, IAsyncGraphDataStore& store, PlanContext& ctx) {
     std::unordered_map<uint16_t, BoundIndexableCondition> prop_conditions;
     for (auto* cond : conditions) {
-        auto extracted = tryExtractBoundCondition(*cond);
+        auto extracted = tryExtractBoundCondition(*cond, ctx);
         if (extracted.has_value())
             prop_conditions[extracted->prop_id] = std::move(*extracted);
     }
@@ -2097,8 +2164,16 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         targets.push_back(std::move(target));
                     }
 
+                    LabelId anon_label_id = INVALID_LABEL_ID;
+                    for (const auto& [lid, ldef] : ctx.label_defs) {
+                        if (ldef.name == kAnonLabelName) {
+                            anon_label_id = lid;
+                            break;
+                        }
+                    }
                     auto result = std::make_unique<DeletePhysicalOp>(std::move(targets), v.detach, cr.output_schema,
-                                                                     store, std::move(cr.op));
+                                                                     store, ctx.label_defs, ctx.edge_label_defs,
+                                                                     anon_label_id, std::move(cr.op));
                     return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
                                               std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundUnwindOp>) {

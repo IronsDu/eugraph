@@ -26,10 +26,33 @@ static bool expectWord(std::istringstream& iss, const std::string& expected) {
     return toUpper(word) == toUpper(expected);
 }
 
+// Parse one property item: n.prop (weak) or n::Label.prop (strong).
+static bool parsePropertyAccessor(const std::string& raw, IndexPropertyAccessor& out) {
+    auto last_dot = raw.rfind('.');
+    if (last_dot == std::string::npos)
+        return false;
+    std::string prefix = trim(raw.substr(0, last_dot));
+    std::string prop = trim(raw.substr(last_dot + 1));
+    if (prop.empty())
+        return false;
+
+    auto strong_pos = prefix.find("::");
+    if (strong_pos != std::string::npos) {
+        std::string source = trim(prefix.substr(strong_pos + 2));
+        if (source.empty())
+            return false;
+        out.is_strong = true;
+        out.source_label = source;
+    }
+    out.property_name = prop;
+    return true;
+}
+
 // Read comma-separated properties from (n.prop1, n.prop2, ...)
-// Returns empty vector on parse failure
-static std::vector<std::string> readPropertyList(std::istringstream& iss) {
-    std::vector<std::string> result;
+// Returns empty vector on parse failure.
+static std::vector<IndexPropertyAccessor> readPropertyList(std::istringstream& iss) {
+    std::vector<IndexPropertyAccessor> result;
+    std::vector<std::string> raw_items;
     std::string token;
     char c;
     // skip whitespace
@@ -37,27 +60,26 @@ static std::vector<std::string> readPropertyList(std::istringstream& iss) {
         iss.get();
     if (!(iss >> c) || c != '(')
         return {};
-    // Read until closing )
     while (iss.get(c)) {
         if (c == ')')
             break;
         if (c == ',') {
             if (!token.empty()) {
-                auto dot_pos = token.find('.');
-                if (dot_pos != std::string::npos)
-                    token = token.substr(dot_pos + 1);
-                result.push_back(trim(token));
+                raw_items.push_back(trim(token));
                 token.clear();
             }
         } else if (c != ' ' && c != '\t') {
             token += c;
         }
     }
-    if (!token.empty()) {
-        auto dot_pos = token.find('.');
-        if (dot_pos != std::string::npos)
-            token = token.substr(dot_pos + 1);
-        result.push_back(trim(token));
+    if (!token.empty())
+        raw_items.push_back(trim(token));
+
+    for (const auto& raw : raw_items) {
+        IndexPropertyAccessor acc;
+        if (!parsePropertyAccessor(raw, acc))
+            return {};
+        result.push_back(std::move(acc));
     }
     return result;
 }
@@ -162,12 +184,11 @@ std::optional<IndexDdlStatement> IndexDdlParser::tryParse(const std::string& que
         if (!expectWord(iss, "ON"))
             return std::nullopt;
 
-        // (var.prop1, var.prop2, ...)
-        auto props = readPropertyList(iss);
-        if (props.empty())
+        // (var.prop1, var.prop2, ...) or (var::Label.prop1, ...)
+        auto accessors = readPropertyList(iss);
+        if (accessors.empty())
             return std::nullopt;
-        stmt.property_names = std::move(props);
-
+        stmt.accessors = std::move(accessors);
         return stmt;
     }
 

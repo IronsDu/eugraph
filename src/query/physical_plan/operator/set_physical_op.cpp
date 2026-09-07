@@ -3,7 +3,9 @@
 #include "common/types/graph_types.hpp"
 #include "common/types/temporal_value.hpp"
 #include "query/evaluator/expression_evaluator.hpp"
+#include "query/physical_plan/operator/edge_index_maintenance.hpp"
 #include "query/physical_plan/operator/mutation_mirror.hpp"
+#include "query/physical_plan/operator/vertex_index_maintenance.hpp"
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
@@ -214,6 +216,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                 continue;
                         }
 
+                        auto old_index_entries = co_await collectEdgeIndexEntries(store_, edge_label_defs_, eid, elid);
+
                         if (std::holds_alternative<std::monostate>(v)) {
                             // Cypher null semantics: SET r.p = null ≡ REMOVE r.p
                             co_await store_.deleteEdgeProperty(eid, elid, pid);
@@ -228,6 +232,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                 edge.properties->resize(pid + 1);
                             (*edge.properties)[pid] = pv;
                         }
+                        auto new_index_entries = co_await collectEdgeIndexEntries(store_, edge_label_defs_, eid, elid);
+                        co_await deleteEdgeIndexEntries(store_, old_index_entries);
+                        co_await insertEdgeIndexEntries(store_, new_index_entries);
                         mirrorEdgeToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(edge));
                         continue;
                     }
@@ -240,6 +247,7 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             continue;
                         const auto& mv = std::get<MapValue>(v);
                         bool modified = false;
+                        auto old_index_entries = co_await collectEdgeIndexEntries(store_, edge_label_defs_, eid, elid);
 
                         // '=' mode: delete all existing edge properties first
                         if (!item.is_add_assign) {
@@ -310,8 +318,13 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             modified = true;
                         }
 
-                        if (modified)
+                        if (modified) {
+                            auto new_index_entries =
+                                co_await collectEdgeIndexEntries(store_, edge_label_defs_, eid, elid);
+                            co_await deleteEdgeIndexEntries(store_, old_index_entries);
+                            co_await insertEdgeIndexEntries(store_, new_index_entries);
                             mirrorEdgeToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(edge));
+                        }
                         continue;
                     }
                     continue;
@@ -322,6 +335,7 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
 
                 const auto& vertex = std::get<VertexValue>(val);
                 VertexId vid = vertex.id;
+                std::optional<std::vector<VertexIndexEntry>> old_index_entries;
 
                 if (item.kind == cypher::SetItemKind::SET_LABELS) {
                     auto lit = label_name_to_id_.find(item.label);
@@ -344,7 +358,17 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     }
                     if (lit == label_name_to_id_.end())
                         continue;
+                    if (vertex.labels.has_value() && vertex.labels->count(lit->second))
+                        continue;
                     co_await store_.addVertexLabel(vid, lit->second);
+                    auto new_index_entries =
+                        co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+                    bool inserted = co_await insertVertexIndexEntriesChecked(store_, new_index_entries);
+                    if (!inserted) {
+                        co_await deleteVertexIndexEntries(store_, new_index_entries);
+                        co_await store_.removeVertexLabel(vid, lit->second);
+                        throw std::runtime_error("ConstraintVerificationFailed: unique index constraint violated");
+                    }
                     VertexValue updated = vertex;
                     if (!updated.labels.has_value())
                         updated.labels = LabelIdSet{};
@@ -353,13 +377,19 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                 } else if (item.kind == cypher::SetItemKind::SET_PROPERTY) {
                     if (item.prop_name.empty() || !item.value.has_value())
                         continue;
+                    old_index_entries = co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
 
                     Value v = value_results[idx][row_idx];
 
                     // Cypher null semantics: SET n.p = null ≡ REMOVE n.p
                     if (std::holds_alternative<std::monostate>(v)) {
                         std::optional<std::pair<LabelId, uint16_t>> removed_at;
+                        std::optional<PropertyValue> rollback_value;
                         if (item.strong_mode && item.resolved_label_id && item.resolved_prop_id) {
+                            auto old_props = co_await store_.getVertexProperties(vid, *item.resolved_label_id);
+                            if (old_props && old_props->size() > *item.resolved_prop_id &&
+                                (*old_props)[*item.resolved_prop_id].has_value())
+                                rollback_value = (*old_props)[*item.resolved_prop_id].value();
                             co_await store_.deleteVertexProperty(vid, *item.resolved_label_id, *item.resolved_prop_id);
                             removed_at = std::make_pair(*item.resolved_label_id, *item.resolved_prop_id);
                         } else {
@@ -378,6 +408,10 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                 }
                             }
                             if (matches.size() == 1) {
+                                auto old_props = co_await store_.getVertexProperties(vid, matches[0].first);
+                                if (old_props && old_props->size() > matches[0].second &&
+                                    (*old_props)[matches[0].second].has_value())
+                                    rollback_value = (*old_props)[matches[0].second].value();
                                 co_await store_.deleteVertexProperty(vid, matches[0].first, matches[0].second);
                                 removed_at = matches[0];
                             }
@@ -391,6 +425,22 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                 it->second[removed_at->second].reset();
                             mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(updated));
                         }
+                        auto new_index_entries =
+                            co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+                        co_await deleteVertexIndexEntries(store_, *old_index_entries);
+                        bool inserted = co_await insertVertexIndexEntriesChecked(store_, new_index_entries);
+                        if (!inserted && removed_at && old_index_entries) {
+                            if (rollback_value.has_value())
+                                co_await store_.putVertexProperty(vid, removed_at->first, removed_at->second,
+                                                                  *rollback_value);
+                            else
+                                co_await store_.deleteVertexProperty(vid, removed_at->first, removed_at->second);
+                            auto restored =
+                                co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+                            co_await deleteVertexIndexEntries(store_, new_index_entries);
+                            co_await insertVertexIndexEntries(store_, restored);
+                            throw std::runtime_error("ConstraintVerificationFailed: unique index constraint violated");
+                        }
                         continue;
                     }
 
@@ -400,9 +450,14 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     // so we can mirror the mutation into the in-memory vertex state
                     // and make subsequent RETURN/ WITH clauses observe the new value.
                     std::optional<std::pair<LabelId, uint16_t>> written_at;
+                    std::optional<PropertyValue> rollback_value;
 
                     if (item.strong_mode && item.resolved_label_id && item.resolved_prop_id) {
                         // Strong mode: use resolved IDs directly
+                        auto old_props = co_await store_.getVertexProperties(vid, *item.resolved_label_id);
+                        if (old_props && old_props->size() > *item.resolved_prop_id &&
+                            (*old_props)[*item.resolved_prop_id].has_value())
+                            rollback_value = (*old_props)[*item.resolved_prop_id].value();
                         co_await store_.putVertexProperty(vid, *item.resolved_label_id, *item.resolved_prop_id, pv);
                         written_at = std::make_pair(*item.resolved_label_id, *item.resolved_prop_id);
                     } else {
@@ -423,6 +478,10 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         }
 
                         if (matches.size() == 1) {
+                            auto old_props = co_await store_.getVertexProperties(vid, matches[0].first);
+                            if (old_props && old_props->size() > matches[0].second &&
+                                (*old_props)[matches[0].second].has_value())
+                                rollback_value = (*old_props)[matches[0].second].value();
                             co_await store_.putVertexProperty(vid, matches[0].first, matches[0].second, pv);
                             written_at = matches[0];
                         } else if (matches.empty()) {
@@ -510,6 +569,22 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         props_vec[written_at->second] = pv;
                         mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(updated));
                     }
+
+                    auto new_index_entries =
+                        co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+                    co_await deleteVertexIndexEntries(store_, *old_index_entries);
+                    bool inserted = co_await insertVertexIndexEntriesChecked(store_, new_index_entries);
+                    if (!inserted && written_at && old_index_entries) {
+                        if (rollback_value.has_value())
+                            co_await store_.putVertexProperty(vid, written_at->first, written_at->second,
+                                                              *rollback_value);
+                        else
+                            co_await store_.deleteVertexProperty(vid, written_at->first, written_at->second);
+                        auto restored = co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+                        co_await deleteVertexIndexEntries(store_, new_index_entries);
+                        co_await insertVertexIndexEntries(store_, restored);
+                        throw std::runtime_error("ConstraintVerificationFailed: unique index constraint violated");
+                    }
                 } else if (item.kind == cypher::SetItemKind::SET_PROPERTIES) {
                     if (!item.value.has_value())
                         continue;
@@ -518,6 +593,21 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     if (!std::holds_alternative<MapValue>(v))
                         continue;
                     const auto& mv = std::get<MapValue>(v);
+                    old_index_entries = co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+
+                    LabelIdSet old_labels = co_await store_.getVertexLabels(vid);
+                    if (anon_label_id_ != INVALID_LABEL_ID && label_defs_.count(anon_label_id_))
+                        old_labels.insert(anon_label_id_);
+                    std::vector<std::tuple<LabelId, uint16_t, PropertyValue>> old_snapshot;
+                    for (LabelId lid : old_labels) {
+                        auto old_props = co_await store_.getVertexProperties(vid, lid);
+                        if (!old_props)
+                            continue;
+                        for (size_t pid = 0; pid < old_props->size(); ++pid) {
+                            if ((*old_props)[pid].has_value())
+                                old_snapshot.emplace_back(lid, static_cast<uint16_t>(pid), (*old_props)[pid].value());
+                        }
+                    }
 
                     // Keep a mutable copy of the vertex to update in-memory state
                     // after store mutations, so the returned row reflects the changes.
@@ -690,6 +780,36 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     if (vertex_modified)
                         mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx,
                                                     std::move(updated_vertex));
+
+                    auto new_index_entries =
+                        co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+                    co_await deleteVertexIndexEntries(store_, *old_index_entries);
+                    bool inserted = co_await insertVertexIndexEntriesChecked(store_, new_index_entries);
+                    if (!inserted) {
+                        LabelIdSet current_labels = co_await store_.getVertexLabels(vid);
+                        for (LabelId lid : current_labels)
+                            if (!old_labels.count(lid))
+                                co_await store_.removeVertexLabel(vid, lid);
+                        for (LabelId lid : old_labels)
+                            co_await store_.addVertexLabel(vid, lid);
+
+                        for (LabelId lid : current_labels) {
+                            auto props = co_await store_.getVertexProperties(vid, lid);
+                            if (props) {
+                                for (size_t pid = 0; pid < props->size(); ++pid) {
+                                    if ((*props)[pid].has_value())
+                                        co_await store_.deleteVertexProperty(vid, lid, static_cast<uint16_t>(pid));
+                                }
+                            }
+                        }
+                        for (const auto& [lid, pid, pv] : old_snapshot)
+                            co_await store_.putVertexProperty(vid, lid, pid, pv);
+
+                        auto restored = co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+                        co_await deleteVertexIndexEntries(store_, new_index_entries);
+                        co_await insertVertexIndexEntries(store_, restored);
+                        throw std::runtime_error("ConstraintVerificationFailed: unique index constraint violated");
+                    }
                 }
             }
         }

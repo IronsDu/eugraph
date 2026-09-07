@@ -3,6 +3,7 @@
 #include "storage/meta/i_sync_graph_meta_store.hpp"
 #include "storage/meta/meta_codec.hpp"
 
+#include <cstdint>
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
@@ -45,7 +46,7 @@ folly::coro::Task<bool> AsyncGraphMetaStore::open(ISyncGraphMetaStore& store, Io
     auto ids_data = co_await i.dispatch([&]() { return s.metadataGet("M|next_ids"); });
     if (ids_data) {
         MetadataCodec::decodeNextIds(*ids_data, schema_.next_vertex_id, schema_.next_edge_id, schema_.next_label_id,
-                                     schema_.next_edge_label_id);
+                                     schema_.next_edge_label_id, schema_.next_index_id);
     }
 
     spdlog::info("AsyncGraphMetaStore opened: {} labels, {} edge labels, next_vid={}, next_eid={}",
@@ -131,6 +132,19 @@ std::optional<uint16_t> findPropId(const std::vector<PropertyDef>& props, const 
 folly::coro::Task<bool> AsyncGraphMetaStore::createVertexIndex(const std::string& name, const std::string& label_name,
                                                                const std::vector<std::string>& prop_names,
                                                                bool unique) {
+    std::vector<IndexAccessorDef> accessors;
+    accessors.reserve(prop_names.size());
+    for (const auto& pn : prop_names) {
+        IndexAccessorDef acc;
+        acc.property_name = pn;
+        accessors.push_back(std::move(acc));
+    }
+    co_return co_await createVertexIndexWithAccessors(name, label_name, accessors, unique);
+}
+
+folly::coro::Task<bool>
+AsyncGraphMetaStore::createVertexIndexWithAccessors(const std::string& name, const std::string& label_name,
+                                                    const std::vector<IndexAccessorDef>& accessors, bool unique) {
     if (schema_.findIndexByName(name).has_value()) {
         spdlog::error("Index '{}' already exists", name);
         co_return false;
@@ -141,29 +155,53 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createVertexIndex(const std::string
         spdlog::error("Label '{}' not found", label_name);
         co_return false;
     }
-
-    std::vector<uint16_t> new_prop_ids;
-    for (const auto& pn : prop_names) {
-        auto prop_id = findPropId(label_opt->properties, pn);
-        if (!prop_id) {
-            spdlog::error("Property '{}' not found in label '{}'", pn, label_name);
-            co_return false;
-        }
-        new_prop_ids.push_back(*prop_id);
+    if (accessors.empty()) {
+        spdlog::error("Index '{}' has no property accessors", name);
+        co_return false;
     }
 
-    for (const auto& idx : label_opt->indexes) {
-        if (idx.prop_ids == new_prop_ids) {
-            spdlog::error("Index already exists on same property set for label '{}'", label_name);
+    // Resolve strong accessors against the source label.
+    std::vector<IndexAccessorDef> resolved = accessors;
+    for (auto& acc : resolved) {
+        if (!acc.is_strong)
+            continue;
+        auto source_opt = schema_.getLabel(acc.source_label_id);
+        if (!source_opt) {
+            spdlog::error("Source label '{}' not found for strong index '{}'", acc.source_label_id, name);
+            co_return false;
+        }
+        auto prop_id = findPropId(source_opt->properties, acc.property_name);
+        if (!prop_id) {
+            spdlog::error("Property '{}' not found in source label '{}' for strong index '{}'", acc.property_name,
+                          source_opt->name, name);
             co_return false;
         }
     }
 
     LabelDef::IndexDef idx_def;
+    idx_def.index_id = schema_.next_index_id++;
     idx_def.name = name;
-    idx_def.prop_ids = new_prop_ids;
+    idx_def.accessors = resolved;
     idx_def.unique = unique;
     idx_def.state = IndexState::WRITE_ONLY;
+
+    auto same_accessors = [](const auto& a, const auto& b) {
+        if (a.size() != b.size())
+            return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a[i].is_strong != b[i].is_strong || a[i].source_label_id != b[i].source_label_id ||
+                a[i].property_name != b[i].property_name)
+                return false;
+        }
+        return true;
+    };
+
+    for (const auto& idx : label_opt->indexes) {
+        if (same_accessors(idx.accessors, idx_def.accessors)) {
+            spdlog::error("Index already exists on same property set for label '{}'", label_name);
+            co_return false;
+        }
+    }
 
     schema_.labels[label_opt->id].indexes.push_back(idx_def);
 
@@ -175,23 +213,28 @@ folly::coro::Task<bool> AsyncGraphMetaStore::createVertexIndex(const std::string
         std::string idx_val;
         idx_val.push_back(static_cast<char>(label_opt->id >> 8));
         idx_val.push_back(static_cast<char>(label_opt->id & 0xFF));
-        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(new_prop_ids.size()) >> 8));
-        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(new_prop_ids.size()) & 0xFF));
-        for (auto pid : new_prop_ids) {
-            idx_val.push_back(static_cast<char>(pid >> 8));
-            idx_val.push_back(static_cast<char>(pid & 0xFF));
+        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(idx_def.accessors.size()) >> 8));
+        idx_val.push_back(static_cast<char>(static_cast<uint16_t>(idx_def.accessors.size()) & 0xFF));
+        for (const auto& acc : idx_def.accessors) {
+            idx_val.push_back(static_cast<char>(acc.is_strong ? 1 : 0));
+            idx_val.push_back(static_cast<char>(acc.source_label_id >> 8));
+            idx_val.push_back(static_cast<char>(acc.source_label_id & 0xFF));
+            idx_val.push_back(static_cast<char>(acc.property_name.size()));
+            for (unsigned char ch : acc.property_name)
+                idx_val.push_back(static_cast<char>(ch));
         }
         idx_val.push_back(static_cast<char>(0)); // is_edge = false
         s.metadataPut(idx_key, idx_val);
     });
+    co_await saveNextIds();
 
     std::string prop_list;
-    for (size_t i = 0; i < prop_names.size(); ++i) {
+    for (size_t i = 0; i < idx_def.accessors.size(); ++i) {
         if (i > 0)
             prop_list += ", ";
-        prop_list += prop_names[i];
+        prop_list += idx_def.accessors[i].property_name;
     }
-    spdlog::info("Created vertex index '{}' on {}.({})", name, label_name, prop_list);
+    spdlog::info("Created vertex index '{}' (id={}) on {}.({})", name, idx_def.index_id, label_name, prop_list);
     co_return true;
 }
 
@@ -328,11 +371,16 @@ folly::coro::Task<std::vector<IAsyncGraphMetaStore::IndexInfo>> AsyncGraphMetaSt
             info.unique = idx.unique;
             info.is_edge = false;
             info.state = idx.state;
-            for (auto pid : idx.prop_ids) {
-                for (auto& p : label.properties) {
-                    if (p.id == pid) {
-                        info.property_names.push_back(p.name);
-                        break;
+            if (!idx.accessors.empty()) {
+                for (const auto& acc : idx.accessors)
+                    info.property_names.push_back(acc.property_name);
+            } else {
+                for (auto pid : idx.prop_ids) {
+                    for (auto& p : label.properties) {
+                        if (p.id == pid) {
+                            info.property_names.push_back(p.name);
+                            break;
+                        }
                     }
                 }
             }
@@ -713,7 +761,7 @@ folly::coro::Task<void> AsyncGraphMetaStore::saveNextIds() {
     co_await io_->get().dispatchVoid([this]() {
         std::lock_guard<std::mutex> lock(id_mu_);
         auto encoded = MetadataCodec::encodeNextIds(schema_.next_vertex_id, schema_.next_edge_id, schema_.next_label_id,
-                                                    schema_.next_edge_label_id);
+                                                    schema_.next_edge_label_id, schema_.next_index_id);
         store_->get().metadataPut("M|next_ids", encoded);
     });
 }

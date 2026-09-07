@@ -37,6 +37,13 @@ public:
                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
                         std::unordered_map<LabelId, LabelDef> label_defs);
 
+    // Index-id based composite constructor (new index table naming)
+    IndexScanPhysicalOp(std::string variable, uint32_t index_id, std::vector<uint16_t> prop_ids, ScanMode mode,
+                        std::vector<PropertyValue> eq_values, std::optional<std::vector<PropertyValue>> range_start,
+                        std::optional<std::vector<PropertyValue>> range_end,
+                        std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
+                        std::unordered_map<LabelId, LabelDef> label_defs);
+
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
     }
@@ -46,6 +53,7 @@ public:
 private:
     std::string variable_;
     LabelId label_id_;
+    uint32_t index_id_ = 0;
     std::vector<uint16_t> prop_ids_;
     ScanMode mode_;
     std::vector<PropertyValue> eq_values_;                  // equality scan values
