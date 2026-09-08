@@ -424,3 +424,13 @@ semi-join；Q12 约慢 Neo4j 30 倍，作为后续优化项。
 2. logical/binder 层“线性 pattern 重排”：将 `Tag` 重排为右 pattern 起点；
 3. `IndexScanValues` 叶子：按左列表逐值做 `Tag(id)` 点查；
 4. 由现有 planner/ProjectionExtract 统一处理 schema/slot/PE。
+
+### 8.9 Apply + logical 反向重排（2026-09-09）
+
+在 `feature/correlated-apply` 上实现：
+- `ApplyPhysicalOp` + `IndexScanValuesPhysicalOp`；
+- `Filter(CrossProduct)` 上的 `x.prop IN left.list` 被重写为
+  `Apply(left, IndexScanValues(Tag) -> 反向 Expand 链)`；
+- 反向链补齐原 pattern 的 dst label 约束后，Q12 本地结果回到正确的 2 行。
+- 本地 Q12 耗时约 1.38s（前向 ListIndexJoin 约 1.1s），WSL 大数据集待复测；
+  若仍慢，下一步做批量 IndexScanValues / 去重和中间层基数控制。

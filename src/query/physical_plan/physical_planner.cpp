@@ -1353,7 +1353,8 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
                 reversed = leaf;
             }
 
-            for (const auto* e : chain) {
+            for (size_t i = 0; i < chain.size(); ++i) {
+                const auto* e = chain[i];
                 auto expand = std::make_unique<binder::BoundExpandOp>();
                 expand->src_variable = e->dst_variable;
                 expand->src_column_index = 0;
@@ -1366,7 +1367,15 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
                     expand->direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
                 else if (expand->direction == cypher::RelationshipDirection::RIGHT_TO_LEFT)
                     expand->direction = cypher::RelationshipDirection::LEFT_TO_RIGHT;
-                expand->dst_label_ids = {};
+
+                // The reversed dst is the original expand's src. Its label
+                // constraint lives on the original child expand (or on the
+                // leaf LabelScan for the bottom-most expand).
+                if (i + 1 < chain.size() && chain[i + 1]->dst_variable == e->src_variable)
+                    expand->dst_label_ids = chain[i + 1]->dst_label_ids;
+                else if (i + 1 == chain.size() && leaf_label != INVALID_LABEL_ID)
+                    expand->dst_label_ids = {leaf_label};
+
                 expand->child = std::move(reversed);
                 reversed = std::move(expand);
             }
