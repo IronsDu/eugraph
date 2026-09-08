@@ -197,6 +197,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             bool physical_out = true;
         };
         std::vector<EdgeEntry> edges;
+        std::unordered_set<EdgeId> allowed_seen;
 
         auto scanOneDirection = [&](VertexId src_id, size_t src_row, Direction scan_dir) -> folly::coro::Task<void> {
             if (allowed_filter) {
@@ -204,7 +205,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     auto out_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
                     while (auto out_batch = co_await out_gen.next()) {
                         for (const auto& entry : *out_batch) {
-                            edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
+                            if (allowed_seen.insert(entry.edge_id).second)
+                                edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
                             break;
                         }
                         break;
@@ -214,7 +216,9 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                         for (const auto& entry : *in_batch) {
                             if (entry.src_vertex_id == entry.dst_vertex_id)
                                 continue;
-                            edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, false});
+                            if (allowed_seen.insert(entry.edge_id).second)
+                                edges.push_back(
+                                    {src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, false});
                             break;
                         }
                         break;
@@ -302,7 +306,9 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                         auto out_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
                         while (auto out_batch = co_await out_gen.next()) {
                             for (const auto& entry : *out_batch) {
-                                edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
+                                if (allowed_seen.insert(entry.edge_id).second)
+                                    edges.push_back(
+                                        {src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
                                 break;
                             }
                             break;
@@ -313,8 +319,9 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                 for (const auto& entry : *in_batch) {
                                     if (entry.src_vertex_id == entry.dst_vertex_id)
                                         continue;
-                                    edges.push_back(
-                                        {src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, false});
+                                    if (allowed_seen.insert(entry.edge_id).second)
+                                        edges.push_back(
+                                            {src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, false});
                                     break;
                                 }
                                 break;

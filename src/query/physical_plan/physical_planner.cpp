@@ -1368,9 +1368,9 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
             if (e->edge_label_ids.empty())
                 chain_ok = false;
         }
-        // TODO: the reversed chain still drops rows during execution. Keep
-        // the prior forward ListIndexJoin path until the reverse builder is
-        // debugged (see branch history / benchmark doc 8.7).
+        // Reversed chain: start from the indexed side and expand backwards
+        // to the original start variable. Still produces extra rows on some
+        // datasets, so keep the forward ListIndexJoin as the active path.
         if (false && chain_ok && chain.front()->dst_variable == dst_var) {
             const auto* last_expand = chain.front();
 
