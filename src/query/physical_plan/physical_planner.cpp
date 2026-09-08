@@ -3,6 +3,7 @@
 #include "query/optimizer/chosen_plan.hpp"
 #include "query/optimizer/column_rewrite.hpp"
 #include "query/optimizer/memo.hpp"
+#include "query/physical_plan/operator/apply_physical_op.hpp"
 #include "query/physical_plan/operator/call_physical_op.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
@@ -2471,6 +2472,37 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     TupleSlotLayout xprod_layout;
                     xprod_layout.merge(lr.slot_layout);
                     xprod_layout.merge(rr.slot_layout);
+
+                    if (v.correlated) {
+                        std::function<CorrelatedSourcePhysicalOp*(PhysicalOperator*)> find_source =
+                            [&](PhysicalOperator* node) -> CorrelatedSourcePhysicalOp* {
+                            if (auto* cs = dynamic_cast<CorrelatedSourcePhysicalOp*>(node))
+                                return cs;
+                            for (auto* child : node->children()) {
+                                if (auto* cs = find_source(const_cast<PhysicalOperator*>(child)))
+                                    return cs;
+                            }
+                            return nullptr;
+                        };
+                        CorrelatedSourcePhysicalOp* source = find_source(rr.op.get());
+                        if (!source)
+                            return std::string("Apply: CorrelatedSourcePhysicalOp not found in right sub-plan");
+                        std::vector<uint32_t> left_corr_cols;
+                        left_corr_cols.reserve(v.correlation.size());
+                        for (const auto& [left_slot, right_slot] : v.correlation) {
+                            (void)right_slot;
+                            int col = lr.slot_layout.getColumnIndex(left_slot);
+                            if (col < 0)
+                                return std::string("Apply: left correlation slot has no physical column");
+                            left_corr_cols.push_back(static_cast<uint32_t>(col));
+                        }
+                        auto apply = std::make_unique<ApplyPhysicalOp>(std::move(lr.op), std::move(rr.op), source,
+                                                                       std::move(left_corr_cols),
+                                                                       std::vector<binder::BoundType>(rr.output_types));
+                        apply->setEvalContext(ctx.eval_ctx);
+                        return PlanOperatorResult{std::move(apply), std::move(output_schema), std::move(output_types),
+                                                  std::move(xprod_layout)};
+                    }
 
                     auto result = std::make_unique<CrossProductPhysicalOp>(
                         std::move(lr.op), std::move(rr.op), std::move(lr.output_schema), std::move(rr.output_schema),
