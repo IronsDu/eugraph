@@ -1,5 +1,7 @@
 #include "query/physical_plan/operator/index_scan_values_physical_op.hpp"
 
+#include <spdlog/spdlog.h>
+
 namespace eugraph {
 namespace compute {
 

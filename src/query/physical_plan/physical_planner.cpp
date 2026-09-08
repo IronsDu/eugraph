@@ -1287,18 +1287,189 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
         return std::nullopt;
     }
 
-    auto saved_filter = ctx.expand_allowed_filter;
-    ctx.expand_allowed_filter = ExpandAllowedFilterContext{index_id, edge_label, dst_var};
-    ctx.filtered_expand = nullptr;
+    // Try to reverse the linear Expand chain so the indexed side becomes the
+    // leaf. This is the fast path for `tag.id IN tags` style filters.
+    IndexScanValuesPhysicalOp* reverse_source = nullptr;
+    std::optional<PlanOperatorResult> reversed_right;
 
-    Schema right_input_schema;
-    std::vector<binder::BoundType> right_input_types;
-    auto right_result = planBoundOperator(join.right, store, meta, ctx, right_input_schema, right_input_types);
-    ctx.expand_allowed_filter = saved_filter;
+    {
+        std::vector<const binder::BoundExpandOp*> chain;
+        binder::BoundFilterOp* start_filter_op = nullptr;
+        LabelId leaf_label = INVALID_LABEL_ID;
+        std::function<void(binder::BoundLogicalOperator&)> collect = [&](binder::BoundLogicalOperator& op) {
+            std::visit(
+                [&](auto& val) {
+                    using T = std::decay_t<decltype(val)>;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                        if (val) {
+                            chain.push_back(val.get());
+                            collect(val->child);
+                        }
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                        if (val) {
+                            start_filter_op = val.get();
+                            collect(val->child);
+                        }
+                    } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
+                        if (val.label_ids.size() == 1)
+                            leaf_label = val.label_ids[0];
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                        if (val)
+                            collect(val->child);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                        if (val)
+                            collect(val->child);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
+                        if (val)
+                            collect(val->child);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
+                        if (val)
+                            collect(val->child);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
+                        if (val)
+                            collect(val->child);
+                    }
+                },
+                op);
+        };
+        collect(join.right);
 
-    if (std::holds_alternative<std::string>(right_result) || !ctx.filtered_expand)
-        return std::nullopt;
-    auto rr = extractChildResult(std::move(right_result));
+        std::optional<PropertyValue> start_value;
+        uint32_t start_index_id = 0;
+        if (start_filter_op) {
+            if (auto* bp = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&start_filter_op->predicate)) {
+                if (*bp && (*bp)->op == cypher::BinaryOperator::EQ) {
+                    auto cond = tryExtractBoundCondition(**bp, ctx);
+                    if (cond) {
+                        LabelId start_label = leaf_label != INVALID_LABEL_ID ? leaf_label : cond->label_id;
+                        auto lit = ctx.label_defs.find(start_label);
+                        if (lit != ctx.label_defs.end()) {
+                            for (const auto& idx : lit->second.indexes) {
+                                if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+                                    continue;
+                                for (const auto& acc : idx.accessors) {
+                                    if (acc.property_name == cond->property_name) {
+                                        start_index_id = idx.index_id;
+                                        start_value = cond->value;
+                                        break;
+                                    }
+                                }
+                                if (start_index_id)
+                                    break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        bool chain_ok = !chain.empty();
+        for (const auto* e : chain) {
+            if (e->edge_label_ids.empty())
+                chain_ok = false;
+        }
+        // TODO: the reversed chain still drops rows during execution. Keep
+        // the prior forward ListIndexJoin path until the reverse builder is
+        // debugged (see branch history / benchmark doc 8.7).
+        if (false && chain_ok && chain.front()->dst_variable == dst_var) {
+            const auto* last_expand = chain.front();
+
+            Schema leaf_schema{last_expand->dst_variable};
+            std::vector<binder::BoundType> leaf_types{binder::BoundType::VertexRef()};
+            TupleSlotLayout leaf_layout;
+            leaf_layout.append(last_expand->planner_dst_slot_id);
+            auto leaf_op = std::make_unique<IndexScanValuesPhysicalOp>(last_expand->dst_variable, index_id, store,
+                                                                       leaf_types, leaf_schema);
+            reverse_source = leaf_op.get();
+            leaf_op->setOutputSchema(leaf_schema, leaf_types);
+            leaf_op->setSlotLayout(leaf_layout);
+
+            PlanOperatorResult cur{std::move(leaf_op), leaf_schema, leaf_types, leaf_layout};
+            cur = dispatchProjectionExtract(std::move(cur), store, ctx);
+
+            for (auto it = chain.begin(); it != chain.end(); ++it) {
+                const auto& e = **it;
+                cypher::RelationshipDirection rev_dir = e.direction;
+                if (e.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT)
+                    rev_dir = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+                else if (e.direction == cypher::RelationshipDirection::RIGHT_TO_LEFT)
+                    rev_dir = cypher::RelationshipDirection::LEFT_TO_RIGHT;
+
+                Schema input_schema = cur.output_schema;
+                std::vector<binder::BoundType> output_types = cur.output_types;
+                Schema output_schema = input_schema;
+                int edge_existing = e.edge_variable.empty() ? -1 : findColumn(input_schema, e.edge_variable);
+                int dst_existing = e.dst_variable.empty() ? -1 : findColumn(input_schema, e.dst_variable);
+                bool edge_bound = edge_existing >= 0;
+                bool dst_bound = dst_existing >= 0;
+                if (!e.edge_variable.empty() && !edge_bound) {
+                    output_schema.push_back(e.edge_variable);
+                    output_types.push_back(binder::BoundType::EdgeKey());
+                }
+                if (!e.dst_variable.empty() && !dst_bound) {
+                    output_schema.push_back(e.dst_variable);
+                    output_types.push_back(binder::BoundType::VertexRef());
+                }
+
+                TupleSlotLayout layout = cur.slot_layout;
+                if (!e.edge_variable.empty() && !edge_bound)
+                    layout.append(e.planner_edge_slot_id != binder::INVALID_SLOT_ID ? e.planner_edge_slot_id
+                                                                                    : e.edge_slot_id);
+                if (!e.dst_variable.empty() && !dst_bound)
+                    layout.append(e.src_slot_id != binder::INVALID_SLOT_ID ? e.src_slot_id : e.planner_dst_slot_id);
+
+                auto op = std::make_unique<ExpandPhysicalOp>(
+                    e.dst_variable, e.src_variable, e.edge_variable,
+                    std::optional<std::vector<EdgeLabelId>>(e.edge_label_ids), rev_dir, store, std::move(input_schema),
+                    std::vector<binder::BoundType>(output_types), std::move(cur.op),
+                    std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{},
+                    std::vector<LabelId>{}, dst_bound, edge_bound, dst_existing, edge_existing,
+                    std::vector<EdgeLabelId>{}, false);
+                if (std::next(it) == chain.end() && start_index_id && start_value.has_value()) {
+                    auto start_values = std::make_shared<std::vector<PropertyValue>>();
+                    start_values->push_back(*start_value);
+                    op->setAllowedDstFilter(start_index_id, e.edge_label_ids[0]);
+                    op->setAllowedDstValues(std::move(start_values));
+                }
+                op->setOutputSchema(output_schema, output_types);
+                op->setSlotLayout(layout);
+
+                PlanOperatorResult next{std::move(op), std::move(output_schema), std::move(output_types),
+                                        std::move(layout)};
+                cur = dispatchProjectionExtract(std::move(next), store, ctx);
+            }
+
+            if (start_filter_op && !(start_index_id && start_value.has_value())) {
+                binder::BoundExpression pred = std::move(start_filter_op->predicate);
+                auto filter_op =
+                    std::make_unique<FilterPhysicalOp>(std::move(pred), cur.output_schema, std::move(cur.op));
+                filter_op->setOutputSchema(cur.output_schema, cur.output_types);
+                filter_op->setSlotLayout(cur.slot_layout);
+                filter_op->setEvalContext(ctx.eval_ctx);
+                cur.op = std::move(filter_op);
+            }
+
+            reversed_right = std::move(cur);
+        }
+    }
+
+    PlanOperatorResult rr;
+    if (reversed_right) {
+        rr = std::move(*reversed_right);
+    } else {
+        auto saved_filter = ctx.expand_allowed_filter;
+        ctx.expand_allowed_filter = ExpandAllowedFilterContext{index_id, edge_label, dst_var};
+        ctx.filtered_expand = nullptr;
+
+        Schema right_input_schema;
+        std::vector<binder::BoundType> right_input_types;
+        auto right_result = planBoundOperator(join.right, store, meta, ctx, right_input_schema, right_input_types);
+        ctx.expand_allowed_filter = saved_filter;
+
+        if (std::holds_alternative<std::string>(right_result) || !ctx.filtered_expand)
+            return std::nullopt;
+        rr = extractChildResult(std::move(right_result));
+    }
 
     Schema output_schema = lr.output_schema;
     output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
@@ -1309,8 +1480,10 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
     layout.merge(rr.slot_layout);
 
     auto result = std::make_unique<ListIndexJoinPhysicalOp>(
-        std::move(lr.op), std::move(rr.op), ctx.filtered_expand, static_cast<uint32_t>(list_col),
-        std::vector<binder::BoundType>(output_types), output_schema);
+        std::move(lr.op), std::move(rr.op), reverse_source ? nullptr : ctx.filtered_expand,
+        static_cast<uint32_t>(list_col), std::vector<binder::BoundType>(output_types), output_schema);
+    if (reverse_source)
+        result->setIndexScanSource(reverse_source);
     result->setEvalContext(ctx.eval_ctx);
     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types), std::move(layout)};
 }
