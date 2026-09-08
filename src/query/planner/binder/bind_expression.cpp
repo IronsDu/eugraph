@@ -304,6 +304,7 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                             return std::nullopt;
                         }
                         auto prop_ref = std::make_unique<BoundPropertyRef>();
+                        prop_ref->property_name = ptr->property;
                         auto saved_label_id = lc->label_id;
                         // Extract variable name from label cast object before move
                         std::optional<std::string> saved_col_name;

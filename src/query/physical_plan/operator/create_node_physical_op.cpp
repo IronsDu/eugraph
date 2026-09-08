@@ -4,6 +4,7 @@
 #include "query/dataset/row.hpp"
 #include "query/evaluator/expression_evaluator.hpp"
 #include "query/physical_plan/operator/property_value_convert.hpp"
+#include "query/physical_plan/operator/vertex_index_maintenance.hpp"
 #include <spdlog/spdlog.h>
 
 namespace {
@@ -371,71 +372,26 @@ CreateNodePhysicalOp::buildLabelProps(ExpressionEvaluator& evaluator, const Data
 
 folly::coro::Task<bool>
 CreateNodePhysicalOp::insertVertex(VertexId vid, const std::vector<std::pair<LabelId, Properties>>& label_props) {
+    auto planned_entries = collectVertexIndexEntriesFromLabelProps(label_defs_, label_props, vid);
+
     bool ok = true;
-    if (!label_defs_.empty()) {
-        for (const auto& [label_id, props] : label_props) {
-            auto def_it = label_defs_.find(label_id);
-            if (def_it == label_defs_.end())
-                continue;
-            for (const auto& idx : def_it->second.indexes) {
-                if (!idx.unique)
-                    continue;
-                if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
-                    continue;
-                std::vector<PropertyValue> values;
-                bool allPresent = true;
-                for (auto prop_id : idx.prop_ids) {
-                    if (prop_id < props.size() && props[prop_id].has_value()) {
-                        values.push_back(props[prop_id].value());
-                    } else {
-                        allPresent = false;
-                        break;
-                    }
-                }
-                if (!allPresent)
-                    continue;
-                auto table = idx.prop_ids.size() == 1 ? vidxTable(label_id, idx.prop_ids[0])
-                                                      : vidxCompositeTable(label_id, idx.prop_ids);
-                bool constraint_ok = co_await store_.checkUniqueConstraint(table, values);
-                if (!constraint_ok) {
-                    spdlog::warn("Unique index constraint violated on index '{}'", idx.name);
-                    ok = false;
-                    break;
-                }
-            }
-            if (!ok)
-                break;
+    for (const auto& entry : planned_entries) {
+        if (!entry.unique)
+            continue;
+        bool constraint_ok = co_await store_.checkUniqueConstraint(entry.table, entry.values);
+        if (!constraint_ok) {
+            spdlog::warn("Unique index constraint violated while creating vertex {}", vid);
+            ok = false;
+            break;
         }
     }
 
     if (ok)
         ok = co_await store_.insertVertex(vid, label_props);
 
-    if (ok && !label_defs_.empty()) {
-        for (const auto& [label_id, props] : label_props) {
-            auto def_it = label_defs_.find(label_id);
-            if (def_it == label_defs_.end())
-                continue;
-            for (const auto& idx : def_it->second.indexes) {
-                if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
-                    continue;
-                std::vector<PropertyValue> values;
-                bool allPresent = true;
-                for (auto prop_id : idx.prop_ids) {
-                    if (prop_id < props.size() && props[prop_id].has_value()) {
-                        values.push_back(props[prop_id].value());
-                    } else {
-                        allPresent = false;
-                        break;
-                    }
-                }
-                if (!allPresent)
-                    continue;
-                auto table = idx.prop_ids.size() == 1 ? vidxTable(label_id, idx.prop_ids[0])
-                                                      : vidxCompositeTable(label_id, idx.prop_ids);
-                co_await store_.insertIndexEntry(table, values, vid);
-            }
-        }
+    if (ok) {
+        for (const auto& entry : planned_entries)
+            co_await store_.insertIndexEntry(entry.table, entry.values, entry.vid);
     }
     co_return ok;
 }

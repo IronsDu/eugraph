@@ -30,6 +30,7 @@ struct GraphSchema {
     EdgeLabelId next_edge_label_id = 1;
     VertexId next_vertex_id = 1;
     EdgeId next_edge_id = 1;
+    uint32_t next_index_id = 1;
 
     // Convenience accessors
 

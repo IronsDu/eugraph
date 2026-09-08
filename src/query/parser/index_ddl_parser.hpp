@@ -6,6 +6,14 @@
 
 namespace eugraph {
 
+struct IndexPropertyAccessor {
+    // Weak accessor: property_name only.
+    // Strong accessor: source_label + property_name.
+    bool is_strong = false;
+    std::string source_label;
+    std::string property_name;
+};
+
 struct IndexDdlStatement {
     enum Type {
         CREATE_VERTEX_INDEX,
@@ -18,7 +26,7 @@ struct IndexDdlStatement {
     bool unique = false;
     std::string index_name;
     std::string label_name;
-    std::vector<std::string> property_names;
+    std::vector<IndexPropertyAccessor> accessors;
 };
 
 class IndexDdlParser {

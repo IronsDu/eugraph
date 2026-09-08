@@ -30,13 +30,31 @@ IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, LabelId label_id,
                                          std::optional<std::vector<PropertyValue>> range_end,
                                          std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
                                          std::unordered_map<LabelId, LabelDef> label_defs)
-    : variable_(std::move(variable)), label_id_(label_id), prop_ids_(std::move(prop_ids)), mode_(mode),
+    : variable_(std::move(variable)), label_id_(label_id), index_id_(0), prop_ids_(std::move(prop_ids)), mode_(mode),
       eq_values_(std::move(eq_values)), range_start_(std::move(range_start)), range_end_(std::move(range_end)),
       output_types_(std::move(output_types)), store_(store), label_defs_(std::move(label_defs)) {}
 
+// Index-id based composite constructor
+IndexScanPhysicalOp::IndexScanPhysicalOp(std::string variable, uint32_t index_id, std::vector<uint16_t> prop_ids,
+                                         ScanMode mode, std::vector<PropertyValue> eq_values,
+                                         std::optional<std::vector<PropertyValue>> range_start,
+                                         std::optional<std::vector<PropertyValue>> range_end,
+                                         std::vector<binder::BoundType> output_types, IAsyncGraphDataStore& store,
+                                         std::unordered_map<LabelId, LabelDef> label_defs)
+    : variable_(std::move(variable)), label_id_(INVALID_LABEL_ID), index_id_(index_id), prop_ids_(std::move(prop_ids)),
+      mode_(mode), eq_values_(std::move(eq_values)), range_start_(std::move(range_start)),
+      range_end_(std::move(range_end)), output_types_(std::move(output_types)), store_(store),
+      label_defs_(std::move(label_defs)) {}
+
 folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
     folly::coro::AsyncGenerator<std::vector<VertexId>> gen;
-    if (mode_ == ScanMode::EQUALITY) {
+    if (index_id_ != 0) {
+        if (mode_ == ScanMode::EQUALITY) {
+            gen = store_.scanVerticesByIndexId(index_id_, eq_values_);
+        } else {
+            gen = store_.scanVerticesByIndexIdRange(index_id_, range_start_, range_end_);
+        }
+    } else if (mode_ == ScanMode::EQUALITY) {
         if (prop_ids_.size() == 1) {
             gen = store_.scanVerticesByIndex(label_id_, prop_ids_[0], eq_values_[0]);
         } else {
