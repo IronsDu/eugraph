@@ -240,19 +240,6 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                             if (edgeIdFromValue(eval) != entry.edge_id)
                                 continue;
                         }
-                        // Filter by destination vertex label constraint (e.g. (b:Person))
-                        if (!dst_label_ids_.empty()) {
-                            auto labels = co_await store_.getVertexLabels(entry.neighbor_id);
-                            bool ok = true;
-                            for (LabelId need : dst_label_ids_) {
-                                if (labels.find(need) == labels.end()) {
-                                    ok = false;
-                                    break;
-                                }
-                            }
-                            if (!ok)
-                                continue;
-                        }
                         bool phy_out = (scan_dir == Direction::OUT);
                         edges.push_back(
                             {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
@@ -344,18 +331,6 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                 if (edgeIdFromValue(eval) != entry.edge_id)
                                     continue;
                             }
-                            if (!dst_label_ids_.empty()) {
-                                auto labels = co_await store_.getVertexLabels(entry.neighbor_id);
-                                bool ok = true;
-                                for (LabelId need : dst_label_ids_) {
-                                    if (labels.find(need) == labels.end()) {
-                                        ok = false;
-                                        break;
-                                    }
-                                }
-                                if (!ok)
-                                    continue;
-                            }
                             bool phy_out = (dir == Direction::OUT);
                             edges.push_back(
                                 {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
@@ -363,6 +338,31 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     }
                 }
             }
+        }
+
+        // Apply destination label filters in one batched lookup instead of
+        // dispatching getVertexLabels per edge.
+        if (!edges.empty() && !dst_label_ids_.empty()) {
+            std::vector<VertexId> neighbors;
+            std::unordered_set<VertexId> seen;
+            for (const auto& e : edges)
+                if (seen.insert(e.dst_id).second)
+                    neighbors.push_back(e.dst_id);
+            auto labels_batch = co_await store_.getVertexLabelsBatch(neighbors);
+            std::unordered_map<VertexId, LabelIdSet> label_map;
+            for (size_t i = 0; i < neighbors.size() && i < labels_batch.size(); ++i)
+                label_map[neighbors[i]] = std::move(labels_batch[i]);
+            edges.erase(std::remove_if(edges.begin(), edges.end(),
+                                       [&](const EdgeEntry& e) {
+                                           auto it = label_map.find(e.dst_id);
+                                           if (it == label_map.end())
+                                               return true;
+                                           for (LabelId need : dst_label_ids_)
+                                               if (it->second.find(need) == it->second.end())
+                                                   return true;
+                                           return false;
+                                       }),
+                        edges.end());
         }
 
         if (edges.empty())
