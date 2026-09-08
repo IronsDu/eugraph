@@ -373,4 +373,27 @@ short-7 复测：此前 6.3/7.5 表格里 <1s 的结果用的是 **无回复 mes
 - 仍不跑：complex-5/6/7（机器卡死类）、complex-1/13/14（shortest path）、complex-10（语法）。
 - 本轮未跑：complex-3、complex-9（风险较高，待单独排查）；short-7 有回复版超过 240s，未继续。
 - 性能遗留：complex-2、complex-8、complex-11 仍比 Neo4j 慢 7.6~20x；complex-4 修复后仍慢 13.4x，瓶颈转向聚合/排序/ProjectionExtract。
-- 正确性遗留：complex-12 仍受 WITH 后 MATCH 属性物化缺陷影响，返回 1 行 `null`，Neo4j 为 20 行。
+- complex-12 正确性问题已在 8.6 修复，当前为约 30 倍性能遗留（`tag.id IN tags` 未下推）。
+
+### 8.6 complex-12 正确性修复 + 起点过滤下推（2026-09-08 晚）
+
+**根因**：`MATCH ... WITH ... MATCH (:Person {id: ...})` 中，匿名起点带 inline property
+时，`needs_cross` 路径在跨 join 后重放属性过滤时找不到变量名，直接返回 `nullopt` 且未报错；
+外层子句循环把 `current` 清空，后续 MATCH 被静默丢弃，计划退化为 `Aggregate(Singleton)`。
+
+**修复**：
+1. 从右子作用域恢复匿名起点 `__anon_N`，正确补上属性过滤；
+2. literal / parameter 型起点属性过滤下推到 CrossProduct 右子计划内部，使
+   `Filter(LabelScan(Person))` 可以被 planner 优化为 `Person(id) IndexScan`。
+
+**结果**（1 次预热 + 3 次中位，单位 ms）：
+
+| Query | 修复前 EuGraph | 修复后 EuGraph | Neo4j | 行数 |
+|-------|---------------:|---------------:|------:|-----:|
+| complex-12-p1 | 1 行 null/空；实跑超时并冲高内存 | 2966.6 | 97.6 | 20/20 ✅ |
+| complex-12-p2 | 同上 | 2910.2 | 82.1 | 20/20 ✅ |
+
+EXPLAIN 已确认右侧从 `LabelScan(Person)` 变为 `IndexScan(__anon_0, label=Person, mode=eq)`。
+
+**剩余问题**：`tag.id IN tags` 仍位于 CrossProduct 之上，未下推为 Tag(id) 索引查找 /
+semi-join；Q12 约慢 Neo4j 30 倍，作为后续优化项。
