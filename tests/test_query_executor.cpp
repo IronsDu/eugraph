@@ -150,6 +150,13 @@ protected:
         ASSERT_TRUE(sync_data_->insertEdge(txn, 5, 2, 6, LIVES_IN_LABEL, 0, {}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
+
+    // Extra LIVES_IN edge 5 -> 2 for correlated-start reverse-expand tests.
+    void addReverseLivesInEdge() {
+        auto txn = sync_data_->beginTransaction();
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 6, 5, 2, LIVES_IN_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
 };
 
 // Helper: drain prepareStream into ExecutionResult (replaces the old executeSync/executeAsync)
@@ -215,6 +222,18 @@ std::vector<std::string> collectStrings(const ExecutionResult& result, size_t co
             values.push_back(std::get<std::string>(row[column]));
     }
     return values;
+}
+
+std::string getExplainPlanText(QueryExecutor& executor, const std::string& query) {
+    auto result = execSync(executor, "EXPLAIN " + query);
+    if (!result.error.empty())
+        return "";
+    std::string plan_text;
+    for (const auto& row : result.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan_text += std::get<std::string>(row[0]) + "\n";
+    }
+    return plan_text;
 }
 
 } // anonymous namespace
@@ -1553,6 +1572,91 @@ TEST_F(QueryExecutorTest, ExplainWithLimit) {
         }
     }
     EXPECT_NE(plan_text.find("Limit(5)"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, MatchMultiplePatternReusedStartAvoidsCrossProduct) {
+    insertMultiHopEdges();
+    addReverseLivesInEdge();
+
+    const std::string query = "MATCH (a:Person)-[:KNOWS]->(friend:Person), "
+                              "(friend)<-[:LIVES_IN]-(c) "
+                              "RETURN a, friend, c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_EQ(plan_text.find("AllNodeScan"), std::string::npos);
+    EXPECT_EQ(plan_text.find("CrossProduct"), std::string::npos);
+
+    size_t expand_count = 0;
+    for (size_t pos = plan_text.find("Expand("); pos != std::string::npos; pos = plan_text.find("Expand(", pos + 1)) {
+        ++expand_count;
+    }
+    EXPECT_GE(expand_count, 2u);
+}
+
+TEST_F(QueryExecutorTest, WithThenMultiplePatternReusedStartAvoidsCrossProduct) {
+    insertMultiHopEdges();
+
+    const std::string query = "MATCH (a:Person)-[:KNOWS]->(b:Person) "
+                              "WITH a, b "
+                              "MATCH (b)-[:KNOWS]->(c), "
+                              "(c)-[:KNOWS]->(d) "
+                              "RETURN a, b, c, d";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_EQ(plan_text.find("AllNodeScan"), std::string::npos);
+    EXPECT_EQ(plan_text.find("CrossProduct"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, MultiplePatternReusedStartLabelFilterAndReverseExpand) {
+    insertMultiHopEdges();
+    addReverseLivesInEdge();
+
+    const std::string query = "MATCH (a:Person)-[:KNOWS]->(friend), "
+                              "(friend:Person)<-[:LIVES_IN]-(c) "
+                              "RETURN a, friend, c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_EQ(plan_text.find("AllNodeScan"), std::string::npos);
+    EXPECT_EQ(plan_text.find("CrossProduct"), std::string::npos);
+    EXPECT_NE(plan_text.find("Filter"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, CartesianMultiplePatternIndependentStartStillCrossProduct) {
+    insertTestVertices();
+
+    const std::string query = "MATCH (a:Person), (b:Person) RETURN a, b";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 25u);
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_NE(plan_text.find("CrossProduct"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, MultiplePatternRepeatedStartNodeHasSingleScanSemantics) {
+    insertTestVertices();
+
+    const std::string query = "MATCH (a:Person), (a:Person) RETURN a";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 5u);
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_EQ(plan_text.find("CrossProduct"), std::string::npos);
 }
 
 TEST_F(QueryExecutorTest, ExplainCreateNode) {
