@@ -303,3 +303,74 @@ short-7 复测：此前 6.3/7.5 表格里 <1s 的结果用的是 **无回复 mes
 本轮该参数原版为 **18.8ms**；改用“有回复的 messageId=1030792151049”后，原版和 UNION ALL 改写版均超过 60s
 （瓶颈是 `OPTIONAL MATCH (m)-[:HAS_CREATOR]->(a:Person)-[r:KNOWS]-(p)`，与 Message 点查索引无关）。
 该查询仍需后续优化 OPTIONAL MATCH + 无方向关系模式。
+
+---
+
+## 8. WSL 同环境复测 + 多 pattern 关联修复（2026-09-08）
+
+> 分支：`feature/ldbc-sf0.1-perf-retest`
+> 数据：`/mnt/f/code/eugraph/social_network-sf0.1-CsvComposite-LongDateFormatter`
+> 查询：`/mnt/f/code/ldbc_snb_interactive_v1_impls/cypher/queries/` 原版查询，不再改写 `:Message` 或关系类型。
+> 方法：Neo4j 与 EuGraph 均通过 Python `neo4j` Bolt driver 执行相同查询文本；每语句 1 次预热 + 3 次计时取中位数。
+> 端口：Neo4j Bolt 7690；EuGraph Bolt 7698。
+
+### 8.1 数据与参数口径
+
+- EuGraph 使用 converted Neo4j-header CSV 经 CLI 映射导入：8 个点文件 + 23 个边文件；loader 4 client/concurrency，`--wt-txn-sync none`，导入耗时 57.9s。
+- Neo4j 导入时发现 5.26.30 的 `neo4j-admin import --id-type=INTEGER` 在多个 node group 的 ID 空间重叠时会在 WSL 环境写坏部分 `id` 属性；改为生成全局唯一的 `extId:ID` 并保留原 `id` 属性后导入正确，导入耗时 1m24.8s。
+- 仓库自带的 `substitution_parameters` 是 sf1 参数，多数 personId 在当前 sf0.1 数据中不存在。本轮两边使用同一组从数据中选取的有效参数：
+  - complex-2/3/4/9/11/12、short-1/2/3：`personId=1242`
+  - complex-8：`personId=143`、`150`
+  - short-4/5/6：Post `messageId=3`、Comment `messageId=32485`
+  - short-7：有回复 `messageId=893353237791`、无回复 `messageId=618475290625`
+
+### 8.2 修复内容
+
+`Binder::bindMatch` 中，MATCH 内第 2 个及之后的 pattern part 如果起点变量已在当前计划中绑定，
+不再放进独立子作用域生成 `AllNodeScan + CrossProduct + 等值 Filter`，而是复用已有列直接作为
+`Expand` / `VarLenExpand` 的源，续接前一个计划。
+
+- 修复前 complex-4 与 short-2 计划均包含 `AllNodeScan` + `CrossProduct`；
+- 修复后两者计划均为 `IndexScan → Expand/VarLenExpand` 链，`AllNodeScan=0`、`CrossProduct=0`。
+- 新增 5 个 `query_executor_tests` 回归用例，覆盖同 MATCH 多 pattern、WITH 后 MATCH 多 pattern、
+  反向 Expand、复用起点 label 过滤，以及无共享变量的 Cartesian 不受影响。
+
+### 8.3 修复前后对比
+
+| Query | 修复前 EuGraph(ms) | 修复后 EuGraph(ms) | Neo4j(ms) | 提升 | 行数 |
+|-------|-------------------:|-------------------:|----------:|-----:|-----:|
+| complex-4 | 20326.7（旧二进制单次） | 330.5 | 24.8 | ~61x | 10/10 |
+| short-2 | 16826.5（旧二进制单次） | 13.1 | 5.8 | ~1285x | 10/10 |
+
+> complex-4 修复前为 7.6 节旧环境 4140ms，修复后同环境 330.5ms，也下降约 12.5x；
+> 上表 20326.7ms 是修复前在 WSL 当前环境的单次冷跑，提升倍数偏保守/偏大取决于口径。
+
+### 8.4 修复后安全查询全集（当前 WSL 同环境）
+
+| Query | 行数 Neo4j/EuGraph | Neo4j(ms) | EuGraph(ms) | 倍数 | 备注 |
+|-------|-------------------:|----------:|------------:|-----:|------|
+| complex-2 | 20/20 | 20.7 | 416.9 | 20.1x | |
+| complex-4 | 10/10 | 24.8 | 330.5 | 13.4x | 已无 AllNodeScan |
+| complex-8-p1 | 20/20 | 8.7 | 105.5 | 12.2x | |
+| complex-8-p2 | 20/20 | 6.5 | 50.0 | 7.6x | |
+| complex-11-p1 | 6/6 | 13.0 | 170.6 | 13.1x | |
+| complex-11-p2 | 10/10 | 12.5 | 212.3 | 16.9x | |
+| complex-12-p1 | 20/**1** | 111.1 | 1.9 | - | EuGraph 仍返回 1 行 null/空，正确性 bug |
+| complex-12-p2 | 20/**1** | 95.5 | 1.6 | - | 同上 |
+| short-1 | 1/1 | 4.3 | 1.7 | 0.4x | 快于 Neo4j |
+| short-2 | 10/10 | 5.8 | 13.1 | 2.3x | 已修复，接近 Neo4j |
+| short-3 | 44/44 | 5.9 | 4.8 | 0.8x | 快于 Neo4j |
+| short-4 Post | 1/1 | 4.1 | 2.2 | 0.5x | Message(id) 索引生效 |
+| short-4 Comment | 1/1 | 3.6 | 1.5 | 0.4x | 同上 |
+| short-5 Post | 1/1 | 3.9 | 1.6 | 0.4x | |
+| short-5 Comment | 1/1 | 3.9 | 2.0 | 0.5x | |
+| short-6 Post | 1/1 | 4.3 | 2.5 | 0.6x | |
+| short-6 Comment | 1/1 | 3.9 | 2.2 | 0.6x | |
+| short-7 无回复 | 0/0 | 4.1 | 2.9 | 0.7x | |
+
+### 8.5 仍未跑 / 遗留问题
+
+- 仍不跑：complex-5/6/7（机器卡死类）、complex-1/13/14（shortest path）、complex-10（语法）。
+- 本轮未跑：complex-3、complex-9（风险较高，待单独排查）；short-7 有回复版超过 240s，未继续。
+- 性能遗留：complex-2、complex-8、complex-11 仍比 Neo4j 慢 7.6~20x；complex-4 修复后仍慢 13.4x，瓶颈转向聚合/排序/ProjectionExtract。
+- 正确性遗留：complex-12 仍受 WITH 后 MATCH 属性物化缺陷影响，返回 1 行 `null`，Neo4j 为 20 行。

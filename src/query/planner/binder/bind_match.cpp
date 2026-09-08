@@ -340,12 +340,24 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         std::optional<BoundLogicalOperator> previous = std::move(current);
         current = std::nullopt;
 
-        // Bind each later pattern part in an isolated scope; reused variables
-        // become local columns and are constrained via equality filters when
-        // joined with the previous part.
+        // A later pattern part whose start node is already bound in the
+        // current plan is a correlated continuation: reuse the existing
+        // column as the expand source instead of scanning it independently
+        // and constraining it with a post-CrossProduct equality filter.
+        const ColumnInfo* previous_start_info = nullptr;
+        bool correlated_with_previous = false;
+        if (pi > 0 && previous && element.node.variable) {
+            previous_start_info = ctx_.lookup(*element.node.variable);
+            if (previous_start_info && isCompatibleForPatternUse(previous_start_info->type, BoundType::Vertex())) {
+                correlated_with_previous = true;
+            }
+        }
+
+        // Bind each isolated later pattern part in a fresh scope; variables
+        // reused in non-start positions are still joined by equality filters.
         BindContext::Snapshot part_left_scope;
         BindContext::Snapshot part_right_scope;
-        bool isolate_part = (pi > 0);
+        bool isolate_part = (pi > 0) && !correlated_with_previous;
         if (isolate_part) {
             part_left_scope = ctx_.save();
             ctx_.beginSubScope();
@@ -367,15 +379,16 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             correlated = false;
         }
 
-        if (correlated) {
-            auto* col = ctx_.lookup(*element.node.variable);
-            if (!col) {
+        if (correlated || correlated_with_previous) {
+            const ColumnInfo* start_info =
+                correlated_with_previous ? previous_start_info : ctx_.lookup(*element.node.variable);
+            if (!start_info) {
                 error("MATCH after WITH on unrelated variable '" + *element.node.variable + "' is not yet supported");
                 return std::nullopt;
             }
             if (!bindNodePattern(element.node, start_var, start_col, start_labels, start_prop_ids, true))
                 return std::nullopt;
-            start_col = col->column_index;
+            start_col = start_info->column_index;
         } else {
             if (!bindNodePattern(element.node, start_var, start_col, start_labels, start_prop_ids))
                 return std::nullopt;
@@ -385,9 +398,14 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         std::vector<std::string> path_element_vars;
         path_element_vars.push_back(start_var);
 
-        // Create scan operator (or reuse parent for correlated MATCH)
-        if (correlated) {
-            current = std::move(*parent);
+        // Create scan operator (or reuse the already-bound start variable
+        // from the parent / previous pattern part for correlated MATCH).
+        if (correlated || correlated_with_previous) {
+            if (correlated) {
+                current = std::move(*parent);
+            } else {
+                current = std::move(*previous);
+            }
 
             // Correlated MATCH start nodes must still satisfy their label
             // predicates. The parent pipeline already carries the variable, so
@@ -827,7 +845,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         }
 
         // For patterns after the first, join with previous via cross product.
-        if (pi > 0 && previous && current) {
+        if (pi > 0 && !correlated_with_previous && previous && current) {
             if (isolate_part) {
                 part_right_scope = ctx_.save();
                 ctx_.restore(part_left_scope);
