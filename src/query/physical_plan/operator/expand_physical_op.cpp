@@ -2,6 +2,8 @@
 #include "common/types/graph_types.hpp"
 #include "query/dataset/row.hpp"
 
+#include <spdlog/spdlog.h>
+
 namespace eugraph {
 namespace compute {
 
@@ -141,6 +143,20 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         co_return;
     }
 
+    const bool allowed_filter = allowed_dst_index_id_ != 0 && allowed_edge_label_ != INVALID_EDGE_LABEL_ID &&
+                                allowed_dst_values_ && !allowed_dst_values_->empty();
+    std::vector<VertexId> allowed_dst_vids;
+    if (allowed_filter) {
+        for (const auto& value : *allowed_dst_values_) {
+            std::vector<PropertyValue> one{value};
+            auto gen = store_.scanVerticesByIndexId(allowed_dst_index_id_, one);
+            while (auto batch = co_await gen.next()) {
+                for (VertexId vid : *batch)
+                    allowed_dst_vids.push_back(vid);
+            }
+        }
+    }
+
     auto child_gen = child_->executeChunk();
 
     auto dir = Direction::OUT;
@@ -185,6 +201,19 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         std::vector<EdgeEntry> edges;
 
         auto scanOneDirection = [&](VertexId src_id, size_t src_row, Direction scan_dir) -> folly::coro::Task<void> {
+            if (allowed_filter && scan_dir == Direction::OUT) {
+                for (VertexId dst_id : allowed_dst_vids) {
+                    auto type_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
+                    while (auto type_batch = co_await type_gen.next()) {
+                        for (const auto& entry : *type_batch) {
+                            edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
+                            break;
+                        }
+                        break;
+                    }
+                }
+                co_return;
+            }
             for (const auto& label_filter : scan_filters) {
                 auto edge_gen = store_.scanEdges(src_id, scan_dir, label_filter);
                 while (auto edge_batch = co_await edge_gen.next()) {
@@ -256,6 +285,19 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                            }),
                             edges.end());
             } else {
+                if (allowed_filter && dir == Direction::OUT) {
+                    for (VertexId dst_id : allowed_dst_vids) {
+                        auto type_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
+                        while (auto type_batch = co_await type_gen.next()) {
+                            for (const auto& entry : *type_batch) {
+                                edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
+                                break;
+                            }
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 for (const auto& label_filter : scan_filters) {
                     auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
                     while (auto edge_batch = co_await edge_gen.next()) {
