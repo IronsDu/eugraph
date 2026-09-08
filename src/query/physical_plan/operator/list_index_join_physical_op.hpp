@@ -3,6 +3,7 @@
 #include "common/types/graph_types.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/physical_plan/operator/expand_physical_op.hpp"
+#include "query/physical_plan/operator/index_scan_values_physical_op.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_type.hpp"
 
@@ -30,6 +31,10 @@ public:
           left_list_col_(left_list_col), output_types_(std::move(output_types)),
           output_schema_(std::move(output_schema)) {}
 
+    void setIndexScanSource(IndexScanValuesPhysicalOp* source) {
+        filtered_source_ = source;
+    }
+
     folly::coro::AsyncGenerator<RowBatch> execute() override {
         return executeViaChunk();
     }
@@ -45,6 +50,7 @@ private:
     std::unique_ptr<PhysicalOperator> left_;
     std::unique_ptr<PhysicalOperator> right_;
     ExpandPhysicalOp* filtered_expand_;
+    IndexScanValuesPhysicalOp* filtered_source_ = nullptr;
     uint32_t left_list_col_;
     std::vector<binder::BoundType> output_types_;
     Schema output_schema_;
