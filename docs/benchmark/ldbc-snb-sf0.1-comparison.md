@@ -397,3 +397,15 @@ EXPLAIN 已确认右侧从 `LabelScan(Person)` 变为 `IndexScan(__anon_0, label
 
 **剩余问题**：`tag.id IN tags` 仍位于 CrossProduct 之上，未下推为 Tag(id) 索引查找 /
 semi-join；Q12 约慢 Neo4j 30 倍，作为后续优化项。
+
+### 8.7 ListIndexJoin 结构优化（进行中）
+
+`Filter(CrossProduct(left,right))` 上的 `right.x.prop IN left.list` 已改写为
+`ListIndexJoinPhysicalOp`：左列表注入右分支的 `ExpandPhysicalOp`，Expand 对列表值做
+`x` 索引解析 + `HAS_*` 边点查，不再扫描全部邻居。计划形态已从
+`Filter(CrossProduct)` 变为 `ListIndexJoin`，Q12 结果保持 2 行正确。
+
+本机 sf0.1 测得的 Q12 耗时仍约 1.0s（与基线相当）。进一步拆分显示无 IN 过滤时右分支
+（Person→friend→comment→post→tag）自身约 1.05s，而从单个 Tag 反向展开仅约 4ms。
+下一步是把右分支改为从 Tag 索引侧反向展开到 Person（`IndexScanValues + 反向 Expand 链`），
+预期可将 Q12 降到两位数 ms 级别。
