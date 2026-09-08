@@ -409,3 +409,18 @@ semi-join；Q12 约慢 Neo4j 30 倍，作为后续优化项。
 （Person→friend→comment→post→tag）自身约 1.05s，而从单个 Tag 反向展开仅约 4ms。
 下一步是把右分支改为从 Tag 索引侧反向展开到 Person（`IndexScanValues + 反向 Expand 链`），
 预期可将 Q12 降到两位数 ms 级别。
+
+### 8.8 结论与后续方向（2026-09-08 深夜复盘）
+
+实验证明：
+- `ListIndexJoin + Expand allowed-filter` 能修正计划形态，但 Q12 本地耗时没有下降；
+- 右分支 `Person→friend→comment→post→tag` 本身约 1.05s，是真正瓶颈；
+- 从 Tag 侧反向展开的单 Tag 探针仅约 4ms，方向正确；
+- 但在 PhysicalPlanner 手工反向构建 Expand 链 + 手工管理 schema/slot/PE 的路径
+  正确性成本过高，已放弃并移除该实验代码。
+
+后续采用：
+1. `ApplyPhysicalOp`：相关执行框架；
+2. logical/binder 层“线性 pattern 重排”：将 `Tag` 重排为右 pattern 起点；
+3. `IndexScanValues` 叶子：按左列表逐值做 `Tag(id)` 点查；
+4. 由现有 planner/ProjectionExtract 统一处理 schema/slot/PE。

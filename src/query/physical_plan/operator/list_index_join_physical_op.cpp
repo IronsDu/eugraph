@@ -27,9 +27,6 @@ folly::coro::AsyncGenerator<DataChunk> ListIndexJoinPhysicalOp::executeChunk() {
             }
             if (filtered_expand_)
                 filtered_expand_->setAllowedDstValues(allowed);
-            if (filtered_source_) {
-                filtered_source_->setValues(allowed);
-            }
 
             auto right_gen = right_->executeChunk();
             while (auto right_chunk = co_await right_gen.next()) {
