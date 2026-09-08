@@ -2,8 +2,6 @@
 #include "common/types/graph_types.hpp"
 #include "query/dataset/row.hpp"
 
-#include <spdlog/spdlog.h>
-
 namespace eugraph {
 namespace compute {
 
@@ -201,12 +199,22 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         std::vector<EdgeEntry> edges;
 
         auto scanOneDirection = [&](VertexId src_id, size_t src_row, Direction scan_dir) -> folly::coro::Task<void> {
-            if (allowed_filter && scan_dir == Direction::OUT) {
+            if (allowed_filter) {
                 for (VertexId dst_id : allowed_dst_vids) {
-                    auto type_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
-                    while (auto type_batch = co_await type_gen.next()) {
-                        for (const auto& entry : *type_batch) {
+                    auto out_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
+                    while (auto out_batch = co_await out_gen.next()) {
+                        for (const auto& entry : *out_batch) {
                             edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
+                            break;
+                        }
+                        break;
+                    }
+                    auto in_gen = store_.scanEdgesByType(allowed_edge_label_, dst_id, src_id);
+                    while (auto in_batch = co_await in_gen.next()) {
+                        for (const auto& entry : *in_batch) {
+                            if (entry.src_vertex_id == entry.dst_vertex_id)
+                                continue;
+                            edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, false});
                             break;
                         }
                         break;
@@ -265,6 +273,10 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             if (src_id == INVALID_VERTEX_ID)
                 continue;
 
+            if (allowed_filter) {
+                co_await scanOneDirection(src_id, src_row, Direction::OUT);
+                continue;
+            }
             if (split_undirected) {
                 size_t before_out = edges.size();
                 co_await scanOneDirection(src_id, src_row, Direction::OUT);
@@ -285,15 +297,28 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                            }),
                             edges.end());
             } else {
-                if (allowed_filter && dir == Direction::OUT) {
+                if (allowed_filter) {
                     for (VertexId dst_id : allowed_dst_vids) {
-                        auto type_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
-                        while (auto type_batch = co_await type_gen.next()) {
-                            for (const auto& entry : *type_batch) {
+                        auto out_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
+                        while (auto out_batch = co_await out_gen.next()) {
+                            for (const auto& entry : *out_batch) {
                                 edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
                                 break;
                             }
                             break;
+                        }
+                        if (dir == Direction::BOTH) {
+                            auto in_gen = store_.scanEdgesByType(allowed_edge_label_, dst_id, src_id);
+                            while (auto in_batch = co_await in_gen.next()) {
+                                for (const auto& entry : *in_batch) {
+                                    if (entry.src_vertex_id == entry.dst_vertex_id)
+                                        continue;
+                                    edges.push_back(
+                                        {src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, false});
+                                    break;
+                                }
+                                break;
+                            }
                         }
                     }
                     continue;

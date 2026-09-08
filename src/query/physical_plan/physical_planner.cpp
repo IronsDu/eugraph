@@ -1399,15 +1399,15 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
                 std::vector<binder::BoundType> output_types = cur.output_types;
                 Schema output_schema = input_schema;
                 int edge_existing = e.edge_variable.empty() ? -1 : findColumn(input_schema, e.edge_variable);
-                int dst_existing = e.dst_variable.empty() ? -1 : findColumn(input_schema, e.dst_variable);
+                int dst_existing = e.src_variable.empty() ? -1 : findColumn(input_schema, e.src_variable);
                 bool edge_bound = edge_existing >= 0;
                 bool dst_bound = dst_existing >= 0;
                 if (!e.edge_variable.empty() && !edge_bound) {
                     output_schema.push_back(e.edge_variable);
                     output_types.push_back(binder::BoundType::EdgeKey());
                 }
-                if (!e.dst_variable.empty() && !dst_bound) {
-                    output_schema.push_back(e.dst_variable);
+                if (!e.src_variable.empty() && !dst_bound) {
+                    output_schema.push_back(e.src_variable);
                     output_types.push_back(binder::BoundType::VertexRef());
                 }
 
