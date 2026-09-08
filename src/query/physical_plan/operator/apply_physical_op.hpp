@@ -2,6 +2,7 @@
 
 #include "query/dataset/data_chunk.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
+#include "query/physical_plan/operator/index_scan_values_physical_op.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 #include "query/planner/bound_type.hpp"
 
@@ -37,6 +38,9 @@ public:
     std::string toString() const override {
         return "Apply";
     }
+    void setValueSink(IndexScanValuesPhysicalOp* sink) {
+        value_sink_ = sink;
+    }
     std::vector<const PhysicalOperator*> children() const override {
         return {left_.get(), right_.get()};
     }
@@ -45,6 +49,7 @@ private:
     std::unique_ptr<PhysicalOperator> left_;
     std::unique_ptr<PhysicalOperator> right_;
     CorrelatedSourcePhysicalOp* correlated_source_;
+    IndexScanValuesPhysicalOp* value_sink_ = nullptr;
     std::vector<uint32_t> left_correlation_cols_;
     std::vector<binder::BoundType> right_output_types_;
 };
