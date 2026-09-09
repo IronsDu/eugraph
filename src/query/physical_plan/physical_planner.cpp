@@ -1290,13 +1290,16 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
         return std::nullopt;
     }
 
-    // Logical reorder: build a reversed right subtree whose leaf is an
-    // index-value scan over `left.tags`, then plan it with the normal
-    // planner and execute it as a correlated Apply.
+    // Logical reorder into a HashJoin(friend), mirroring Neo4j's Q12 plan:
+    //
+    //   Apply(left: collect(tag.id) AS tags,
+    //        HashJoin(left: IndexScanValues(Tag) -> ... -> friend,
+    //                 right: Person(id) -> KNOWS -> friend))
     {
         std::vector<const binder::BoundExpandOp*> chain;
         binder::BoundFilterOp* start_filter_op = nullptr;
         LabelId leaf_label = INVALID_LABEL_ID;
+        std::optional<binder::BoundLabelScanOp> leaf_scan;
         std::function<void(binder::BoundLogicalOperator&)> collect = [&](binder::BoundLogicalOperator& op) {
             std::visit(
                 [&](auto& val) {
@@ -1314,6 +1317,7 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
                     } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
                         if (val.label_ids.size() == 1)
                             leaf_label = val.label_ids[0];
+                        leaf_scan = val;
                     } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
                         if (val)
                             collect(val->child);
@@ -1335,26 +1339,27 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
         };
         collect(join.right);
 
-        bool chain_ok = !chain.empty();
+        bool chain_ok = chain.size() >= 2 && start_filter_op && leaf_scan.has_value();
         for (const auto* e : chain)
             if (e->edge_label_ids.empty())
                 chain_ok = false;
-
         if (chain_ok && chain.front()->dst_variable == dst_var) {
-            binder::BoundLogicalOperator reversed;
+            const std::string friend_var = chain[chain.size() - 1]->dst_variable;
+            const std::string person_var = chain[chain.size() - 1]->src_variable;
+
+            // Build Tag side: IndexScanValues(Tag) -> reversed expands up to friend.
+            binder::BoundLogicalOperator tag_side;
             {
                 binder::BoundLabelScanOp leaf;
                 leaf.variable = chain.front()->dst_variable;
                 leaf.column_index = 0;
                 leaf.label_ids = {expand_dst_label != INVALID_LABEL_ID ? expand_dst_label : prop_label};
-                leaf.label_names = {};
                 leaf.label_prop_ids = chain.front()->dst_label_prop_ids;
                 leaf.index_scan_values = true;
                 leaf.index_id = index_id;
-                reversed = leaf;
+                tag_side = leaf;
             }
-
-            for (size_t i = 0; i < chain.size(); ++i) {
+            for (size_t i = 0; i + 1 < chain.size(); ++i) {
                 const auto* e = chain[i];
                 auto expand = std::make_unique<binder::BoundExpandOp>();
                 expand->src_variable = e->dst_variable;
@@ -1368,25 +1373,69 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
                     expand->direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
                 else if (expand->direction == cypher::RelationshipDirection::RIGHT_TO_LEFT)
                     expand->direction = cypher::RelationshipDirection::LEFT_TO_RIGHT;
-
-                // The reversed dst is the original expand's src. Its label
-                // constraint lives on the original child expand (or on the
-                // leaf LabelScan for the bottom-most expand).
-                if (i + 1 < chain.size() && chain[i + 1]->dst_variable == e->src_variable)
+                if (i + 1 < chain.size() - 1 && chain[i + 1]->dst_variable == e->src_variable)
                     expand->dst_label_ids = chain[i + 1]->dst_label_ids;
-                else if (i + 1 == chain.size() && leaf_label != INVALID_LABEL_ID)
-                    expand->dst_label_ids = {leaf_label};
+                else if (i + 1 == chain.size() - 1 && chain[i + 1]->dst_variable == e->src_variable)
+                    expand->dst_label_ids = chain[i + 1]->dst_label_ids;
+                expand->child = std::move(tag_side);
+                tag_side = std::move(expand);
+            }
 
-                expand->child = std::move(reversed);
-                reversed = std::move(expand);
+            // Build Person side from the original bottom-most expand + filter + leaf.
+            binder::BoundLogicalOperator person_side;
+            {
+                auto filter = std::make_unique<binder::BoundFilterOp>();
+                filter->predicate = std::move(start_filter_op->predicate);
+                filter->child = *leaf_scan;
+                person_side = std::move(filter);
+            }
+            {
+                const auto* e = chain.back();
+                auto expand = std::make_unique<binder::BoundExpandOp>();
+                expand->src_variable = e->src_variable;
+                expand->src_column_index = 0;
+                expand->edge_variable = e->edge_variable;
+                expand->dst_variable = e->dst_variable;
+                expand->dst_column_index = 0;
+                expand->edge_label_ids = e->edge_label_ids;
+                expand->direction = e->direction;
+                expand->dst_label_ids = e->dst_label_ids;
+                expand->dst_label_prop_ids = e->dst_label_prop_ids;
+                expand->edge_prop_ids = e->edge_prop_ids;
+                expand->child = std::move(person_side);
+                person_side = std::move(expand);
             }
 
             Schema right_input_schema;
             std::vector<binder::BoundType> right_input_types;
-            auto right_result = planBoundOperator(reversed, store, meta, ctx, right_input_schema, right_input_types);
-            if (std::holds_alternative<std::string>(right_result))
+            auto tag_result = planBoundOperator(tag_side, store, meta, ctx, right_input_schema, right_input_types);
+            if (std::holds_alternative<std::string>(tag_result))
                 return std::nullopt;
-            auto rr = extractChildResult(std::move(right_result));
+            auto tr = extractChildResult(std::move(tag_result));
+
+            auto person_result =
+                planBoundOperator(person_side, store, meta, ctx, right_input_schema, right_input_types);
+            if (std::holds_alternative<std::string>(person_result))
+                return std::nullopt;
+            auto pr = extractChildResult(std::move(person_result));
+
+            int left_key = findColumn(tr.output_schema, friend_var);
+            int right_key = findColumn(pr.output_schema, friend_var);
+            if (left_key < 0 || right_key < 0)
+                return std::nullopt;
+
+            Schema hj_schema = tr.output_schema;
+            hj_schema.insert(hj_schema.end(), pr.output_schema.begin(), pr.output_schema.end());
+            auto hj_types = tr.output_types;
+            hj_types.insert(hj_types.end(), pr.output_types.begin(), pr.output_types.end());
+            TupleSlotLayout hj_layout = tr.slot_layout;
+            hj_layout.merge(pr.slot_layout);
+
+            auto hj = std::make_unique<HashJoinPhysicalOp>(std::move(tr.op), std::move(pr.op),
+                                                           std::vector<uint32_t>{static_cast<uint32_t>(left_key)},
+                                                           std::vector<uint32_t>{static_cast<uint32_t>(right_key)},
+                                                           std::vector<binder::BoundType>(hj_types), hj_schema);
+            hj->setEvalContext(ctx.eval_ctx);
 
             std::function<IndexScanValuesPhysicalOp*(PhysicalOperator*)> find_values =
                 [&](PhysicalOperator* node) -> IndexScanValuesPhysicalOp* {
@@ -1397,30 +1446,20 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
                         return iv;
                 return nullptr;
             };
-            IndexScanValuesPhysicalOp* value_sink = find_values(rr.op.get());
+            IndexScanValuesPhysicalOp* value_sink = find_values(hj.get());
             if (!value_sink)
                 return std::nullopt;
 
-            if (start_filter_op) {
-                binder::BoundExpression pred = std::move(start_filter_op->predicate);
-                auto filter_op =
-                    std::make_unique<FilterPhysicalOp>(std::move(pred), rr.output_schema, std::move(rr.op));
-                filter_op->setOutputSchema(rr.output_schema, rr.output_types);
-                filter_op->setSlotLayout(rr.slot_layout);
-                filter_op->setEvalContext(ctx.eval_ctx);
-                rr.op = std::move(filter_op);
-            }
-
             Schema output_schema = lr.output_schema;
-            output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
+            output_schema.insert(output_schema.end(), hj_schema.begin(), hj_schema.end());
             auto output_types = lr.output_types;
-            output_types.insert(output_types.end(), rr.output_types.begin(), rr.output_types.end());
+            output_types.insert(output_types.end(), hj_types.begin(), hj_types.end());
             TupleSlotLayout layout = lr.slot_layout;
-            layout.merge(rr.slot_layout);
+            layout.merge(hj_layout);
 
-            auto apply = std::make_unique<ApplyPhysicalOp>(std::move(lr.op), std::move(rr.op), nullptr,
+            auto apply = std::make_unique<ApplyPhysicalOp>(std::move(lr.op), std::move(hj), nullptr,
                                                            std::vector<uint32_t>{static_cast<uint32_t>(list_col)},
-                                                           std::vector<binder::BoundType>(rr.output_types));
+                                                           std::vector<binder::BoundType>(hj_types));
             apply->setValueSink(value_sink);
             apply->setEvalContext(ctx.eval_ctx);
             return PlanOperatorResult{std::move(apply), std::move(output_schema), std::move(output_types),
