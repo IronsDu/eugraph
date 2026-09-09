@@ -452,3 +452,18 @@ eviction/log 线程，以及 pthread 等待。bcc offcputime 因容器 BPF 权�
 1. 复用 WT cursor（批量 scan 时 reset/search_near 而非 open/close）；
 2. DuckDB 式向量化执行：按列批处理，减少 per-row Value/队列开销；
 3. WT 会话/缓存参数进一步调优。
+
+### 8.11 算子级计时：Q12 瓶颈在左分支 VarLenExpand（2026-09-09）
+
+对 Q12 关键算子加计时后（连续多次采样）：
+
+| 位置 | 算子 | 耗时 |
+|------|------|------|
+| 左分支 | VarLenExpand(tag->baseTagClass) | ~910-940ms |
+| 左分支 | 同处 ProjectionExtract | 同上 |
+| 右分支 | IndexScanValues / Expand / HashJoin | 约 10-35ms |
+
+结论：右分支 Apply/HashJoin 已不是瓶颈；当前 Q12 约 95% 时间花在
+`MATCH (tag:Tag)-[:HAS_TYPE|IS_SUBCLASS_OF*0..]->(baseTagClass:TagClass)`
+的 VarLenExpand 上。下一步优化 OR 过滤下推到 `Tag(name)` / `TagClass(name)`
+索引，或改为 TagClass 起点 + 反向 VLE。
