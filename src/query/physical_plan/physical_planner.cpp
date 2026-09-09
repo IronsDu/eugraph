@@ -878,6 +878,90 @@ static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const bin
     return std::nullopt;
 }
 
+// Detect `Filter(src.prop = v OR dst.prop = v)` above a VarLenExpand and
+// attach index-value pruning hints. The VLE then implements the OR by
+// checking source/destination membership without a UNION rewrite.
+static bool trySetVarlenOrFilters(const binder::BoundFilterOp& filter, binder::BoundVarLenExpandOp& vle,
+                                  const PlanContext& ctx) {
+    const auto* or_op_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&filter.predicate);
+    if (!or_op_ptr || !*or_op_ptr || (*or_op_ptr)->op != cypher::BinaryOperator::OR)
+        return false;
+    auto& or_op = **or_op_ptr;
+
+    auto extract_side = [&](const binder::BoundExpression& expr, std::string& var,
+                            std::optional<BoundIndexableCondition>& cond) {
+        const auto* bp = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr);
+        if (!bp || !*bp || (*bp)->op != cypher::BinaryOperator::EQ)
+            return false;
+        auto extracted = tryExtractBoundCondition(**bp, ctx);
+        if (!extracted)
+            return false;
+        if (auto* cref = std::get_if<binder::BoundColumnRef>(&(*bp)->left)) {
+            var = cref->name;
+        } else if (const auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&(*bp)->left)) {
+            if (!prop || !*prop)
+                return false;
+            if (auto* obj = std::get_if<binder::BoundColumnRef>(&(*prop)->object))
+                var = obj->name;
+        }
+        if (var.empty())
+            return false;
+        cond = std::move(extracted);
+        return true;
+    };
+
+    std::string side_a_var, side_b_var;
+    std::optional<BoundIndexableCondition> cond_a, cond_b;
+    if (!extract_side(or_op.left, side_a_var, cond_a) || !extract_side(or_op.right, side_b_var, cond_b))
+        return false;
+    if (side_a_var == vle.dst_variable && side_b_var == vle.src_variable) {
+        std::swap(side_a_var, side_b_var);
+        std::swap(cond_a, cond_b);
+    }
+    if (side_a_var != vle.src_variable || side_b_var != vle.dst_variable)
+        return false;
+
+    auto find_index = [&](LabelId label, const std::string& prop_name) -> uint32_t {
+        auto it = ctx.label_defs.find(label);
+        if (it == ctx.label_defs.end())
+            return 0;
+        for (const auto& idx : it->second.indexes) {
+            if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+                continue;
+            for (const auto& acc : idx.accessors)
+                if (acc.property_name == prop_name)
+                    return idx.index_id;
+        }
+        return 0;
+    };
+
+    LabelId src_label = INVALID_LABEL_ID;
+    LabelId dst_label = INVALID_LABEL_ID;
+    if (const auto* child_scan = std::get_if<binder::BoundLabelScanOp>(&vle.child)) {
+        if (!child_scan->label_ids.empty())
+            src_label = child_scan->label_ids[0];
+    }
+    if (!vle.dst_label_ids.empty())
+        dst_label = vle.dst_label_ids[0];
+    if (src_label == INVALID_LABEL_ID || dst_label == INVALID_LABEL_ID)
+        return false;
+
+    uint32_t src_idx = find_index(src_label, cond_a->property_name);
+    uint32_t dst_idx = find_index(dst_label, cond_b->property_name);
+    if (src_idx == 0 && dst_idx == 0)
+        return false;
+
+    if (src_idx != 0) {
+        vle.src_filter_index_id = src_idx;
+        vle.src_filter_value = cond_a->value;
+    }
+    if (dst_idx != 0) {
+        vle.dst_filter_index_id = dst_idx;
+        vle.dst_filter_value = cond_b->value;
+    }
+    return true;
+}
+
 std::optional<PlanOperatorResult>
 PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                                    const std::vector<const binder::BoundBinaryOp*>& conditions, LabelId label_id,
@@ -2011,6 +2095,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                             v.dst_label_ids = old_src_labels;
                             v.dst_label_prop_ids = old_src_props;
                             v.direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+                            std::swap(v.src_filter_index_id, v.dst_filter_index_id);
+                            std::swap(v.src_filter_value, v.dst_filter_value);
                             if (auto slot_it = ctx.var_slots.find(old_src); slot_it != ctx.var_slots.end()) {
                                 v.dst_slot_id = slot_it->second;
                                 v.planner_dst_slot_id = slot_it->second;
@@ -2071,8 +2157,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         store, std::move(child_schema), std::vector<binder::BoundType>(output_types),
                         std::move(child_op), std::unordered_map<LabelId, std::vector<uint16_t>>{}, v.path_variable,
                         v.edge_variable, v.edge_prop_filters, v.dst_label_ids, dst_bound, dst_existing,
-                        v.bound_edge_list, edge_list_existing, v.prev_edge_var, prev_edge_existing,
-                        v.dst_label_missing);
+                        v.bound_edge_list, edge_list_existing, v.prev_edge_var, prev_edge_existing, v.dst_label_missing,
+                        v.src_filter_index_id, v.src_filter_value, v.dst_filter_index_id, v.dst_filter_value);
                     auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                           std::move(output_types), TupleSlotLayout{}};
                     // Phase D: VarLenExpand outputs VertexRef for dst; ProjectionExtract
@@ -2080,6 +2166,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
+                    // Attach OR index-value pruning hints to a child VarLenExpand.
+                    if (auto* vle_ptr = std::get_if<std::unique_ptr<binder::BoundVarLenExpandOp>>(&v.child)) {
+                        if (vle_ptr && *vle_ptr)
+                            trySetVarlenOrFilters(v, **vle_ptr, ctx);
+                    }
+
                     // ── Index scan optimization: Filter(LabelScan) → IndexScan ──
                     if (std::holds_alternative<binder::BoundLabelScanOp>(v.child)) {
                         auto& scan_op = std::get<binder::BoundLabelScanOp>(v.child);

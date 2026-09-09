@@ -474,3 +474,9 @@ VLE 内部计数显示 Q12 左分支曾执行 **65,689 次 edge scan**（71 个
 TagClass 起点重复遍历同一 TagClass 图）。对同一 chunk 缓存每个 vertex
 的邻接边和 dst label 后，scan 次数降到 16,151，Q12 median 从 ~0.83s
 降至 **~0.38s**（Neo4j 0.122s）。
+
+### 8.13 VLE OR 索引剪枝（2026-09-09）
+
+把 `WHERE tag.name = $v OR baseTagClass.name = $v` 下推为 VLE 的
+src/dst index 允许集。Q12 左分支起点从 71 个 TagClass 降为 1 个，
+median 从 ~0.38s 降至 **~0.014s**（Neo4j 0.122s，本机首次反超）。
