@@ -467,3 +467,10 @@ eviction/log 线程，以及 pthread 等待。bcc offcputime 因容器 BPF 权�
 `MATCH (tag:Tag)-[:HAS_TYPE|IS_SUBCLASS_OF*0..]->(baseTagClass:TagClass)`
 的 VarLenExpand 上。下一步优化 OR 过滤下推到 `Tag(name)` / `TagClass(name)`
 索引，或改为 TagClass 起点 + 反向 VLE。
+
+### 8.12 VarLenExpand 邻接缓存（2026-09-09）
+
+VLE 内部计数显示 Q12 左分支曾执行 **65,689 次 edge scan**（71 个
+TagClass 起点重复遍历同一 TagClass 图）。对同一 chunk 缓存每个 vertex
+的邻接边和 dst label 后，scan 次数降到 16,151，Q12 median 从 ~0.83s
+降至 **~0.38s**（Neo4j 0.122s）。
