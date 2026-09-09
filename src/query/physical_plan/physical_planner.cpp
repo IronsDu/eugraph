@@ -9,6 +9,7 @@
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/delete_physical_op.hpp"
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
+#include "query/physical_plan/operator/hash_join_physical_op.hpp"
 #include "query/physical_plan/operator/index_scan_values_physical_op.hpp"
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
 #include "query/physical_plan/operator/list_index_join_physical_op.hpp"
@@ -2617,6 +2618,16 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     TupleSlotLayout xprod_layout;
                     xprod_layout.merge(lr.slot_layout);
                     xprod_layout.merge(rr.slot_layout);
+
+                    if (v.join_type == binder::JoinType::Hash) {
+                        auto hash_join = std::make_unique<HashJoinPhysicalOp>(
+                            std::move(lr.op), std::move(rr.op), std::vector<uint32_t>(v.left_keys),
+                            std::vector<uint32_t>(v.right_keys), std::vector<binder::BoundType>(output_types),
+                            output_schema);
+                        hash_join->setEvalContext(ctx.eval_ctx);
+                        return PlanOperatorResult{std::move(hash_join), std::move(output_schema),
+                                                  std::move(output_types), std::move(xprod_layout)};
+                    }
 
                     if (v.correlated) {
                         std::function<CorrelatedSourcePhysicalOp*(PhysicalOperator*)> find_source =

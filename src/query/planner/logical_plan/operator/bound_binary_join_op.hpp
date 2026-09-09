@@ -15,6 +15,9 @@ struct BoundBinaryJoinOp {
     // right subtree through a BoundCorrelatedSourceOp leaf.
     bool correlated = false;
     std::vector<std::pair<SlotId, SlotId>> correlation;
+    // Hash join keys are physical column indices local to each child.
+    std::vector<uint32_t> left_keys;
+    std::vector<uint32_t> right_keys;
 };
 
 } // namespace binder

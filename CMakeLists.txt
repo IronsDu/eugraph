@@ -214,6 +214,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/distinct_physical_op.cpp
     src/query/physical_plan/operator/expand_physical_op.cpp
     src/query/physical_plan/operator/filter_physical_op.cpp
+    src/query/physical_plan/operator/hash_join_physical_op.cpp
     src/query/physical_plan/operator/index_scan_physical_op.cpp
     src/query/physical_plan/operator/label_scan_physical_op.cpp
     src/query/physical_plan/operator/limit_physical_op.cpp

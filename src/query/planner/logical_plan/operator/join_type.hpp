@@ -6,7 +6,8 @@ namespace binder {
 enum class JoinType {
     Cross,
     Inner,
-    Left
+    Left,
+    Hash
 };
 
 } // namespace binder
