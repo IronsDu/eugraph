@@ -434,3 +434,21 @@ semi-join；Q12 约慢 Neo4j 30 倍，作为后续优化项。
 - 反向链补齐原 pattern 的 dst label 约束后，Q12 本地结果回到正确的 2 行。
 - 本地 Q12 耗时约 1.38s（前向 ListIndexJoin 约 1.1s），WSL 大数据集待复测；
   若仍慢，下一步做批量 IndexScanValues / 去重和中间层基数控制。
+
+### 8.10 HashJoin 双支计划 + 缓存调优（2026-09-09）
+
+Q12 已重写为 Neo4j 同构计划：`Apply(collect tags, HashJoin(friend))`，
+左支从 `Tag(id) IN tags` 反向展开，右支从 `Person(id)` 经 KNOWS 展开。
+
+同机 median：
+- 纯反向链：~1.005s
+- HashJoin：~0.934s
+- HashJoin + WT cache 2048MB：**~0.864s**
+- Neo4j：0.122s
+
+perf（连续 20 次）显示剩余热点转向 WiredTiger 会话/游标生命周期与后台
+eviction/log 线程，以及 pthread 等待。bcc offcputime 因容器 BPF 权限不足无法采集。
+下一步建议：
+1. 复用 WT cursor（批量 scan 时 reset/search_near 而非 open/close）；
+2. DuckDB 式向量化执行：按列批处理，减少 per-row Value/队列开销；
+3. WT 会话/缓存参数进一步调优。
