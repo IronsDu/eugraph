@@ -141,6 +141,20 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         co_return;
     }
 
+    const bool allowed_filter = allowed_dst_index_id_ != 0 && allowed_edge_label_ != INVALID_EDGE_LABEL_ID &&
+                                allowed_dst_values_ && !allowed_dst_values_->empty();
+    std::vector<VertexId> allowed_dst_vids;
+    if (allowed_filter) {
+        for (const auto& value : *allowed_dst_values_) {
+            std::vector<PropertyValue> one{value};
+            auto gen = store_.scanVerticesByIndexId(allowed_dst_index_id_, one);
+            while (auto batch = co_await gen.next()) {
+                for (VertexId vid : *batch)
+                    allowed_dst_vids.push_back(vid);
+            }
+        }
+    }
+
     auto child_gen = child_->executeChunk();
 
     auto dir = Direction::OUT;
@@ -183,8 +197,35 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             bool physical_out = true;
         };
         std::vector<EdgeEntry> edges;
+        std::unordered_set<EdgeId> allowed_seen;
 
         auto scanOneDirection = [&](VertexId src_id, size_t src_row, Direction scan_dir) -> folly::coro::Task<void> {
+            if (allowed_filter) {
+                for (VertexId dst_id : allowed_dst_vids) {
+                    auto out_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
+                    while (auto out_batch = co_await out_gen.next()) {
+                        for (const auto& entry : *out_batch) {
+                            if (allowed_seen.insert(entry.edge_id).second)
+                                edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
+                            break;
+                        }
+                        break;
+                    }
+                    auto in_gen = store_.scanEdgesByType(allowed_edge_label_, dst_id, src_id);
+                    while (auto in_batch = co_await in_gen.next()) {
+                        for (const auto& entry : *in_batch) {
+                            if (entry.src_vertex_id == entry.dst_vertex_id)
+                                continue;
+                            if (allowed_seen.insert(entry.edge_id).second)
+                                edges.push_back(
+                                    {src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, false});
+                            break;
+                        }
+                        break;
+                    }
+                }
+                co_return;
+            }
             for (const auto& label_filter : scan_filters) {
                 auto edge_gen = store_.scanEdges(src_id, scan_dir, label_filter);
                 while (auto edge_batch = co_await edge_gen.next()) {
@@ -199,19 +240,6 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                             if (edgeIdFromValue(eval) != entry.edge_id)
                                 continue;
                         }
-                        // Filter by destination vertex label constraint (e.g. (b:Person))
-                        if (!dst_label_ids_.empty()) {
-                            auto labels = co_await store_.getVertexLabels(entry.neighbor_id);
-                            bool ok = true;
-                            for (LabelId need : dst_label_ids_) {
-                                if (labels.find(need) == labels.end()) {
-                                    ok = false;
-                                    break;
-                                }
-                            }
-                            if (!ok)
-                                continue;
-                        }
                         bool phy_out = (scan_dir == Direction::OUT);
                         edges.push_back(
                             {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
@@ -221,74 +249,160 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             co_return;
         };
 
-        for (size_t src_row = 0; src_row < rows.size(); ++src_row) {
-            VertexId src_id = INVALID_VERTEX_ID;
-            if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[src_row].size()) {
-                const auto& val = rows[src_row][src_col_idx_];
-                if (std::holds_alternative<VertexValue>(val)) {
-                    src_id = std::get<VertexValue>(val).id;
-                } else if (std::holds_alternative<VertexRef>(val)) {
-                    src_id = std::get<VertexRef>(val).id;
-                } else if (std::holds_alternative<int64_t>(val)) {
-                    src_id = static_cast<VertexId>(std::get<int64_t>(val));
+        bool batched = false;
+        if (!allowed_filter && !dst_bound_ && !edge_bound_ && !split_undirected) {
+            std::vector<VertexId> src_ids;
+            std::unordered_map<VertexId, size_t> row_of_src;
+            for (size_t src_row = 0; src_row < rows.size(); ++src_row) {
+                VertexId src_id = INVALID_VERTEX_ID;
+                if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[src_row].size()) {
+                    const auto& val = rows[src_row][src_col_idx_];
+                    if (std::holds_alternative<VertexValue>(val))
+                        src_id = std::get<VertexValue>(val).id;
+                    else if (std::holds_alternative<VertexRef>(val))
+                        src_id = std::get<VertexRef>(val).id;
+                    else if (std::holds_alternative<int64_t>(val))
+                        src_id = static_cast<VertexId>(std::get<int64_t>(val));
+                }
+                if (src_id != INVALID_VERTEX_ID) {
+                    row_of_src[src_id] = src_row;
+                    src_ids.push_back(src_id);
                 }
             }
-            if (src_id == INVALID_VERTEX_ID)
-                continue;
-
-            if (split_undirected) {
-                size_t before_out = edges.size();
-                co_await scanOneDirection(src_id, src_row, Direction::OUT);
-                size_t before_in = edges.size();
-                co_await scanOneDirection(src_id, src_row, Direction::IN);
-                // For self-loops the same edge appears in both OUT and IN
-                // adjacency. Track edge ids from this row's OUT scan and
-                // remove IN edges that duplicate them.
-                std::unordered_set<EdgeId> seen;
-                for (size_t ei = before_out; ei < before_in; ++ei)
-                    seen.insert(edges[ei].edge_id);
-                edges.erase(std::remove_if(edges.begin() + static_cast<long>(before_in), edges.end(),
-                                           [&seen](const EdgeEntry& e) {
-                                               if (seen.count(e.edge_id))
-                                                   return true;
-                                               seen.insert(e.edge_id);
-                                               return false;
-                                           }),
-                            edges.end());
-            } else {
+            if (!src_ids.empty()) {
                 for (const auto& label_filter : scan_filters) {
-                    auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
-                    while (auto edge_batch = co_await edge_gen.next()) {
-                        for (const auto& entry : *edge_batch) {
-                            if (dst_bound_) {
-                                const Value& bval = rows[src_row][dst_col_idx_];
-                                if (vertexIdFromValue(bval) != entry.neighbor_id)
-                                    continue;
-                            }
-                            if (edge_bound_) {
-                                const Value& eval = rows[src_row][edge_col_idx_];
-                                if (edgeIdFromValue(eval) != entry.edge_id)
-                                    continue;
-                            }
-                            if (!dst_label_ids_.empty()) {
-                                auto labels = co_await store_.getVertexLabels(entry.neighbor_id);
-                                bool ok = true;
-                                for (LabelId need : dst_label_ids_) {
-                                    if (labels.find(need) == labels.end()) {
-                                        ok = false;
-                                        break;
-                                    }
-                                }
-                                if (!ok)
-                                    continue;
-                            }
+                    auto batch_gen = store_.scanEdgesBatch(src_ids, dir, label_filter);
+                    while (auto batch = co_await batch_gen.next()) {
+                        for (const auto& be : *batch) {
+                            auto row_it = row_of_src.find(be.src_id);
+                            if (row_it == row_of_src.end())
+                                continue;
                             bool phy_out = (dir == Direction::OUT);
-                            edges.push_back(
-                                {src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id, entry.seq, phy_out});
+                            edges.push_back({row_it->second, be.entry.neighbor_id, be.entry.edge_id,
+                                             be.entry.edge_label_id, be.entry.seq, phy_out});
                         }
                     }
                 }
             }
+            batched = true;
+        }
+
+        if (!batched) {
+            for (size_t src_row = 0; src_row < rows.size(); ++src_row) {
+                VertexId src_id = INVALID_VERTEX_ID;
+                if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[src_row].size()) {
+                    const auto& val = rows[src_row][src_col_idx_];
+                    if (std::holds_alternative<VertexValue>(val)) {
+                        src_id = std::get<VertexValue>(val).id;
+                    } else if (std::holds_alternative<VertexRef>(val)) {
+                        src_id = std::get<VertexRef>(val).id;
+                    } else if (std::holds_alternative<int64_t>(val)) {
+                        src_id = static_cast<VertexId>(std::get<int64_t>(val));
+                    }
+                }
+                if (src_id == INVALID_VERTEX_ID)
+                    continue;
+
+                if (allowed_filter) {
+                    co_await scanOneDirection(src_id, src_row, Direction::OUT);
+                    continue;
+                }
+                if (split_undirected) {
+                    size_t before_out = edges.size();
+                    co_await scanOneDirection(src_id, src_row, Direction::OUT);
+                    size_t before_in = edges.size();
+                    co_await scanOneDirection(src_id, src_row, Direction::IN);
+                    // For self-loops the same edge appears in both OUT and IN
+                    // adjacency. Track edge ids from this row's OUT scan and
+                    // remove IN edges that duplicate them.
+                    std::unordered_set<EdgeId> seen;
+                    for (size_t ei = before_out; ei < before_in; ++ei)
+                        seen.insert(edges[ei].edge_id);
+                    edges.erase(std::remove_if(edges.begin() + static_cast<long>(before_in), edges.end(),
+                                               [&seen](const EdgeEntry& e) {
+                                                   if (seen.count(e.edge_id))
+                                                       return true;
+                                                   seen.insert(e.edge_id);
+                                                   return false;
+                                               }),
+                                edges.end());
+                } else {
+                    if (allowed_filter) {
+                        for (VertexId dst_id : allowed_dst_vids) {
+                            auto out_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
+                            while (auto out_batch = co_await out_gen.next()) {
+                                for (const auto& entry : *out_batch) {
+                                    if (allowed_seen.insert(entry.edge_id).second)
+                                        edges.push_back(
+                                            {src_row, dst_id, entry.edge_id, allowed_edge_label_, entry.seq, true});
+                                    break;
+                                }
+                                break;
+                            }
+                            if (dir == Direction::BOTH) {
+                                auto in_gen = store_.scanEdgesByType(allowed_edge_label_, dst_id, src_id);
+                                while (auto in_batch = co_await in_gen.next()) {
+                                    for (const auto& entry : *in_batch) {
+                                        if (entry.src_vertex_id == entry.dst_vertex_id)
+                                            continue;
+                                        if (allowed_seen.insert(entry.edge_id).second)
+                                            edges.push_back({src_row, dst_id, entry.edge_id, allowed_edge_label_,
+                                                             entry.seq, false});
+                                        break;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    for (const auto& label_filter : scan_filters) {
+                        auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
+                        while (auto edge_batch = co_await edge_gen.next()) {
+                            for (const auto& entry : *edge_batch) {
+                                if (dst_bound_) {
+                                    const Value& bval = rows[src_row][dst_col_idx_];
+                                    if (vertexIdFromValue(bval) != entry.neighbor_id)
+                                        continue;
+                                }
+                                if (edge_bound_) {
+                                    const Value& eval = rows[src_row][edge_col_idx_];
+                                    if (edgeIdFromValue(eval) != entry.edge_id)
+                                        continue;
+                                }
+                                bool phy_out = (dir == Direction::OUT);
+                                edges.push_back({src_row, entry.neighbor_id, entry.edge_id, entry.edge_label_id,
+                                                 entry.seq, phy_out});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply destination label filters in one batched lookup instead of
+        // dispatching getVertexLabels per edge.
+        if (!edges.empty() && !dst_label_ids_.empty()) {
+            std::vector<VertexId> neighbors;
+            std::unordered_set<VertexId> seen;
+            for (const auto& e : edges)
+                if (seen.insert(e.dst_id).second)
+                    neighbors.push_back(e.dst_id);
+            auto labels_batch = co_await store_.getVertexLabelsBatch(neighbors);
+            std::unordered_map<VertexId, LabelIdSet> label_map;
+            for (size_t i = 0; i < neighbors.size() && i < labels_batch.size(); ++i)
+                label_map[neighbors[i]] = std::move(labels_batch[i]);
+            edges.erase(std::remove_if(edges.begin(), edges.end(),
+                                       [&](const EdgeEntry& e) {
+                                           auto it = label_map.find(e.dst_id);
+                                           if (it == label_map.end())
+                                               return true;
+                                           for (LabelId need : dst_label_ids_)
+                                               if (it->second.find(need) == it->second.end())
+                                                   return true;
+                                           return false;
+                                       }),
+                        edges.end());
         }
 
         if (edges.empty())

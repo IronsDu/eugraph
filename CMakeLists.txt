@@ -202,6 +202,8 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/projection_extract_physical_op.cpp
     src/query/physical_plan/operator/aggregate_physical_op.cpp
     src/query/physical_plan/operator/all_node_scan_physical_op.cpp
+    src/query/physical_plan/operator/apply_physical_op.cpp
+    src/query/physical_plan/operator/index_scan_values_physical_op.cpp
     src/query/physical_plan/operator/alter_edge_label_physical_op.cpp
     src/query/physical_plan/operator/create_edge_label_physical_op.cpp
     src/query/physical_plan/operator/create_edge_physical_op.cpp
@@ -212,10 +214,12 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/distinct_physical_op.cpp
     src/query/physical_plan/operator/expand_physical_op.cpp
     src/query/physical_plan/operator/filter_physical_op.cpp
+    src/query/physical_plan/operator/hash_join_physical_op.cpp
     src/query/physical_plan/operator/index_scan_physical_op.cpp
     src/query/physical_plan/operator/label_scan_physical_op.cpp
     src/query/physical_plan/operator/limit_physical_op.cpp
     src/query/physical_plan/operator/left_join_physical_op.cpp
+    src/query/physical_plan/operator/list_index_join_physical_op.cpp
     src/query/physical_plan/operator/varlen_expand_physical_op.cpp
     src/query/physical_plan/operator/path_build_physical_op.cpp
     src/query/physical_plan/operator/project_physical_op.cpp

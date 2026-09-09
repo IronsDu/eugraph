@@ -267,6 +267,38 @@ public:
         }
     }
 
+    folly::coro::AsyncGenerator<std::vector<BatchedEdge>>
+    scanEdgesBatch(const std::vector<VertexId>& src_ids, Direction direction,
+                   std::optional<EdgeLabelId> label_filter) override {
+        constexpr size_t BATCH = 65536;
+        auto txn = txn_;
+        auto vids = src_ids;
+        auto dir = direction;
+        auto filter = label_filter;
+        size_t offset = 0;
+        while (offset < vids.size()) {
+            std::vector<BatchedEdge> batch;
+            batch.reserve(1024);
+            co_await io_.dispatchVoid([this, txn, &vids, &offset, dir, filter, &batch]() {
+                while (offset < vids.size() && batch.size() < BATCH) {
+                    VertexId vid = vids[offset++];
+                    auto cursor = store_.createEdgeScanCursor(txn, vid, dir, filter);
+                    if (!cursor)
+                        continue;
+                    while (cursor->valid() && batch.size() < BATCH) {
+                        batch.push_back(BatchedEdge{vid, cursor->entry()});
+                        cursor->next();
+                    }
+                }
+            });
+            if (batch.empty()) {
+                offset = vids.size();
+                co_return;
+            }
+            co_yield std::move(batch);
+        }
+    }
+
     // ==================== Edge Type Scan ====================
 
     folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry>>
