@@ -109,6 +109,13 @@ public:
     // Edge Scan
     virtual folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
     scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) = 0;
+    struct BatchedEdge {
+        VertexId src_id;
+        ISyncGraphDataStore::EdgeIndexEntry entry;
+    };
+    virtual folly::coro::AsyncGenerator<std::vector<BatchedEdge>>
+    scanEdgesBatch(const std::vector<VertexId>& src_ids, Direction direction,
+                   std::optional<EdgeLabelId> label_filter) = 0;
 
     // Edge Type Scan
     virtual folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry>>
