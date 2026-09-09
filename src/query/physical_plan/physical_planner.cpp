@@ -1983,6 +1983,41 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundVarLenExpandOp>) {
+                    // Reverse a zero-or-more OUT varlen that starts from a
+                    // LabelScan: start from the (usually much smaller)
+                    // destination label instead, mirroring Neo4j's join order.
+                    if (v.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT && v.min_hops == 0 &&
+                        v.max_hops == -1 && v.path_variable.empty() && v.edge_variable.empty() && !v.bound_edge_list &&
+                        v.edge_prop_filters.empty() && std::holds_alternative<binder::BoundLabelScanOp>(v.child)) {
+                        auto& src_scan = std::get<binder::BoundLabelScanOp>(v.child);
+                        if (src_scan.label_ids.size() == 1 && !v.dst_label_ids.empty()) {
+                            const auto old_src = v.src_variable;
+                            const auto old_dst = v.dst_variable;
+                            const auto old_src_labels = src_scan.label_ids;
+                            const auto old_src_props = src_scan.label_prop_ids;
+                            const auto old_dst_labels = v.dst_label_ids;
+                            const auto old_dst_props = v.dst_label_prop_ids;
+
+                            binder::BoundLabelScanOp new_scan;
+                            new_scan.variable = old_dst;
+                            new_scan.column_index = 0;
+                            new_scan.label_ids = old_dst_labels;
+                            new_scan.label_prop_ids = old_dst_props;
+
+                            v.src_variable = old_dst;
+                            v.dst_variable = old_src;
+                            v.src_column_index = 0;
+                            v.dst_column_index = 0;
+                            v.dst_label_ids = old_src_labels;
+                            v.dst_label_prop_ids = old_src_props;
+                            v.direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+                            if (auto slot_it = ctx.var_slots.find(old_src); slot_it != ctx.var_slots.end()) {
+                                v.dst_slot_id = slot_it->second;
+                                v.planner_dst_slot_id = slot_it->second;
+                            }
+                            v.child = new_scan;
+                        }
+                    }
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
