@@ -134,6 +134,9 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         bool physical_out = true; // true: found via OUT adjacency
     };
 
+    std::unordered_map<VertexId, std::vector<DirectedEdgeEntry>> adjacency_cache;
+    std::unordered_map<VertexId, bool> dst_label_cache;
+
     auto scanDirected = [&](VertexId vid, Direction scan_dir) -> folly::coro::Task<std::vector<DirectedEdgeEntry>> {
         std::vector<DirectedEdgeEntry> out;
         bool phy_out = (scan_dir == Direction::OUT);
@@ -150,22 +153,36 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
     auto hasDstLabels = [&](VertexId vid) -> folly::coro::Task<bool> {
         if (dst_label_ids_.empty())
             co_return true;
+        auto it = dst_label_cache.find(vid);
+        if (it != dst_label_cache.end())
+            co_return it->second;
         auto labels = co_await store_.getVertexLabels(vid);
+        bool ok = true;
         for (LabelId need : dst_label_ids_) {
-            if (labels.find(need) == labels.end())
-                co_return false;
+            if (labels.find(need) == labels.end()) {
+                ok = false;
+                break;
+            }
         }
-        co_return true;
+        dst_label_cache.emplace(vid, ok);
+        co_return ok;
     };
 
     auto scanAll = [&](VertexId vid) -> folly::coro::Task<std::vector<DirectedEdgeEntry>> {
+        auto cache_it = adjacency_cache.find(vid);
+        if (cache_it != adjacency_cache.end())
+            co_return cache_it->second;
+        std::vector<DirectedEdgeEntry> result;
         if (split_undirected) {
             auto out = co_await scanDirected(vid, Direction::OUT);
             auto in = co_await scanDirected(vid, Direction::IN);
             out.insert(out.end(), std::make_move_iterator(in.begin()), std::make_move_iterator(in.end()));
-            co_return out;
+            result = std::move(out);
+        } else {
+            result = co_await scanDirected(vid, dir);
         }
-        co_return co_await scanDirected(vid, dir);
+        adjacency_cache.emplace(vid, result);
+        co_return result;
     };
 
     while (auto chunk = co_await child_gen.next()) {
