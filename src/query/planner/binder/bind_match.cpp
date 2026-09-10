@@ -1982,10 +1982,12 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
                   (!graph.nodes[graph.parts[0].ordered_elements.front()].variable.empty() &&
                    ctx_.lookup(graph.nodes[graph.parts[0].ordered_elements.front()].variable) != nullptr);
 
-    bool all_bound_nodes =
-        std::all_of(bound_vars.begin(), bound_vars.end(), [](const BoundPatternVar& v) { return v.is_node; });
-
-    if (!bound_vars.empty() && first_node_bound && !(all_bound_nodes && bound_vars.size() > 1)) {
+    // If the start node is already bound, continue the pattern from it even
+    // when the other endpoint is bound too: Expand can check a bound
+    // destination via dst_bound. Re-scanning the start node and joining the
+    // two endpoints with CrossProduct turns a bounded lookup into a much
+    // larger AllNodeScan/CrossProduct plan (see TCK Match7[9] and SHORT-7).
+    if (!bound_vars.empty() && first_node_bound) {
         auto saved_ctx = ctx_.save();
         ctx_.beginSubScope();
 
@@ -2045,7 +2047,7 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
     // First node is new but later variables are bound. Carry the bound
     // variables through a CorrelatedSource, bind the pattern independently and
     // constrain the two sides with the shared cross-join equality helper.
-    if (!bound_vars.empty() && (!first_node_bound || (first_node_bound && all_bound_nodes && bound_vars.size() > 1))) {
+    if (!bound_vars.empty() && !first_node_bound) {
         auto saved_ctx = ctx_.save();
         ctx_.beginSubScope();
 
