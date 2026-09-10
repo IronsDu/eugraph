@@ -5,6 +5,37 @@ namespace compute {
 
 namespace {
 using Key = std::vector<Value>;
+
+// 1 = vertex-like, 2 = edge-like. VertexValue/VertexRef (and EdgeValue/
+// EdgeKey) denote the same graph entity with the same identity even when one
+// side was materialized and the other is still a topology reference.
+int graphEntityKind(const Value& value) {
+    if (std::holds_alternative<VertexRef>(value) || std::holds_alternative<VertexValue>(value))
+        return 1;
+    if (std::holds_alternative<EdgeKey>(value) || std::holds_alternative<EdgeValue>(value))
+        return 2;
+    return 0;
+}
+
+bool joinValueEquals(const Value& a, const Value& b) {
+    int kind_a = graphEntityKind(a);
+    int kind_b = graphEntityKind(b);
+    if (kind_a != 0 && kind_a == kind_b) {
+        auto entityId = [](const Value& value) -> uint64_t {
+            if (std::holds_alternative<VertexRef>(value))
+                return std::get<VertexRef>(value).id;
+            if (std::holds_alternative<VertexValue>(value))
+                return std::get<VertexValue>(value).id;
+            if (std::holds_alternative<EdgeKey>(value))
+                return std::get<EdgeKey>(value).id;
+            return std::get<EdgeValue>(value).id;
+        };
+        return entityId(a) == entityId(b);
+    }
+    auto eq = valueEquals(a, b);
+    return eq && *eq;
+}
+
 struct KeyHash {
     size_t operator()(const Key& k) const noexcept {
         size_t h = 0x9e3779b9;
@@ -18,8 +49,7 @@ struct KeyEq {
         if (a.size() != b.size())
             return false;
         for (size_t i = 0; i < a.size(); ++i) {
-            auto eq = valueEquals(a[i], b[i]);
-            if (!eq || !*eq)
+            if (!joinValueEquals(a[i], b[i]))
                 return false;
         }
         return true;

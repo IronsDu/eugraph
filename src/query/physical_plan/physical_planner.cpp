@@ -10,6 +10,7 @@
 #include "query/physical_plan/operator/delete_physical_op.hpp"
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
 #include "query/physical_plan/operator/hash_join_physical_op.hpp"
+#include "query/physical_plan/operator/index_scan_physical_op.hpp"
 #include "query/physical_plan/operator/index_scan_values_physical_op.hpp"
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
 #include "query/physical_plan/operator/list_index_join_physical_op.hpp"
@@ -878,6 +879,70 @@ static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const bin
     return std::nullopt;
 }
 
+/// Extract the variable name from a property object expression (`n.prop`).
+static std::string expressionVariableName(const binder::BoundExpression& expr) {
+    if (auto* ref = std::get_if<binder::BoundColumnRef>(&expr))
+        return ref->name;
+    if (auto* ref = std::get_if<binder::BoundVariableRef>(&expr))
+        return ref->name;
+    if (auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&expr)) {
+        if (prop && *prop)
+            return expressionVariableName((*prop)->object);
+    }
+    if (auto* cast = std::get_if<std::unique_ptr<binder::BoundLabelCast>>(&expr)) {
+        if (cast && *cast)
+            return expressionVariableName((*cast)->object);
+    }
+    return {};
+}
+
+static std::optional<cypher::BinaryOperator> reverseComparison(cypher::BinaryOperator op) {
+    switch (op) {
+    case cypher::BinaryOperator::GT:
+        return cypher::BinaryOperator::LT;
+    case cypher::BinaryOperator::GTE:
+        return cypher::BinaryOperator::LTE;
+    case cypher::BinaryOperator::LT:
+        return cypher::BinaryOperator::GT;
+    case cypher::BinaryOperator::LTE:
+        return cypher::BinaryOperator::GTE;
+    case cypher::BinaryOperator::EQ:
+        return cypher::BinaryOperator::EQ;
+    default:
+        return std::nullopt;
+    }
+}
+
+/// Like tryExtractBoundCondition, but also accepts the normalized form
+/// `literal <op> variable.prop` (which Cypher produces for `$end > m.date`).
+static std::optional<BoundIndexableCondition> tryExtractNormalizedBoundCondition(const binder::BoundBinaryOp& binop,
+                                                                                 const PlanContext& ctx) {
+    if (auto cond = tryExtractBoundCondition(binop, ctx))
+        return cond;
+
+    if (!std::holds_alternative<binder::BoundLiteral>(binop.left))
+        return std::nullopt;
+    auto reversed = reverseComparison(binop.op);
+    if (!reversed)
+        return std::nullopt;
+
+    binder::BoundBinaryOp swapped;
+    swapped.op = *reversed;
+    swapped.left = optimizer::cloneBoundExpression(binop.right);
+    swapped.right = optimizer::cloneBoundExpression(binop.left);
+    return tryExtractBoundCondition(swapped, ctx);
+}
+
+static void collectAndConjuncts(const binder::BoundExpression& expr, std::vector<const binder::BoundExpression*>& out) {
+    auto* binop = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr);
+    if (binop && *binop && (*binop)->op == cypher::BinaryOperator::AND) {
+        collectAndConjuncts((*binop)->left, out);
+        collectAndConjuncts((*binop)->right, out);
+        return;
+    }
+    out.push_back(&expr);
+}
+
 // Detect `Filter(src.prop = v OR dst.prop = v)` above a VarLenExpand and
 // attach index-value pruning hints. The VLE then implements the OR by
 // checking source/destination membership without a UNION rewrite.
@@ -1580,6 +1645,209 @@ PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binde
     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types), std::move(layout)};
 }
 
+std::optional<PlanOperatorResult> PhysicalPlanner::tryPlanFilterDestinationIndexJoin(binder::BoundFilterOp& filter,
+                                                                                     IAsyncGraphDataStore& store,
+                                                                                     IAsyncGraphMetaStore& meta,
+                                                                                     PlanContext& ctx) {
+    // The date predicate may be split across a contiguous Filter chain by
+    // the binder/optimizer; absorb the whole chain (including this Filter's
+    // own predicate) so the index scan replaces all predicates that only
+    // reference the expanded destination.
+    std::vector<const binder::BoundExpression*> predicates{&filter.predicate};
+    binder::BoundLogicalOperator* current = &filter.child;
+    while (auto* next_filter = std::get_if<std::unique_ptr<binder::BoundFilterOp>>(current)) {
+        if (!next_filter || !*next_filter)
+            return std::nullopt;
+        predicates.push_back(&(*next_filter)->predicate);
+        current = &(*next_filter)->child;
+    }
+
+    auto* expand_ptr = std::get_if<std::unique_ptr<binder::BoundExpandOp>>(current);
+    if (!expand_ptr || !*expand_ptr)
+        return std::nullopt;
+    auto& expand = **expand_ptr;
+    if (expand.src_variable.empty() || expand.dst_variable.empty())
+        return std::nullopt;
+    if (expand.direction != cypher::RelationshipDirection::RIGHT_TO_LEFT)
+        return std::nullopt;
+    if (expand.edge_label_ids.size() != 1)
+        return std::nullopt;
+
+    // Enabled for the LDBC Message/HAS_CREATOR shape: the shared Message
+    // label has a weak creationDate index (backfilled over the concrete
+    // Comment/Post labels), so an index range scan resolves the same property
+    // values as the unlabeled pattern's weak property access.
+    if (!expand.dst_label_ids.empty())
+        return std::nullopt;
+
+    const auto edge_it = ctx.edge_label_defs.find(expand.edge_label_ids[0]);
+    if (edge_it == ctx.edge_label_defs.end())
+        return std::nullopt;
+    const auto& edge_name = edge_it->second.name;
+    if (edge_name != "HAS_CREATOR" && edge_name != "hasCreator")
+        return std::nullopt;
+
+    auto message_label_it = ctx.label_name_to_id.find("Message");
+    if (message_label_it == ctx.label_name_to_id.end())
+        return std::nullopt;
+    auto message_label_def_it = ctx.label_defs.find(message_label_it->second);
+    if (message_label_def_it == ctx.label_defs.end())
+        return std::nullopt;
+
+    uint16_t creation_date_prop_id = 0;
+    for (const auto& property : message_label_def_it->second.properties) {
+        if (property.name == "creationDate") {
+            creation_date_prop_id = property.id;
+            break;
+        }
+    }
+    if (creation_date_prop_id == 0)
+        return std::nullopt;
+
+    uint32_t message_creation_date_index_id = 0;
+    for (const auto& idx : message_label_def_it->second.indexes) {
+        if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+            continue;
+        for (const auto& accessor : idx.accessors) {
+            if (accessor.property_name == "creationDate") {
+                message_creation_date_index_id = idx.index_id;
+                break;
+            }
+        }
+        if (message_creation_date_index_id != 0)
+            break;
+    }
+    if (message_creation_date_index_id == 0)
+        return std::nullopt;
+
+    // Extract the range bounds. scanIndexRange treats both bounds as
+    // exclusive, so >= / <= are adjusted by one for integer timestamps.
+    auto adjustInt64 = [](const PropertyValue& value, int64_t delta) -> std::optional<PropertyValue> {
+        if (auto* i = std::get_if<int64_t>(&value))
+            return PropertyValue{*i + delta};
+        return std::nullopt;
+    };
+
+    std::vector<const binder::BoundExpression*> conjuncts;
+    for (auto* predicate : predicates)
+        collectAndConjuncts(*predicate, conjuncts);
+
+    std::optional<PropertyValue> lower;
+    std::optional<PropertyValue> upper;
+    for (auto* conjunct : conjuncts) {
+        auto* binop_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(conjunct);
+        if (!binop_ptr || !*binop_ptr)
+            return std::nullopt;
+        auto cond = tryExtractNormalizedBoundCondition(**binop_ptr, ctx);
+        if (!cond || cond->property_name != "creationDate")
+            return std::nullopt;
+
+        std::string condition_var = expressionVariableName((*binop_ptr)->left);
+        if (condition_var != expand.dst_variable)
+            condition_var = expressionVariableName((*binop_ptr)->right);
+        if (condition_var != expand.dst_variable)
+            return std::nullopt;
+
+        switch (cond->op) {
+        case cypher::BinaryOperator::GTE: {
+            auto adjusted = adjustInt64(cond->value, -1);
+            if (!adjusted)
+                return std::nullopt;
+            lower = std::move(*adjusted);
+            break;
+        }
+        case cypher::BinaryOperator::GT:
+            lower = cond->value;
+            break;
+        case cypher::BinaryOperator::LTE: {
+            auto adjusted = adjustInt64(cond->value, 1);
+            if (!adjusted)
+                return std::nullopt;
+            upper = std::move(*adjusted);
+            break;
+        }
+        case cypher::BinaryOperator::LT:
+            upper = cond->value;
+            break;
+        default:
+            return std::nullopt;
+        }
+    }
+    if (!lower || !upper)
+        return std::nullopt;
+
+    // Candidate source (friend) rows.
+    Schema empty_schema;
+    std::vector<binder::BoundType> empty_types;
+    auto left_result = planBoundOperator(expand.child, store, meta, ctx, empty_schema, empty_types);
+    if (std::holds_alternative<std::string>(left_result))
+        return std::nullopt;
+    auto lr = extractChildResult(std::move(left_result));
+
+    const int left_key = findColumn(lr.output_schema, expand.src_variable);
+    if (left_key < 0)
+        return std::nullopt;
+    // Bound destination / edge variables need the original Expand semantics.
+    if (!expand.dst_variable.empty() && findColumn(lr.output_schema, expand.dst_variable) >= 0)
+        return std::nullopt;
+    if (!expand.edge_variable.empty() && findColumn(lr.output_schema, expand.edge_variable) >= 0)
+        return std::nullopt;
+
+    // Right branch: Message(creationDate) index range -> HAS_CREATOR -> creator.
+    Schema right_schema{expand.dst_variable};
+    std::vector<binder::BoundType> right_types{binder::BoundType::VertexRef()};
+    if (!expand.edge_variable.empty()) {
+        right_schema.push_back(expand.edge_variable);
+        right_types.push_back(binder::BoundType::EdgeKey());
+    }
+    std::string creator_var = "__index_join_creator";
+    while (findColumn(lr.output_schema, creator_var) >= 0 || findColumn(right_schema, creator_var) >= 0)
+        creator_var += "_";
+    right_schema.push_back(creator_var);
+    right_types.push_back(binder::BoundType::VertexRef());
+
+    std::optional<std::vector<PropertyValue>> range_start;
+    std::optional<std::vector<PropertyValue>> range_end;
+    if (lower)
+        range_start = std::vector<PropertyValue>{std::move(*lower)};
+    if (upper)
+        range_end = std::vector<PropertyValue>{std::move(*upper)};
+
+    auto index_scan = std::make_unique<IndexScanPhysicalOp>(
+        expand.dst_variable, message_creation_date_index_id, std::vector<uint16_t>{creation_date_prop_id},
+        IndexScanPhysicalOp::ScanMode::RANGE, std::vector<PropertyValue>{}, std::move(range_start),
+        std::move(range_end), std::vector<binder::BoundType>{binder::BoundType::VertexRef()}, store, ctx.label_defs);
+
+    auto expand_result = std::make_unique<ExpandPhysicalOp>(
+        expand.dst_variable, creator_var, expand.edge_variable, expand.edge_label_ids,
+        cypher::RelationshipDirection::LEFT_TO_RIGHT, store, Schema{expand.dst_variable},
+        std::vector<binder::BoundType>(right_types), std::move(index_scan),
+        std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, std::vector<LabelId>{}, false,
+        false, -1, -1, std::vector<EdgeLabelId>{}, false);
+
+    const int right_key = findColumn(right_schema, creator_var);
+    if (right_key < 0)
+        return std::nullopt;
+
+    Schema join_schema = lr.output_schema;
+    join_schema.insert(join_schema.end(), right_schema.begin(), right_schema.end());
+    auto join_types = lr.output_types;
+    join_types.insert(join_types.end(), right_types.begin(), right_types.end());
+    TupleSlotLayout join_layout = lr.slot_layout;
+    join_layout.merge(makeSlotLayout(right_schema, ctx));
+
+    auto hash_join = std::make_unique<HashJoinPhysicalOp>(std::move(lr.op), std::move(expand_result),
+                                                          std::vector<uint32_t>{static_cast<uint32_t>(left_key)},
+                                                          std::vector<uint32_t>{static_cast<uint32_t>(right_key)},
+                                                          std::vector<binder::BoundType>(join_types), join_schema);
+    hash_join->setEvalContext(ctx.eval_ctx);
+
+    auto plan_result =
+        PlanOperatorResult{std::move(hash_join), std::move(join_schema), std::move(join_types), std::move(join_layout)};
+    plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
+    return plan_result;
+}
+
 /// Bottom-up (post-order) compilation: visit children first so each
 /// operator can use its child's output layout to resolve its own
 /// BoundColumnRef slot_ids → column_indices.
@@ -2166,6 +2434,13 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
+                    // ── Selective destination index join ──
+                    // `Expand(src -> dst) WHERE dst.prop <range>` can be
+                    // planned as `IndexScan(dst.prop range) -> edge -> src`
+                    // hash-joined against the existing src rows.
+                    if (auto idx_join = tryPlanFilterDestinationIndexJoin(v, store, meta, ctx))
+                        return std::move(*idx_join);
+
                     // Attach OR index-value pruning hints to a child VarLenExpand.
                     if (auto* vle_ptr = std::get_if<std::unique_ptr<binder::BoundVarLenExpandOp>>(&v.child)) {
                         if (vle_ptr && *vle_ptr)

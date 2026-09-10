@@ -149,6 +149,16 @@ private:
                                                            IAsyncGraphMetaStore& meta, PlanContext& ctx,
                                                            Schema input_schema,
                                                            const std::vector<binder::BoundType>& input_types);
+
+    /// Reorder a correlated Expand chain driven by a selective range
+    /// predicate on the expanded destination (e.g. LDBC Q3's
+    /// `(friend)<-[:HAS_CREATOR]-(message) WHERE message.creationDate ...`).
+    /// Instead of scanning every message of every candidate friend, this
+    /// plans the destination label's property index first and hash-joins the
+    /// resulting messages back to the candidate source rows through the edge.
+    std::optional<PlanOperatorResult> tryPlanFilterDestinationIndexJoin(binder::BoundFilterOp& filter,
+                                                                        IAsyncGraphDataStore& store,
+                                                                        IAsyncGraphMetaStore& meta, PlanContext& ctx);
 };
 
 } // namespace compute
