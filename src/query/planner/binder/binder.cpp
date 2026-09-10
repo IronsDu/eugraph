@@ -193,6 +193,54 @@ BoundExpression Binder::makeEqualityExpr(const BoundColumnRef& left, const Bound
     return BoundExpression(std::move(bin));
 }
 
+const cypher::PatternComprehension* Binder::internProjectionExistsPattern(const cypher::ExistsExpr& ex) {
+    if (ex.full_query)
+        return nullptr;
+    auto it = projection_exists_patterns_.find(&ex);
+    if (it != projection_exists_patterns_.end())
+        return it->second;
+
+    auto pc = std::make_unique<cypher::PatternComprehension>(existsToPatternComprehension(ex));
+    const cypher::PatternComprehension* raw = pc.get();
+    projection_exists_patterns_[&ex] = raw;
+    projection_exists_storage_.push_back(std::move(pc));
+    return raw;
+}
+
+std::optional<BoundExpression> Binder::makePatternExistsExpression(SlotId slot, const std::string& name,
+                                                                const BoundType& pattern_type) const {
+    if (slot == INVALID_SLOT_ID)
+        return std::nullopt;
+
+    BoundType list_type = pattern_type;
+    if (list_type.kind != BoundTypeKind::LIST)
+        list_type = BoundType::List(BoundType::Any());
+
+    const function::FunctionDef* size_def = func_registry_.lookup("size", {list_type});
+    if (!size_def)
+        size_def = func_registry_.lookup("size", {BoundType::Any()});
+    if (!size_def)
+        return std::nullopt;
+
+    auto size_call = std::make_unique<BoundFunctionCall>();
+    size_call->func_def = size_def;
+    size_call->args.push_back(BoundExpression(BoundColumnRef{0, list_type, name, slot}));
+    size_call->return_type = BoundType::Int64();
+
+    auto gt = std::make_unique<BoundBinaryOp>();
+    gt->op = cypher::BinaryOperator::GT;
+    gt->left = BoundExpression(std::move(size_call));
+    gt->right = BoundExpression(BoundLiteral(int64_t{0}));
+    gt->result_type = BoundType::Bool();
+    gt->fallback_fn = resolveBinaryFallbackFn(cypher::BinaryOperator::GT, BoundTypeKind::INT64, BoundTypeKind::INT64);
+    return BoundExpression(std::move(gt));
+}
+
+std::optional<BoundExpression> Binder::makePatternExistsExpression(
+    const BoundPatternComprehension& placeholder) const {
+    return makePatternExistsExpression(placeholder.output_slot, placeholder.output_name, placeholder.result_type);
+}
+
 std::optional<BoundLogicalOperator> Binder::bindCrossWithEqualities(BoundLogicalOperator left,
                                                                     BoundLogicalOperator right,
                                                                     const BindContext::Snapshot& left_scope,

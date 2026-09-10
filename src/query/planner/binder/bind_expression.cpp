@@ -657,6 +657,24 @@ std::optional<BoundExpression> Binder::bindExpression(const cypher::Expression& 
                 }
                 return result;
             } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                auto projection_exists = projection_exists_patterns_.find(ptr.get());
+                if (projection_exists != projection_exists_patterns_.end() && projection_exists->second) {
+                    auto output = projection_exists_outputs_.find(projection_exists->second);
+                    if (output != projection_exists_outputs_.end()) {
+                        const auto& [slot, name, type] = output->second;
+                        if (auto bool_expr = makePatternExistsExpression(slot, name, type))
+                            return bool_expr;
+                    }
+                    // Hoisting has not produced an output yet (e.g. a nested
+                    // expression bound before its projection body). Keep the
+                    // list-valued placeholder so the patch pass can convert it.
+                    BoundPatternComprehension placeholder;
+                    placeholder.ast = projection_exists->second;
+                    placeholder.result_type = BoundType::List(BoundType::Any());
+                    placeholder.as_boolean = true;
+                    return BoundExpression(std::move(placeholder));
+                }
+
                 auto patched = exists_as_list_.find(ptr.get());
                 if (patched == exists_as_list_.end()) {
                     error("UnexpectedSyntax: pattern expression is only allowed in WHERE clauses");

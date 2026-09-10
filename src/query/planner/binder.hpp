@@ -6,6 +6,7 @@
 #include "query/parser/ast.hpp"
 #include "query/planner/bind_context.hpp"
 #include "query/planner/bound_expression/bound_expression.hpp"
+#include "query/planner/bound_expression/bound_pattern_comprehension.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 
 #include <optional>
@@ -92,6 +93,10 @@ private:
     /// (which cannot be re-created) from CREATE-created variables (which
     /// can be reused without labels/props by subsequent CREATEs).
     std::unordered_set<std::string> create_scope_vars_;
+    /// Owns synthetic PatternComprehension ASTs created for projection-context
+    /// bare pattern expressions; keyed by the original ExistsExpr AST node.
+    std::vector<std::unique_ptr<cypher::PatternComprehension>> projection_exists_storage_;
+    std::unordered_map<const cypher::ExistsExpr*, const cypher::PatternComprehension*> projection_exists_patterns_;
 
 public:
     const BindContext& ctx() const {
@@ -112,6 +117,26 @@ public:
     /// sees the projected value even though Sort is placed before Project.
     std::unordered_map<std::string, const cypher::Expression*> order_by_alias_subs_;
     std::unordered_map<const cypher::ExistsExpr*, std::tuple<SlotId, std::string, BoundType>> exists_as_list_;
+
+    /// Output columns of synthetic PatternComprehensions hoisted for bare
+    /// pattern expressions in projections, keyed by the synthetic AST node.
+    /// bindExpression consults this to turn an ExistsExpr placeholder into a
+    /// boolean `size(list) > 0` during the normal bind walk.
+    std::unordered_map<const cypher::PatternComprehension*,
+                       std::tuple<SlotId, std::string, BoundType>> projection_exists_outputs_;
+
+    /// Projection-context interning for bare pattern expressions
+    /// (`RETURN not((n)-->(m))`). The synthetic PatternComprehension AST is
+    /// hoisted through the normal PCApply path; bindExpression resolves the
+    /// original ExistsExpr* through this map into a boolean expression.
+    const cypher::PatternComprehension* internProjectionExistsPattern(const cypher::ExistsExpr& ex);
+
+    /// Build `size(list) > 0` from one hoisted pattern-comprehension output.
+    std::optional<BoundExpression> makePatternExistsExpression(SlotId slot, const std::string& name,
+                                                                const BoundType& list_type) const;
+
+    /// Build `size(list) > 0` for a patched, as_boolean pattern placeholder.
+    std::optional<BoundExpression> makePatternExistsExpression(const BoundPatternComprehension& placeholder) const;
 
     void error(const std::string& msg) {
         errors_.push_back(msg);

@@ -448,9 +448,16 @@ private:
         auto xors = ctx->xorExpression();
         if (xors.size() == 1)
             return buildXorExpr(xors[0]);
-        Expression r = buildXorExpr(xors[0]);
+        auto build_operand = [&](AP::XorExpressionContext* operand) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = false;
+            Expression built = buildXorExpr(operand);
+            disallow_bare_pattern_ = saved;
+            return built;
+        };
+        Expression r = build_operand(xors[0]);
         for (size_t i = 1; i < xors.size(); i++)
-            r = makeBinaryOp(BinaryOperator::OR, std::move(r), buildXorExpr(xors[i]));
+            r = makeBinaryOp(BinaryOperator::OR, std::move(r), build_operand(xors[i]));
         return r;
     }
 
@@ -458,9 +465,16 @@ private:
         auto ands = ctx->andExpression();
         if (ands.size() == 1)
             return buildAndExpr(ands[0]);
-        Expression r = buildAndExpr(ands[0]);
+        auto build_operand = [&](AP::AndExpressionContext* operand) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = false;
+            Expression built = buildAndExpr(operand);
+            disallow_bare_pattern_ = saved;
+            return built;
+        };
+        Expression r = build_operand(ands[0]);
         for (size_t i = 1; i < ands.size(); i++)
-            r = makeBinaryOp(BinaryOperator::XOR, std::move(r), buildAndExpr(ands[i]));
+            r = makeBinaryOp(BinaryOperator::XOR, std::move(r), build_operand(ands[i]));
         return r;
     }
 
@@ -468,15 +482,32 @@ private:
         auto nots = ctx->notExpression();
         if (nots.size() == 1)
             return buildNotExpr(nots[0]);
-        Expression r = buildNotExpr(nots[0]);
+        auto build_operand = [&](AP::NotExpressionContext* operand) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = false;
+            Expression built = buildNotExpr(operand);
+            disallow_bare_pattern_ = saved;
+            return built;
+        };
+        Expression r = build_operand(nots[0]);
         for (size_t i = 1; i < nots.size(); i++)
-            r = makeBinaryOp(BinaryOperator::AND, std::move(r), buildNotExpr(nots[i]));
+            r = makeBinaryOp(BinaryOperator::AND, std::move(r), build_operand(nots[i]));
         return r;
     }
 
     Expression buildNotExpr(AP::NotExpressionContext* ctx) {
-        auto e = buildComparisonExpr(ctx->comparisonExpression());
         auto nots = ctx->NOT();
+        Expression e;
+        if (nots.empty()) {
+            e = buildComparisonExpr(ctx->comparisonExpression());
+        } else {
+            // NOT's operand is a boolean context: bare pattern predicates are
+            // valid here, e.g. `not((n)-[:KNOWS]-(m))`.
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = false;
+            e = buildComparisonExpr(ctx->comparisonExpression());
+            disallow_bare_pattern_ = saved;
+        }
         // Wrap with NOT for each NOT token (NOT NOT x → NOT(NOT(x)))
         for (size_t i = nots.size(); i > 0; --i)
             e = makeUnaryOp(UnaryOperator::NOT, std::move(e));
@@ -829,10 +860,19 @@ private:
         auto expected = whenCount * 2 + (ctx->ELSE() ? 1 : 0);
         if (totalExprs > expected)
             c->subject = buildExpression(ctx->expression(0));
+        auto buildWhenCondition = [&](AP::ExpressionContext* condition) {
+            // CASE WHEN conditions are boolean contexts where a bare pattern
+            // predicate is valid, e.g. `CASE WHEN (n)-->(m) THEN ...`.
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = false;
+            Expression built = buildExpression(condition);
+            disallow_bare_pattern_ = saved;
+            return built;
+        };
         for (size_t i = 0; i < whenCount; i++) {
             size_t base = (c->subject ? 1 : 0) + i * 2;
             c->when_thens.push_back(
-                {buildExpression(ctx->expression(base)), buildExpression(ctx->expression(base + 1))});
+                {buildWhenCondition(ctx->expression(base)), buildExpression(ctx->expression(base + 1))});
         }
         if (ctx->ELSE()) {
             size_t idx = (c->subject ? 1 : 0) + whenCount * 2;
@@ -846,8 +886,12 @@ private:
         auto fe = ctx->filterExpression();
         lc->variable = fe->symbol()->getText();
         lc->list_expr = buildExpression(fe->expression());
-        if (fe->where())
+        if (fe->where()) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = false;
             lc->where_pred = buildExpression(fe->where()->expression());
+            disallow_bare_pattern_ = saved;
+        }
         if (ctx->expression())
             lc->projection = buildExpression(ctx->expression());
         return Expression(std::move(lc));
@@ -874,8 +918,12 @@ private:
         std::string var = fe->symbol()->getText();
         Expression listExpr = buildExpression(fe->expression());
         std::optional<Expression> wp;
-        if (fe->where())
+        if (fe->where()) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = false;
             wp = buildExpression(fe->where()->expression());
+            disallow_bare_pattern_ = saved;
+        }
 
         if (ctx->ALL()) {
             auto e = std::make_unique<AllExpr>();
@@ -1076,6 +1124,9 @@ private:
             ret->return_all = true;
         } else {
             bool saved = disallow_bare_pattern_;
+            // A bare pattern predicate is only valid in a boolean context.
+            // Boolean sub-contexts (NOT/AND/OR/CASE WHEN/EXISTS) clear this
+            // flag while they build their operands.
             disallow_bare_pattern_ = true;
             for (auto* item : items->projectionItem()) {
                 ReturnItem ri;
@@ -1087,12 +1138,24 @@ private:
             }
             disallow_bare_pattern_ = saved;
         }
-        if (ctx->orderSt())
+        if (ctx->orderSt()) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = true;
             ret->order_by = buildOrderBy(ctx->orderSt());
-        if (ctx->skipSt())
+            disallow_bare_pattern_ = saved;
+        }
+        if (ctx->skipSt()) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = true;
             ret->skip = buildExpression(ctx->skipSt()->expression());
-        if (ctx->limitSt())
+            disallow_bare_pattern_ = saved;
+        }
+        if (ctx->limitSt()) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = true;
             ret->limit = buildExpression(ctx->limitSt()->expression());
+            disallow_bare_pattern_ = saved;
+        }
         return ret;
     }
 
@@ -1115,12 +1178,24 @@ private:
             }
             disallow_bare_pattern_ = saved;
         }
-        if (ctx->orderSt())
+        if (ctx->orderSt()) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = true;
             w->order_by = buildOrderBy(ctx->orderSt());
-        if (ctx->skipSt())
+            disallow_bare_pattern_ = saved;
+        }
+        if (ctx->skipSt()) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = true;
             w->skip = buildExpression(ctx->skipSt()->expression());
-        if (ctx->limitSt())
+            disallow_bare_pattern_ = saved;
+        }
+        if (ctx->limitSt()) {
+            bool saved = disallow_bare_pattern_;
+            disallow_bare_pattern_ = true;
             w->limit = buildExpression(ctx->limitSt()->expression());
+            disallow_bare_pattern_ = saved;
+        }
         return w;
     }
 

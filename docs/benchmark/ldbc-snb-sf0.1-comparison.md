@@ -1,6 +1,6 @@
 # LDBC SNB Interactive SF0.1 复测（当前版本）
 
-> 分支：`perf/ldbc-complex-3`（Q12 优化 `4d6f627` + 本轮 Complex-3 优化）
+> 分支：`feat/pattern-expression-in-return`（main `c63e3bd` + 本轮 RETURN/ORDER BY pattern expression 支持）
 > 数据目录：`eugraph/build/ldbc-bench/eugraph`（converted Neo4j-header CSV，`Comment:Message` / `Post:Message`）
 > 节点 327,588；边 1,477,965
 > 查询集：`ldbc_snb_interactive_v1_impls/cypher/queries/` 的 **LDBC 原版查询文本**
@@ -69,12 +69,11 @@
 |-------|------|
 | complex-1 / complex-13 | 依赖 `shortestPath`，当前不支持 |
 | complex-5 / complex-6 | 已知会导致 CPU/内存失控，跳过 |
-| complex-7 | 原版在 EuGraph 中语法不支持（RETURN 中的 pattern expression）；等价 OPTIONAL MATCH 改写已在第 7 节验证不再失控 |
 | complex-9 | 已知超时（>40s），跳过 |
 | complex-10 | pattern comprehension 语法不支持 |
 | complex-14 | `allShortestPaths` + `reduce` 语法不支持 |
 
-## 4. 当前版本关键优化（Q12 `bf25c759` + 本轮 Complex-3 / Short-7）
+## 4. 当前版本关键优化（Q12 + Complex-3 / Short-7 + Complex-7 原版支持）
 
 1. **Q12 计划重写**：`Apply(collect(tag.id), HashJoin(friend))`，左支从 `Tag(id) IN tags` 反向展开，右支从 `Person(id)` 经 KNOWS 展开。
 2. **Expand 批处理**：dst label 一次批量检查；新增 `scanEdgesBatch` 快速路径。
@@ -82,6 +81,7 @@
 4. **VarLenExpand OR 索引剪枝**：`WHERE src.prop = v OR dst.prop = v` 下推为 src/dst 索引允许集，Q12 左分支起点从 71 个 TagClass 降为 1 个。
 5. **Complex-3 索引优先 join**：将 `Expand(friend→message) → Filter(message.creationDate) → Expand(message→country)` 改写为 `HashJoin(candidate friends, IndexScan(Message.creationDate range) → HAS_CREATOR → creator)`；日期谓词在 Expand 之上先拆分为独立 Filter 后再下推。
 6. **Short-7 OPTIONAL MATCH 相关性链修复**：起点已绑定时不再因为终点也已绑定就退化为独立扫描 + CrossProduct，而是继续用 `CorrelatedSource → Expand(start→new) → Expand(new→bound_endpoint)`；同时修复了 complex-7 的 OPTIONAL MATCH 等价改写。
+7. **Complex-7 原版 pattern expression 支持**：`NOT`、`AND` / `OR`、`CASE WHEN`、`ANY` / 列表推导 WHERE、`EXISTS { pattern }` 等布尔上下文中的 bare pattern 解析为 `ExistsExpr`，经 `BoundPatternComprehensionApplyOp` hoist 后绑定为 `size(list) > 0`；原版 complex-7 已可执行，结果与 Neo4j 逐行一致。
 
 Q12 同机中位数：约 **13ms**（优化前约 1.2s）。
 
@@ -107,6 +107,7 @@ Short-7 有回复中位数：约 **7ms**（优化前超时 >240s；Neo4j 同机�
 | 语句 | 当前差距 | 已定位原因 | 后续方案 |
 |------|---------|-----------|---------|
 | complex-3 | ~2.1x | 已改为 Message(creationDate) 索引优先 HashJoin(creator=friend)；剩余在 `KNOWS*1..2` VLE、聚合与顶点物化 | 继续优化 VLE、聚合/排序批量化 |
+| complex-7 | ~9x | 原版 pattern expression 已支持；当前走 `PatternComprehensionApply + size(list) > 0`，关联子计划仍有开销 | 与 7.4 的 OPTIONAL MATCH 改写共用相关性 Expand 路径，或将 PCApply 纳入 CBO 代价比较 |
 | complex-4 | ~2.0x | 已修多 pattern 关联；剩余在聚合/排序/ProjectionExtract | 聚合与排序批量化；ProjectionExtract 向量化 |
 | complex-11 | ~2.3x | 同上 | 同上 |
 
@@ -116,7 +117,6 @@ Short-7 有回复中位数：约 **7ms**（优化前超时 >240s；Neo4j 同机�
 |------|------|-----------|
 | complex-5 | CPU/内存失控 | 需先隔离复现，再做 bounded VLE / 去重 |
 | complex-6 | 同上 | 同上 |
-| complex-7 | 原版语法不支持；OPTIONAL MATCH 改写原会失控 | 本轮已修复 optional 相关性计划；原版 pattern expression 支持见第 7 节 |
 | complex-9 | 超时 >40s | 多起点消息展开，需 join order / 索引 |
 
 ### 5.4 已经修复并验证有效的问题（保留结论）
@@ -347,46 +347,57 @@ CorrelatedSource(m, p)
 
 - TCK `Match7.feature`：31/31 通过。
 - 所有包含 `OPTIONAL MATCH` 的 TCK feature：275/275 通过。
-- `query_executor_tests`：507/507 通过。
+- `query_executor_tests`：511/511 通过（新增 pattern expression 回归用例）。
 - SHORT-7 有回复（`messageId=893353237791`）：
   - 修复前：超时 >240s；
   - 修复后：19 行，同机中位数约 7.02ms；
   - Neo4j 同参数：19 行，中位数约 9.27ms；
   - 两边返回结果逐行一致。
 
-### 7.4 COMPLEX-7 分析
+### 7.4 COMPLEX-7 原版支持
 
-原版 complex-7 在 EuGraph 中仍然报：
-
-```text
-SyntaxError: UnexpectedSyntax
-```
-
-原因是最后返回项中的 pattern expression：
+原版 complex-7 最后返回项包含 pattern expression：
 
 ```cypher
 not((liker)-[:KNOWS]-(person)) AS isNew
 ```
 
-目前 EuGraph 只允许 pattern expression 出现在 WHERE 中。
+本轮实现了**布尔上下文**中的 bare pattern expression：
 
-用等价的 OPTIONAL MATCH 改写：
+- parser：投影项、ORDER BY、WITH、函数参数与 `CASE THEN` 仍拒绝 bare pattern（与 Neo4j 一致）；`NOT`、`AND` / `OR` / `XOR`、`CASE WHEN`、`ANY` / `ALL` / `NONE` / `SINGLE` 的 WHERE、列表推导 WHERE 等布尔上下文允许 bare pattern；
+- binder：`collectPatternComprehensionsAST` 收集 ExistsExpr，复用 `existsToPatternComprehension` 生成合成 PatternComprehension，并经 `BoundPatternComprehensionApplyOp` hoist；
+- `bindExpression` 绑定 ExistsExpr 时直接生成 `size(list) > 0`，因此外层的 `NOT` / `AND` 等算子在类型检查前就拿到 boolean，而不是先看到 list 占位符；
+- `patchPatternComprehensionPlaceholders` 保留为普通 pattern comprehension 和其他占位符路径的兜底。
 
-```cypher
-WITH liker, head(collect({msg: message, likeTime: likeTime})) AS latestLike, person
-OPTIONAL MATCH (liker)-[r:KNOWS]-(person)
-RETURN ..., r IS NULL AS isNew
-```
+验证：
 
-在修复后的计划中右支变成：
+- `personId=1242`：EuGraph 原版 complex-7 返回 20 行，与 Neo4j 原版逐行一致；
+- 多轮预热后热态中位数：EuGraph 约 58ms，Neo4j 约 6ms；
+- 回归：`query_executor_tests` **519/519** 通过；`cypher_parser_tests` 81/81 通过。新增用例覆盖：
+  - `NotBarePatternExpressionInReturn`
+  - `BarePatternInBooleanOperators`
+  - `BarePatternInCaseWhen`
+  - `BarePatternInAnyWherePredicate`
+  - `BarePatternInListComprehensionWhere`
+  - `ExistsPatternSubqueryInReturn` / `ExistsPatternSubqueryWithWhereInReturn`
+  - `BarePatternExpressionDirectInReturnError`、`BarePatternExpressionInOrderByError`、`BarePatternExpressionInWithError`、`BarePatternExpressionInFunctionArgError`、`BarePatternExpressionInCaseThenError`
 
-```text
-CorrelatedSource(liker, person)
-  -> Expand(liker)-[r:KNOWS]-(person)   // person 为 bound destination
-```
+已支持的 pattern expression 形式（布尔上下文）：
 
-不再出现 `AllNodeScan + CrossProduct`，因此不会再 OOM。用 `personId=1242` 验证：
+- `RETURN not((n)-[:KNOWS]-(m)) AS x`
+- `RETURN ((n)-[:KNOWS]-(m)) AND true AS x` / `OR false`
+- `RETURN CASE WHEN (n)-[:KNOWS]-(m) THEN 1 ELSE 0 END`
+- `WHERE (n)-[:KNOWS]-(m)`
+- `RETURN EXISTS { (n)-[:KNOWS]->(m:Person) WHERE m.name = 'name2' } AS x`
+- `ANY(x IN [1, 2] WHERE (n)-[:KNOWS]->(:Person))`
+- `[x IN [1, 2] WHERE (n)-[:KNOWS]->(:Person)]`
 
-- EuGraph：20 行，结果与 Neo4j 原版逐行一致；
-- 同机热态中位数：EuGraph 约 51.8ms，Neo4j 约 15.0ms；
-- 原版 complex-7 的直接支持需要把 RETURN/ORDER BY 中的 pattern expression 统一 hoist 成 `PatternComprehensionApply + size(list) > 0`，可复用现有 `BoundPatternComprehensionApplyOp` 基础设施，作为后续特性实现。
+与 Neo4j 一致地拒绝非布尔直接使用：
+
+- `RETURN (n)-[:KNOWS]->(:Person) AS x`
+- `ORDER BY (n)-[:KNOWS]->(:Person)`
+- `WITH (n)-[:KNOWS]->(:Person) AS x`
+- `coalesce((n)-[:KNOWS]->(:Person), false)`
+- `CASE WHEN true THEN (n)-[:KNOWS]->(:Person) ELSE false END`
+
+`EXISTS { MATCH ... }` 完整子查询仍不支持。
