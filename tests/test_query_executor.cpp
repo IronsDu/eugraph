@@ -4943,6 +4943,48 @@ TEST_F(QueryExecutorTest, OptionalMatchColumnTypeVerification) {
     }
 }
 
+// Regression for TCK Match7[9]-shaped plans: both chain endpoints are bound
+// from the outer scope. The right sub-plan must stay correlated on the bound
+// start node instead of re-scanning it and joining the two endpoint columns
+// with CrossProduct + equality filters.
+TEST_F(QueryExecutorTest, OptionalMatchBoundStartAndBoundEndUsesCorrelatedChain) {
+    insertTestVertices();
+    {
+        auto txn = sync_data_->beginTransaction();
+        // Direct a->c edge keeps the outer MATCH free of CrossProduct.
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 3, KNOWS_LABEL, 0, {}));
+        // Optional a->b->c path, with b = Person 2.
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 2, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
+
+    const std::string query = "MATCH (a:Person {name:'name1'})-[:KNOWS]->(c:Person {name:'name3'}) "
+                              "OPTIONAL MATCH (a)-[:KNOWS]->(b:Person)-[:KNOWS]->(c) RETURN b";
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_FALSE(isNull(result.rows[0][0])) << "optional chain should match Person 2";
+
+    if (std::holds_alternative<VertexValue>(result.rows[0][0])) {
+        EXPECT_EQ(std::get<VertexValue>(result.rows[0][0]).id, 2u);
+    } else {
+        ASSERT_TRUE(std::holds_alternative<VertexRef>(result.rows[0][0])) << "b should be a vertex reference/value";
+        EXPECT_EQ(std::get<VertexRef>(result.rows[0][0]).id, 2u);
+    }
+
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_EQ(plan.find("CrossProduct"), std::string::npos)
+        << "bound-endpoint OPTIONAL MATCH should not fall back to CrossProduct:\n"
+        << plan;
+    EXPECT_EQ(plan.find("AllNodeScan"), std::string::npos)
+        << "bound-endpoint OPTIONAL MATCH should not re-scan a bound node:\n"
+        << plan;
+}
+
 // Reproduce TCK scenario 106: WITH + UNWIND + CREATE edge
 // This scenario crashed the server under ASAN in CI.
 TEST_F(QueryExecutorTest, WithUnwindCreateEdge) {

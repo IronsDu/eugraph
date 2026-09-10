@@ -33,6 +33,7 @@
 | short-5 Comment | 1 | 0.92 | 2.23 | 0.41 | 🟢 |
 | short-6 Post | 1 | 1.28 | 2.54 | 0.50 | 🟢 |
 | short-7 无回复 | 0 | 1.40 | 2.70 | 0.52 | 🟢 |
+| short-7 有回复 | 19 | 7.02 | 9.27 | 0.76 | 🟢 |
 | short-2 | 10 | 5.78 | 5.25 | 1.10 | 🟢 |
 | complex-8 | 20 | 5.92 | 5.28 | 1.12 | 🟢 |
 | complex-2 | 20 | 25.51 | 17.98 | 1.42 | 🟢 |
@@ -67,23 +68,26 @@
 | Query | 原因 |
 |-------|------|
 | complex-1 / complex-13 | 依赖 `shortestPath`，当前不支持 |
-| complex-5 / complex-6 / complex-7 | 已知会导致 CPU/内存失控，跳过 |
+| complex-5 / complex-6 | 已知会导致 CPU/内存失控，跳过 |
+| complex-7 | 原版在 EuGraph 中语法不支持（RETURN 中的 pattern expression）；等价 OPTIONAL MATCH 改写已在第 7 节验证不再失控 |
 | complex-9 | 已知超时（>40s），跳过 |
 | complex-10 | pattern comprehension 语法不支持 |
 | complex-14 | `allShortestPaths` + `reduce` 语法不支持 |
-| short-7 有回复版 | 已知 OPTIONAL MATCH 路径超过 240s，跳过 |
 
-## 4. 当前版本关键优化（Q12 `bf25c759` + 本轮 Complex-3）
+## 4. 当前版本关键优化（Q12 `bf25c759` + 本轮 Complex-3 / Short-7）
 
 1. **Q12 计划重写**：`Apply(collect(tag.id), HashJoin(friend))`，左支从 `Tag(id) IN tags` 反向展开，右支从 `Person(id)` 经 KNOWS 展开。
 2. **Expand 批处理**：dst label 一次批量检查；新增 `scanEdgesBatch` 快速路径。
 3. **VarLenExpand 邻接缓存**：同一 chunk 内复用每个 vertex 的邻接边和 label 判定，避免多起点重复扫描同一张图。
 4. **VarLenExpand OR 索引剪枝**：`WHERE src.prop = v OR dst.prop = v` 下推为 src/dst 索引允许集，Q12 左分支起点从 71 个 TagClass 降为 1 个。
 5. **Complex-3 索引优先 join**：将 `Expand(friend→message) → Filter(message.creationDate) → Expand(message→country)` 改写为 `HashJoin(candidate friends, IndexScan(Message.creationDate range) → HAS_CREATOR → creator)`；日期谓词在 Expand 之上先拆分为独立 Filter 后再下推。
+6. **Short-7 OPTIONAL MATCH 相关性链修复**：起点已绑定时不再因为终点也已绑定就退化为独立扫描 + CrossProduct，而是继续用 `CorrelatedSource → Expand(start→new) → Expand(new→bound_endpoint)`；同时修复了 complex-7 的 OPTIONAL MATCH 等价改写。
 
 Q12 同机中位数：约 **13ms**（优化前约 1.2s）。
 
 Complex-3 同机中位数：约 **101ms**（优化前约 2024ms）。
+
+Short-7 有回复中位数：约 **7ms**（优化前超时 >240s；Neo4j 同机约 9ms）。
 
 ## 5. 历史结论与遗留优化方案（保留）
 
@@ -112,9 +116,8 @@ Complex-3 同机中位数：约 **101ms**（优化前约 2024ms）。
 |------|------|-----------|
 | complex-5 | CPU/内存失控 | 需先隔离复现，再做 bounded VLE / 去重 |
 | complex-6 | 同上 | 同上 |
-| complex-7 | OPTIONAL MATCH 组合后失控 | 核心聚合很快；需拆解 OPTIONAL MATCH 关联 |
+| complex-7 | 原版语法不支持；OPTIONAL MATCH 改写原会失控 | 本轮已修复 optional 相关性计划；原版 pattern expression 支持见第 7 节 |
 | complex-9 | 超时 >40s | 多起点消息展开，需 join order / 索引 |
-| short-7 有回复版 | 超时 >240s | `OPTIONAL MATCH ...-[r:KNOWS]-(p)` 无方向模式，需边/模式优化 |
 
 ### 5.4 已经修复并验证有效的问题（保留结论）
 
@@ -296,3 +299,94 @@ EuGraph 已有 `LogicalOptimizer` / `Memo` / `LogProp` / `CostModel` 骨架，�
 
 4. **验证：按 SF 逐级复测**
    至少覆盖 SF0.1 / SF1，观察 complex-3 的 ratio 是否随 `E_window/E_friend` 变化，验证代价 guard 和 CBO 选择是否符合预期。
+
+## 7. SHORT-7 / COMPLEX-7 的 OPTIONAL MATCH 相关性优化（2026-09-10）
+
+### 7.1 根因
+
+`bindOptionalMatch` 之前有一个分支条件：
+
+```text
+first_node_bound && all_bound_nodes && bound_vars.size() > 1
+  -> 把该 OPTIONAL MATCH 的 pattern 独立绑定，
+     再通过 CrossProduct + 等值 Filter 与 CorrelationSource 拼接
+```
+
+对于 SHORT-7 这类形状：
+
+```cypher
+MATCH (m:Message {id: $messageId})<-[:REPLY_OF]-(c:Comment)-[:HAS_CREATOR]->(p:Person)
+OPTIONAL MATCH (m)-[:HAS_CREATOR]->(a:Person)-[r:KNOWS]-(p)
+```
+
+`m` 和 `p` 都已绑定，因此走了独立绑定分支，右支计划退化为：
+
+```text
+CrossProduct
+  CorrelatedSource(m, p)
+  AllNodeScan(m)
+    -> Expand(m → a)
+    -> Expand(a → p)
+```
+
+即在右支重新全图扫描一次 `m`，再和左侧做 CrossProduct。
+
+### 7.2 修复
+
+只要 pattern 的起始节点已绑定，就继续从该节点做相关性展开，即使另一个端点也已绑定：
+
+```text
+CorrelatedSource(m, p)
+  -> Expand(m)-[:HAS_CREATOR]->(a)
+  -> Expand(a)-[r:KNOWS]-(p)   // p 作为 bound destination 检查
+```
+
+绑定的终点由物理 `Expand` 的 `dst_bound` 路径处理，不再需要重新扫描起点。
+
+### 7.3 验证
+
+- TCK `Match7.feature`：31/31 通过。
+- 所有包含 `OPTIONAL MATCH` 的 TCK feature：275/275 通过。
+- `query_executor_tests`：507/507 通过。
+- SHORT-7 有回复（`messageId=893353237791`）：
+  - 修复前：超时 >240s；
+  - 修复后：19 行，同机中位数约 7.02ms；
+  - Neo4j 同参数：19 行，中位数约 9.27ms；
+  - 两边返回结果逐行一致。
+
+### 7.4 COMPLEX-7 分析
+
+原版 complex-7 在 EuGraph 中仍然报：
+
+```text
+SyntaxError: UnexpectedSyntax
+```
+
+原因是最后返回项中的 pattern expression：
+
+```cypher
+not((liker)-[:KNOWS]-(person)) AS isNew
+```
+
+目前 EuGraph 只允许 pattern expression 出现在 WHERE 中。
+
+用等价的 OPTIONAL MATCH 改写：
+
+```cypher
+WITH liker, head(collect({msg: message, likeTime: likeTime})) AS latestLike, person
+OPTIONAL MATCH (liker)-[r:KNOWS]-(person)
+RETURN ..., r IS NULL AS isNew
+```
+
+在修复后的计划中右支变成：
+
+```text
+CorrelatedSource(liker, person)
+  -> Expand(liker)-[r:KNOWS]-(person)   // person 为 bound destination
+```
+
+不再出现 `AllNodeScan + CrossProduct`，因此不会再 OOM。用 `personId=1242` 验证：
+
+- EuGraph：20 行，结果与 Neo4j 原版逐行一致；
+- 同机热态中位数：EuGraph 约 51.8ms，Neo4j 约 15.0ms；
+- 原版 complex-7 的直接支持需要把 RETURN/ORDER BY 中的 pattern expression 统一 hoist 成 `PatternComprehensionApply + size(list) > 0`，可复用现有 `BoundPatternComprehensionApplyOp` 基础设施，作为后续特性实现。
