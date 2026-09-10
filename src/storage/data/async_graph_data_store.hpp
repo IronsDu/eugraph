@@ -501,19 +501,19 @@ public:
         auto txn = txn_;
         std::string table = vidxTable(label_id, prop_id);
         auto val = value;
-        while (true) {
-            std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([this, txn, &table, &val, &batch]() {
-                store_.scanIndexEquality(txn, table, val, [&](uint64_t entity_id) {
-                    batch.push_back(entity_id);
-                    return batch.size() < BATCH;
-                });
+        // The synchronous index APIs do not expose a resumable cursor. Collect
+        // the (index-bounded) match set in one dispatch, then emit chunks.
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &val, &all]() {
+            store_.scanIndexEquality(txn, table, val, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
             });
-            if (batch.empty())
-                co_return;
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end));
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
         }
     }
 
@@ -524,19 +524,17 @@ public:
         auto txn = txn_;
         std::string table = vidxCompositeTable(label_id, prop_ids);
         auto vals = values;
-        while (true) {
-            std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([this, txn, &table, &vals, &batch]() {
-                store_.scanIndexEquality(txn, table, vals, [&](uint64_t entity_id) {
-                    batch.push_back(entity_id);
-                    return batch.size() < BATCH;
-                });
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &vals, &all]() {
+            store_.scanIndexEquality(txn, table, vals, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
             });
-            if (batch.empty())
-                co_return;
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end));
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
         }
     }
 
@@ -548,19 +546,17 @@ public:
         std::string table = vidxTable(label_id, prop_id);
         auto s = start;
         auto e = end;
-        while (true) {
-            std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
-                store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
-                    batch.push_back(entity_id);
-                    return batch.size() < BATCH;
-                });
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &s, &e, &all]() {
+            store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
             });
-            if (batch.empty())
-                co_return;
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end_idx = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end_idx));
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
         }
     }
 
@@ -573,19 +569,17 @@ public:
         std::string table = vidxCompositeTable(label_id, prop_ids);
         auto s = start;
         auto e = end;
-        while (true) {
-            std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
-                store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
-                    batch.push_back(entity_id);
-                    return batch.size() < BATCH;
-                });
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &s, &e, &all]() {
+            store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
             });
-            if (batch.empty())
-                co_return;
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end_idx = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end_idx));
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
         }
     }
 
@@ -595,19 +589,17 @@ public:
         auto txn = txn_;
         std::string table = vidxTableById(index_id);
         auto vals = values;
-        while (true) {
-            std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([this, txn, &table, &vals, &batch]() {
-                store_.scanIndexEquality(txn, table, vals, [&](uint64_t entity_id) {
-                    batch.push_back(entity_id);
-                    return batch.size() < BATCH;
-                });
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &vals, &all]() {
+            store_.scanIndexEquality(txn, table, vals, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
             });
-            if (batch.empty())
-                co_return;
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end));
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
         }
     }
 
@@ -619,19 +611,17 @@ public:
         std::string table = vidxTableById(index_id);
         auto s = start;
         auto e = end;
-        while (true) {
-            std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
-                store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
-                    batch.push_back(entity_id);
-                    return batch.size() < BATCH;
-                });
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &s, &e, &all]() {
+            store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
             });
-            if (batch.empty())
-                co_return;
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end_idx = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end_idx));
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
         }
     }
 

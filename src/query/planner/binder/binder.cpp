@@ -889,10 +889,75 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
         collectVars(*bound_pred);
     }
 
-    auto filter = std::make_unique<BoundFilterOp>();
-    filter->predicate = std::move(*bound_pred);
-    filter->child = std::move(child);
-    return filter;
+    // Split top-level AND conjuncts into nested Filters when the WHERE is
+    // applied directly above an Expand/VarLenExpand. This gives the optimizer
+    // one predicate per Filter, so a variable-local predicate
+    // (e.g. `message.creationDate >= t1`) can be pushed below a downstream
+    // Expand even when another conjunct (e.g. `country IN [x, y]`)
+    // references a variable introduced by that Expand.
+    //
+    // Do not split in front of a plain LabelScan: composite index selection
+    // matches all indexed accessors on a single Filter, and splitting would
+    // break the existing Filter(LabelScan) → IndexScan rewrite.
+    std::function<bool(const BoundLogicalOperator&)> has_expand_below = [&](const BoundLogicalOperator& op) -> bool {
+        return std::visit(
+            [&](const auto& ptr) -> bool {
+                using T = std::decay_t<decltype(ptr)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<BoundExpandOp>> ||
+                              std::is_same_v<T, std::unique_ptr<BoundVarLenExpandOp>>) {
+                    return ptr != nullptr;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundFilterOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundProjectOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundDistinctOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundSortOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundSkipOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundLimitOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundPathBuildOp>>) {
+                    return ptr && has_expand_below(ptr->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryJoinOp>>) {
+                    return ptr && (has_expand_below(ptr->left) || has_expand_below(ptr->right));
+                } else {
+                    return false;
+                }
+            },
+            op);
+    };
+    const bool split_conjuncts = has_expand_below(child);
+    if (!split_conjuncts) {
+        auto filter = std::make_unique<BoundFilterOp>();
+        filter->predicate = std::move(*bound_pred);
+        filter->child = std::move(child);
+        return filter;
+    }
+
+    std::vector<BoundExpression> conjuncts;
+    std::function<void(BoundExpression)> collectConjuncts = [&](BoundExpression expr) {
+        auto* and_op = std::get_if<std::unique_ptr<BoundBinaryOp>>(&expr);
+        if (and_op && *and_op && (*and_op)->op == cypher::BinaryOperator::AND) {
+            auto left = std::move((*and_op)->left);
+            auto right = std::move((*and_op)->right);
+            collectConjuncts(std::move(left));
+            collectConjuncts(std::move(right));
+            return;
+        }
+        conjuncts.push_back(std::move(expr));
+    };
+    collectConjuncts(std::move(*bound_pred));
+    if (conjuncts.size() == 1) {
+        auto filter = std::make_unique<BoundFilterOp>();
+        filter->predicate = std::move(conjuncts.front());
+        filter->child = std::move(child);
+        return filter;
+    }
+
+    BoundLogicalOperator current = std::move(child);
+    for (auto& conjunct : conjuncts) {
+        auto filter = std::make_unique<BoundFilterOp>();
+        filter->predicate = std::move(conjunct);
+        filter->child = std::move(current);
+        current = std::move(filter);
+    }
+    return current;
 }
 
 } // namespace binder
