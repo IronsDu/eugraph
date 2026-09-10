@@ -1646,6 +1646,27 @@ TEST_F(QueryExecutorTest, CartesianMultiplePatternIndependentStartStillCrossProd
     EXPECT_NE(plan_text.find("CrossProduct"), std::string::npos);
 }
 
+TEST_F(QueryExecutorTest, WithAggregateThenAnonymousStartInlinePropertyKeepsMatch) {
+    insertMultiHopEdges();
+
+    const std::string query = "MATCH (n:Person) "
+                              "WITH collect(n.name) AS names "
+                              "MATCH (:Person {name: 'name1'})-[:KNOWS]->(friend:Person) "
+                              "RETURN friend.name";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name2");
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_EQ(plan_text.find("Singleton"), std::string::npos);
+    EXPECT_NE(plan_text.find("CrossProduct"), std::string::npos);
+    EXPECT_NE(plan_text.find("Expand("), std::string::npos);
+}
+
 TEST_F(QueryExecutorTest, MultiplePatternRepeatedStartNodeHasSingleScanSemantics) {
     insertTestVertices();
 

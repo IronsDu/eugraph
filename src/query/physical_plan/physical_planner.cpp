@@ -3,12 +3,16 @@
 #include "query/optimizer/chosen_plan.hpp"
 #include "query/optimizer/column_rewrite.hpp"
 #include "query/optimizer/memo.hpp"
+#include "query/physical_plan/operator/apply_physical_op.hpp"
 #include "query/physical_plan/operator/call_physical_op.hpp"
 #include "query/physical_plan/operator/correlated_source_physical_op.hpp"
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/delete_physical_op.hpp"
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
+#include "query/physical_plan/operator/hash_join_physical_op.hpp"
+#include "query/physical_plan/operator/index_scan_values_physical_op.hpp"
 #include "query/physical_plan/operator/left_join_physical_op.hpp"
+#include "query/physical_plan/operator/list_index_join_physical_op.hpp"
 #include "query/physical_plan/operator/merge_physical_op.hpp"
 #include "query/physical_plan/operator/path_element_property_read_physical_op.hpp"
 #include "query/physical_plan/operator/pattern_comprehension_apply_physical_op.hpp"
@@ -874,6 +878,90 @@ static std::optional<BoundIndexableCondition> tryExtractBoundCondition(const bin
     return std::nullopt;
 }
 
+// Detect `Filter(src.prop = v OR dst.prop = v)` above a VarLenExpand and
+// attach index-value pruning hints. The VLE then implements the OR by
+// checking source/destination membership without a UNION rewrite.
+static bool trySetVarlenOrFilters(const binder::BoundFilterOp& filter, binder::BoundVarLenExpandOp& vle,
+                                  const PlanContext& ctx) {
+    const auto* or_op_ptr = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&filter.predicate);
+    if (!or_op_ptr || !*or_op_ptr || (*or_op_ptr)->op != cypher::BinaryOperator::OR)
+        return false;
+    auto& or_op = **or_op_ptr;
+
+    auto extract_side = [&](const binder::BoundExpression& expr, std::string& var,
+                            std::optional<BoundIndexableCondition>& cond) {
+        const auto* bp = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&expr);
+        if (!bp || !*bp || (*bp)->op != cypher::BinaryOperator::EQ)
+            return false;
+        auto extracted = tryExtractBoundCondition(**bp, ctx);
+        if (!extracted)
+            return false;
+        if (auto* cref = std::get_if<binder::BoundColumnRef>(&(*bp)->left)) {
+            var = cref->name;
+        } else if (const auto* prop = std::get_if<std::unique_ptr<binder::BoundPropertyRef>>(&(*bp)->left)) {
+            if (!prop || !*prop)
+                return false;
+            if (auto* obj = std::get_if<binder::BoundColumnRef>(&(*prop)->object))
+                var = obj->name;
+        }
+        if (var.empty())
+            return false;
+        cond = std::move(extracted);
+        return true;
+    };
+
+    std::string side_a_var, side_b_var;
+    std::optional<BoundIndexableCondition> cond_a, cond_b;
+    if (!extract_side(or_op.left, side_a_var, cond_a) || !extract_side(or_op.right, side_b_var, cond_b))
+        return false;
+    if (side_a_var == vle.dst_variable && side_b_var == vle.src_variable) {
+        std::swap(side_a_var, side_b_var);
+        std::swap(cond_a, cond_b);
+    }
+    if (side_a_var != vle.src_variable || side_b_var != vle.dst_variable)
+        return false;
+
+    auto find_index = [&](LabelId label, const std::string& prop_name) -> uint32_t {
+        auto it = ctx.label_defs.find(label);
+        if (it == ctx.label_defs.end())
+            return 0;
+        for (const auto& idx : it->second.indexes) {
+            if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+                continue;
+            for (const auto& acc : idx.accessors)
+                if (acc.property_name == prop_name)
+                    return idx.index_id;
+        }
+        return 0;
+    };
+
+    LabelId src_label = INVALID_LABEL_ID;
+    LabelId dst_label = INVALID_LABEL_ID;
+    if (const auto* child_scan = std::get_if<binder::BoundLabelScanOp>(&vle.child)) {
+        if (!child_scan->label_ids.empty())
+            src_label = child_scan->label_ids[0];
+    }
+    if (!vle.dst_label_ids.empty())
+        dst_label = vle.dst_label_ids[0];
+    if (src_label == INVALID_LABEL_ID || dst_label == INVALID_LABEL_ID)
+        return false;
+
+    uint32_t src_idx = find_index(src_label, cond_a->property_name);
+    uint32_t dst_idx = find_index(dst_label, cond_b->property_name);
+    if (src_idx == 0 && dst_idx == 0)
+        return false;
+
+    if (src_idx != 0) {
+        vle.src_filter_index_id = src_idx;
+        vle.src_filter_value = cond_a->value;
+    }
+    if (dst_idx != 0) {
+        vle.dst_filter_index_id = dst_idx;
+        vle.dst_filter_value = cond_b->value;
+    }
+    return true;
+}
+
 std::optional<PlanOperatorResult>
 PhysicalPlanner::tryBoundIndexScan(const binder::BoundLabelScanOp& scan_op,
                                    const std::vector<const binder::BoundBinaryOp*>& conditions, LabelId label_id,
@@ -1127,6 +1215,370 @@ static std::unique_ptr<PhysicalOperator> finalizePlanResult(PlanOperatorResult&&
 }
 
 } // namespace
+
+std::optional<PlanOperatorResult>
+PhysicalPlanner::tryPlanListIndexJoin(const binder::BoundFilterOp& filter, binder::BoundBinaryJoinOp& join,
+                                      IAsyncGraphDataStore& store, IAsyncGraphMetaStore& meta, PlanContext& ctx,
+                                      Schema input_schema, const std::vector<binder::BoundType>& input_types) {
+    // Recognize `right_var.prop IN left_list_column`.
+    const binder::BoundBinaryOp* in_op = nullptr;
+    if (auto* bp = std::get_if<std::unique_ptr<binder::BoundBinaryOp>>(&filter.predicate)) {
+        if (*bp && (*bp)->op == cypher::BinaryOperator::IN)
+            in_op = bp->get();
+    }
+    if (!in_op) {
+        return std::nullopt;
+    }
+    if (!std::holds_alternative<binder::BoundColumnRef>(in_op->right)) {
+        return std::nullopt;
+    }
+    const auto& list_ref = std::get<binder::BoundColumnRef>(in_op->right);
+
+    std::string prop_name;
+    LabelId prop_label = INVALID_LABEL_ID;
+    std::string dst_var;
+    if (std::holds_alternative<std::unique_ptr<binder::BoundPropertyRef>>(in_op->left)) {
+        auto& prop_ref = std::get<std::unique_ptr<binder::BoundPropertyRef>>(in_op->left);
+        if (!prop_ref || prop_ref->candidates.empty() || prop_ref->property_name.empty())
+            return std::nullopt;
+        prop_name = prop_ref->property_name;
+        prop_label = prop_ref->candidates[0].label_id;
+        if (auto* obj = std::get_if<binder::BoundColumnRef>(&prop_ref->object))
+            dst_var = obj->name;
+    } else if (std::holds_alternative<binder::BoundColumnRef>(in_op->left)) {
+        auto resolved = resolveColumnProperty(ctx, std::get<binder::BoundColumnRef>(in_op->left));
+        if (!resolved)
+            return std::nullopt;
+        prop_name = resolved->first;
+        prop_label = resolved->second.first;
+        dst_var = std::get<binder::BoundColumnRef>(in_op->left).name;
+    } else {
+        return std::nullopt;
+    }
+    if (prop_name.empty() || prop_label == INVALID_LABEL_ID || dst_var.empty()) {
+        return std::nullopt;
+    }
+    auto label_it = ctx.label_defs.find(prop_label);
+    if (label_it == ctx.label_defs.end())
+        return std::nullopt;
+
+    uint32_t index_id = 0;
+    for (const auto& idx : label_it->second.indexes) {
+        if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+            continue;
+        for (const auto& acc : idx.accessors) {
+            if (acc.property_name == prop_name) {
+                index_id = idx.index_id;
+                break;
+            }
+        }
+        if (index_id != 0)
+            break;
+    }
+    if (index_id == 0) {
+        return std::nullopt;
+    }
+
+    // Find the final Expand in the right subtree that produces prop_ref's
+    // variable and capture its single edge label.
+    EdgeLabelId edge_label = INVALID_EDGE_LABEL_ID;
+    LabelId expand_dst_label = INVALID_LABEL_ID;
+    bool found_expand = false;
+    std::function<void(const binder::BoundLogicalOperator&)> visit = [&](const binder::BoundLogicalOperator& op) {
+        std::visit(
+            [&](const auto& val) {
+                using T = std::decay_t<decltype(val)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                    if (val) {
+                        if (val->dst_variable == dst_var &&
+                            val->direction == cypher::RelationshipDirection::LEFT_TO_RIGHT &&
+                            val->edge_label_ids.size() == 1) {
+                            edge_label = val->edge_label_ids[0];
+                            if (!val->dst_label_ids.empty())
+                                expand_dst_label = val->dst_label_ids[0];
+                            found_expand = true;
+                        }
+                        visit(val->child);
+                    }
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                    if (val)
+                        visit(val->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                    if (val)
+                        visit(val->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
+                    if (val)
+                        visit(val->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                    if (val)
+                        visit(val->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
+                    if (val)
+                        visit(val->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
+                    if (val)
+                        visit(val->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
+                    if (val)
+                        visit(val->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
+                    if (val)
+                        visit(val->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundVarLenExpandOp>>) {
+                    if (val)
+                        visit(val->child);
+                }
+            },
+            op);
+    };
+    visit(join.right);
+    if (!found_expand || edge_label == INVALID_EDGE_LABEL_ID) {
+        return std::nullopt;
+    }
+    if (expand_dst_label != INVALID_LABEL_ID && ctx.label_defs.count(expand_dst_label)) {
+        prop_label = expand_dst_label;
+        index_id = 0;
+        auto expand_label_it = ctx.label_defs.find(prop_label);
+        for (const auto& idx : expand_label_it->second.indexes) {
+            if (idx.state != IndexState::PUBLIC || idx.index_id == 0)
+                continue;
+            for (const auto& acc : idx.accessors) {
+                if (acc.property_name == prop_name) {
+                    index_id = idx.index_id;
+                    break;
+                }
+            }
+            if (index_id != 0)
+                break;
+        }
+        if (index_id == 0)
+            return std::nullopt;
+    }
+
+    auto left_result = planBoundOperator(join.left, store, meta, ctx, input_schema, input_types);
+    if (std::holds_alternative<std::string>(left_result))
+        return std::nullopt;
+    auto lr = extractChildResult(std::move(left_result));
+
+    // Prefer the name carried by the bound column; fall back to slot layout.
+    int list_col = -1;
+    for (size_t i = 0; i < lr.output_schema.size(); ++i) {
+        if (lr.output_schema[i] == list_ref.name) {
+            list_col = static_cast<int>(i);
+            break;
+        }
+    }
+    if (list_col < 0)
+        list_col = lr.slot_layout.getColumnIndex(list_ref.slot_id);
+    if (list_col < 0) {
+        return std::nullopt;
+    }
+
+    // Logical reorder into a HashJoin(friend), mirroring Neo4j's Q12 plan:
+    //
+    //   Apply(left: collect(tag.id) AS tags,
+    //        HashJoin(left: IndexScanValues(Tag) -> ... -> friend,
+    //                 right: Person(id) -> KNOWS -> friend))
+    {
+        std::vector<const binder::BoundExpandOp*> chain;
+        binder::BoundFilterOp* start_filter_op = nullptr;
+        LabelId leaf_label = INVALID_LABEL_ID;
+        std::optional<binder::BoundLabelScanOp> leaf_scan;
+        std::function<void(binder::BoundLogicalOperator&)> collect = [&](binder::BoundLogicalOperator& op) {
+            std::visit(
+                [&](auto& val) {
+                    using T = std::decay_t<decltype(val)>;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
+                        if (val) {
+                            chain.push_back(val.get());
+                            collect(val->child);
+                        }
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFilterOp>>) {
+                        if (val) {
+                            start_filter_op = val.get();
+                            collect(val->child);
+                        }
+                    } else if constexpr (std::is_same_v<T, binder::BoundLabelScanOp>) {
+                        if (val.label_ids.size() == 1)
+                            leaf_label = val.label_ids[0];
+                        leaf_scan = val;
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundProjectOp>>) {
+                        if (val)
+                            collect(val->child);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
+                        if (val)
+                            collect(val->child);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
+                        if (val)
+                            collect(val->child);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSkipOp>>) {
+                        if (val)
+                            collect(val->child);
+                    } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
+                        if (val)
+                            collect(val->child);
+                    }
+                },
+                op);
+        };
+        collect(join.right);
+
+        bool chain_ok = chain.size() >= 2 && start_filter_op && leaf_scan.has_value();
+        for (const auto* e : chain)
+            if (e->edge_label_ids.empty())
+                chain_ok = false;
+        if (chain_ok && chain.front()->dst_variable == dst_var) {
+            const std::string friend_var = chain[chain.size() - 1]->dst_variable;
+            const std::string person_var = chain[chain.size() - 1]->src_variable;
+
+            // Build Tag side: IndexScanValues(Tag) -> reversed expands up to friend.
+            binder::BoundLogicalOperator tag_side;
+            {
+                binder::BoundLabelScanOp leaf;
+                leaf.variable = chain.front()->dst_variable;
+                leaf.column_index = 0;
+                leaf.label_ids = {expand_dst_label != INVALID_LABEL_ID ? expand_dst_label : prop_label};
+                leaf.label_prop_ids = chain.front()->dst_label_prop_ids;
+                leaf.index_scan_values = true;
+                leaf.index_id = index_id;
+                tag_side = leaf;
+            }
+            for (size_t i = 0; i + 1 < chain.size(); ++i) {
+                const auto* e = chain[i];
+                auto expand = std::make_unique<binder::BoundExpandOp>();
+                expand->src_variable = e->dst_variable;
+                expand->src_column_index = 0;
+                expand->edge_variable = e->edge_variable;
+                expand->dst_variable = e->src_variable;
+                expand->dst_column_index = 0;
+                expand->edge_label_ids = e->edge_label_ids;
+                expand->direction = e->direction;
+                if (expand->direction == cypher::RelationshipDirection::LEFT_TO_RIGHT)
+                    expand->direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+                else if (expand->direction == cypher::RelationshipDirection::RIGHT_TO_LEFT)
+                    expand->direction = cypher::RelationshipDirection::LEFT_TO_RIGHT;
+                if (i + 1 < chain.size() - 1 && chain[i + 1]->dst_variable == e->src_variable)
+                    expand->dst_label_ids = chain[i + 1]->dst_label_ids;
+                else if (i + 1 == chain.size() - 1 && chain[i + 1]->dst_variable == e->src_variable)
+                    expand->dst_label_ids = chain[i + 1]->dst_label_ids;
+                expand->child = std::move(tag_side);
+                tag_side = std::move(expand);
+            }
+
+            // Build Person side from the original bottom-most expand + filter + leaf.
+            binder::BoundLogicalOperator person_side;
+            {
+                auto filter = std::make_unique<binder::BoundFilterOp>();
+                filter->predicate = std::move(start_filter_op->predicate);
+                filter->child = *leaf_scan;
+                person_side = std::move(filter);
+            }
+            {
+                const auto* e = chain.back();
+                auto expand = std::make_unique<binder::BoundExpandOp>();
+                expand->src_variable = e->src_variable;
+                expand->src_column_index = 0;
+                expand->edge_variable = e->edge_variable;
+                expand->dst_variable = e->dst_variable;
+                expand->dst_column_index = 0;
+                expand->edge_label_ids = e->edge_label_ids;
+                expand->direction = e->direction;
+                expand->dst_label_ids = e->dst_label_ids;
+                expand->dst_label_prop_ids = e->dst_label_prop_ids;
+                expand->edge_prop_ids = e->edge_prop_ids;
+                expand->child = std::move(person_side);
+                person_side = std::move(expand);
+            }
+
+            Schema right_input_schema;
+            std::vector<binder::BoundType> right_input_types;
+            auto tag_result = planBoundOperator(tag_side, store, meta, ctx, right_input_schema, right_input_types);
+            if (std::holds_alternative<std::string>(tag_result))
+                return std::nullopt;
+            auto tr = extractChildResult(std::move(tag_result));
+
+            auto person_result =
+                planBoundOperator(person_side, store, meta, ctx, right_input_schema, right_input_types);
+            if (std::holds_alternative<std::string>(person_result))
+                return std::nullopt;
+            auto pr = extractChildResult(std::move(person_result));
+
+            int left_key = findColumn(tr.output_schema, friend_var);
+            int right_key = findColumn(pr.output_schema, friend_var);
+            if (left_key < 0 || right_key < 0)
+                return std::nullopt;
+
+            Schema hj_schema = tr.output_schema;
+            hj_schema.insert(hj_schema.end(), pr.output_schema.begin(), pr.output_schema.end());
+            auto hj_types = tr.output_types;
+            hj_types.insert(hj_types.end(), pr.output_types.begin(), pr.output_types.end());
+            TupleSlotLayout hj_layout = tr.slot_layout;
+            hj_layout.merge(pr.slot_layout);
+
+            auto hj = std::make_unique<HashJoinPhysicalOp>(std::move(tr.op), std::move(pr.op),
+                                                           std::vector<uint32_t>{static_cast<uint32_t>(left_key)},
+                                                           std::vector<uint32_t>{static_cast<uint32_t>(right_key)},
+                                                           std::vector<binder::BoundType>(hj_types), hj_schema);
+            hj->setEvalContext(ctx.eval_ctx);
+
+            std::function<IndexScanValuesPhysicalOp*(PhysicalOperator*)> find_values =
+                [&](PhysicalOperator* node) -> IndexScanValuesPhysicalOp* {
+                if (auto* iv = dynamic_cast<IndexScanValuesPhysicalOp*>(node))
+                    return iv;
+                for (auto* child : node->children())
+                    if (auto* iv = find_values(const_cast<PhysicalOperator*>(child)))
+                        return iv;
+                return nullptr;
+            };
+            IndexScanValuesPhysicalOp* value_sink = find_values(hj.get());
+            if (!value_sink)
+                return std::nullopt;
+
+            Schema output_schema = lr.output_schema;
+            output_schema.insert(output_schema.end(), hj_schema.begin(), hj_schema.end());
+            auto output_types = lr.output_types;
+            output_types.insert(output_types.end(), hj_types.begin(), hj_types.end());
+            TupleSlotLayout layout = lr.slot_layout;
+            layout.merge(hj_layout);
+
+            auto apply = std::make_unique<ApplyPhysicalOp>(std::move(lr.op), std::move(hj), nullptr,
+                                                           std::vector<uint32_t>{static_cast<uint32_t>(list_col)},
+                                                           std::vector<binder::BoundType>(hj_types));
+            apply->setValueSink(value_sink);
+            apply->setEvalContext(ctx.eval_ctx);
+            return PlanOperatorResult{std::move(apply), std::move(output_schema), std::move(output_types),
+                                      std::move(layout)};
+        }
+    }
+
+    auto saved_filter = ctx.expand_allowed_filter;
+    ctx.expand_allowed_filter = ExpandAllowedFilterContext{index_id, edge_label, dst_var};
+    ctx.filtered_expand = nullptr;
+
+    Schema right_input_schema;
+    std::vector<binder::BoundType> right_input_types;
+    auto right_result = planBoundOperator(join.right, store, meta, ctx, right_input_schema, right_input_types);
+    ctx.expand_allowed_filter = saved_filter;
+
+    if (std::holds_alternative<std::string>(right_result) || !ctx.filtered_expand)
+        return std::nullopt;
+
+    auto rr = extractChildResult(std::move(right_result));
+
+    Schema output_schema = lr.output_schema;
+    output_schema.insert(output_schema.end(), rr.output_schema.begin(), rr.output_schema.end());
+    auto output_types = lr.output_types;
+    output_types.insert(output_types.end(), rr.output_types.begin(), rr.output_types.end());
+
+    TupleSlotLayout layout = lr.slot_layout;
+    layout.merge(rr.slot_layout);
+
+    auto result = std::make_unique<ListIndexJoinPhysicalOp>(
+        std::move(lr.op), std::move(rr.op), ctx.filtered_expand, static_cast<uint32_t>(list_col),
+        std::vector<binder::BoundType>(output_types), output_schema);
+    result->setEvalContext(ctx.eval_ctx);
+    return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types), std::move(layout)};
+}
 
 /// Bottom-up (post-order) compilation: visit children first so each
 /// operator can use its child's output layout to resolve its own
@@ -1534,9 +1986,15 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     output_schema.push_back(val.variable);
                     output_types.push_back(binder::BoundType::VertexRef());
                 }
-                auto result = std::make_unique<LabelScanPhysicalOp>(
-                    val.variable, val.label_ids, std::vector<binder::BoundType>(output_types), store, ctx.label_defs,
-                    anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
+                std::unique_ptr<PhysicalOperator> result;
+                if (val.index_scan_values && val.index_id != 0) {
+                    result = std::make_unique<IndexScanValuesPhysicalOp>(val.variable, val.index_id, store,
+                                                                         output_types, output_schema);
+                } else {
+                    result = std::make_unique<LabelScanPhysicalOp>(
+                        val.variable, val.label_ids, std::vector<binder::BoundType>(output_types), store,
+                        ctx.label_defs, anon_id, std::unordered_map<LabelId, std::vector<uint16_t>>{});
+                }
                 TupleSlotLayout scan_layout = makeSlotLayout(output_schema, ctx);
                 auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                       std::move(output_types), std::move(scan_layout)};
@@ -1598,11 +2056,54 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         std::unordered_map<LabelId, std::vector<uint16_t>>{}, std::vector<uint16_t>{}, v.dst_label_ids,
                         dst_bound, edge_bound, dst_existing, edge_existing, std::move(full_scan_labels),
                         full_edge_scan);
+                    if (ctx.expand_allowed_filter && ctx.expand_allowed_filter->dst_var == v.dst_variable &&
+                        v.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT) {
+                        result->setAllowedDstFilter(ctx.expand_allowed_filter->index_id,
+                                                    ctx.expand_allowed_filter->edge_label);
+                        ctx.filtered_expand = result.get();
+                    }
                     auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                           std::move(output_types), TupleSlotLayout{}};
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundVarLenExpandOp>) {
+                    // Reverse a zero-or-more OUT varlen that starts from a
+                    // LabelScan: start from the (usually much smaller)
+                    // destination label instead, mirroring Neo4j's join order.
+                    if (v.direction == cypher::RelationshipDirection::LEFT_TO_RIGHT && v.min_hops == 0 &&
+                        v.max_hops == -1 && v.path_variable.empty() && v.edge_variable.empty() && !v.bound_edge_list &&
+                        v.edge_prop_filters.empty() && std::holds_alternative<binder::BoundLabelScanOp>(v.child)) {
+                        auto& src_scan = std::get<binder::BoundLabelScanOp>(v.child);
+                        if (src_scan.label_ids.size() == 1 && !v.dst_label_ids.empty()) {
+                            const auto old_src = v.src_variable;
+                            const auto old_dst = v.dst_variable;
+                            const auto old_src_labels = src_scan.label_ids;
+                            const auto old_src_props = src_scan.label_prop_ids;
+                            const auto old_dst_labels = v.dst_label_ids;
+                            const auto old_dst_props = v.dst_label_prop_ids;
+
+                            binder::BoundLabelScanOp new_scan;
+                            new_scan.variable = old_dst;
+                            new_scan.column_index = 0;
+                            new_scan.label_ids = old_dst_labels;
+                            new_scan.label_prop_ids = old_dst_props;
+
+                            v.src_variable = old_dst;
+                            v.dst_variable = old_src;
+                            v.src_column_index = 0;
+                            v.dst_column_index = 0;
+                            v.dst_label_ids = old_src_labels;
+                            v.dst_label_prop_ids = old_src_props;
+                            v.direction = cypher::RelationshipDirection::RIGHT_TO_LEFT;
+                            std::swap(v.src_filter_index_id, v.dst_filter_index_id);
+                            std::swap(v.src_filter_value, v.dst_filter_value);
+                            if (auto slot_it = ctx.var_slots.find(old_src); slot_it != ctx.var_slots.end()) {
+                                v.dst_slot_id = slot_it->second;
+                                v.planner_dst_slot_id = slot_it->second;
+                            }
+                            v.child = new_scan;
+                        }
+                    }
                     auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(child_result))
                         return std::get<std::string>(child_result);
@@ -1656,8 +2157,8 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                         store, std::move(child_schema), std::vector<binder::BoundType>(output_types),
                         std::move(child_op), std::unordered_map<LabelId, std::vector<uint16_t>>{}, v.path_variable,
                         v.edge_variable, v.edge_prop_filters, v.dst_label_ids, dst_bound, dst_existing,
-                        v.bound_edge_list, edge_list_existing, v.prev_edge_var, prev_edge_existing,
-                        v.dst_label_missing);
+                        v.bound_edge_list, edge_list_existing, v.prev_edge_var, prev_edge_existing, v.dst_label_missing,
+                        v.src_filter_index_id, v.src_filter_value, v.dst_filter_index_id, v.dst_filter_value);
                     auto plan_result = PlanOperatorResult{std::move(result), std::move(output_schema),
                                                           std::move(output_types), TupleSlotLayout{}};
                     // Phase D: VarLenExpand outputs VertexRef for dst; ProjectionExtract
@@ -1665,6 +2166,12 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     plan_result = dispatchProjectionExtract(std::move(plan_result), store, ctx);
                     return plan_result;
                 } else if constexpr (std::is_same_v<Elem, binder::BoundFilterOp>) {
+                    // Attach OR index-value pruning hints to a child VarLenExpand.
+                    if (auto* vle_ptr = std::get_if<std::unique_ptr<binder::BoundVarLenExpandOp>>(&v.child)) {
+                        if (vle_ptr && *vle_ptr)
+                            trySetVarlenOrFilters(v, **vle_ptr, ctx);
+                    }
+
                     // ── Index scan optimization: Filter(LabelScan) → IndexScan ──
                     if (std::holds_alternative<binder::BoundLabelScanOp>(v.child)) {
                         auto& scan_op = std::get<binder::BoundLabelScanOp>(v.child);
@@ -1681,6 +2188,16 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                                         return std::move(idx_result.value());
                                 }
                             }
+                        }
+                    }
+
+                    // ── List index join: Filter(CrossProduct) with x.prop IN left.list ──
+                    if (auto* join_op = std::get_if<std::unique_ptr<binder::BoundBinaryJoinOp>>(&v.child)) {
+                        if (join_op && *join_op) {
+                            auto list_join =
+                                tryPlanListIndexJoin(v, **join_op, store, meta, ctx, input_schema, input_types);
+                            if (list_join.has_value())
+                                return std::move(list_join.value());
                         }
                     }
 
