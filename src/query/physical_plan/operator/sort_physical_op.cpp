@@ -12,9 +12,14 @@ namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
     // Phase 1: drain all child chunks, materialize rows + pre-compute sort keys.
+    //
+    // The pre-computed keys are stored in the SAME Row as the payload columns
+    // rather than in a parallel vector<vector<Value>>: one contiguous
+    // allocation per row instead of two, and the comparator below indexes the
+    // keys directly. Payload columns live in [0, num_cols); keys follow.
     std::vector<Row> all_rows;
-    std::vector<std::vector<Value>> all_keys;
     size_t num_cols = 0;
+    const size_t n_keys = sort_items_.size();
 
     auto child_gen = child_->executeChunk();
     ExpressionEvaluator evaluator(eval_ctx_);
@@ -25,30 +30,22 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
             continue;
         num_cols = chunk->numColumns();
 
-        std::vector<std::vector<Value>> chunk_key_vals(sort_items_.size());
-        for (size_t k = 0; k < sort_items_.size(); ++k) {
-            auto key_col = Column::flat(binder::BoundTypeKind::ANY, n);
-            evaluator.evaluate(sort_items_[k].expr, *chunk, key_col);
-            chunk_key_vals[k].reserve(n);
-            for (size_t r = 0; r < n; ++r) {
-                chunk_key_vals[k].push_back(key_col.getValue(r));
-            }
+        std::vector<Column> key_cols(n_keys);
+        for (size_t k = 0; k < n_keys; ++k) {
+            key_cols[k] = Column::flat(binder::BoundTypeKind::ANY, n);
+            evaluator.evaluate(sort_items_[k].expr, *chunk, key_cols[k]);
         }
 
         for (size_t r = 0; r < n; ++r) {
             Row row;
-            row.reserve(num_cols);
+            row.reserve(num_cols + n_keys);
             for (size_t c = 0; c < num_cols; ++c) {
                 row.push_back(chunk->getValue(c, r));
             }
-            all_rows.push_back(std::move(row));
-
-            std::vector<Value> keys;
-            keys.reserve(sort_items_.size());
-            for (size_t k = 0; k < sort_items_.size(); ++k) {
-                keys.push_back(std::move(chunk_key_vals[k][r]));
+            for (size_t k = 0; k < n_keys; ++k) {
+                row.push_back(key_cols[k].getValue(r));
             }
-            all_keys.push_back(std::move(keys));
+            all_rows.push_back(std::move(row));
         }
     }
 
@@ -60,9 +57,9 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
     std::iota(indices.begin(), indices.end(), 0);
 
     std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
-        for (size_t i = 0; i < sort_items_.size(); ++i) {
-            const Value& va = all_keys[a][i];
-            const Value& vb = all_keys[b][i];
+        for (size_t i = 0; i < n_keys; ++i) {
+            const Value& va = all_rows[a][num_cols + i];
+            const Value& vb = all_rows[b][num_cols + i];
             int cmp = cypherCompareValues(va, vb);
             if (cmp == 0)
                 continue;

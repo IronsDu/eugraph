@@ -36,12 +36,20 @@ folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::exec
             }
             correlated_source_->setValues(std::move(corr_values));
 
-            // Drain the right sub-plan fully. The right sub-plan ends with
+            // Drain the right sub-plan. The right sub-plan ends with
             // Aggregate(collect(...)) emitting one row per group; with no
             // group keys we get a single row whose column[oi] IS the fully
             // collected ListValue.
             std::vector<ListValue> collected;
             collected.resize(list_element_types_.size());
+            // Existence-only: every consumer of this column reads it solely
+            // through the synthesised `size(list) > 0` predicate, so the list
+            // contents are dead — only its emptiness is observable. Stop at the
+            // first matching row and keep a single dummy element, which yields
+            // exactly the same truth value (`0 > 0` false / `1 > 0` true) while
+            // skipping the rest of the correlated sub-plan and the whole
+            // collect() materialisation.
+            bool existence_hit = false;
             auto right_gen = right_->executeChunk();
             while (auto right_chunk = co_await right_gen.next()) {
                 if (!right_chunk || right_chunk->count == 0)
@@ -50,10 +58,27 @@ folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::exec
                     if (oi >= right_chunk->columns.size())
                         break;
                     Value v = right_chunk->columns[oi].getValue(0);
-                    if (std::holds_alternative<ListValue>(v))
-                        collected[oi] = std::move(std::get<ListValue>(v));
-                    else if (!::eugraph::isNull(v))
+                    if (std::holds_alternative<ListValue>(v)) {
+                        auto& lv = std::get<ListValue>(v);
+                        if (existence_only_) {
+                            if (!lv.elements.empty() && collected[oi].elements.empty())
+                                collected[oi].elements.push_back(ValueStorage{Value{int64_t{1}}});
+                        } else {
+                            collected[oi] = std::move(lv);
+                        }
+                    } else if (!::eugraph::isNull(v)) {
                         collected[oi].elements.push_back(ValueStorage{std::move(v)});
+                    }
+                }
+                if (existence_only_) {
+                    for (const auto& lv : collected) {
+                        if (!lv.elements.empty()) {
+                            existence_hit = true;
+                            break;
+                        }
+                    }
+                    if (existence_hit)
+                        break;
                 }
             }
             for (size_t oi = 0; oi < list_element_types_.size(); ++oi) {

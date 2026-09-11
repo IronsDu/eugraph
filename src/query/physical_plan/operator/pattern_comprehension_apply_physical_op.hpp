@@ -46,12 +46,26 @@ public:
 
     void deriveOutputLayout(const TupleSlotLayout& parent_layout) override;
 
+    /// Mark this Apply as existence-only. The collected list is consumed solely
+    /// as `size(list) > 0`, so the operator may stop draining the correlated
+    /// sub-plan at the first matching row instead of materialising every match.
+    void setExistenceOnly(bool v) {
+        existence_only_ = v;
+    }
+    bool existenceOnly() const {
+        return existence_only_;
+    }
+
 private:
     std::unique_ptr<PhysicalOperator> left_;
     std::unique_ptr<PhysicalOperator> right_;
     CorrelatedSourcePhysicalOp* correlated_source_;
     std::vector<uint32_t> left_correlation_cols_;
     std::vector<binder::BoundType> list_element_types_;
+    /// See setExistenceOnly(). The emitted list is then an empty placeholder:
+    /// only its emptiness is observable, and every upstream consumer reads it
+    /// through the synthesised `size(list) > 0` predicate.
+    bool existence_only_ = false;
 };
 
 } // namespace compute
