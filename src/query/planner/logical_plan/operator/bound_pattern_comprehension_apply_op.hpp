@@ -44,6 +44,20 @@ struct BoundPatternComprehensionApplyOp {
         BoundType element_type = BoundType::Any();
     };
     std::vector<Output> outputs;
+
+    /// True when every consumer of this Apply only asks "does at least one
+    /// match exist?" — i.e. the comprehension came from a boolean-context
+    /// pattern predicate (`NOT (a)-[:R]-(b)`, `EXISTS { ... }`, `WHERE (a)-->(b)`)
+    /// and is consumed as `size(<list>) > 0`. The collected list's *contents*
+    /// are then dead, so the physical operator may stop draining the correlated
+    /// sub-plan at the first matching row and replace the real elements with a
+    /// single placeholder element. Only emptiness is observable, so the
+    /// downstream `size(list) > 0` yields exactly the same truth value
+    /// (0 elements -> false, 1 placeholder -> true).
+    ///
+    /// Set only for existence-derived comprehensions; a user-visible
+    /// comprehension (`[(a)-->(b) | b]` used as a list) always stays false.
+    bool existence_only = false;
 };
 
 } // namespace binder

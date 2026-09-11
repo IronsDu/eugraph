@@ -1878,6 +1878,23 @@ static void compileOperatorTree(PhysicalOperator* op, PlanContext& ctx) {
     }
 }
 
+namespace {
+/// Diagnostic: print the physical operator tree with each node's slot layout.
+/// Enable with EUGRAPH_PLAN_DEBUG=1.
+void dumpPhysicalPlan(const PhysicalOperator* op, int depth) {
+    if (!op)
+        return;
+    std::string indent(static_cast<size_t>(depth) * 2, ' ');
+    std::string layout;
+    for (size_t i = 0; i < op->slotLayout().size(); ++i) {
+        layout += " " + std::to_string(op->slotLayout().slotAt(i));
+    }
+    spdlog::info("[PLAN] {}{} |slots:{} |", indent, op->toString(), layout);
+    for (const auto* child : op->children())
+        dumpPhysicalPlan(child, depth + 1);
+}
+} // namespace
+
 std::variant<std::unique_ptr<PhysicalOperator>, std::string>
 PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphDataStore& store,
                            IAsyncGraphMetaStore& meta, PlanContext& ctx) {
@@ -1934,6 +1951,20 @@ PhysicalPlanner::planBound(binder::BoundLogicalPlan& bound_plan, IAsyncGraphData
         return std::get<std::string>(result);
     auto phys_op = finalizePlanResult(std::move(std::get<PlanOperatorResult>(result)));
     compileOperatorTree(phys_op.get(), ctx);
+    if (std::getenv("EUGRAPH_PRED_DEBUG")) {
+        std::function<void(const PhysicalOperator*)> dump_pred = [&](const PhysicalOperator* o) {
+            if (!o)
+                return;
+            if (auto* f = dynamic_cast<const FilterPhysicalOp*>(o))
+                spdlog::info("[PRED] filter pred={}", optimizer::describeBoundExpression(f->predicate()));
+            for (const auto* c : o->children())
+                dump_pred(c);
+        };
+        dump_pred(phys_op.get());
+    }
+    static const bool plan_debug = std::getenv("EUGRAPH_PLAN_DEBUG") != nullptr;
+    if (plan_debug)
+        dumpPhysicalPlan(phys_op.get(), 0);
     return phys_op;
 }
 
@@ -3277,6 +3308,11 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     auto result = std::make_unique<PatternComprehensionApplyPhysicalOp>(
                         std::move(lr.op), std::move(rr.op), correlated, std::move(left_corr_cols),
                         std::move(list_elem_types));
+                    // Existence-derived comprehensions (`NOT (a)-[:R]-(b)`,
+                    // `EXISTS { ... }`, `WHERE (a)-->(b)`) are consumed only as
+                    // `size(list) > 0`, so the operator may stop at the first
+                    // correlated match instead of collecting every one of them.
+                    result->setExistenceOnly(v.existence_only);
                     result->setEvalContext(ctx.eval_ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                               std::move(out_layout)};

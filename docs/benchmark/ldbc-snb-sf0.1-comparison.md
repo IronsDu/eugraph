@@ -107,7 +107,7 @@ Short-7 有回复中位数：约 **7ms**（优化前超时 >240s；Neo4j 同机�
 | 语句 | 当前差距 | 已定位原因 | 后续方案 |
 |------|---------|-----------|---------|
 | complex-3 | ~2.1x | 已改为 Message(creationDate) 索引优先 HashJoin(creator=friend)；剩余在 `KNOWS*1..2` VLE、聚合与顶点物化 | 继续优化 VLE、聚合/排序批量化 |
-| complex-7 | ~9x | 原版 pattern expression 已支持；当前走 `PatternComprehensionApply + size(list) > 0`，关联子计划仍有开销 | 与 7.4 的 OPTIONAL MATCH 改写共用相关性 Expand 路径，或将 PCApply 纳入 CBO 代价比较 |
+| complex-7 | 见 §8（修正后基线 3.4x~12.5x） | **不是** pattern expression 主导：主因是中间宽列物化 + 逐行 `Value` variant 拷贝/堆分配；pattern expression 约占 25% | 见 §8.5 |
 | complex-4 | ~2.0x | 已修多 pattern 关联；剩余在聚合/排序/ProjectionExtract | 聚合与排序批量化；ProjectionExtract 向量化 |
 | complex-11 | ~2.3x | 同上 | 同上 |
 
@@ -372,7 +372,6 @@ not((liker)-[:KNOWS]-(person)) AS isNew
 验证：
 
 - `personId=1242`：EuGraph 原版 complex-7 返回 20 行，与 Neo4j 原版逐行一致；
-- 多轮预热后热态中位数：EuGraph 约 58ms，Neo4j 约 6ms；
 - 回归：`query_executor_tests` **519/519** 通过；`cypher_parser_tests` 81/81 通过。新增用例覆盖：
   - `NotBarePatternExpressionInReturn`
   - `BarePatternInBooleanOperators`
@@ -401,3 +400,283 @@ not((liker)-[:KNOWS]-(person)) AS isNew
 - `CASE WHEN true THEN (n)-[:KNOWS]->(:Person) ELSE false END`
 
 `EXISTS { MATCH ... }` 完整子查询仍不支持。
+
+## 8. COMPLEX-7 基线与优化（2026-09-10，修正 §7.4 的对比口径）
+
+### 8.1 根因：§7.4 的 Neo4j 基线不可比
+
+§7.4 曾记录「personId=1242：EuGraph 约 58ms / Neo4j 约 6ms」。该对比有两处数据不对称，**Neo4j 侧实际未做等价工作**：
+
+| 不对称点 | Neo4j 侧事实 | EuGraph 侧事实 | 后果 |
+|---|---|---|---|
+| `:Message` 标签 | **不存在**（只有 `Comment` / `Post`） | 存在（loader 建了 `Comment:Message` / `Post:Message`） | Neo4j 的 `MATCH (message:Message)` 命中 0 个节点，计划为 `NodeByLabelScan(message:Message)` 空扫 |
+| `creationDate` 类型 | **STRING**（`neo4j-local/convert_for_neo4j.py` 声明 `:LONG` 但未生效） | INT64（loader 采样推断，`csv_loader.cpp`） | 原版 LDBC 文本的 `likeTime - msg.creationDate` 在 Neo4j 上抛 `CypherTypeError: Cannot subtract String from String` |
+
+因此「Neo4j 6ms」是**空扫 0 行**的耗时；personId=1242 实际有 **416 条 like 边**。
+
+### 8.2 修正后的等价值基线
+
+同一份 sf0.1 数据、等价值查询（`WHERE (message:Comment OR message:Post)`；Neo4j 侧日期加 `toInteger`），两边返回行与首行字段逐字段一致。基准脚本：[`scripts/bench_ldbc_complex7.py`](../../scripts/bench_ldbc_complex7.py)：
+
+```bash
+python3 scripts/bench_ldbc_complex7.py --both --variant eqv --person-id 933,1242,2199023256816 --iters 20
+```
+
+> 注意事项：本机为共享开发机，**绝对耗时会随负载漂移**（同一版本不同时刻可差 10~20%）。脚本同时输出 `min` / `p25` / `median`，其中 `min` 是最少受其他负载干扰的一轮，建议以 `min` 与**倍数**为准，不要跨时刻直接比较绝对值。
+
+| personId | like 边数 | EuGraph min | Neo4j min | 倍数（min） | 行数 |
+|---|---:|---:|---:|---:|---:|
+| 933 | 45 | 7.5ms | 1.6ms | 4.6x | 7 |
+| 1242 | 416 | 34.2ms | 2.6ms | 13.1x | 20 |
+| 2199023256816 | 1944 | 123.7ms | 5.3ms | 23.4x | 20 |
+
+> 上表为 §8.4 + §8.5 两项优化**均已生效**后的数值；Neo4j 侧同一轮次测量。
+>
+> ⚠️ **绝对值与倍数都随机器负载漂移**：同一份代码，机器较空闲时 EuGraph/Neo4j 分别读到 123.7/5.3ms（23.4x），机器较忙时读到 150.1/7.4ms（20.3x）。两者并非等比例变化——Neo4j 对 CPU 争用更敏感，因此**总负载越高，倍数看起来越小**。跨时刻比较绝对值或倍数都不可靠；判断某次优化是否有效，必须用**同一二进制、背靠背交替测量**（见 §8.4 / §8.5 的做法）。
+
+关键特征：**EuGraph 耗时随 liker 数线性劣化，Neo4j 基本平坦** —— 属于系统性逐行开销，而非 join 顺序选错。以 SF0.1 的 like 边数换算，EuGraph 约 0.08 ms/边，Neo4j 约 0.004 ms/边（且 Neo4j 侧还包含 `toInteger` 字符串转换开销）。
+
+### 8.3 耗时归因（修正 §5.2）
+
+按流水线阶段实测（pid=2199023256816 / 1242）：
+
+| 阶段 | 2199023256816 | 1242 |
+|---|---:|---:|
+| `MATCH` 三段 Expand（~1944 行） | 31.9ms | — |
+| `+ WITH liker, message, likeTime, person` | 83.7ms（+51.8） | — |
+| `+ ORDER BY likeTime, toInteger(message.id)` | 99.2ms（+15.5） | — |
+| `+ head(collect({...}))` | 128.1ms（+28.9） | 37.8ms |
+| `+ pattern expression` | +46ms | +12ms |
+| `+ 末尾 RETURN / ORDER BY / LIMIT 20` | 142.8ms | 51.3ms |
+
+结论：**pattern expression 只占约 25%**（§5.2 原先把 complex-7 的差距整体归因于它，是错的）。主因是中间宽列的逐行物化。
+
+perf（RelWithDebInfo + 循环执行，13042 样本）自耗时分布：
+
+| 类别 | 占比 |
+|---|---:|
+| 堆分配器（`operator new` / `malloc` / `free`） | **17.2%** |
+| `std::variant` 派发 | **14.1%** |
+| `VertexValue` 拷贝构造 | 5.2% |
+| WiredTiger 全部 `__wt_*` 合计 | ~5% |
+
+即 CPU 几乎全部消耗在行级 `Value` 装箱/卸载上，存储只占 ~5%。
+
+进一步下钻（同一份 profile，去掉采样自身开销后）最大的一簇是 **`VertexValue` 的完整物化**：`VertexValue::VertexValue` 拷贝构造 + 其内部 `unordered_map<LabelId, Properties>` 的节点分配，合计约 **6%**，仅次于分配器总和。来源是 complex-7 的 `collect({msg: message, likeTime: likeTime})` —— `message` 作为**整对象**进入 map，于是每个 (message, like) 组合都要构造一个带全部属性容器的 `VertexValue`，而最终 `head(...)` 每组只保留一个。这与 §8.6 第一条（whole-object 构造点）是同一根因在不同层面的表现。
+
+### 8.4 已实施的优化：existence-only 提前退出（pattern expression）
+
+`not((liker)-[:KNOWS]-(person))` 及 `EXISTS { ... }`、`WHERE (a)-->(b)` 这类布尔上下文的 pattern predicate，其合成 comprehension 的列表**只被 `size(list) > 0` 消费**，列表内容是不可观测的。改动：
+
+- `Binder`：`collectExistenceDerivedPatterns` 标出由 `ExistsExpr` 派生的 comprehension，置 `BoundPatternComprehensionApplyOp::existence_only`；
+- 物理算子：`existence_only` 时在遇到第一个匹配行后**立即停止拉取关联子计划**，并以单元素占位列表输出（`0 > 0` = false / `1 > 0` = true，真值完全一致），从而跳过 `collect()` 全量物化；
+- 用户可见的 pattern comprehension（`[(a)-->(b) | b]`）不受影响，`existence_only` 恒为 false。
+
+同条件 A/B（同一二进制、环境开关切换，各 25 次迭代）：
+
+| 参数 | 关闭 | 开启 | 收益 |
+|---|---:|---:|---:|
+| personId=1242 | min 47.9 / p25 50.7 / med 52.7 | min 41.3 / p25 44.0 / med 45.5 | min **-13.8%** |
+| personId=2199023256816 | min 176.6 / p25 182.5 / med 187.0 | min 148.6 / p25 154.4 / med 155.5 | min **-15.9%**，p25 -15.4% |
+
+### 8.5 已实施的优化：Sort 逐行分配收敛
+
+`SortPhysicalOp` 原先为每行分配**两个**独立堆对象：payload 行（`std::vector<Value>`）与并列的排序键行（`std::vector<Value>`）。把排序键直接追加到同一 `Row` 尾部（payload 占 `[0, num_cols)`，键紧随其后），每行只剩一次分配，比较器按偏移直接索引。
+
+改动本身是 O(1) 的行内布局调整，无语义变化。背靠背两轮 A/B（每轮基线/改动各 30 次迭代，第二轮调换测量顺序以排除漂移）：
+
+| 参数 | 轮次 | 基线 min | 改动后 min | 收益 |
+|---|---|---:|---:|---:|
+| 2199023256816 | 1 | 166.17 | 159.18 | -4.2% |
+| 2199023256816 | 2 | 166.36 | 155.48 | -6.5% |
+| 1242 | 1 | 47.09 | 45.18 | -4.1% |
+| 1242 | 2 | 47.78 | 45.92 | -3.9% |
+
+收益不大但两轮方向一致；保留。
+
+### 8.6 尝试过但**证伪**的方案（保留结论，避免重复踩坑）
+
+| 方案 | 结论 | 证据 |
+|---|---|---|
+| 让 `WITH n` 纯转发不抬升 whole-object 需求（phase-aware demand） | **不可行，已回滚** | `query_executor_tests` 从 519/519 降到 495/519（24 失败：`WithWhere`、`WithStarPassthrough`、`CreateNode*`、`ExecuteReturnVertex` 等）。根因：whole-object 需求是**承重的** —— `lowerAliasPassthrough` 依据 `PEPlan.object_slot_id` 决定转发列是否提升到 object slot，且约 52 处下游消费者直接 `std::get<VertexValue>`，不认识 `VertexRef`。移除需求会让 `n.age` 这类谓词读到空列 |
+| 聚合分组键用引用而非整对象（`isBareGraphRef` 分组键版本） | **不可行，已回滚** | `labels(v)` / `type(r)` 等函数对分组键仍要求整对象，`ANY(x IN ...)` 等列表消费者也要求真实列表内容；破坏面约 52 处 |
+| Aggregate 逐 chunk 的 scratch 向量/行向量提升为复用缓冲 | **负优化，已回滚** | 实测重载参数从 min 148.3ms 退化到 224.9ms（+52%）；预分配 1024×n_args 的 `Value` 向量并反复复用，反而增加了 `Value` 拷贝与移动赋值开销 |
+| 用 `LD_PRELOAD` malloc 采样器 / 全局 `operator new` 计数做分配归因 | **未能落地** | 协程挂起点把算子帧与叶子分配割裂，`perf --call-graph dwarf` 与 `backtrace()` 都看不到算子帧，无法把分配归因到具体算子；放弃该类归因，改为「最小改动 + 背靠背 A/B」逐个验证 |
+| `head(collect(x))` 识别为「保首值」：给 `AggStateBase` 加 `keep_first_only`，collect 每组只留第一个元素（并让 `finalize` 改为 move 而非再深拷贝一遍） | **无净收益，已回滚** | 单二进制 + 环境开关背靠背两轮 A/B：重载参数 117.6/121.0（关闭）vs 116.1/119.5 与 116.6/121.1（开启），轻载参数同样在 ±2% 内、方向不一致。**根因**：整对象物化的开销发生在 collect **上游**的 `ProjectionExtract::ConstructVertex`（批量取 label/属性并构建完整 `VertexValue`），`collect` 状态本身只持有已被物化对象的拷贝，因此限制它并不触及主成本 |
+| Sort 输出列按输入 kind 定型（避免每格走 `ANY` 的 `Value` 装箱） | **负优化，已回滚** | 单二进制 + 环境开关背靠背 A/B：`ANY` 输出 min 32.9/118.7，定型输出 min 32.7/119.3 —— 轻载参数持平，重载参数略差（med 121.2 → 124.4）。**根因**：`VertexValue` 这类大对象走定型列需要按 map 存储拷贝，反而比 variant 更贵；而消费方一律经 `getValue` 读取，定型没有带来读侧收益 |
+| `setValue` 增加 `Value&&` 重载，让 type-erased 列「搬入」而不是深拷贝（`ConstructVertex` 每行少一次 `VertexValue` 深拷贝） | **无收益，已回滚** | 单二进制 + 环境开关背靠背 A/B：搬入 min 121.0 / med 131.6，搬出（拷贝）min 121.3 / med 127.6 —— 差异落在 ±5% 噪声内。**教训**：该改动首次单独测量得「min 150.1→132.0、med 160.1→140.0」，看似 12~17% 大胜，实为机器负载变化造成的假象。没有同二进制交替对照的「收益」一律不可信（见 §8.2 的负载告警） |
+
+### 8.7 后续方向（按收益排序）
+
+> **结论先行（第 4 轮更新）**：complex-7 剩余差距的来源已被收敛到**计划形状本身**，而不是某个可以局部替换的实现细节。要继续提速需要改「每组只取第一行」的早期剪枝机制（见下），这属于执行器层面的改动。
+
+1. **按组提前剪枝（唯一仍有量级空间的方向）**。已确认的事实链：
+   - 剩余最大成本簇是 `ProjectionExtract::ConstructVertex`：对**每一行**拉取该 vertex 的**全部**属性（`batchGetVertexProperties(..., {})`，空 projection 表示不过滤属性）并构建完整 `VertexValue`（含 `unordered_map` 分配），≈6%；
+   - complex-7 的 `head(collect({msg: message, ...}))` 每组最终只用**第一个** message，即 1944 行里只有 542 行的 `message` 真正被需要；
+   - 但 `message` 必须**在进入 `collect` 的 map 之前**构造完成，因此在 `Aggregate` 处限制状态（8.6 已验证）或把构造推迟到 `Sort`/`Aggregate` 之后都无效。
+   
+   唯一可行的做法：让 `head(collect(...))` 触发「每组只保留首行」的 hint，并把该 hint **沿 Project → ProjectionExtract → Sort 上游传播**，使非首行的 vertex 构造与属性读取根本不发生（预计可去掉 1944→542 行、约 3.6 倍的物化量）。这需要执行器的 per-group early-exit 机制，属于架构级改动。
+   
+   > 注：第 4 轮已实测确认「把构造点后移到聚合之后」这一 (A) 的原始表述**不足以**解决问题——因为构造被 `collect` 的 map 语义钉在聚合之前。修正后的目标表述应为上面的「按组剪枝」。
+
+2. **降低行级 `Value` 装箱成本**（分配器 17% + variant 派发 14%）。已验证：单独消除局部拷贝（8.6 `Value&&`、typed Sort 输出）收益为零到负；`VertexValue` 走定型列反而更贵。要动这块必须是成套改动，预期收益也不及第 1 项。
+
+### 8.8 第 5–7 轮的补充实测：为什么「少读属性 / 不构造 VertexValue」省不出时间
+
+**实验（同一 query 骨架，只改 `collect` 的 map 装什么）**
+
+| 变体 | min | p25 | med |
+|---|---:|---:|---:|
+| C1 `collect({msg: message, ...})` 装整 vertex | 124.22 | 129.00 | 131.81 |
+| C2 `collect({msg: {mid: message.id, mcd: message.creationDate, mc: message.content, mif: message.imageFile}, ...})` 只装扁平属性 | 124.35 | 127.67 | 128.73 |
+
+**C2 并不更快。** 且 DPL 已经自动走了「只读所需属性」这条路：C2 的需求为 `var=message whole_vertex=false coalesce=4`，PE 规格为 `__pe_*<vprop-coalesce[2.6,5.4,6.4]>` —— `message` 根本没被构造，只按 label 属性对做 coalesced 扁平加载。也就是说「通过 ProjectionExtract 只读取需要的属性」**就是当前实现**，而它比构造整对象还略慢（多列 flatten 的 setValue 开销 ≥ 一次 map 插入）。
+
+**逐阶段实测（pid=2199023256816）**
+
+| 阶段 | min | 增量 |
+|---|---:|---:|
+| S1 `MATCH ... RETURN count(*)`（三段 Expand，1944 行） | 22.0 | — |
+| S2 `+ WITH liker, message, likeTime, person` | 61.2 | **+39.2** |
+| S3 `+ ORDER BY likeTime, createDate` | 71.3 | +10.1 |
+| S4 `+ head(collect({map}))` | 97.2 | +25.9 |
+| 完整 complex-7 | 124.2 | +27.0 |
+
+**纯 Expand 只占 22ms；S2→S4 的 75ms（占 60%）全是逐行算子开销**（物化宽列 + 排序 + 聚合 map + 收尾投影），约 20µs/行/列。属性读取量在总耗时里不可见 —— 这正是 C1≈C2 的原因。
+
+**结论：杠杆是「行数」，不是「属性读取量」。** 剪枝的收益来自 1944→542 行，而非省掉属性读取。
+
+**构造点为何钉在 Sort 上游（机制已定位）**
+
+1. 触发点：`requirement_collector.cpp:244` —— `Project` 中出现指向图变量的**裸列引用**即置 `need_entire = true`；complex-7 聚合输入的 `Project(items=[liker, message, likeTime, person])` 正是这种裸转发（C2 中 `message` 是属性访问，故不置位）。
+2. 构造位置 = Enricher 在计划中的位置：`materializeChosen(VertexEnrich)` 把 `enrich_output` 应用到**其直接子树**，`applyEnrichInPlace` 再一路走到产出该变量的 scan/expand。
+3. Enricher 被放在 `message` 的产出组（早于 `Sort`），故 1944 行各构造一个完整 `VertexValue`。
+4. `Project` 处刻意不重跑 PE（`physical_planner.cpp:2621` 有注释说明），构造点无法在 Project 处补救。
+
+**因此 (A) 的正确表述**不是「把 Demand-Pull 下推到聚合之后」，而是：**把整对象 Enricher 的插入位置沿计划下移，越过只做行数削减的屏障（`Sort` / `Filter`），但仍留在 `Aggregate` 之前**（聚合改变行形状，Enricher 必须在其之前）。这是语义等价的重排：`Sort` 只重排、`Filter` 只删行。按此规则，`message` 的构造点将由「Expand 之后（1944 行）」移到「Sort 之后（542 行）」。
+
+实现落在 **Enricher 插入位置**（`memo.cpp` 的 enforcer 生成 + `physical_planner.cpp` 的 `materializeChosen` / `applyEnrichInPlace`），**不是** `lowerAliasPassthrough` / 需求语义那一块（8.6 第一条失败的正是后者）。需要处理的细节：整对象需求下移的同时，`Sort` / `Filter` 自身需要的**扁平属性需求必须留在上游**，即需求要按屏障切成两段。**该改动需要开发者评审后再实施**（见 §8.9）。
+
+### 8.9 待评审的下一步（需要开发者决策）
+
+**目标**：把整对象 Enricher 的插入位置下移，越过 `Sort` / `Filter` 等只做行数削减的屏障，但仍留在 `Aggregate` 之前。预计把 complex-7 中 `message` 的 `VertexValue` 构造量从 1944 行降到 542 行（约 3.6x），对应 §8.8 中 S2（+39.2ms）与 S4（+25.9ms）里属于整对象物化的部分。
+
+**为什么需要评审**：改动面在 Enricher 插入位置（`memo.cpp` 的 enforcer 生成、`physical_planner.cpp` 的 `materializeChosen` / `applyEnrichInPlace`），属于执行器核心。本会话对相邻机制（`lowerAliasPassthrough` 需求语义、collect 状态）的两次大改动都因触及承重不变量而回滚，因此该改动应在明确设计评审后进行。
+
+**必须处理的细节**：整对象需求下移时，`Sort` / `Filter` 自身需要的扁平属性需求必须留在上游 —— 即需求要按屏障切成两段（聚合前 / 聚合后）。这正是原始 (A) 表述「phase-aware demand」的实质，但作用对象是 **Enricher 位置**而非需求本身。
+
+**验收口径**（与 §8.2 / §8.6 一致）：
+- `query_executor_tests` 519/519、`optimizer_tests` 109/109、`cypher_parser_tests` 81/81；
+- TCK 15815 step 全过且与基线逐条 diff 为 0；
+- 与 Neo4j 在 pid 933 / 1242 / 2199023256816 上逐行结果一致；
+- 收益必须用**同一二进制 + 环境开关背靠背交替测量**判定（见 §8.2 的负载告警与 §8.6 中「负载假象」的教训）。
+
+**已排除的替代路径**（避免重复尝试）：限制下游 `collect` 状态（§8.6）、只取消 `WITH n` 的 whole-object 需求（§8.6）、`Value&&` 重载（§8.6）、typed Sort 输出（§8.6）、Aggregate scratch 复用（§8.6）、只限制 `ConstructVertex` 的属性列表（§8.8：属性读取量本就不是瓶颈）。
+
+### 8.10 与 Neo4j 执行计划的结构对照（第 7 轮）
+
+Neo4j 的 complex-7 等价值执行计划（`EXPLAIN`，pid=2199023256816，`WHERE (message:Comment OR message:Post)`；自底向上）：
+
+```text
+NodeByLabelScan(person:Person)                       rows≈1528
+  Filter person.id = $personId                       rows≈76
+    Expand(All) (person)<-[:HAS_CREATOR]-(message)   rows≈14337
+      Filter message:Comment|Post                    rows≈10763
+        Expand(All) (message)<-[:LIKES]-(liker)      rows≈4130
+          Filter liker:Person                        rows≈4130
+            Projection like.creationDate AS likeTime
+              Projection toInteger(message.id)
+                Sort likeTime DESC, toInteger(message.id) ASC
+                  EagerAggregation liker, person, collect({msg: message, likeTime}) rows≈64
+                    Projection head(anon_2) AS latestLike
+                      Projection latestLike.likeTime
+                        Sort latestLike.likeTime DESC
+                          Projection head(anon_2)
+                            Projection liker.id, toInteger(personId)
+                              PartialTop ... LIMIT 20        rows=20
+                                LetAntiSemiApply
+                                  Expand(Into) (liker)-[:KNOWS]-(person)
+                                  Argument person, liker
+                                CacheProperties cache[liker.lastName], cache[liker.firstName]
+                                  Projection ... mL, c, mid
+                                    ProduceResults
+```
+
+**两处结构性差异（都可量化）**
+
+**① `message` 全程不被物化 —— Neo4j 用 slot 引用，聚合里也存引用**
+
+Neo4j 的 `message` 从 `Expand(All)` 产出后，穿过 `Projection`、`Sort`、`EagerAggregation` 的 `collect({msg: message, ...})`、`head()`、再穿过外层 `Sort`，**始终是一个 node 引用（slot）**；只有到最上层 `Projection` 真正读取 `latestLike.msg.id / .creationDate / .content / .imageFile` 时才做属性访问，并由显式的 `CacheProperties` 只缓存**用到的两个** liker 属性。
+
+EuGraph 的同一段计划里，`message` 在 `Expand(person→message)` 之后立刻被 `ProjectionExtract` 的 `ConstructVertex` 物化为完整 `VertexValue`（含全部属性容器的 `unordered_map`），因为 `collect({msg: message})` 的 map 必须存**具体值**；随后这个对象还要被 `Sort` 与聚合搬动。
+
+**这是 EuGraph 与 Neo4j 在 complex-7 上最大的结构性差距**，也解释了 §8.8 的全部实测：瓶颈不是「属性读多了」，而是「在行数还很多的时候（1944 行）就把引用升级成了重型对象」。Neo4j 把这次升级推迟到了只有 20 行的时候。
+
+**② pattern expression 的求值位置差 27 倍**
+
+| | 位置 | 求值次数 |
+|---|---|---|
+| Neo4j | `LetAntiSemiApply` 位于 `PartialTop ... LIMIT 20` **之上** | **20 次** |
+| EuGraph | `PatternComprehensionApply` 位于 `Sort(items=2)` 与 `Limit(20)` **之下**（紧贴聚合输出） | **542 次** |
+
+Neo4j 让 `not((liker)-[:KNOWS]-(person))` 只在最终 20 行上求值；EuGraph 在当前计划里对全部 542 个分组各求值一次。§8.4 的 existence-only 提前退出已经把**每次**求值的成本降下来了，但次数差仍在。把 `BoundPatternComprehensionApplyOp`（或其后的 Apply）上移到 `Limit` 之上是另一个独立的优化点 —— 该 att 需要把 whole-object 需求（`liker`）与 `latestLike.likeTime`（排序键）一并上移，属计划重排。
+
+**结论**：Neo4j 的两点做法指向同一个原则 —— **延后「引用 → 重型对象」的升级，并把它放到行数最少的位置**。EuGraph 需要的是 §8.9 的 Enricher 下移（对应 ①）与 pattern-apply 上移（对应 ②）。
+
+### 8.11 第 10 轮：`need_entire` 溯源（一个被证伪的定位）
+
+**假设**：`requirement_collector.cpp` 的「Project 裸转发 → `need_entire = true`」是迫使 complex-7 在 1944 行处构造整 `VertexValue` 的根因；把它限制到「结果投影」即可让中间 `WITH` 只产出扁平属性。
+
+**实验**：
+1. 先**完全删除**该规则 → `query_executor_tests` 从 519 降到 **518**，唯一失败是 `QueryExecutorTest.TckWith7Scenario1BoundEndpoint`（`WITH a AS b, b AS tmp, r AS r / WITH b AS a, r / LIMIT 1 / MATCH (a)-[r]->(b) / RETURN a, r, b`，期望 b=vid302 实际得到 301）。说明该规则对**别名链在槽位上的消歧**是承重的，不能整体删除。
+2. 再改为**仅对结果投影生效**（`isResultProjection` 沿 `Limit`/`Skip`/`Sort`/`Distinct` 向下判定最外层 Project）→ `query_executor_tests` **519/519**、`optimizer_tests` **109/109** 全绿。
+
+**结论：改动是语义惰性的，收益为 0。** 用 `EUGRAPH_DPL_DEBUG` 对比需求转储，改动**前后完全一致**：
+
+```
+[DPL] slot=3 var=message whole_vertex=true ... coalesce=1     ← 未变
+```
+
+即 complex-7 里 `message` 的 `whole_vertex` **不是**由「裸转发」规则触发的。同二进制 + 环境开关背靠背 A/B 也确认：旧行为 min 118.46 / med 122.34，新行为 min 122.43 / med 131.71 —— 差异属负载噪声（且方向不利），**已回滚**。
+
+**这修正了 §8.9 的落点判断**：`need_entire` 的真实来源是 **`message` 被存进 `collect({msg: message})` 的 map**（`Project` 项里的裸引用，位于**聚合的输入投影**，不是结果投影），其外层消费是内层 Project 别名链的独立位置。因此 §8.9 的方案 (1) 不能靠改 `need_entire` 规则实现，**必须真正移动构造点**（把整对象构造放到行数削减之后）。这仍需要改 Enricher 插入层级，且该层级信息在 `collectPlanRequirements` 里不可见 —— 需求是按变量全局合并的，不区分「该需求来自 Sort 之前还是之后」。
+
+**对「一劳永逸」方案的表述**：需要让需求收集**按算子位置分区**（同一变量在 `Sort` 之上的消费者需要整对象、在 `Sort` 之下的只需要扁平属性），而不是按变量全局合并。这是 §8.9 方案 (1) 的正确形态，也是本会话唯一尚未尝试过的实现路径。
+
+### 8.12 设计评估：问题不在 ProjectionExtract，在需求模型的「位置无关性」
+
+第 10 轮实验（§8.11）与第 1 轮实验（§8.6）合起来指向一个结论：**属性提取下推本身不复杂也不僵化，僵化的是它上游的需求模型。**
+
+**证据**
+
+| 观察 | 说明 |
+|---|---|
+| §8.8 C1 vs C2：map 装整 vertex vs 只装扁平属性，min 124.22 vs 124.35 | 扁平属性提取路径**工作正常且已自动生效**（`whole_vertex=false` + `vprop-coalesce`），没有僵化问题 |
+| §8.6 第 1 条：取消 `WITH n` 的 whole-object 需求 → 519→495（24 失败） | 失败原因是约 52 处消费者直接 `std::get<VertexValue>`，**不是**提取能力不足 |
+| §8.11：把裸转发规则限定到结果投影 → 519/519 但需求转储**完全不变**、收益 0 | 真实构造决策**不经过**该规则 |
+
+**僵化点**：`PlanRequirements` 是 `unordered_map<SlotId, VariableRequirement>` —— **一个变量一个需求、一个构造点**。于是：
+
+- 同一变量在计划**不同位置**的消费者被合并成一个需求；
+- 只要**任一**消费者需要整对象，整对象就在**产出该变量的算子**（计划中行数最多处）被构造；
+- 位置信息（「这个需求来自 `Sort` 之前还是之后」）在合并时丢失，下游无法据此把构造点后移。
+
+这正是 Neo4j 计划（§8.10）与我们的根本差异：Neo4j 全程持引用、在最上层才读属性；我们则因为在 ALIAS/容器位置需要「对象」而把构造提到最前。
+
+**«一劳永逸» 的正确形态**：让需求**按算子位置分区**，而不是按变量全局合并 ——
+
+```
+现在:  PlanRequirements = { slot -> Requirement }              // 位置无关
+目标:  PlanRequirements = { slot -> { region -> Requirement } } // 按屏障分区
+```
+
+其中 region 由「纯行数削减屏障」划分（`Sort` / `Filter` / `Limit`）。规则：**某变量在屏障之上的消费者需要整对象时，不在产出算子构造，而在该屏障之后、该消费者之前构造**；屏障之下的消费者只声明它们真正读的扁平属性。
+
+这样：
+- 构造点自动落在行数最少的位置（complex-7：`message` 从 1944 行降到 542 行，甚至更后）；
+- 不需要改那 52 处 `VertexValue` 消费者（它们在屏障之上，仍然拿到对象）；
+- `ProjectionExtract` 的提取逻辑**无需改动** —— 它已经是按需的，只是被告知的需求粒度错了。
+
+**落点**：`requirement_collector.cpp`（收集时携带 region 而不是直接 `mergeVarRequirements`）、`column_rewrite.hpp` 的 `PlanRequirements` 类型、`column_rewrite.cpp` 的 `collectPlanRequirements` / `buildExtractionInfo`、以及 `memo.cpp` 的 enforcer 生成（按 region 选构造位置）。
+
+**为什么没有在本会话实施**：这是 `PlanRequirements` 的语义变更，牵动 DPL 全部下游（`lowerAliasPassthrough`、`rewriteExpr`、`dispatchProjectionExtract`）。本会话在同类承重语义上已失败 3 次（§8.6 两条 + §8.11），且该改动必须一次做对才能保住 519/519 与 TCK 0 变化 —— 需要一轮完整预算独立实施与验证。

@@ -283,6 +283,11 @@ void lowerAliasPassthrough(binder::BoundLogicalOperator& root, const PEPlans& pl
 /// using the given PEPlans. Returns true if any rewrite occurred.
 bool rewriteExpression(binder::BoundExpression& expr, const PEPlans& plans, const SlotResolver& resolver);
 
+/// Diagnostic helper: render a bound expression (nested column refs, operator
+/// kinds) as a short string. Used by the EUGRAPH_PRED_DEBUG predicate dump in
+/// PhysicalPlanner::planBound.
+std::string describeBoundExpression(const binder::BoundExpression& expr);
+
 /// Walk a BoundLogicalOperator tree and lower all BoundExpressions to
 /// slot-based references. Unlike the legacy column-index rewriter, this
 /// pass requires no base_col / ProjectResetMap / LeftJoinColMap machinery

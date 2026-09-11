@@ -1,5 +1,8 @@
 #include "query/optimizer/column_rewrite.hpp"
 
+#include <cstdlib>
+#include <spdlog/spdlog.h>
+
 #include "query/planner/binder/join_equality.hpp"
 
 #include "query/planner/bound_expression/bound_dynamic_property_ref.hpp"
@@ -737,13 +740,15 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSortOp>>) {
                 if (v) {
-                    for (const auto& item : v->items)
+                    for (const auto& item : v->items) {
                         collectExprReqs(item.expr, reqs, resolver, "", label_defs);
+                    }
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAggregateOp>>) {
                 if (v) {
-                    for (const auto& k : v->group_keys)
+                    for (const auto& k : v->group_keys) {
                         collectExprReqs(k, reqs, resolver, "", label_defs);
+                    }
                     for (const auto& agg : v->aggregates) {
                         for (const auto& arg : agg.arguments) {
                             // count(n) only needs non-null rows. A bare
@@ -1634,6 +1639,27 @@ binder::SlotId getCanonicalSlot(const AliasSlotMap& alias_map, binder::SlotId sl
     return cur;
 }
 
+namespace {
+/// Diagnostic: dump the aggregated Demand-Pull requirements. Enable with
+/// EUGRAPH_DPL_DEBUG=1. Used to explain why a variable is materialised as a
+/// whole VertexValue instead of only its referenced flat properties.
+void dumpPlanRequirements(const PlanRequirements& reqs, const NameSlotMap& names) {
+    std::unordered_map<binder::SlotId, std::string> slot_names;
+    for (const auto& [name, slot] : names)
+        slot_names.emplace(slot, name);
+    for (const auto& [slot, r] : reqs) {
+        if (r.empty())
+            continue;
+        auto it = slot_names.find(slot);
+        const std::string& name = it != slot_names.end() ? it->second : std::string("<anon>");
+        spdlog::info("[DPL] slot={} var={} whole_vertex={} whole_edge={} labels={} edge_type={} vprops={} eprops={} "
+                     "coalesce={}",
+                     slot, name, r.need_whole_vertex, r.need_whole_edge, r.need_vertex_labels, r.need_edge_type,
+                     r.vertex_props.size(), r.edge_props.size(), r.coalesce_vertex_props.size());
+    }
+}
+} // namespace
+
 PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& root, const SlotResolver& resolver,
                                          const NameSlotMap* fresh_expands,
                                          const std::unordered_map<LabelId, LabelDef>* label_defs) {
@@ -1665,6 +1691,9 @@ PlanRequirements collectPlanRequirements(const binder::BoundLogicalOperator& roo
         }
         dedupeVarReqs(r);
     }
+    static const bool dpl_debug = std::getenv("EUGRAPH_DPL_DEBUG") != nullptr;
+    if (dpl_debug)
+        dumpPlanRequirements(reqs, resolver.names());
     return reqs;
 }
 
@@ -1749,6 +1778,34 @@ void lowerAliasPassthrough(binder::BoundLogicalOperator& root, const PEPlans& pl
 
 bool rewriteExpression(binder::BoundExpression& expr, const PEPlans& plans, const SlotResolver& resolver) {
     return rewriteExpr(expr, plans, resolver);
+}
+
+std::string describeBoundExpression(const binder::BoundExpression& expr) {
+    std::string out;
+    std::visit(
+        [&](const auto& ptr) {
+            using T = std::decay_t<decltype(ptr)>;
+            if constexpr (std::is_same_v<T, binder::BoundColumnRef>) {
+                out = "ColRef(" + ptr.name + " slot=" + std::to_string(ptr.slot_id) +
+                      " kind=" + std::to_string(static_cast<int>(ptr.type.kind)) + ")";
+            } else if constexpr (std::is_same_v<T, binder::BoundLiteral>) {
+                out = "Literal";
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>>) {
+                out = "PropRef(" + (ptr ? ptr->property_name : std::string("?")) +
+                      " cands=" + std::to_string(ptr ? ptr->candidates.size() : 0) +
+                      " obj=" + (ptr ? describeBoundExpression(ptr->object) : std::string("?")) + ")";
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
+                out = "Binary(" + std::to_string(ptr ? static_cast<int>(ptr->op) : -1) + ", " +
+                      (ptr ? describeBoundExpression(ptr->left) : std::string("?")) + ", " +
+                      (ptr ? describeBoundExpression(ptr->right) : std::string("?")) + ")";
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
+                out = "Func(" + (ptr && ptr->func_def ? ptr->func_def->name : std::string("?")) + ")";
+            } else {
+                out = "expr#" + std::to_string(expr.index());
+            }
+        },
+        expr);
+    return out;
 }
 
 void rewriteColumnIndices(binder::BoundLogicalOperator& op, const PEPlans& plans, const SlotResolver& resolver) {

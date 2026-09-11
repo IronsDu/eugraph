@@ -469,7 +469,87 @@ static void collectPatternComprehensionsAST(const cypher::Expression& expr,
         expr);
 }
 
-// Patch every BoundPatternComprehension placeholder in a bound expression
+// Collect the PatternComprehension nodes that were interned from an
+// `ExistsExpr` — i.e. a pattern predicate in a boolean context
+// (`EXISTS { ... }`, bare `(a)-[:R]-(b)`, `WHERE (a)-->(b)`).
+//
+// Such a comprehension is always consumed as `size(<list>) > 0`
+// (see bindExpression's ExistsExpr case), so its collected list is dead. The
+// physical operator is allowed to stop at the first matching row instead of
+// building the full list, which is what makes `NOT (...)` cheap on a large
+// correlated sub-plan.
+template <typename Item>
+static std::set<const cypher::PatternComprehension*>
+collectExistenceDerivedPatterns(const std::vector<Item>& items,
+                                const std::vector<cypher::OrderBy::SortItem>* order_by_items, Binder& binder) {
+    std::set<const cypher::PatternComprehension*> out;
+    auto walk = [&](const cypher::Expression& expr, auto&& self) -> void {
+        std::visit(
+            [&](const auto& ptr) {
+                using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+                if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                    if (const auto* pc = binder.internProjectionExistsPattern(*ptr))
+                        out.insert(pc);
+                    if (ptr->where_pred)
+                        self(*ptr->where_pred, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                    // A user-visible comprehension is never existence-only; its
+                    // list is returned. Only descend for nested EXISTS nodes.
+                    if (ptr->projection)
+                        self(*ptr->projection, self);
+                    if (ptr->where_pred)
+                        self(*ptr->where_pred, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                    self(ptr->left, self);
+                    self(ptr->right, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
+                    self(ptr->operand, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                    self(ptr->inner, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                    for (const auto& arg : ptr->args)
+                        self(arg, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
+                    self(ptr->object, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                    if (ptr->subject)
+                        self(*ptr->subject, self);
+                    for (const auto& [w, t] : ptr->when_thens) {
+                        self(w, self);
+                        self(t, self);
+                    }
+                    if (ptr->else_expr)
+                        self(*ptr->else_expr, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                    for (const auto& e : ptr->elements)
+                        self(e, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
+                    for (const auto& [k, v] : ptr->entries)
+                        self(v, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
+                                     std::is_same_v<Elem, cypher::NoneExpr> ||
+                                     std::is_same_v<Elem, cypher::SingleExpr>) {
+                    self(ptr->list_expr, self);
+                    if (ptr->where_pred)
+                        self(*ptr->where_pred, self);
+                } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                    self(ptr->list_expr, self);
+                    if (ptr->where_pred)
+                        self(*ptr->where_pred, self);
+                    if (ptr->projection)
+                        self(*ptr->projection, self);
+                }
+            },
+            expr);
+    };
+    for (const auto& item : items)
+        walk(item.expr, walk);
+    if (order_by_items)
+        for (const auto& si : *order_by_items)
+            walk(si.expr, walk);
+    return out;
+}
+
 // tree with the slot/name/type it should resolve to. The placeholder was
 // created with only an AST pointer; the hoisting pass later learned where
 // the corresponding Apply op emits its list column. We mutate in place
@@ -574,6 +654,12 @@ bool hoistPatternComprehensions(
     // Dedupe by pointer (same AST node referenced twice would otherwise hoist
     // twice; TCK never does this, but cheap to guard).
     std::set<const cypher::PatternComprehension*> seen;
+    // Comprehensions interned from a boolean-context pattern predicate
+    // (`EXISTS { ... }` / a bare `(a)-[:R]-(b)`). Their collected list is only
+    // ever consumed as `size(list) > 0`, so the physical operator may stop at
+    // the first match instead of building the whole list.
+    const std::set<const cypher::PatternComprehension*> existence_only =
+        collectExistenceDerivedPatterns(items, order_by_items, binder);
     for (const auto* pc : pc_asts) {
         if (!seen.insert(pc).second)
             continue;
@@ -584,6 +670,17 @@ bool hoistPatternComprehensions(
         auto apply_op = binder.bindPatternComprehension(*pc, std::move(child), corr, out_slot, out_name, out_elem_type);
         if (!apply_op) {
             return false;
+        }
+        if (existence_only.count(pc)) {
+            std::visit(
+                [](auto& v) {
+                    using T = std::decay_t<decltype(v)>;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                        if (v)
+                            v->existence_only = true;
+                    }
+                },
+                *apply_op);
         }
         child = std::move(*apply_op);
         auto output = std::make_tuple(out_slot, out_name, binder::BoundType::List(out_elem_type));

@@ -33,6 +33,10 @@ public:
 
     void compileExpressions(const TupleSlotLayout& input_layout) override;
 
+    const binder::BoundExpression& predicate() const {
+        return predicate_;
+    }
+
 private:
     binder::BoundExpression predicate_;
     Schema schema_;
