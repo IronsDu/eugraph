@@ -26,10 +26,10 @@ static std::string resolvePath(const std::string& data_dir, const std::string& f
 int main(int argc, char* argv[]) {
     // Parse our args before folly::Init to avoid gflags conflicts
     args::ArgumentParser parser("EuGraph CSV loader.");
+    parser.helpParams.addDefault = true;
     args::HelpFlag help(parser, "help", "Show this help menu", {"help"});
-    args::ValueFlag<std::string> host_flag(parser, "host", "Server address (default: 127.0.0.1)", {"host"},
-                                           "127.0.0.1");
-    args::ValueFlag<int> port_flag(parser, "port", "Server port (default: 9090)", {"port"}, 9090);
+    args::ValueFlag<std::string> host_flag(parser, "host", "Server address", {"host"}, "127.0.0.1");
+    args::ValueFlag<int> port_flag(parser, "port", "Server port", {"port"}, 9090);
     args::ValueFlag<std::string> data_dir_flag(
         parser, "path", "CSV data directory; required when scanning, optional with --nodes/--relationships",
         {"data-dir"});
@@ -37,12 +37,12 @@ int main(int argc, char* argv[]) {
         parser, "spec", "Explicit vertex file mapping: Label[:Label...]=file (repeatable)", {"nodes"});
     args::ValueFlagList<std::string> relationships_flag(
         parser, "spec", "Explicit edge file mapping: TYPE=file (repeatable)", {"relationships"});
-    args::ValueFlag<std::string> delimiter_flag(parser, "char", "CSV delimiter (default: '|'; only '|' supported)",
-                                                {"delimiter"}, "|");
-    args::ValueFlag<int> batch_size_flag(parser, "n", "Records per RPC batch (default: 500)", {"batch-size"}, 500);
-    args::ValueFlag<int> rpc_connections_flag(parser, "n", "Number of concurrent RPC connections (default: 1)",
-                                              {"rpc-connections"}, 1);
-    args::ValueFlag<int> parallel_files_flag(parser, "n", "Max number of CSV files loaded in parallel (default: 1)",
+    args::ValueFlag<std::string> delimiter_flag(parser, "char", "CSV delimiter; only '|' is supported", {"delimiter"},
+                                                "|");
+    args::ValueFlag<int> batch_size_flag(parser, "n", "Records per RPC batch", {"batch-size"}, 500);
+    args::ValueFlag<int> rpc_connections_flag(parser, "n", "Number of concurrent RPC connections", {"rpc-connections"},
+                                              1);
+    args::ValueFlag<int> parallel_files_flag(parser, "n", "Max number of CSV files loaded in parallel",
                                              {"parallel-files"}, 1);
 
     try {

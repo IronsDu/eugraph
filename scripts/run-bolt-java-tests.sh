@@ -30,7 +30,7 @@ trap cleanup EXIT
 
 mkdir -p "$WORK_DIR"
 
-"$SERVER" --port "$THRIFT_PORT" --bolt-port "$BOLT_PORT" --data-dir "$WORK_DIR/data" \
+"$SERVER" --thrift-port "$THRIFT_PORT" --bolt-port "$BOLT_PORT" --data-dir "$WORK_DIR/data" \
     > "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 

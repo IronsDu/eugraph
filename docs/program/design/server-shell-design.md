@@ -7,13 +7,13 @@ RPC 层与通信协议见 [service/rpc-service.md](../service/rpc-service.md)。
 ## Server 启动流程
 
 1. 创建 SyncGraphDataStore（`{data_dir}/data`）+ SyncGraphMetaStore（`{data_dir}/meta`）
-2. 创建共享 `IoScheduler(io_threads=4)`
+2. 创建共享 `IoScheduler(storage_io_threads=4)`
 3. 创建 AsyncGraphDataStore + AsyncGraphMetaStore
 4. 创建 QueryExecutor(async_data, async_meta, config{compute_threads})
 5. 创建 EuGraphHandler
 6. Thrift server 使用 `IOThreadPoolExecutor` 同时作为 IO 和 handler 线程池
 
-`--threads` 控制 compute 线程数，IO 线程数固定为 4。
+`--compute-threads` 控制查询计算线程数；`--storage-io-threads` 控制存储 IO 池（`IoScheduler`），`--thrift-io-threads` 控制 Thrift IO/handler 池。
 
 ## Shell
 

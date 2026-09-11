@@ -13,9 +13,10 @@ using namespace eugraph::shell;
 static ShellConfig parseArgs(int argc, char* argv[]) {
     ShellConfig config;
     args::ArgumentParser parser("EuGraph shell.");
+    parser.helpParams.addDefault = true;
     args::HelpFlag help(parser, "help", "Show this help menu", {"help"});
-    args::ValueFlag<std::string> host(parser, "host", "Server host (default: 127.0.0.1)", {'h', "host"}, config.host);
-    args::ValueFlag<int> port(parser, "port", "Server port (default: 9090)", {'p', "port"}, config.port);
+    args::ValueFlag<std::string> host(parser, "host", "Server host", {'h', "host"}, config.host);
+    args::ValueFlag<int> port(parser, "port", "Server port", {'p', "port"}, config.port);
 
     try {
         parser.ParseCLI(argc, argv);
