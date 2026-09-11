@@ -1359,25 +1359,30 @@ VertexRecord::~VertexRecord() {}
 
 VertexRecord::VertexRecord([[maybe_unused]] VertexRecord&& other) noexcept :
     __fbthrift_field_properties(std::move(other.__fbthrift_field_properties)),
+    __fbthrift_field_labels(std::move(other.__fbthrift_field_labels)),
     __isset(other.__isset) {
 }
 
 VertexRecord& VertexRecord::operator=([[maybe_unused]] VertexRecord&& other) noexcept {
     this->__fbthrift_field_properties = std::move(other.__fbthrift_field_properties);
+    this->__fbthrift_field_labels = std::move(other.__fbthrift_field_labels);
     __isset = other.__isset;
     return *this;
 }
 
 
-VertexRecord::VertexRecord(apache::thrift::FragileConstructor, ::std::vector<::eugraph::thrift_service::PropertyValueThrift> properties__arg) :
-    __fbthrift_field_properties(std::move(properties__arg)) { 
+VertexRecord::VertexRecord(apache::thrift::FragileConstructor, ::std::vector<::eugraph::thrift_service::PropertyValueThrift> properties__arg, ::std::vector<::std::string> labels__arg) :
+    __fbthrift_field_properties(std::move(properties__arg)),
+    __fbthrift_field_labels(std::move(labels__arg)) { 
   __isset.set(folly::index_constant<0>(), true);
+  __isset.set(folly::index_constant<1>(), true);
 }
 
 
 void VertexRecord::__fbthrift_clear() {
   // clear all fields
   this->__fbthrift_field_properties.clear();
+  this->__fbthrift_field_labels.clear();
   __isset = {};
 }
 
@@ -1405,9 +1410,18 @@ const ::std::vector<::eugraph::thrift_service::PropertyValueThrift>& VertexRecor
   return static_cast<::std::vector<::eugraph::thrift_service::PropertyValueThrift>&&>(__fbthrift_field_properties);
 }
 
+const ::std::vector<::std::string>& VertexRecord::get_labels() const& {
+  return __fbthrift_field_labels;
+}
+
+::std::vector<::std::string> VertexRecord::get_labels() && {
+  return static_cast<::std::vector<::std::string>&&>(__fbthrift_field_labels);
+}
+
 void swap([[maybe_unused]] VertexRecord& a, [[maybe_unused]] VertexRecord& b) {
   using ::std::swap;
   swap(a.__fbthrift_field_properties, b.__fbthrift_field_properties);
+  swap(a.__fbthrift_field_labels, b.__fbthrift_field_labels);
   swap(a.__isset, b.__isset);
 }
 

@@ -26,6 +26,22 @@ uint64_t MetadataCodec::decodeU64(std::string_view data, size_t& offset) {
     return val;
 }
 
+void MetadataCodec::encodeU32(std::string& buf, uint32_t val) {
+    buf.push_back(static_cast<char>((val >> 24) & 0xFF));
+    buf.push_back(static_cast<char>((val >> 16) & 0xFF));
+    buf.push_back(static_cast<char>((val >> 8) & 0xFF));
+    buf.push_back(static_cast<char>(val & 0xFF));
+}
+
+uint32_t MetadataCodec::decodeU32(std::string_view data, size_t& offset) {
+    if (offset + 4 > data.size())
+        throw std::runtime_error("MetadataCodec: unexpected end of data decoding U32");
+    uint32_t val = (static_cast<uint8_t>(data[offset]) << 24) | (static_cast<uint8_t>(data[offset + 1]) << 16) |
+                   (static_cast<uint8_t>(data[offset + 2]) << 8) | static_cast<uint8_t>(data[offset + 3]);
+    offset += 4;
+    return val;
+}
+
 void MetadataCodec::encodeU16(std::string& buf, uint16_t val) {
     buf.push_back(static_cast<char>((val >> 8) & 0xFF));
     buf.push_back(static_cast<char>(val & 0xFF));
@@ -178,7 +194,14 @@ PropertyDef MetadataCodec::decodePropertyDef(std::string_view data, size_t& offs
 // ==================== IndexDef ====================
 
 void MetadataCodec::encodeIndexDef(std::string& buf, const LabelDef::IndexDef& idx) {
+    encodeU32(buf, idx.index_id);
     encodeString(buf, idx.name);
+    encodeU16(buf, static_cast<uint16_t>(idx.accessors.size()));
+    for (const auto& acc : idx.accessors) {
+        encodeU8(buf, acc.is_strong ? 1 : 0);
+        encodeU16(buf, acc.source_label_id);
+        encodeString(buf, acc.property_name);
+    }
     encodeU16(buf, static_cast<uint16_t>(idx.prop_ids.size()));
     for (auto pid : idx.prop_ids)
         encodeU16(buf, pid);
@@ -188,7 +211,15 @@ void MetadataCodec::encodeIndexDef(std::string& buf, const LabelDef::IndexDef& i
 
 LabelDef::IndexDef MetadataCodec::decodeIndexDef(std::string_view data, size_t& offset) {
     LabelDef::IndexDef idx;
+    idx.index_id = decodeU32(data, offset);
     idx.name = decodeString(data, offset);
+    auto accessor_count = decodeU16(data, offset);
+    idx.accessors.resize(accessor_count);
+    for (uint16_t i = 0; i < accessor_count; ++i) {
+        idx.accessors[i].is_strong = decodeU8(data, offset) != 0;
+        idx.accessors[i].source_label_id = decodeU16(data, offset);
+        idx.accessors[i].property_name = decodeString(data, offset);
+    }
     auto count = decodeU16(data, offset);
     idx.prop_ids.resize(count);
     for (uint16_t i = 0; i < count; ++i)
@@ -272,22 +303,25 @@ EdgeLabelDef MetadataCodec::decodeEdgeLabelDef(std::string_view data) {
 
 // ==================== ID counters ====================
 
-std::string MetadataCodec::encodeNextIds(VertexId next_vid, EdgeId next_eid, LabelId next_lid, EdgeLabelId next_elid) {
+std::string MetadataCodec::encodeNextIds(VertexId next_vid, EdgeId next_eid, LabelId next_lid, EdgeLabelId next_elid,
+                                         uint32_t next_index_id) {
     std::string buf;
     encodeU64(buf, next_vid);
     encodeU64(buf, next_eid);
     encodeU16(buf, next_lid);
     encodeU16(buf, next_elid);
+    encodeU32(buf, next_index_id);
     return buf;
 }
 
 void MetadataCodec::decodeNextIds(std::string_view data, VertexId& next_vid, EdgeId& next_eid, LabelId& next_lid,
-                                  EdgeLabelId& next_elid) {
+                                  EdgeLabelId& next_elid, uint32_t& next_index_id) {
     size_t offset = 0;
     next_vid = decodeU64(data, offset);
     next_eid = decodeU64(data, offset);
     next_lid = decodeU16(data, offset);
     next_elid = decodeU16(data, offset);
+    next_index_id = decodeU32(data, offset);
 }
 
 } // namespace eugraph

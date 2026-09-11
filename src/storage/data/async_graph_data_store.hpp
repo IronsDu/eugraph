@@ -267,6 +267,38 @@ public:
         }
     }
 
+    folly::coro::AsyncGenerator<std::vector<BatchedEdge>>
+    scanEdgesBatch(const std::vector<VertexId>& src_ids, Direction direction,
+                   std::optional<EdgeLabelId> label_filter) override {
+        constexpr size_t BATCH = 65536;
+        auto txn = txn_;
+        auto vids = src_ids;
+        auto dir = direction;
+        auto filter = label_filter;
+        size_t offset = 0;
+        while (offset < vids.size()) {
+            std::vector<BatchedEdge> batch;
+            batch.reserve(1024);
+            co_await io_.dispatchVoid([this, txn, &vids, &offset, dir, filter, &batch]() {
+                while (offset < vids.size() && batch.size() < BATCH) {
+                    VertexId vid = vids[offset++];
+                    auto cursor = store_.createEdgeScanCursor(txn, vid, dir, filter);
+                    if (!cursor)
+                        continue;
+                    while (cursor->valid() && batch.size() < BATCH) {
+                        batch.push_back(BatchedEdge{vid, cursor->entry()});
+                        cursor->next();
+                    }
+                }
+            });
+            if (batch.empty()) {
+                offset = vids.size();
+                co_return;
+            }
+            co_yield std::move(batch);
+        }
+    }
+
     // ==================== Edge Type Scan ====================
 
     folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry>>
@@ -469,19 +501,19 @@ public:
         auto txn = txn_;
         std::string table = vidxTable(label_id, prop_id);
         auto val = value;
-        while (true) {
-            std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([this, txn, &table, &val, &batch]() {
-                store_.scanIndexEquality(txn, table, val, [&](uint64_t entity_id) {
-                    batch.push_back(entity_id);
-                    return batch.size() < BATCH;
-                });
+        // The synchronous index APIs do not expose a resumable cursor. Collect
+        // the (index-bounded) match set in one dispatch, then emit chunks.
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &val, &all]() {
+            store_.scanIndexEquality(txn, table, val, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
             });
-            if (batch.empty())
-                co_return;
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end));
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
         }
     }
 
@@ -492,19 +524,17 @@ public:
         auto txn = txn_;
         std::string table = vidxCompositeTable(label_id, prop_ids);
         auto vals = values;
-        while (true) {
-            std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([this, txn, &table, &vals, &batch]() {
-                store_.scanIndexEquality(txn, table, vals, [&](uint64_t entity_id) {
-                    batch.push_back(entity_id);
-                    return batch.size() < BATCH;
-                });
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &vals, &all]() {
+            store_.scanIndexEquality(txn, table, vals, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
             });
-            if (batch.empty())
-                co_return;
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end));
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
         }
     }
 
@@ -516,19 +546,17 @@ public:
         std::string table = vidxTable(label_id, prop_id);
         auto s = start;
         auto e = end;
-        while (true) {
-            std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
-                store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
-                    batch.push_back(entity_id);
-                    return batch.size() < BATCH;
-                });
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &s, &e, &all]() {
+            store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
             });
-            if (batch.empty())
-                co_return;
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end_idx = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end_idx));
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
         }
     }
 
@@ -541,19 +569,59 @@ public:
         std::string table = vidxCompositeTable(label_id, prop_ids);
         auto s = start;
         auto e = end;
-        while (true) {
-            std::vector<VertexId> batch;
-            co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
-                store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
-                    batch.push_back(entity_id);
-                    return batch.size() < BATCH;
-                });
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &s, &e, &all]() {
+            store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
             });
-            if (batch.empty())
-                co_return;
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end_idx = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end_idx));
             co_yield std::move(batch);
-            if (batch.size() < BATCH)
-                co_return;
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values) override {
+        constexpr size_t BATCH = 1024;
+        auto txn = txn_;
+        std::string table = vidxTableById(index_id);
+        auto vals = values;
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &vals, &all]() {
+            store_.scanIndexEquality(txn, table, vals, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
+            });
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end));
+            co_yield std::move(batch);
+        }
+    }
+
+    folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexIdRange(uint32_t index_id, const std::optional<std::vector<PropertyValue>>& start,
+                               const std::optional<std::vector<PropertyValue>>& end) override {
+        constexpr size_t BATCH = 1024;
+        auto txn = txn_;
+        std::string table = vidxTableById(index_id);
+        auto s = start;
+        auto e = end;
+        std::vector<VertexId> all;
+        co_await io_.dispatchVoid([this, txn, &table, &s, &e, &all]() {
+            store_.scanIndexRange(txn, table, s, e, [&](uint64_t entity_id) {
+                all.push_back(entity_id);
+                return true;
+            });
+        });
+        for (size_t i = 0; i < all.size(); i += BATCH) {
+            size_t end_idx = std::min(i + BATCH, all.size());
+            std::vector<VertexId> batch(all.begin() + static_cast<long>(i), all.begin() + static_cast<long>(end_idx));
+            co_yield std::move(batch);
         }
     }
 
@@ -701,12 +769,13 @@ public:
 
     // ==================== Batch Write ====================
 
-    folly::coro::Task<void> batchInsertVertices(LabelId label_id, std::vector<BatchVertexEntry> entries) override {
-        co_await io_.dispatchVoid([this, label_id, entries = std::move(entries)]() {
+    folly::coro::Task<void> batchInsertVertices(std::vector<BatchVertexEntry> entries) override {
+        co_await io_.dispatchVoid([this, entries = std::move(entries)]() {
             auto txn = store_.beginTransaction();
             for (const auto& e : entries) {
-                std::pair<LabelId, Properties> lp{label_id, e.props};
-                store_.insertVertex(txn, e.vid, std::span<const std::pair<LabelId, Properties>>{&lp, 1});
+                store_.insertVertex(
+                    txn, e.vid,
+                    std::span<const std::pair<LabelId, Properties>>{e.label_props.data(), e.label_props.size()});
             }
             store_.commitTransaction(txn);
         });

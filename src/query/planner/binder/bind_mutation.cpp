@@ -391,6 +391,7 @@ std::optional<BoundLogicalOperator> Binder::bindSet(const cypher::SetClause& set
         }
         case cypher::SetItemKind::SET_LABELS: {
             bound_item.kind = BoundSetOp::ItemKind::SET_LABELS;
+            bound_item.label = item.label;
             LabelId lid = catalog_.labelNameToId(item.label);
             if (lid != INVALID_LABEL_ID)
                 bound_item.label_id = lid;

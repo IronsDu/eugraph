@@ -397,7 +397,8 @@ static bool hasAggregate(const cypher::Expression& expr) {
 // Used to drive the hoisting pass that turns each comprehension into a
 // BoundPatternComprehensionApplyOp stacked above the input child.
 static void collectPatternComprehensionsAST(const cypher::Expression& expr,
-                                            std::vector<const cypher::PatternComprehension*>& out) {
+                                            std::vector<const cypher::PatternComprehension*>& out,
+                                            Binder* binder = nullptr) {
     std::visit(
         [&](const auto& ptr) {
             using Elem = typename std::decay_t<decltype(ptr)>::element_type;
@@ -406,54 +407,63 @@ static void collectPatternComprehensionsAST(const cypher::Expression& expr,
                 // The projection / where_pred could in turn contain nested
                 // pattern comprehensions; recurse to be safe.
                 if (ptr->projection)
-                    collectPatternComprehensionsAST(*ptr->projection, out);
+                    collectPatternComprehensionsAST(*ptr->projection, out, binder);
                 if (ptr->where_pred)
-                    collectPatternComprehensionsAST(*ptr->where_pred, out);
+                    collectPatternComprehensionsAST(*ptr->where_pred, out, binder);
+            } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                if (binder) {
+                    if (const auto* pc = binder->internProjectionExistsPattern(*ptr))
+                        out.push_back(pc);
+                }
+                if (ptr->where_pred)
+                    collectPatternComprehensionsAST(*ptr->where_pred, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
-                collectPatternComprehensionsAST(ptr->left, out);
-                collectPatternComprehensionsAST(ptr->right, out);
+                collectPatternComprehensionsAST(ptr->left, out, binder);
+                collectPatternComprehensionsAST(ptr->right, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::UnaryOp>) {
-                collectPatternComprehensionsAST(ptr->operand, out);
+                collectPatternComprehensionsAST(ptr->operand, out, binder);
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                collectPatternComprehensionsAST(ptr->inner, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
                 for (const auto& arg : ptr->args)
-                    collectPatternComprehensionsAST(arg, out);
+                    collectPatternComprehensionsAST(arg, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::PropertyAccess>) {
-                collectPatternComprehensionsAST(ptr->object, out);
+                collectPatternComprehensionsAST(ptr->object, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::SubscriptExpr>) {
-                collectPatternComprehensionsAST(ptr->list, out);
-                collectPatternComprehensionsAST(ptr->index, out);
+                collectPatternComprehensionsAST(ptr->list, out, binder);
+                collectPatternComprehensionsAST(ptr->index, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
-                collectPatternComprehensionsAST(ptr->list, out);
+                collectPatternComprehensionsAST(ptr->list, out, binder);
                 if (ptr->from)
-                    collectPatternComprehensionsAST(*ptr->from, out);
+                    collectPatternComprehensionsAST(*ptr->from, out, binder);
                 if (ptr->to)
-                    collectPatternComprehensionsAST(*ptr->to, out);
+                    collectPatternComprehensionsAST(*ptr->to, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
                 if (ptr->subject)
-                    collectPatternComprehensionsAST(*ptr->subject, out);
+                    collectPatternComprehensionsAST(*ptr->subject, out, binder);
                 for (const auto& [w, t] : ptr->when_thens) {
-                    collectPatternComprehensionsAST(w, out);
-                    collectPatternComprehensionsAST(t, out);
+                    collectPatternComprehensionsAST(w, out, binder);
+                    collectPatternComprehensionsAST(t, out, binder);
                 }
                 if (ptr->else_expr)
-                    collectPatternComprehensionsAST(*ptr->else_expr, out);
+                    collectPatternComprehensionsAST(*ptr->else_expr, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
                 for (const auto& e : ptr->elements)
-                    collectPatternComprehensionsAST(e, out);
+                    collectPatternComprehensionsAST(e, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::MapExpr>) {
                 for (const auto& [k, v] : ptr->entries)
-                    collectPatternComprehensionsAST(v, out);
+                    collectPatternComprehensionsAST(v, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
                                  std::is_same_v<Elem, cypher::NoneExpr> || std::is_same_v<Elem, cypher::SingleExpr>) {
-                collectPatternComprehensionsAST(ptr->list_expr, out);
+                collectPatternComprehensionsAST(ptr->list_expr, out, binder);
                 if (ptr->where_pred)
-                    collectPatternComprehensionsAST(*ptr->where_pred, out);
+                    collectPatternComprehensionsAST(*ptr->where_pred, out, binder);
             } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
-                collectPatternComprehensionsAST(ptr->list_expr, out);
+                collectPatternComprehensionsAST(ptr->list_expr, out, binder);
                 if (ptr->where_pred)
-                    collectPatternComprehensionsAST(*ptr->where_pred, out);
+                    collectPatternComprehensionsAST(*ptr->where_pred, out, binder);
                 if (ptr->projection)
-                    collectPatternComprehensionsAST(*ptr->projection, out);
+                    collectPatternComprehensionsAST(*ptr->projection, out, binder);
             }
         },
         expr);
@@ -467,7 +477,8 @@ static void collectPatternComprehensionsAST(const cypher::Expression& expr,
 static void patchPatternComprehensionPlaceholders(
     binder::BoundExpression& expr,
     const std::unordered_map<const cypher::PatternComprehension*,
-                             std::tuple<binder::SlotId, std::string, binder::BoundType>>& patch_map) {
+                             std::tuple<binder::SlotId, std::string, binder::BoundType>>& patch_map,
+    Binder& binder) {
     std::visit(
         [&](auto& ptr) {
             using T = std::decay_t<decltype(ptr)>;
@@ -478,55 +489,60 @@ static void patchPatternComprehensionPlaceholders(
                     ptr.output_name = std::get<1>(it->second);
                     ptr.result_type = std::move(std::get<2>(it->second));
                 }
+                if (ptr.as_boolean) {
+                    auto bool_expr = binder.makePatternExistsExpression(ptr);
+                    if (bool_expr)
+                        expr = std::move(*bool_expr);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryOp>>) {
-                patchPatternComprehensionPlaceholders(ptr->left, patch_map);
-                patchPatternComprehensionPlaceholders(ptr->right, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->left, patch_map, binder);
+                patchPatternComprehensionPlaceholders(ptr->right, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnaryOp>>) {
-                patchPatternComprehensionPlaceholders(ptr->operand, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->operand, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundFunctionCall>>) {
                 for (auto& arg : ptr->args)
-                    patchPatternComprehensionPlaceholders(arg, patch_map);
+                    patchPatternComprehensionPlaceholders(arg, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPropertyRef>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDynamicPropertyRef>>) {
-                patchPatternComprehensionPlaceholders(ptr->object, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->object, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLabelCast>>) {
-                patchPatternComprehensionPlaceholders(ptr->object, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->object, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundList>>) {
                 for (auto& elem : ptr->elements)
-                    patchPatternComprehensionPlaceholders(elem, patch_map);
+                    patchPatternComprehensionPlaceholders(elem, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundMap>>) {
                 for (auto& [k, v] : ptr->entries)
-                    patchPatternComprehensionPlaceholders(v, patch_map);
+                    patchPatternComprehensionPlaceholders(v, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCase>>) {
                 if (ptr->subject)
-                    patchPatternComprehensionPlaceholders(*ptr->subject, patch_map);
+                    patchPatternComprehensionPlaceholders(*ptr->subject, patch_map, binder);
                 for (auto& [w, t] : ptr->when_thens) {
-                    patchPatternComprehensionPlaceholders(w, patch_map);
-                    patchPatternComprehensionPlaceholders(t, patch_map);
+                    patchPatternComprehensionPlaceholders(w, patch_map, binder);
+                    patchPatternComprehensionPlaceholders(t, patch_map, binder);
                 }
                 if (ptr->else_expr)
-                    patchPatternComprehensionPlaceholders(*ptr->else_expr, patch_map);
+                    patchPatternComprehensionPlaceholders(*ptr->else_expr, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSubscript>>) {
-                patchPatternComprehensionPlaceholders(ptr->list, patch_map);
-                patchPatternComprehensionPlaceholders(ptr->index, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->list, patch_map, binder);
+                patchPatternComprehensionPlaceholders(ptr->index, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSlice>>) {
-                patchPatternComprehensionPlaceholders(ptr->list, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->list, patch_map, binder);
                 if (ptr->from)
-                    patchPatternComprehensionPlaceholders(*ptr->from, patch_map);
+                    patchPatternComprehensionPlaceholders(*ptr->from, patch_map, binder);
                 if (ptr->to)
-                    patchPatternComprehensionPlaceholders(*ptr->to, patch_map);
+                    patchPatternComprehensionPlaceholders(*ptr->to, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundAllExpr>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundAnyExpr>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundNoneExpr>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSingleExpr>>) {
-                patchPatternComprehensionPlaceholders(ptr->list_expr, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->list_expr, patch_map, binder);
                 if (ptr->where_pred)
-                    patchPatternComprehensionPlaceholders(*ptr->where_pred, patch_map);
+                    patchPatternComprehensionPlaceholders(*ptr->where_pred, patch_map, binder);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundListComprehension>>) {
-                patchPatternComprehensionPlaceholders(ptr->list_expr, patch_map);
+                patchPatternComprehensionPlaceholders(ptr->list_expr, patch_map, binder);
                 if (ptr->where_pred)
-                    patchPatternComprehensionPlaceholders(*ptr->where_pred, patch_map);
-                patchPatternComprehensionPlaceholders(ptr->projection, patch_map);
+                    patchPatternComprehensionPlaceholders(*ptr->where_pred, patch_map, binder);
+                patchPatternComprehensionPlaceholders(ptr->projection, patch_map, binder);
             }
         },
         expr);
@@ -547,10 +563,10 @@ bool hoistPatternComprehensions(
         patch_map) {
     std::vector<const cypher::PatternComprehension*> pc_asts;
     for (const auto& item : items)
-        collectPatternComprehensionsAST(item.expr, pc_asts);
+        collectPatternComprehensionsAST(item.expr, pc_asts, &binder);
     if (order_by_items) {
         for (const auto& si : *order_by_items)
-            collectPatternComprehensionsAST(si.expr, pc_asts);
+            collectPatternComprehensionsAST(si.expr, pc_asts, &binder);
     }
     if (pc_asts.empty())
         return true;
@@ -570,7 +586,12 @@ bool hoistPatternComprehensions(
             return false;
         }
         child = std::move(*apply_op);
-        patch_map[pc] = std::make_tuple(out_slot, out_name, binder::BoundType::List(out_elem_type));
+        auto output = std::make_tuple(out_slot, out_name, binder::BoundType::List(out_elem_type));
+        patch_map[pc] = output;
+        // Let the subsequent bind walk resolve the original ExistsExpr into a
+        // boolean predicate immediately, before enclosing operators type-check
+        // it (e.g. NOT requires bool, not list).
+        binder.projection_exists_outputs_[pc] = std::move(output);
     }
     return true;
 }
@@ -886,7 +907,7 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
             ctx_.restore(saved);
             return false;
         }
-        patchPatternComprehensionPlaceholders(*bound_where, pc_patch_map);
+        patchPatternComprehensionPlaceholders(*bound_where, pc_patch_map, *this);
         auto filter = std::make_unique<BoundFilterOp>();
         filter->predicate = std::move(*bound_where);
         filter->child = std::move(current);
@@ -900,7 +921,7 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
             ctx_.restore(saved);
             return false;
         }
-        patchPatternComprehensionPlaceholders(*bound_proj, pc_patch_map);
+        patchPatternComprehensionPlaceholders(*bound_proj, pc_patch_map, *this);
         proj_expr = std::move(*bound_proj);
     } else {
         cypher::Expression var_expr(std::make_unique<cypher::Variable>(lc.variable));
@@ -1559,7 +1580,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
                 continue;
-            patchPatternComprehensionPlaceholders(*bound_expr, pc_patch_map);
+            patchPatternComprehensionPlaceholders(*bound_expr, pc_patch_map, *this);
 
             if (is_simple_agg) {
                 // Top-level aggregate function: e.g., RETURN count(a).
@@ -1819,7 +1840,7 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
         auto bound_expr = bindExpression(item.expr);
         if (!bound_expr)
             continue;
-        patchPatternComprehensionPlaceholders(*bound_expr, pc_patch_map);
+        patchPatternComprehensionPlaceholders(*bound_expr, pc_patch_map, *this);
 
         // Detect whole-variable return (e.g., RETURN n) to add all property requirements
         if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {
@@ -2152,7 +2173,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
             auto bound_expr = bindExpression(item.expr);
             if (!bound_expr)
                 continue;
-            patchPatternComprehensionPlaceholders(*bound_expr, wc_pc_patch_map);
+            patchPatternComprehensionPlaceholders(*bound_expr, wc_pc_patch_map, *this);
 
             if (is_simple_agg) {
                 BoundAggregateOp::AggregateItem agg_item;
@@ -2378,7 +2399,7 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
                 auto bound_expr = bindExpression(item.expr);
                 if (!bound_expr)
                     continue;
-                patchPatternComprehensionPlaceholders(*bound_expr, wc_pc_patch_map);
+                patchPatternComprehensionPlaceholders(*bound_expr, wc_pc_patch_map, *this);
 
                 // Detect whole-variable pass-through to add property requirements
                 if (std::holds_alternative<BoundColumnRef>(*bound_expr)) {

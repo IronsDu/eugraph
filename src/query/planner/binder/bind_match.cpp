@@ -112,6 +112,76 @@ cypher::Expression cloneExpression(const cypher::Expression& expr) {
 }
 } // anonymous namespace
 
+namespace {
+
+/// Collect every variable name mentioned in an expression tree.
+/// This is intentionally expression-shape complete: OPTIONAL MATCH WHERE and
+/// EXISTS disjunctions use it to discover outer variables that must be
+/// correlated into the right sub-plan, regardless of the expression node type
+/// (ListExpr, ParenExpr, CaseExpr, subscripts, slices, quantifiers, ...).
+void collectExpressionVariableNames(const cypher::Expression& expr, std::vector<std::string>& out) {
+    std::visit(
+        [&](const auto& ptr) {
+            using T = std::decay_t<decltype(ptr)>;
+            using E = typename T::element_type;
+            if constexpr (std::is_same_v<E, cypher::Variable>) {
+                out.push_back(ptr->name);
+            } else if constexpr (std::is_same_v<E, cypher::PropertyAccess>) {
+                collectExpressionVariableNames(ptr->object, out);
+            } else if constexpr (std::is_same_v<E, cypher::LabelCastExpr>) {
+                collectExpressionVariableNames(ptr->object, out);
+            } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
+                collectExpressionVariableNames(ptr->left, out);
+                collectExpressionVariableNames(ptr->right, out);
+            } else if constexpr (std::is_same_v<E, cypher::UnaryOp>) {
+                collectExpressionVariableNames(ptr->operand, out);
+            } else if constexpr (std::is_same_v<E, cypher::FunctionCall>) {
+                for (const auto& arg : ptr->args)
+                    collectExpressionVariableNames(arg, out);
+            } else if constexpr (std::is_same_v<E, cypher::ListExpr>) {
+                for (const auto& elem : ptr->elements)
+                    collectExpressionVariableNames(elem, out);
+            } else if constexpr (std::is_same_v<E, cypher::MapExpr>) {
+                for (const auto& [_, v] : ptr->entries)
+                    collectExpressionVariableNames(v, out);
+            } else if constexpr (std::is_same_v<E, cypher::CaseExpr>) {
+                if (ptr->subject)
+                    collectExpressionVariableNames(*ptr->subject, out);
+                for (const auto& [w, t] : ptr->when_thens) {
+                    collectExpressionVariableNames(w, out);
+                    collectExpressionVariableNames(t, out);
+                }
+                if (ptr->else_expr)
+                    collectExpressionVariableNames(*ptr->else_expr, out);
+            } else if constexpr (std::is_same_v<E, cypher::SubscriptExpr>) {
+                collectExpressionVariableNames(ptr->list, out);
+                collectExpressionVariableNames(ptr->index, out);
+            } else if constexpr (std::is_same_v<E, cypher::SliceExpr>) {
+                collectExpressionVariableNames(ptr->list, out);
+                if (ptr->from)
+                    collectExpressionVariableNames(*ptr->from, out);
+                if (ptr->to)
+                    collectExpressionVariableNames(*ptr->to, out);
+            } else if constexpr (std::is_same_v<E, cypher::AllExpr> || std::is_same_v<E, cypher::AnyExpr> ||
+                                 std::is_same_v<E, cypher::NoneExpr> || std::is_same_v<E, cypher::SingleExpr>) {
+                collectExpressionVariableNames(ptr->list_expr, out);
+                if (ptr->where_pred)
+                    collectExpressionVariableNames(*ptr->where_pred, out);
+            } else if constexpr (std::is_same_v<E, cypher::ListComprehension>) {
+                collectExpressionVariableNames(ptr->list_expr, out);
+                if (ptr->where_pred)
+                    collectExpressionVariableNames(*ptr->where_pred, out);
+                if (ptr->projection)
+                    collectExpressionVariableNames(*ptr->projection, out);
+            } else if constexpr (std::is_same_v<E, cypher::ParenExpr>) {
+                collectExpressionVariableNames(ptr->inner, out);
+            }
+        },
+        expr);
+}
+
+} // anonymous namespace
+
 // ==================== Pattern-graph semantic pre-pass ====================
 
 namespace {
@@ -270,12 +340,24 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         std::optional<BoundLogicalOperator> previous = std::move(current);
         current = std::nullopt;
 
-        // Bind each later pattern part in an isolated scope; reused variables
-        // become local columns and are constrained via equality filters when
-        // joined with the previous part.
+        // A later pattern part whose start node is already bound in the
+        // current plan is a correlated continuation: reuse the existing
+        // column as the expand source instead of scanning it independently
+        // and constraining it with a post-CrossProduct equality filter.
+        const ColumnInfo* previous_start_info = nullptr;
+        bool correlated_with_previous = false;
+        if (pi > 0 && previous && element.node.variable) {
+            previous_start_info = ctx_.lookup(*element.node.variable);
+            if (previous_start_info && isCompatibleForPatternUse(previous_start_info->type, BoundType::Vertex())) {
+                correlated_with_previous = true;
+            }
+        }
+
+        // Bind each isolated later pattern part in a fresh scope; variables
+        // reused in non-start positions are still joined by equality filters.
         BindContext::Snapshot part_left_scope;
         BindContext::Snapshot part_right_scope;
-        bool isolate_part = (pi > 0);
+        bool isolate_part = (pi > 0) && !correlated_with_previous;
         if (isolate_part) {
             part_left_scope = ctx_.save();
             ctx_.beginSubScope();
@@ -297,15 +379,16 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
             correlated = false;
         }
 
-        if (correlated) {
-            auto* col = ctx_.lookup(*element.node.variable);
-            if (!col) {
+        if (correlated || correlated_with_previous) {
+            const ColumnInfo* start_info =
+                correlated_with_previous ? previous_start_info : ctx_.lookup(*element.node.variable);
+            if (!start_info) {
                 error("MATCH after WITH on unrelated variable '" + *element.node.variable + "' is not yet supported");
                 return std::nullopt;
             }
             if (!bindNodePattern(element.node, start_var, start_col, start_labels, start_prop_ids, true))
                 return std::nullopt;
-            start_col = col->column_index;
+            start_col = start_info->column_index;
         } else {
             if (!bindNodePattern(element.node, start_var, start_col, start_labels, start_prop_ids))
                 return std::nullopt;
@@ -315,9 +398,14 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         std::vector<std::string> path_element_vars;
         path_element_vars.push_back(start_var);
 
-        // Create scan operator (or reuse parent for correlated MATCH)
-        if (correlated) {
-            current = std::move(*parent);
+        // Create scan operator (or reuse the already-bound start variable
+        // from the parent / previous pattern part for correlated MATCH).
+        if (correlated || correlated_with_previous) {
+            if (correlated) {
+                current = std::move(*parent);
+            } else {
+                current = std::move(*previous);
+            }
 
             // Correlated MATCH start nodes must still satisfy their label
             // predicates. The parent pipeline already carries the variable, so
@@ -757,7 +845,7 @@ std::optional<BoundLogicalOperator> Binder::bindMatch(const cypher::MatchClause&
         }
 
         // For patterns after the first, join with previous via cross product.
-        if (pi > 0 && previous && current) {
+        if (pi > 0 && !correlated_with_previous && previous && current) {
             if (isolate_part) {
                 part_right_scope = ctx_.save();
                 ctx_.restore(part_left_scope);
@@ -1464,64 +1552,7 @@ Binder::bindExistsOrAsSemiJoin(const std::vector<std::pair<const cypher::ExistsE
             outer_names.push_back(name);
     } else {
         std::function<void(const cypher::Expression&)> collectExprVars;
-        collectExprVars = [&](const cypher::Expression& expr) {
-            std::visit(
-                [&](const auto& ptr) {
-                    using T = std::decay_t<decltype(ptr)>;
-                    using E = typename T::element_type;
-                    if constexpr (std::is_same_v<E, cypher::Variable>) {
-                        outer_names.push_back(ptr->name);
-                    } else if constexpr (std::is_same_v<E, cypher::PropertyAccess>) {
-                        collectExprVars(ptr->object);
-                    } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
-                        collectExprVars(ptr->left);
-                        collectExprVars(ptr->right);
-                    } else if constexpr (std::is_same_v<E, cypher::UnaryOp>) {
-                        collectExprVars(ptr->operand);
-                    } else if constexpr (std::is_same_v<E, cypher::FunctionCall>) {
-                        for (const auto& arg : ptr->args)
-                            collectExprVars(arg);
-                    } else if constexpr (std::is_same_v<E, cypher::ListExpr>) {
-                        for (const auto& elem : ptr->elements)
-                            collectExprVars(elem);
-                    } else if constexpr (std::is_same_v<E, cypher::MapExpr>) {
-                        for (const auto& [_, v] : ptr->entries)
-                            collectExprVars(v);
-                    } else if constexpr (std::is_same_v<E, cypher::CaseExpr>) {
-                        if (ptr->subject)
-                            collectExprVars(*ptr->subject);
-                        for (const auto& [w, t] : ptr->when_thens) {
-                            collectExprVars(w);
-                            collectExprVars(t);
-                        }
-                        if (ptr->else_expr)
-                            collectExprVars(*ptr->else_expr);
-                    } else if constexpr (std::is_same_v<E, cypher::SubscriptExpr>) {
-                        collectExprVars(ptr->list);
-                        collectExprVars(ptr->index);
-                    } else if constexpr (std::is_same_v<E, cypher::SliceExpr>) {
-                        collectExprVars(ptr->list);
-                        if (ptr->from)
-                            collectExprVars(*ptr->from);
-                        if (ptr->to)
-                            collectExprVars(*ptr->to);
-                    } else if constexpr (std::is_same_v<E, cypher::AllExpr> || std::is_same_v<E, cypher::AnyExpr> ||
-                                         std::is_same_v<E, cypher::NoneExpr> || std::is_same_v<E, cypher::SingleExpr>) {
-                        collectExprVars(ptr->list_expr);
-                        if (ptr->where_pred)
-                            collectExprVars(*ptr->where_pred);
-                    } else if constexpr (std::is_same_v<E, cypher::ListComprehension>) {
-                        collectExprVars(ptr->list_expr);
-                        if (ptr->where_pred)
-                            collectExprVars(*ptr->where_pred);
-                        if (ptr->projection)
-                            collectExprVars(*ptr->projection);
-                    } else if constexpr (std::is_same_v<E, cypher::ParenExpr>) {
-                        collectExprVars(ptr->inner);
-                    }
-                },
-                expr);
-        };
+        collectExprVars = [&](const cypher::Expression& expr) { collectExpressionVariableNames(expr, outer_names); };
         auto collectPatternVars = [&](const cypher::PatternPart& pp) {
             if (pp.element.node.variable)
                 outer_names.push_back(*pp.element.node.variable);
@@ -1922,30 +1953,10 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
     // appear in the pattern graph itself (e.g. WHERE r <> r2).
     std::unordered_set<std::string> where_names;
     std::function<void(const cypher::Expression&)> collect_where_vars = [&](const cypher::Expression& expr) {
-        std::visit(
-            [&](const auto& ptr) {
-                using E = typename std::decay_t<decltype(ptr)>::element_type;
-                if constexpr (std::is_same_v<E, cypher::Variable>) {
-                    where_names.insert(ptr->name);
-                } else if constexpr (std::is_same_v<E, cypher::BinaryOp>) {
-                    collect_where_vars(ptr->left);
-                    collect_where_vars(ptr->right);
-                } else if constexpr (std::is_same_v<E, cypher::UnaryOp>) {
-                    collect_where_vars(ptr->operand);
-                } else if constexpr (std::is_same_v<E, cypher::FunctionCall>) {
-                    for (auto& arg : ptr->args)
-                        collect_where_vars(arg);
-                } else if constexpr (std::is_same_v<E, cypher::PropertyAccess>) {
-                    collect_where_vars(ptr->object);
-                } else if constexpr (std::is_same_v<E, cypher::ListComprehension>) {
-                    collect_where_vars(ptr->list_expr);
-                    if (ptr->where_pred)
-                        collect_where_vars(*ptr->where_pred);
-                    if (ptr->projection)
-                        collect_where_vars(*ptr->projection);
-                }
-            },
-            expr);
+        std::vector<std::string> vars;
+        collectExpressionVariableNames(expr, vars);
+        for (const auto& name : vars)
+            where_names.insert(name);
     };
     if (match.where_pred)
         collect_where_vars(*match.where_pred);
@@ -1971,10 +1982,12 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
                   (!graph.nodes[graph.parts[0].ordered_elements.front()].variable.empty() &&
                    ctx_.lookup(graph.nodes[graph.parts[0].ordered_elements.front()].variable) != nullptr);
 
-    bool all_bound_nodes =
-        std::all_of(bound_vars.begin(), bound_vars.end(), [](const BoundPatternVar& v) { return v.is_node; });
-
-    if (!bound_vars.empty() && first_node_bound && !(all_bound_nodes && bound_vars.size() > 1)) {
+    // If the start node is already bound, continue the pattern from it even
+    // when the other endpoint is bound too: Expand can check a bound
+    // destination via dst_bound. Re-scanning the start node and joining the
+    // two endpoints with CrossProduct turns a bounded lookup into a much
+    // larger AllNodeScan/CrossProduct plan (see TCK Match7[9] and SHORT-7).
+    if (!bound_vars.empty() && first_node_bound) {
         auto saved_ctx = ctx_.save();
         ctx_.beginSubScope();
 
@@ -2034,7 +2047,7 @@ std::optional<BoundLogicalOperator> Binder::bindOptionalMatch(const cypher::Matc
     // First node is new but later variables are bound. Carry the bound
     // variables through a CorrelatedSource, bind the pattern independently and
     // constrain the two sides with the shared cross-join equality helper.
-    if (!bound_vars.empty() && (!first_node_bound || (first_node_bound && all_bound_nodes && bound_vars.size() > 1))) {
+    if (!bound_vars.empty() && !first_node_bound) {
         auto saved_ctx = ctx_.save();
         ctx_.beginSubScope();
 

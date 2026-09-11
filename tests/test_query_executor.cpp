@@ -150,6 +150,13 @@ protected:
         ASSERT_TRUE(sync_data_->insertEdge(txn, 5, 2, 6, LIVES_IN_LABEL, 0, {}));
         ASSERT_TRUE(sync_data_->commitTransaction(txn));
     }
+
+    // Extra LIVES_IN edge 5 -> 2 for correlated-start reverse-expand tests.
+    void addReverseLivesInEdge() {
+        auto txn = sync_data_->beginTransaction();
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 6, 5, 2, LIVES_IN_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
 };
 
 // Helper: drain prepareStream into ExecutionResult (replaces the old executeSync/executeAsync)
@@ -215,6 +222,18 @@ std::vector<std::string> collectStrings(const ExecutionResult& result, size_t co
             values.push_back(std::get<std::string>(row[column]));
     }
     return values;
+}
+
+std::string getExplainPlanText(QueryExecutor& executor, const std::string& query) {
+    auto result = execSync(executor, "EXPLAIN " + query);
+    if (!result.error.empty())
+        return "";
+    std::string plan_text;
+    for (const auto& row : result.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan_text += std::get<std::string>(row[0]) + "\n";
+    }
+    return plan_text;
 }
 
 } // anonymous namespace
@@ -1555,6 +1574,112 @@ TEST_F(QueryExecutorTest, ExplainWithLimit) {
     EXPECT_NE(plan_text.find("Limit(5)"), std::string::npos);
 }
 
+TEST_F(QueryExecutorTest, MatchMultiplePatternReusedStartAvoidsCrossProduct) {
+    insertMultiHopEdges();
+    addReverseLivesInEdge();
+
+    const std::string query = "MATCH (a:Person)-[:KNOWS]->(friend:Person), "
+                              "(friend)<-[:LIVES_IN]-(c) "
+                              "RETURN a, friend, c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_EQ(plan_text.find("AllNodeScan"), std::string::npos);
+    EXPECT_EQ(plan_text.find("CrossProduct"), std::string::npos);
+
+    size_t expand_count = 0;
+    for (size_t pos = plan_text.find("Expand("); pos != std::string::npos; pos = plan_text.find("Expand(", pos + 1)) {
+        ++expand_count;
+    }
+    EXPECT_GE(expand_count, 2u);
+}
+
+TEST_F(QueryExecutorTest, WithThenMultiplePatternReusedStartAvoidsCrossProduct) {
+    insertMultiHopEdges();
+
+    const std::string query = "MATCH (a:Person)-[:KNOWS]->(b:Person) "
+                              "WITH a, b "
+                              "MATCH (b)-[:KNOWS]->(c), "
+                              "(c)-[:KNOWS]->(d) "
+                              "RETURN a, b, c, d";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_EQ(plan_text.find("AllNodeScan"), std::string::npos);
+    EXPECT_EQ(plan_text.find("CrossProduct"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, MultiplePatternReusedStartLabelFilterAndReverseExpand) {
+    insertMultiHopEdges();
+    addReverseLivesInEdge();
+
+    const std::string query = "MATCH (a:Person)-[:KNOWS]->(friend), "
+                              "(friend:Person)<-[:LIVES_IN]-(c) "
+                              "RETURN a, friend, c";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 1u);
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_EQ(plan_text.find("AllNodeScan"), std::string::npos);
+    EXPECT_EQ(plan_text.find("CrossProduct"), std::string::npos);
+    EXPECT_NE(plan_text.find("Filter"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, CartesianMultiplePatternIndependentStartStillCrossProduct) {
+    insertTestVertices();
+
+    const std::string query = "MATCH (a:Person), (b:Person) RETURN a, b";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 25u);
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_NE(plan_text.find("CrossProduct"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, WithAggregateThenAnonymousStartInlinePropertyKeepsMatch) {
+    insertMultiHopEdges();
+
+    const std::string query = "MATCH (n:Person) "
+                              "WITH collect(n.name) AS names "
+                              "MATCH (:Person {name: 'name1'})-[:KNOWS]->(friend:Person) "
+                              "RETURN friend.name";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "name2");
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_EQ(plan_text.find("Singleton"), std::string::npos);
+    EXPECT_NE(plan_text.find("CrossProduct"), std::string::npos);
+    EXPECT_NE(plan_text.find("Expand("), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, MultiplePatternRepeatedStartNodeHasSingleScanSemantics) {
+    insertTestVertices();
+
+    const std::string query = "MATCH (a:Person), (a:Person) RETURN a";
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    EXPECT_EQ(result.rows.size(), 5u);
+
+    std::string plan_text = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan_text.empty()) << "EXPLAIN should produce a plan";
+    EXPECT_EQ(plan_text.find("CrossProduct"), std::string::npos);
+}
+
 TEST_F(QueryExecutorTest, ExplainCreateNode) {
     auto result = execSync(*executor_, "EXPLAIN CREATE (n:Person {name: 'test'})");
     ASSERT_TRUE(result.error.empty()) << result.error;
@@ -2107,6 +2232,59 @@ TEST_F(QueryExecutorMultiLabelTest, SetVertexLabel) {
     // CREATE (n:Person), SET n:Employee
     auto result = execSync(*executor_, "CREATE (n:Person) SET n:Employee");
     ASSERT_TRUE(result.error.empty()) << result.error;
+}
+
+TEST_F(QueryExecutorMultiLabelTest, SetVertexLabelAutoCreate) {
+    // SET n:Message should auto-create the label with the correct name
+    // even when Message was not pre-registered in the catalog.
+    auto r1 = execSync(*executor_, "CREATE (n:Person) SET n:Message");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+
+    auto r2 = execSync(*executor_, "MATCH (n:Message) RETURN labels(n)");
+    ASSERT_TRUE(r2.error.empty()) << r2.error;
+    ASSERT_EQ(r2.rows.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<ListValue>(r2.rows[0][0]));
+    auto labels = std::get<ListValue>(r2.rows[0][0]);
+    bool has_message = false;
+    bool has_empty = false;
+    for (const auto& elem : labels.elements) {
+        if (std::holds_alternative<std::string>(elem.value)) {
+            const auto& name = std::get<std::string>(elem.value);
+            if (name == "Message")
+                has_message = true;
+            if (name.empty())
+                has_empty = true;
+        }
+    }
+    EXPECT_TRUE(has_message);
+    EXPECT_FALSE(has_empty);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, OptionalMatchWhereListExprCorrelatesOuterVars) {
+    // Regression: OPTIONAL MATCH WHERE with an outer variable inside a list
+    // expression used to fail with UndefinedVariable because the binder only
+    // collected variables from a subset of expression shapes.
+    auto r1 = execSync(*executor_, "CREATE (p:Person {name: 'Alice'}), (e:Employee {name: 'Bob'}) "
+                                   "WITH p, e "
+                                   "OPTIONAL MATCH (p)-[r]-(x) "
+                                   "WHERE x.name IN [p.name, e.name] "
+                                   "RETURN count(x) AS c");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_EQ(r1.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r1.rows[0][0]), 0);
+}
+
+TEST_F(QueryExecutorMultiLabelTest, OptionalMatchWhereParenExprCorrelatesOuterVars) {
+    // Regression: parenthesized WHERE predicates must also have their outer
+    // variables correlated into the right sub-plan.
+    auto r1 = execSync(*executor_, "CREATE (p:Person {name: 'Alice'}), (e:Employee {name: 'Bob'}) "
+                                   "WITH p, e "
+                                   "OPTIONAL MATCH (p)-[r]-(x) "
+                                   "WHERE (x.name = p.name OR x.name = e.name) "
+                                   "RETURN count(x) AS c");
+    ASSERT_TRUE(r1.error.empty()) << r1.error;
+    ASSERT_EQ(r1.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(r1.rows[0][0]), 0);
 }
 
 TEST_F(QueryExecutorMultiLabelTest, RemoveVertexLabel) {
@@ -4302,12 +4480,25 @@ TEST_F(QueryExecutorTest, ExistsUndirected) {
     ASSERT_GE(result.rows.size(), 4u);
 }
 
-// ── Error case ──
+// ── EXISTS subquery in RETURN: bare pattern supported, full query not ──
 
-TEST_F(QueryExecutorTest, ExistsInReturnError) {
+TEST_F(QueryExecutorTest, ExistsPatternSubqueryInReturn) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(*executor_, "MATCH (n) RETURN EXISTS { (n)-[:KNOWS]->() } AS has_rel");
-    // EXISTS in RETURN is not supported in Phase 1
+    auto result = execSync(*executor_, "MATCH (n:Person) "
+                                       "RETURN n.name AS name, EXISTS { (n)-[:KNOWS]->() } AS has_out "
+                                       "ORDER BY name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    const bool expected[] = {true, true, true, false, false};
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<bool>(result.rows[i][1])) << "row " << i;
+        EXPECT_EQ(std::get<bool>(result.rows[i][1]), expected[i]) << "row " << i;
+    }
+}
+
+TEST_F(QueryExecutorTest, ExistsFullSubqueryInReturnError) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n) RETURN EXISTS { MATCH (m) WHERE m = n RETURN m } AS has_rel");
     EXPECT_FALSE(result.error.empty());
 }
 
@@ -4320,6 +4511,118 @@ TEST_F(QueryExecutorTest, PatternPredicateTwoNodes) {
     ASSERT_TRUE(result.error.empty()) << result.error;
     // Alice→Bob, Alice→Charlie, Bob→David, Charlie→David
     ASSERT_EQ(result.rows.size(), 4u);
+}
+
+// ── Bare pattern expression outside a boolean context is a syntax error ──
+
+TEST_F(QueryExecutorTest, BarePatternExpressionDirectInReturnError) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_,
+                           "MATCH (n:Person) RETURN n.name AS name, (n)-[:KNOWS]->(:Person) AS has_out ORDER BY name");
+    EXPECT_FALSE(result.error.empty());
+}
+
+TEST_F(QueryExecutorTest, NotBarePatternExpressionInReturn) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (a:Person), (b:Person) "
+                                       "RETURN a.name AS aname, b.name AS bname, not((a)-[:KNOWS]->(b)) AS not_knows "
+                                       "ORDER BY aname, bname");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 25u);
+    size_t true_count = 0;
+    size_t false_count = 0;
+    for (const auto& row : result.rows) {
+        ASSERT_TRUE(std::holds_alternative<bool>(row[2])) << "expected boolean pattern predicate";
+        if (std::get<bool>(row[2]))
+            ++true_count;
+        else
+            ++false_count;
+    }
+    // The graph has Alice→Bob, Alice→Charlie, Bob→David, Charlie→David.
+    EXPECT_EQ(false_count, 4u);
+    EXPECT_EQ(true_count, 21u);
+}
+
+TEST_F(QueryExecutorTest, BarePatternInBooleanOperators) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) "
+                                       "RETURN n.name AS name, "
+                                       "       ((n)-[:KNOWS]->(:Person)) AND true AS and_val, "
+                                       "       ((n)-[:KNOWS]->(:Person)) OR false AS or_val, "
+                                       "       NOT ((n)-[:KNOWS]->(:Person)) AS not_val "
+                                       "ORDER BY name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    const bool has_out[] = {true, true, true, false, false};
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<bool>(result.rows[i][1])) << "row " << i;
+        ASSERT_TRUE(std::holds_alternative<bool>(result.rows[i][2])) << "row " << i;
+        ASSERT_TRUE(std::holds_alternative<bool>(result.rows[i][3])) << "row " << i;
+        EXPECT_EQ(std::get<bool>(result.rows[i][1]), has_out[i]) << "and row " << i;
+        EXPECT_EQ(std::get<bool>(result.rows[i][2]), has_out[i]) << "or row " << i;
+        EXPECT_EQ(std::get<bool>(result.rows[i][3]), !has_out[i]) << "not row " << i;
+    }
+}
+
+TEST_F(QueryExecutorTest, BarePatternInCaseWhen) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result =
+        execSync(*executor_, "MATCH (n:Person) "
+                             "RETURN n.name AS name, CASE WHEN (n)-[:KNOWS]->(:Person) THEN 1 ELSE 0 END AS v "
+                             "ORDER BY name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    const int64_t expected[] = {1, 1, 1, 0, 0};
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[i][1])) << "row " << i;
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][1]), expected[i]) << "row " << i;
+    }
+}
+
+TEST_F(QueryExecutorTest, BarePatternInAnyWherePredicate) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result =
+        execSync(*executor_, "MATCH (n:Person) "
+                             "RETURN n.name AS name, ANY(x IN [1, 2] WHERE (n)-[:KNOWS]->(:Person)) AS any_out "
+                             "ORDER BY name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    const bool expected[] = {true, true, true, false, false};
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<bool>(result.rows[i][1])) << "row " << i;
+        EXPECT_EQ(std::get<bool>(result.rows[i][1]), expected[i]) << "row " << i;
+    }
+}
+
+TEST_F(QueryExecutorTest, BarePatternInListComprehensionWhere) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) "
+                                       "RETURN n.name AS name, [x IN [1, 2] WHERE (n)-[:KNOWS]->(:Person)] AS xs "
+                                       "ORDER BY name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    const size_t expected_sizes[] = {2, 2, 2, 0, 0};
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<ListValue>(result.rows[i][1])) << "row " << i;
+        const auto& list = std::get<ListValue>(result.rows[i][1]);
+        EXPECT_EQ(list.elements.size(), expected_sizes[i]) << "row " << i;
+    }
+}
+
+TEST_F(QueryExecutorTest, ExistsPatternSubqueryWithWhereInReturn) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) "
+                                       "RETURN n.name AS name, "
+                                       "       EXISTS { (n)-[:KNOWS]->(m:Person) WHERE m.name = 'name2' } AS has_n2 "
+                                       "ORDER BY name");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 5u);
+    // Only name1 has an outgoing KNOWS edge to name2.
+    const bool expected[] = {true, false, false, false, false};
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<bool>(result.rows[i][1])) << "row " << i;
+        EXPECT_EQ(std::get<bool>(result.rows[i][1]), expected[i]) << "row " << i;
+    }
 }
 
 // ── Nested EXISTS with a correlated property filter (ExistentialSubquery3 [1]) ──
@@ -4380,6 +4683,31 @@ TEST_F(QueryExecutorTest, PatternComprehensionInsideListComprehension) {
             EXPECT_EQ(std::get<int64_t>(lv.elements[j].value), expected_lists[i][j]);
         }
     }
+}
+
+TEST_F(QueryExecutorTest, BarePatternExpressionInOrderByError) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.name AS name ORDER BY (n)-[:KNOWS]->(:Person), name");
+    EXPECT_FALSE(result.error.empty());
+}
+
+TEST_F(QueryExecutorTest, BarePatternExpressionInWithError) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) WITH (n)-[:KNOWS]->(:Person) AS has_out RETURN has_out");
+    EXPECT_FALSE(result.error.empty());
+}
+
+TEST_F(QueryExecutorTest, BarePatternExpressionInFunctionArgError) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN coalesce((n)-[:KNOWS]->(:Person), false) AS has_out");
+    EXPECT_FALSE(result.error.empty());
+}
+
+TEST_F(QueryExecutorTest, BarePatternExpressionInCaseThenError) {
+    insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
+    auto result = execSync(
+        *executor_, "MATCH (n:Person) RETURN CASE WHEN true THEN (n)-[:KNOWS]->(:Person) ELSE false END AS has_out");
+    EXPECT_FALSE(result.error.empty());
 }
 
 // ── MapValue / properties() / keys() ──
@@ -4763,6 +5091,48 @@ TEST_F(QueryExecutorTest, OptionalMatchColumnTypeVerification) {
                 << "b should be VertexValue in matched row, got type index " << row[2].index();
         }
     }
+}
+
+// Regression for TCK Match7[9]-shaped plans: both chain endpoints are bound
+// from the outer scope. The right sub-plan must stay correlated on the bound
+// start node instead of re-scanning it and joining the two endpoint columns
+// with CrossProduct + equality filters.
+TEST_F(QueryExecutorTest, OptionalMatchBoundStartAndBoundEndUsesCorrelatedChain) {
+    insertTestVertices();
+    {
+        auto txn = sync_data_->beginTransaction();
+        // Direct a->c edge keeps the outer MATCH free of CrossProduct.
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 1, 1, 3, KNOWS_LABEL, 0, {}));
+        // Optional a->b->c path, with b = Person 2.
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 2, 1, 2, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->insertEdge(txn, 3, 2, 3, KNOWS_LABEL, 0, {}));
+        ASSERT_TRUE(sync_data_->commitTransaction(txn));
+    }
+
+    const std::string query = "MATCH (a:Person {name:'name1'})-[:KNOWS]->(c:Person {name:'name3'}) "
+                              "OPTIONAL MATCH (a)-[:KNOWS]->(b:Person)-[:KNOWS]->(c) RETURN b";
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_EQ(result.rows[0].size(), 1u);
+    ASSERT_FALSE(isNull(result.rows[0][0])) << "optional chain should match Person 2";
+
+    if (std::holds_alternative<VertexValue>(result.rows[0][0])) {
+        EXPECT_EQ(std::get<VertexValue>(result.rows[0][0]).id, 2u);
+    } else {
+        ASSERT_TRUE(std::holds_alternative<VertexRef>(result.rows[0][0])) << "b should be a vertex reference/value";
+        EXPECT_EQ(std::get<VertexRef>(result.rows[0][0]).id, 2u);
+    }
+
+    const std::string plan = getExplainPlanText(*executor_, query);
+    ASSERT_FALSE(plan.empty());
+    EXPECT_EQ(plan.find("CrossProduct"), std::string::npos)
+        << "bound-endpoint OPTIONAL MATCH should not fall back to CrossProduct:\n"
+        << plan;
+    EXPECT_EQ(plan.find("AllNodeScan"), std::string::npos)
+        << "bound-endpoint OPTIONAL MATCH should not re-scan a bound node:\n"
+        << plan;
 }
 
 // Reproduce TCK scenario 106: WITH + UNWIND + CREATE edge
@@ -7696,6 +8066,14 @@ TEST_F(QueryExecutorTest, CeilFunctionRegistered) {
     ASSERT_EQ(result.rows.size(), 1u);
     ASSERT_TRUE(std::holds_alternative<double>(result.rows[0][0]));
     EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 2.0);
+}
+
+TEST_F(QueryExecutorTest, FloorFunctionRegistered) {
+    auto result = execSync(*executor_, "RETURN floor(1.2)");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<double>(result.rows[0][0]));
+    EXPECT_DOUBLE_EQ(std::get<double>(result.rows[0][0]), 1.0);
 }
 
 TEST_F(QueryExecutorTest, ReturnImplicitColumnPreservesSourceText) {

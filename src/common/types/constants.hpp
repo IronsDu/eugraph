@@ -36,6 +36,14 @@ inline std::string epropTable(EdgeLabelId id) {
 inline std::string vidxTable(LabelId label_id, uint16_t prop_id) {
     return "table:vidx_" + std::to_string(label_id) + "_" + std::to_string(prop_id);
 }
+
+// 新索引表：按 index_id 命名，与索引定义列解耦
+inline std::string vidxTableById(uint32_t index_id) {
+    return "table:vidx_" + std::to_string(index_id);
+}
+inline std::string eidxTableById(uint32_t index_id) {
+    return "table:eidx_" + std::to_string(index_id);
+}
 inline std::string eidxTable(EdgeLabelId label_id, uint16_t prop_id) {
     return "table:eidx_" + std::to_string(label_id) + "_" + std::to_string(prop_id);
 }

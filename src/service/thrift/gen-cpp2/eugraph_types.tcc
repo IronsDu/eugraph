@@ -2265,6 +2265,22 @@ _readField_properties:
   if (UNLIKELY(!_readState.advanceToNextField(
           iprot,
           1,
+          2,
+          apache::thrift::protocol::T_LIST))) {
+    goto _advance_failure;
+  }
+_readField_labels:
+  {
+    _readState.beforeSubobject(iprot);
+    this->__fbthrift_field_labels = ::std::vector<::std::string>();
+    ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::list<::apache::thrift::type_class::string>, ::std::vector<::std::string>>::readWithContext(*iprot, this->__fbthrift_field_labels, _readState);
+    _readState.afterSubobject(iprot);
+  }
+ this->__isset.set(1, true);
+
+  if (UNLIKELY(!_readState.advanceToNextField(
+          iprot,
+          2,
           0,
           apache::thrift::protocol::T_STOP))) {
     goto _advance_failure;
@@ -2295,6 +2311,14 @@ _loop:
         goto _skip;
       }
     }
+    case 2:
+    {
+      if (LIKELY(_readState.isCompatibleWithType(iprot, apache::thrift::protocol::T_LIST))) {
+        goto _readField_labels;
+      } else {
+        goto _skip;
+      }
+    }
     default:
     {
 _skip:
@@ -2314,6 +2338,10 @@ uint32_t VertexRecord::serializedSize(Protocol_ const* prot_) const {
     xfer += prot_->serializedFieldSize("properties", apache::thrift::protocol::T_LIST, 1);
     xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::list<::apache::thrift::type_class::variant>, ::std::vector<::eugraph::thrift_service::PropertyValueThrift>>::serializedSize<false>(*prot_, this->__fbthrift_field_properties);
   }
+  {
+    xfer += prot_->serializedFieldSize("labels", apache::thrift::protocol::T_LIST, 2);
+    xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::list<::apache::thrift::type_class::string>, ::std::vector<::std::string>>::serializedSize<false>(*prot_, this->__fbthrift_field_labels);
+  }
   xfer += prot_->serializedSizeStop();
   return xfer;
 }
@@ -2325,6 +2353,10 @@ uint32_t VertexRecord::serializedSizeZC(Protocol_ const* prot_) const {
   {
     xfer += prot_->serializedFieldSize("properties", apache::thrift::protocol::T_LIST, 1);
     xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::list<::apache::thrift::type_class::variant>, ::std::vector<::eugraph::thrift_service::PropertyValueThrift>>::serializedSize<true>(*prot_, this->__fbthrift_field_properties);
+  }
+  {
+    xfer += prot_->serializedFieldSize("labels", apache::thrift::protocol::T_LIST, 2);
+    xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::list<::apache::thrift::type_class::string>, ::std::vector<::std::string>>::serializedSize<false>(*prot_, this->__fbthrift_field_labels);
   }
   xfer += prot_->serializedSizeStop();
   return xfer;
@@ -2340,6 +2372,13 @@ uint32_t VertexRecord::write(Protocol_* prot_) const {
     xfer += ::apache::thrift::detail::writeFieldBegin<apache::thrift::protocol::T_LIST, 1, kPrevFieldId>(*prot_, "properties", previousFieldHasValue);
     previousFieldHasValue = true;
     xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::list<::apache::thrift::type_class::variant>, ::std::vector<::eugraph::thrift_service::PropertyValueThrift>>::write(*prot_, this->__fbthrift_field_properties);
+    xfer += prot_->writeFieldEnd();
+  }
+  {
+    constexpr int16_t kPrevFieldId = 1;
+    xfer += ::apache::thrift::detail::writeFieldBegin<apache::thrift::protocol::T_LIST, 2, kPrevFieldId>(*prot_, "labels", previousFieldHasValue);
+    previousFieldHasValue = true;
+    xfer += ::apache::thrift::detail::pm::protocol_methods<::apache::thrift::type_class::list<::apache::thrift::type_class::string>, ::std::vector<::std::string>>::write(*prot_, this->__fbthrift_field_labels);
     xfer += prot_->writeFieldEnd();
   }
   xfer += prot_->writeFieldStop();

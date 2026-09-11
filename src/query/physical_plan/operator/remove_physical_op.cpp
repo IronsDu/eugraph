@@ -1,5 +1,7 @@
 #include "query/physical_plan/operator/remove_physical_op.hpp"
 #include "common/types/graph_types.hpp"
+#include "query/physical_plan/operator/edge_index_maintenance.hpp"
+#include "query/physical_plan/operator/vertex_index_maintenance.hpp"
 
 namespace eugraph {
 namespace compute {
@@ -58,11 +60,14 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                     VertexId vid = vertex.id;
                     VertexValue updated = vertex;
                     bool modified = false;
+                    std::optional<std::vector<VertexIndexEntry>> old_index_entries;
 
                     if (item.kind == BoundRemoveItem::Kind::LABEL) {
                         auto lit = label_name_to_id_.find(item.name);
                         if (lit == label_name_to_id_.end())
                             continue;
+                        auto old_index_entries =
+                            co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
                         // Cypher 语义：属性归属 vertex 而非 label。removeVertexLabel
                         // 内部会清空 vpropTable(label_id) 下属于该 vertex 的属性。无论
                         // 此 label 是不是最后一个，都要先把它的属性副本迁到 __anon__，
@@ -91,11 +96,17 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                             }
                         }
                         co_await store_.removeVertexLabel(vid, lit->second);
+                        auto new_index_entries =
+                            co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+                        co_await deleteVertexIndexEntries(store_, old_index_entries);
+                        co_await insertVertexIndexEntries(store_, new_index_entries);
                         if (updated.labels.has_value()) {
                             updated.labels->erase(lit->second);
                             modified = true;
                         }
                     } else if (item.kind == BoundRemoveItem::Kind::PROPERTY) {
+                        old_index_entries =
+                            co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
                         if (item.strong_mode && item.resolved_label_id && item.resolved_prop_id) {
                             co_await store_.deleteVertexProperty(vid, *item.resolved_label_id, *item.resolved_prop_id);
                             auto pit = updated.properties.find(*item.resolved_label_id);
@@ -145,6 +156,13 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                         }
                     }
 
+                    if (old_index_entries.has_value()) {
+                        auto new_index_entries =
+                            co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
+                        co_await deleteVertexIndexEntries(store_, *old_index_entries);
+                        co_await insertVertexIndexEntries(store_, new_index_entries);
+                    }
+
                     if (modified)
                         chunk->setValue(static_cast<size_t>(col), row_idx, Value(std::move(updated)));
                 } else if (std::holds_alternative<EdgeValue>(val)) {
@@ -155,6 +173,8 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                     auto def_it = edge_label_defs_.find(edge.label_id);
                     if (def_it == edge_label_defs_.end())
                         continue;
+                    auto old_index_entries =
+                        co_await collectEdgeIndexEntries(store_, edge_label_defs_, edge.id, edge.label_id);
                     for (const auto& pd : def_it->second.properties) {
                         if (pd.name == item.name) {
                             co_await store_.deleteEdgeProperty(edge.id, edge.label_id, pd.id);
@@ -168,6 +188,10 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                             break;
                         }
                     }
+                    auto new_index_entries =
+                        co_await collectEdgeIndexEntries(store_, edge_label_defs_, edge.id, edge.label_id);
+                    co_await deleteEdgeIndexEntries(store_, old_index_entries);
+                    co_await insertEdgeIndexEntries(store_, new_index_entries);
                 }
             }
         }

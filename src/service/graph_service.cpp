@@ -262,12 +262,24 @@ folly::coro::Task<std::vector<VertexId>> GraphService::batchInsertVertices(const
     for (size_t i = 0; i < count; i++) {
         IAsyncGraphDataStore::BatchVertexEntry entry;
         entry.vid = start_vid + i;
+        entry.label_props.emplace_back(label_id, Properties{});
+        auto& props = entry.label_props.back().second;
         for (auto& pv : entries[i].props)
-            entry.props.push_back(std::optional<PropertyValue>(std::move(pv)));
+            props.push_back(std::optional<PropertyValue>(std::move(pv)));
+
+        for (const auto& extra_label : entries[i].extra_labels) {
+            if (extra_label == label_name)
+                continue;
+            auto extra_id_opt = co_await inst->async_meta->getLabelId(extra_label);
+            if (!extra_id_opt.has_value()) {
+                throw std::runtime_error("Label not found: " + extra_label);
+            }
+            entry.label_props.emplace_back(*extra_id_opt, Properties{});
+        }
         batch_entries.push_back(std::move(entry));
     }
 
-    co_await inst->async_data->batchInsertVertices(label_id, std::move(batch_entries));
+    co_await inst->async_data->batchInsertVertices(std::move(batch_entries));
 
     std::vector<VertexId> result;
     result.reserve(count);

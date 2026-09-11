@@ -111,6 +111,7 @@ struct ForEachField<::eugraph::thrift_service::VertexRecord> {
   template <typename F, typename... T>
   void operator()([[maybe_unused]] F&& f, [[maybe_unused]] T&&... t) const {
     f(0, static_cast<T&&>(t).properties_ref()...);
+    f(1, static_cast<T&&>(t).labels_ref()...);
   }
 };
 

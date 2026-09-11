@@ -98,6 +98,7 @@ struct EdgeLabelInfo {
 
 struct VertexRecord {
   1: list<PropertyValueThrift> properties
+  2: list<string> labels
 }
 
 struct EdgeRecord {

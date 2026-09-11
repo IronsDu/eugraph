@@ -193,6 +193,53 @@ BoundExpression Binder::makeEqualityExpr(const BoundColumnRef& left, const Bound
     return BoundExpression(std::move(bin));
 }
 
+const cypher::PatternComprehension* Binder::internProjectionExistsPattern(const cypher::ExistsExpr& ex) {
+    if (ex.full_query)
+        return nullptr;
+    auto it = projection_exists_patterns_.find(&ex);
+    if (it != projection_exists_patterns_.end())
+        return it->second;
+
+    auto pc = std::make_unique<cypher::PatternComprehension>(existsToPatternComprehension(ex));
+    const cypher::PatternComprehension* raw = pc.get();
+    projection_exists_patterns_[&ex] = raw;
+    projection_exists_storage_.push_back(std::move(pc));
+    return raw;
+}
+
+std::optional<BoundExpression> Binder::makePatternExistsExpression(SlotId slot, const std::string& name,
+                                                                   const BoundType& pattern_type) const {
+    if (slot == INVALID_SLOT_ID)
+        return std::nullopt;
+
+    BoundType list_type = pattern_type;
+    if (list_type.kind != BoundTypeKind::LIST)
+        list_type = BoundType::List(BoundType::Any());
+
+    const function::FunctionDef* size_def = func_registry_.lookup("size", {list_type});
+    if (!size_def)
+        size_def = func_registry_.lookup("size", {BoundType::Any()});
+    if (!size_def)
+        return std::nullopt;
+
+    auto size_call = std::make_unique<BoundFunctionCall>();
+    size_call->func_def = size_def;
+    size_call->args.push_back(BoundExpression(BoundColumnRef{0, list_type, name, slot}));
+    size_call->return_type = BoundType::Int64();
+
+    auto gt = std::make_unique<BoundBinaryOp>();
+    gt->op = cypher::BinaryOperator::GT;
+    gt->left = BoundExpression(std::move(size_call));
+    gt->right = BoundExpression(BoundLiteral(int64_t{0}));
+    gt->result_type = BoundType::Bool();
+    gt->fallback_fn = resolveBinaryFallbackFn(cypher::BinaryOperator::GT, BoundTypeKind::INT64, BoundTypeKind::INT64);
+    return BoundExpression(std::move(gt));
+}
+
+std::optional<BoundExpression> Binder::makePatternExistsExpression(const BoundPatternComprehension& placeholder) const {
+    return makePatternExistsExpression(placeholder.output_slot, placeholder.output_name, placeholder.result_type);
+}
+
 std::optional<BoundLogicalOperator> Binder::bindCrossWithEqualities(BoundLogicalOperator left,
                                                                     BoundLogicalOperator right,
                                                                     const BindContext::Snapshot& left_scope,
@@ -506,35 +553,7 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                         auto right = bindMatch(*ptr, std::nullopt, /*skip_where=*/true, /*defer_inline_filters=*/true);
                         if (!right)
                             return std::nullopt;
-                        BindContext::Snapshot right_scope = ctx_.save();
-                        // Outer scalar symbols were visible only for inline
-                        // property binding; they are not right-side outputs and
-                        // must not produce cross equalities.
-                        for (const auto& [name, info] : outer_scalars)
-                            right_scope.symbols.erase(name);
-                        ctx_.restore(left_scope);
 
-                        // Merge right-only variables into the outer scope with
-                        // a column offset. Same-named variables keep the left
-                        // (outer) column as the canonical one.
-                        for (const auto& [name, info] : right_scope.symbols) {
-                            if (!ctx_.lookup(name)) {
-                                ColumnInfo merged = info;
-                                merged.column_index += left_scope.next_column_index;
-                                ctx_.symbols[name] = std::move(merged);
-                            }
-                        }
-                        ctx_.next_column_index = left_scope.next_column_index + right_scope.next_column_index;
-
-                        auto joined =
-                            bindCrossWithEqualities(std::move(left), std::move(*right), left_scope, right_scope);
-                        if (!joined)
-                            return std::nullopt;
-                        BoundLogicalOperator result = std::move(*joined);
-
-                        // Re-apply inline property filters above the cross join
-                        // so outer scalar references resolve against the left
-                        // side and fresh pattern variables against the right.
                         auto apply_prop_filters =
                             [&](const std::string& var, const cypher::PropertiesMap& props,
                                 BoundLogicalOperator child) -> std::optional<BoundLogicalOperator> {
@@ -561,13 +580,106 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                             return child;
                         };
 
-                        for (const auto& pp : ptr->patterns) {
-                            const auto& el = pp.element;
-                            if (el.node.properties) {
-                                if (!el.node.variable)
-                                    return std::nullopt;
-                                auto next =
-                                    apply_prop_filters(*el.node.variable, *el.node.properties, std::move(result));
+                        auto resolve_start_var = [&](const cypher::NodePattern& node) -> std::optional<std::string> {
+                            if (node.variable)
+                                return *node.variable;
+                            for (const auto& [name, info] : ctx_.symbols) {
+                                if (info.column_index == 0 && info.type.kind == BoundTypeKind::VERTEX &&
+                                    name.starts_with("__anon_")) {
+                                    return name;
+                                }
+                            }
+                            return std::nullopt;
+                        };
+
+                        // Literal / parameter-valued start filters do not need
+                        // any column from the left side. Push them below the
+                        // cross join so Filter(LabelScan) can be lowered to an
+                        // IndexScan. Filters referencing outer variables must
+                        // stay above the join.
+                        std::vector<bool> start_props_pushed_down(ptr->patterns.size(), false);
+                        for (size_t pi = 0; pi < ptr->patterns.size(); ++pi) {
+                            const auto& node = ptr->patterns[pi].element.node;
+                            if (!node.properties)
+                                continue;
+                            bool can_push_down = true;
+                            for (const auto& [_, prop_expr] : node.properties->entries) {
+                                if (!std::holds_alternative<std::unique_ptr<cypher::Literal>>(prop_expr) &&
+                                    !std::holds_alternative<std::unique_ptr<cypher::Parameter>>(prop_expr)) {
+                                    can_push_down = false;
+                                    break;
+                                }
+                            }
+                            if (!can_push_down)
+                                continue;
+                            auto start_var = resolve_start_var(node);
+                            if (!start_var) {
+                                error("Internal binder error: anonymous MATCH start node after WITH "
+                                      "could not be resolved for inline property filters");
+                                return std::nullopt;
+                            }
+                            auto filtered = apply_prop_filters(*start_var, *node.properties, std::move(*right));
+                            if (!filtered)
+                                return std::nullopt;
+                            right = std::move(*filtered);
+                            start_props_pushed_down[pi] = true;
+                        }
+
+                        BindContext::Snapshot right_scope = ctx_.save();
+                        // Outer scalar symbols were visible only for inline
+                        // property binding; they are not right-side outputs and
+                        // must not produce cross equalities.
+                        for (const auto& [name, info] : outer_scalars)
+                            right_scope.symbols.erase(name);
+                        ctx_.restore(left_scope);
+
+                        // Merge right-only variables into the outer scope with
+                        // a column offset. Same-named variables keep the left
+                        // (outer) column as the canonical one.
+                        for (const auto& [name, info] : right_scope.symbols) {
+                            if (!ctx_.lookup(name)) {
+                                ColumnInfo merged = info;
+                                merged.column_index += left_scope.next_column_index;
+                                ctx_.symbols[name] = std::move(merged);
+                            }
+                        }
+                        ctx_.next_column_index = left_scope.next_column_index + right_scope.next_column_index;
+
+                        auto joined =
+                            bindCrossWithEqualities(std::move(left), std::move(*right), left_scope, right_scope);
+                        if (!joined)
+                            return std::nullopt;
+                        BoundLogicalOperator result = std::move(*joined);
+
+                        // Re-apply any remaining inline property filters above
+                        // the cross join: outer-scalar references resolve
+                        // against the left side and fresh pattern variables
+                        // against the right.
+                        for (size_t pi = 0; pi < ptr->patterns.size(); ++pi) {
+                            const auto& el = ptr->patterns[pi].element;
+                            if (el.node.properties && !start_props_pushed_down[pi]) {
+                                std::string start_var;
+                                if (el.node.variable) {
+                                    start_var = *el.node.variable;
+                                } else {
+                                    // Anonymous start nodes are assigned __anon_N by
+                                    // bindMatch in the isolated right scope. After the
+                                    // cross join the right-side start column is column 0
+                                    // in right_scope.
+                                    for (const auto& [name, info] : right_scope.symbols) {
+                                        if (info.column_index == 0 && info.type.kind == BoundTypeKind::VERTEX &&
+                                            name.starts_with("__anon_")) {
+                                            start_var = name;
+                                            break;
+                                        }
+                                    }
+                                    if (start_var.empty()) {
+                                        error("Internal binder error: anonymous MATCH start node after WITH "
+                                              "could not be resolved for inline property filters");
+                                        return std::nullopt;
+                                    }
+                                }
+                                auto next = apply_prop_filters(start_var, *el.node.properties, std::move(result));
                                 if (!next)
                                     return std::nullopt;
                                 result = std::move(*next);
@@ -581,8 +693,11 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                                     result = std::move(*next);
                                 }
                                 if (node_pat.properties) {
-                                    if (!node_pat.variable)
+                                    if (!node_pat.variable) {
+                                        error("Internal binder error: anonymous MATCH node with inline properties "
+                                              "after WITH is not yet supported");
                                         return std::nullopt;
+                                    }
                                     auto next =
                                         apply_prop_filters(*node_pat.variable, *node_pat.properties, std::move(result));
                                     if (!next)
@@ -821,10 +936,75 @@ std::optional<BoundLogicalOperator> Binder::bindWhere(const cypher::Expression& 
         collectVars(*bound_pred);
     }
 
-    auto filter = std::make_unique<BoundFilterOp>();
-    filter->predicate = std::move(*bound_pred);
-    filter->child = std::move(child);
-    return filter;
+    // Split top-level AND conjuncts into nested Filters when the WHERE is
+    // applied directly above an Expand/VarLenExpand. This gives the optimizer
+    // one predicate per Filter, so a variable-local predicate
+    // (e.g. `message.creationDate >= t1`) can be pushed below a downstream
+    // Expand even when another conjunct (e.g. `country IN [x, y]`)
+    // references a variable introduced by that Expand.
+    //
+    // Do not split in front of a plain LabelScan: composite index selection
+    // matches all indexed accessors on a single Filter, and splitting would
+    // break the existing Filter(LabelScan) → IndexScan rewrite.
+    std::function<bool(const BoundLogicalOperator&)> has_expand_below = [&](const BoundLogicalOperator& op) -> bool {
+        return std::visit(
+            [&](const auto& ptr) -> bool {
+                using T = std::decay_t<decltype(ptr)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<BoundExpandOp>> ||
+                              std::is_same_v<T, std::unique_ptr<BoundVarLenExpandOp>>) {
+                    return ptr != nullptr;
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundFilterOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundProjectOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundDistinctOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundSortOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundSkipOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundLimitOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<BoundPathBuildOp>>) {
+                    return ptr && has_expand_below(ptr->child);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<BoundBinaryJoinOp>>) {
+                    return ptr && (has_expand_below(ptr->left) || has_expand_below(ptr->right));
+                } else {
+                    return false;
+                }
+            },
+            op);
+    };
+    const bool split_conjuncts = has_expand_below(child);
+    if (!split_conjuncts) {
+        auto filter = std::make_unique<BoundFilterOp>();
+        filter->predicate = std::move(*bound_pred);
+        filter->child = std::move(child);
+        return filter;
+    }
+
+    std::vector<BoundExpression> conjuncts;
+    std::function<void(BoundExpression)> collectConjuncts = [&](BoundExpression expr) {
+        auto* and_op = std::get_if<std::unique_ptr<BoundBinaryOp>>(&expr);
+        if (and_op && *and_op && (*and_op)->op == cypher::BinaryOperator::AND) {
+            auto left = std::move((*and_op)->left);
+            auto right = std::move((*and_op)->right);
+            collectConjuncts(std::move(left));
+            collectConjuncts(std::move(right));
+            return;
+        }
+        conjuncts.push_back(std::move(expr));
+    };
+    collectConjuncts(std::move(*bound_pred));
+    if (conjuncts.size() == 1) {
+        auto filter = std::make_unique<BoundFilterOp>();
+        filter->predicate = std::move(conjuncts.front());
+        filter->child = std::move(child);
+        return filter;
+    }
+
+    BoundLogicalOperator current = std::move(child);
+    for (auto& conjunct : conjuncts) {
+        auto filter = std::make_unique<BoundFilterOp>();
+        filter->predicate = std::move(conjunct);
+        filter->child = std::move(current);
+        current = std::move(filter);
+    }
+    return current;
 }
 
 } // namespace binder

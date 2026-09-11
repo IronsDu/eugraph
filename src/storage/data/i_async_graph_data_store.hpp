@@ -109,6 +109,13 @@ public:
     // Edge Scan
     virtual folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeIndexEntry>>
     scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) = 0;
+    struct BatchedEdge {
+        VertexId src_id;
+        ISyncGraphDataStore::EdgeIndexEntry entry;
+    };
+    virtual folly::coro::AsyncGenerator<std::vector<BatchedEdge>>
+    scanEdgesBatch(const std::vector<VertexId>& src_ids, Direction direction,
+                   std::optional<EdgeLabelId> label_filter) = 0;
 
     // Edge Type Scan
     virtual folly::coro::AsyncGenerator<std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry>>
@@ -155,6 +162,11 @@ public:
     scanVerticesByIndexRangeComposite(LabelId label_id, const std::vector<uint16_t>& prop_ids,
                                       const std::optional<std::vector<PropertyValue>>& start,
                                       const std::optional<std::vector<PropertyValue>>& end) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexId(uint32_t index_id, const std::vector<PropertyValue>& values) = 0;
+    virtual folly::coro::AsyncGenerator<std::vector<VertexId>>
+    scanVerticesByIndexIdRange(uint32_t index_id, const std::optional<std::vector<PropertyValue>>& start,
+                               const std::optional<std::vector<PropertyValue>>& end) = 0;
 
     // Edge Index Scan
     virtual folly::coro::AsyncGenerator<std::vector<EdgeIndexScanEntry>>
@@ -173,7 +185,7 @@ public:
     // Batch write (single transaction, single dispatch)
     struct BatchVertexEntry {
         VertexId vid;
-        Properties props;
+        std::vector<std::pair<LabelId, Properties>> label_props;
     };
     struct BatchEdgeEntry {
         EdgeId eid;
@@ -182,7 +194,7 @@ public:
         uint64_t seq;
         Properties props;
     };
-    virtual folly::coro::Task<void> batchInsertVertices(LabelId label_id, std::vector<BatchVertexEntry> entries) = 0;
+    virtual folly::coro::Task<void> batchInsertVertices(std::vector<BatchVertexEntry> entries) = 0;
     virtual folly::coro::Task<void> batchInsertEdges(EdgeLabelId edge_label_id,
                                                      std::vector<BatchEdgeEntry> entries) = 0;
 };

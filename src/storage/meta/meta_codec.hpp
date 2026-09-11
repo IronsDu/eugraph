@@ -26,10 +26,11 @@ public:
 
     // ==================== ID counters ====================
 
-    /// Encode next_ids: {next_vertex_id}|{next_edge_id}|{next_label_id}|{next_edge_label_id}
-    static std::string encodeNextIds(VertexId next_vid, EdgeId next_eid, LabelId next_lid, EdgeLabelId next_elid);
+    /// Encode next_ids: {next_vertex_id}|{next_edge_id}|{next_label_id}|{next_edge_label_id}|{next_index_id}
+    static std::string encodeNextIds(VertexId next_vid, EdgeId next_eid, LabelId next_lid, EdgeLabelId next_elid,
+                                     uint32_t next_index_id);
     static void decodeNextIds(std::string_view data, VertexId& next_vid, EdgeId& next_eid, LabelId& next_lid,
-                              EdgeLabelId& next_elid);
+                              EdgeLabelId& next_elid, uint32_t& next_index_id);
 
     // ==================== PropertyValue ====================
 
@@ -50,6 +51,8 @@ private:
     // ==================== Primitive helpers ====================
 
     static void encodeU64(std::string& buf, uint64_t val);
+    static void encodeU32(std::string& buf, uint32_t val);
+    static uint32_t decodeU32(std::string_view data, size_t& offset);
     static uint64_t decodeU64(std::string_view data, size_t& offset);
 
     static void encodeU16(std::string& buf, uint16_t val);

@@ -135,20 +135,45 @@ static void createEdgeLabel(TestEnv& env, const std::string& name, const std::ve
 
 // Helper: manually insert vertices with properties and index entries
 static void insertVertexWithIndex(TestEnv& env, LabelId label_id, VertexId vid, const Properties& props,
-                                  const std::vector<LabelDef::IndexDef>& indexes) {
+                                  const LabelDef& label_def) {
+    // Ensure new index-id tables exist.
+    for (const auto& idx : label_def.indexes) {
+        if (idx.index_id != 0 && (idx.state == IndexState::WRITE_ONLY || idx.state == IndexState::PUBLIC))
+            env.data_store->createIndex(vidxTableById(idx.index_id));
+    }
+
     auto txn = env.data_store->beginTransaction();
     std::pair<LabelId, Properties> lp{label_id, props};
     env.data_store->insertVertex(txn, vid, {&lp, 1});
-    // Manually insert index entries for all WRITE_ONLY/PUBLIC indexes
-    for (const auto& idx : indexes) {
-        if (idx.state == IndexState::WRITE_ONLY || idx.state == IndexState::PUBLIC) {
-            for (auto prop_id : idx.prop_ids) {
-                if (prop_id < props.size() && props[prop_id].has_value()) {
-                    auto table = vidxTable(label_id, prop_id);
-                    env.data_store->insertIndexEntry(table, *props[prop_id], vid);
+
+    for (const auto& idx : label_def.indexes) {
+        if (idx.index_id == 0)
+            continue;
+        if (idx.state != IndexState::WRITE_ONLY && idx.state != IndexState::PUBLIC)
+            continue;
+
+        std::vector<PropertyValue> values;
+        bool all_present = true;
+        for (const auto& acc : idx.accessors) {
+            if (acc.is_strong) {
+                all_present = false;
+                break;
+            }
+            uint16_t pid = UINT16_MAX;
+            for (const auto& pd : label_def.properties) {
+                if (pd.name == acc.property_name) {
+                    pid = pd.id;
+                    break;
                 }
             }
+            if (pid == UINT16_MAX || pid >= props.size() || !props[pid].has_value()) {
+                all_present = false;
+                break;
+            }
+            values.push_back(props[pid].value());
         }
+        if (all_present)
+            env.data_store->insertIndexEntry(vidxTableById(idx.index_id), values, vid);
     }
     env.data_store->commitTransaction(txn);
 }
@@ -173,16 +198,17 @@ TEST_F(IndexE2ETest, QueryByIndexEquality) {
     ASSERT_TRUE(blockingWait(env.async_meta->updateIndexState("idx_age", IndexState::PUBLIC)));
 
     // Create the index storage table
-    auto index_table = vidxTable(label_id, age_prop_id);
+    auto updated_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(updated_def.has_value());
+    auto index_table = vidxTableById(updated_def->indexes[0].index_id);
     ASSERT_TRUE(env.data_store->createIndex(index_table));
 
     // Insert test data
-    auto updated_def = blockingWait(env.async_meta->getLabelDef("Person"));
     for (int i = 1; i <= 5; ++i) {
         Properties props(2);
         props[name_prop_id] = std::string("person_") + std::to_string(i);
         props[age_prop_id] = int64_t(i * 10);
-        insertVertexWithIndex(env, label_id, static_cast<VertexId>(i), props, updated_def->indexes);
+        insertVertexWithIndex(env, label_id, static_cast<VertexId>(i), props, *updated_def);
     }
 
     // Now query with WHERE n.age = 30 — should use index scan
@@ -223,9 +249,38 @@ TEST_F(IndexE2ETest, DdlParserCreateVertexIndex) {
     EXPECT_EQ(stmt->type, IndexDdlStatement::CREATE_VERTEX_INDEX);
     EXPECT_EQ(stmt->index_name, "idx_age");
     EXPECT_EQ(stmt->label_name, "Person");
-    ASSERT_EQ(stmt->property_names.size(), 1u);
-    EXPECT_EQ(stmt->property_names[0], "age");
+    ASSERT_EQ(stmt->accessors.size(), 1u);
+    EXPECT_EQ(stmt->accessors[0].property_name, "age");
     EXPECT_FALSE(stmt->unique);
+}
+
+TEST_F(IndexE2ETest, DdlParserCreateStrongAccessorIndex) {
+    auto stmt = IndexDdlParser::tryParse("CREATE INDEX idx_name FOR (n:Message) ON (n::Post.creationDate)");
+    ASSERT_TRUE(stmt.has_value());
+    EXPECT_EQ(stmt->type, IndexDdlStatement::CREATE_VERTEX_INDEX);
+    EXPECT_EQ(stmt->index_name, "idx_name");
+    EXPECT_EQ(stmt->label_name, "Message");
+    ASSERT_EQ(stmt->accessors.size(), 1u);
+    EXPECT_TRUE(stmt->accessors[0].is_strong);
+    EXPECT_EQ(stmt->accessors[0].source_label, "Post");
+    EXPECT_EQ(stmt->accessors[0].property_name, "creationDate");
+    ASSERT_EQ(stmt->accessors.size(), 1u);
+    EXPECT_EQ(stmt->accessors[0].property_name, "creationDate");
+}
+
+TEST_F(IndexE2ETest, DdlParserCreateMixedCompositeIndex) {
+    auto stmt = IndexDdlParser::tryParse("CREATE INDEX idx_mix FOR (n:Message) ON (n::Post.creationDate, n.name)");
+    ASSERT_TRUE(stmt.has_value());
+    EXPECT_EQ(stmt->type, IndexDdlStatement::CREATE_VERTEX_INDEX);
+    ASSERT_EQ(stmt->accessors.size(), 2u);
+    EXPECT_TRUE(stmt->accessors[0].is_strong);
+    EXPECT_EQ(stmt->accessors[0].source_label, "Post");
+    EXPECT_EQ(stmt->accessors[0].property_name, "creationDate");
+    EXPECT_FALSE(stmt->accessors[1].is_strong);
+    EXPECT_EQ(stmt->accessors[1].property_name, "name");
+    ASSERT_EQ(stmt->accessors.size(), 2u);
+    EXPECT_EQ(stmt->accessors[0].property_name, "creationDate");
+    EXPECT_EQ(stmt->accessors[1].property_name, "name");
 }
 
 TEST_F(IndexE2ETest, DdlParserCreateUniqueIndex) {
@@ -241,8 +296,8 @@ TEST_F(IndexE2ETest, DdlParserCreateEdgeIndex) {
     ASSERT_TRUE(stmt.has_value());
     EXPECT_EQ(stmt->type, IndexDdlStatement::CREATE_EDGE_INDEX);
     EXPECT_EQ(stmt->label_name, "KNOWS");
-    ASSERT_EQ(stmt->property_names.size(), 1u);
-    EXPECT_EQ(stmt->property_names[0], "weight");
+    ASSERT_EQ(stmt->accessors.size(), 1u);
+    EXPECT_EQ(stmt->accessors[0].property_name, "weight");
 }
 
 TEST_F(IndexE2ETest, DdlParserDropIndex) {
@@ -303,20 +358,20 @@ TEST_F(IndexE2ETest, IndexRangeQuery) {
     auto label_def = blockingWait(env.async_meta->getLabelDef("Person"));
     ASSERT_TRUE(label_def.has_value());
     LabelId label_id = label_def->id;
-    auto age_prop_id = label_def->properties[1].id;
 
     ASSERT_TRUE(blockingWait(env.async_meta->createVertexIndex("idx_age", "Person", {"age"}, false)));
     ASSERT_TRUE(blockingWait(env.async_meta->updateIndexState("idx_age", IndexState::PUBLIC)));
 
-    auto index_table = vidxTable(label_id, age_prop_id);
+    auto updated_def = blockingWait(env.async_meta->getLabelDef("Person"));
+    ASSERT_TRUE(updated_def.has_value());
+    auto index_table = vidxTableById(updated_def->indexes[0].index_id);
     ASSERT_TRUE(env.data_store->createIndex(index_table));
 
-    auto updated_def = blockingWait(env.async_meta->getLabelDef("Person"));
     for (int i = 1; i <= 10; ++i) {
         Properties props(2);
         props[0] = std::string("p") + std::to_string(i);
         props[1] = int64_t(i * 10);
-        insertVertexWithIndex(env, label_id, static_cast<VertexId>(i), props, updated_def->indexes);
+        insertVertexWithIndex(env, label_id, static_cast<VertexId>(i), props, *updated_def);
     }
 
     // Range scan: age > 30 and age < 70 → should return vids 4,5,6
@@ -412,6 +467,400 @@ TEST_F(IndexE2ETest, DdlCreateIndexLabelNotFound) {
     auto result = execSync(executor, "CREATE INDEX idx_age FOR (n:NoSuchLabel) ON (n.age)");
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("Label not found"), std::string::npos);
+}
+
+TEST_F(IndexE2ETest, DdlCreateWeakIndexBackfillAcrossLabels) {
+    createLabel(env, "Message", {});
+    createLabel(env, "Post",
+                {
+                    {0, "creationDate", PropertyType::INT64, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto idx = env.async_meta->schema().findIndexByName("idx_msg_date");
+    ASSERT_TRUE(idx.has_value());
+    EXPECT_EQ(idx->state, IndexState::PUBLIC);
+
+    auto table = vidxTableById(idx->index_id);
+    std::vector<VertexId> results;
+    auto txn = env.data_store->beginTransaction();
+    env.data_store->scanIndexEquality(txn, table, int64_t(123), [&](uint64_t eid) {
+        results.push_back(eid);
+        return true;
+    });
+    env.data_store->commitTransaction(txn);
+
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0], 1u);
+
+    // The weak index should be usable by the query planner.
+    auto rows = runQuery(executor, "MATCH (n:Message) WHERE n.creationDate = 123 RETURN n");
+    ASSERT_EQ(rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(rows[0][0]));
+    EXPECT_EQ(std::get<VertexValue>(rows[0][0]).id, 1u);
+}
+
+TEST_F(IndexE2ETest, WeakIndexMaintainsOnLabelAddRemove) {
+    createLabel(env, "Message", {});
+    createLabel(env, "Post",
+                {
+                    {0, "creationDate", PropertyType::INT64, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto idx = env.async_meta->schema().findIndexByName("idx_msg_date");
+    ASSERT_TRUE(idx.has_value());
+    auto table = vidxTableById(idx->index_id);
+
+    // Removing the filter label must remove the index entry.
+    auto remove = execSync(executor, "MATCH (n:Message) REMOVE n:Message");
+    ASSERT_TRUE(remove.error.empty()) << remove.error;
+    {
+        std::vector<VertexId> results;
+        auto txn = env.data_store->beginTransaction();
+        env.data_store->scanIndexEquality(txn, table, int64_t(123), [&](uint64_t eid) {
+            results.push_back(eid);
+            return true;
+        });
+        env.data_store->commitTransaction(txn);
+        EXPECT_TRUE(results.empty());
+    }
+
+    // Adding the filter label back must re-add the index entry.
+    auto set_label = execSync(executor, "MATCH (n:Post) SET n:Message");
+    ASSERT_TRUE(set_label.error.empty()) << set_label.error;
+    {
+        std::vector<VertexId> results;
+        auto txn = env.data_store->beginTransaction();
+        env.data_store->scanIndexEquality(txn, table, int64_t(123), [&](uint64_t eid) {
+            results.push_back(eid);
+            return true;
+        });
+        env.data_store->commitTransaction(txn);
+        ASSERT_EQ(results.size(), 1u);
+        EXPECT_EQ(results[0], 1u);
+    }
+}
+
+TEST_F(IndexE2ETest, WeakIndexMaintainsOnPropertySetRemove) {
+    createLabel(env, "Message", {});
+    createLabel(env, "Post",
+                {
+                    {0, "creationDate", PropertyType::INT64, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto idx = env.async_meta->schema().findIndexByName("idx_msg_date");
+    ASSERT_TRUE(idx.has_value());
+    auto table = vidxTableById(idx->index_id);
+
+    auto set_prop = execSync(executor, "MATCH (n:Post) SET n.creationDate = 456");
+    ASSERT_TRUE(set_prop.error.empty()) << set_prop.error;
+    {
+        std::vector<VertexId> old_hits;
+        std::vector<VertexId> new_hits;
+        auto txn = env.data_store->beginTransaction();
+        env.data_store->scanIndexEquality(txn, table, int64_t(123), [&](uint64_t eid) {
+            old_hits.push_back(eid);
+            return true;
+        });
+        env.data_store->scanIndexEquality(txn, table, int64_t(456), [&](uint64_t eid) {
+            new_hits.push_back(eid);
+            return true;
+        });
+        env.data_store->commitTransaction(txn);
+        EXPECT_TRUE(old_hits.empty());
+        ASSERT_EQ(new_hits.size(), 1u);
+        EXPECT_EQ(new_hits[0], 1u);
+    }
+
+    auto remove_prop = execSync(executor, "MATCH (n:Post) REMOVE n.creationDate");
+    ASSERT_TRUE(remove_prop.error.empty()) << remove_prop.error;
+    {
+        std::vector<VertexId> hits;
+        auto txn = env.data_store->beginTransaction();
+        env.data_store->scanIndexEquality(txn, table, int64_t(456), [&](uint64_t eid) {
+            hits.push_back(eid);
+            return true;
+        });
+        env.data_store->commitTransaction(txn);
+        EXPECT_TRUE(hits.empty());
+    }
+}
+
+TEST_F(IndexE2ETest, WeakIndexRemovedOnVertexDelete) {
+    createLabel(env, "Message", {});
+    createLabel(env, "Post",
+                {
+                    {0, "creationDate", PropertyType::INT64, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto idx = env.async_meta->schema().findIndexByName("idx_msg_date");
+    ASSERT_TRUE(idx.has_value());
+    auto table = vidxTableById(idx->index_id);
+
+    auto del = execSync(executor, "MATCH (n:Post) DELETE n");
+    ASSERT_TRUE(del.error.empty()) << del.error;
+
+    std::vector<VertexId> hits;
+    auto txn = env.data_store->beginTransaction();
+    env.data_store->scanIndexEquality(txn, table, int64_t(123), [&](uint64_t eid) {
+        hits.push_back(eid);
+        return true;
+    });
+    env.data_store->commitTransaction(txn);
+    EXPECT_TRUE(hits.empty());
+}
+
+TEST_F(IndexE2ETest, EdgeIndexMaintainsOnPropertySetRemove) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+    createEdgeLabel(env, "KNOWS",
+                    {
+                        {0, "since", PropertyType::INT64, false, std::nullopt},
+                    });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto create = execSync(executor, "CREATE (a:Person {name:'alice'}), (b:Person {name:'bob'}), "
+                                     "(a)-[:KNOWS {since:123}]->(b)");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+    auto ddl = execSync(executor, "CREATE INDEX idx_knows_since FOR ()-[r:KNOWS]-() ON (r.since)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto edge_label = blockingWait(env.async_meta->getEdgeLabelDef("KNOWS"));
+    ASSERT_TRUE(edge_label.has_value());
+    auto table = eidxTable(edge_label->id, edge_label->properties[0].id);
+
+    auto set_prop = execSync(executor, "MATCH (:Person {name:'alice'})-[r:KNOWS]->(:Person) SET r.since = 456");
+    ASSERT_TRUE(set_prop.error.empty()) << set_prop.error;
+    {
+        std::vector<EdgeId> old_hits;
+        std::vector<EdgeId> new_hits;
+        auto txn = env.data_store->beginTransaction();
+        env.data_store->scanIndexEquality(txn, table, int64_t(123), [&](uint64_t eid) {
+            old_hits.push_back(eid);
+            return true;
+        });
+        env.data_store->scanIndexEquality(txn, table, int64_t(456), [&](uint64_t eid) {
+            new_hits.push_back(eid);
+            return true;
+        });
+        env.data_store->commitTransaction(txn);
+        EXPECT_TRUE(old_hits.empty());
+        ASSERT_EQ(new_hits.size(), 1u);
+    }
+
+    auto remove_prop = execSync(executor, "MATCH (:Person {name:'alice'})-[r:KNOWS]->(:Person) REMOVE r.since");
+    ASSERT_TRUE(remove_prop.error.empty()) << remove_prop.error;
+    {
+        std::vector<EdgeId> hits;
+        auto txn = env.data_store->beginTransaction();
+        env.data_store->scanIndexEquality(txn, table, int64_t(456), [&](uint64_t eid) {
+            hits.push_back(eid);
+            return true;
+        });
+        env.data_store->commitTransaction(txn);
+        EXPECT_TRUE(hits.empty());
+    }
+}
+
+TEST_F(IndexE2ETest, UniqueIndexSetRollsBackProperty) {
+    createLabel(env, "Person",
+                {
+                    {0, "name", PropertyType::STRING, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto ddl = execSync(executor, "CREATE UNIQUE INDEX idx_person_name FOR (n:Person) ON (n.name)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+    auto create = execSync(executor, "CREATE (a:Person {name:'alice'}), (b:Person {name:'bob'})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+
+    bool threw = false;
+    try {
+        auto set = execSync(executor, "MATCH (n:Person {name:'bob'}) SET n.name = 'alice'");
+        threw = !set.error.empty();
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        EXPECT_NE(std::string(e.what()).find("unique index"), std::string::npos);
+    }
+    EXPECT_TRUE(threw);
+
+    auto alice = runQuery(executor, "MATCH (n:Person {name:'alice'}) RETURN n");
+    auto bob = runQuery(executor, "MATCH (n:Person {name:'bob'}) RETURN n");
+    EXPECT_EQ(alice.size(), 1u);
+    EXPECT_EQ(bob.size(), 1u);
+}
+
+TEST_F(IndexE2ETest, WeakIndexUsedWhenNodeCreatedAfterIndex) {
+    createLabel(env, "Message", {});
+    createLabel(env, "Post",
+                {
+                    {0, "id", PropertyType::INT64, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_id FOR (n:Message) ON (n.id)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto create = execSync(executor, "CREATE (n:Post:Message {id: 123})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+
+    auto rows = runQuery(executor, "MATCH (n:Message) WHERE n.id = 123 RETURN n");
+    ASSERT_EQ(rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(rows[0][0]));
+    EXPECT_EQ(std::get<VertexValue>(rows[0][0]).id, 1u);
+}
+
+TEST_F(IndexE2ETest, StrongIndexPointLookup) {
+    createLabel(env, "Message", {});
+    createLabel(env, "Post",
+                {
+                    {0, "creationDate", PropertyType::INT64, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_pdate FOR (n:Message) ON (n::Post.creationDate)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto rows = runQuery(executor, "MATCH (n:Message) WHERE n::Post.creationDate = 123 RETURN n");
+    ASSERT_EQ(rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(rows[0][0]));
+    EXPECT_EQ(std::get<VertexValue>(rows[0][0]).id, 1u);
+}
+
+TEST_F(IndexE2ETest, MixedStrongWeakCompositeIndexQuery) {
+    createLabel(env, "Message", {});
+    createLabel(env, "Post",
+                {
+                    {0, "creationDate", PropertyType::INT64, false, std::nullopt},
+                    {1, "browserUsed", PropertyType::STRING, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123, browserUsed: 'Firefox'})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_mix FOR (n:Message) ON "
+                                  "(n::Post.creationDate, n.browserUsed)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto rows = runQuery(executor, "MATCH (n:Message) WHERE n::Post.creationDate = 123 AND n.browserUsed = 'Firefox' "
+                                   "RETURN n");
+    ASSERT_EQ(rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValue>(rows[0][0]));
+    EXPECT_EQ(std::get<VertexValue>(rows[0][0]).id, 1u);
+}
+
+TEST_F(IndexE2ETest, StrongIndexRejectsMissingSourceProperty) {
+    createLabel(env, "Message", {});
+    createLabel(env, "Post",
+                {
+                    {0, "creationDate", PropertyType::INT64, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_bad FOR (n:Message) ON (n::Post.missing)");
+    EXPECT_FALSE(ddl.error.empty());
+}
+
+TEST_F(IndexE2ETest, WeakIndexBackfillConflictSetsError) {
+    createLabel(env, "A",
+                {
+                    {0, "creationDate", PropertyType::INT64, false, std::nullopt},
+                });
+    createLabel(env, "B",
+                {
+                    {0, "creationDate", PropertyType::INT64, false, std::nullopt},
+                });
+    createLabel(env, "Message", {});
+    auto a_opt = blockingWait(env.async_meta->getLabelId("A"));
+    auto b_opt = blockingWait(env.async_meta->getLabelId("B"));
+    auto m_opt = blockingWait(env.async_meta->getLabelId("Message"));
+    ASSERT_TRUE(a_opt.has_value());
+    ASSERT_TRUE(b_opt.has_value());
+    ASSERT_TRUE(m_opt.has_value());
+    LabelId aid = *a_opt;
+    LabelId bid = *b_opt;
+    LabelId mid = *m_opt;
+
+    Properties props_a(1);
+    props_a[0] = int64_t(123);
+    Properties props_b(1);
+    props_b[0] = int64_t(456);
+    Properties props_m;
+    std::vector<std::pair<LabelId, Properties>> label_props;
+    label_props.emplace_back(aid, std::move(props_a));
+    label_props.emplace_back(bid, std::move(props_b));
+    label_props.emplace_back(mid, std::move(props_m));
+    auto txn = env.data_store->beginTransaction();
+    ASSERT_TRUE(env.data_store->insertVertex(txn, 1, label_props));
+    env.data_store->commitTransaction(txn);
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_date FOR (n:Message) ON (n.creationDate)");
+    EXPECT_FALSE(ddl.error.empty());
+    EXPECT_NE(ddl.error.find("conflicting"), std::string::npos);
+
+    auto idx = env.async_meta->schema().findIndexByName("idx_msg_date");
+    ASSERT_TRUE(idx.has_value());
+    EXPECT_EQ(idx->state, IndexState::ERROR);
+}
+
+TEST_F(IndexE2ETest, DdlCreateStrongIndexBackfill) {
+    createLabel(env, "Message", {});
+    createLabel(env, "Post",
+                {
+                    {0, "creationDate", PropertyType::INT64, false, std::nullopt},
+                });
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    auto create = execSync(executor, "CREATE (n:Post:Message {creationDate: 123})");
+    ASSERT_TRUE(create.error.empty()) << create.error;
+
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_pdate FOR (n:Message) ON (n::Post.creationDate)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+
+    auto idx = env.async_meta->schema().findIndexByName("idx_msg_pdate");
+    ASSERT_TRUE(idx.has_value());
+    EXPECT_EQ(idx->state, IndexState::PUBLIC);
+
+    auto table = vidxTableById(idx->index_id);
+    std::vector<VertexId> results;
+    auto txn = env.data_store->beginTransaction();
+    env.data_store->scanIndexEquality(txn, table, int64_t(123), [&](uint64_t eid) {
+        results.push_back(eid);
+        return true;
+    });
+    env.data_store->commitTransaction(txn);
+
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0], 1u);
 }
 
 TEST_F(IndexE2ETest, EndToEndCreateIndexAndQuery) {
@@ -563,9 +1012,9 @@ TEST_F(IndexE2ETest, DdlParserCreateCompositeIndex) {
     EXPECT_EQ(stmt->type, IndexDdlStatement::CREATE_VERTEX_INDEX);
     EXPECT_EQ(stmt->index_name, "idx_age_name");
     EXPECT_EQ(stmt->label_name, "Person");
-    ASSERT_EQ(stmt->property_names.size(), 2u);
-    EXPECT_EQ(stmt->property_names[0], "age");
-    EXPECT_EQ(stmt->property_names[1], "name");
+    ASSERT_EQ(stmt->accessors.size(), 2u);
+    EXPECT_EQ(stmt->accessors[0].property_name, "age");
+    EXPECT_EQ(stmt->accessors[1].property_name, "name");
     EXPECT_FALSE(stmt->unique);
 }
 
@@ -573,9 +1022,9 @@ TEST_F(IndexE2ETest, DdlParserCreateCompositeUniqueIndex) {
     auto stmt = IndexDdlParser::tryParse("CREATE UNIQUE INDEX idx_id_email FOR (n:User) ON (n.id, n.email)");
     ASSERT_TRUE(stmt.has_value());
     EXPECT_TRUE(stmt->unique);
-    ASSERT_EQ(stmt->property_names.size(), 2u);
-    EXPECT_EQ(stmt->property_names[0], "id");
-    EXPECT_EQ(stmt->property_names[1], "email");
+    ASSERT_EQ(stmt->accessors.size(), 2u);
+    EXPECT_EQ(stmt->accessors[0].property_name, "id");
+    EXPECT_EQ(stmt->accessors[1].property_name, "email");
 }
 
 TEST_F(IndexE2ETest, DdlCreateCompositeIndexViaExecutor) {

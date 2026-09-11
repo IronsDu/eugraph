@@ -29,6 +29,12 @@ struct BoundPatternComprehension {
     std::string output_name;
     /// Result type: LIST(element_type).
     BoundType result_type = BoundType::Any();
+    /// True when this placeholder came from a bare pattern expression used as
+    /// a boolean predicate (e.g. `not((n)-->(m))` in RETURN). After hoisting,
+    /// the patching pass replaces it with `size(list) > 0` instead of a plain
+    /// list column reference.
+    bool as_boolean = false;
+
     /// Non-owning pointer back to the AST node. The hoisting pass reads
     /// `patterns`, `where_pred`, `projection` from here to build the
     /// correlated sub-plan. The AST outlives the binder (owned by parser).

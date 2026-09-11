@@ -337,16 +337,18 @@ TEST(MetadataCodecTest, EdgeLabelDefRoundTrip) {
 }
 
 TEST(MetadataCodecTest, NextIdsRoundTrip) {
-    auto encoded = MetadataCodec::encodeNextIds(100, 200, 5, 3);
+    auto encoded = MetadataCodec::encodeNextIds(100, 200, 5, 3, 7);
     VertexId vid;
     EdgeId eid;
     LabelId lid;
     EdgeLabelId elid;
-    MetadataCodec::decodeNextIds(encoded, vid, eid, lid, elid);
+    uint32_t index_id = 0;
+    MetadataCodec::decodeNextIds(encoded, vid, eid, lid, elid, index_id);
     EXPECT_EQ(vid, 100u);
     EXPECT_EQ(eid, 200u);
     EXPECT_EQ(lid, 5u);
     EXPECT_EQ(elid, 3u);
+    EXPECT_EQ(index_id, 7u);
 }
 
 TEST(MetadataCodecTest, PropertyValueAllTypes) {

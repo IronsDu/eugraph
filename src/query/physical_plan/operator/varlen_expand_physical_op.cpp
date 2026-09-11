@@ -84,6 +84,24 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         dir = Direction::BOTH;
     }
 
+    std::unordered_set<VertexId> src_allowed;
+    std::unordered_set<VertexId> dst_allowed;
+    auto loadAllowed = [&](uint32_t index_id, const PropertyValue& value,
+                           std::unordered_set<VertexId>& out) -> folly::coro::Task<void> {
+        if (index_id == 0)
+            co_return;
+        std::vector<PropertyValue> one{value};
+        auto gen = store_.scanVerticesByIndexId(index_id, one);
+        while (auto batch = co_await gen.next()) {
+            for (VertexId vid : *batch)
+                out.insert(vid);
+        }
+    };
+    if (src_filter_index_id_ != 0)
+        co_await loadAllowed(src_filter_index_id_, src_filter_value_, src_allowed);
+    if (dst_filter_index_id_ != 0)
+        co_await loadAllowed(dst_filter_index_id_, dst_filter_value_, dst_allowed);
+
     std::vector<std::optional<EdgeLabelId>> scan_filters;
     if (!label_filters_.has_value()) {
         scan_filters.push_back(std::nullopt);
@@ -134,6 +152,9 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         bool physical_out = true; // true: found via OUT adjacency
     };
 
+    std::unordered_map<VertexId, std::vector<DirectedEdgeEntry>> adjacency_cache;
+    std::unordered_map<VertexId, bool> dst_label_cache;
+
     auto scanDirected = [&](VertexId vid, Direction scan_dir) -> folly::coro::Task<std::vector<DirectedEdgeEntry>> {
         std::vector<DirectedEdgeEntry> out;
         bool phy_out = (scan_dir == Direction::OUT);
@@ -150,22 +171,36 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
     auto hasDstLabels = [&](VertexId vid) -> folly::coro::Task<bool> {
         if (dst_label_ids_.empty())
             co_return true;
+        auto it = dst_label_cache.find(vid);
+        if (it != dst_label_cache.end())
+            co_return it->second;
         auto labels = co_await store_.getVertexLabels(vid);
+        bool ok = true;
         for (LabelId need : dst_label_ids_) {
-            if (labels.find(need) == labels.end())
-                co_return false;
+            if (labels.find(need) == labels.end()) {
+                ok = false;
+                break;
+            }
         }
-        co_return true;
+        dst_label_cache.emplace(vid, ok);
+        co_return ok;
     };
 
     auto scanAll = [&](VertexId vid) -> folly::coro::Task<std::vector<DirectedEdgeEntry>> {
+        auto cache_it = adjacency_cache.find(vid);
+        if (cache_it != adjacency_cache.end())
+            co_return cache_it->second;
+        std::vector<DirectedEdgeEntry> result;
         if (split_undirected) {
             auto out = co_await scanDirected(vid, Direction::OUT);
             auto in = co_await scanDirected(vid, Direction::IN);
             out.insert(out.end(), std::make_move_iterator(in.begin()), std::make_move_iterator(in.end()));
-            co_return out;
+            result = std::move(out);
+        } else {
+            result = co_await scanDirected(vid, dir);
         }
-        co_return co_await scanDirected(vid, dir);
+        adjacency_cache.emplace(vid, result);
+        co_return result;
     };
 
     while (auto chunk = co_await child_gen.next()) {
@@ -225,6 +260,15 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 prev_edge_id = edgeIdFromValue(rows[src_row][prev_edge_col_idx_]);
             }
 
+            const bool src_matches = (src_filter_index_id_ == 0 || src_allowed.count(src_id) != 0);
+            const bool dst_filter_active = (dst_filter_index_id_ != 0);
+            auto dst_matches = [&](VertexId vid) { return !dst_filter_active || dst_allowed.count(vid) != 0; };
+
+            // OR pruning: a non-matching source can only produce rows through
+            // the dst side. If the dst index is empty, it cannot produce rows.
+            if (!src_matches && dst_filter_active && dst_allowed.empty())
+                continue;
+
             // Collect initial edges from source vertex
             std::vector<DirectedEdgeEntry> start_edges = co_await scanAll(src_id);
             if (prev_edge_id != INVALID_EDGE_ID) {
@@ -243,7 +287,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 }
                 if (edge_list_bound_ && !expected_edge_ids.empty())
                     emit_identity = false;
-                if (emit_identity) {
+                if (emit_identity && (src_matches || dst_matches(src_id))) {
                     OutputEntry identity_entry;
                     identity_entry.src_row = src_row;
                     identity_entry.dst_id = src_id;
@@ -325,7 +369,8 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
 
                 int next_depth = frame.depth + 1;
 
-                if (next_depth >= min_hops_ && co_await hasDstLabels(edge.neighbor_id)) {
+                if (next_depth >= min_hops_ && (src_matches || dst_matches(edge.neighbor_id)) &&
+                    co_await hasDstLabels(edge.neighbor_id)) {
                     OutputEntry entry;
                     entry.src_row = src_row;
                     entry.dst_id = edge.neighbor_id;

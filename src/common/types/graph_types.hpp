@@ -160,6 +160,13 @@ enum class IndexState : uint8_t {
     ERROR = 3,
 };
 
+// ==================== Index Accessor ====================
+struct IndexAccessorDef {
+    bool is_strong = false;
+    LabelId source_label_id = INVALID_LABEL_ID;
+    std::string property_name;
+};
+
 // ==================== Label Definition ====================
 struct LabelDef {
     LabelId id = INVALID_LABEL_ID;
@@ -167,7 +174,11 @@ struct LabelDef {
     std::vector<PropertyDef> properties;
 
     struct IndexDef {
+        uint32_t index_id = 0;
         std::string name;
+        std::vector<IndexAccessorDef> accessors;
+        // Resolved property ids. Vertex indexes use accessors; this field is
+        // now only used by edge indexes.
         std::vector<uint16_t> prop_ids;
         bool unique = false;
         IndexState state = IndexState::WRITE_ONLY;

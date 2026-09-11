@@ -63,6 +63,18 @@ public:
     }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
+
+    /// Configure an allowed-destination filter. Instead of scanning every
+    /// edge neighbour, Expand probes edges for the destination vertex ids
+    /// resolved from `allowed values` via `index_id`.
+    void setAllowedDstFilter(uint32_t index_id, EdgeLabelId edge_label) {
+        allowed_dst_index_id_ = index_id;
+        allowed_edge_label_ = edge_label;
+    }
+
+    void setAllowedDstValues(std::shared_ptr<std::vector<PropertyValue>> values) {
+        allowed_dst_values_ = std::move(values);
+    }
     void setLimitHint(size_t limit) override {
         limit_hint_ = limit_hint_.has_value() ? std::min(*limit_hint_, limit) : limit;
     }
@@ -90,6 +102,10 @@ private:
     int edge_col_idx_ = -1;
     std::vector<EdgeLabelId> full_scan_labels_;
     bool full_edge_scan_ = false;
+
+    uint32_t allowed_dst_index_id_ = 0;
+    EdgeLabelId allowed_edge_label_ = INVALID_EDGE_LABEL_ID;
+    std::shared_ptr<std::vector<PropertyValue>> allowed_dst_values_;
     std::optional<size_t> limit_hint_;
 };
 

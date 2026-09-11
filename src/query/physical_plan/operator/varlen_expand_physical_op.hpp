@@ -47,7 +47,8 @@ public:
         std::unordered_map<EdgeLabelId, std::vector<std::pair<uint16_t, PropertyValue>>> edge_prop_filters = {},
         std::vector<LabelId> dst_label_ids = {}, bool dst_bound = false, int dst_col_idx = -1,
         bool edge_list_bound = false, int edge_list_col_idx = -1, std::string prev_edge_var = {},
-        int prev_edge_col_idx = -1, bool dst_label_missing = false)
+        int prev_edge_col_idx = -1, bool dst_label_missing = false, uint32_t src_filter_index_id = 0,
+        PropertyValue src_filter_value = {}, uint32_t dst_filter_index_id = 0, PropertyValue dst_filter_value = {})
         : src_var_(std::move(src_var)), dst_var_(std::move(dst_var)), label_filters_(std::move(label_filters)),
           direction_(direction), min_hops_(min_hops), max_hops_(max_hops), store_(store),
           input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)),
@@ -55,7 +56,9 @@ public:
           edge_prop_filters_(std::move(edge_prop_filters)), dst_label_ids_(std::move(dst_label_ids)),
           dst_bound_(dst_bound), dst_col_idx_(dst_col_idx), edge_list_bound_(edge_list_bound),
           edge_list_col_idx_(edge_list_col_idx), prev_edge_var_(std::move(prev_edge_var)),
-          prev_edge_col_idx_(prev_edge_col_idx), dst_label_missing_(dst_label_missing) {
+          prev_edge_col_idx_(prev_edge_col_idx), dst_label_missing_(dst_label_missing),
+          src_filter_index_id_(src_filter_index_id), src_filter_value_(std::move(src_filter_value)),
+          dst_filter_index_id_(dst_filter_index_id), dst_filter_value_(std::move(dst_filter_value)) {
         for (size_t i = 0; i < input_schema_.size(); ++i) {
             if (input_schema_[i] == src_var_) {
                 src_col_idx_ = static_cast<int>(i);
@@ -105,6 +108,10 @@ private:
     std::string prev_edge_var_;
     int prev_edge_col_idx_ = -1;
     bool dst_label_missing_ = false;
+    uint32_t src_filter_index_id_ = 0;
+    PropertyValue src_filter_value_;
+    uint32_t dst_filter_index_id_ = 0;
+    PropertyValue dst_filter_value_;
 };
 
 } // namespace compute

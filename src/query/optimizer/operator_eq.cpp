@@ -75,6 +75,8 @@ bool eqSetItem(const binder::BoundSetOp::SetItem& a, const binder::BoundSetOp::S
         return false;
     if (a.prop_name != b.prop_name)
         return false;
+    if (a.label != b.label)
+        return false;
     if (a.prop_id != b.prop_id)
         return false;
     if (!eqOptExpr(a.value_expr, b.value_expr))

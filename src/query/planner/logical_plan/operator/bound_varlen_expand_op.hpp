@@ -51,6 +51,13 @@ struct BoundVarLenExpandOp {
     /// paths to exactly this sequence and must not append an output column.
     bool bound_edge_list = false;
     uint32_t bound_edge_list_col_index = 0;
+    // OR-filter pruning: index_id + value for src/dst property equality.
+    // When set, VarLenExpand probes the index once and uses the allowed
+    // vertex sets to implement `src.prop = v OR dst.prop = v`.
+    uint32_t src_filter_index_id = 0;
+    PropertyValue src_filter_value;
+    uint32_t dst_filter_index_id = 0;
+    PropertyValue dst_filter_value;
     // P3: inline edge property filter [{prop: value}]
     // Per edge-label: list of (prop_id, expected_value) equality checks
     std::unordered_map<EdgeLabelId, std::vector<std::pair<uint16_t, PropertyValue>>> edge_prop_filters;

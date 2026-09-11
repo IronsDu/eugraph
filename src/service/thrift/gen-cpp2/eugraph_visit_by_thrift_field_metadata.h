@@ -185,6 +185,8 @@ struct VisitByFieldId<::eugraph::thrift_service::VertexRecord> {
     switch (fieldId) {
     case 1:
       return f(0, static_cast<T&&>(t).properties_ref());
+    case 2:
+      return f(1, static_cast<T&&>(t).labels_ref());
     default:
       throwInvalidThriftId(fieldId, "::eugraph::thrift_service::VertexRecord");
     }

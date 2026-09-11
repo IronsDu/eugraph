@@ -20,10 +20,10 @@
 | `edge_index` | 边邻接索引 | `{vertex_id:u64BE}{direction:u8}{label_id:u16BE}{neighbor_id:u64BE}{seq:u64BE}` |
 | `etype_{id}` | 边类型索引（每关系类型一表） | `{src_id:u64BE}{dst_id:u64BE}{seq:u64BE}` |
 | `eprop_{id}` | 边属性存储（每关系类型一表） | `{edge_id:u64BE}{prop_id:u16BE}` |
-| `vidx_{label_id}_{prop_id}` | 顶点二级索引 | `{sortable_value}{entity_id:u64BE}` |
-| `vidxComposite_{label_id}_{prop_id}` | 顶点复合索引 | `{sortable_values...}{entity_id:u64BE}` |
-| `eidx_{label_id}_{prop_id}` | 边属性索引 | `{sortable_value}{edge_id:u64BE}` |
-| `eidxComposite_{label_id}_{prop_id}` | 边复合属性索引 | `{sortable_values...}{edge_id:u64BE}` |
+| `vidx_{index_id}` | 顶点二级索引 | `{sortable_value}{entity_id:u64BE}` |
+| `vidx_{index_id}` | 顶点复合索引（单/复合同表名规则） | `{sortable_values...}{entity_id:u64BE}` |
+| `eidx_{edge_label_id}_{prop_id...}` | 边属性索引（TODO: 迁移到 eidx_{index_id}） | `{sortable_value}{edge_id:u64BE}` |
+| `eidx_{edge_label_id}_{prop_id...}` | 边复合属性索引（TODO: 迁移到 eidx_{index_id}） | `{sortable_values...}{edge_id:u64BE}` |
 
 ---
 
@@ -119,7 +119,7 @@
 前缀 {src_id}{dst_id}                           →  MATCH (a)-[e:KNOWS]->(b) WHERE id(a) = X AND id(b) = Y
 ```
 
-**顶点属性索引（vidx_{id}_{prop_id}）** 支持以下查询：
+**顶点属性索引（vidx_{index_id}）** 支持以下查询：
 
 ```
 等值扫描 {sortable_value}                        →  MATCH (n:Person) WHERE n.age = 30
@@ -127,7 +127,7 @@
 复合等值 {v1}{v2}                                →  MATCH (n:Person) WHERE n.age = 30 AND n.name = 'Alice'
 ```
 
-**边属性索引（eidx_{id}_{prop_id}）** 支持以下查询：
+**边属性索引（eidx_{edge_label_id}_{prop_id...}）** 支持以下查询：
 
 ```
 等值扫描 {sortable_value}                        →  MATCH ()-[e:KNOWS]->() WHERE e.weight = 5
