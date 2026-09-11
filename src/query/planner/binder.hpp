@@ -122,8 +122,8 @@ public:
     /// pattern expressions in projections, keyed by the synthetic AST node.
     /// bindExpression consults this to turn an ExistsExpr placeholder into a
     /// boolean `size(list) > 0` during the normal bind walk.
-    std::unordered_map<const cypher::PatternComprehension*,
-                       std::tuple<SlotId, std::string, BoundType>> projection_exists_outputs_;
+    std::unordered_map<const cypher::PatternComprehension*, std::tuple<SlotId, std::string, BoundType>>
+        projection_exists_outputs_;
 
     /// Projection-context interning for bare pattern expressions
     /// (`RETURN not((n)-->(m))`). The synthetic PatternComprehension AST is
@@ -133,7 +133,7 @@ public:
 
     /// Build `size(list) > 0` from one hoisted pattern-comprehension output.
     std::optional<BoundExpression> makePatternExistsExpression(SlotId slot, const std::string& name,
-                                                                const BoundType& list_type) const;
+                                                               const BoundType& list_type) const;
 
     /// Build `size(list) > 0` for a patched, as_boolean pattern placeholder.
     std::optional<BoundExpression> makePatternExistsExpression(const BoundPatternComprehension& placeholder) const;

@@ -208,7 +208,7 @@ const cypher::PatternComprehension* Binder::internProjectionExistsPattern(const 
 }
 
 std::optional<BoundExpression> Binder::makePatternExistsExpression(SlotId slot, const std::string& name,
-                                                                const BoundType& pattern_type) const {
+                                                                   const BoundType& pattern_type) const {
     if (slot == INVALID_SLOT_ID)
         return std::nullopt;
 
@@ -236,8 +236,7 @@ std::optional<BoundExpression> Binder::makePatternExistsExpression(SlotId slot, 
     return BoundExpression(std::move(gt));
 }
 
-std::optional<BoundExpression> Binder::makePatternExistsExpression(
-    const BoundPatternComprehension& placeholder) const {
+std::optional<BoundExpression> Binder::makePatternExistsExpression(const BoundPatternComprehension& placeholder) const {
     return makePatternExistsExpression(placeholder.output_slot, placeholder.output_name, placeholder.result_type);
 }
 

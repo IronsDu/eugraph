@@ -4484,10 +4484,9 @@ TEST_F(QueryExecutorTest, ExistsUndirected) {
 
 TEST_F(QueryExecutorTest, ExistsPatternSubqueryInReturn) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(*executor_,
-                           "MATCH (n:Person) "
-                           "RETURN n.name AS name, EXISTS { (n)-[:KNOWS]->() } AS has_out "
-                           "ORDER BY name");
+    auto result = execSync(*executor_, "MATCH (n:Person) "
+                                       "RETURN n.name AS name, EXISTS { (n)-[:KNOWS]->() } AS has_out "
+                                       "ORDER BY name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5u);
     const bool expected[] = {true, true, true, false, false};
@@ -4499,8 +4498,7 @@ TEST_F(QueryExecutorTest, ExistsPatternSubqueryInReturn) {
 
 TEST_F(QueryExecutorTest, ExistsFullSubqueryInReturnError) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(*executor_,
-                           "MATCH (n) RETURN EXISTS { MATCH (m) WHERE m = n RETURN m } AS has_rel");
+    auto result = execSync(*executor_, "MATCH (n) RETURN EXISTS { MATCH (m) WHERE m = n RETURN m } AS has_rel");
     EXPECT_FALSE(result.error.empty());
 }
 
@@ -4519,18 +4517,16 @@ TEST_F(QueryExecutorTest, PatternPredicateTwoNodes) {
 
 TEST_F(QueryExecutorTest, BarePatternExpressionDirectInReturnError) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(
-        *executor_,
-        "MATCH (n:Person) RETURN n.name AS name, (n)-[:KNOWS]->(:Person) AS has_out ORDER BY name");
+    auto result = execSync(*executor_,
+                           "MATCH (n:Person) RETURN n.name AS name, (n)-[:KNOWS]->(:Person) AS has_out ORDER BY name");
     EXPECT_FALSE(result.error.empty());
 }
 
 TEST_F(QueryExecutorTest, NotBarePatternExpressionInReturn) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(*executor_,
-                           "MATCH (a:Person), (b:Person) "
-                           "RETURN a.name AS aname, b.name AS bname, not((a)-[:KNOWS]->(b)) AS not_knows "
-                           "ORDER BY aname, bname");
+    auto result = execSync(*executor_, "MATCH (a:Person), (b:Person) "
+                                       "RETURN a.name AS aname, b.name AS bname, not((a)-[:KNOWS]->(b)) AS not_knows "
+                                       "ORDER BY aname, bname");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 25u);
     size_t true_count = 0;
@@ -4549,14 +4545,12 @@ TEST_F(QueryExecutorTest, NotBarePatternExpressionInReturn) {
 
 TEST_F(QueryExecutorTest, BarePatternInBooleanOperators) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(
-        *executor_,
-        "MATCH (n:Person) "
-        "RETURN n.name AS name, "
-        "       ((n)-[:KNOWS]->(:Person)) AND true AS and_val, "
-        "       ((n)-[:KNOWS]->(:Person)) OR false AS or_val, "
-        "       NOT ((n)-[:KNOWS]->(:Person)) AS not_val "
-        "ORDER BY name");
+    auto result = execSync(*executor_, "MATCH (n:Person) "
+                                       "RETURN n.name AS name, "
+                                       "       ((n)-[:KNOWS]->(:Person)) AND true AS and_val, "
+                                       "       ((n)-[:KNOWS]->(:Person)) OR false AS or_val, "
+                                       "       NOT ((n)-[:KNOWS]->(:Person)) AS not_val "
+                                       "ORDER BY name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5u);
     const bool has_out[] = {true, true, true, false, false};
@@ -4572,10 +4566,10 @@ TEST_F(QueryExecutorTest, BarePatternInBooleanOperators) {
 
 TEST_F(QueryExecutorTest, BarePatternInCaseWhen) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(*executor_,
-                           "MATCH (n:Person) "
-                           "RETURN n.name AS name, CASE WHEN (n)-[:KNOWS]->(:Person) THEN 1 ELSE 0 END AS v "
-                           "ORDER BY name");
+    auto result =
+        execSync(*executor_, "MATCH (n:Person) "
+                             "RETURN n.name AS name, CASE WHEN (n)-[:KNOWS]->(:Person) THEN 1 ELSE 0 END AS v "
+                             "ORDER BY name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5u);
     const int64_t expected[] = {1, 1, 1, 0, 0};
@@ -4587,11 +4581,10 @@ TEST_F(QueryExecutorTest, BarePatternInCaseWhen) {
 
 TEST_F(QueryExecutorTest, BarePatternInAnyWherePredicate) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(
-        *executor_,
-        "MATCH (n:Person) "
-        "RETURN n.name AS name, ANY(x IN [1, 2] WHERE (n)-[:KNOWS]->(:Person)) AS any_out "
-        "ORDER BY name");
+    auto result =
+        execSync(*executor_, "MATCH (n:Person) "
+                             "RETURN n.name AS name, ANY(x IN [1, 2] WHERE (n)-[:KNOWS]->(:Person)) AS any_out "
+                             "ORDER BY name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5u);
     const bool expected[] = {true, true, true, false, false};
@@ -4603,11 +4596,9 @@ TEST_F(QueryExecutorTest, BarePatternInAnyWherePredicate) {
 
 TEST_F(QueryExecutorTest, BarePatternInListComprehensionWhere) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(
-        *executor_,
-        "MATCH (n:Person) "
-        "RETURN n.name AS name, [x IN [1, 2] WHERE (n)-[:KNOWS]->(:Person)] AS xs "
-        "ORDER BY name");
+    auto result = execSync(*executor_, "MATCH (n:Person) "
+                                       "RETURN n.name AS name, [x IN [1, 2] WHERE (n)-[:KNOWS]->(:Person)] AS xs "
+                                       "ORDER BY name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5u);
     const size_t expected_sizes[] = {2, 2, 2, 0, 0};
@@ -4620,11 +4611,10 @@ TEST_F(QueryExecutorTest, BarePatternInListComprehensionWhere) {
 
 TEST_F(QueryExecutorTest, ExistsPatternSubqueryWithWhereInReturn) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(*executor_,
-                           "MATCH (n:Person) "
-                           "RETURN n.name AS name, "
-                           "       EXISTS { (n)-[:KNOWS]->(m:Person) WHERE m.name = 'name2' } AS has_n2 "
-                           "ORDER BY name");
+    auto result = execSync(*executor_, "MATCH (n:Person) "
+                                       "RETURN n.name AS name, "
+                                       "       EXISTS { (n)-[:KNOWS]->(m:Person) WHERE m.name = 'name2' } AS has_n2 "
+                                       "ORDER BY name");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 5u);
     // Only name1 has an outgoing KNOWS edge to name2.
@@ -4697,33 +4687,26 @@ TEST_F(QueryExecutorTest, PatternComprehensionInsideListComprehension) {
 
 TEST_F(QueryExecutorTest, BarePatternExpressionInOrderByError) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(
-        *executor_,
-        "MATCH (n:Person) RETURN n.name AS name ORDER BY (n)-[:KNOWS]->(:Person), name");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.name AS name ORDER BY (n)-[:KNOWS]->(:Person), name");
     EXPECT_FALSE(result.error.empty());
 }
 
 TEST_F(QueryExecutorTest, BarePatternExpressionInWithError) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(
-        *executor_,
-        "MATCH (n:Person) WITH (n)-[:KNOWS]->(:Person) AS has_out RETURN has_out");
+    auto result = execSync(*executor_, "MATCH (n:Person) WITH (n)-[:KNOWS]->(:Person) AS has_out RETURN has_out");
     EXPECT_FALSE(result.error.empty());
 }
 
 TEST_F(QueryExecutorTest, BarePatternExpressionInFunctionArgError) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
-    auto result = execSync(
-        *executor_,
-        "MATCH (n:Person) RETURN coalesce((n)-[:KNOWS]->(:Person), false) AS has_out");
+    auto result = execSync(*executor_, "MATCH (n:Person) RETURN coalesce((n)-[:KNOWS]->(:Person), false) AS has_out");
     EXPECT_FALSE(result.error.empty());
 }
 
 TEST_F(QueryExecutorTest, BarePatternExpressionInCaseThenError) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
     auto result = execSync(
-        *executor_,
-        "MATCH (n:Person) RETURN CASE WHEN true THEN (n)-[:KNOWS]->(:Person) ELSE false END AS has_out");
+        *executor_, "MATCH (n:Person) RETURN CASE WHEN true THEN (n)-[:KNOWS]->(:Person) ELSE false END AS has_out");
     EXPECT_FALSE(result.error.empty());
 }
 
