@@ -30,8 +30,9 @@ int main(int argc, char* argv[]) {
     args::ValueFlag<std::string> host_flag(parser, "host", "Server address (default: 127.0.0.1)", {"host"},
                                            "127.0.0.1");
     args::ValueFlag<int> port_flag(parser, "port", "Server port (default: 9090)", {"port"}, 9090);
-    args::ValueFlag<std::string> data_dir_flag(parser, "path", "Path to CSV data directory", {"data-dir"},
-                                               args::Options::Required);
+    args::ValueFlag<std::string> data_dir_flag(
+        parser, "path", "CSV data directory; required when scanning, optional with --nodes/--relationships",
+        {"data-dir"});
     args::ValueFlagList<std::string> nodes_flag(
         parser, "spec", "Explicit vertex file mapping: Label[:Label...]=file (repeatable)", {"nodes"});
     args::ValueFlagList<std::string> relationships_flag(
@@ -39,10 +40,10 @@ int main(int argc, char* argv[]) {
     args::ValueFlag<std::string> delimiter_flag(parser, "char", "CSV delimiter (default: '|'; only '|' supported)",
                                                 {"delimiter"}, "|");
     args::ValueFlag<int> batch_size_flag(parser, "n", "Records per RPC batch (default: 500)", {"batch-size"}, 500);
-    args::ValueFlag<int> eventbase_threads_flag(parser, "n", "Number of EventBase/RPC client threads (default: 1)",
-                                                {"eventbase-threads", "rpc-threads"}, 1);
-    args::ValueFlag<int> concurrency_flag(parser, "n", "Max parallel CSV file loading tasks (default: 1)",
-                                          {"concurrency", "loader-concurrency"}, 1);
+    args::ValueFlag<int> rpc_connections_flag(parser, "n", "Number of concurrent RPC connections (default: 1)",
+                                              {"rpc-connections"}, 1);
+    args::ValueFlag<int> parallel_files_flag(parser, "n", "Max number of CSV files loaded in parallel (default: 1)",
+                                             {"parallel-files"}, 1);
 
     try {
         parser.ParseCLI(argc, argv);
@@ -66,11 +67,13 @@ int main(int argc, char* argv[]) {
     const std::vector<std::string> rel_specs = args::get(relationships_flag);
     const std::string delimiter = args::get(delimiter_flag);
     const int batch_size = args::get(batch_size_flag);
-    const int eventbase_threads = args::get(eventbase_threads_flag);
-    const int concurrency = args::get(concurrency_flag);
+    const int rpc_connections = args::get(rpc_connections_flag);
+    const int parallel_files = args::get(parallel_files_flag);
 
-    if (data_dir.empty()) {
-        std::cerr << "Error: --data-dir must not be empty\n";
+    // --data-dir is only mandatory as the scan root of directory-scan mode.
+    // In CLI mode it merely anchors relative --nodes/--relationships paths.
+    if (node_specs.empty() && rel_specs.empty() && data_dir.empty()) {
+        std::cerr << "Error: --data-dir is required when neither --nodes nor --relationships is given\n";
         std::cerr << parser;
         return 1;
     }
@@ -79,8 +82,8 @@ int main(int argc, char* argv[]) {
         std::cerr << parser;
         return 1;
     }
-    if (batch_size <= 0 || eventbase_threads <= 0 || concurrency <= 0) {
-        std::cerr << "Error: --batch-size/--eventbase-threads/--concurrency must be positive\n";
+    if (batch_size <= 0 || rpc_connections <= 0 || parallel_files <= 0) {
+        std::cerr << "Error: --batch-size/--rpc-connections/--parallel-files must be positive\n";
         std::cerr << parser;
         return 1;
     }
@@ -142,20 +145,20 @@ int main(int argc, char* argv[]) {
 
     std::vector<std::unique_ptr<eugraph::shell::EuGraphRpcClient>> extra_clients;
     std::vector<eugraph::shell::EuGraphRpcClient*> clients;
-    clients.reserve(eventbase_threads);
+    clients.reserve(rpc_connections);
     clients.push_back(&client);
-    for (int i = 1; i < eventbase_threads; i++) {
+    for (int i = 1; i < rpc_connections; i++) {
         auto extra = std::make_unique<eugraph::shell::EuGraphRpcClient>(host, port);
         if (!extra->connect()) {
-            spdlog::error("[loader] Failed to connect extra EventBase client at {}:{}", host, port);
+            spdlog::error("[loader] Failed to open extra RPC connection to {}:{}", host, port);
             return 1;
         }
         extra_clients.push_back(std::move(extra));
         clients.push_back(extra_clients.back().get());
     }
 
-    spdlog::info("[loader] Connected to {}:{} with {} EventBase client(s), concurrency={}", host, port, clients.size(),
-                 concurrency);
+    spdlog::info("[loader] Connected to {}:{} with {} RPC connection(s), parallel-files={}", host, port, clients.size(),
+                 parallel_files);
 
     spdlog::info("[loader] Creating labels...");
     eugraph::loader::createLabels(client, label_schemas);
@@ -164,14 +167,14 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("[loader] Loading vertex data...");
     auto id_maps = eugraph::loader::loadVertices(clients, vertex_files, label_schemas, merged_label_props, batch_size,
-                                                 concurrency);
+                                                 parallel_files);
     spdlog::info("[loader] Vertex loading complete. {} groups in ID map", id_maps.group_id_map.size());
 
     spdlog::info("[loader] Creating unique indexes on ID properties...");
     eugraph::loader::createUniqueIdIndexes(client, label_schemas);
 
     spdlog::info("[loader] Loading edge data...");
-    eugraph::loader::loadEdges(clients, edge_files, edge_schemas, id_maps, batch_size, concurrency);
+    eugraph::loader::loadEdges(clients, edge_files, edge_schemas, id_maps, batch_size, parallel_files);
     spdlog::info("[loader] Edge loading complete.");
 
     spdlog::info("[loader] All data loaded successfully.");

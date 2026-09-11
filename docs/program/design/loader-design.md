@@ -35,7 +35,7 @@ eugraph-loader --host 127.0.0.1 --port 9090 \
 | `--nodes=[Label[:Label]...=]<file>` | 点文件映射，可重复。`Label` 列表第一个为主标签，属性存放在主标签下。 |
 | `--relationships=[Type=]<file>` | 边文件映射，可重复。关系类型名可为任意字符串（含下划线）。 |
 | `--delimiter <char>` | CSV 分隔符，当前仅支持 `\|`。 |
-| `--data-dir` | 文件路径基准目录；`--nodes` / `--relationships` 中的相对路径基于此。 |
+| `--data-dir` | 文件路径基准目录；`--nodes` / `--relationships` 中的相对路径基于此。目录扫描模式下为扫描根目录（此时必填）；CLI 模式下全部使用绝对路径时可不填。 |
 
 ## 3. 目录扫描模式（兼容）
 
@@ -130,8 +130,8 @@ Loader 通过扩展后的 RPC `batchInsertVertices` 一次写入多标签顶点�
    c. 批量插入边
 ```
 
-默认串行（`--concurrency 1`）。配置 `--eventbase-threads N --concurrency M` 后，
-loader 创建 `N` 个独立 RPC EventBase 客户端，并用最多 `M` 个工作线程并发处理 CSV 文件：
+默认串行（`--parallel-files 1`）。配置 `--rpc-connections N --parallel-files M` 后，
+loader 创建 `N` 个独立 RPC 连接（各自一个 EventBase 线程），并用最多 `M` 个工作线程并发处理 CSV 文件：
 先并行装载 vertex 文件，待点映射全部就绪后再并行装载 edge 文件。
 
 ## 8. 服务端扩展
