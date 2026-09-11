@@ -15,6 +15,8 @@ RPC 层与通信协议见 [service/rpc-service.md](../service/rpc-service.md)。
 
 `--compute-threads` 控制查询计算线程数；`--storage-io-threads` 控制存储 IO 池（`IoScheduler`），`--thrift-io-threads` 控制 Thrift IO/handler 池。
 
+注意第 2 步的 `IoScheduler` 池与第 6 步的 Thrift 池是**两个独立对象**，只是默认规模相同。Thrift / RPC 模式下查询执行跑在 Thrift IO 池上，每次存储调用跳转到 `IoScheduler` 池，`--compute-threads` 不参与；Bolt 模式下 session 处理被调度到 Compute 池。详见 [运行时执行模型](../../query/engine/execution-model.md)。
+
 ## Shell
 
 Shell 通过 RPC 连接 server，查询结果通过 `subscribeInline` 流式打印。
