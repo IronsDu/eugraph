@@ -13,7 +13,6 @@ folly::coro::AsyncGenerator<DataChunk> DistinctPhysicalOp::executeChunk() {
     auto child_gen = child_->executeChunk();
     while (auto chunk = co_await child_gen.next()) {
         const size_t n = chunk->numRows();
-        const size_t cols = chunk->numColumns();
 
         SelectionVector new_sel;
         new_sel.is_identity = false;

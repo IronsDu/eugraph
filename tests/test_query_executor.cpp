@@ -3,12 +3,14 @@
 #include "common/types/graph_types.hpp"
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row_identity.hpp"
+
 #include "query/executor/query_executor.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
+#include "test_chunk_helpers.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -20,23 +22,6 @@ using namespace eugraph::compute;
 using namespace folly::coro;
 
 namespace {
-
-/// Test-side chunk -> rows helper. DataChunk::toRows() was removed from the
-/// production API (it materialised a std::vector<Value> per row just to be read
-/// once); tests still want plain rows, so they build them here.
-inline std::vector<Row> chunkToRows(const DataChunk& ch) {
-    std::vector<Row> rows;
-    const size_t n = ch.numRows();
-    rows.reserve(n);
-    for (size_t r = 0; r < n; ++r) {
-        Row row;
-        row.reserve(ch.numColumns());
-        for (size_t c = 0; c < ch.numColumns(); ++c)
-            row.push_back(ch.columns[c].getValue(r));
-        rows.push_back(std::move(row));
-    }
-    return rows;
-}
 
 std::string getTestDbPath() {
     return "/tmp/eugraph_executor_test_" + std::to_string(getpid());
@@ -190,7 +175,7 @@ ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
     blockingWait(co_invoke([&]() -> Task<void> {
         try {
             while (auto chunk = co_await gen.next()) {
-                auto rows = chunkToRows(*chunk);
+                auto rows = eugraph::test::chunkToRows(*chunk);
                 for (auto& row : rows) {
                     result.rows.push_back(std::move(row));
                 }
@@ -218,7 +203,7 @@ ExecutionResult execSyncParams(QueryExecutor& executor, const std::string& query
     blockingWait(co_invoke([&]() -> Task<void> {
         try {
             while (auto chunk = co_await gen.next()) {
-                auto rows = chunkToRows(*chunk);
+                auto rows = eugraph::test::chunkToRows(*chunk);
                 for (auto& row : rows) {
                     result.rows.push_back(std::move(row));
                 }
@@ -6513,7 +6498,7 @@ TEST_F(QueryExecutorTest, TckUnwind1Scenario14UnwindWithMerge) {
     auto gen = std::move(ctx->gen);
     blockingWait(co_invoke([&]() -> Task<void> {
         while (auto chunk = co_await gen.next()) {
-            auto rows = chunkToRows(*chunk);
+            auto rows = eugraph::test::chunkToRows(*chunk);
             for (auto& row : rows)
                 result.rows.push_back(std::move(row));
         }
