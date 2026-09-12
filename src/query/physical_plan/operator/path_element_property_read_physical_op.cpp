@@ -24,7 +24,7 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
         std::vector<Value> path_out(row_count);
 
         for (size_t i = 0; i < row_count; ++i) {
-            if (path_col_idx_ < 0 || static_cast<size_t>(path_col_idx_) >= input_cols)
+            if (path_col_idx_ >= input_cols)
                 continue;
             Value val = chunk->columns[path_col_idx_].getValue(i);
             // Phase D: accept both PathTopology (topology-stage) and PathValue
