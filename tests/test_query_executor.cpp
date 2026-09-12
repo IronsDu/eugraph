@@ -2,6 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 #include "common/types/temporal_value.hpp"
+#include "query/dataset/row_identity.hpp"
 #include "query/executor/query_executor.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
@@ -19,6 +20,23 @@ using namespace eugraph::compute;
 using namespace folly::coro;
 
 namespace {
+
+/// Test-side chunk -> rows helper. DataChunk::toRows() was removed from the
+/// production API (it materialised a std::vector<Value> per row just to be read
+/// once); tests still want plain rows, so they build them here.
+inline std::vector<Row> chunkToRows(const DataChunk& ch) {
+    std::vector<Row> rows;
+    const size_t n = ch.numRows();
+    rows.reserve(n);
+    for (size_t r = 0; r < n; ++r) {
+        Row row;
+        row.reserve(ch.numColumns());
+        for (size_t c = 0; c < ch.numColumns(); ++c)
+            row.push_back(ch.columns[c].getValue(r));
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
 
 std::string getTestDbPath() {
     return "/tmp/eugraph_executor_test_" + std::to_string(getpid());
@@ -172,7 +190,7 @@ ExecutionResult execSync(QueryExecutor& executor, const std::string& query) {
     blockingWait(co_invoke([&]() -> Task<void> {
         try {
             while (auto chunk = co_await gen.next()) {
-                auto rows = chunk->toRows();
+                auto rows = chunkToRows(*chunk);
                 for (auto& row : rows) {
                     result.rows.push_back(std::move(row));
                 }
@@ -200,7 +218,7 @@ ExecutionResult execSyncParams(QueryExecutor& executor, const std::string& query
     blockingWait(co_invoke([&]() -> Task<void> {
         try {
             while (auto chunk = co_await gen.next()) {
-                auto rows = chunk->toRows();
+                auto rows = chunkToRows(*chunk);
                 for (auto& row : rows) {
                     result.rows.push_back(std::move(row));
                 }
@@ -2852,6 +2870,104 @@ TEST_F(QueryExecutorWithTest, WithDistinct) {
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2);
+}
+
+// Regression: `WITH DISTINCT <vertex>` must collapse a vertex the way
+// `count(DISTINCT <vertex>)` already did.
+//
+// `MATCH (n:Person)-[:KNOWS]-(m)` emits each vertex once per incident edge, and
+// the two directions of an undirected match can deliver the same entity under
+// different runtime representations (VertexRef from the topology stage,
+// VertexValue once a whole object was constructed). The old DISTINCT key
+// compared std::variant values, whose operator== checks the variant index
+// first, so those two representations counted as distinct and the query kept
+// each vertex twice -- observed on sf0.1 as 2514 rows where the answer is 1357,
+// while `count(DISTINCT m)` correctly returned 1357. The two spellings of the
+// same question must agree.
+//
+// The representation split does not reproduce in a fixture this small (all rows
+// arrive as VertexValue), so the canonicalisation itself is covered directly by
+// RowIdentityTest.EntityRepresentationsCollapse below; this test guards the
+// end-to-end agreement of the two spellings.
+TEST_F(QueryExecutorWithTest, WithDistinctVertexMatchesCountDistinct) {
+    insertPersonWithEdges(); // persons 1,2,3 + KNOWS 1-2, 1-3, 2-3
+
+    auto distinct_result = execSync(*executor_, "MATCH (n:Person)-[:KNOWS]-(m) WITH DISTINCT m RETURN count(*) AS c");
+    ASSERT_TRUE(distinct_result.error.empty()) << distinct_result.error;
+    ASSERT_EQ(distinct_result.rows.size(), 1u);
+    const auto distinct_count = std::get<int64_t>(distinct_result.rows[0][0]);
+
+    // Undirected KNOWS over 3 edges yields 6 (vertex, edge) rows spanning 3 vertices.
+    EXPECT_EQ(distinct_count, 3) << "WITH DISTINCT m collapsed to " << distinct_count;
+    EXPECT_LT(distinct_count, 6) << "undirected duplicates were not collapsed at all";
+
+    auto aggregate_result = execSync(*executor_, "MATCH (n:Person)-[:KNOWS]-(m) RETURN count(DISTINCT m) AS c");
+    ASSERT_TRUE(aggregate_result.error.empty()) << aggregate_result.error;
+    ASSERT_EQ(aggregate_result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(aggregate_result.rows[0][0]), distinct_count)
+        << "WITH DISTINCT and count(DISTINCT) disagree on the same pattern";
+}
+
+// The DISTINCT key must fold a graph entity to its id, whichever runtime
+// representation the row happens to carry, so that the deduplicating path
+// (`WITH DISTINCT`) agrees with the aggregate path (`count(DISTINCT)`) that was
+// already correct on sf0.1.
+//
+// Caveat learned while writing this: with ANY-typed columns both representations
+// already hash to the same value, so this test documents and locks the intended
+// invariant but does NOT reproduce the sf0.1 disagreement (2514 vs 1357) by
+// itself -- see the header comment in row_identity.hpp. The end-to-end agreement
+// is covered by WithDistinctVertexMatchesCountDistinct above.
+TEST(RowIdentityTest, EntityRepresentationsCollapse) {
+    const VertexId vid = 42;
+
+    DataChunk ref_chunk;
+    auto& ref_col = ref_chunk.addColumn(binder::BoundTypeKind::VERTEX_REF);
+    ref_col.reserve(1);
+    ref_col.setValue(0, Value(VertexRef{vid}));
+    ref_chunk.count = 1;
+
+    DataChunk value_chunk;
+    auto& value_col = value_chunk.addColumn(binder::BoundTypeKind::VERTEX);
+    value_col.reserve(1);
+    VertexValue vv;
+    vv.id = vid;
+    value_col.setValue(0, Value(vv));
+    value_chunk.count = 1;
+
+    RowDigest ref_key;
+    RowDigest value_key;
+    digestChunkRow(ref_chunk, 0, ref_key);
+    digestChunkRow(value_chunk, 0, value_key);
+
+    EXPECT_EQ(ref_key, value_key) << "VertexRef and VertexValue for the same vertex must share a DISTINCT key";
+    EXPECT_EQ(RowDigestHash{}(ref_key), RowDigestHash{}(value_key));
+
+    // A different vertex must NOT collapse with it.
+    DataChunk other_chunk;
+    auto& other_col = other_chunk.addColumn(binder::BoundTypeKind::VERTEX_REF);
+    other_col.reserve(1);
+    other_col.setValue(0, Value(VertexRef{vid + 1}));
+    other_chunk.count = 1;
+    RowDigest other_key;
+    digestChunkRow(other_chunk, 0, other_key);
+    EXPECT_NE(ref_key, other_key);
+
+    // Non-entity values keep their full value identity (two different strings
+    // must not collapse just because both are non-entities).
+    DataChunk s1, s2;
+    auto& c1 = s1.addColumn(binder::BoundTypeKind::STRING);
+    auto& c2 = s2.addColumn(binder::BoundTypeKind::STRING);
+    c1.reserve(1);
+    c2.reserve(1);
+    c1.setValue(0, Value(std::string("a")));
+    c2.setValue(0, Value(std::string("b")));
+    s1.count = 1;
+    s2.count = 1;
+    RowDigest k1, k2;
+    digestChunkRow(s1, 0, k1);
+    digestChunkRow(s2, 0, k2);
+    EXPECT_NE(k1, k2);
 }
 
 TEST_F(QueryExecutorWithTest, WithWhere) {
@@ -6397,7 +6513,7 @@ TEST_F(QueryExecutorTest, TckUnwind1Scenario14UnwindWithMerge) {
     auto gen = std::move(ctx->gen);
     blockingWait(co_invoke([&]() -> Task<void> {
         while (auto chunk = co_await gen.next()) {
-            auto rows = chunk->toRows();
+            auto rows = chunkToRows(*chunk);
             for (auto& row : rows)
                 result.rows.push_back(std::move(row));
         }

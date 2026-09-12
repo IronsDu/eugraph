@@ -1,4 +1,5 @@
 #include "query/physical_plan/operator/expand_physical_op.hpp"
+
 #include "common/types/graph_types.hpp"
 #include "query/dataset/row.hpp"
 
@@ -179,25 +180,32 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         }
     }
 
-    while (auto chunk = co_await child_gen.next()) {
-        auto rows = chunk->toRows();
-        size_t input_cols = chunk->numColumns();
+    // Per-edge accumulation record. Declared here (rather than inside the chunk
+    // loop) so the vector below can be reused across chunks.
+    struct EdgeEntryScratch {
+        size_t src_row;
+        VertexId dst_id;
+        EdgeId edge_id;
+        EdgeLabelId edge_label_id;
+        uint64_t seq;
+        // For UNDIRECTED split: true when the edge was found via the OUT
+        // adjacency list (physical src = liker, dst = neighbor); false when
+        // found via IN (physical src = neighbor, dst = liker).
+        bool physical_out = true;
+    };
+    // Reused across chunks: clearing keeps the capacity, so the per-chunk heap
+    // traffic for edge accumulation drops to (near) zero. `edges` grows to the
+    // chunk's expansion count, which is the hot allocation otherwise.
+    std::vector<EdgeEntryScratch> edges;
+    std::unordered_set<EdgeId> allowed_seen;
 
-        // Collect output rows: DICTIONARY input + FLAT new columns
-        // First pass: collect edges per source row
-        struct EdgeEntry {
-            size_t src_row;
-            VertexId dst_id;
-            EdgeId edge_id;
-            EdgeLabelId edge_label_id;
-            uint64_t seq;
-            // For UNDIRECTED split: true when the edge was found via the OUT
-            // adjacency list (physical src = liker, dst = neighbor); false
-            // when found via IN (physical src = neighbor, dst = liker).
-            bool physical_out = true;
-        };
-        std::vector<EdgeEntry> edges;
-        std::unordered_set<EdgeId> allowed_seen;
+    while (auto chunk = co_await child_gen.next()) {
+        const size_t input_rows = chunk->numRows();
+        const size_t input_cols = chunk->numColumns();
+
+        // Reset per chunk; capacity is retained (see the hoisted declarations).
+        edges.clear();
+        allowed_seen.clear();
 
         auto scanOneDirection = [&](VertexId src_id, size_t src_row, Direction scan_dir) -> folly::coro::Task<void> {
             if (allowed_filter) {
@@ -231,12 +239,12 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 while (auto edge_batch = co_await edge_gen.next()) {
                     for (const auto& entry : *edge_batch) {
                         if (dst_bound_) {
-                            const Value& bval = rows[src_row][dst_col_idx_];
+                            const Value& bval = chunk->columns[dst_col_idx_].getValue(src_row);
                             if (vertexIdFromValue(bval) != entry.neighbor_id)
                                 continue;
                         }
                         if (edge_bound_) {
-                            const Value& eval = rows[src_row][edge_col_idx_];
+                            const Value& eval = chunk->columns[edge_col_idx_].getValue(src_row);
                             if (edgeIdFromValue(eval) != entry.edge_id)
                                 continue;
                         }
@@ -254,10 +262,10 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             std::vector<VertexId> src_ids;
             std::unordered_map<VertexId, std::vector<size_t>> rows_of_src;
             std::unordered_set<VertexId> seen_src;
-            for (size_t src_row = 0; src_row < rows.size(); ++src_row) {
+            for (size_t src_row = 0; src_row < input_rows; ++src_row) {
                 VertexId src_id = INVALID_VERTEX_ID;
-                if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[src_row].size()) {
-                    const auto& val = rows[src_row][src_col_idx_];
+                if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < input_cols) {
+                    const Value& val = chunk->columns[src_col_idx_].getValue(src_row);
                     if (std::holds_alternative<VertexValue>(val))
                         src_id = std::get<VertexValue>(val).id;
                     else if (std::holds_alternative<VertexRef>(val))
@@ -291,10 +299,10 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         }
 
         if (!batched) {
-            for (size_t src_row = 0; src_row < rows.size(); ++src_row) {
+            for (size_t src_row = 0; src_row < input_rows; ++src_row) {
                 VertexId src_id = INVALID_VERTEX_ID;
-                if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[src_row].size()) {
-                    const auto& val = rows[src_row][src_col_idx_];
+                if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < input_cols) {
+                    const Value& val = chunk->columns[src_col_idx_].getValue(src_row);
                     if (std::holds_alternative<VertexValue>(val)) {
                         src_id = std::get<VertexValue>(val).id;
                     } else if (std::holds_alternative<VertexRef>(val)) {
@@ -322,7 +330,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                     for (size_t ei = before_out; ei < before_in; ++ei)
                         seen.insert(edges[ei].edge_id);
                     edges.erase(std::remove_if(edges.begin() + static_cast<long>(before_in), edges.end(),
-                                               [&seen](const EdgeEntry& e) {
+                                               [&seen](const EdgeEntryScratch& e) {
                                                    if (seen.count(e.edge_id))
                                                        return true;
                                                    seen.insert(e.edge_id);
@@ -364,12 +372,12 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                         while (auto edge_batch = co_await edge_gen.next()) {
                             for (const auto& entry : *edge_batch) {
                                 if (dst_bound_) {
-                                    const Value& bval = rows[src_row][dst_col_idx_];
+                                    const Value& bval = chunk->columns[dst_col_idx_].getValue(src_row);
                                     if (vertexIdFromValue(bval) != entry.neighbor_id)
                                         continue;
                                 }
                                 if (edge_bound_) {
-                                    const Value& eval = rows[src_row][edge_col_idx_];
+                                    const Value& eval = chunk->columns[edge_col_idx_].getValue(src_row);
                                     if (edgeIdFromValue(eval) != entry.edge_id)
                                         continue;
                                 }
@@ -396,7 +404,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             for (size_t i = 0; i < neighbors.size() && i < labels_batch.size(); ++i)
                 label_map[neighbors[i]] = std::move(labels_batch[i]);
             edges.erase(std::remove_if(edges.begin(), edges.end(),
-                                       [&](const EdgeEntry& e) {
+                                       [&](const EdgeEntryScratch& e) {
                                            auto it = label_map.find(e.dst_id);
                                            if (it == label_map.end())
                                                return true;
@@ -459,8 +467,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             }
             if (!edge_bound_ && !edge_var_.empty()) {
                 VertexId sid = INVALID_VERTEX_ID;
-                if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[edges[i].src_row].size()) {
-                    const auto& val = rows[edges[i].src_row][src_col_idx_];
+                if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < input_cols) {
+                    const Value& val = chunk->columns[src_col_idx_].getValue(edges[i].src_row);
                     if (std::holds_alternative<VertexValue>(val))
                         sid = std::get<VertexValue>(val).id;
                     else if (std::holds_alternative<VertexRef>(val))

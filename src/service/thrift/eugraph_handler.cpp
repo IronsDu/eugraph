@@ -72,11 +72,15 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
             }
         }
         eugraph::thrift_service::ResultRowBatch thrift_batch;
-        auto rows = chunk->toRows();
-        for (auto& row : rows) {
+        // Serialise straight out of the columnar chunk; materialising rows first
+        // allocated a heap vector per row and copied every cell for a single
+        // read each.
+        const size_t chunk_rows = chunk->numRows();
+        const size_t chunk_cols = chunk->numColumns();
+        for (size_t r = 0; r < chunk_rows; ++r) {
             eugraph::thrift_service::ResultRow row_resp;
-            for (size_t col_idx = 0; col_idx < row.size(); ++col_idx) {
-                const auto& val = row[col_idx];
+            for (size_t col_idx = 0; col_idx < chunk_cols; ++col_idx) {
+                const eugraph::Value& val = chunk->columns[col_idx].getValue(r);
                 const std::vector<eugraph::LabelId>* order = nullptr;
                 if (col_idx < ctx->columns.size()) {
                     auto it = ctx->label_order.find(ctx->columns[col_idx]);
@@ -88,7 +92,7 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
             }
             thrift_batch.rows()->push_back(std::move(row_resp));
         }
-        total_rows += rows.size();
+        total_rows += chunk_rows;
         co_yield std::move(thrift_batch);
     }
     if (ctx->should_commit) {

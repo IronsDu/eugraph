@@ -530,20 +530,6 @@ struct DataChunk {
     }
 
     /// Convert to legacy Row vector (for transition / RPC output).
-    std::vector<Row> toRows() const {
-        std::vector<Row> rows;
-        size_t n = sel.is_identity ? count : sel.count;
-        rows.reserve(n);
-        for (size_t r = 0; r < n; ++r) {
-            Row row;
-            row.reserve(columns.size());
-            for (size_t c = 0; c < columns.size(); ++c) {
-                row.push_back(getValue(c, r));
-            }
-            rows.push_back(std::move(row));
-        }
-        return rows;
-    }
 
     /// Number of columns.
     size_t numColumns() const {

@@ -115,7 +115,7 @@ private:
 /// Convert a RowBatch to DataChunk. Infers column types from first non-null value.
 DataChunk rowBatchToDataChunk(const RowBatch& batch);
 
-/// Convert DataChunk to RowBatch (delegates to DataChunk::toRows()).
+/// Convert DataChunk to RowBatch (legacy execute() bridge).
 RowBatch dataChunkToRowBatch(const DataChunk& chunk);
 
 /// Wrap an AsyncGenerator<RowBatch> as AsyncGenerator<DataChunk>.

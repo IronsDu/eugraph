@@ -13,14 +13,20 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
     auto child_gen = child_->executeChunk();
 
     while (auto chunk = co_await child_gen.next()) {
-        auto rows = chunk->toRows();
-        size_t input_cols = chunk->numColumns();
-        size_t row_count = rows.size();
+        const size_t input_cols = chunk->numColumns();
+        const size_t row_count = chunk->numRows();
+
+        // The path column is rebuilt here (PathTopology -> PathValue, then
+        // element enrichment). Previously this rewrote a materialised
+        // std::vector<Row> copy of the whole chunk just to feed the output
+        // column; the payload only ever lives for this loop, so it is kept in a
+        // per-column buffer instead of a full row materialisation.
+        std::vector<Value> path_out(row_count);
 
         for (size_t i = 0; i < row_count; ++i) {
-            if (path_col_idx_ >= rows[i].size())
+            if (path_col_idx_ < 0 || static_cast<size_t>(path_col_idx_) >= input_cols)
                 continue;
-            auto& val = rows[i][path_col_idx_];
+            Value val = chunk->columns[path_col_idx_].getValue(i);
             // Phase D: accept both PathTopology (topology-stage) and PathValue
             // (legacy RBO path). Upgrade PathTopology to PathValue in-place.
             if (std::holds_alternative<PathTopology>(val)) {
@@ -40,10 +46,12 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
                         pv.elements.push_back(std::move(ee));
                     }
                 }
-                rows[i][path_col_idx_] = Value(std::move(pv));
+                val = Value(std::move(pv));
             }
-            if (!std::holds_alternative<PathValue>(val))
+            if (!std::holds_alternative<PathValue>(val)) {
+                path_out[i] = std::move(val);
                 continue;
+            }
             auto& pv = std::get<PathValue>(val);
 
             for (auto& elem : pv.elements) {
@@ -68,6 +76,7 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
                     }
                 }
             }
+            path_out[i] = std::move(val);
         }
 
         DataChunk output;
@@ -77,7 +86,7 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
             if (c == path_col_idx_) {
                 auto col = Column::flat(output_types_[c].kind, row_count);
                 for (size_t i = 0; i < row_count; ++i)
-                    col.setValue(i, rows[i][c]);
+                    col.setValue(i, path_out[i]);
                 output.columns.push_back(std::move(col));
             } else {
                 auto& src_col = chunk->columns[c];

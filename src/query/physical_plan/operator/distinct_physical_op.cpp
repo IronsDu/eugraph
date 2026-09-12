@@ -1,23 +1,28 @@
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
-#include "query/dataset/row.hpp"
+#include "query/dataset/row_identity.hpp"
+
+#include <functional>
+#include <optional>
 
 namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> DistinctPhysicalOp::executeChunk() {
-    std::unordered_set<Row, RowHash, RowEqual> seen;
+    std::unordered_set<RowDigest, RowDigestHash> seen;
 
     auto child_gen = child_->executeChunk();
     while (auto chunk = co_await child_gen.next()) {
-        size_t n = chunk->numRows();
-        std::vector<Row> rows = chunk->toRows();
+        const size_t n = chunk->numRows();
+        const size_t cols = chunk->numColumns();
 
         SelectionVector new_sel;
         new_sel.is_identity = false;
         new_sel.indices.reserve(n);
 
+        RowDigest key;
         for (size_t i = 0; i < n; ++i) {
-            if (seen.insert(rows[i]).second) {
+            digestChunkRow(*chunk, i, key);
+            if (seen.insert(key).second) {
                 new_sel.indices.push_back(static_cast<uint32_t>(i));
             }
         }

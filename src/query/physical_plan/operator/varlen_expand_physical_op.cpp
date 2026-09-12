@@ -204,7 +204,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
     };
 
     while (auto chunk = co_await child_gen.next()) {
-        auto rows = chunk->toRows();
+        const size_t input_rows = chunk->numRows();
         size_t input_cols = chunk->numColumns();
 
         struct OutputEntry {
@@ -233,17 +233,17 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
             VertexId incoming_physical_dst = INVALID_VERTEX_ID;
         };
 
-        for (size_t src_row = 0; src_row < rows.size(); ++src_row) {
+        for (size_t src_row = 0; src_row < input_rows; ++src_row) {
             std::vector<EdgeId> expected_edge_ids;
             if (edge_list_bound_) {
-                if (edge_list_col_idx_ < 0 || static_cast<size_t>(edge_list_col_idx_) >= rows[src_row].size())
+                if (edge_list_col_idx_ < 0 || static_cast<size_t>(edge_list_col_idx_) >= input_cols)
                     continue;
-                expected_edge_ids = edgeIdsFromValue(rows[src_row][edge_list_col_idx_]);
+                expected_edge_ids = edgeIdsFromValue(chunk->columns[edge_list_col_idx_].getValue(src_row));
             }
 
             VertexId src_id = INVALID_VERTEX_ID;
-            if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < rows[src_row].size()) {
-                const auto& val = rows[src_row][src_col_idx_];
+            if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < input_cols) {
+                const Value& val = chunk->columns[src_col_idx_].getValue(src_row);
                 if (std::holds_alternative<VertexValue>(val)) {
                     src_id = std::get<VertexValue>(val).id;
                 } else if (std::holds_alternative<VertexRef>(val)) {
@@ -256,8 +256,8 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                 continue;
 
             EdgeId prev_edge_id = INVALID_EDGE_ID;
-            if (prev_edge_col_idx_ >= 0 && static_cast<size_t>(prev_edge_col_idx_) < rows[src_row].size()) {
-                prev_edge_id = edgeIdFromValue(rows[src_row][prev_edge_col_idx_]);
+            if (prev_edge_col_idx_ >= 0 && static_cast<size_t>(prev_edge_col_idx_) < input_cols) {
+                prev_edge_id = edgeIdFromValue(chunk->columns[prev_edge_col_idx_].getValue(src_row));
             }
 
             const bool src_matches = (src_filter_index_id_ == 0 || src_allowed.count(src_id) != 0);
@@ -281,7 +281,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
             if (min_hops_ == 0 && co_await hasDstLabels(src_id)) {
                 bool emit_identity = true;
                 if (dst_bound_) {
-                    VertexId bound_dst = vertexIdFromValue(rows[src_row][dst_col_idx_]);
+                    VertexId bound_dst = vertexIdFromValue(chunk->columns[dst_col_idx_].getValue(src_row));
                     if (bound_dst != src_id)
                         emit_identity = false;
                 }
@@ -293,7 +293,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                     identity_entry.dst_id = src_id;
                     if (!path_var_.empty()) {
                         PathValue pv;
-                        const auto& src_val = rows[src_row][src_col_idx_];
+                        const Value& src_val = chunk->columns[src_col_idx_].getValue(src_row);
                         if (std::holds_alternative<VertexValue>(src_val)) {
                             pv.elements.push_back(ValueStorage{src_val});
                         } else {
@@ -377,7 +377,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                     if (!path_var_.empty()) {
                         // Build path: stack vertices/edges + current edge + destination
                         PathValue pv;
-                        const auto& src_val = rows[src_row][src_col_idx_];
+                        const Value& src_val = chunk->columns[src_col_idx_].getValue(src_row);
                         if (std::holds_alternative<VertexValue>(src_val)) {
                             pv.elements.push_back(ValueStorage{src_val});
                         } else {
@@ -416,7 +416,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
                     }
                     bool emit = true;
                     if (dst_bound_) {
-                        VertexId bound_dst = vertexIdFromValue(rows[src_row][dst_col_idx_]);
+                        VertexId bound_dst = vertexIdFromValue(chunk->columns[dst_col_idx_].getValue(src_row));
                         if (bound_dst != edge.neighbor_id)
                             emit = false;
                     }
