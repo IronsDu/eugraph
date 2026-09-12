@@ -2,12 +2,14 @@
 
 #include "common/types/constants.hpp"
 #include "query/executor/query_executor.hpp"
+
 #include "query/parser/index_ddl_parser.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/io_scheduler.hpp"
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
+#include "test_chunk_helpers.hpp"
 
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
@@ -84,7 +86,7 @@ static ExecutionResult execSync(QueryExecutor& executor, const std::string& quer
     auto gen = std::move(ctx->gen);
     blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
         while (auto chunk = co_await gen.next()) {
-            auto rows = chunk->toRows();
+            auto rows = eugraph::test::chunkToRows(*chunk);
             for (auto& row : rows) {
                 result.rows.push_back(std::move(row));
             }
@@ -107,7 +109,7 @@ static std::vector<Row> runQuery(QueryExecutor& executor, const std::string& que
     auto gen = std::move(ctx->gen);
     blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
         while (auto chunk = co_await gen.next()) {
-            auto rows = chunk->toRows();
+            auto rows = eugraph::test::chunkToRows(*chunk);
             for (auto& row : rows) {
                 result.rows.push_back(std::move(row));
             }

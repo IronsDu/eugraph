@@ -522,10 +522,15 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         // would destroy generator-owned cursors on the caller (compute pool)
         // thread instead of the storage IO thread.
         while (auto chunk = co_await stream_ctx_->gen.next()) {
-            spdlog::info("[handlePull] got chunk: count={} columns={}", chunk->count, chunk->numColumns());
-            auto rows = chunk->toRows();
-            spdlog::info("[handlePull] converted to {} rows", rows.size());
-            for (auto& row : rows) {
+            const size_t chunk_rows = chunk->numRows();
+            const size_t chunk_cols = chunk->numColumns();
+            spdlog::info("[handlePull] got chunk: count={} columns={}", chunk_rows, chunk_cols);
+            // Serialise straight out of the columnar chunk. Materialising the
+            // chunk as std::vector<Row> first cost one heap vector per row and
+            // copied every cell, only for each row to be read once here.
+            std::vector<packstream::Value> record_fields;
+            record_fields.reserve(chunk_cols);
+            for (size_t r = 0; r < chunk_rows; ++r) {
                 if (limit >= 0 && fetched >= limit)
                     continue;
 
@@ -534,13 +539,15 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
                     first_record_at = std::chrono::steady_clock::now();
                 }
 
-                std::vector<packstream::Value> record_fields;
-                for (auto& val : row) {
-                    record_fields.push_back(valueToBolt(val, label_defs_, edge_label_defs_, negotiated_version_));
+                record_fields.clear();
+                for (size_t c = 0; c < chunk_cols; ++c) {
+                    record_fields.push_back(
+                        valueToBolt(chunk->columns[c].getValue(r), label_defs_, edge_label_defs_, negotiated_version_));
                 }
                 appendChunkedMessage(response, makeRecord(record_fields));
                 fetched++;
             }
+            spdlog::info("[handlePull] converted to {} rows", chunk_rows);
         }
 
         // Commit auto-commit transaction

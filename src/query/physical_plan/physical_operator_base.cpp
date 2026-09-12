@@ -44,8 +44,14 @@ DataChunk rowBatchToDataChunk(const RowBatch& batch) {
 
 RowBatch dataChunkToRowBatch(const DataChunk& chunk) {
     RowBatch rb;
-    auto rows = chunk.toRows();
-    for (auto& row : rows) {
+    const size_t n = chunk.numRows();
+    const size_t cols = chunk.numColumns();
+    rb.rows.reserve(n);
+    for (size_t r = 0; r < n; ++r) {
+        Row row;
+        row.reserve(cols);
+        for (size_t c = 0; c < cols; ++c)
+            row.push_back(chunk.columns[c].getValue(r));
         rb.push_back(std::move(row));
     }
     return rb;

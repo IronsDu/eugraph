@@ -680,3 +680,100 @@ Neo4j 让 `not((liker)-[:KNOWS]-(person))` 只在最终 20 行上求值；EuGrap
 **落点**：`requirement_collector.cpp`（收集时携带 region 而不是直接 `mergeVarRequirements`）、`column_rewrite.hpp` 的 `PlanRequirements` 类型、`column_rewrite.cpp` 的 `collectPlanRequirements` / `buildExtractionInfo`、以及 `memo.cpp` 的 enforcer 生成（按 region 选构造位置）。
 
 **为什么没有在本会话实施**：这是 `PlanRequirements` 的语义变更，牵动 DPL 全部下游（`lowerAliasPassthrough`、`rewriteExpr`、`dispatchProjectionExtract`）。本会话在同类承重语义上已失败 3 次（§8.6 两条 + §8.11），且该改动必须一次做对才能保住 519/519 与 TCK 0 变化 —— 需要一轮完整预算独立实施与验证。
+
+### 8.13 COMPLEX-7 剩余成本归因与实现障碍（第 11–12 轮）
+
+**每查询分配次数逐阶段归因**（`LD_PRELOAD` 计数器，40 次查询取平均，pid=2199023256816）
+
+| 阶段 | alloc/query | 时间 | 相对上一阶段 |
+|---|---:|---:|---:|
+| S1 纯三段展开 | 158,369 | 23.6ms | — |
+| S2 + 物化 `liker, message, likeTime, person` | 777,368 | 65.1ms | **+619,000** |
+| S3 + ORDER BY | 991,402 | 73.4ms | +214,033 |
+| S4 + `head(collect({msg, likeTime}))` | 1,703,248 | 99.6ms | **+711,847** |
+
+完整 complex-7 约 234 万次分配/查询。**S2 与 S4 是同一根因**（`message` 作为整对象被构造与拷贝），合计约 133 万，占总量 57%。S1 说明「读图」本身只占 15.8 万 —— 问题在物化，不在存储。
+
+**已实施的优化（第 11 轮）**
+
+`ExpandPhysicalOp` 复用跨 chunk 的 `edges` / `allowed_seen` 缓冲，并删除 `chunk->toRows()`（原先为每个输入行构造一个 `std::vector<Value>`，而代码只读源点与绑定端点两列，改为直接 `chunk->columns[c].getValue(row)`）。同二进制 + 环境开关 A/B，两轮各 30 次：min **135.31/136.21 → 127.47/128.03**、med **139.41/143.02 → 132.18/131.63**（约 -6%）。
+
+**同时修掉一个算法级缺陷**：`ExpressionEvaluator::evalMap` 把 entry 求值放在逐行循环内，而 `acquireTempColumn` 只向 `std::deque` 追加、从不复用，于是 2-entry map 在 1024 行 chunk 上分配约 2048 个临时列而非 2 个（`O(rows × entries)`）。改为每 chunk 求值一次后：`collect({msg: message.id, likeTime: likeTime})` 由 **27,965,716 → 1,445,761** alloc/query、**524.92 → 86.89 ms**（分配 -19x、时间 6x）。注意：**该缺陷不影响 complex-7**（其 map 的两个值都是普通列引用，走非分配路径），complex-7 上 A/B 为平（min 120.37/119.25 vs 120.63/126.50）。
+
+**剩余杠杆的确切实现障碍**
+
+要消除 S2/S4 的整对象物化，必须让容器里的 vertex 保持引用/扁平属性而非整对象。障碍已定位到一处入口：
+
+`src/query/optimizer/column_rewrite.cpp` 的 `rewriteExpr()` 属性引用分支第一步即
+```cpp
+std::string var = varNameFromObject(val->object);
+if (var.empty()) return false;          // complex-7 走到这里即返回
+```
+而 `varNameFromObject()`（同文件 49 行起）只识别 `BoundVariableRef` / `BoundColumnRef` / `BoundLabelCast` / `startNode` / `endNode`。complex-7 聚合后的访问是 `latestLike.msg.creationDate` —— object 为 **map 下标**，返回空，因此整条属性引用不做扁平列 lowering，运行时只能从构造出的对象里取属性。
+
+**失败模式（必须在设计中处理）**：若只把 map 里的 vertex 改为存 `VertexRef`（该类型本就在 `Value` variant 内，类型合法）而不打通上述 lowering，则 `.creationDate` / `.content` / `.imageFile` 这类非结构属性将**静默返回 null**（`VertexRef` 仅携带 id；`evalPropertyRef` 只对 `id` 有结构字段兜底）。这类错误不一定被单元测试捕获，必须靠与 Neo4j 逐行对比才能发现。
+
+**最小路径**：① 让 `BoundMap` 记录「某 entry 的值来源于哪个变量」的来源元信息；② 在 `rewriteExpr` 中，当 `BoundPropertyRef` 的 object 是「源自变量 X 的 map 下标」时，使用 X 的 PEPlan 扁平列槽位做替换；③ **仅在完整可解析时替换**，否则保守回退到现状（这是避免静默 null 的关键约束）；④ 验收：519/519 + TCK 逐条 diff 为 0 + 与 Neo4j 在 933/1242/2199023256816 逐行一致 + 同二进制 A/B 量化。
+
+**第 12 轮另两项实测（均为负结果，已回滚，记录以免重试）**
+
+| 尝试 | 结论 |
+|---|---|
+| 复用 edge-scan cursor（新增 `IEdgeScanCursor::reposition()`，整批源点共用一个 cursor） | 无收益且可能损害邻接局部性（WT 自身 cursor cache 已摊销按顶点建 cursor 的开销）。首次读数看似回归，实为机器负载漂移 —— 与 §8.6 记录的同一陷阱 |
+| `Column::setValue(Value&&)` 搬入重载（消除 `ConstructVertex` 处 `Value(*cache[row])` 的第四次整对象拷贝） | 同二进制 + 环境开关 A/B 两轮：拷贝路径 min 125.62/125.40 / med 132.30/130.58，搬入路径 min 125.49/126.05 / med 130.76/129.20 —— **平的**。说明该处拷贝不是可摘的果子 |
+
+**第 12 轮补充实测：缩减 `ConstructVertex` 的属性列表也无收益**
+
+既然 `need_whole_vertex` 分支显式丢弃了 `r.vertex_props`（`column_rewrite.cpp` 中「A whole-vertex Construct column must carry every property」），一个自然的想法是：既然唯一消费者只读 4 个属性，就让 `ConstructVertex` 只加载这 4 个。实测否定（同一查询骨架，`/proc/<pid>/stat` 计服务端 CPU，40 次/例）：
+
+| WITH 内容 | 服务端 CPU/查询 | wall/查询 |
+|---|---:|---:|
+| 4 个裸引用（`message` 整对象） | **73.75 ms** | 62.65 ms |
+| 只有 `message.id`（扁平） | 77.50 ms | 65.61 ms |
+| `message` 的 5 个扁平属性 | 85.00 ms | 72.74 ms |
+
+**整对象反而最快。** 因此「少读属性」这条路（含 §8.8 的 C1/C2 对照、§8.6 的 typed 列尝试）已被三种独立测法一致否定：属性读取量不是成本，构造与逐行算子开销才是。
+
+**第 12 轮结论：complex-7 在现有执行模型下已无低成本增量可摘。**
+已实测否定的方向累计 9 个（§8.6 六条 + §8.11 + 本节两条 + 搬入重载）。剩余差距的唯一出口是 §8.13 描述的容器下标 lowering（让 `latestLike.msg.<prop>` 能被 lower 成扁平列，从而容器里无需存整对象），其实现障碍与失败模式已在该节写明；该改动属编译期数据流能力，需要独立一轮实现并靠 519 + TCK + 与 Neo4j 逐行对比守住正确性。
+
+### 8.14 移除 `DataChunk::toRows()` 与 DISTINCT 的一个真实语义缺陷（第 13 轮）
+
+**重构**：`DataChunk::toRows()` 已从生产 API 删除。它按行物化 `std::vector<Value>`（每行一次堆分配）并复制每个单元格，而 9 个调用点里：
+
+- **4 个算子**只读 1~2 列（`distinct`、`varlen_expand`、`path_build`、`path_element_property_read`）→ 改为直接 `chunk->columns[c].getValue(r)`；`path_element_property_read` 原先还回写行数组，改为按列写 `path_out`；
+- **2 个输出边界**（Bolt `handlePull`、Thrift `eugraph_handler`）只需逐行序列化 → 改为按列遍历、就地构造 packstream/thrift 值，省掉每行一个 `std::vector`；
+- **1 个遗留桥接**（`dataChunkToRowBatch`）→ 直接从列构造行；
+- 测试侧改用本地 `chunkToRows()` 辅助函数。
+
+未引入 `RowView`：`RowView::operator[]` 的实现与直接 `getValue` 完全相同，却要给 4 个算子引入「chunk 被 move/yield 后 view 悬垂」的新风险类别。
+
+**顺带发现并修复一个真实语义缺陷（严重）**
+
+重写 `distinct` 时暴露出：`MATCH (p:Person)-[:KNOWS]-(f:Person) WITH DISTINCT f RETURN count(*)` 在**原实现下语义也是错的**。
+
+- 原 `DistinctPhysicalOp` 把整行 `std::vector<Value>` 塞进 `unordered_set<Row, RowHash, RowEqual>`。`RowEqual` 用 `std::variant::operator==`，它**先比 variant 下标**，因此同一顶点的 `VertexValue` 与 `VertexRef` 两种表示被判为不同 → 无向遍历产生的两个端点不会合并。
+- 实测：`WITH DISTINCT f` = **2514**，而 `count(DISTINCT f)` = **1357**（Neo4j 亦为 1357）。同一语义两种写法不一致，且 `WITH DISTINCT f` 正是 519 单测未覆盖的形状。
+- 修复：键改为**即时计算的逐列指纹**（不是持有 chunk 引用的视图），实体单元格取 **id**（与 `ValueHash` 一致，`VertexRef`/`VertexValue`/`EdgeKey`/`EdgeValue` 都归一到 id），非实体走 `ValueHash`。
+- 修复后与 Neo4j 逐一对照全部一致：
+
+| 查询 | eugraph | Neo4j |
+|---|---:|---:|
+| `WITH DISTINCT f`（无向） | 1357 | 1357 |
+| `WITH DISTINCT f`（单向） | 1205 | 1205 |
+| `WITH DISTINCT p, f` | 14073 | 14073 |
+| `WITH DISTINCT f.id` | 1205 | 1205 |
+| `VLE *2` 路径数 | 2732 | 2732 |
+| `VLE *1..3` 去重 | 1034 | 1034 |
+
+**设计约束（踩过的坑）**：第一版键持有 `const DataChunk*` + row，键的生命周期比 chunk 长（chunk 按值 yield 后即销毁）→ 悬垂指针，实测触发 `std::bad_alloc`。因此键必须在读取行时**即时算出并只存数值**。
+
+**实测收益**（服务端 CPU 取自 `/proc/<pid>/stat`，两轮各 20 次，前后各测两遍）
+
+| 查询 | before（含 `toRows`） | after（无 `toRows`） | 变化 |
+|---|---:|---:|---:|
+| `WITH DISTINCT p, f`（14k 行） | 178.0 / 178.5 ms | **137.5 / 143.0 ms** | **约 -22%** |
+| short-2 | 4 / 5 ms | 4.5 / 5 ms | 持平 |
+| complex-4 | 21 / 20 ms | 19 / 19 ms | 约 -5% |
+
+DISTINCT 受益最大，因为它原先要为每行物化整行 `std::vector<Value>` 再塞进哈希集合 —— 现在只算逐列指纹。

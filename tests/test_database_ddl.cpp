@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "test_chunk_helpers.hpp"
+
 #include "common/types/graph_types.hpp"
 #include "query/parser/database_ddl_parser.hpp"
 #include "service/graph_service.hpp"
@@ -141,7 +143,7 @@ protected:
         auto gen = std::move(exec_ctx.ctx->gen);
         blockingWait(folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
             while (auto chunk = co_await gen.next()) {
-                for (auto& row : chunk->toRows())
+                for (auto& row : eugraph::test::chunkToRows(*chunk))
                     rows.push_back(std::move(row));
             }
             co_return;

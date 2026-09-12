@@ -12,7 +12,14 @@ void ExpressionEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
     size_t total_cols = std::max(static_cast<size_t>(loop_column_index) + 1, input.columns.size() + 1);
 
     for (size_t i = 0; i < count; ++i) {
-        bool final_result;
+        // Initialised to the "empty input" answer for this kind, so the
+        // variable is never read before being written even if the enum ever
+        // gains a value the switch below does not handle. GCC additionally
+        // reported a possible use-uninitialised read at
+        // `at_initial = !final_result` (the ANY case) even though the switch
+        // covers every current enumerator; the initialiser settles that too and
+        // costs nothing.
+        bool final_result = (kind == QuantifierKind::ALL || kind == QuantifierKind::NONE);
         int single_match_count = 0;
 
         switch (kind) {
