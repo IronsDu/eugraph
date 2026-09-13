@@ -177,6 +177,29 @@ static bool expressionReferencesVariable(const cypher::Expression& expr, const s
     return expressionReferencesVariableImpl(expr, name);
 }
 
+/// True when any node or relationship in `patterns` is bound to `name`.
+///
+/// Used for the pattern variables of an EXISTS subquery: a bare-predicate
+/// EXISTS is built from an outer-scope pattern, so its named nodes can be outer
+/// references rather than subquery-local bindings. Missing them would let a
+/// `WITH ... WHERE` be placed before the alias it depends on, which is the same
+/// class of misplacement as the ParenExpr gap this traversal used to have.
+static bool patternBindsVariable(const std::vector<cypher::PatternPart>& patterns, const std::string& name) {
+    for (const auto& pp : patterns) {
+        if (pp.variable && *pp.variable == name)
+            return true;
+        if (pp.element.node.variable && *pp.element.node.variable == name)
+            return true;
+        for (const auto& [rel, np] : pp.element.chain) {
+            if (rel.variable && *rel.variable == name)
+                return true;
+            if (np.variable && *np.variable == name)
+                return true;
+        }
+    }
+    return false;
+}
+
 static bool expressionReferencesVariableImpl(const cypher::Expression& expr, const std::string& name) {
     return std::visit(
         [&](const auto& ptr) -> bool {
@@ -221,6 +244,42 @@ static bool expressionReferencesVariableImpl(const cypher::Expression& expr, con
             } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
                 return expressionReferencesVariableImpl(ptr->list_expr, name) ||
                        (ptr->where_pred && expressionReferencesVariableImpl(*ptr->where_pred, name));
+            } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                return expressionReferencesVariableImpl(ptr->inner, name);
+            } else if constexpr (std::is_same_v<Elem, cypher::LabelCastExpr>) {
+                return expressionReferencesVariableImpl(ptr->object, name);
+            } else if constexpr (std::is_same_v<Elem, cypher::SliceExpr>) {
+                if (expressionReferencesVariableImpl(ptr->list, name))
+                    return true;
+                if (ptr->from && expressionReferencesVariableImpl(*ptr->from, name))
+                    return true;
+                if (ptr->to && expressionReferencesVariableImpl(*ptr->to, name))
+                    return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::AllExpr> || std::is_same_v<Elem, cypher::AnyExpr> ||
+                                 std::is_same_v<Elem, cypher::NoneExpr> || std::is_same_v<Elem, cypher::SingleExpr>) {
+                // The bound variable is local to the quantifier; only the
+                // source list and the per-element predicate are outer-scope.
+                if (expressionReferencesVariableImpl(ptr->list_expr, name))
+                    return true;
+                if (ptr->where_pred && expressionReferencesVariableImpl(*ptr->where_pred, name))
+                    return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                // `is_bare_predicate` EXISTS is built from an outer-scope
+                // pattern, so pattern variables can be outer references; for
+                // the full-subquery form only the WHERE is inspected here.
+                if (patternBindsVariable(ptr->patterns, name))
+                    return true;
+                if (ptr->where_pred && expressionReferencesVariableImpl(*ptr->where_pred, name))
+                    return true;
+                return false;
+            } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                if (ptr->projection && expressionReferencesVariableImpl(*ptr->projection, name))
+                    return true;
+                if (ptr->where_pred && expressionReferencesVariableImpl(*ptr->where_pred, name))
+                    return true;
+                return false;
             } else {
                 return false;
             }
@@ -396,6 +455,119 @@ static bool hasAggregate(const cypher::Expression& expr) {
 // Walk a Cypher AST and collect pointers to every PatternComprehension node.
 // Used to drive the hoisting pass that turns each comprehension into a
 // BoundPatternComprehensionApplyOp stacked above the input child.
+/// Find a ListComprehension that is the expression itself or sits directly under
+/// a chain of function calls (`size([x IN posts WHERE <pattern>])`).
+///
+/// The lowering used to test only the item's outermost node, so a comprehension
+/// wrapped in a call never reached it and fell through to the row-wise evaluator,
+/// where a pattern predicate is not applied and the unfiltered list length comes
+/// back. Only calls are traversed: descending into arbitrary expression positions
+/// changes how nested comprehensions bind and is a separate problem.
+/// True when a bare pattern predicate inside `expr` binds or uses `name`,
+/// e.g. `(x)-->(:Y)` binds `x`. Such a pattern is an ExistsExpr in the AST, and
+/// `expressionReferencesVariable` deliberately walks only expression operands, so
+/// it does not see these.
+static bool patternPredicatesVariable(const cypher::Expression& expr, const std::string& name) {
+    bool found = false;
+    std::function<void(const cypher::Expression&)> walk = [&](const cypher::Expression& e) {
+        if (found)
+            return;
+        std::visit(
+            [&](const auto& ptr) {
+                using Elem = typename std::decay_t<decltype(ptr)>::element_type;
+                if (!ptr)
+                    return;
+                if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                    if (patternBindsVariable(ptr->patterns, name)) {
+                        found = true;
+                        return;
+                    }
+                    if (ptr->where_pred)
+                        walk(*ptr->where_pred);
+                } else if constexpr (std::is_same_v<Elem, cypher::FunctionCall>) {
+                    for (const auto& a : ptr->args)
+                        walk(a);
+                } else if constexpr (std::is_same_v<Elem, cypher::BinaryOp>) {
+                    walk(ptr->left);
+                    walk(ptr->right);
+                } else if constexpr (std::is_same_v<Elem, cypher::ListExpr>) {
+                    for (const auto& el : ptr->elements)
+                        walk(el);
+                } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
+                    walk(ptr->inner);
+                } else if constexpr (std::is_same_v<Elem, cypher::ListComprehension>) {
+                    walk(ptr->list_expr);
+                    if (ptr->where_pred)
+                        walk(*ptr->where_pred);
+                    if (ptr->projection)
+                        walk(*ptr->projection);
+                } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                    // A pattern bound here (e.g. `x` in `[(x)-->(:Y) | 1]`) is a
+                    // reference to the enclosing comprehension's loop variable.
+                    if (ptr->variable && *ptr->variable == name) {
+                        found = true;
+                        return;
+                    }
+                    if (patternBindsVariable(ptr->patterns, name)) {
+                        found = true;
+                        return;
+                    }
+                    if (ptr->where_pred)
+                        walk(*ptr->where_pred);
+                    if (ptr->projection)
+                        walk(*ptr->projection);
+                } else if constexpr (std::is_same_v<Elem, cypher::CaseExpr>) {
+                    if (ptr->subject)
+                        walk(*ptr->subject);
+                    for (const auto& [w, t] : ptr->when_thens) {
+                        walk(w);
+                        walk(t);
+                    }
+                    if (ptr->else_expr)
+                        walk(*ptr->else_expr);
+                }
+            },
+            e);
+    };
+    walk(expr);
+    return found;
+}
+
+/// Replace, in place, the ListComprehension node that `findListComprehensionUnderCalls`
+/// would return with a reference to the list variable `replacement`.
+///
+/// The item must keep its surrounding expression: for
+/// `size([x IN posts WHERE <pattern>])` the value returned to the user is the
+/// *length*, not the list, so substituting the whole item for the variable would
+/// change the output type and hand back the list itself.
+static bool substituteListComprehensionUnderCalls(cypher::Expression& expr, const std::string& replacement) {
+    if (std::holds_alternative<std::unique_ptr<cypher::ListComprehension>>(expr)) {
+        auto var = std::make_unique<cypher::Variable>();
+        var->name = replacement;
+        expr = cypher::Expression(std::move(var));
+        return true;
+    }
+    if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&expr)) {
+        for (auto& a : (*fc)->args) {
+            if (substituteListComprehensionUnderCalls(a, replacement))
+                return true;
+        }
+    }
+    return false;
+}
+
+static const cypher::ListComprehension* findListComprehensionUnderCalls(const cypher::Expression& expr) {
+    if (auto* lc = std::get_if<std::unique_ptr<cypher::ListComprehension>>(&expr))
+        return lc->get();
+    if (auto* fc = std::get_if<std::unique_ptr<cypher::FunctionCall>>(&expr)) {
+        for (const auto& a : (*fc)->args) {
+            if (auto* lc = findListComprehensionUnderCalls(a))
+                return lc;
+        }
+    }
+    return nullptr;
+}
+
 static void collectPatternComprehensionsAST(const cypher::Expression& expr,
                                             std::vector<const cypher::PatternComprehension*>& out,
                                             Binder* binder = nullptr) {
@@ -1011,6 +1183,12 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
         current = std::move(filter);
     }
 
+    // The list comprehension keeps each *element* at most once: with a pattern
+    // predicate the sub-plan produces one row per match, so a predicate like
+    // `(x)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(p)` yields one row per (x, tag) pair
+    // and would otherwise push x into the list several times. neo4j returns the
+    // deduplicated element list (`[1,1,1]`, not `[1,1,1,1,1,1]`), so collapse the
+    // duplicates before collecting.
     BoundExpression proj_expr;
     if (proj_idx) {
         auto bound_proj = bindExpression(pc_items[*proj_idx].expr);
@@ -1521,23 +1699,49 @@ std::optional<BoundLogicalOperator> Binder::bindReturn(const cypher::ReturnClaus
     std::vector<ReturnItemView> items;
     items.reserve(ret.items.size());
     for (const auto& item : ret.items) {
-        auto* lc = std::get_if<std::unique_ptr<cypher::ListComprehension>>(&item.expr);
+        const auto* lc = findListComprehensionUnderCalls(item.expr);
         std::vector<const cypher::PatternComprehension*> pc_asts;
-        if (lc && *lc) {
-            if ((*lc)->where_pred)
-                collectPatternComprehensionsAST(*(*lc)->where_pred, pc_asts);
-            if ((*lc)->projection)
-                collectPatternComprehensionsAST(*(*lc)->projection, pc_asts);
+        if (lc) {
+            if (lc->where_pred)
+                collectPatternComprehensionsAST(*lc->where_pred, pc_asts, this);
+            if (lc->projection)
+                collectPatternComprehensionsAST(*lc->projection, pc_asts, this);
         }
-        if (!pc_asts.empty()) {
+        // A comprehension whose body (WHERE or projection) never mentions the loop
+        // variable is constant for the whole outer row: it keeps every element or
+        // none of them. The pattern path would emit one element per match instead,
+        // which is a different answer, so those stay on the row-wise evaluator.
+        // Check BOTH parts: `[x IN nodes(p) | size([(x)-->(:Y) | 1])]` has no WHERE
+        // and references the loop variable only in its projection.
+        // Evaluated part by part, because a comprehension with no WHERE keeps every
+        // element whose projection uses the loop variable, and one with a WHERE
+        // filters per element. `expressionReferencesVariable` alone is not enough:
+        // it does not look at the variables a bare pattern predicate binds, and
+        // `(x)-->(:Y)` is exactly that (an ExistsExpr in the AST), so a projection
+        // like `size([(x)-->(:Y) | 1])` reads as not referencing `x`.
+        auto part_uses_loop_var = [&](const cypher::Expression& e) {
+            return expressionReferencesVariable(e, lc->variable) || patternPredicatesVariable(e, lc->variable);
+        };
+        bool body_uses_loop_var = false;
+        if (lc && !lc->variable.empty()) {
+            const bool where_uses = lc->where_pred && part_uses_loop_var(*lc->where_pred);
+            const bool proj_uses = lc->projection && part_uses_loop_var(*lc->projection);
+            if (where_uses || proj_uses)
+                body_uses_loop_var = true;
+            // No WHERE and no projection: the body is the loop variable itself.
+            if (!lc->where_pred && !lc->projection)
+                body_uses_loop_var = true;
+        }
+        if (!pc_asts.empty() && body_uses_loop_var) {
             SlotId out_slot = INVALID_SLOT_ID;
             std::string out_name;
             BoundType out_elem_type;
-            if (!lowerListComprehensionWithPatternComprehension(**lc, child, out_slot, out_name, out_elem_type))
+            if (!lowerListComprehensionWithPatternComprehension(*lc, child, out_slot, out_name, out_elem_type))
                 return std::nullopt;
-            auto var = std::make_unique<cypher::Variable>();
-            var->name = out_name;
-            lowered_exprs.push_back(cypher::Expression(std::move(var)));
+            cypher::Expression rewritten = cloneAstExpression(item.expr);
+            if (!substituteListComprehensionUnderCalls(rewritten, out_name))
+                return std::nullopt;
+            lowered_exprs.push_back(std::move(rewritten));
             items.push_back({lowered_exprs.back(), item.alias, item.source_text});
         } else {
             items.push_back({item.expr, item.alias, item.source_text});
@@ -2109,24 +2313,48 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     lowered_exprs.reserve(wc.items.size());
     std::vector<ReturnItemView> items;
     items.reserve(wc.items.size());
+    // Loop variables registered while lowering a comprehension. The lowering
+    // restores its saved context before returning, so these bindings are gone by
+    // the time the hoisting pass below binds a pattern comprehension that lives
+    // inside the same item -- which leaves the comprehension's free variable
+    // unresolved and the planner falls back to a full scan joined with the
+    // correlated source. Re-register them around the hoisting pass so the inner
+    // pattern correlates to the element column instead.
+    std::vector<std::pair<std::string, ColumnInfo>> lowered_loop_bindings;
     for (const auto& item : wc.items) {
-        auto* lc = std::get_if<std::unique_ptr<cypher::ListComprehension>>(&item.expr);
+        const auto* lc = findListComprehensionUnderCalls(item.expr);
         std::vector<const cypher::PatternComprehension*> pc_asts;
-        if (lc && *lc) {
-            if ((*lc)->where_pred)
-                collectPatternComprehensionsAST(*(*lc)->where_pred, pc_asts);
-            if ((*lc)->projection)
-                collectPatternComprehensionsAST(*(*lc)->projection, pc_asts);
+        if (lc) {
+            if (lc->where_pred)
+                collectPatternComprehensionsAST(*lc->where_pred, pc_asts, this);
+            if (lc->projection)
+                collectPatternComprehensionsAST(*lc->projection, pc_asts, this);
         }
-        if (!pc_asts.empty()) {
+        bool body_uses_loop_var = false;
+        if (lc && !lc->variable.empty()) {
+            auto part_uses = [&](const cypher::Expression& e) {
+                return expressionReferencesVariable(e, lc->variable) || patternPredicatesVariable(e, lc->variable);
+            };
+            if ((lc->where_pred && part_uses(*lc->where_pred)) || (lc->projection && part_uses(*lc->projection)))
+                body_uses_loop_var = true;
+            if (!lc->where_pred && !lc->projection)
+                body_uses_loop_var = true;
+        }
+        if (!pc_asts.empty() && body_uses_loop_var) {
             SlotId out_slot = INVALID_SLOT_ID;
             std::string out_name;
             BoundType out_elem_type;
-            if (!lowerListComprehensionWithPatternComprehension(**lc, child, out_slot, out_name, out_elem_type))
+            if (!lowerListComprehensionWithPatternComprehension(*lc, child, out_slot, out_name, out_elem_type))
                 return std::nullopt;
-            auto var = std::make_unique<cypher::Variable>();
-            var->name = out_name;
-            lowered_exprs.push_back(cypher::Expression(std::move(var)));
+            // The lowering removed the loop variable from the context; capture it
+            // so the hoisting pass can see it again.
+            auto bound_type = lc->variable.empty() ? BoundType::Any() : BoundType::Any();
+            ColumnInfo loop_info = makeColumnInfo(lc->variable, std::move(bound_type));
+            lowered_loop_bindings.emplace_back(lc->variable, std::move(loop_info));
+            cypher::Expression rewritten = cloneAstExpression(item.expr);
+            if (!substituteListComprehensionUnderCalls(rewritten, out_name))
+                return std::nullopt;
+            lowered_exprs.push_back(std::move(rewritten));
             items.push_back({lowered_exprs.back(), item.alias, item.source_text});
         } else {
             items.push_back({item.expr, item.alias, item.source_text});
@@ -2145,8 +2373,15 @@ std::optional<BoundLogicalOperator> Binder::bindWith(const cypher::WithClause& w
     // ── Pattern comprehension hoisting ── (see bindReturn for rationale)
     std::unordered_map<const cypher::PatternComprehension*, std::tuple<binder::SlotId, std::string, binder::BoundType>>
         wc_pc_patch_map;
-    if (!hoistPatternComprehensions(*this, child, items, wc.order_by ? &wc.order_by->items : nullptr,
-                                    wc_pc_patch_map)) {
+    // Make the lowered comprehensions' loop variables visible again while their
+    // bodies are hoisted, then remove them: they are not visible after the WITH.
+    for (const auto& [name, info] : lowered_loop_bindings)
+        ctx_.symbols[name] = info;
+    auto hoist_ok =
+        hoistPatternComprehensions(*this, child, items, wc.order_by ? &wc.order_by->items : nullptr, wc_pc_patch_map);
+    for (const auto& [name, info] : lowered_loop_bindings)
+        ctx_.symbols.erase(name);
+    if (!hoist_ok) {
         return std::nullopt;
     }
 

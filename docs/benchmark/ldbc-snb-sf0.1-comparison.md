@@ -777,3 +777,51 @@ if (var.empty()) return false;          // complex-7 走到这里即返回
 | complex-4 | 21 / 20 ms | 19 / 19 ms | 约 -5% |
 
 DISTINCT 受益最大，因为它原先要为每行物化整行 `std::vector<Value>` 再塞进哈希集合 —— 现在只算逐列指纹。
+
+### 8.15 COMPLEX-10：从「无法执行」到「可执行但计数仍不正确」（第 14–22 轮）
+
+本节只记录结论与验收口径；完整的根因证据、被证伪的方向、探针规范与测量陷阱见
+[docs/query/deferred-pattern-comprehension-findings.md](../query/deferred-pattern-comprehension-findings.md)。
+
+起点的三个阻塞项（全部实测确认，非推断）：
+
+| # | 现象 | 根因 | 状态 |
+|---|---|---|---|
+| 1 | `WITH 1 AS a WHERE (a=1)` 报 `UndefinedVariable: a` | `expressionReferencesVariable` 缺 `ParenExpr` 分支，导致 `WITH … WHERE` 被绑到别名不存在的位置 | **已修** |
+| 2 | `datetime({epochMillis: …})` 恒返回 1970-01-01 | 该 key 在代码库中完全未实现；补上后又发现 `extractDateFields` 在无 `date`/`datetime` 基准时强制重置年月日为 1970-01-01，覆盖了 epoch 推出的日期 | **已修** |
+| 3 | complex-10 执行 **>400s 超时** | `bindExistsSubPlan` 只在起始变量能按名解析时记录关联对，而列表推导降级在返回前 `ctx_.restore`，于是位于独立 `WITH` 层的推导在内层模式绑定前已丢失循环变量 → 规划器退化为 `AllNodeScan(p)` × 关联源的**笛卡尔积**（全库节点数 × 每组行数） | **已修：>400s → 0.44s，计划中 `AllNodeScan`/`CrossProduct` 归零** |
+
+修复 3 的同时修好了一个派生缺陷：同一 RETURN 里被 `size(…)` 包裹的列表推导此前**从不降级**（决策只看最外层节点），于是内层模式谓词完全不执行，`size()` 返回未过滤的列表长度（352 而非过滤值）。
+
+**仍未解决（1 个）**：推导的元素计数在真实数据上不正确。
+
+```
+eugraph   {n: 352, c_explicit: 6, c_anon: 0}
+neo4j     {n: 352, c_explicit: 3, c_anon: 3}
+```
+
+complex-10 使用的正是匿名形式（`(x)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(person)`），因此其
+`commonPostCount` 归零、`commonInterestScore = 2*cpc - pc` 随之错误。**所以 complex-10
+目前可执行、分数自洽，但分数不可信。**
+
+**根因已锁定**：推导的**循环变量名冲突**。判别性证据 —— 只把第二个推导的循环变量改名即可修复：
+
+```
+两个推导都用 x（共用同一列表） → {s1: 6, s2: 0}
+第二个推导改用 y              → {s1: 6, s2: 6}
+```
+
+机制：降级以 `variable = lc.variable` 建 `BoundUnwindOp`，而嵌套模式推导的模式变量在常见写法里同名；
+规划期多处**按名解析**（`makeSlotLayout` 经 `ctx.var_slots`、关联解析经
+`output_schema[pos] != corr.left_var`、`bindExistsSubPlan` 经 `ctx_.lookup`/`saved_ctx.symbols`），
+于是第二个推导的列表引用落进第一个推导的 Unwind 作用域，按元素执行并拿到顶点而非列表。
+
+**改名并不可行**（已实测三轮并回退）：该名字**跨嵌套边界是承重的**（
+`[x IN nodes(p) | size([(x)-->(:Y) | 1])]` 的内层模式变量就是外层循环变量，改名即断开关联），
+却又**跨兄弟推导有害**。名字层的手段无法同时满足两者。
+
+**下一步（待合并后单独一轮）**：按仓库既有的身份模型红线（`VariableId = SlotId`，禁止以变量名作为语义身份）
+把上述三处**改为按 SlotId 传递** —— 兄弟推导天然拥有不同 slot，而嵌套推导对外层元素的引用解析到同一 slot，
+两个场景自然分离。验收口径：判别用例 `{6, 0}` → `{6, 6}`；标注与匿名形式均与 neo4j 一致（person 933 为 3 与 3）；
+`query_executor_tests` 521/521、`optimizer_tests` 109/109、TCK 不变；complex-10 无超时**且**
+`commonPostCount` 与独立路径（`OPTIONAL MATCH … count(DISTINCT q)`）一致。

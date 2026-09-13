@@ -189,7 +189,12 @@ int32_t parseTzOffset(const std::string& tz) {
     return static_cast<int32_t>(sign * (hours * 3600 + minutes * 60 + seconds));
 }
 
-void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_t& day) {
+/// Apply the map's explicit date fields on top of `year`/`month`/`day`.
+///
+/// When `has_outer_base` is true the incoming values come from a caller-supplied
+/// base (an `epochMillis` key, say) and must be kept unless the map itself names
+/// a date field; otherwise there is no base and the date defaults to 1970-01-01.
+void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_t& day, bool has_outer_base = false) {
     // Step 1: check for base temporal value ('date' or 'datetime' key)
     bool has_date_base = false;
     for (const auto& [k, vs] : mv->entries) {
@@ -202,7 +207,7 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
             break;
         }
     }
-    if (!has_date_base) {
+    if (!has_date_base && !has_outer_base) {
         year = 1970;
         month = 1;
         day = 1;
@@ -1047,7 +1052,32 @@ inline Value datetimeImpl(const Value& arg) {
             }
         }
         tv.kind = DateTimeKind::DATETIME;
-        extractDateFields(mv, tv.year, tv.month, tv.day);
+        // `epochMillis` is a base for both the date and the time-of-day, like a
+        // `datetime`/`date`/`time` key. Without this the key was silently
+        // ignored and the constructor returned the epoch (1970-01-01), which is
+        // what LDBC complex-10 fed into `datetime({epochMillis: friend.birthday})`.
+        if (hasMapKey(mv, "epochMillis")) {
+            // `epochMillis` is a base for both the date and the time-of-day, like
+            // a `datetime` / `date` / `time` key. Without this the key was
+            // silently ignored and the constructor returned the epoch
+            // (1970-01-01) -- what LDBC complex-10 fed into
+            // `datetime({epochMillis: friend.birthday})`.
+            int64_t epoch_millis = intFromMap(mv, "epochMillis");
+            int64_t seconds = epoch_millis / 1'000LL;
+            int64_t nanos = (epoch_millis % 1'000LL) * 1'000'000LL;
+            if (nanos < 0) {
+                nanos += 1'000'000'000LL;
+                --seconds;
+            }
+            // Guard the seconds * 1e9 intermediate inside datetimeFromEpoch.
+            if (seconds > 9'000'000'000LL || seconds < -9'000'000'000LL)
+                return Value{};
+            tv = datetimeFromEpoch(seconds, nanos);
+            has_base = true;
+            base_has_tz = true;
+            tv.tz_offset_sec = 0;
+        }
+        extractDateFields(mv, tv.year, tv.month, tv.day, has_base);
         if (hasMapKey(mv, "hour"))
             tv.hour = intFromMap(mv, "hour");
         if (hasMapKey(mv, "minute"))

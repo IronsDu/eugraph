@@ -92,6 +92,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 导入、LDBC 查询耗时对比、慢查询分析 |
+| [列表推导内模式推导：发现与待修缺陷](query/deferred-pattern-comprehension-findings.md) | complex-10 的根因证据、被证伪的方向、探针规范与验收口径 |
 
 
 ## 格式化
