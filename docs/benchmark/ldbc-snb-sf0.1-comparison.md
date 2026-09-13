@@ -825,3 +825,71 @@ complex-10 使用的正是匿名形式（`(x)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(p
 两个场景自然分离。验收口径：判别用例 `{6, 0}` → `{6, 6}`；标注与匿名形式均与 neo4j 一致（person 933 为 3 与 3）；
 `query_executor_tests` 521/521、`optimizer_tests` 109/109、TCK 不变；complex-10 无超时**且**
 `commonPostCount` 与独立路径（`OPTIONAL MATCH … count(DISTINCT q)`）一致。
+
+### 8.16 重新导入 sf0.1：loader 缺陷修复与 complex-7 回归验证（第 23 轮）
+
+**导入方法（此前未记录，现在补上）**
+
+交付的 `social_network-sf0.1-CsvBasic-LongDateFormatter/` **不是** Neo4j 导入格式（表头为 `Person.id|Person.id|creationDate`），直接喂 loader 会**静默跳过所有边**：
+
+```
+[loader] Missing vertex group for  -> , skipping
+```
+
+应使用已转换好的数据 `/home/dodo/code/fuck/neo4j-local/import-converted`，映射照抄 LDBC 官方脚本
+`ldbc_snb_interactive_v1_impls/cypher/scripts/import-to-neo4j.sh`（`--nodes` 8 条、`--relationships` 22 条）。
+表头形如 `id:ID(Place)|name:STRING|:LABEL`、`:START_ID(Person)|:END_ID(Person)|creationDate:LONG`。
+
+**发现并修复的 loader 缺陷（`bafeaaae`）**
+
+按上述映射导入会在边加载中途崩溃，导入不完整：
+
+```
+stl_vector.h:1253: vector<int>::operator[]: Assertion '__n < this->size()' failed
+```
+
+根因：`buildEdgeTypeSchemas` 以 **edge type** 为键复用 schema，于是同一类型的多个文件共享一份
+`schema.properties`（各文件属性的**并集**），而 `loadOneEdgeFile` 的 `prop_cols` 来自**当前文件**表头。
+逐行循环用一方索引另一方：
+
+```cpp
+for (size_t i = 0; i < schema.properties.size(); i++)
+    int csv_col = prop_cols[i];        // 本文件列少时越界
+```
+
+只有「同一关系类型被声明多次」才会命中 —— 而 LDBC 映射里恰好有 5 个：
+`HAS_CREATOR`（Comment/Post）、`HAS_TAG`（Comment/Post/Forum）、`IS_LOCATED_IN`（Organisation/Comment/Person/Post）、
+`REPLY_OF`（Comment/Post）、`LIKES`（Comment/Post）。
+
+**排查中排除的两点**（避免误判为并发问题）：`--concurrency 1` 串行同样崩溃；单独加载
+`person_knows_person` 正常。所以既不是竞态，也不是某个文件本身的问题。
+
+修复：按**列名**（而非位置）在当前文件内解析属性，文件确实不带的属性写空值而非越界读。
+
+**修复后导入结果与原始 CSV 逐项核对一致**
+
+| 文件 | CSV 行数 | 导入 |
+|---|---:|---:|
+| place / organisation / tagclass / tag | 1460 / 7955 / 71 / 16080 | 一致 |
+| person / forum / post / comment | 1528 / 13750 / 135701 / 151043 | 一致 |
+| **合计** | **327,588** | **327,588** |
+
+边共 1,477,965 条（HAS_CREATOR 286744、HAS_TAG 290118、LIKES 109440、IS_LOCATED_D 296227、
+REPLY_OF 151043、CONTAINER_OF 135701、HAS_MEMBER 123268、HAS_INTEREST 35475、KNOWS 14073 等），
+person 933 有 352 个 Post（与旧库一致）。
+
+> 备注：`Message 286744 = Post + Comment` 是**同一批点带两个标签**，不是另一批点；点数合计时不应重复计入。
+
+**complex-7 回归验证（同二进制交错 A/B）**
+
+此前跨时间比较曾显示 complex-7 慢 5–15%（如 min 127ms → 141ms），**该结论是错误的**。
+改为「同数据、同机、每轮重启服务、两二进制交错」后：
+
+| 轮次 | 基线 `146203fa`（PR #202 合并前） | 当前 |
+|---|---|---|
+| 1 | min 132.15 / p25 137.95 / med 142.74 ms | min 132.41 / p25 137.29 / med 142.01 ms |
+| 2 | min 132.33 / p25 138.15 / med 140.84 ms | min 134.54 / p25 137.36 / med 142.27 ms |
+
+**无可测差异**，方向不一致。结论：**PR #202 未给 complex-7 带来回退**；跨时间比较的差异来自测量条件漂移
+（与 §8.6 记录的是同一个陷阱）。基线绝对值也并非 127ms —— 它在合并前同样是 ~132ms，
+说明文档中更早的 120.37ms 来自与本次不同的条件（构建类型/数据/负载），不宜直接跨条件引用。

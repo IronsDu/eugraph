@@ -838,6 +838,16 @@ void loadOneEdgeFile(shell::EuGraphRpcClient& client, const CsvFileInfo& fi, con
     const auto& dst_map = dst_map_it->second;
 
     std::vector<int> prop_cols = buildEdgePropertyColumns(headers);
+    // Name -> column for this file, so property lookup does not depend on the
+    // merged schema happening to match this file's column order.
+    std::unordered_map<std::string, int> file_prop_col;
+    for (int i = 0; i < static_cast<int>(headers.size()); i++) {
+        HeaderToken ht = parseHeaderToken(headers[i]);
+        if (ht.kind == HeaderKind::START_ID || ht.kind == HeaderKind::END_ID)
+            continue;
+        if (!ht.name.empty())
+            file_prop_col.emplace(ht.name, i);
+    }
 
     std::vector<thrift_service::EdgeRecord> batch;
     batch.reserve(batch_size);
@@ -864,11 +874,17 @@ void loadOneEdgeFile(shell::EuGraphRpcClient& client, const CsvFileInfo& fi, con
         rec.src_vertex_id() = static_cast<int64_t>(src_vid_it->second);
         rec.dst_vertex_id() = static_cast<int64_t>(dst_vid_it->second);
 
+        // Resolve each property by NAME against this file's header rather than by
+        // position. An edge type can be declared by several files (HAS_TAG for
+        // Comment/Post/Forum, IS_LOCATED_IN for four labels, ...) whose columns
+        // differ, and `schema.properties` is the union of all of them while
+        // `prop_cols` describes only this file -- indexing one with the other ran
+        // off the end of `prop_cols`.
         auto& props = *rec.properties();
-        for (size_t i = 0; i < schema.properties.size(); i++) {
-            int csv_col = prop_cols[i];
-            if (csv_col < static_cast<int>(fields.size())) {
-                props.push_back(toThriftValue(fields[csv_col], schema.properties[i].type));
+        for (const auto& pi : schema.properties) {
+            auto hit = file_prop_col.find(pi.name);
+            if (hit != file_prop_col.end() && hit->second < static_cast<int>(fields.size())) {
+                props.push_back(toThriftValue(fields[hit->second], pi.type));
             } else {
                 props.push_back(thrift_service::PropertyValueThrift{});
             }
