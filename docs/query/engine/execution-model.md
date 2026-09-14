@@ -76,7 +76,7 @@ Compute 池同样是 `GraphManager` 持有的**单例**：经 `QueryExecutor::Co
 
 算子执行中的每次存储调用都经 `IoScheduler::dispatch`，由于当前线程不属于 Storage IO 池，`co_viaIfAsync` 不会内联，而是把调用调度到 Storage IO 池，完成后再恢复原协程。
 
-注意：**逐批算子执行与流式消费目前仍在 IO 线程上**——它们发生在 `makeStreamGenerator` 消费 `StreamContext::gen` 的循环里，由 Thrift 在消费方线程恢复。本次外派的只是计划/准备阶段。
+注意：**逐批算子执行与流式消费目前仍在 IO 线程上**（已知限制，见第六节第 7 条）——它们发生在 `makeStreamGenerator` 消费 `StreamContext::gen` 的循环里，由 Thrift 在消费方线程恢复。本次外派的只是计划/准备阶段。
 
 **Bolt 模式**：`BoltConnection::dispatchMessage` 通过 `scheduleOn(computeExecutor())` 把整个 session 消息处理放到**同一个** Compute 池，以便 socket EventBase 腾出来服务其他连接（`src/service/bolt/bolt_server.cpp`）。存储调用再从 Compute 池跳转到 Storage IO 池。Bolt 整条消息都在 Compute 池上处理，没有 Thrift 那种"回包必须回到原线程"的约束。
 
@@ -153,3 +153,7 @@ AsyncGenerator<RowBatch>
 5. **GraphTxnHandle 是 `void*`**：指向堆上 `TxnState`，commit/rollback 后释放。任何后续访问是 use-after-free。
 
 6. **CREATE INDEX 同步回填**：当前阻塞用户请求直到回填完成，大表会很慢。
+
+7. **Thrift 的逐批算子执行仍在 IO 线程（已知限制，未完成）**：`co_executeCypher` 目前只把 `GraphService::executeCypher`（解析/绑定/物理计划/事务建立）外派到 Compute 池；`while (co_await ctx->gen.next())` 这一逐批循环位于 `makeStreamGenerator`，由 Thrift 在消费方线程恢复，因此**仍在 Thrift IO 池上执行**。要搬走需要包装该 generator——folly 的 `co_withExecutor` 只接受 `Task`，不接受 `AsyncGenerator::next()` 的 awaitable，所以不是一行改动。改动前务必先读第三节的警告：回包必须回到原线程。
+
+8. **不要照搬 Bolt 的做法改 Thrift**：两者线程归属不同。Bolt 的 `BoltConnection::dispatchMessage` 把整条 `processMessage`（含 `gen.next()` 逐批循环与结果序列化）调度到 Compute 池，只把最终字节 `via(socket EventBase)` 写回，因此 **Bolt 的执行全程都在 Compute 池上**，无逐批回跳问题（`bolt_session.cpp` 内不存在 executor 跳转，且 `has_more=false` 一次性物化）。Thrift 是流式 RPC，generator 由框架在消费方线程恢复，不能简单照搬。
