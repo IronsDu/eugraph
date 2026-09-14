@@ -11,7 +11,7 @@
 
 | 项 | 配置 |
 |---|---|
-| server | `eugraph-server --bolt-port 7688 --port 9090` |
+| server | `eugraph-server --bolt-port 7688 --thrift-port 9090` |
 | WiredTiger | cache 2048MB，`--wt-txn-sync none`，threads 4 |
 | 索引 | loader 自带各标签 `id` 唯一索引 + `Tag(name)` / `TagClass(name)` / `Person(firstName)` / `Message(creationDate)` 等 |
 

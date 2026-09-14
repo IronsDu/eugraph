@@ -1,100 +1,97 @@
 #include "program/loader/csv_loader.hpp"
 #include "program/shell/rpc_client.hpp"
 
+#include <args.hxx>
+
 #include <folly/init/Init.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
 
-static void printUsage() {
-    fmt::print("Usage: eugraph-loader --host <host> --port <port> --data-dir <path> [options]\n");
-    fmt::print("  --host                Server address (default: 127.0.0.1)\n");
-    fmt::print("  --port                Server port (default: 9090)\n");
-    fmt::print("  --data-dir            Path to CSV data directory\n");
-    fmt::print("  --nodes=Label[:Label...]=file    Explicit vertex file mapping (repeatable)\n");
-    fmt::print("  --relationships=TYPE=file        Explicit edge file mapping (repeatable)\n");
-    fmt::print("  --delimiter           CSV delimiter (default: '|'; only '|' supported)\n");
-    fmt::print("  --batch-size          Records per RPC batch (default: 500)\n");
-    fmt::print("  --eventbase-threads   Number of EventBase/RPC client threads (default: 1)\n");
-    fmt::print("  --concurrency         Max parallel CSV file loading tasks (default: 1)\n");
-    fmt::print("  --loader-concurrency  Alias of --concurrency\n");
-}
-
+// Resolve a --nodes/--relationships file path against --data-dir.
 static std::string resolvePath(const std::string& data_dir, const std::string& file) {
     std::filesystem::path p(file);
-    if (p.is_absolute())
+    if (p.is_absolute()) {
         return file;
+    }
     return (std::filesystem::path(data_dir) / p).string();
 }
 
 int main(int argc, char* argv[]) {
-    std::string host = "127.0.0.1";
-    int port = 9090;
-    std::string data_dir;
-    int batch_size = 500;
-    int eventbase_threads = 1;
-    int concurrency = 1;
-    std::vector<std::string> node_specs;
-    std::vector<std::string> rel_specs;
-    std::string delimiter = "|";
+    // Parse our args before folly::Init to avoid gflags conflicts
+    args::ArgumentParser parser("EuGraph CSV loader.");
+    parser.helpParams.addDefault = true;
+    args::HelpFlag help(parser, "help", "Show this help menu", {"help"});
+    args::ValueFlag<std::string> host_flag(parser, "host", "Server address", {"host"}, "127.0.0.1");
+    args::ValueFlag<int> port_flag(parser, "port", "Server port", {"port"}, 9090);
+    args::ValueFlag<std::string> data_dir_flag(
+        parser, "path", "CSV data directory; required when scanning, optional with --nodes/--relationships",
+        {"data-dir"});
+    args::ValueFlagList<std::string> nodes_flag(
+        parser, "spec", "Explicit vertex file mapping: Label[:Label...]=file (repeatable)", {"nodes"});
+    args::ValueFlagList<std::string> relationships_flag(
+        parser, "spec", "Explicit edge file mapping: TYPE=file (repeatable)", {"relationships"});
+    args::ValueFlag<std::string> delimiter_flag(parser, "char", "CSV delimiter; only '|' is supported", {"delimiter"},
+                                                "|");
+    args::ValueFlag<int> batch_size_flag(parser, "n", "Records per RPC batch", {"batch-size"}, 500);
+    args::ValueFlag<int> rpc_connections_flag(parser, "n", "Number of concurrent RPC connections", {"rpc-connections"},
+                                              1);
+    args::ValueFlag<int> parallel_files_flag(parser, "n", "Max number of CSV files loaded in parallel",
+                                             {"parallel-files"}, 1);
 
-    auto take_value = [&](int& i, const std::string& arg) -> std::string {
-        if (arg.find('=') != std::string::npos) {
-            return arg.substr(arg.find('=') + 1);
-        }
-        if (i + 1 < argc) {
-            return argv[++i];
-        }
-        return "";
-    };
-
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg.rfind("--host", 0) == 0) {
-            host = take_value(i, arg);
-        } else if (arg.rfind("--port", 0) == 0) {
-            port = std::stoi(take_value(i, arg));
-        } else if (arg.rfind("--data-dir", 0) == 0) {
-            data_dir = take_value(i, arg);
-        } else if (arg.rfind("--batch-size", 0) == 0) {
-            batch_size = std::stoi(take_value(i, arg));
-        } else if (arg.rfind("--eventbase-threads", 0) == 0 || arg.rfind("--rpc-threads", 0) == 0) {
-            eventbase_threads = std::stoi(take_value(i, arg));
-        } else if (arg.rfind("--concurrency", 0) == 0 || arg.rfind("--loader-concurrency", 0) == 0) {
-            concurrency = std::stoi(take_value(i, arg));
-        } else if (arg.rfind("--nodes", 0) == 0) {
-            node_specs.push_back(take_value(i, arg));
-        } else if (arg.rfind("--relationships", 0) == 0) {
-            rel_specs.push_back(take_value(i, arg));
-        } else if (arg.rfind("--delimiter", 0) == 0) {
-            delimiter = take_value(i, arg);
-        } else if (arg == "--help") {
-            printUsage();
-            return 0;
-        }
+    try {
+        parser.ParseCLI(argc, argv);
+    } catch (const args::Help&) {
+        std::cout << parser;
+        return 0;
+    } catch (const args::ParseError& e) {
+        std::cerr << e.what() << '\n';
+        std::cerr << parser;
+        return 1;
+    } catch (const args::ValidationError& e) {
+        std::cerr << e.what() << '\n';
+        std::cerr << parser;
+        return 1;
     }
 
-    if (data_dir.empty()) {
-        fmt::print(stderr, "Error: --data-dir is required\n");
-        printUsage();
+    const std::string host = args::get(host_flag);
+    const int port = args::get(port_flag);
+    const std::string data_dir = args::get(data_dir_flag);
+    const std::vector<std::string> node_specs = args::get(nodes_flag);
+    const std::vector<std::string> rel_specs = args::get(relationships_flag);
+    const std::string delimiter = args::get(delimiter_flag);
+    const int batch_size = args::get(batch_size_flag);
+    const int rpc_connections = args::get(rpc_connections_flag);
+    const int parallel_files = args::get(parallel_files_flag);
+
+    // --data-dir is only mandatory as the scan root of directory-scan mode.
+    // In CLI mode it merely anchors relative --nodes/--relationships paths.
+    if (node_specs.empty() && rel_specs.empty() && data_dir.empty()) {
+        std::cerr << "Error: --data-dir is required when neither --nodes nor --relationships is given\n";
+        std::cerr << parser;
         return 1;
     }
     if (delimiter != "|") {
-        fmt::print(stderr, "Error: only '|' delimiter is currently supported\n");
+        std::cerr << "Error: only '|' delimiter is currently supported\n";
+        std::cerr << parser;
         return 1;
     }
-    if (batch_size <= 0 || eventbase_threads <= 0 || concurrency <= 0) {
-        fmt::print(stderr, "Error: --batch-size/--eventbase-threads/--concurrency must be positive\n");
+    if (batch_size <= 0 || rpc_connections <= 0 || parallel_files <= 0) {
+        std::cerr << "Error: --batch-size/--rpc-connections/--parallel-files must be positive\n";
+        std::cerr << parser;
         return 1;
     }
 
+    // folly::Init only needs program name; our custom flags confuse gflags
     int folly_argc = 1;
     folly::Init init(&folly_argc, &argv);
+
     spdlog::set_level(spdlog::level::info);
 
     std::vector<eugraph::loader::CsvFileInfo> vertex_files, edge_files;
@@ -148,20 +145,20 @@ int main(int argc, char* argv[]) {
 
     std::vector<std::unique_ptr<eugraph::shell::EuGraphRpcClient>> extra_clients;
     std::vector<eugraph::shell::EuGraphRpcClient*> clients;
-    clients.reserve(eventbase_threads);
+    clients.reserve(rpc_connections);
     clients.push_back(&client);
-    for (int i = 1; i < eventbase_threads; i++) {
+    for (int i = 1; i < rpc_connections; i++) {
         auto extra = std::make_unique<eugraph::shell::EuGraphRpcClient>(host, port);
         if (!extra->connect()) {
-            spdlog::error("[loader] Failed to connect extra EventBase client at {}:{}", host, port);
+            spdlog::error("[loader] Failed to open extra RPC connection to {}:{}", host, port);
             return 1;
         }
         extra_clients.push_back(std::move(extra));
         clients.push_back(extra_clients.back().get());
     }
 
-    spdlog::info("[loader] Connected to {}:{} with {} EventBase client(s), concurrency={}", host, port, clients.size(),
-                 concurrency);
+    spdlog::info("[loader] Connected to {}:{} with {} RPC connection(s), parallel-files={}", host, port, clients.size(),
+                 parallel_files);
 
     spdlog::info("[loader] Creating labels...");
     eugraph::loader::createLabels(client, label_schemas);
@@ -170,14 +167,14 @@ int main(int argc, char* argv[]) {
 
     spdlog::info("[loader] Loading vertex data...");
     auto id_maps = eugraph::loader::loadVertices(clients, vertex_files, label_schemas, merged_label_props, batch_size,
-                                                 concurrency);
+                                                 parallel_files);
     spdlog::info("[loader] Vertex loading complete. {} groups in ID map", id_maps.group_id_map.size());
 
     spdlog::info("[loader] Creating unique indexes on ID properties...");
     eugraph::loader::createUniqueIdIndexes(client, label_schemas);
 
     spdlog::info("[loader] Loading edge data...");
-    eugraph::loader::loadEdges(clients, edge_files, edge_schemas, id_maps, batch_size, concurrency);
+    eugraph::loader::loadEdges(clients, edge_files, edge_schemas, id_maps, batch_size, parallel_files);
     spdlog::info("[loader] Edge loading complete.");
 
     spdlog::info("[loader] All data loaded successfully.");

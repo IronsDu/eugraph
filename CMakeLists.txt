@@ -33,6 +33,7 @@ find_package(lz4 CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(antlr4-runtime CONFIG REQUIRED)
+find_package(args CONFIG REQUIRED)
 find_package(folly CONFIG REQUIRED)
 find_package(FBThrift CONFIG REQUIRED)
 
@@ -378,6 +379,7 @@ target_include_directories(eugraph-server PRIVATE
 )
 
 target_link_libraries(eugraph-server PRIVATE
+    taywee::args
     eugraph_shell_lib
     eugraph_bolt
     eugraph_query_engine
@@ -400,6 +402,7 @@ target_include_directories(eugraph-shell PRIVATE
 )
 
 target_link_libraries(eugraph-shell PRIVATE
+    taywee::args
     eugraph_shell_lib
     dl
 )
@@ -431,6 +434,7 @@ target_include_directories(eugraph-loader PRIVATE
 )
 
 target_link_libraries(eugraph-loader PRIVATE
+    taywee::args
     eugraph_loader_lib
     dl
 )

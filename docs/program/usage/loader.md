@@ -18,20 +18,20 @@ eugraph-loader --host 127.0.0.1 --port 9090 --data-dir ./csv-data
 
 ```bash
 eugraph-loader --host 127.0.0.1 --port 9090 --data-dir ./csv-data \
-    --batch-size 500 --eventbase-threads 4 --concurrency 4
+    --batch-size 500 --rpc-connections 4 --parallel-files 4
 ```
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--host` | 127.0.0.1 | Server 地址 |
 | `--port` | 9090 | Server 端口 |
-| `--data-dir` | **必填** | CSV 文件根目录 |
+| `--data-dir` | 无 | CSV 文件根目录。目录扫描模式（未给 `--nodes`/`--relationships`）下**必填**；CLI 模式下作为其中相对路径的基准，全部用绝对路径时可不填 |
 | `--nodes` | 无 | 点文件映射 `Label[:Label...]=file`，可重复 |
 | `--relationships` | 无 | 边文件映射 `TYPE=file`，可重复 |
 | `--delimiter` | `\|` | CSV 分隔符，当前仅支持 `\|` |
 | `--batch-size` | 500 | 每 RPC 批次的记录数 |
-| `--eventbase-threads` | 1 | 创建多少个独立 RPC EventBase 客户端/连接 |
-| `--concurrency` | 1 | 最多并行装载多少个 CSV 文件；`--loader-concurrency` 是同义别名 |
+| `--rpc-connections` | 1 | 到 server 的并发 RPC 连接数；每个连接对应一个独立 EventBase 线程 |
+| `--parallel-files` | 1 | 最多同时装载多少个 CSV 文件 |
 
 ## 两种使用方式
 

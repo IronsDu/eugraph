@@ -118,30 +118,42 @@ fbthrift RPC 服务 + 交互式 Shell。
 
 ## 线程模型
 
+Thrift IO 池与 Storage IO 池（`IoScheduler` 内部持有）是**两个独立的 `IOThreadPoolExecutor`**，默认规模相同但互不共享。
+
+**Thrift / RPC 模式**：
+
 ```
 ┌──────────────────────────────────────────────────────┐
-│  Thrift IO 线程 (fbthrift IOThreadPoolExecutor)       │
-│  ├─ 接收请求                                          │
-│  ├─ DDL/DML 通过 IoScheduler::dispatch 调度到 IO 线程  │
-│  └─ 需要 IO 时 co_await 挂起，让出 CPU                │
+│  Thrift IO 池 (IOThreadPoolExecutor, "ThriftIO")      │
+│  同时作为 handler 执行池（setThreadManagerFromExecutor）│
+│  ├─ 接收请求、执行 handler                             │
+│  ├─ 解析/计划/算子执行直接在本池线程上跑（不经 Compute） │
+│  └─ 每次存储调用 co_await IoScheduler::dispatch 挂起    │
 └──────────────────────┬───────────────────────────────┘
-                       │ co_viaIfAsync (IoScheduler)
+                       │ co_viaIfAsync：跨池，不内联
                        ▼
 ┌──────────────────────────────────────────────────────┐
-│  Compute 线程池 (CPUThreadPoolExecutor)               │
-│  ├─ 解析、逻辑/物理计划、表达式求值                    │
-│  ├─ co_viaIfAsync 内联，实际在 IO 线程                │
-│  └─ 需要 IO 时 co_await 挂起，让出 CPU                │
-└──────────────────────┬───────────────────────────────┘
-                       │ co_viaIfAsync (IoScheduler)
-                       ▼
-┌──────────────────────────────────────────────────────┐
-│  IO 线程池 (IOThreadPoolExecutor, IoScheduler)        │
+│  Storage IO 池 (IOThreadPoolExecutor, IoScheduler)    │
 │  ├─ WiredTiger 读写操作                               │
 │  ├─ Cursor 操作、事务提交/回滚                         │
-│  └─ 完成后恢复挂起的协程                               │
+│  └─ 完成后恢复挂起的协程（执行线程回到 Thrift IO 池）    │
 └──────────────────────────────────────────────────────┘
 ```
+
+该模式下 Compute 池不被使用。
+
+**Bolt 模式**：
+
+```
+Bolt EventBase ──scheduleOn(computeExecutor())──▶ Compute 池 (CPUThreadPoolExecutor)
+  （socket 网络 IO）                                 │ session 处理 + 解析/计划/算子执行
+                                                    │ co_viaIfAsync：跨池，不内联
+                                                    ▼
+                                              Storage IO 池 (IoScheduler)
+                                                WiredTiger 读写
+```
+
+Bolt 连接把整个 session 消息处理放到 Compute 池，以便 socket EventBase 腾出来服务其他连接。
 
 ## DDL 协调流程
 
