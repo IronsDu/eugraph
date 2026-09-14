@@ -54,13 +54,7 @@ struct StreamContext {
 class QueryExecutor {
 public:
     struct Config {
-        /// Compute pool size used when the executor owns its pool.
         size_t compute_threads = 4;
-        /// When set, this pool is shared instead of creating a private one.
-        /// GraphManager sets it so that every graph — and the Thrift handler
-        /// executor — share a single pool (mirrors how IoScheduler is shared
-        /// across graphs via AsyncGraphDataStore).
-        std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool;
         Config() = default;
     };
 

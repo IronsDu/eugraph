@@ -200,3 +200,53 @@ READ of size 4 at 0x0000011af000 thread T0
 2. **优先用 `std::visit` 而非手动 index 分发**——`std::visit` 由编译器保证覆盖所有类型，遗漏会导致编译错误而非运行时崩溃。
 3. **ASAN + ctest 串行跑**——并行跑时 /tmp 目录冲突会导致假阳性（Disk quota exceeded），串行跑才能得到可靠的 ASAN 报告。
 4. **测试残留数据要清理**——WiredTiger 测试在 /tmp 下会留下数百 MB 的数据，多次运行不清理会导致磁盘满。ctest 前执行 `find /tmp -name "eugraph*" -exec rm -rf {} +`。
+
+## 案例 6：CI 上 query_executor_tests 长时间无进展（未解决）
+
+### 现象
+
+ASan job（`code-quality.yml`：`build/` + `-fsanitize=address` + `-O0`）运行一个多小时后，日志停在
+`QueryExecutorTest.TckWith7Scenario2MultipleWiths` 不再前进：该用例已完成 CREATE 的大部分日志输出，
+之后既无报错也无后续输出。日志中 `Test timeout computed to be: 10000000`，即**没有有效的单测超时**。
+
+### 排查过程
+
+1. **本地三种配置复现均通过**：
+   - debug preset 重复 20 次：20/20 通过，777 ms；
+   - release 产物（不含当时改动）重复 20 次：20/20 通过；
+   - ASan 产物：通过，991 ms，无 ASan 报错。
+2. **核对链接关系**：`query_executor_tests` 只链接 `eugraph_query_engine` + `eugraph_metadata`，不链接
+   `eugraph_shell_lib`（`graph_manager.cpp` / `graph_service.cpp` / `eugraph_handler.cpp` 都在后者），
+   因此这几个文件的改动不可能影响该测试。
+3. **确认用例内无重试循环**：日志里反复出现的 `[CreateNode] executeChunk` 是因为该 CREATE 有 8 个节点
+   pattern（4 具名 + 4 匿名）→ 8 个 CreateNode 算子各打印一次；`grep -rn 'retry'` 在执行器与 create 算子中
+   无结果。反复出现的 `EdgeLabel 'REL' already exists` 也是正常的（多条边共用 `:REL`，首条创建、
+   其余报"已存在"并被容忍），本地同样如此且能跑完。
+4. **编号偏移**：CI 有 1075 个用例、本地 1073 个，CI 的 `#616` 对应本地 `#614`，按编号比对会错位。
+
+### 根因
+
+**未定位。** 已排除该用例自身的确定性缺陷，也排除了当时改动的影响；本地任何配置都无法复现。
+主要嫌疑是 CI 环境差异（ASan + `-O0`、runner 核数与磁盘 IO、容器资源限制）下的偶发死锁或极慢。
+
+### 修复
+
+未修复，待办。下次复现时建议：
+
+1. 看那个进程的 CPU 占用：**接近 100% = 忙循环，接近 0% = 阻塞在锁/IO**，两者根因完全不同；
+2. 给卡住的进程发 `SIGABRT`（folly 与 ASan 都会打印栈）；gdb attach 可能被 `ptrace_scope` 拒绝，
+   此时可用 `/proc/<pid>/task/*/wchan` 与线程名兜底；
+3. 先重跑一次 job：若通过即为 flake，可据此决定是否加重试或隔离。
+
+### 经验
+
+1. **CI 的 ctest 需要有效的单测超时**。仓库只在 3 个 bolt 驱动测试上设了 `TIMEOUT 600`，CI 与 test preset
+   都没有全局超时，因此一个卡住的用例会烧掉整个 job。建议加一个宽松但存在的 `--timeout`
+   （`tck_tests` 正常就要 ~25 分钟、`loader_integration_tests` ~90s，别设太小）。
+2. **判断"某改动是否可能影响某个测试二进制"，查 CMake 链接关系最快**，不要靠推理：目标链接了哪些库，
+   就决定了哪些源文件在它的作用域内。
+3. **`ctest --verbose` 的用例编号是本地顺序，与 CI 不一致**（用例总数不同），定位时要按**用例名**查。
+4. **`pgrep -f <pattern>` 会匹配到自己所在的命令行**，是常见假阳性（本轮排查被它误导过两次）。
+   写等待循环时用 `pgrep -f '[c]make ...'` 这类写法规避。
+5. **本地无法复现的环境相关卡死，不要猜**：先把能排除的排除掉（链接关系、用例自身逻辑、编号错位），
+   再把不确定性与复现步骤写清楚，比给一个似是而非的结论更有价值。

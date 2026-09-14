@@ -144,12 +144,6 @@ int main(int argc, char* argv[]) {
     auto ioPool = std::make_shared<folly::IOThreadPoolExecutor>(
         config.thrift_io_threads, std::make_shared<folly::NamedThreadFactory>("ThriftIO"));
     server->setIOThreadPool(ioPool);
-
-    // Handlers stay on the IO thread pool. Running them on a separate executor
-    // makes fbthrift route every reply through IOWorkerContext::ReplyQueue with a
-    // cross-thread wakeup, measured at ~6-7s extra latency per request/response
-    // RPC (streaming queries are unaffected). Query execution is moved off the IO
-    // threads from inside the handler instead.
     server->setThreadManagerFromExecutor(ioPool.get());
     spdlog::info("  Using IO thread pool ({} threads) as handler executor", config.thrift_io_threads);
 

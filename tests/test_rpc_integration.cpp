@@ -78,9 +78,6 @@ protected:
         // Start real fbthrift server via ScopedServerInterfaceThread
         // Use a config callback to set the IO thread pool as handler executor
         // to avoid the PriorityThreadManager's ReplyQueue notification delay.
-        // Measured: with handlers on a separate pool, every request/response RPC
-        // pays ~6-7s of extra latency because the reply has to cross threads into
-        // IOWorkerContext::ReplyQueue.
         auto ts = std::make_shared<apache::thrift::ThriftServer>();
         ts->setAddress(folly::SocketAddress("::1", 0));
         ts->setAllowPlaintextOnLoopback(true);

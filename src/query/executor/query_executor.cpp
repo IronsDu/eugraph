@@ -19,10 +19,8 @@ namespace eugraph {
 namespace compute {
 
 QueryExecutor::QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, Config config)
-    : async_data_(async_data), async_meta_(async_meta), config_(std::move(config)) {
-    compute_pool_ = config_.compute_pool ? config_.compute_pool
-                                         : std::make_shared<folly::CPUThreadPoolExecutor>(config_.compute_threads);
-}
+    : async_data_(async_data), async_meta_(async_meta), config_(config),
+      compute_pool_(std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads)) {}
 
 QueryExecutor::~QueryExecutor() = default;
 
