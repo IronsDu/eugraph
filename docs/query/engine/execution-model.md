@@ -37,12 +37,21 @@ Server 进程内有 4 个可配置线程池（另有 WiredTiger 自身的 evicti
 
 | 线程池 | 类型 | 规模参数 | 职责 |
 |--------|------|---------|------|
-| Compute | `CPUThreadPoolExecutor` | `--compute-threads` | 仅 Bolt 模式使用：承载整个 Bolt session 消息处理（解析、计划、执行） |
-| Thrift IO / handler | `IOThreadPoolExecutor`（`ThriftIO`） | `--thrift-io-threads` | Thrift 网络 IO；同时经 `setThreadManagerFromExecutor` 用作 handler 执行池 |
+| Compute | `CPUThreadPoolExecutor` | `--compute-threads` | 进程内唯一，由 `GraphManager` 持有、所有图共享。Thrift `executeCypher` 的计划/执行准备，以及 Bolt 的 session 处理 |
+| Thrift IO | `IOThreadPoolExecutor`（`ThriftIO`） | `--thrift-io-threads` | Thrift 网络 IO；同时经 `setThreadManagerFromExecutor` 用作 handler 执行池 |
 | Storage IO | `IOThreadPoolExecutor`（`IoScheduler` 内部） | `--storage-io-threads` | 所有 WiredTiger 调用（scan、get、insert、commit） |
 | Bolt EventBase | `BoltServer` | `--bolt-io-threads` | Bolt 连接的网络 EventBase |
 
 Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 内部创建 `IoScheduler`，由后者自持一个 `IOThreadPoolExecutor`（`src/storage/graph_manager.cpp`）；Thrift 的池则在 `src/program/server/eugraph_server_main.cpp` 单独创建。二者默认值相同（均为 4），但互不共享。
+
+Compute 池同样是 `GraphManager` 持有的**单例**：经 `QueryExecutor::Config::compute_pool` 注入，因此 G 个图共享一个池，而非每图一个。
+
+> **不要把 handler 整体搬到 Compute 池。** 实测：一旦用
+> `setThreadManagerFromExecutor` 把 handler 放到非 IO 的 executor 上，普通
+> 请求-响应型 RPC（DDL 等）的**回包**会被延迟 6–7 秒——回复必须跨线程写入
+> `IOWorkerContext::ReplyQueue` 并唤醒 IO worker 的 EventBase，而该唤醒在本版本
+> fbthrift 下不可靠（流式查询走另一条回包路径，不受影响，因此仅测查询会漏掉此问题）。
+> handler 必须在本线程（IO 池）上开始并结束，只把中间的重活外派。
 
 ### IoScheduler
 
@@ -63,11 +72,13 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 
 ### 各模式的线程归属
 
-**Thrift / RPC 模式**：handler 直接运行在 Thrift IO 池上（该池同时是 Thrift 的网络 IO 池），不经过 Compute 池。算子执行中的每次存储调用都经 `IoScheduler::dispatch`，由于当前线程不属于 Storage IO 池，`co_viaIfAsync` 不会内联，而是把调用调度到 Storage IO 池，完成后再恢复原协程。
+**Thrift / RPC 模式**：handler 运行在 Thrift IO 池上，并在**同一线程上结束**——这是回包能即时发出的前提（见上文警告）。`co_executeCypher` 只把中间的重活外派：用 `co_withExecutor` 把 `GraphService::executeCypher`（解析、绑定、物理计划、事务建立）放到共享 Compute 池，随后用 `hopTo(origin)`（基于 `co_current_executor` + `co_withExecutor`）跳回原 IO 线程再返回（`src/service/thrift/eugraph_handler.cpp`）。
 
-结果是：物理算子树的执行线程在 Thrift IO 池与 Storage IO 池之间来回切换，没有计算隔离；并且 Thrift 模式下**没有任何代码把查询执行调度到 Compute 池**（`eugraph_handler` 中不存在 executor 调度），因此 `--compute-threads` 在纯 Thrift 模式下不生效。
+算子执行中的每次存储调用都经 `IoScheduler::dispatch`，由于当前线程不属于 Storage IO 池，`co_viaIfAsync` 不会内联，而是把调用调度到 Storage IO 池，完成后再恢复原协程。
 
-**Bolt 模式**：`BoltConnection::dispatchMessage` 通过 `scheduleOn(computeExecutor())` 把整个 session 消息处理放到 Compute 池，以便 socket EventBase 腾出来服务其他连接（`src/service/bolt/bolt_server.cpp`）。存储调用再从 Compute 池跳转到 Storage IO 池。因此 Bolt 模式下 `--compute-threads` 才是实际承载查询执行的线程池。
+注意：**逐批算子执行与流式消费目前仍在 IO 线程上**——它们发生在 `makeStreamGenerator` 消费 `StreamContext::gen` 的循环里，由 Thrift 在消费方线程恢复。本次外派的只是计划/准备阶段。
+
+**Bolt 模式**：`BoltConnection::dispatchMessage` 通过 `scheduleOn(computeExecutor())` 把整个 session 消息处理放到**同一个** Compute 池，以便 socket EventBase 腾出来服务其他连接（`src/service/bolt/bolt_server.cpp`）。存储调用再从 Compute 池跳转到 Storage IO 池。Bolt 整条消息都在 Compute 池上处理，没有 Thrift 那种"回包必须回到原线程"的约束。
 
 ---
 
@@ -137,7 +148,7 @@ AsyncGenerator<RowBatch>
 
 3. **全量物化**：调用方若 drain 整个 generator 到内存后才 commit，大结果集内存压力大。
 
-4. **`co_viaIfAsync` 跨池不内联**：Thrift IO 池与 Storage IO 池是两个独立 executor，每次存储调用都会跳转到 Storage IO 池。Thrift / RPC 模式下物理算子树在这两个 IO 池之间切换执行，无计算隔离，且 Compute 池不被使用；只有 Bolt 模式会把 session 处理放到 Compute 池。
+4. **`co_viaIfAsync` 跨池不内联**：Compute 池与 Storage IO 池是两个独立 executor，每次存储调用都会跳转到 Storage IO 池。Thrift 模式下计划阶段在 Compute 池、逐批算子执行仍在 Thrift IO 池，存储调用再跳到 Storage IO 池；Bolt 模式整条消息都在 Compute 池上。
 
 5. **GraphTxnHandle 是 `void*`**：指向堆上 `TxnState`，commit/rollback 后释放。任何后续访问是 use-after-free。
 

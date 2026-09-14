@@ -15,6 +15,8 @@
 #include <sstream>
 #include <unordered_set>
 
+#include <folly/Executor.h>
+#include <folly/coro/Coroutine.h>
 #include <folly/io/async/EventBaseManager.h>
 
 namespace {
@@ -22,6 +24,14 @@ namespace {
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
         .count();
+}
+
+/// Moves the calling coroutine onto `executor` and leaves it running there.
+/// Used to come back to the Thrift IO worker thread before the reply is
+/// produced: fbthrift enqueues replies through IOWorkerContext::ReplyQueue, and
+/// handing one over from another thread costs seconds of latency.
+folly::coro::Task<void> hopTo(folly::Executor::KeepAlive<> executor) {
+    co_await folly::coro::co_withExecutor(std::move(executor), []() -> folly::coro::Task<void> { co_return; }());
 }
 
 folly::coro::AsyncGenerator<eugraph::thrift_service::ResultRowBatch&&>
@@ -887,7 +897,19 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
         }
     }
 
-    auto exec_ctx = co_await graph_service_.executeCypher(*query, params, *graph_name);
+    // Planning and execution setup run on the shared compute pool instead of the
+    // Thrift IO thread, then we hop back so the reply is produced on the thread
+    // the handler started on.
+    auto compute_ka = folly::getKeepAliveToken(graph_service_.computeExecutor());
+    eugraph::service::CypherExecutionContext exec_ctx;
+    if (compute_ka) {
+        folly::Executor::KeepAlive<> origin = co_await folly::coro::co_current_executor;
+        exec_ctx = co_await folly::coro::co_withExecutor(compute_ka,
+                                                         graph_service_.executeCypher(*query, params, *graph_name));
+        co_await hopTo(std::move(origin));
+    } else {
+        exec_ctx = co_await graph_service_.executeCypher(*query, params, *graph_name);
+    }
 
     thrift_service::QueryStreamMeta meta;
     meta.columns() = exec_ctx.ctx->columns;

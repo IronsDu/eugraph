@@ -9,6 +9,8 @@
 #include "storage/meta/async_graph_meta_store.hpp"
 #include "storage/meta/sync_graph_meta_store.hpp"
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
+
 #include <atomic>
 #include <filesystem>
 #include <memory>
@@ -51,6 +53,13 @@ public:
 
     GraphInstance* getGraph(const std::string& name);
 
+    /// Compute pool shared by every graph's QueryExecutor. The Thrift server
+    /// also uses it as its handler executor, so query execution and stream
+    /// serialization run off the IO threads (mirroring what Bolt does).
+    folly::Executor* computeExecutor() const {
+        return compute_pool_.get();
+    }
+
 private:
     std::unique_ptr<GraphInstance> openGraphInstance(uint32_t graph_id, const std::string& name);
     void checkpointAll();
@@ -58,10 +67,11 @@ private:
 
     std::string data_dir_;
     int io_threads_ = 4;
-    int compute_threads_ = 4;
     int checkpoint_interval_sec_ = kDefaultCheckpointIntervalSec;
     std::string data_wt_config_;
     std::shared_ptr<IoScheduler> io_scheduler_;
+    // Shared by all graphs: one compute pool per process, not one per graph.
+    std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool_;
 
     CatalogStore catalog_;
 

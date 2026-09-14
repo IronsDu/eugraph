@@ -118,29 +118,37 @@ fbthrift RPC 服务 + 交互式 Shell。
 
 ## 线程模型
 
-Thrift IO 池与 Storage IO 池（`IoScheduler` 内部持有）是**两个独立的 `IOThreadPoolExecutor`**，默认规模相同但互不共享。
+Compute 池是进程内唯一的 `CPUThreadPoolExecutor`，由 `GraphManager` 持有、被所有图共享。Thrift IO 池与 Storage IO 池（`IoScheduler` 内部持有）是两个独立的 `IOThreadPoolExecutor`，默认规模相同但互不共享。
 
 **Thrift / RPC 模式**：
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │  Thrift IO 池 (IOThreadPoolExecutor, "ThriftIO")      │
-│  同时作为 handler 执行池（setThreadManagerFromExecutor）│
-│  ├─ 接收请求、执行 handler                             │
-│  ├─ 解析/计划/算子执行直接在本池线程上跑（不经 Compute） │
-│  └─ 每次存储调用 co_await IoScheduler::dispatch 挂起    │
+│  = 网络 IO + handler 执行池（setThreadManagerFromExecutor）│
+│  ├─ handler 在本线程开始、也必须在本线程结束             │
+│  └─ 逐批算子执行与流式消费（makeStreamGenerator）        │
 └──────────────────────┬───────────────────────────────┘
-                       │ co_viaIfAsync：跨池，不内联
+                       │ co_withExecutor：只把计划阶段外派
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│  Compute 池 (CPUThreadPoolExecutor，全局唯一)          │
+│  └─ GraphService::executeCypher：解析/绑定/物理计划     │
+└──────────────────────┬───────────────────────────────┘
+                       │ hopTo(origin)：跳回 IO 线程后再返回
+                       │ （回包必须在本线程入队，否则延迟数秒）
                        ▼
 ┌──────────────────────────────────────────────────────┐
 │  Storage IO 池 (IOThreadPoolExecutor, IoScheduler)    │
 │  ├─ WiredTiger 读写操作                               │
 │  ├─ Cursor 操作、事务提交/回滚                         │
-│  └─ 完成后恢复挂起的协程（执行线程回到 Thrift IO 池）    │
+│  └─ 完成后恢复挂起的协程                               │
 └──────────────────────────────────────────────────────┘
 ```
 
-该模式下 Compute 池不被使用。
+> **易错点**：不要用 `setThreadManagerFromExecutor` 把 handler 整体放到非 IO 的
+> executor 上。实测这会让请求-响应型 RPC（DDL 等）的回包延迟 6–7 秒——回复需跨线程写入
+> `IOWorkerContext::ReplyQueue`。流式查询不受影响，因此只测查询会漏掉该问题。
 
 **Bolt 模式**：
 
@@ -153,7 +161,7 @@ Bolt EventBase ──scheduleOn(computeExecutor())──▶ Compute 池 (CPUThre
                                                 WiredTiger 读写
 ```
 
-Bolt 连接把整个 session 消息处理放到 Compute 池，以便 socket EventBase 腾出来服务其他连接。
+Bolt 连接把整个 session 消息处理放到 Compute 池，以便 socket EventBase 腾出来服务其他连接。Bolt 整条消息都在 Compute 池上处理，没有 Thrift 那种"回包必须回到原线程"的约束。
 
 ## DDL 协调流程
 
