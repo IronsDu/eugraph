@@ -24,7 +24,10 @@ struct ListenerState {
 // ==================== BoltConnection ====================
 
 BoltConnection::BoltConnection(folly::AsyncSocket::UniquePtr socket, service::GraphService& service)
-    : socket_(std::move(socket)), service_(service), session_(service_) {}
+    : socket_(std::move(socket)), service_(service), session_(service_) {
+    closed_ = std::make_shared<std::atomic<bool>>(false);
+    session_.setConnectionClosedFlag(closed_);
+}
 
 BoltConnection::~BoltConnection() {
     spdlog::debug("[bolt] connection destroyed");
@@ -350,6 +353,10 @@ void BoltConnection::closeConnection() {
         return;
     phase_ = Phase::CLOSED;
     message_accumulator_.clear();
+    // Let a PULL that is still draining a result notice that nobody is listening.
+    if (closed_) {
+        closed_->store(true, std::memory_order_relaxed);
+    }
 
     // Keep a self-reference so the connection is not destroyed while
     // we're still inside this method (removeConnection may drop the

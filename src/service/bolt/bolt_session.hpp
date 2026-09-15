@@ -8,6 +8,7 @@
 
 #include <folly/coro/Task.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -35,6 +36,13 @@ public:
     }
     void setBoltPort(uint16_t port) {
         bolt_port_ = port;
+    }
+
+    /// Lets the owning connection tell a running PULL that the client is gone, so
+    /// it stops pulling instead of draining a result nobody will read. Checked
+    /// between batches, so it cannot interrupt a single long gen.next().
+    void setConnectionClosedFlag(std::shared_ptr<const std::atomic<bool>> flag) {
+        connection_closed_ = std::move(flag);
     }
 
     SessionState state() const {
@@ -88,6 +96,8 @@ private:
 
     // Current query execution context (set by RUN, consumed by PULL)
     std::shared_ptr<compute::StreamContext> stream_ctx_;
+    /// Shared with the owning connection; true once the socket is gone.
+    std::shared_ptr<const std::atomic<bool>> connection_closed_;
     std::unordered_map<LabelId, LabelDef> label_defs_;
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs_;
 

@@ -85,7 +85,7 @@ CONNECTING → READY → STREAMING → READY
 | LOGON | 0x6A | C→S | 认证（Bolt v5.0+ 驱动） |
 | LOGOFF | 0x6B | C→S | 登出 |
 | RUN | 0x10 | C→S | 执行 Cypher 查询 |
-| PULL | 0x3F | C→S | 拉取结果批次（支持 n 限制） |
+| PULL | 0x3F | C→S | 拉取结果批次（`n` 限制；未取完时返回 `has_more=true`，驱动继续 PULL） |
 | DISCARD | 0x2E | C→S | 丢弃剩余结果 |
 | BEGIN | 0x11 | C→S | 开始显式事务 |
 | COMMIT | 0x12 | C→S | 提交事务 |
