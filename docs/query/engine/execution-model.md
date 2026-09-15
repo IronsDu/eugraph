@@ -79,16 +79,44 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 
 `GraphManager::openGraphInstance` 按 `compute_threads_` 为每个图实例各建一个 `CPUThreadPoolExecutor`（`src/storage/graph_manager.cpp`），因此 G 个图 = `G × --compute-threads` 个线程，而 Bolt 只用得到当前图那一个。改法是让 `GraphManager` 持有一个共享池（与既有的 `io_scheduler_` 同样做法），经 `QueryExecutor::Config` 注入。参考实现见提交 `f2b3884`（该提交同时含下方待办 2 的失败尝试，回退时被一并撤销）。
 
-**待办 2：把 Thrift 的查询执行移出 IO 线程（暂缓，风险已知）。**
+**待办 2：把 Thrift 的查询执行移出 IO 线程（已解决）。**
 
 动机：Thrift 模式下 handler 与查询执行都占用 IO 线程。已实测**两次失败尝试**，表现都是秒级停顿，根因相同——**跨线程唤醒 IO worker 的 EventBase 在本版本 fbthrift/folly 下会被延迟数秒**：
 
 | 尝试 | 做法 | 实测结果 |
 |------|------|---------|
 | 整段 handler 外派 | `setThreadManagerFromExecutor(compute_pool)` | 请求-响应型 RPC（DDL 等）**回包**延迟 6–7 秒：单用例 1.4s → 12.7s，套件 20s → 262s。原因是响应需跨线程写入 `IOWorkerContext::ReplyQueue`。**流式查询走另一条回包路径、完全不受影响，只测查询会得到假阴性。** |
-| 仅外派计划阶段 | 在 `co_executeCypher` 内 `co_withExecutor` 搬到 Compute 池，再用 `co_current_executor` + `co_withExecutor` 跳回 IO 线程后返回 | DDL 路径正常（0.5s），但 **TCK 全面退化**：单查询中位耗时 5780ms（425 个样本中 318 个 ≥3s），`tck_tests` 从 1470–1500s 涨到 >1980s 仍未结束。原因是 `StreamContext::gen` 在 Compute 线程上创建、却由 Thrift 在 IO 线程消费，**每批 `gen.next()` 都要跨线程恢复**。 |
+| 仅外派计划阶段，跳回 **IO 线程池** | 在 `co_executeCypher` 内 `co_withExecutor` 搬到 Compute 池，再用 `co_current_executor` + `co_withExecutor` 跳回 `co_current_executor` 得到的 executor（= 线程池） | DDL 路径正常（0.5s），但 **TCK 全面退化**：单查询中位耗时 5780ms（425 个样本中 318 个 ≥3s），`tck_tests` 从 1470–1500s 涨到 >1980s 仍未结束。原因是 `co_current_executor` 给的是**线程池**而非该请求的 evb，4 条 IO 线程下大概率落到别的 evb 线程 → 同样入队。 |
 
-结论：**在解决跨线程唤醒延迟之前，不要改 Thrift 的线程归属。** 将来若要推进，需要先弄清该唤醒延迟的机制（`IOWorkerContext::ReplyQueue` 基于 `EventBaseAtomicNotificationQueue::startConsumingInternal`），或改走 Bolt 那种"整条消息物化、只把最终字节写回 EventBase"的模型。
+**根因（已定位）**：fbthrift 的 `HandlerCallbackBase::sendReply`（`AsyncProcessor.cpp`）只在
+`getEventBase()->inRunningEventBaseThread()` 为真时直发回包，否则写入
+`IOWorkerContext::ReplyQueue`；而该队列是用 **`startConsumingInternal`** 注册的
+（`IOWorkerContext.h`），folly 明确说明 internal event
+"**may be skipped if EventBase doesn't have any other registered events**"。
+于是只要回包不在该请求自己的 evb 线程上产生，evb 空闲时排空就会被推迟数秒。
+fbthrift 自身也踩过这个坑：`putMessageInReplyQueue` 中有一段仅 Windows 生效的绕过，
+注释写着 "We are seeing performance regression ... if we use the reply queue"。
+
+**解法（已实现并验证）**：外派前先捕获**该请求自己的 EventBase**，外派完成后跳回它，
+而不是跳回线程池。`EventBase` 实现了 `keepAliveAcquire/Release`，可作为 Executor 调度：
+
+```cpp
+folly::EventBase* request_evb = folly::EventBaseManager::get()->getEventBase();  // 仍在 evb 线程上
+auto compute_ka = folly::getKeepAliveToken(graph_service_.computeExecutor());
+exec_ctx = co_await folly::coro::co_withExecutor(compute_ka, graph_service_.executeCypher(...));
+co_await hopTo(folly::getKeepAliveToken(request_evb));   // 回到该请求的 evb，回包才会直发
+```
+
+实测（server 默认 4 条 IO 线程）：
+
+| 指标 | 跳回线程池（错） | 跳回该请求的 evb（对） |
+|---|---|---|
+| `tck_tests` | >1980s 未跑完 | **1523s**（基线 1470–1499s） |
+| 单查询中位耗时 | 5780 ms | **1 ms** |
+| 单查询 P90 | 7083 ms | **2 ms** |
+| ≥1000ms 的查询 | 318 / 425 | 9 / 77257 |
+| `eugraph-shell` CREATE + MATCH | — | 49 ms / 139 ms |
+| `eugraph-loader`（DDL + 批量 RPC） | — | RPC 阶段 240 ms |
 
 ---
 
