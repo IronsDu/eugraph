@@ -44,10 +44,16 @@ folly::coro::AsyncGenerator<eugraph::thrift_service::ResultRowBatch&&>
 makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
                     std::unordered_map<eugraph::LabelId, eugraph::LabelDef> label_defs,
                     std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
-                    eugraph::service::thrift::EuGraphHandler& handler, int64_t t0) {
+                    eugraph::service::thrift::EuGraphHandler& handler, int64_t t0,
+                    folly::Executor::KeepAlive<> compute) {
     size_t total_rows = 0;
     bool labels_merged = false;
-    while (auto chunk = co_await ctx->gen.next()) {
+    // Bind each pull to the compute pool. The generator's promise carries an
+    // executor and routes every await inside the operator tree through it, so
+    // this is what actually keeps per-batch execution (and row conversion) off
+    // the Thrift IO thread -- simply starting the query there is not enough,
+    // because the consumer drives the generator.
+    while (auto chunk = co_await ctx->gen.next().viaIfAsync(compute)) {
         if (!labels_merged) {
             labels_merged = true;
             for (const auto& [lid, def] : ctx->label_defs) {
@@ -930,7 +936,7 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
     // metadata (label order); the assignment above copies, so ctx keeps them.
 
     auto gen = makeStreamGenerator(std::move(exec_ctx.ctx), std::move(exec_ctx.label_defs),
-                                   std::move(exec_ctx.edge_label_defs), *this, t0);
+                                   std::move(exec_ctx.edge_label_defs), *this, t0, compute_ka);
 
     co_return apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>{
         std::move(meta), std::move(gen)};
