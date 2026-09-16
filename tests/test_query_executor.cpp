@@ -4786,6 +4786,167 @@ TEST_F(QueryExecutorTest, PatternComprehensionInsideListComprehension) {
     }
 }
 
+// ── A comprehension whose pattern endpoint is an enclosing variable ──
+//
+// The fixture is built so the two candidate answers differ: `p`'s own post carries
+// tag `t1`, which `p` is interested in, and `keep` also carries `t1`. The `drop`
+// post carries only `t9`, which p is NOT interested in, so it must not be collected.
+//
+//   MATCH (p:P {id:1})<-[:CREATED]-(post) WITH collect(post) AS posts, p
+//   RETURN size([x IN posts WHERE (x)-[:HAS_TAG]->()<-[:INTEREST]-(p)])
+//
+// The endpoint `(p)` is a reference to the enclosing variable, and `posts` is the
+// enclosing Unwind's list. Getting either one wrong -- resolving `p` to another
+// bound variable, or failing to expose `posts` to the sub-plan -- makes the
+// comprehension drop its constraint and count `drop` as well, so the assertion is
+// exactly the difference between "constraint applied" (1) and "constraint lost" (2).
+TEST_F(QueryExecutorTest, ListComprehensionPatternPredicateCountsOnlyMatchingElements) {
+    auto setup1 = execSync(*executor_, "CREATE (t1:T {id: 3}), (t9:T {id: 4})");
+    ASSERT_TRUE(setup1.error.empty()) << setup1.error;
+    // p is interested in t1 only.
+    auto setup2 = execSync(*executor_, "CREATE (p:P {id: 1})-[:INTEREST]->(:T {id: 3})");
+    ASSERT_TRUE(setup2.error.empty()) << setup2.error;
+    // Four posts reach p: two of p's own and two of a friend's. Expressed as
+    // post -[:CREATED]-> person so every MATCH below stays in the forward direction.
+    auto setup3 = execSync(*executor_, "MATCH (p:P {id: 1}) CREATE (:Post {id: 5})-[:CREATED]->(p)");
+    ASSERT_TRUE(setup3.error.empty()) << setup3.error;
+    // p knows f2 and f3; each friend created one post carrying t1 (shared) and one
+    // carrying t9 (not shared).
+    auto setup4 = execSync(*executor_, "MATCH (p:P {id: 1}) "
+                                       "CREATE (p)-[:KNOWS]->(:F {id: 2}), (p)-[:KNOWS]->(:F {id: 3})");
+    ASSERT_TRUE(setup4.error.empty()) << setup4.error;
+    auto setup5 = execSync(*executor_, "MATCH (f2:F {id: 2}), (f3:F {id: 3}) "
+                                       "CREATE (:Post {id: 6})-[:CREATED]->(f2), (:Post {id: 7})-[:CREATED]->(f2), "
+                                       "(:Post {id: 8})-[:CREATED]->(f3), (:Post {id: 9})-[:CREATED]->(f3)");
+    ASSERT_TRUE(setup5.error.empty()) << setup5.error;
+    // Post 5 (p's)  -> t1 (shared)      keep
+    // Post 6 (p's)  -> t9 (not shared)  drop
+    // Post 7 (f's)  -> t1 (shared)      keep
+    // Post 8 (f's)  -> t9 (not shared)  drop
+    auto setup6 = execSync(*executor_, "MATCH (a:Post {id: 6}), (b:Post {id: 7}), (c:Post {id: 8}), (d:Post {id: 9}), "
+                                       "(t1:T {id: 3}), (t9:T {id: 4}) "
+                                       "CREATE (a)-[:HAS_TAG]->(t1), (b)-[:HAS_TAG]->(t9), (c)-[:HAS_TAG]->(t1), "
+                                       "(d)-[:HAS_TAG]->(t9)");
+    ASSERT_TRUE(setup6.error.empty()) << setup6.error;
+
+    auto result =
+        execSync(*executor_, "MATCH (p:P {id: 1})-[:KNOWS]->(f:F) WITH p, f "
+                             "MATCH (post:Post)-[:CREATED]->(f) WITH p, f, collect(post) AS posts "
+                             "RETURN f.id AS fid, size(posts) AS n, "
+                             "size([x IN posts WHERE (x)-[:HAS_TAG]->()<-[:INTEREST]-(p)]) AS matched ORDER BY fid");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    // Two groups, each holding one post that shares t1 with p and one that does not.
+    // Every group must therefore report n=2 and matched=1; if the endpoint constraint
+    // is dropped the count becomes 2 in each group, which is the failure pinned here.
+    ASSERT_EQ(result.rows.size(), 2u);
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[i][1]));
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][1]), 2) << "posts collected in group " << i;
+        ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[i][2]));
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][2]), 1) << "matched in group " << i;
+    }
+}
+
+// ── Same shape, but the person only enters through WITH ──
+//
+// The variant above works because the person is bound by the outer MATCH. Here the
+// friend comes from the MATCH while the person and the post list are both carried
+// across a WITH, so the comprehension's endpoint and its Unwind input are correlated
+// variables rather than match-bound ones -- the arrangement used by LDBC complex-10.
+TEST_F(QueryExecutorTest, ListComprehensionPatternPredicateAcrossWith) {
+    auto setup1 = execSync(*executor_, "CREATE (t1:T {id: 3}), (t9:T {id: 4})");
+    ASSERT_TRUE(setup1.error.empty()) << setup1.error;
+    auto setup2 = execSync(*executor_, "CREATE (p:P {id: 1})-[:INTEREST]->(:T {id: 3})");
+    ASSERT_TRUE(setup2.error.empty()) << setup2.error;
+    auto setup3 = execSync(*executor_, "MATCH (p:P {id: 1}) "
+                                       "CREATE (p)-[:KNOWS]->(:F {id: 2}), (p)-[:KNOWS]->(:F {id: 3})");
+    ASSERT_TRUE(setup3.error.empty()) << setup3.error;
+    auto setup4 = execSync(*executor_, "MATCH (f2:F {id: 2}), (f3:F {id: 3}) "
+                                       "CREATE (:Post {id: 6})-[:CREATED]->(f2), (:Post {id: 7})-[:CREATED]->(f2), "
+                                       "(:Post {id: 8})-[:CREATED]->(f3), (:Post {id: 9})-[:CREATED]->(f3)");
+    ASSERT_TRUE(setup4.error.empty()) << setup4.error;
+    auto setup5 = execSync(*executor_, "MATCH (a:Post {id: 6}), (b:Post {id: 7}), (c:Post {id: 8}), (d:Post {id: 9}), "
+                                       "(t1:T {id: 3}), (t9:T {id: 4}) "
+                                       "CREATE (a)-[:HAS_TAG]->(t1), (b)-[:HAS_TAG]->(t9), (c)-[:HAS_TAG]->(t1), "
+                                       "(d)-[:HAS_TAG]->(t9)");
+    ASSERT_TRUE(setup5.error.empty()) << setup5.error;
+
+    // p and posts are both introduced by WITH, so the comprehension correlates on the
+    // person while its Unwind list arrives the same way.
+    auto result = execSync(*executor_, "MATCH (p:P {id: 1}) WITH p "
+                                       "MATCH (p)-[:KNOWS]->(f:F) WITH p, f "
+                                       "MATCH (post:Post)-[:CREATED]->(f) WITH p, f, collect(post) AS posts "
+                                       "RETURN f.id AS fid, size(posts) AS n, "
+                                       "size([x IN posts WHERE (x)-[:HAS_TAG]->()<-[:INTEREST]-(p)]) AS matched "
+                                       "ORDER BY fid");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    for (size_t i = 0; i < result.rows.size(); ++i) {
+        ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[i][1]));
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][1]), 2) << "posts collected in group " << i;
+        ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[i][2]));
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][2]), 1) << "matched in group " << i;
+    }
+}
+
+// ── A negated pattern predicate must not disable a later comprehension ──
+//
+// Minimal reproduction of a defect confirmed against neo4j. `friend` is reached over
+// two hops so it is not adjacent to `person`, which makes the NOT(...) predicate true
+// rather than excluding the row. With the predicate present the comprehension below it
+// loses its endpoint constraint and reports 0; without it the same query reports 1.
+// neo4j reports 1 in both cases.
+//
+//   cpc = size([x IN posts WHERE (x)-[:UT_HAS_TAG]->()<-[:UT_INTEREST]-(person)])
+//
+// post 6 carries t1, which person is interested in, and post 7 carries no tag, so the
+// correct answer is 1 either way.
+// Regression test: the comprehension's endpoint constraint survives a negated pattern
+// predicate in the same WHERE. It failed (cpc=0 against neo4j's 1) until the saved-slot
+// names for EXISTS sub-plans were made unique binder-wide instead of per call -- both
+// sub-plans used to bind `__exists_saved_1`, so the comprehension resolved against the
+// other sub-plan's value and dropped its constraint.
+TEST_F(QueryExecutorTest, NegatedPatternPredicateDoesNotBreakFollowingComprehension) {
+    auto s1 = execSync(*executor_, "CREATE (t1:UT_T {id: 3})");
+    ASSERT_TRUE(s1.error.empty()) << s1.error;
+    auto s2 = execSync(*executor_, "MATCH (t1:UT_T {id: 3}) CREATE (:UT_P {id: 1})-[:UT_INTEREST]->(t1)");
+    ASSERT_TRUE(s2.error.empty()) << s2.error;
+    auto s3 = execSync(*executor_, "CREATE (mid:UT_P {id: 99})");
+    ASSERT_TRUE(s3.error.empty()) << s3.error;
+    auto s4 = execSync(*executor_, "MATCH (p:UT_P {id: 1}), (m:UT_P {id: 99}) CREATE (p)-[:UT_KNOWS]->(m)");
+    ASSERT_TRUE(s4.error.empty()) << s4.error;
+    auto s5 = execSync(*executor_, "MATCH (m:UT_P {id: 99}) CREATE (m)-[:UT_KNOWS]->(:UT_F {id: 2})");
+    ASSERT_TRUE(s5.error.empty()) << s5.error;
+    auto s6 = execSync(*executor_, "MATCH (f:UT_F {id: 2}) CREATE (:UT_Post {id: 6})-[:UT_CREATED]->(f), "
+                                   "(:UT_Post {id: 7})-[:UT_CREATED]->(f)");
+    ASSERT_TRUE(s6.error.empty()) << s6.error;
+    auto s7 = execSync(*executor_, "MATCH (a:UT_Post {id: 6}), (t1:UT_T {id: 3}) CREATE (a)-[:UT_HAS_TAG]->(t1)");
+    ASSERT_TRUE(s7.error.empty()) << s7.error;
+
+    const char* head = "MATCH (person:UT_P {id: 1})-[:UT_KNOWS]->(m:UT_P {id: 99})-[:UT_KNOWS]->(friend:UT_F) "
+                       "WHERE NOT friend=person";
+    const char* coll = " OPTIONAL MATCH (friend)<-[:UT_CREATED]-(post:UT_Post) "
+                       "WITH friend, collect(post) AS posts, person "
+                       "RETURN size(posts) AS n, "
+                       "size([x IN posts WHERE (x)-[:UT_HAS_TAG]->()<-[:UT_INTEREST]-(person)]) AS cpc";
+    const char* negated = " AND NOT (friend)-[:UT_KNOWS]-(person)";
+
+    // Control: without the negated pattern predicate the comprehension counts correctly.
+    auto control = execSync(*executor_, std::string(head) + coll);
+    ASSERT_TRUE(control.error.empty()) << control.error;
+    ASSERT_EQ(control.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(control.rows[0][0]), 2);
+    EXPECT_EQ(std::get<int64_t>(control.rows[0][1]), 1) << "control: correct without NOT(...)";
+
+    // With it, the row is still produced but the comprehension drops its constraint.
+    auto with_not = execSync(*executor_, std::string(head) + negated + coll);
+    ASSERT_TRUE(with_not.error.empty()) << with_not.error;
+    ASSERT_EQ(with_not.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(with_not.rows[0][0]), 2);
+    EXPECT_EQ(std::get<int64_t>(with_not.rows[0][1]), 1)
+        << "NOT(...) must not change the comprehension's count (neo4j reports 1)";
+}
+
 TEST_F(QueryExecutorTest, BarePatternExpressionInOrderByError) {
     insertExistsTestGraph(*sync_data_, PERSON_LABEL, KNOWS_LABEL);
     auto result = execSync(*executor_, "MATCH (n:Person) RETURN n.name AS name ORDER BY (n)-[:KNOWS]->(:Person), name");

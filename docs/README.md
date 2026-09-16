@@ -93,6 +93,8 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 |------|------|
 | [LDBC SNB SF0.1 对比测试](benchmark/ldbc-snb-sf0.1-comparison.md) | EuGraph vs Neo4j 导入、LDBC 查询耗时对比、慢查询分析 |
 | [列表推导内模式推导：发现与待修缺陷](query/deferred-pattern-comprehension-findings.md) | complex-10 的根因证据、被证伪的方向、探针规范与验收口径 |
+| [模式推导缺陷排查经验](query/comprehension-defect-debugging-notes.md) | 十一轮排查的复盘：为何反复走错、哪三个动作最终定位到根因、可复用的检查清单 |
+| [已知缺陷待办](query/known-defects-todo.md) | 排查中顺带确认、与 complex-10 无关的既有缺陷（反向模式、类型硬编码、列集合冲突、loader 越界、测量陷阱） |
 
 
 ## 格式化
