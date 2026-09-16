@@ -1208,6 +1208,15 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
     // Expand's output schema contain the name twice (passthrough + dst) and
     // makeSlotLayout would collapse them onto the same slot, breaking the
     // post-Expand equality filter.
+    // Names for the saved endpoint value must be unique across the whole statement,
+    // not just within this call. Two sub-plans bound in the same statement (say a
+    // `NOT <pattern predicate>` in the WHERE and a pattern comprehension beside it)
+    // used to both produce `__exists_saved_1`, and because both were registered in
+    // ctx_.symbols the later sub-plan resolved against the earlier one's binding: the
+    // comprehension then read the wrong value for its endpoint, silently dropped the
+    // constraint, and counted every element (0 instead of 1 on the fixture above, and
+    // complex-10's inflated commonPostCount on sf0.1). Deriving the suffix from the
+    // binder-wide counter keeps each sub-plan's bindings its own.
     uint32_t chain_counter = 0;
     for (const auto& pp : exp_patterns) {
         for (auto& [rel_pat, node_pat] : pp.element.chain) {
@@ -1230,7 +1239,8 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             // otherwise Expand's output_schema would contain the name twice
             // (passthrough + dst) and makeSlotLayout would collapse them onto
             // the same slot, breaking the filter.
-            std::string sub_dst_var = "__exists_dst_" + std::to_string(chain_counter);
+            const uint32_t unique = nextAnonId();
+            std::string sub_dst_var = "__exists_dst_" + std::to_string(unique);
             uint32_t sub_dst_col = nextColumnIndex();
             SlotId sub_dst_slot = allocateNamedSlot(sub_dst_var);
             ColumnInfo sub_dst_info;
@@ -1244,7 +1254,7 @@ std::optional<BoundLogicalOperator> Binder::bindExistsSubPlan(const cypher::Exis
             // Fresh name + slot for the saved outer value (preserved across
             // Expand). This IS correlated so the SemiJoin injects the outer
             // value into the source's output.
-            std::string saved_var = "__exists_saved_" + std::to_string(chain_counter);
+            std::string saved_var = "__exists_saved_" + std::to_string(unique);
             uint32_t saved_col = nextColumnIndex();
             SlotId saved_slot = allocateNamedSlot(saved_var);
             ColumnInfo saved_info;

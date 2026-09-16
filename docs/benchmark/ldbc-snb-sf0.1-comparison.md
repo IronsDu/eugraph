@@ -70,8 +70,72 @@
 | complex-1 / complex-13 | 依赖 `shortestPath`，当前不支持 |
 | complex-5 / complex-6 | 已知会导致 CPU/内存失控，跳过 |
 | complex-9 | 已知超时（>40s），跳过 |
-| complex-10 | pattern comprehension 语法不支持 |
 | complex-14 | `allShortestPaths` + `reduce` 语法不支持 |
+
+**complex-10 现已支持**（此前记为「pattern comprehension 语法不支持」）。修复见
+[docs/query/deferred-pattern-comprehension-findings.md](../query/deferred-pattern-comprehension-findings.md)：
+`bindExistsSubPlan` 用局部计数器命名保存槽，同一条语句里的两个子计划都生成
+`__exists_saved_1`，后者解析到前者的绑定，导致与 `NOT <模式谓词>` 同处一个 WHERE 的
+模式推导静默丢弃终点约束。
+
+复数查询冒烟（personId=933, month=5）：complex-2/3/4/5/6 返回 0 行（该人当月无数据，
+非错误）、**complex-7 7 行 / complex-8 20 行 / complex-10 10 行 / complex-11/12 0 行**
+均正常执行；complex-1/13/14 仍因不支持的语法报错。
+
+### 测量警告：CPU 会降到 33% 频率
+
+本机（AMD Ryzen 7 5825U）在若干次测量中观察到 `lscpu` 的
+`CPU(s) scaling MHz: 33%`，此时**同一二进制**的 complex-7 相比全频时慢约 2 倍
+（如 pid 933 从 min 8.4ms 变为 15.8ms、pid 1242 从 39ms 变为 71ms）。
+**跨时间比较复杂度指标前必须确认当前 CPU 频率**，否则会把功耗状态误判为代码回归 ——
+本轮就曾因此怀疑新提交引入了性能回归，同二进制交错 A/B 显示两个二进制逐项相同，
+真正原因是频率。
+
+### complex-10 延迟（sf0.1，修复后）
+
+**测量前提**：`lscpu` 显示 `CPU(s) scaling MHz: 34%`（同前文警告，此状态下绝对值偏慢约 2 倍）。
+warmup 3 / iters 15，每轮独立连接。
+
+| personId | month | rows | min | p25 | median | p95 | max |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 933 | 5 | 10 | 375.74 ms | 384.75 | 396.59 | 431.36 | 431.36 ms |
+| 933 | 8 | 10 | 610.05 ms | 632.62 | 667.20 | 706.50 | 706.50 ms |
+| 1242 | 5 | 10 | 2328.10 ms | 2421.26 | 2476.58 | 2998.25 | 2998.25 ms |
+| 2199023256816 | 5 | 10 | 2803.82 ms | 2889.74 | 2902.08 | — | 3067.72 ms |
+
+**同条件下的 complex-7 参照**（用于上下文化，min）：
+
+| personId | complex-7 min | complex-10 min | 倍数 |
+|---|---:|---:|---:|
+| 933 | 17.03 ms | 375.74 ms | ~22x |
+| 1242 | 74.72 ms | 2328.10 ms | ~31x |
+| 2199023256816 | 134.52 ms | 2803.82 ms | ~21x |
+
+**瓶颈在计划开头，不在推导**：
+
+```
+VarLenExpand(src=person, dst=friend, hops=[2..2], labels=[11], direction=ANY)
+```
+
+即 `[:KNOWS*2..2]` 的**无向 2 跳变长展开** —— 需双向遍历，且结果集随人脉规模增长
+（1239→1242 这类高连接度 person 上 friend 数更多，故慢 6～7 倍）。
+其后的 `Expand(friend → city)`、`AntiSemiJoin`（排除直连）、`Distinct`、
+`LeftJoin`（OPTIONAL MATCH 取帖）与推导的 `PatternComprehensionApply` 都是小头。
+
+**优化方向**（未实施）：从 `VarLenExpand` 的中间节点入手减少 2 跳候选集；
+或把 `NOT (friend)-[:KNOWS]-(person)` 的 `AntiSemiJoin` 前移到 VLE 之前剪枝。
+
+### 回归验证：EXISTS 保存槽改名未影响性能
+
+同数据、同机、每轮重启、两二进制交错各两轮（complex-7，warmup 5 / iters 30）：
+
+| pid | 修复前 min（两轮） | 修复后 min（两轮） |
+|---|---|---|
+| 933 | 15.84 / 15.81 ms | 16.47 / 15.86 ms |
+| 1242 | 71.02 / 71.16 ms | 71.64 / 72.42 ms |
+| 2199023256816 | 138.96 / 138.08 ms | 154.72 / 147.35 ms |
+
+逐项差异都在噪声内，**无可测回归**。
 
 ## 4. 当前版本关键优化（Q12 + Complex-3 / Short-7 + Complex-7 原版支持）
 

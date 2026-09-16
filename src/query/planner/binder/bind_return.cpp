@@ -1024,6 +1024,33 @@ static bool containsListComprehension(const cypher::Expression& expr) {
 }
 
 // Collect all variable names appearing anywhere in an expression.
+static void collectAllVariables(const cypher::Expression& expr, std::set<std::string>& vars);
+
+/// Collect the names a pattern binds (its node and relationship variables).
+///
+/// A bare pattern predicate names variables that are *references* to the enclosing
+/// scope when they are already bound there -- in
+/// `[x IN posts WHERE (x)-[:HAS_TAG]->()<-[:HAS_INTEREST]-(p)]` the endpoint `p`
+/// comes from the enclosing WITH. `collectAllVariables` never saw it, because it is
+/// a pattern variable rather than a `Variable` expression, so `p` did not become a
+/// correlation variable of the lowered comprehension. The inner sub-plan then could
+/// not resolve it and the constraint the endpoint carries was dropped, which made
+/// the comprehension match every element (6 where the answer is 3).
+static void collectPatternVariables(const std::vector<cypher::PatternPart>& patterns, std::set<std::string>& vars) {
+    for (const auto& pp : patterns) {
+        if (pp.variable)
+            vars.insert(*pp.variable);
+        if (pp.element.node.variable)
+            vars.insert(*pp.element.node.variable);
+        for (const auto& [rel, node] : pp.element.chain) {
+            if (rel.variable)
+                vars.insert(*rel.variable);
+            if (node.variable)
+                vars.insert(*node.variable);
+        }
+    }
+}
+
 static void collectAllVariables(const cypher::Expression& expr, std::set<std::string>& vars) {
     std::visit(
         [&](const auto& ptr) {
@@ -1044,6 +1071,18 @@ static void collectAllVariables(const cypher::Expression& expr, std::set<std::st
                     collectAllVariables(arg, vars);
             } else if constexpr (std::is_same_v<Elem, cypher::ParenExpr>) {
                 collectAllVariables(ptr->inner, vars);
+            } else if constexpr (std::is_same_v<Elem, cypher::ExistsExpr>) {
+                collectPatternVariables(ptr->patterns, vars);
+                if (ptr->where_pred)
+                    collectAllVariables(*ptr->where_pred, vars);
+            } else if constexpr (std::is_same_v<Elem, cypher::PatternComprehension>) {
+                if (ptr->variable)
+                    vars.insert(*ptr->variable);
+                collectPatternVariables(ptr->patterns, vars);
+                if (ptr->where_pred)
+                    collectAllVariables(*ptr->where_pred, vars);
+                if (ptr->projection)
+                    collectAllVariables(*ptr->projection, vars);
             }
         },
         expr);
