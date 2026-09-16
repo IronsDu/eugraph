@@ -125,6 +125,50 @@ VarLenExpand(src=person, dst=friend, hops=[2..2], labels=[11], direction=ANY)
 **优化方向**（未实施）：从 `VarLenExpand` 的中间节点入手减少 2 跳候选集；
 或把 `NOT (friend)-[:KNOWS]-(person)` 的 `AntiSemiJoin` 前移到 VLE 之前剪枝。
 
+### complex-10 与 neo4j 对比（需先补齐 neo4j 数据，两个差异）
+
+neo4j 实例是从**旧的转换结果**导入的，直接对照会失真；补齐两处后两引擎可等价对比：
+
+| 差异 | neo4j 现状 | 补齐 |
+|---|---|---|
+| 派生细分标签 | `City`/`Country`/`Continent` 均为 0（eugraph 从 `Place.type` 派生） | `MATCH (p:Place) WHERE p.type='city' SET p:City`（country / continent 同理）→ 1343/111/6，与 eugraph 一致 |
+| `birthday` 类型 | **字符串**（原始 CSV 表头是 `birthday:LONG`，旧转换当字符串处理） | `MATCH (n:Person) SET n.birthday = toInteger(n.birthday)` |
+
+**结果一致性核验**（补齐后）：
+
+| personId | eugraph | neo4j | 结论 |
+|---|---:|---:|---|
+| 933 | 10 行 | 10 行 | **逐行一致** |
+| 1242 | 10 行 | 10 行 | 顶部 4 行不同 —— 经查是**平局截断**：`score = -1` 有 15 个 friend 而只取 10 个 |
+
+1242 的完整 `score` 分布**两引擎逐 bucket 相同**（75 个 bucket，含 `0:5, -1:5, -2:1, …, -2490:1`），
+且 2 跳过滤后的 friend 数两边都是 96 —— **结果正确，差异仅来自 ORDER BY 平局内的取舍顺序**。
+
+### complex-10 延迟对比（同数据、交错 A/B，前 2 轮 warmup）
+
+| personId | eugraph min / p50 | neo4j min / p50 | 倍数 |
+|---|---:|---:|---:|
+| 933 | 410.36 / 426.23 ms | **21.24 / 22.71 ms** | **19.3x** |
+| 1242 | 2363.17 / 2548.27 ms | **39.08 / 42.43 ms** | **60.5x** |
+
+（测量时 `CPU(s) scaling MHz` 偏低，两边同样受影响，**倍数**比绝对值更可靠。）
+
+**差距来源在计划开头，不在推导**：
+
+```
+VarLenExpand(src=person, dst=friend, hops=[2..2], labels=[11], direction=ANY)
+```
+
+即 `[:KNOWS*2..2]` 的**无向 2 跳变长展开**。neo4j 用双向 BFS + 关系索引，
+而当前实现的无向变长展开是主要成本；且它按 person 的连接度放大，
+所以高连接度的 1242 比 933 慢 6 倍（而 neo4j 只慢 1.8 倍）。
+
+**优化方向**（未实施，与 complex-7 的已知方向一致）：
+
+1. 无向 VLE 改为**双向按需扩展**（而非全量扫描后取交集）；
+2. 把 `NOT (friend)-[:KNOWS]-(person)` 的 `AntiSemiJoin` **前移到 VLE 之前**剪枝；
+3. 日期过滤（`friend.birthday`）在 VLE 阶段即可用属性下推削减候选。
+
 ### 回归验证：EXISTS 保存槽改名未影响性能
 
 同数据、同机、每轮重启、两二进制交错各两轮（complex-7，warmup 5 / iters 30）：
