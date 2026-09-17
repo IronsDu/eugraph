@@ -127,8 +127,16 @@ Thrift IO 池与 Storage IO 池（`IoScheduler` 内部持有）是**两个独立
 │  Thrift IO 池 (IOThreadPoolExecutor, "ThriftIO")      │
 │  同时作为 handler 执行池（setThreadManagerFromExecutor）│
 │  ├─ 接收请求、执行 handler                             │
-│  ├─ 解析/计划/算子执行直接在本池线程上跑（不经 Compute） │
-│  └─ 每次存储调用 co_await IoScheduler::dispatch 挂起    │
+│  └─ 规划阶段 co_withExecutor 外派到 Compute 池，        │
+│     完成后 hopTo(本请求 EventBase) 回来（回包才内联）    │
+└──────────────────────┬───────────────────────────────┘
+                       │ co_withExecutor / hopTo
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│  Compute 池 (CPUThreadPoolExecutor，进程唯一)          │
+│  ├─ parse / bind / plan                               │
+│  └─ 每批算子执行 + 结果序列化                           │
+│     （gen.next().viaIfAsync(compute) 绑定）            │
 └──────────────────────┬───────────────────────────────┘
                        │ co_viaIfAsync：跨池，不内联
                        ▼
@@ -136,11 +144,13 @@ Thrift IO 池与 Storage IO 池（`IoScheduler` 内部持有）是**两个独立
 │  Storage IO 池 (IOThreadPoolExecutor, IoScheduler)    │
 │  ├─ WiredTiger 读写操作                               │
 │  ├─ Cursor 操作、事务提交/回滚                         │
-│  └─ 完成后恢复挂起的协程（执行线程回到 Thrift IO 池）    │
+│  └─ 完成后恢复挂起的协程（执行线程回到 Compute 池）      │
 └──────────────────────────────────────────────────────┘
 ```
 
-该模式下 Compute 池不被使用。
+该模式下 Compute 池承载查询工作（规划 + 每批执行），网络 IO 与 handler 仍在 Thrift IO 池；
+`--compute-threads` 因此对 Thrift 模式同样生效。细节与实测数据见
+[execution-model.md](../query/engine/execution-model.md) 第三节。
 
 **Bolt 模式**：
 

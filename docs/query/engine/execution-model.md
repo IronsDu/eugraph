@@ -37,12 +37,14 @@ Server 进程内有 4 个可配置线程池（另有 WiredTiger 自身的 evicti
 
 | 线程池 | 类型 | 规模参数 | 职责 |
 |--------|------|---------|------|
-| Compute | `CPUThreadPoolExecutor` | `--compute-threads` | 仅 Bolt 模式使用：承载整个 Bolt session 消息处理（解析、计划、执行） |
+| Compute | `CPUThreadPoolExecutor` | `--compute-threads` | **进程内唯一一个**（`main()` 创建，注入 `GraphManager` / 各图 `QueryExecutor` / `GraphService`）。Bolt 用它承载整个 session 消息处理；Thrift 用它承载查询规划与每批算子执行 |
 | Thrift IO / handler | `IOThreadPoolExecutor`（`ThriftIO`） | `--thrift-io-threads` | Thrift 网络 IO；同时经 `setThreadManagerFromExecutor` 用作 handler 执行池 |
 | Storage IO | `IOThreadPoolExecutor`（`IoScheduler` 内部） | `--storage-io-threads` | 所有 WiredTiger 调用（scan、get、insert、commit） |
 | Bolt EventBase | `BoltServer` | `--bolt-io-threads` | Bolt 连接的网络 EventBase |
 
 Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 内部创建 `IoScheduler`，由后者自持一个 `IOThreadPoolExecutor`（`src/storage/graph_manager.cpp`）；Thrift 的池则在 `src/program/server/eugraph_server_main.cpp` 单独创建。二者默认值相同（均为 4），但互不共享。
+
+Compute 池只有一个（不再是"每图一个"）：`main()` 造好 `shared_ptr<CPUThreadPoolExecutor>`，传给 `GraphManager::init`，再由 `openGraphInstance` 经 `QueryExecutor::Config::compute_pool` 交给每个图的执行器；`GraphService` 也持有同一个池，供两个协议层取用。`GraphManager::init` 的这个参数默认 null（测试场景退化为私有池）。
 
 ### IoScheduler
 
@@ -63,9 +65,14 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 
 ### 各模式的线程归属
 
-**Thrift / RPC 模式**：handler 直接运行在 Thrift IO 池上（该池同时是 Thrift 的网络 IO 池），不经过 Compute 池。算子执行中的每次存储调用都经 `IoScheduler::dispatch`，由于当前线程不属于 Storage IO 池，`co_viaIfAsync` 不会内联，而是把调用调度到 Storage IO 池，完成后再恢复原协程。
+**Thrift / RPC 模式**：handler 本身运行在 Thrift IO 池上，但**查询工作已搬到 Compute 池**：
 
-结果是：物理算子树的执行线程在 Thrift IO 池与 Storage IO 池之间来回切换，没有计算隔离；并且 Thrift 模式下**没有任何代码把查询执行调度到 Compute 池**（`eugraph_handler` 中不存在 executor 调度），因此 `--compute-threads` 在纯 Thrift 模式下不生效。
+- 规划阶段：`co_executeCypher` 用 `co_withExecutor(compute_ka, graph_service_.executeCypher(...))` 把 parse/bind/plan 外派到 Compute 池；
+- 外派完成后必须**跳回该请求自己的 EventBase**（`hopTo(request_evb)`）才能让回包内联（原因见下方待办 2 的根因一节；跳回 IO 线程池不够）；
+- 每批算子执行与结果序列化：`makeStreamGenerator` 里用 `exec_ctx.ctx->gen.next().viaIfAsync(compute)` 绑定，generator 的 promise 携带该 executor，内部每次 `co_await` 都经 `co_viaIfAsync` 走 Compute 池 —— 这是让算子真正跑在 Compute 池上的关键，仅把查询"启动"在池上是不够的（消费方是 IO 线程，它驱动 generator）；
+- 存储调用再从 Compute 池跳到 Storage IO 池（`IoScheduler::dispatch`），完成后回到 Compute 池。
+
+因此 Thrift 模式下 `--compute-threads` 是实际承载查询执行的线程池；网络 IO 与 handler 仍留在 Thrift IO 池。
 
 **Bolt 模式**：`BoltConnection::dispatchMessage` 通过 `scheduleOn(computeExecutor())` 把整个 session 消息处理放到 Compute 池，以便 socket EventBase 腾出来服务其他连接（`src/service/bolt/bolt_server.cpp`）。存储调用再从 Compute 池跳转到 Storage IO 池。因此 Bolt 模式下 `--compute-threads` 才是实际承载查询执行的线程池。
 
@@ -73,11 +80,13 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 
 ### 已知问题与待办
 
-> 以下均已实测，结论明确但尚未解决。**动线程归属之前请先读完本节**，否则很容易重复踩坑。
+> 本节记录线程归属上踩过的坑与实测结论。**动线程归属之前请先读完本节**，否则很容易重复踩坑。两项待办现已解决，踩坑记录保留。
 
-**待办 1：Compute 池目前每图一个，应改为进程一个。**
+**待办 1：Compute 池改为进程一个（已解决）。**
 
-`GraphManager::openGraphInstance` 按 `compute_threads_` 为每个图实例各建一个 `CPUThreadPoolExecutor`（`src/storage/graph_manager.cpp`），因此 G 个图 = `G × --compute-threads` 个线程，而 Bolt 只用得到当前图那一个。改法是让 `GraphManager` 持有一个共享池（与既有的 `io_scheduler_` 同样做法），经 `QueryExecutor::Config` 注入。参考实现见提交 `f2b3884`（该提交同时含下方待办 2 的失败尝试，回退时被一并撤销）。
+原状：`GraphManager::openGraphInstance` 按 `compute_threads_` 为每个图实例各建一个 `CPUThreadPoolExecutor`，因此 G 个图 = `G × --compute-threads` 条线程，而 Bolt 只用得到当前图那一个。
+
+现状：`main()` 创建唯一的 `shared_ptr<CPUThreadPoolExecutor>`，经 `GraphManager::init(..., compute_pool)` 持有，再由 `QueryExecutor::Config::compute_pool` 注入每个图的执行器；`GraphService` 构造时也拿到同一个池（`computeExecutor()` 不再"去默认图里找一个"）。`GraphManager::init` 的新参数默认 null，未传时退化为私有池，因此既有测试调用点无需改动。
 
 **待办 2：把 Thrift 的查询执行移出 IO 线程（已解决）。**
 
@@ -207,7 +216,7 @@ AsyncGenerator<RowBatch>
 
 3. **全量物化**：调用方若 drain 整个 generator 到内存后才 commit，大结果集内存压力大。
 
-4. **`co_viaIfAsync` 跨池不内联**：Thrift IO 池与 Storage IO 池是两个独立 executor，每次存储调用都会跳转到 Storage IO 池。Thrift / RPC 模式下物理算子树在这两个 IO 池之间切换执行，无计算隔离，且 Compute 池不被使用；只有 Bolt 模式会把 session 处理放到 Compute 池。
+4. **`co_viaIfAsync` 跨池不内联**：Thrift IO 池与 Storage IO 池是两个独立 executor，每次存储调用都会跳转到 Storage IO 池。Thrift / RPC 模式下规划与每批执行在 Compute 池上，存储调用再从 Compute 池跳转到 Storage IO 池；Bolt 同样把 session 处理放在 Compute 池（见第三节）。
 
 5. **GraphTxnHandle 是 `void*`**：指向堆上 `TxnState`，commit/rollback 后释放。任何后续访问是 use-after-free。
 
@@ -216,3 +225,10 @@ AsyncGenerator<RowBatch>
 7. **先销毁算子树，再结束事务**（顺序红线）：`endStream()` / 析构 `StreamContext` 之前**不要** commit/rollback。顶层 generator 返回空并不代表所有游标都已关闭——`LIMIT` 等提前返回的算子会把子生成器留在 `co_yield` 上，活游标跟着那些协程帧一直活到算子树被销毁。先结束事务会释放 WT session 与游标，随后析构 `WtCursor` 时 `cursor_->close()` 打在已释放内存上（实测 SIGSEGV：`~WtCursor` ← `~VertexScanCursorImpl`）。正确顺序：**销毁流（关游标）→ commit/rollback**。Bolt 侧见 [neo4j-bolt-protocol.md](../../service/neo4j-bolt-protocol.md) 第 10 节。
 
 8. **放弃流就必须结束它的事务**：`GraphTxnHandle` 只被 commit/rollback 从 `txns_` 里摘除，句柄一丢，事务的 WT session、快照与未提交修改就活到进程结束。累积约 185 个泄漏的事务后 `open_session()` 失败，`beginTran()` 返回 `INVALID_GRAPH_TXN`，`getSession(INVALID_GRAPH_TXN)` 兜底到共享 `defaultSession_`（autocommit）——**查询静默失去事务语义，写操作逐行提交且无法回滚**，最终 WT 断言 `lock_success == 0` 崩溃。因此"丢弃流"的路径必须调用 `rollbackTranNow()`：Bolt 用 `BoltSession::abandonStream()`，Thrift/RPC 用 `eugraph_handler.cpp` 里的 `StreamAbandonRollback`；`prepareStream()` 也改为在 `beginTran()` 失败时直接报错而不是降级。
+
+9. **事务句柄只能通过 `forkTransaction()` 绑定到 store**（禁止改写共享实例）：`IAsyncGraphDataStore` 曾经有一个 `setTransaction()`，索引回填用它把事务写进了**所有语句共享**的 store 实例（`query_executor.cpp` 的顶点/边索引回填两处）。两个后果：① 并发语句互相覆盖对方的句柄；② 该事务 commit 后句柄没被复位，而 `GraphTxnHandle` 是 `TxnState*`——地址随后被下一个 `beginTran()` 复用，陈旧句柄就**别名到别人的活事务**，于是两个协程驱动同一个 WT session，WT 诊断版的线程检查直接 abort：
+   ```
+   WT_SESSION.open_cursor / __curfile_next: assertion failed: 'lock_success == 0'
+   ```
+   （断言来自 `api.h` 的 `__wt_spin_trylock(&session->thread_check.lock)`，含义就是"同一 session 被两线程并发使用"，不是资源耗尽。）
+   实测特征：LDBC sf0.1 目录导入在默认线程下必崩（2/2），`--compute-threads=1` 时不崩——因为触发需要真正的并发重叠。**修法**：回填（以及任何长流程）必须用 `async_data_.forkTransaction(txn)` 得到私有 store，全程只用它；`setTransaction()` 已从接口删除，`AsyncGraphDataStore::txn_` 也改成 `const`，从类型上杜绝再犯。回归覆盖：LDBC 目录导入（`eugraph-loader --data-dir social_network-sf0.1-CsvComposite-LongDateFormatter`）在默认线程 + offload 打开时必须 `All data loaded successfully`。
