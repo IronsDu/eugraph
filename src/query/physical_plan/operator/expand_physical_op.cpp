@@ -63,7 +63,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         for (EdgeLabelId lid : full_scan_labels_) {
             if (remaining_rows == 0)
                 break;
-            auto edge_gen = store_.scanEdgesByType(lid, std::nullopt, std::nullopt);
+            auto edge_gen = cancellable(store_.scanEdgesByType(lid, std::nullopt, std::nullopt));
             while (remaining_rows > 0) {
                 auto edge_batch = co_await edge_gen.next();
                 if (!edge_batch.has_value())
@@ -148,7 +148,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
     if (allowed_filter) {
         for (const auto& value : *allowed_dst_values_) {
             std::vector<PropertyValue> one{value};
-            auto gen = store_.scanVerticesByIndexId(allowed_dst_index_id_, one);
+            auto gen = cancellable(store_.scanVerticesByIndexId(allowed_dst_index_id_, one));
             while (auto batch = co_await gen.next()) {
                 for (VertexId vid : *batch)
                     allowed_dst_vids.push_back(vid);
@@ -156,7 +156,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         }
     }
 
-    auto child_gen = child_->executeChunk();
+    auto child_gen = cancellable(child_->executeChunk());
 
     auto dir = Direction::OUT;
     if (direction_ == cypher::RelationshipDirection::RIGHT_TO_LEFT) {
@@ -210,7 +210,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
         auto scanOneDirection = [&](VertexId src_id, size_t src_row, Direction scan_dir) -> folly::coro::Task<void> {
             if (allowed_filter) {
                 for (VertexId dst_id : allowed_dst_vids) {
-                    auto out_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
+                    auto out_gen = cancellable(store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id));
                     while (auto out_batch = co_await out_gen.next()) {
                         for (const auto& entry : *out_batch) {
                             if (allowed_seen.insert(entry.edge_id).second)
@@ -219,7 +219,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                         }
                         break;
                     }
-                    auto in_gen = store_.scanEdgesByType(allowed_edge_label_, dst_id, src_id);
+                    auto in_gen = cancellable(store_.scanEdgesByType(allowed_edge_label_, dst_id, src_id));
                     while (auto in_batch = co_await in_gen.next()) {
                         for (const auto& entry : *in_batch) {
                             if (entry.src_vertex_id == entry.dst_vertex_id)
@@ -235,7 +235,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 co_return;
             }
             for (const auto& label_filter : scan_filters) {
-                auto edge_gen = store_.scanEdges(src_id, scan_dir, label_filter);
+                auto edge_gen = cancellable(store_.scanEdges(src_id, scan_dir, label_filter));
                 while (auto edge_batch = co_await edge_gen.next()) {
                     for (const auto& entry : *edge_batch) {
                         if (dst_bound_) {
@@ -281,7 +281,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
             }
             if (!src_ids.empty()) {
                 for (const auto& label_filter : scan_filters) {
-                    auto batch_gen = store_.scanEdgesBatch(src_ids, dir, label_filter);
+                    auto batch_gen = cancellable(store_.scanEdgesBatch(src_ids, dir, label_filter));
                     while (auto batch = co_await batch_gen.next()) {
                         for (const auto& be : *batch) {
                             auto row_it = rows_of_src.find(be.src_id);
@@ -300,6 +300,10 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
 
         if (!batched) {
             for (size_t src_row = 0; src_row < input_rows; ++src_row) {
+                // One input row is one adjacency probe plus property loads, so this is
+                // where a cancelled query should stop rather than finishing the chunk.
+                if (cancelled())
+                    co_return;
                 VertexId src_id = INVALID_VERTEX_ID;
                 if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < input_cols) {
                     const Value& val = chunk->columns[src_col_idx_].getValue(src_row);
@@ -340,7 +344,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 } else {
                     if (allowed_filter) {
                         for (VertexId dst_id : allowed_dst_vids) {
-                            auto out_gen = store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id);
+                            auto out_gen = cancellable(store_.scanEdgesByType(allowed_edge_label_, src_id, dst_id));
                             while (auto out_batch = co_await out_gen.next()) {
                                 for (const auto& entry : *out_batch) {
                                     if (allowed_seen.insert(entry.edge_id).second)
@@ -351,7 +355,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                                 break;
                             }
                             if (dir == Direction::BOTH) {
-                                auto in_gen = store_.scanEdgesByType(allowed_edge_label_, dst_id, src_id);
+                                auto in_gen = cancellable(store_.scanEdgesByType(allowed_edge_label_, dst_id, src_id));
                                 while (auto in_batch = co_await in_gen.next()) {
                                     for (const auto& entry : *in_batch) {
                                         if (entry.src_vertex_id == entry.dst_vertex_id)
@@ -368,7 +372,7 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                         continue;
                     }
                     for (const auto& label_filter : scan_filters) {
-                        auto edge_gen = store_.scanEdges(src_id, dir, label_filter);
+                        auto edge_gen = cancellable(store_.scanEdges(src_id, dir, label_filter));
                         while (auto edge_batch = co_await edge_gen.next()) {
                             for (const auto& entry : *edge_batch) {
                                 if (dst_bound_) {

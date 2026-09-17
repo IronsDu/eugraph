@@ -48,7 +48,7 @@ folly::coro::AsyncGenerator<DataChunk> LimitPhysicalOp::executeChunk() {
     if (remaining > 0 && !child_->mayHaveSideEffects())
         child_->setLimitHint(static_cast<size_t>(remaining));
 
-    auto child_gen = child_->executeChunk();
+    auto child_gen = cancellable(child_->executeChunk());
 
     // LIMIT 0: consume all child data (triggering side-effect operators like
     // DELETE / REMOVE) but yield nothing.  Cypher semantics require mutations

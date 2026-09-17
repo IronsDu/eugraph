@@ -204,7 +204,7 @@ folly::coro::Task<std::vector<EdgeLabelDef>> GraphService::listEdgeLabels(const 
 
 folly::coro::Task<CypherExecutionContext>
 GraphService::executeCypher(const std::string& query, const std::unordered_map<std::string, Value>& params,
-                            const std::string& graph_name) {
+                            const std::string& graph_name, compute::QueryCancel cancel) {
     // Check for database DDL before resolving a specific graph.
     // Database-level DDL (CREATE/DROP/SHOW DATABASE, USE) operates on the
     // GraphManager, not on a single graph instance.
@@ -223,7 +223,7 @@ GraphService::executeCypher(const std::string& query, const std::unordered_map<s
 
     auto* inst = resolveGraph(resolved_graph);
 
-    auto ctx = co_await inst->executor->prepareStream(query, params);
+    auto ctx = co_await inst->executor->prepareStream(query, params, std::move(cancel));
 
     if (!ctx->error.empty()) {
         throw std::runtime_error(ctx->error);

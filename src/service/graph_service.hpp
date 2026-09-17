@@ -62,9 +62,13 @@ public:
     /// Execute a Cypher query with pre-parsed parameters.
     /// Returns both the StreamContext and label/edge-label definitions
     /// needed for result value serialization.
+    /// `cancel` (optional) lets the protocol layer stop the statement when the client
+    /// goes away; it lives in the statement's QueryContext and the operators check it
+    /// as they consume each upstream chunk.
     folly::coro::Task<CypherExecutionContext> executeCypher(const std::string& query,
                                                             const std::unordered_map<std::string, Value>& params,
-                                                            const std::string& graph_name);
+                                                            const std::string& graph_name,
+                                                            compute::QueryCancel cancel = nullptr);
 
     /// Batch insert vertices. entries[i].props corresponds to primary label
     /// property positions; entries[i].extra_labels are added as pure labels

@@ -10,7 +10,7 @@ namespace compute {
 folly::coro::AsyncGenerator<DataChunk> DistinctPhysicalOp::executeChunk() {
     std::unordered_set<RowDigest, RowDigestHash> seen;
 
-    auto child_gen = child_->executeChunk();
+    auto child_gen = cancellable(child_->executeChunk());
     while (auto chunk = co_await child_gen.next()) {
         const size_t n = chunk->numRows();
 

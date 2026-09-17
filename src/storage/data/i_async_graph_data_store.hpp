@@ -24,6 +24,12 @@ public:
     virtual folly::coro::Task<GraphTxnHandle> beginTran() = 0;
     virtual folly::coro::Task<bool> commitTran(GraphTxnHandle txn) = 0;
     virtual folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) = 0;
+    /// Roll back without a coroutine, for teardown paths that run on a network
+    /// EventBase thread where nothing can be awaited. A transaction whose handle is
+    /// dropped without being ended keeps its WT session and snapshot alive forever,
+    /// so every path that abandons a stream must call this (or rollbackTran).
+    /// Safe from any thread; the store guards its transaction table with a mutex.
+    virtual bool rollbackTranNow(GraphTxnHandle txn) = 0;
     virtual void setTransaction(GraphTxnHandle txn) = 0;
     /// Create an isolated view bound to one transaction. Concurrent query
     /// streams each own one so transaction handles never leak across calls.

@@ -27,7 +27,8 @@ QueryExecutor::QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaSt
 QueryExecutor::~QueryExecutor() = default;
 
 folly::coro::Task<std::shared_ptr<StreamContext>>
-QueryExecutor::prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params) {
+QueryExecutor::prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params,
+                             QueryCancel cancel) {
     auto ctx = std::make_shared<StreamContext>(async_data_);
 
     // 0. Quick guard: skip DDL if query starts with EXPLAIN (so DDL isn't executed for EXPLAIN queries)
@@ -138,6 +139,20 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     // Begin transaction. Fork a dedicated store wrapper so concurrent
     // queries can never overwrite each other's transaction handle.
     GraphTxnHandle txn = co_await async_data_.beginTran();
+    if (txn == INVALID_GRAPH_TXN) {
+        // Fail loudly. Continuing would run the query through the store's shared
+        // default session in autocommit mode: writes would land one row at a time
+        // with nothing to roll back, which is exactly what a transaction is for.
+        ctx->error = "Failed to begin transaction";
+        spdlog::error("[QueryExecutor] beginTran failed; refusing to run '{}'", cypher_query);
+        co_return ctx;
+    }
+    // Statement execution context: the one place statement-scoped state (today the
+    // cancellation flag, later deadlines/budgets) belongs. Operators hold it through
+    // a shared_ptr, and the store stays unaware of it -- cancellation is observed on
+    // the operator side, where upstream chunks are consumed.
+    auto query_ctx = std::make_shared<QueryContext>(std::move(cancel));
+    ctx->query_context = query_ctx;
     auto query_store = async_data_.forkTransaction(txn);
     IAsyncGraphDataStore& query_data = *query_store;
     ctx->query_store = std::move(query_store);
@@ -325,6 +340,8 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
     }
 
     ctx->phys_op = std::move(phys_op);
+    // One attach call reaches the whole tree (base class recurses over children).
+    ctx->phys_op->setQueryContext(ctx->query_context);
     ctx->gen = ctx->phys_op->executeChunk();
     ctx->txn = txn;
 

@@ -8,6 +8,7 @@
 #include "query/parser/cypher_parser.hpp"
 #include "query/parser/index_ddl_parser.hpp"
 #include "query/physical_plan/physical_planner.hpp"
+#include "query/physical_plan/query_context.hpp"
 #include "query/planner/binder.hpp"
 #include "storage/data/i_async_graph_data_store.hpp"
 #include "storage/meta/i_async_graph_meta_store.hpp"
@@ -32,6 +33,10 @@ struct StreamContext {
     IAsyncGraphDataStore& store;
     // Owns the transaction-bound store used by the physical plan.
     std::unique_ptr<IAsyncGraphDataStore> query_store;
+    /// Per-statement execution state, shared with the operator tree (see
+    /// PhysicalOperator::setQueryContext). Declared after phys_op/query_store on
+    /// purpose: it must not be the thing that keeps them alive during teardown.
+    std::shared_ptr<QueryContext> query_context;
     bool should_commit = true;
     // Owned by StreamContext so references in physical operators remain valid
     std::unordered_map<LabelId, LabelDef> label_defs;
@@ -67,8 +72,12 @@ public:
     QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, Config config);
     ~QueryExecutor();
 
+    /// Build the streaming execution context for one query. `cancel`, when given, is
+    /// armed on the query's store wrapper so that every physical operator observes it
+    /// (see IAsyncGraphDataStore::cancelled); pass nullptr for non-cancellable callers.
     folly::coro::Task<std::shared_ptr<StreamContext>>
-    prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params = {});
+    prepareStream(const std::string& cypher_query, const std::unordered_map<std::string, Value>& params = {},
+                  QueryCancel cancel = nullptr);
 
     folly::Executor* computeExecutor() const {
         return compute_pool_.get();

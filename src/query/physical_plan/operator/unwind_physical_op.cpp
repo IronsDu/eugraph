@@ -6,7 +6,7 @@ namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> UnwindPhysicalOp::executeChunk() {
-    auto gen = child_->executeChunk();
+    auto gen = cancellable(child_->executeChunk());
     size_t num_input_cols = input_schema_.size();
 
     DataChunk output;

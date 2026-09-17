@@ -4,7 +4,7 @@ namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> ApplyPhysicalOp::executeChunk() {
-    auto left_gen = left_->executeChunk();
+    auto left_gen = cancellable(left_->executeChunk());
 
     while (auto left_chunk = co_await left_gen.next()) {
         if (!left_chunk || left_chunk->count == 0)
@@ -42,7 +42,7 @@ folly::coro::AsyncGenerator<DataChunk> ApplyPhysicalOp::executeChunk() {
                 value_sink_->setValues(std::move(allowed));
             }
 
-            auto right_gen = right_->executeChunk();
+            auto right_gen = cancellable(right_->executeChunk());
             while (auto right_chunk = co_await right_gen.next()) {
                 if (!right_chunk || right_chunk->count == 0)
                     continue;
