@@ -51,7 +51,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
     if (!child_)
         co_return;
 
-    auto child_gen = child_->executeChunk();
+    auto child_gen = cancellable(child_->executeChunk());
 
     // Deferred state — resolved only after the first child chunk, when child ops
     // (e.g. CreateEdgeLabelPhysicalOp) have populated the shared name_to_id / defs maps.

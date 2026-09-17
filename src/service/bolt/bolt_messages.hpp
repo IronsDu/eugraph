@@ -20,7 +20,10 @@ constexpr uint8_t LOGON = 0x6A;
 constexpr uint8_t LOGOFF = 0x6B;
 constexpr uint8_t RESET = 0x0F;
 constexpr uint8_t RUN = 0x10;
-constexpr uint8_t DISCARD = 0x2E;
+// 0x2F, not 0x2E: the pair is DISCARD 0x2F / PULL 0x3F. With 0x2E every real
+// DISCARD fell into the dispatcher's default branch, so a driver that discards a
+// result (the Java driver does) got a ProtocolError back and hung waiting.
+constexpr uint8_t DISCARD = 0x2F;
 constexpr uint8_t PULL = 0x3F;
 constexpr uint8_t BEGIN = 0x11;
 constexpr uint8_t COMMIT = 0x12;

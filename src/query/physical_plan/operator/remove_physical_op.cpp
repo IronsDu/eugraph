@@ -19,7 +19,7 @@ int findColumn(const Schema& schema, const std::string& name) {
 } // anonymous namespace
 
 folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
-    auto child_gen = child_->executeChunk();
+    auto child_gen = cancellable(child_->executeChunk());
 
     while (auto chunk = co_await child_gen.next()) {
         size_t n = chunk->numRows();

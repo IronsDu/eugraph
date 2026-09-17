@@ -49,6 +49,14 @@ public:
         co_return ok;
     }
 
+    /// Synchronous rollback for teardown paths that have no coroutine to await (the
+    /// Bolt connection drops abandoned streams from its EventBase thread). Doing the
+    /// WT work inline is fine there: the transaction is idle by then, and blocking
+    /// the loop is far cheaper than leaking its session forever.
+    bool rollbackTranNow(GraphTxnHandle txn) override {
+        return store_.rollbackTransaction(txn);
+    }
+
     // ==================== DDL ====================
 
     folly::coro::Task<bool> createLabel(LabelId label_id) override {

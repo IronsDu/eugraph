@@ -14,7 +14,7 @@ std::string ProjectPhysicalOp::toString() const {
 }
 
 folly::coro::AsyncGenerator<DataChunk> ProjectPhysicalOp::executeChunk() {
-    auto child_gen = child_->executeChunk();
+    auto child_gen = cancellable(child_->executeChunk());
 
     // Empty projection (no RETURN): drain child for side effects, produce 0 rows
     if (items_.empty()) {

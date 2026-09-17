@@ -362,7 +362,14 @@ test('concurrent PULL 25 sessions', async () => {
     return session
       .run('UNWIND range(1, 5000) AS i RETURN i')
       .then((result) => result.records)
-      .then((records) => records.length === 25)
+      // The browser bundle keeps issuing PULLs until the stream ends, so by the time
+      // run() resolves the whole result is buffered here -- fetchSize only decides
+      // how many records each PULL asks for. What this test has to catch is
+      // truncation: the server used to drain the result internally, hand back just
+      // the first page and still report has_more=false, so every session silently
+      // lost 4975 of its 5000 rows. Requiring the full count fails on that bug and
+      // passes once PULL paging reports has_more honestly.
+      .then((records) => records.length === 5000)
       .finally(() => session.close());
   });
   const results = await Promise.all(tasks);

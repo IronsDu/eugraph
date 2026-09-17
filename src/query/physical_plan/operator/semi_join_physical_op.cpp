@@ -4,7 +4,7 @@ namespace eugraph {
 namespace compute {
 
 folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executeChunk() {
-    auto left_gen = left_->executeChunk();
+    auto left_gen = cancellable(left_->executeChunk());
 
     while (auto left_chunk = co_await left_gen.next()) {
         if (!left_chunk || left_chunk->count == 0)
@@ -21,7 +21,7 @@ folly::coro::AsyncGenerator<DataChunk> SemiJoinPhysicalOp::executeChunk() {
             }
             correlated_source_->setValues(std::move(corr_values));
 
-            auto right_gen = right_->executeChunk();
+            auto right_gen = cancellable(right_->executeChunk());
             auto right_chunk = co_await right_gen.next();
             size_t right_rows = right_chunk ? right_chunk->numRows() : 0;
             if (right_chunk && right_rows > 0) {
