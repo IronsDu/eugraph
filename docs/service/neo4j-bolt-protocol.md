@@ -85,8 +85,8 @@ CONNECTING → READY → STREAMING → READY
 | LOGON | 0x6A | C→S | 认证（Bolt v5.0+ 驱动） |
 | LOGOFF | 0x6B | C→S | 登出 |
 | RUN | 0x10 | C→S | 执行 Cypher 查询 |
-| PULL | 0x3F | C→S | 拉取结果批次（支持 n 限制） |
-| DISCARD | 0x2E | C→S | 丢弃剩余结果 |
+| PULL | 0x3F | C→S | 拉取结果批次（`n` 限制；未取完时返回 `has_more=true`，驱动继续 PULL） |
+| DISCARD | 0x2F | C→S | 丢弃剩余结果 |
 | BEGIN | 0x11 | C→S | 开始显式事务 |
 | COMMIT | 0x12 | C→S | 提交事务 |
 | ROLLBACK | 0x13 | C→S | 回滚事务 |
@@ -130,7 +130,7 @@ Bolt 协议使用 PackStream 二进制编码（类似 MessagePack），定义在
 | 0x11 | BEGIN | 开始事务 |
 | 0x12 | COMMIT | 提交事务 |
 | 0x13 | ROLLBACK | 回滚事务 |
-| 0x2E | DISCARD | 丢弃结果 |
+| 0x2F | DISCARD | 丢弃结果 |
 | 0x3F | PULL | 拉取结果 |
 | 0x54 | TELEMETRY | 驱动遥测 |
 | 0x66 | ROUTE | 路由表查询 |
@@ -262,6 +262,32 @@ Bolt v5.1 使用分块传输编码进行消息帧定界：
 
 通过 `DatabaseDdlParser`（token-based）在 `GraphService::executeCypher()` 中拦截 DDL 语句，Bolt 和 Thrift 两条路径共享。支持：`CREATE DATABASE`、`DROP DATABASE`、`SHOW DATABASES [YIELD *]`、`SHOW DATABASE`、`SHOW PROCEDURES`、`SHOW FUNCTIONS`、`SHOW CURRENT USER`、`SHOW VECTOR INDEXES`、`USE <graph>`。
 
+### 9. 结果流分页（PULL 的 has_more 语义）
+
+RUN 只负责把查询编译成算子流水线并返回 `fields`；真正的结果按 PULL 逐页拉取，服务端必须严格遵守分页契约：
+
+- **只返回本页请求的记录数**：`PULL {n}` 最多返回 `n` 条；`n = -1` 表示不限量。服务端**不得**多返回，也不得在 `n` 用尽后丢弃剩余结果。
+- **未取完必须报告 `has_more=true`**，驱动据此继续 PULL；只有生成器真正耗尽（`next()` 返回空）时才能回 `has_more=false` 并结束流。
+- **流在多次 PULL 之间保持存活**：`stream_ctx_`（算子树 + 游标 + 事务）在 PULL 之间不销毁，事务只在流耗尽或 DISCARD/RESET 时才提交/回滚。
+- **页边界可以落在一个 chunk 中间**：一个 `DataChunk` 往往大于一页。被截断的那个 chunk 剩余部分保存在 `pending_chunk_` / `pending_row_`，由下一次 PULL 从断点继续，绝不丢弃。
+
+> ⚠️ 历史缺陷：早期实现的 `handlePull` 会把生成器一次性抽干、丢掉第 `n` 条之后的所有记录，却仍然回 `has_more=false`。客户端因此静默拿到被截断的结果（`MATCH (n) RETURN n` 在 10 万节点上只返回 1000 条）——这是数据正确性问题，不是性能问题。
+
+### 10. 查询取消（客户端断开的感知）
+
+结果流可能很长，而生成结果是**拉取式（pull-based volcano）**的：只有真正持有存储游标的“生产者”算子会持续产生数据，父算子只是向上游要数据。因此取消只需要一个显式标志，不需要中断协程：
+
+- **标志存放位置**：`QueryContext`——每语句一份的执行上下文（`src/query/physical_plan/query_context.hpp`）。`prepareStream()` 造出它，并用 `setQueryContext()` 一次性挂到算子树根上（基类递归下发到所有子算子，算子通过 `shared_ptr` 持有，因此不必担心拆解顺序）；算子用基类提供的 `cancelled()` 检查，**不需要改任何算子签名**。
+  > 令牌一度寄生在 `IAsyncGraphDataStore` 上——那个类型同时也被一个图里的所有查询共享：一旦有人对共享实例 setter，`forkTransaction()` 的拷贝会让**之后每个查询一出生就是"已取消"**。现在存储层完全不参与取消：`IAsyncGraphDataStore` 上既没有令牌也没有 setter，查询级状态只存在于 `QueryContext`。
+- **谁来置位**：Bolt 会话把自己的连接存活标志（`BoltConnection::closed_`）作为取消标志传给 `executeCypher()`。socket 断开后，正在执行的查询在下一次检查点就会自行收敛。Thrift 路径目前传 `nullptr`（永不取消）。
+- **检查点全在算子侧，且只有一个原语**：`PhysicalOperator::cancellable(gen)`（`physical_operator_base.hpp`），凡是"按 chunk 消费上游"的地方包一层——存储来源（`store_.scanXxx()`，34 处）与算子来源（`child_->executeChunk()`，38 处）都要包；后者是必需的，因为"先物化再吐 chunk"的算子（如 `AllNodeScanPhysicalOp`）必须由消费它的上游算子（如 `CreateNodePhysicalOp`）在拿到 chunk 时检查并停止拉取。`expand` / `varlen_expand` 这类单行就能炸开整棵遍历的重算子再额外按输入行检查。精度是"最多多做一个 batch"；例外是 `scanAllVertices()` 与索引扫描——它们在第一次 `next()` 内就把整个匹配集收集完，那期间取消要等收集结束。
+- **收敛方式**：被取消的算子直接 `co_return`，生成器提前结束，父算子自然展开退出——不需要向上传播异常。
+- **事务语义**：取消**不等于**查询正常跑完。生成器提前结束和“真的取完”在协议层都表现为 `next()` 返回空，所以 `handlePull()` 会把“取消了”显式判定出来（`streamCancelled()`），走与客户端断开相同的分支：**回滚事务**、结束流、回 `FAILURE`，绝不提交一个客户端没看全的写事务。
+- **顺序红线：先拆流，再结束事务**（`endStream()` → `commitTran()` / `rollbackTran()`）。顶层生成器返回空**不代表**所有游标都已关闭：`LIMIT` 这类算子提前 `co_return` 时会把子生成器留在 `co_yield` 上挂着，活游标就在那些帧里，直到 `endStream()` 销毁算子树才析构。如果先 commit/rollback，WT session 与游标已被释放，随后 `~WtCursor` 再去 `cursor_->close()` 就是 use-after-free——实测直接 SIGSEGV（栈帧 `~WtCursor` ← `~VertexScanCursorImpl` ← `~StreamContext`）。`handlePull()` 因此在判定结束后先把 `txn` / `store` / `should_commit` 取出来存成局部量，再 `endStream()`，最后才结束事务。
+- **另一条红线：任何"丢掉流"的路径都必须结束它的事务**。`GraphTxnHandle` 一旦被丢弃就再也无法 commit/rollback，而 `txns_` 表只在 commit/rollback 时 erase——于是那个事务的 WT session、快照（读）和未提交修改（写）会**一直活到进程结束**。实测后果链：单个流泄漏 1 个 session → 约 185 次异常断连后 `open_session()` 开始失败（日志 `Failed to open session: error -31802`、`Failed to open transaction session`）→ 此时 `beginTran()` 返回 `INVALID_GRAPH_TXN`，而 `getSession(INVALID_GRAPH_TXN)` 会兜底到共享的 `defaultSession_`（autocommit），**写操作逐行提交、没有东西可以回滚**（实测该状态下 `SET` 的部分写入立刻可见）→ 最终 WT 在关游标时断言 `lock_success == 0` → `__wt_abort` → SIGABRT。
+  因此 Bolt 侧所有拆流点统一走 `BoltSession::abandonStream(rollback_explicit)`：连接断开 / GOODBYE / RESET 传 `true`（连挂起的显式事务一起回滚），DISCARD 与新 RUN 传 `false`（显式事务要留给客户端 COMMIT）。它内部顺序同样是"先销毁算子树、再 `rollbackTranNow()`"。Thrift/RPC 侧用 `StreamAbandonRollback`（`eugraph_handler.cpp`）在生成器被提前销毁时做同一件事。仓库里已无"丢句柄不回滚"的路径。
+- **事务起不来必须显式失败**：`prepareStream()` 现在遇到 `beginTran()` 返回 `INVALID_GRAPH_TXN` 会写入 `ctx->error` 并终止，而不是让查询落到共享 session 上变成非事务的逐行写。
+
 ## 文件清单
 
 ```
@@ -276,6 +302,7 @@ src/service/bolt/bolt_server.hpp/.cpp                   # TCP 服务端（folly:
 src/query/planner/logical_plan/operator/bound_call_op.hpp   # CALL 子句逻辑算子
 src/query/planner/binder/bind_call.cpp                      # CALL 子句绑定
 src/query/physical_plan/operator/call_physical_op.hpp/.cpp  # CALL 物理执行算子
+src/query/physical_plan/query_context.hpp                   # 每语句执行上下文（取消令牌等）
 src/query/parser/database_ddl_parser.hpp/.cpp               # 数据库 DDL 解析器
 tests/test_packstream.cpp                       # PackStream 单元测试
 tests/test_bolt_values.cpp                      # Bolt 类型映射测试

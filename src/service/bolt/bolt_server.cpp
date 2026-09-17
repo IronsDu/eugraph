@@ -24,7 +24,10 @@ struct ListenerState {
 // ==================== BoltConnection ====================
 
 BoltConnection::BoltConnection(folly::AsyncSocket::UniquePtr socket, service::GraphService& service)
-    : socket_(std::move(socket)), service_(service), session_(service_) {}
+    : socket_(std::move(socket)), service_(service), session_(service_) {
+    closed_ = std::make_shared<std::atomic<bool>>(false);
+    session_.setConnectionClosedFlag(closed_);
+}
 
 BoltConnection::~BoltConnection() {
     spdlog::debug("[bolt] connection destroyed");
@@ -262,8 +265,15 @@ void BoltConnection::dispatchMessage(std::vector<uint8_t> message) {
 }
 
 void BoltConnection::finishMessage(std::vector<uint8_t> response) {
-    if (phase_ == Phase::CLOSED)
+    if (phase_ == Phase::CLOSED) {
+        // The socket is gone and the in-flight message has just finished, so no
+        // coroutine is running: this is the safe moment to drop the stream. Both
+        // this and closeConnection() run on the EventBase thread, so
+        // message_processing_ needs no synchronisation.
+        message_processing_ = false;
+        session_.abandonStream(true);
         return;
+    }
 
     if (session_.isClosed()) {
         if (!response.empty())
@@ -350,6 +360,16 @@ void BoltConnection::closeConnection() {
         return;
     phase_ = Phase::CLOSED;
     message_accumulator_.clear();
+    // Let a PULL that is still draining a result notice that nobody is listening.
+    if (closed_) {
+        closed_->store(true, std::memory_order_relaxed);
+    }
+    // If no message is in flight the stream is suspended and can be dropped right
+    // here (rollback included); otherwise finishMessage() does it once the in-flight
+    // task completes. Both run on this EventBase thread, so this is not a race.
+    if (!message_processing_) {
+        session_.abandonStream(true);
+    }
 
     // Keep a self-reference so the connection is not destroyed while
     // we're still inside this method (removeConnection may drop the

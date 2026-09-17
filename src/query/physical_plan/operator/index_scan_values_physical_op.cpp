@@ -10,7 +10,7 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanValuesPhysicalOp::executeChunk()
     std::vector<VertexId> collected;
     for (const auto& value : *values_) {
         std::vector<PropertyValue> one{value};
-        auto gen = store_.scanVerticesByIndexId(index_id_, one);
+        auto gen = cancellable(store_.scanVerticesByIndexId(index_id_, one));
         while (auto batch = co_await gen.next()) {
             for (VertexId vid : *batch)
                 collected.push_back(vid);

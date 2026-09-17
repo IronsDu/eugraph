@@ -9,7 +9,7 @@ void PatternComprehensionApplyPhysicalOp::deriveOutputLayout(const TupleSlotLayo
 }
 
 folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::executeChunk() {
-    auto left_gen = left_->executeChunk();
+    auto left_gen = cancellable(left_->executeChunk());
 
     while (auto left_chunk_opt = co_await left_gen.next()) {
         if (!left_chunk_opt || left_chunk_opt->count == 0)
@@ -50,7 +50,7 @@ folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::exec
             // skipping the rest of the correlated sub-plan and the whole
             // collect() materialisation.
             bool existence_hit = false;
-            auto right_gen = right_->executeChunk();
+            auto right_gen = cancellable(right_->executeChunk());
             while (auto right_chunk = co_await right_gen.next()) {
                 if (!right_chunk || right_chunk->count == 0)
                     continue;

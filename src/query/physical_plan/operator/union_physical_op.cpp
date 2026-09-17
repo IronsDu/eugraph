@@ -22,7 +22,7 @@ folly::coro::AsyncGenerator<RowBatch> UnionPhysicalOp::execute() {
 
 folly::coro::AsyncGenerator<DataChunk> UnionPhysicalOp::executeChunk() {
     // Execute left child
-    auto left_gen = left_->executeChunk();
+    auto left_gen = cancellable(left_->executeChunk());
     while (true) {
         auto chunk = co_await left_gen.next();
         if (!chunk.has_value())
@@ -31,7 +31,7 @@ folly::coro::AsyncGenerator<DataChunk> UnionPhysicalOp::executeChunk() {
     }
 
     // Execute right child
-    auto right_gen = right_->executeChunk();
+    auto right_gen = cancellable(right_->executeChunk());
     while (true) {
         auto chunk = co_await right_gen.next();
         if (!chunk.has_value())

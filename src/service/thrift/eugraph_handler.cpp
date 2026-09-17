@@ -24,11 +24,49 @@ int64_t nowMs() {
         .count();
 }
 
+/// Ends a query's transaction when its result stream is abandoned.
+///
+/// Destroying a fbthrift stream destroys this generator's frame. Without this the
+/// statement's GraphTxnHandle would simply be dropped, leaving its WT session, its
+/// snapshot and any uncommitted writes alive for the life of the process -- enough
+/// abandoned streams and opening a session starts failing, after which queries
+/// silently lose transaction semantics. Same contract as
+/// BoltSession::abandonStream(), for the Thrift/RPC path.
+class StreamAbandonRollback {
+public:
+    explicit StreamAbandonRollback(std::shared_ptr<eugraph::compute::StreamContext> ctx) : ctx_(std::move(ctx)) {}
+
+    ~StreamAbandonRollback() {
+        if (!ctx_ || finished_)
+            return;
+        const eugraph::GraphTxnHandle txn = ctx_->txn;
+        eugraph::IAsyncGraphDataStore& store = ctx_->store;
+        const bool rollback = ctx_->should_commit;
+        // Order matters: destroy the operator tree (and the cursors it still holds)
+        // while the transaction is alive, then end the transaction.
+        ctx_->gen = folly::coro::AsyncGenerator<eugraph::DataChunk>{};
+        ctx_->phys_op.reset();
+        ctx_.reset();
+        if (rollback && txn != eugraph::INVALID_GRAPH_TXN)
+            store.rollbackTranNow(txn);
+    }
+
+    /// The stream ran to completion and committed; there is nothing to roll back.
+    void markFinished() {
+        finished_ = true;
+    }
+
+private:
+    std::shared_ptr<eugraph::compute::StreamContext> ctx_;
+    bool finished_ = false;
+};
+
 folly::coro::AsyncGenerator<eugraph::thrift_service::ResultRowBatch&&>
 makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
                     std::unordered_map<eugraph::LabelId, eugraph::LabelDef> label_defs,
                     std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
                     eugraph::service::thrift::EuGraphHandler& handler, int64_t t0) {
+    StreamAbandonRollback abandon_rollback{ctx};
     size_t total_rows = 0;
     bool labels_merged = false;
     while (auto chunk = co_await ctx->gen.next()) {
@@ -98,6 +136,7 @@ makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
     if (ctx->should_commit) {
         co_await ctx->store.commitTran(ctx->txn);
     }
+    abandon_rollback.markFinished();
     spdlog::info("[handler] executeCypher stream done, {} rows, took={}ms", total_rows, nowMs() - t0);
 }
 

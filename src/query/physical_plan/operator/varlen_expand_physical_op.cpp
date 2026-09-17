@@ -75,7 +75,7 @@ std::string VarLenExpandPhysicalOp::toString() const {
 folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
     if (dst_label_missing_)
         co_return;
-    auto child_gen = child_->executeChunk();
+    auto child_gen = cancellable(child_->executeChunk());
 
     auto dir = Direction::OUT;
     if (direction_ == cypher::RelationshipDirection::RIGHT_TO_LEFT) {
@@ -91,7 +91,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         if (index_id == 0)
             co_return;
         std::vector<PropertyValue> one{value};
-        auto gen = store_.scanVerticesByIndexId(index_id, one);
+        auto gen = cancellable(store_.scanVerticesByIndexId(index_id, one));
         while (auto batch = co_await gen.next()) {
             for (VertexId vid : *batch)
                 out.insert(vid);
@@ -159,7 +159,7 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         std::vector<DirectedEdgeEntry> out;
         bool phy_out = (scan_dir == Direction::OUT);
         for (const auto& label_filter : scan_filters) {
-            auto edge_gen = store_.scanEdges(vid, scan_dir, label_filter);
+            auto edge_gen = cancellable(store_.scanEdges(vid, scan_dir, label_filter));
             while (auto edge_batch = co_await edge_gen.next()) {
                 for (const auto& e : *edge_batch)
                     out.push_back({e.neighbor_id, e.edge_id, e.edge_label_id, e.seq, phy_out});
@@ -234,6 +234,10 @@ folly::coro::AsyncGenerator<DataChunk> VarLenExpandPhysicalOp::executeChunk() {
         };
 
         for (size_t src_row = 0; src_row < input_rows; ++src_row) {
+            // Heaviest loop in the engine: a single input row can expand into a whole
+            // traversal, so check here as well as at the store batch boundaries.
+            if (cancelled())
+                co_return;
             std::vector<EdgeId> expected_edge_ids;
             if (edge_list_bound_) {
                 if (edge_list_col_idx_ < 0 || static_cast<size_t>(edge_list_col_idx_) >= input_cols)

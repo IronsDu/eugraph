@@ -77,6 +77,9 @@ private:
     folly::AsyncSocket::UniquePtr socket_;
     service::GraphService& service_;
     BoltSession session_;
+    /// Set once the socket goes away; shared with the session so a running PULL
+    /// can abandon a result the client will never read.
+    std::shared_ptr<std::atomic<bool>> closed_;
     BoltServer* server_ = nullptr; // for removing self from active set
 
     Transport transport_ = Transport::DETECTING;

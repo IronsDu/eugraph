@@ -102,6 +102,8 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 - `gen` — 从 `phys_op->execute()` 创建的 AsyncGenerator
 - `txn` — 事务句柄
 - `store` — 数据存储引用（用于结束时 commit）
+- `query_store` — 本查询 `forkTransaction()` 出来的 store 包装器，物理算子实际使用的就是它；它同时承载本查询的取消标志
+- `query_context` — 每语句一份的 `QueryContext`（取消令牌等），算子通过 `shared_ptr` 共享；由 `setQueryContext()` 在规划完成后一次性挂到算子树根上
 - `label_defs` / `edge_label_defs` — 被物理算子通过裸指针引用，StreamContext 持有所有权
 
 ### Handler 流式生成
@@ -124,6 +126,25 @@ AsyncGenerator<RowBatch>
 - 流正常结束：generator 耗尽后 `commitTran`
 - 客户端断连：generator 销毁，事务隐式回滚（WT session 关闭）
 - 执行期错误：generator 提前结束，隐式回滚
+- 查询被取消：按“未正常完成”处理，必须回滚而不是提交（见下）
+
+### 查询取消（协作式）
+
+长查询要能被放弃（典型场景：客户端断开；将来也可以是显式的 CANCEL 消息）。实现方式是**显式标志 + 批次边界检查**，不是协程中断：
+
+- `QueryContext`（`src/query/physical_plan/query_context.hpp`）是**每语句一份**的执行上下文，目前持有取消令牌（`QueryCancel = shared_ptr<const atomic<bool>>`，定义也在这里），将来的 deadline / 预算 / 统计也应该加在这里。`prepareStream(query, params, cancel)` 造出它并 `setQueryContext()` 挂到算子树根上，基类递归下发给所有子算子；算子通过 `shared_ptr` 持有，所以拆解顺序不影响正确性。
+  - **它刻意不持有 store**：算子自己就有 `store_`；而 `StreamContext` 的 `query_store` 声明在 `phys_op` 之后（先析构），一个被算子保活的 context 若引用它会在极端顺序下悬空。
+  - **它的析构函数不做任何事**：结束事务属于显式拆流路径（`BoltSession::abandonStream()` / `StreamAbandonRollback`）。如果让 context 析构顺手回滚，就会在算子析构（关游标）之前释放 WT session，正好踩中下面第 7 条的顺序红线。
+  - **存储层完全不知道"取消"这回事**：`IAsyncGraphDataStore` 上既没有令牌也没有 setter（曾经有，见 [interfaces.md](../../storage/interfaces.md) 设计决策 7）。存储实例被一个图里所有查询共享，查询级状态不该落在它身上。
+- 算子通过基类提供的 `cancelled()` 检查（无 context 时恒为 false，便于单测直接构造算子），因此**不需要修改任何算子的函数签名或构造函数**。
+- 检查点全部在算子侧，只有**一个原语**：`PhysicalOperator::cancellable(gen)`（`physical_operator_base.hpp` 里的模板协程），凡是"按 chunk 消费上游"的地方都包一层，两侧来源各包一次：
+  - **存储侧来源**：所有 `store_.scanXxx(...)` 生成器的消费点（9 个算子文件、34 处）；
+  - **算子侧来源**：所有 `child_->executeChunk()` / `->execute()` 的获取点（29 个算子文件、38 处）。
+  第二条是必需的：像 `AllNodeScanPhysicalOp` 这类"先把结果物化进内存、再逐个 chunk 吐给父算子"的算子，如果在它物化期间取消，检查只写在它消费 store 的地方是拦不住后面 10 万行输出的——必须由**上游消费者**（例如 `CreateNodePhysicalOp`）在"拿到一个上游 chunk"时检查并停止拉取（写查询尤其重要：`MATCH (n) CREATE ...` 的根算子不产出任何行，只有算子树内部的检查才能让它停下）。
+  - **精度**：代价最多是多做一个 batch——飞行中的那个 chunk 会被产出后丢弃，随后算子返回、生成器销毁。两个例外会超出"一个 batch"：`scanAllVertices()` 与顶点索引扫描在**第一次 `next()` 内就把整个匹配集收集完**（单次 dispatch），那期间取消要等收集结束；对选择性索引这个量很小，这是"让存储层保持与查询无关"所付的代价。
+  - 粒度到此为止，不打断单次长 IO。行级检查仍保留在 `expand` / `varlen_expand`（单行就能炸开整棵遍历）。
+- 被取消的算子直接 `co_return`，生成器提前结束，父算子自然退出，不需要异常传播。
+- **收敛即回滚**：生成器“提前结束”和“真的取完”在协议层都表现为 `next()` 取空，因此结束流时必须能区分二者。Bolt 侧用 `streamCancelled()` 显式判定，走与断连相同的分支：回滚事务、结束流、回 `FAILURE`，绝不提交客户端没看全的写事务。
 
 ---
 
@@ -163,3 +184,7 @@ AsyncGenerator<RowBatch>
 5. **GraphTxnHandle 是 `void*`**：指向堆上 `TxnState`，commit/rollback 后释放。任何后续访问是 use-after-free。
 
 6. **CREATE INDEX 同步回填**：当前阻塞用户请求直到回填完成，大表会很慢。
+
+7. **先销毁算子树，再结束事务**（顺序红线）：`endStream()` / 析构 `StreamContext` 之前**不要** commit/rollback。顶层 generator 返回空并不代表所有游标都已关闭——`LIMIT` 等提前返回的算子会把子生成器留在 `co_yield` 上，活游标跟着那些协程帧一直活到算子树被销毁。先结束事务会释放 WT session 与游标，随后析构 `WtCursor` 时 `cursor_->close()` 打在已释放内存上（实测 SIGSEGV：`~WtCursor` ← `~VertexScanCursorImpl`）。正确顺序：**销毁流（关游标）→ commit/rollback**。Bolt 侧见 [neo4j-bolt-protocol.md](../../service/neo4j-bolt-protocol.md) 第 10 节。
+
+8. **放弃流就必须结束它的事务**：`GraphTxnHandle` 只被 commit/rollback 从 `txns_` 里摘除，句柄一丢，事务的 WT session、快照与未提交修改就活到进程结束。累积约 185 个泄漏的事务后 `open_session()` 失败，`beginTran()` 返回 `INVALID_GRAPH_TXN`，`getSession(INVALID_GRAPH_TXN)` 兜底到共享 `defaultSession_`（autocommit）——**查询静默失去事务语义，写操作逐行提交且无法回滚**，最终 WT 断言 `lock_success == 0` 崩溃。因此"丢弃流"的路径必须调用 `rollbackTranNow()`：Bolt 用 `BoltSession::abandonStream()`，Thrift/RPC 用 `eugraph_handler.cpp` 里的 `StreamAbandonRollback`；`prepareStream()` 也改为在 `beginTran()` 失败时直接报错而不是降级。

@@ -3,6 +3,7 @@
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
+#include "query/physical_plan/query_context.hpp"
 #include "query/physical_plan/slot_layout.hpp"
 #include "query/planner/bound_type.hpp"
 
@@ -85,6 +86,21 @@ public:
         return slot_layout_;
     }
 
+    /// Attach the statement's execution context to this operator and its whole
+    /// subtree. Held by shared_ptr, so an operator can never observe a destroyed
+    /// context no matter which order the tree is torn down in; the planner attaches
+    /// it once, on the root.
+    void setQueryContext(std::shared_ptr<QueryContext> ctx) {
+        query_ctx_ = std::move(ctx);
+        for (const auto* child : children()) {
+            if (child)
+                const_cast<PhysicalOperator*>(child)->setQueryContext(query_ctx_);
+        }
+    }
+    const std::shared_ptr<QueryContext>& queryContext() const {
+        return query_ctx_;
+    }
+
     /// Compile expressions using the input layout from the child operator.
     /// Called after the physical tree is built, bottom-up (child before
     /// parent).  Each operator resolves its BoundColumnRef slot_ids to
@@ -100,6 +116,35 @@ protected:
     function::EvalContext eval_ctx_;
     TupleSlotLayout slot_layout_;
 
+    /// True when this statement has been cancelled (client gone, deadline, ...).
+    /// Operators check it as they process each batch of upstream chunks and each
+    /// input row of an expansion; a cancelled operator just co_returns and the
+    /// pull-based tree unwinds by itself.
+    bool cancelled() const {
+        return query_ctx_ && query_ctx_->cancelled();
+    }
+
+    /// Wrap a store generator so it stops as soon as the statement is cancelled:
+    /// the one place cancellation is observed on the storage side of an operator, so
+    /// no scan loop has to remember the check.
+    ///
+    /// Cancellation is checked here rather than inside the store on purpose -- a
+    /// store instance is shared by every query of a graph, and query state does not
+    /// belong on it. The cost is at most one more batch: the chunk already in
+    /// flight is produced and dropped, then the operator returns and its generator
+    /// is destroyed. (Two store generators do all their work inside the first
+    /// next() -- scanAllVertices and the index scans, which collect their whole
+    /// match set in one dispatch -- so those can overshoot by more than a batch;
+    /// with a selective index that is still small, and it is the accepted price of
+    /// keeping the store query-agnostic.)
+    template <typename T> folly::coro::AsyncGenerator<T> cancellable(folly::coro::AsyncGenerator<T> gen) {
+        while (auto item = co_await gen.next()) {
+            if (cancelled())
+                co_return;
+            co_yield std::move(*item);
+        }
+    }
+
     /// Bridge for upgraded operators: wraps executeChunk() output as RowBatch.
     /// Use for the legacy execute() override:
     ///   folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
@@ -108,6 +153,9 @@ protected:
 private:
     Schema output_schema_;
     std::vector<binder::BoundType> output_types_;
+    /// Per-statement execution state; null for operators built outside a statement
+    /// (unit tests), where cancelled() is then simply false.
+    std::shared_ptr<QueryContext> query_ctx_;
 };
 
 // ── Conversion utilities (used by default bridge and DDL/EXPLAIN paths) ──

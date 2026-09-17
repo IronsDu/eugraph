@@ -62,7 +62,7 @@ folly::coro::AsyncGenerator<DataChunk> HashJoinPhysicalOp::executeChunk() {
     std::unordered_map<Key, std::vector<std::vector<Value>>, KeyHash, KeyEq> hash_table;
     size_t right_cols = 0;
     {
-        auto right_gen = right_->executeChunk();
+        auto right_gen = cancellable(right_->executeChunk());
         while (auto chunk = co_await right_gen.next()) {
             if (!chunk || chunk->count == 0)
                 continue;
@@ -82,7 +82,7 @@ folly::coro::AsyncGenerator<DataChunk> HashJoinPhysicalOp::executeChunk() {
     }
 
     // Probe phase.
-    auto left_gen = left_->executeChunk();
+    auto left_gen = cancellable(left_->executeChunk());
     while (auto left_chunk = co_await left_gen.next()) {
         if (!left_chunk || left_chunk->count == 0)
             continue;

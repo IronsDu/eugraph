@@ -50,15 +50,15 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
     folly::coro::AsyncGenerator<std::vector<VertexId>> gen;
     if (index_id_ != 0) {
         if (mode_ == ScanMode::EQUALITY) {
-            gen = store_.scanVerticesByIndexId(index_id_, eq_values_);
+            gen = cancellable(store_.scanVerticesByIndexId(index_id_, eq_values_));
         } else {
-            gen = store_.scanVerticesByIndexIdRange(index_id_, range_start_, range_end_);
+            gen = cancellable(store_.scanVerticesByIndexIdRange(index_id_, range_start_, range_end_));
         }
     } else if (mode_ == ScanMode::EQUALITY) {
         if (prop_ids_.size() == 1) {
-            gen = store_.scanVerticesByIndex(label_id_, prop_ids_[0], eq_values_[0]);
+            gen = cancellable(store_.scanVerticesByIndex(label_id_, prop_ids_[0], eq_values_[0]));
         } else {
-            gen = store_.scanVerticesByIndexComposite(label_id_, prop_ids_, eq_values_);
+            gen = cancellable(store_.scanVerticesByIndexComposite(label_id_, prop_ids_, eq_values_));
         }
     } else {
         if (prop_ids_.size() == 1) {
@@ -68,9 +68,9 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
                 start = (*range_start_)[0];
             if (range_end_.has_value())
                 end = (*range_end_)[0];
-            gen = store_.scanVerticesByIndexRange(label_id_, prop_ids_[0], start, end);
+            gen = cancellable(store_.scanVerticesByIndexRange(label_id_, prop_ids_[0], start, end));
         } else {
-            gen = store_.scanVerticesByIndexRangeComposite(label_id_, prop_ids_, range_start_, range_end_);
+            gen = cancellable(store_.scanVerticesByIndexRangeComposite(label_id_, prop_ids_, range_start_, range_end_));
         }
     }
 

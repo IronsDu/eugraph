@@ -130,10 +130,14 @@ public:
 ```cpp
 class IAsyncGraphDataStore {
 public:
-    // 事务
+    // 事务（注意：本接口**不**涉及取消 —— 取消是 compute 层的事，见设计决策 7）
     virtual folly::coro::Task<GraphTxnHandle> beginTran() = 0;
     virtual folly::coro::Task<bool> commitTran(GraphTxnHandle txn) = 0;
     virtual folly::coro::Task<bool> rollbackTran(GraphTxnHandle txn) = 0;
+    /// 同步回滚：给没有协程可 await 的拆流路径用（Bolt 在 EventBase 线程上丢弃
+    /// 被放弃的流）。句柄被丢弃而不结束事务，会让它的 WT session 与快照一直活着，
+    /// 所以任何放弃流的路径都必须调用它（或 rollbackTran）。
+    virtual bool rollbackTranNow(GraphTxnHandle txn) = 0;
     virtual void setTransaction(GraphTxnHandle txn) = 0;
 
     // DDL
@@ -282,3 +286,4 @@ public:
 4. **DDL 协调**：显式 DDL（CREATE LABEL/EDGE LABEL）由 handler 层协调（先调 `async_meta_.createLabel()` 持久化元数据，再调 `async_data_.createLabel()` 创建物理表）。运行时隐式 DDL（CREATE 语句中引用不存在的边类型或属性）由物理算子 `CreateEdgeLabelPhysicalOp` / `AlterEdgeLabelPhysicalOp` 在执行阶段处理。
 5. **ISyncGraphMetaStore DDL 方法为 no-op**：元数据只存在自己的 `table:metadata` 中；物理表的创建由 data store 负责。
 6. **批量操作使用独立事务**：`batchInsertVertices`/`batchInsertEdges` 内部自行 begin+commit，不参与外层 Cypher 事务。
+7. **存储层不参与取消**：取消是语句级（compute 层）的概念，归属 `compute::QueryContext`（每语句一份）。早期版本把它作为 `IAsyncGraphDataStore` 的可写字段——而该类型的实例（`QueryExecutor::async_data_`）被一个图里所有查询共享，一旦有人对共享实例 setter，`forkTransaction()` 的拷贝就会让之后每个查询"一出生就是已取消"。现在存储接口上没有令牌、没有 setter，扫描算子通过 `PhysicalOperator::cancellable(gen)` 在消费上游 chunk 时检查（代价是最多多做一个 batch）。详见 [execution-model.md](../query/engine/execution-model.md)。

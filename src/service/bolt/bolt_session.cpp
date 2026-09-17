@@ -440,12 +440,19 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
         }
 
         spdlog::info("[bolt] RUN db='{}' query='{}'", db_name, msg.query);
-        auto exec_ctx = co_await service_.executeCypher(msg.query, params, db_name);
+        // Hand the connection's liveness flag to the query. If the socket dies
+        // mid-execution the operators stop at their next batch boundary instead of
+        // scanning the rest of the graph for a client that is no longer there.
+        auto exec_ctx = co_await service_.executeCypher(msg.query, params, db_name, connection_closed_);
 
         // Handle USE <graph> — update session database context
         if (!exec_ctx.switched_database.empty())
             current_database_ = exec_ctx.switched_database;
 
+        // Drop any previous stream (and its unread rows) before adopting this one.
+        // An unfinished auto-commit statement is rolled back rather than leaked; an
+        // explicit transaction stays parked for the client's COMMIT.
+        abandonStream(false);
         stream_ctx_ = std::move(exec_ctx.ctx);
         label_defs_ = std::move(exec_ctx.label_defs);
         edge_label_defs_ = std::move(exec_ctx.edge_label_defs);
@@ -513,27 +520,46 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
 
     std::vector<uint8_t> response;
     int64_t fetched = 0;
-    int64_t limit = msg.n;
+    const int64_t limit = msg.n; // < 0 means "no limit" (PULL {n: -1})
     bool have_first_record = false;
     std::chrono::steady_clock::time_point first_record_at;
+    bool exhausted = false;
+    bool disconnected = false;
 
     try {
-        // Read the async generator to completion. Early-returning on LIMIT
-        // would destroy generator-owned cursors on the caller (compute pool)
-        // thread instead of the storage IO thread.
-        while (auto chunk = co_await stream_ctx_->gen.next()) {
-            const size_t chunk_rows = chunk->numRows();
-            const size_t chunk_cols = chunk->numColumns();
-            spdlog::info("[handlePull] got chunk: count={} columns={}", chunk_rows, chunk_cols);
+        // Pull only what this PULL asked for and leave the stream -- and with it
+        // the operator tree and its cursors -- alive in stream_ctx_ for the next
+        // PULL. Draining to completion here (as this used to) forces the whole
+        // result to be materialised before the first batch is sent, and silently
+        // caps the client at `n` records while still reporting has_more=false.
+        while (limit < 0 || fetched < limit) {
+            // Checked between batches: a client that has gone away makes the rest
+            // of this result pointless, and the stream may hold a transaction.
+            if (streamCancelled()) {
+                spdlog::info("[handlePull] client disconnected; abandoning stream after {} record(s)", fetched);
+                disconnected = true;
+                break;
+            }
+            if (!pending_chunk_) {
+                auto next = co_await stream_ctx_->gen.next();
+                if (!next) {
+                    exhausted = true;
+                    break;
+                }
+                pending_chunk_ = std::move(*next);
+                pending_row_ = 0;
+            }
+            const size_t chunk_rows = pending_chunk_->numRows();
+            const size_t chunk_cols = pending_chunk_->numColumns();
             // Serialise straight out of the columnar chunk. Materialising the
             // chunk as std::vector<Row> first cost one heap vector per row and
             // copied every cell, only for each row to be read once here.
             std::vector<packstream::Value> record_fields;
             record_fields.reserve(chunk_cols);
-            for (size_t r = 0; r < chunk_rows; ++r) {
-                if (limit >= 0 && fetched >= limit)
-                    continue;
-
+            // Resumes at pending_row_, so a page boundary landing inside a chunk
+            // keeps the rest of that chunk for the next PULL instead of dropping it.
+            for (; pending_row_ < chunk_rows && (limit < 0 || fetched < limit); ++pending_row_) {
+                const size_t r = pending_row_;
                 if (!have_first_record) {
                     have_first_record = true;
                     first_record_at = std::chrono::steady_clock::now();
@@ -541,35 +567,83 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
 
                 record_fields.clear();
                 for (size_t c = 0; c < chunk_cols; ++c) {
-                    record_fields.push_back(
-                        valueToBolt(chunk->columns[c].getValue(r), label_defs_, edge_label_defs_, negotiated_version_));
+                    record_fields.push_back(valueToBolt(pending_chunk_->columns[c].getValue(r), label_defs_,
+                                                        edge_label_defs_, negotiated_version_));
                 }
                 appendChunkedMessage(response, makeRecord(record_fields));
                 fetched++;
             }
-            spdlog::info("[handlePull] converted to {} rows", chunk_rows);
+            if (pending_row_ >= chunk_rows) {
+                pending_chunk_.reset();
+                pending_row_ = 0;
+            }
         }
 
-        // Commit auto-commit transaction
-        if (!in_transaction_ && stream_ctx_->should_commit) {
-            co_await stream_ctx_->store.commitTran(stream_ctx_->txn);
-        }
-
-        // Save transaction handle for explicit transaction commits
-        if (in_transaction_ && stream_ctx_->should_commit) {
-            pending_txn_ = stream_ctx_->txn;
-            pending_store_ = &stream_ctx_->store;
-        }
-
-        // Build success metadata
         std::unordered_map<std::string, packstream::Value> meta;
         meta["type"] = std::string{"r"};
         meta["t_first"] = have_first_record ? elapsedMs(first_record_at) : elapsedMs(query_start_);
         meta["t_last"] = elapsedMs(query_start_);
-        // The generator was consumed to completion above, so there is never
-        // another PULL to serve.
+
+        // The generator can also end early because the store noticed the cancel flag
+        // and stopped producing. That is not a completed result, so it must not be
+        // committed; treat it exactly like a disconnect.
+        const char* abort_reason = nullptr;
+        if (disconnected) {
+            abort_reason = "client disconnected";
+        } else if (streamCancelled()) {
+            spdlog::info("[handlePull] query cancelled mid-stream; rolling back after {} record(s)", fetched);
+            abort_reason = "query cancelled";
+        }
+
+        // Whatever happens next, the stream has to be torn down BEFORE the
+        // transaction is finished. The top-level generator being done does not mean
+        // every cursor is closed: operators that stop early (LIMIT) leave their
+        // child generators suspended mid-co_yield, and those frames -- and the
+        // WtCursor objects in them -- are destroyed by endStream(). Committing or
+        // rolling back first frees the WT session and its cursors, so the later
+        // ~WtCursor would close freed memory.
+        const GraphTxnHandle stream_txn = stream_ctx_->txn;
+        IAsyncGraphDataStore& stream_store = stream_ctx_->store;
+        const bool stream_should_commit = stream_ctx_->should_commit;
+        const bool stream_in_txn = in_transaction_;
+
+        if (abort_reason) {
+            // Nobody will read this response: release the operator tree (closing its
+            // cursors), then roll back rather than commit a write the client never saw.
+            endStream();
+            if (!stream_in_txn && stream_should_commit) {
+                co_await stream_store.rollbackTran(stream_txn);
+            }
+            state_ = SessionState::FAILED;
+            co_return makeFailure("DatabaseError", abort_reason);
+        }
+
+        if (!exhausted) {
+            // The client asked for fewer records than the stream holds: tell it to
+            // PULL again. The stream stays open, keeping its transaction, the
+            // labels and the partially consumed generator; nothing is committed
+            // until it is drained or discarded.
+            meta["has_more"] = true;
+            appendChunkedMessage(response, makeSuccess(meta));
+            co_return response;
+        }
+
+        // Result fully drained: drop the stream (and with it every cursor) first, so
+        // the commit below cannot free a session a suspended generator still holds.
+        endStream();
+
+        // Commit auto-commit transaction
+        if (!stream_in_txn && stream_should_commit) {
+            co_await stream_store.commitTran(stream_txn);
+        }
+
+        // Save transaction handle for explicit transaction commits
+        if (stream_in_txn && stream_should_commit) {
+            parkTxn(stream_txn, stream_store);
+        }
+
         meta["has_more"] = false;
-        if (stream_ctx_->should_commit && next_bookmark_fn_)
+        if (stream_should_commit && next_bookmark_fn_)
             meta["bookmark"] = std::string{"eugraph:bookmark:" + std::to_string(next_bookmark_fn_())};
 
         appendChunkedMessage(response, makeSuccess(meta));
@@ -581,13 +655,12 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
             state_ = SessionState::READY;
         }
 
-        // Clear stream context
-        stream_ctx_.reset();
-
         co_return response;
     } catch (const std::exception& e) {
         state_ = SessionState::FAILED;
-        stream_ctx_.reset();
+        // The query died mid-stream: end its transaction instead of dropping the
+        // handle (an explicit one stays parked for the client's ROLLBACK).
+        abandonStream(false);
         co_return makeFailure("DatabaseError", e.what());
     }
 }
@@ -596,13 +669,13 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleDiscard(const Discard
     if (state_ == SessionState::FAILED) {
         co_return makeIgnored();
     }
-    // Save transaction handle for explicit transaction commits
+    // Save transaction handle for explicit transaction commits.
+    // DISCARD keeps the explicit transaction: park its statement transaction, then
+    // end the stream (which rolls back only an auto-commit statement).
     if (in_transaction_ && stream_ctx_ && stream_ctx_->should_commit) {
-        pending_txn_ = stream_ctx_->txn;
-        pending_store_ = &stream_ctx_->store;
+        parkTxn(stream_ctx_->txn, stream_ctx_->store);
     }
-    // Discard remaining results and close stream
-    stream_ctx_.reset();
+    abandonStream(false);
     if (state_ == SessionState::TX_STREAMING) {
         state_ = SessionState::TX_READY;
     } else {
@@ -738,13 +811,9 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRoute(const RouteMess
 }
 
 folly::coro::Task<std::vector<uint8_t>> BoltSession::handleReset() {
-    // RESET is valid in any state
-    if (pending_txn_ != INVALID_GRAPH_TXN && pending_store_) {
-        co_await pending_store_->rollbackTran(pending_txn_);
-        pending_txn_ = INVALID_GRAPH_TXN;
-        pending_store_ = nullptr;
-    }
-    stream_ctx_.reset();
+    // RESET is valid in any state, and aborts everything: the parked explicit
+    // transaction and any stream still holding one.
+    abandonStream(true);
     in_transaction_ = false;
     state_ = SessionState::READY;
     std::unordered_map<std::string, packstream::Value> meta;
@@ -752,8 +821,8 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleReset() {
 }
 
 folly::coro::Task<std::vector<uint8_t>> BoltSession::handleGoodbye() {
-    // GOODBYE is valid in any state
-    stream_ctx_.reset();
+    // GOODBYE is valid in any state; the client is done, so nothing is kept.
+    abandonStream(true);
     state_ = SessionState::CLOSED;
     // No response needed; connection will be closed by caller
     co_return std::vector<uint8_t>{};

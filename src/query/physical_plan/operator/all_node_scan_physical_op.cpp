@@ -11,14 +11,14 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
     std::unordered_set<VertexId> seen_vids;
 
     if (candidate_labels_.empty()) {
-        auto gen = store_.scanAllVertices();
+        auto gen = cancellable(store_.scanAllVertices());
         while (auto batch = co_await gen.next()) {
             for (VertexId vid : *batch)
                 seen_vids.insert(vid);
         }
     } else {
         for (LabelId lid : candidate_labels_) {
-            auto gen = store_.scanVerticesByLabel(lid);
+            auto gen = cancellable(store_.scanVerticesByLabel(lid));
             while (auto batch = co_await gen.next()) {
                 for (VertexId vid : *batch)
                     seen_vids.insert(vid);

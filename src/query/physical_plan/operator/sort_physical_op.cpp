@@ -21,7 +21,7 @@ folly::coro::AsyncGenerator<DataChunk> SortPhysicalOp::executeChunk() {
     size_t num_cols = 0;
     const size_t n_keys = sort_items_.size();
 
-    auto child_gen = child_->executeChunk();
+    auto child_gen = cancellable(child_->executeChunk());
     ExpressionEvaluator evaluator(eval_ctx_);
 
     while (auto chunk = co_await child_gen.next()) {

@@ -11,7 +11,7 @@ folly::coro::AsyncGenerator<DataChunk> LabelScanPhysicalOp::executeChunk() {
 
     bool multi_label = label_ids_.size() > 1;
     LabelId scan_label = label_ids_[0];
-    auto gen = store_.scanVerticesByLabel(scan_label);
+    auto gen = cancellable(store_.scanVerticesByLabel(scan_label));
     while (auto batch = co_await gen.next()) {
         DataChunk chunk;
         chunk.setSchema(output_types_);

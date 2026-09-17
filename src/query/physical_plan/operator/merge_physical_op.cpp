@@ -429,7 +429,7 @@ MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
     if (labels.empty()) {
         if (anon_label_id_ == INVALID_LABEL_ID)
             co_return std::nullopt;
-        auto gen = store_.scanVerticesByLabel(anon_label_id_);
+        auto gen = cancellable(store_.scanVerticesByLabel(anon_label_id_));
         while (auto batch = co_await gen.next()) {
             for (auto vid : *batch) {
                 if (prop_filters.empty() && pending_props.empty())
@@ -490,7 +490,7 @@ MergePhysicalOp::findMatchingNode(const std::vector<LabelId>& labels,
     for (auto lid : labels) {
         if (lid == INVALID_LABEL_ID)
             continue;
-        auto gen = store_.scanVerticesByLabel(lid);
+        auto gen = cancellable(store_.scanVerticesByLabel(lid));
         std::unordered_set<VertexId> label_verts;
         while (auto batch = co_await gen.next()) {
             for (auto vid : *batch) {
@@ -678,7 +678,7 @@ MergePhysicalOp::findMatchingEdge(VertexId src_vid, VertexId dst_vid,
     Direction store_dir = toStoreDir(direction_);
 
     auto scanAndFilter = [&](Direction dir) -> folly::coro::Task<std::optional<std::tuple<EdgeId, EdgeLabelId>>> {
-        auto gen = store_.scanEdges(src_vid, dir, edge_label_id_);
+        auto gen = cancellable(store_.scanEdges(src_vid, dir, edge_label_id_));
         while (auto batch = co_await gen.next()) {
             for (const auto& entry : *batch) {
                 if (entry.neighbor_id != dst_vid)
@@ -745,7 +745,7 @@ MergePhysicalOp::findAllMatchingEdges(VertexId src_vid, VertexId dst_vid,
     Direction store_dir = toStoreDir(direction_);
 
     auto scanAndCollect = [&](Direction dir) -> folly::coro::Task<void> {
-        auto gen = store_.scanEdges(src_vid, dir, edge_label_id_);
+        auto gen = cancellable(store_.scanEdges(src_vid, dir, edge_label_id_));
         while (auto batch = co_await gen.next()) {
             for (const auto& entry : *batch) {
                 if (entry.neighbor_id != dst_vid)
@@ -1163,7 +1163,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
     }
 
     // Phase 3: per-row processing — yield one chunk per row
-    auto child_gen = child_->executeChunk();
+    auto child_gen = cancellable(child_->executeChunk());
     while (auto chunk = co_await child_gen.next()) {
         for (size_t row = 0; row < chunk->count; ++row) {
             bool start_created = false;
@@ -1252,7 +1252,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 bool bare_merge = !has_relationship_ && start_labels_.empty() && start_prop_filters_.empty() &&
                                   start_pending_props_.empty();
                 if (bare_merge) {
-                    auto all_gen = store_.scanAllVertices();
+                    auto all_gen = cancellable(store_.scanAllVertices());
                     while (auto batch = co_await all_gen.next()) {
                         for (auto vid : *batch)
                             bare_matches.push_back(vid);
