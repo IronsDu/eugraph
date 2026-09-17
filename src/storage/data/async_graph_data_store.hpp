@@ -24,10 +24,8 @@ public:
     AsyncGraphDataStore(ISyncGraphDataStore& store, IoScheduler& io, GraphTxnHandle txn = INVALID_GRAPH_TXN)
         : store_(store), io_(io), txn_(txn) {}
 
-    void setTransaction(GraphTxnHandle txn) override {
-        txn_ = txn;
-    }
-
+    /// The transaction handle is fixed at construction: the only way to get an
+    /// instance bound to a transaction is to fork one (see IAsyncGraphDataStore).
     std::unique_ptr<IAsyncGraphDataStore> forkTransaction(GraphTxnHandle txn) override {
         return std::make_unique<AsyncGraphDataStore>(store_, io_, txn);
     }
@@ -802,7 +800,10 @@ public:
 private:
     ISyncGraphDataStore& store_;
     IoScheduler& io_;
-    GraphTxnHandle txn_;
+    // Fixed at construction: the only way to bind a store to a transaction is to
+    // fork one, so a shared instance can never be re-pointed at another statement's
+    // transaction.
+    const GraphTxnHandle txn_;
 };
 
 } // namespace eugraph
