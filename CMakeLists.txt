@@ -167,6 +167,7 @@ target_link_libraries(eugraph_metadata PUBLIC
 
 add_library(eugraph_query_engine STATIC
     src/common/types/temporal_value.cpp
+    src/common/types/query_error.cpp
     src/query/catalog/catalog.cpp
     src/query/planner/binder/bind_binary_op.cpp
     src/query/planner/binder/bind_unary_op.cpp

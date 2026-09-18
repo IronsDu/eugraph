@@ -1,10 +1,13 @@
 #pragma once
 
+#include "common/types/query_error.hpp"
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
 #include "query/function/scalar/support/typed_batch.hpp"
 
+#include <algorithm>
 #include <cctype>
+#include <optional>
 
 namespace eugraph {
 namespace function {
@@ -67,10 +70,61 @@ struct ReverseStringOp {
     }
 };
 
+/// 两参数形式：从两端去掉 `chars` 里出现的任意字符（文档语义）。
+/// 注意不要照抄 neo4j 5.26 的实现 —— 它的 trim(s, chars) 会直接返回第二个参数。
+/// ltrim/rtrim 在 neo4j 里是正确的，语义与此一致。
+inline Value trimCharsImpl(const Value& str_val, const Value& chars_val) {
+    if (isNull(str_val) || isNull(chars_val))
+        return Value{};
+    if (!std::holds_alternative<std::string>(str_val) || !std::holds_alternative<std::string>(chars_val))
+        return Value{};
+    const auto& s = std::get<std::string>(str_val);
+    const auto& chars = std::get<std::string>(chars_val);
+    if (chars.empty())
+        return Value{s};
+    auto begin = s.find_first_not_of(chars);
+    if (begin == std::string::npos)
+        return Value{std::string{}};
+    auto end = s.find_last_not_of(chars);
+    return Value{s.substr(begin, end - begin + 1)};
+}
+
+inline Value ltrimCharsImpl(const Value& str_val, const Value& chars_val) {
+    if (isNull(str_val) || isNull(chars_val))
+        return Value{};
+    if (!std::holds_alternative<std::string>(str_val) || !std::holds_alternative<std::string>(chars_val))
+        return Value{};
+    const auto& s = std::get<std::string>(str_val);
+    const auto& chars = std::get<std::string>(chars_val);
+    if (chars.empty())
+        return Value{s};
+    auto begin = s.find_first_not_of(chars);
+    return Value{begin == std::string::npos ? std::string{} : s.substr(begin)};
+}
+
+inline Value rtrimCharsImpl(const Value& str_val, const Value& chars_val) {
+    if (isNull(str_val) || isNull(chars_val))
+        return Value{};
+    if (!std::holds_alternative<std::string>(str_val) || !std::holds_alternative<std::string>(chars_val))
+        return Value{};
+    const auto& s = std::get<std::string>(str_val);
+    const auto& chars = std::get<std::string>(chars_val);
+    if (chars.empty())
+        return Value{s};
+    auto end = s.find_last_not_of(chars);
+    return Value{end == std::string::npos ? std::string{} : s.substr(0, end + 1)};
+}
+
 inline void trimBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {
     if (args.empty())
         return;
     const Column& in = *args[0];
+    if (args.size() >= 2) {
+        const Column& chars = *args[1];
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, trimCharsImpl(in.getValue(i), chars.getValue(i)));
+        return;
+    }
     if (in.type == binder::BoundTypeKind::STRING)
         typedUnaryBatch<std::string, std::string, TrimOp>(in, result, count);
     else
@@ -96,6 +150,12 @@ inline void ltrimBatchFn(const std::vector<const Column*>& args, Column& result,
     if (args.empty())
         return;
     const Column& in = *args[0];
+    if (args.size() >= 2) {
+        const Column& chars = *args[1];
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, ltrimCharsImpl(in.getValue(i), chars.getValue(i)));
+        return;
+    }
     if (in.type == binder::BoundTypeKind::STRING)
         typedUnaryBatch<std::string, std::string, LTrimOp>(in, result, count);
     else
@@ -121,6 +181,12 @@ inline void rtrimBatchFn(const std::vector<const Column*>& args, Column& result,
     if (args.empty())
         return;
     const Column& in = *args[0];
+    if (args.size() >= 2) {
+        const Column& chars = *args[1];
+        for (size_t i = 0; i < count; ++i)
+            result.setValue(i, rtrimCharsImpl(in.getValue(i), chars.getValue(i)));
+        return;
+    }
     if (in.type == binder::BoundTypeKind::STRING)
         typedUnaryBatch<std::string, std::string, RTrimOp>(in, result, count);
     else
@@ -195,21 +261,22 @@ inline void replaceBatchFn(const std::vector<const Column*>& args, Column& resul
 
 // --- substring ---
 
-inline Value substringImpl(const Value& str_val, int64_t start, int64_t length) {
+/// `length` 为 nullopt 表示两参数形式（取到字符串末尾）。
+/// 负的起始位置或负的长度是错误（neo4j: Neo.DatabaseError.Statement.ExecutionFailed），
+/// 而不是返回 NULL —— 静默的 NULL 会让调用方把「参数写错」当成「没有值」。
+inline Value substringImpl(const Value& str_val, int64_t start, std::optional<int64_t> length) {
     if (isNull(str_val))
         return Value{};
     if (!std::holds_alternative<std::string>(str_val))
         return Value{};
-    if (start < 0)
-        return Value{};
+    if (start < 0 || (length.has_value() && *length < 0))
+        throw QueryException(QueryErrorKind::ExecutionFailed, "Cannot handle negative start index nor negative length");
     const auto& s = std::get<std::string>(str_val);
     auto ustart = static_cast<size_t>(start);
     if (ustart >= s.size())
         return Value{std::string{}};
-    auto remaining = s.size() - ustart;
-    auto ulen = static_cast<size_t>(length < 0 ? static_cast<int64_t>(remaining) : length);
-    if (ulen > remaining)
-        ulen = remaining;
+    const auto remaining = s.size() - ustart;
+    const auto ulen = length.has_value() ? std::min(static_cast<size_t>(*length), remaining) : remaining;
     return Value{s.substr(ustart, ulen)};
 }
 
@@ -226,11 +293,15 @@ inline void substringBatchFn(const std::vector<const Column*>& args, Column& res
             continue;
         }
         auto start = std::get<int64_t>(start_val);
-        int64_t length = -1;
+        std::optional<int64_t> length;
         if (len_col) {
             auto len_val = len_col->getValue(i);
-            if (!isNull(len_val))
-                length = std::get<int64_t>(len_val);
+            if (isNull(len_val)) {
+                // 长度显式为 NULL：结果也是 NULL（与 neo4j 一致），不再当作「取到末尾」。
+                result.setValue(i, Value{});
+                continue;
+            }
+            length = std::get<int64_t>(len_val);
         }
         result.setValue(i, substringImpl(str_col.getValue(i), start, length));
     }

@@ -282,6 +282,9 @@ void genericAddBatch(const Column& left, const Column& right, Column& result, si
             } else {
                 result.setNull(i);
             }
+        } else if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
+            // 整型走 exact 路径：numericPair 会提升为 double，既丢精度又不会报溢出。
+            result.setValue(i, Value(detail::checkedAdd(std::get<int64_t>(lv), std::get<int64_t>(rv))));
         } else {
             auto pair = numericPair(lv, rv);
             if (pair)
@@ -334,6 +337,8 @@ void genericSubBatch(const Column& left, const Column& right, Column& result, si
             } else {
                 result.setNull(i);
             }
+        } else if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
+            result.setValue(i, Value(detail::checkedSub(std::get<int64_t>(lv), std::get<int64_t>(rv))));
         } else {
             auto pair = numericPair(lv, rv);
             if (pair)
@@ -358,6 +363,8 @@ void genericMulBatch(const Column& left, const Column& right, Column& result, si
         } else if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<DurationValue>(rv)) {
             result.setValue(
                 i, Value(mulDuration(std::get<DurationValue>(rv), static_cast<double>(std::get<int64_t>(lv)))));
+        } else if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
+            result.setValue(i, Value(detail::checkedMul(std::get<int64_t>(lv), std::get<int64_t>(rv))));
         } else {
             auto pair = numericPair(lv, rv);
             if (pair)
@@ -384,6 +391,10 @@ void genericDivBatch(const Column& left, const Column& right, Column& result, si
                 result.setNull(i);
             else
                 result.setValue(i, Value(mulDuration(std::get<DurationValue>(lv), 1.0 / static_cast<double>(div))));
+        } else if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
+            // 整数除法必须保持整数语义（7/2 = 3）。走 numericPair 会把两侧提升成
+            // double，既丢了截断语义，除零也变成 inf 而不是 ArithmeticError。
+            result.setValue(i, Value(detail::checkedDivide(std::get<int64_t>(lv), std::get<int64_t>(rv))));
         } else {
             auto pair = numericPair(lv, rv);
             if (pair)
@@ -409,7 +420,7 @@ void genericModBatch(const Column& left, const Column& right, Column& result, si
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
         if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
-            result.setValue(i, Value(std::get<int64_t>(lv) % std::get<int64_t>(rv)));
+            result.setValue(i, Value(detail::checkedModulo(std::get<int64_t>(lv), std::get<int64_t>(rv))));
         else {
             auto pair = numericPair(lv, rv);
             if (pair)
@@ -472,8 +483,7 @@ void int64DivBatch(const Column& left, const Column& right, Column& result, size
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
         if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
-            int64_t b = std::get<int64_t>(rv);
-            result.setValue(i, b != 0 ? Value(std::get<int64_t>(lv) / b) : Value{});
+            result.setValue(i, Value(detail::checkedDivide(std::get<int64_t>(lv), std::get<int64_t>(rv))));
         } else {
             result.setNull(i);
         }
@@ -485,8 +495,7 @@ void int64ModBatch(const Column& left, const Column& right, Column& result, size
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
         if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv)) {
-            int64_t b = std::get<int64_t>(rv);
-            result.setValue(i, b != 0 ? Value(std::get<int64_t>(lv) % b) : Value{});
+            result.setValue(i, Value(detail::checkedModulo(std::get<int64_t>(lv), std::get<int64_t>(rv))));
         } else {
             result.setNull(i);
         }

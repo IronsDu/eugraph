@@ -77,6 +77,8 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 执行模型/协程/流式 | [query/engine/execution-model.md], [query/engine/query-engine-design.md] | `src/storage/io_scheduler.hpp`, `executor/` |
 | 元数据/Schema 管理 | [storage/metadata-service-design.md] | `src/storage/meta/`, `src/storage/graph_schema.hpp` |
 | 表达式求值相关 | [query/syntax/cypher-syntax.md], [query/engine/query-engine-design.md] | `executor/vectorized_evaluator.cpp`, `binder/` |
+| 时间类型/时间运算语义 | [query/engine/temporal-semantics.md] | `src/common/types/temporal_value.*`, `function/scalar/temporal_functions.hpp` |
+| 查询错误分类/状态码 | [query/engine/error-model.md] | `src/common/types/query_error.*`, `src/service/bolt/bolt_session.cpp` |
 
 ## 构建与运行
 
@@ -137,6 +139,8 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | [表达式求值 Benchmarks](query/engine/evaluator-benchmarks.md) | google benchmark 基线、优化前后对比与运行方法 |
 | [执行模型](query/engine/execution-model.md) | Pull-based 火山模型、协程调度、IO/Compute 分离、流式执行、关键不变量 |
 | [事务模型](query/engine/transaction-model.md) | 事务生命周期、snapshot isolation、流式事务、批量操作事务 |
+| [时间语义（对齐 neo4j）](query/engine/temporal-semantics.md) | 月末夹取、duration.between 的月/天拆分、时区比较、epoch 基准、date - date 扩展与验证方式 |
+| [查询错误模型](query/engine/error-model.md) | 错误分类 → Neo4j 状态码、消息契约、整数溢出/除零与 map 参数校验、与 neo4j 的差异清单 |
 | [ProjectionExtract 按需属性物化设计](query/engine/projection-extract-design.md) | 需求驱动的属性物化：SlotId 系统、六阶段管线、PEPlan、ColumnSpec |
 | [SlotId 架构设计](query/engine/slot-id-design.md) | 全局唯一槽位标识符：动机、设计决策、物理布局映射、内部/用户槽位分区 |
 | [CrossProduct 相关变量等值约束](query/engine/cross-product-correlation.md) | WITH 后独立 MATCH / 多 pattern 同名变量的独立作用域绑定与实体 ID 等值约束设计 |

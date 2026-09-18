@@ -139,9 +139,17 @@ std::string temporalToString(const DateTimeValue& tv);
 std::string temporalToString(const TimeValue& tv);
 std::string temporalToString(const DurationValue& tv);
 
-int64_t temporalToComparable(const DateTimeValue& tv);
+/// 客户端/ISO-8601 渲染：零秒与零小数省略（Java 驱动渲染 Bolt 时间值的形式）。
+/// Thrift/Shell/TCK 的文本输出用它；`toString()` 仍走 temporalToString（秒始终输出）。
+/// 见 docs/query/engine/temporal-semantics.md 第 5 节。
+std::string temporalToIsoString(const DateTimeValue& tv);
+std::string temporalToIsoString(const TimeValue& tv);
+std::string temporalToIsoString(const DurationValue& tv);
+
+__int128 temporalToComparable(const DateTimeValue& tv);
 int64_t temporalToComparable(const TimeValue& tv);
 
+/// 绝对时刻坐标（纪元纳秒，128 位：公元 2262 年以后 int64 会溢出）。
 bool temporalLess(const DateTimeValue& a, const DateTimeValue& b);
 bool temporalLess(const TimeValue& a, const TimeValue& b);
 
@@ -173,6 +181,10 @@ DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b);
 DurationValue durationBetween(const TimeValue& a, const TimeValue& b);
 
 DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos);
+
+/// 把 duration 的纳秒分量收进 [0, 1e9)（java.time.Duration 的不变量，neo4j 沿用）。
+/// 所有构造 duration 的地方都应调用它，否则 .seconds / .nanosecondsOfSecond 会与 neo4j 不一致。
+void normalizeDurationNanos(DurationValue& dur);
 
 int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, const std::string& tz_name);
 int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, int64_t hour, int64_t minute,

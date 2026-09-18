@@ -1,4 +1,5 @@
 #include "common/types/temporal_value.hpp"
+#include "common/types/query_error.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -252,11 +253,13 @@ bool DurationValue::operator==(const DurationValue& o) const {
 
 // ==================== Comparable ====================
 
-int64_t temporalToComparable(const DateTimeValue& tv) {
-    int64_t days = daysFromCivil(tv.year, tv.month, tv.day);
-    int64_t day_ns = ((tv.hour * 3600 + tv.minute * 60 + tv.second) * 1'000'000'000LL) + tv.nanos;
+__int128 temporalToComparable(const DateTimeValue& tv) {
+    // 128 位：把日期折成"纪元纳秒"后，int64 只能表示到公元 2262 年
+    // （days * 8.64e13 溢出），再往后的 datetime 排序/比较会得出错误结果。
+    const __int128 days = daysFromCivil(tv.year, tv.month, tv.day);
+    __int128 day_ns = (static_cast<__int128>(tv.hour) * 3600 + tv.minute * 60 + tv.second) * 1'000'000'000LL + tv.nanos;
     if (tv.kind == DateTimeKind::DATETIME)
-        day_ns -= static_cast<int64_t>(tv.tz_offset_sec) * 1'000'000'000LL;
+        day_ns -= static_cast<__int128>(tv.tz_offset_sec) * 1'000'000'000LL;
     return days * 86'400'000'000'000LL + day_ns;
 }
 
@@ -269,40 +272,53 @@ int64_t temporalToComparable(const TimeValue& tv) {
 
 // ==================== Ordering ====================
 
+// Local wall-clock ordering, ignoring any time zone. Used directly for the
+// zone-less kinds and as the tie-break when two zoned values share an instant.
+static bool localFieldsLess(const DateTimeValue& a, const DateTimeValue& b) {
+    if (a.year != b.year)
+        return a.year < b.year;
+    if (a.month != b.month)
+        return a.month < b.month;
+    if (a.day != b.day)
+        return a.day < b.day;
+    if (a.hour != b.hour)
+        return a.hour < b.hour;
+    if (a.minute != b.minute)
+        return a.minute < b.minute;
+    if (a.second != b.second)
+        return a.second < b.second;
+    return a.nanos < b.nanos;
+}
+
+static bool localFieldsLess(const TimeValue& a, const TimeValue& b) {
+    if (a.hour != b.hour)
+        return a.hour < b.hour;
+    if (a.minute != b.minute)
+        return a.minute < b.minute;
+    if (a.second != b.second)
+        return a.second < b.second;
+    return a.nanos < b.nanos;
+}
+
 bool temporalLess(const DateTimeValue& a, const DateTimeValue& b) {
     if (a.kind != b.kind)
         return false;
     switch (a.kind) {
     case DateTimeKind::DATE:
-        if (a.year != b.year)
-            return a.year < b.year;
-        if (a.month != b.month)
-            return a.month < b.month;
-        return a.day < b.day;
     case DateTimeKind::LOCAL_DATETIME:
-        if (a.year != b.year)
-            return a.year < b.year;
-        if (a.month != b.month)
-            return a.month < b.month;
-        if (a.day != b.day)
-            return a.day < b.day;
-        if (a.hour != b.hour)
-            return a.hour < b.hour;
-        if (a.minute != b.minute)
-            return a.minute < b.minute;
-        if (a.second != b.second)
-            return a.second < b.second;
-        return a.nanos < b.nanos;
+        return localFieldsLess(a, b);
     case DateTimeKind::DATETIME: {
-        int64_t a_days = daysFromCivil(a.year, a.month, a.day);
-        int64_t b_days = daysFromCivil(b.year, b.month, b.day);
-        if (a_days != b_days)
-            return a_days < b_days;
-        int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos -
-                       static_cast<int64_t>(a.tz_offset_sec) * 1'000'000'000LL;
-        int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos -
-                       static_cast<int64_t>(b.tz_offset_sec) * 1'000'000'000LL;
-        return a_ns < b_ns;
+        // Zoned values order by instant; equal instants fall back to the local
+        // wall clock, which is what neo4j does:
+        //   datetime('2024-01-01T00:00:00Z') < datetime('2024-01-01T08:00:00+08:00')
+        // is TRUE (one instant, the first has the earlier local time), and
+        //   datetime('2024-01-01T00:00:00Z') >= datetime('2024-01-01T00:00:00+08:00')
+        // is TRUE as well because those two instants are 8h apart.
+        const __int128 a_inst = temporalToComparable(a);
+        const __int128 b_inst = temporalToComparable(b);
+        if (a_inst != b_inst)
+            return a_inst < b_inst;
+        return localFieldsLess(a, b);
     }
     default:
         return false;
@@ -312,20 +328,34 @@ bool temporalLess(const DateTimeValue& a, const DateTimeValue& b) {
 bool temporalLess(const TimeValue& a, const TimeValue& b) {
     if (a.kind != b.kind)
         return false;
-    int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos;
-    int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos;
     if (a.kind == TimeKind::TIME) {
-        a_ns -= static_cast<int64_t>(a.tz_offset_sec) * 1'000'000'000LL;
-        b_ns -= static_cast<int64_t>(b.tz_offset_sec) * 1'000'000'000LL;
+        const __int128 a_inst = temporalToComparable(a);
+        const __int128 b_inst = temporalToComparable(b);
+        if (a_inst != b_inst)
+            return a_inst < b_inst;
     }
-    return a_ns < b_ns;
+    return localFieldsLess(a, b);
 }
 
 // ==================== Arithmetic: DateTime +/- Duration ====================
 
 DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& duration) {
     DateTimeValue result = temporal;
-    result.month += duration.months;
+    // Months first, clamping the day to the last day of the target month. Adding
+    // months and days together and then normalizing (the old behaviour) turned
+    // date('2024-03-31') - duration('P1M') into 2024-03-02: February has no 31st,
+    // so the overflow spilled into March. Neo4j clamps instead:
+    // 2024-03-31 - P1M = 2024-02-29, 2024-05-31 - P1M = 2024-04-30, and
+    // 2024-03-31 - P1M1D = 2024-02-28.
+    if (duration.months != 0) {
+        int64_t total_months = result.year * 12 + (result.month - 1) + duration.months;
+        int64_t new_year = total_months >= 0 ? total_months / 12 : -((-total_months + 11) / 12);
+        result.year = new_year;
+        result.month = total_months - new_year * 12 + 1;
+        int64_t last_day = daysInMonth(result.year, result.month);
+        if (last_day > 0 && result.day > last_day)
+            result.day = last_day;
+    }
     result.day += duration.days;
     normalizeDate(result.year, result.month, result.day);
 
@@ -465,18 +495,43 @@ void normalizeDuration(DurationValue& dur) {
     }
 }
 
+namespace {
+/// 128 位中间结果收进 int64：越界报错，避免有符号溢出（UB）。
+int64_t checkedNarrow(__int128 value, const char* what) {
+    if (value > std::numeric_limits<int64_t>::max() || value < std::numeric_limits<int64_t>::min())
+        throw QueryException(QueryErrorKind::Argument, std::string(what) + " out of range");
+    return static_cast<int64_t>(value);
+}
+} // namespace
+
+void normalizeDurationNanos(DurationValue& dur) {
+    // java.time.Duration 的不变量：纳秒分量恒在 [0, 1e9)，符号由 seconds 承担。
+    // neo4j 的 duration 继承了这个不变量，所以 .seconds / .nanosecondsOfSecond
+    // 的取值必须与它一致（文本形式两者本来就相同）。
+    if (dur.nanos >= 0 && dur.nanos < 1'000'000'000LL)
+        return;
+    int64_t carry = dur.nanos / 1'000'000'000LL; // C++ 向零截断
+    int64_t rem = dur.nanos % 1'000'000'000LL;
+    if (rem < 0) {
+        rem += 1'000'000'000LL;
+        --carry;
+    }
+    // 极端输入（例如参数里 seconds=INT64_MAX, nanos=1e9）下 carry 会把 seconds 顶出范围：
+    // 报错而不是让有符号溢出变成 UB。
+    if (carry > 0 && dur.seconds > std::numeric_limits<int64_t>::max() - carry)
+        throw QueryException(QueryErrorKind::Argument, "duration out of range");
+    if (carry < 0 && dur.seconds < std::numeric_limits<int64_t>::min() - carry)
+        throw QueryException(QueryErrorKind::Argument, "duration out of range");
+    dur.seconds += carry;
+    dur.nanos = rem;
+}
+
 DurationValue subtractDateTimes(const DateTimeValue& a, const DateTimeValue& b) {
-    DurationValue result;
-    int64_t a_ns = temporalToComparable(a);
-    int64_t b_ns = temporalToComparable(b);
-    int64_t diff_ns = a_ns - b_ns;
-    int64_t ns_per_day = 86'400'000'000'000LL;
-    result.days = diff_ns / ns_per_day;
-    int64_t remaining_ns = diff_ns % ns_per_day;
-    result.seconds = remaining_ns / 1'000'000'000LL;
-    result.nanos = remaining_ns % 1'000'000'000LL;
-    normalizeDuration(result);
-    return result;
+    // `a - b` is the interval from b to a, so it shares duration.between()'s month
+    // and day split: date('2024-03-01') - date('2024-01-31') is P1M1D, not P30D.
+    // (Neo4j itself rejects temporal - temporal with "expected Duration but was
+    // Date"; we keep supporting it, but consistently with duration.between.)
+    return durationBetween(b, a);
 }
 
 DurationValue subtractTimes(const TimeValue& a, const TimeValue& b) {
@@ -488,23 +543,12 @@ DurationValue subtractTimes(const TimeValue& a, const TimeValue& b) {
         a_norm.kind = TimeKind::LOCAL_TIME;
         b_norm.kind = TimeKind::LOCAL_TIME;
     }
-    int64_t a_ns = temporalToComparable(a_norm);
-    int64_t b_ns = temporalToComparable(b_norm);
-    int64_t diff_ns = a_ns - b_ns;
-    result.seconds = diff_ns / 1'000'000'000LL;
-    result.nanos = diff_ns % 1'000'000'000LL;
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.seconds -= 1;
-    }
-    // Ensure consistent sign between seconds and nanos
-    if (result.seconds < 0 && result.nanos > 0) {
-        result.nanos -= 1'000'000'000LL;
-        result.seconds += 1;
-    } else if (result.seconds > 0 && result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.seconds -= 1;
-    }
+    const __int128 a_ns = temporalToComparable(a_norm);
+    const __int128 b_ns = temporalToComparable(b_norm);
+    const __int128 diff_ns = a_ns - b_ns; // time 只有一天范围，128 位只是为了统一类型
+    result.seconds = static_cast<int64_t>(diff_ns / 1'000'000'000LL);
+    result.nanos = static_cast<int64_t>(diff_ns % 1'000'000'000LL);
+    normalizeDurationNanos(result);
     return result;
 }
 
@@ -512,17 +556,14 @@ DurationValue subtractTimes(const TimeValue& a, const TimeValue& b) {
 
 DurationValue addDurations(const DurationValue& a, const DurationValue& b) {
     DurationValue result;
-    result.months = a.months + b.months;
-    result.days = a.days + b.days;
-    int64_t total_a = a.seconds * 1'000'000'000LL + a.nanos;
-    int64_t total_b = b.seconds * 1'000'000'000LL + b.nanos;
-    int64_t total = total_a + total_b;
-    result.seconds = total / 1'000'000'000LL;
-    result.nanos = total % 1'000'000'000LL;
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.seconds -= 1;
-    }
+    result.months = checkedNarrow(static_cast<__int128>(a.months) + b.months, "duration months");
+    result.days = checkedNarrow(static_cast<__int128>(a.days) + b.days, "duration days");
+    // 纳秒级累加用 128 位：a.seconds * 1e9 在 |seconds| > 292 年时就溢出 int64。
+    const __int128 total = (static_cast<__int128>(a.seconds) * 1'000'000'000LL + a.nanos) +
+                           (static_cast<__int128>(b.seconds) * 1'000'000'000LL + b.nanos);
+    result.seconds = checkedNarrow(total / 1'000'000'000LL, "duration seconds");
+    result.nanos = static_cast<int64_t>(total % 1'000'000'000LL);
+    normalizeDurationNanos(result);
     return result;
 }
 
@@ -537,15 +578,13 @@ DurationValue subDurations(const DurationValue& a, const DurationValue& b) {
 
 DurationValue mulDuration(const DurationValue& dur, int64_t factor) {
     DurationValue result;
-    result.months = dur.months * factor;
-    result.days = dur.days * factor;
-    int64_t total = (dur.seconds * 1'000'000'000LL + dur.nanos) * factor;
-    result.seconds = total / 1'000'000'000LL;
-    result.nanos = total % 1'000'000'000LL;
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.seconds -= 1;
-    }
+    result.months = checkedNarrow(static_cast<__int128>(dur.months) * factor, "duration months");
+    result.days = checkedNarrow(static_cast<__int128>(dur.days) * factor, "duration days");
+    const __int128 total =
+        (static_cast<__int128>(dur.seconds) * 1'000'000'000LL + dur.nanos) * static_cast<__int128>(factor);
+    result.seconds = checkedNarrow(total / 1'000'000'000LL, "duration seconds");
+    result.nanos = static_cast<int64_t>(total % 1'000'000'000LL);
+    normalizeDurationNanos(result);
     return result;
 }
 
@@ -565,16 +604,13 @@ DurationValue divDuration(const DurationValue& dur, int64_t divisor) {
 
     // Divide seconds+nanos with integer truncation. The cascaded fractional
     // days (frac_d) are added AFTER division — they are already fractional.
-    int64_t ns_per_divisor = (dur.seconds * 1'000'000'000LL + dur.nanos) / divisor;
-    int64_t cascade_ns = static_cast<int64_t>(std::round(frac_d * 86400.0 * 1e9));
-    int64_t total_sec = ns_per_divisor / 1'000'000'000LL + cascade_ns / 1'000'000'000LL;
-    int64_t total_nanos = (ns_per_divisor % 1'000'000'000LL) + (cascade_ns % 1'000'000'000LL);
-    result.seconds = total_sec + total_nanos / 1'000'000'000LL;
-    result.nanos = total_nanos % 1'000'000'000LL;
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.seconds -= 1;
-    }
+    const __int128 ns_per_divisor = (static_cast<__int128>(dur.seconds) * 1'000'000'000LL + dur.nanos) / divisor;
+    const __int128 cascade_ns = static_cast<__int128>(std::llround(frac_d * 86400.0 * 1e9));
+    const __int128 total_sec = ns_per_divisor / 1'000'000'000LL + cascade_ns / 1'000'000'000LL;
+    const __int128 total_nanos = (ns_per_divisor % 1'000'000'000LL) + (cascade_ns % 1'000'000'000LL);
+    result.seconds = checkedNarrow(total_sec + total_nanos / 1'000'000'000LL, "duration seconds");
+    result.nanos = static_cast<int64_t>(total_nanos % 1'000'000'000LL);
+    normalizeDurationNanos(result);
     return result;
 }
 
@@ -594,14 +630,7 @@ DurationValue mulDuration(const DurationValue& dur, double factor) {
     result.seconds = static_cast<int64_t>(total_ns / 1e9);
     result.nanos = static_cast<int64_t>(total_ns - static_cast<double>(result.seconds) * 1e9);
 
-    if (result.nanos >= 1'000'000'000LL) {
-        result.seconds += result.nanos / 1'000'000'000LL;
-        result.nanos %= 1'000'000'000LL;
-    }
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.seconds -= 1;
-    }
+    normalizeDurationNanos(result);
     return result;
 }
 
@@ -613,67 +642,118 @@ DurationValue divDuration(const DurationValue& dur, double divisor) {
 
 // ==================== Duration between ====================
 
+namespace {
+
+/// `a` shifted by whole months, clamping the day to the target month's last day --
+/// the same rule addDuration() applies, so the two stay consistent.
+DateTimeValue addMonthsClamped(const DateTimeValue& a, int64_t months) {
+    DateTimeValue r = a;
+    if (months == 0)
+        return r;
+    int64_t total = r.year * 12 + (r.month - 1) + months;
+    int64_t y = total >= 0 ? total / 12 : -((-total + 11) / 12);
+    r.year = y;
+    r.month = total - y * 12 + 1;
+    int64_t last = daysInMonth(r.year, r.month);
+    if (last > 0 && r.day > last)
+        r.day = last;
+    return r;
+}
+
+/// 本地字段（忽略时区偏移）的纳秒坐标。
+///
+/// neo4j 的 duration.between 只在**两侧都带时区**时按绝对时刻计算；
+/// 只要有一侧是无时区类型（date / localdatetime），整段计算就退化为本地字段之差：
+/// duration.between(date('2015-07-21'), datetime('2015-07-21T21:40:32+0100'))
+/// 是 PT21H40M32S（本地 21:40:32），而不是按 UTC 的 PT20H40M32S。
+__int128 localFieldsNanos(const DateTimeValue& tv) {
+    // 128 位：与 temporalToComparable 同理，days * 8.64e13 在公元 2262 年后溢出 int64
+    // （UBSan 会直接报 signed integer overflow）。
+    const __int128 days = daysFromCivil(tv.year, tv.month, tv.day);
+    const __int128 day_ns =
+        (static_cast<__int128>(tv.hour) * 3600 + tv.minute * 60 + tv.second) * 1'000'000'000LL + tv.nanos;
+    return days * 86'400'000'000'000LL + day_ns;
+}
+
+/// Nanoseconds since local midnight; subtracted by the zone offset for zoned
+/// values so that a difference of two instants crosses zones correctly.
+int64_t timeOfDayNanos(const DateTimeValue& v, bool utc) {
+    int64_t ns = ((v.hour * 3600 + v.minute * 60 + v.second) * 1'000'000'000LL) + v.nanos;
+    if (utc && v.kind == DateTimeKind::DATETIME)
+        ns -= static_cast<int64_t>(v.tz_offset_sec) * 1'000'000'000LL;
+    return ns;
+}
+
+} // namespace
+
 DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b) {
-    DurationValue result;
+    // Port of neo4j's DurationValue.durationBetween (community/values
+    // DurationValue.java), which is a composition of java.time units:
+    //
+    //   months = ChronoUnit.MONTHS.between(from, to)
+    //   from  += months                    (plusMonths clamps the day-of-month)
+    //   days   = ChronoUnit.DAYS.between(from, to)
+    //   nanos  = ChronoUnit.NANOS.between(from, to)
+    //
+    // The month count is java.time's packed day-of-month comparison, and for values
+    // that carry a time of day an end time earlier than the start first moves the
+    // end *date* back one day. Nothing is rebalanced afterwards: the time part may
+    // come out negative and the printer borrows a day for it. That is why
+    // duration.between(datetime('2024-01-31T10:00:00Z'), datetime('2024-03-01T09:00:00Z'))
+    // is P29DT23H and not P1MT23H -- both are exact decompositions, this is the one
+    // neo4j picks.
+    const bool has_time = (a.kind != DateTimeKind::DATE);
+    // 参照系：两侧都带时区才是绝对时刻，否则一律按本地字段（见 localFieldsNanos）。
+    // 借位的比较必须与后面 days/rem 的算法用同一个参照系，否则会出现
+    // 11M30D 这种"月按本地算、余量按时刻算"的混合结果。
+    const bool both_zoned = (a.kind == DateTimeKind::DATETIME && b.kind == DateTimeKind::DATETIME);
 
-    int64_t months_diff = (b.year - a.year) * 12 + (b.month - a.month);
-    bool same_calendar_month = (months_diff == 0);
-    if (b.day < a.day) {
-        if (same_calendar_month) {
-            result.months = 0;
-            result.days = b.day - a.day;
-        } else {
-            months_diff--;
-            int64_t prev_month = b.month - 1;
-            int64_t prev_year = b.year;
-            if (prev_month < 1) {
-                prev_month = 12;
-                prev_year--;
+    int64_t end_year = b.year;
+    int64_t end_month = b.month;
+    int64_t end_day = b.day;
+    if (has_time && timeOfDayNanos(b, both_zoned) < timeOfDayNanos(a, both_zoned)) {
+        // LocalDate.minusDays(1)
+        if (--end_day < 1) {
+            if (--end_month < 1) {
+                end_month = 12;
+                --end_year;
             }
-            int64_t days_in_prev = daysInMonth(prev_year, prev_month);
-            result.months = months_diff;
-            result.days = (days_in_prev - a.day) + b.day;
+            end_day = daysInMonth(end_year, end_month);
         }
-    } else {
-        result.months = months_diff;
-        result.days = b.day - a.day;
+    }
+    const int64_t packed_a = (a.year * 12 + (a.month - 1)) * 32 + a.day;
+    const int64_t packed_b = (end_year * 12 + (end_month - 1)) * 32 + end_day;
+    const int64_t months = (packed_b - packed_a) / 32; // C++ truncation matches Java's
+
+    const DateTimeValue mid = addMonthsClamped(a, months);
+    constexpr int64_t kDayNs = 86'400LL * 1'000'000'000LL;
+    int64_t days = daysFromCivil(b.year, b.month, b.day) - daysFromCivil(mid.year, mid.month, mid.day);
+    const auto frame = [both_zoned](const DateTimeValue& v) {
+        return both_zoned ? temporalToComparable(v) : localFieldsNanos(v);
+    };
+    // rem_ns 已经扣掉整月/整日，必然小于一天；但减法用 128 位算，避免跨世纪的中间值溢出。
+    int64_t rem_ns = static_cast<int64_t>(frame(b) - frame(mid) - static_cast<__int128>(days) * kDayNs);
+
+    // neo4j hands back a day borrowed from the time part when the two disagree in
+    // sign -- duration.between(datetime('2024-01-31T10:00:00Z'),
+    // datetime('2024-03-01T09:00:00Z')) arrives as 29 days + 23h, not 30 days - 1h
+    // (both are the same length). Note this fold belongs to between() only:
+    // duration({days: 1, seconds: -3600}) keeps its mixed signs, and
+    // toString() renders that as P1DT-1H.
+    if (days > 0 && rem_ns < 0) {
+        --days;
+        rem_ns += kDayNs;
+    } else if (days < 0 && rem_ns > 0) {
+        ++days;
+        rem_ns -= kDayNs;
     }
 
-    int64_t a_ns = ((a.hour * 3600 + a.minute * 60 + a.second) * 1'000'000'000LL) + a.nanos;
-    int64_t b_ns = ((b.hour * 3600 + b.minute * 60 + b.second) * 1'000'000'000LL) + b.nanos;
-    if (a.kind == DateTimeKind::DATETIME && b.kind == DateTimeKind::DATETIME)
-        a_ns -= static_cast<int64_t>(a.tz_offset_sec) * 1'000'000'000LL;
-    if (b.kind == DateTimeKind::DATETIME && a.kind == DateTimeKind::DATETIME)
-        b_ns -= static_cast<int64_t>(b.tz_offset_sec) * 1'000'000'000LL;
-    int64_t time_diff = b_ns - a_ns;
-
-    // Normalize months/days conflicting signs: fold months into days (30 days/month)
-    if (result.months != 0 && result.days != 0 && ((result.months < 0) != (result.days < 0))) {
-        result.days += result.months * 30;
-        result.months = 0;
-    }
-
-    // Normalize time sign: borrow from days if time conflicts with days
-    if (time_diff < 0 && result.days > 0) {
-        result.days--;
-        time_diff += 86'400'000'000'000LL;
-    } else if (time_diff > 0 && result.days < 0) {
-        result.days++;
-        time_diff -= 86'400'000'000'000LL;
-    }
-
-    // Fold days into time only for same-calendar-month (not month-normalized) cases
-    if (result.months == 0 && result.days != 0 && same_calendar_month) {
-        time_diff += result.days * 86'400'000'000'000LL;
-        result.days = 0;
-    }
-
-    result.seconds = time_diff / 1'000'000'000LL;
-    result.nanos = time_diff % 1'000'000'000LL;
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.seconds -= 1;
-    }
+    DurationValue result;
+    result.months = months;
+    result.days = days;
+    result.seconds = rem_ns / 1'000'000'000LL;
+    result.nanos = rem_ns % 1'000'000'000LL;
+    normalizeDurationNanos(result);
     return result;
 }
 
@@ -812,37 +892,63 @@ std::string fmtTimezone(int32_t offset_sec, const std::string& tz_name) {
 
 } // anonymous namespace
 
-std::string temporalToString(const DateTimeValue& tv) {
+namespace {
+
+/// 时间部分：`always_seconds` 为真时秒始终输出（服务端 `toString()`：neo4j 渲染
+/// toString(localdatetime('2024-06-15T12:30:00')) 为 '2024-06-15T12:30:00'）；
+/// 为假时按 ISO-8601 省略零秒与零小数（各语言驱动渲染 Bolt 时间值的形式，
+/// openCypher TCK 的期望文本也是这个约定）。
+std::string fmtTimeOfDay(int64_t hour, int64_t minute, int64_t second, int64_t nanos, bool always_seconds) {
+    std::string s = pad2(hour) + ":" + pad2(minute);
+    if (always_seconds || second != 0 || nanos != 0)
+        s += ":" + pad2(second) + fmtSubsecond(nanos);
+    return s;
+}
+
+std::string fmtDateTime(const DateTimeValue& tv, bool always_seconds) {
     switch (tv.kind) {
     case DateTimeKind::DATE:
         return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day);
-    case DateTimeKind::LOCAL_DATETIME: {
-        std::string s =
-            pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" + pad2(tv.hour) + ":" + pad2(tv.minute);
-        if (tv.second != 0 || tv.nanos != 0)
-            s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
-        return s;
-    }
-    case DateTimeKind::DATETIME: {
-        std::string s =
-            pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" + pad2(tv.hour) + ":" + pad2(tv.minute);
-        if (tv.second != 0 || tv.nanos != 0)
-            s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
-        s += fmtTimezone(tv.tz_offset_sec, tv.tz_name);
-        return s;
-    }
+    case DateTimeKind::LOCAL_DATETIME:
+        return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" +
+               fmtTimeOfDay(tv.hour, tv.minute, tv.second, tv.nanos, always_seconds);
+    case DateTimeKind::DATETIME:
+        return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" +
+               fmtTimeOfDay(tv.hour, tv.minute, tv.second, tv.nanos, always_seconds) +
+               fmtTimezone(tv.tz_offset_sec, tv.tz_name);
     default:
         return "";
     }
 }
 
-std::string temporalToString(const TimeValue& tv) {
-    std::string s = pad2(tv.hour) + ":" + pad2(tv.minute);
-    if (tv.second != 0 || tv.nanos != 0)
-        s += ":" + pad2(tv.second) + fmtSubsecond(tv.nanos);
+std::string fmtTime(const TimeValue& tv, bool always_seconds) {
+    std::string s = fmtTimeOfDay(tv.hour, tv.minute, tv.second, tv.nanos, always_seconds);
     if (tv.kind == TimeKind::TIME)
         s += fmtTimezone(tv.tz_offset_sec, tv.tz_name);
     return s;
+}
+
+} // namespace
+
+std::string temporalToString(const DateTimeValue& tv) {
+    return fmtDateTime(tv, /*always_seconds=*/true);
+}
+
+std::string temporalToIsoString(const DateTimeValue& tv) {
+    return fmtDateTime(tv, /*always_seconds=*/false);
+}
+
+std::string temporalToString(const TimeValue& tv) {
+    return fmtTime(tv, /*always_seconds=*/true);
+}
+
+std::string temporalToIsoString(const TimeValue& tv) {
+    return fmtTime(tv, /*always_seconds=*/false);
+}
+
+std::string temporalToIsoString(const DurationValue& tv) {
+    // duration 的渲染两边一致（Java Duration.toString()）。
+    return temporalToString(tv);
 }
 
 std::string temporalToString(const DurationValue& tv) {

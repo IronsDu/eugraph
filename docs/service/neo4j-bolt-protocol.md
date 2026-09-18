@@ -182,6 +182,19 @@ Bolt 协议使用 PackStream 二进制编码（类似 MessagePack），定义在
 | `DateTimeValue` | DateTime/Date/LocalDateTime/DateTimeZoneId（按 kind 分派） |
 | `TimeValue` | Time/LocalTime（按 kind 分派） |
 | `DurationValue` | Duration |
+| `BytesValue` | Bytes |
+
+### 参数方向（Bolt → `Value`，`boltParamToValue`）
+
+| 参数 | 支持情况 |
+|------|----------|
+| Null / Boolean / Integer / Float / String / List / Dictionary | 支持（逐层递归） |
+| Date `0x44`、Time `0x54`、LocalTime `0x74`、LocalDateTime `0x64`、Duration `0x45` | 支持 |
+| DateTime `0x49`/`0x46`（带偏移） | 支持：本地字段 = 纪元秒 + 偏移 |
+| DateTime `0x69`/`0x66`（命名时区） | 支持：按 UTC 日期查出时区偏移后折算本地字段，`tz_name` 保留 |
+| Bytes `0xCC`/`0xCD`/`0xCE` | 支持：映射为 `BytesValue`（内部二进制值），可写入属性并按内容比较 |
+
+回归：`tests/test_query_executor.cpp` 的 `BytesParamsAndPropertiesRoundtrip`（期望值实测自 neo4j）。
 
 ## 实现机制
 

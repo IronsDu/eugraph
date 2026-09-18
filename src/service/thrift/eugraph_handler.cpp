@@ -184,6 +184,10 @@ thrift_service::PropertyType EuGraphHandler::fromPropertyType(::eugraph::Propert
     switch (t) {
     case ::eugraph::PropertyType::ANY:
         return thrift_service::PropertyType::STRING;
+    case ::eugraph::PropertyType::BYTES:
+        // Thrift 的 PropertyType 枚举里没有二进制（它是既有兼容面，不新增取值）：
+        // schema 展示层面退化成 STRING；二进制属性本身的读写走 Cypher/Bolt，不受影响。
+        return thrift_service::PropertyType::STRING;
     case ::eugraph::PropertyType::DATETIME:
         return thrift_service::PropertyType::DATETIME;
     case ::eugraph::PropertyType::TIME:
@@ -293,6 +297,12 @@ void appendCypherValue(std::ostringstream& oss, const PropertyValue& pv) {
             }
         }
         oss << '\'';
+    } else if (std::holds_alternative<std::vector<uint8_t>>(pv)) {
+        static const char* kHex = "0123456789abcdef";
+        oss << '\'';
+        for (uint8_t b : std::get<std::vector<uint8_t>>(pv))
+            oss << kHex[b >> 4] << kHex[b & 0x0F];
+        oss << '\'';
     } else if (std::holds_alternative<std::vector<int64_t>>(pv)) {
         oss << '[';
         bool first = true;
@@ -324,28 +334,28 @@ void appendCypherValue(std::ostringstream& oss, const PropertyValue& pv) {
         }
         oss << ']';
     } else if (std::holds_alternative<DateTimeValue>(pv)) {
-        oss << '\'' << temporalToString(std::get<DateTimeValue>(pv)) << '\'';
+        oss << '\'' << temporalToIsoString(std::get<DateTimeValue>(pv)) << '\'';
     } else if (std::holds_alternative<TimeValue>(pv)) {
-        oss << '\'' << temporalToString(std::get<TimeValue>(pv)) << '\'';
+        oss << '\'' << temporalToIsoString(std::get<TimeValue>(pv)) << '\'';
     } else if (std::holds_alternative<DurationValue>(pv)) {
-        oss << '\'' << temporalToString(std::get<DurationValue>(pv)) << '\'';
+        oss << '\'' << temporalToIsoString(std::get<DurationValue>(pv)) << '\'';
     } else if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
         oss << '[';
         bool first = true;
         for (auto& x : std::get<std::vector<DateTimeValue>>(pv))
-            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToString(x) << '\'';
+            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToIsoString(x) << '\'';
         oss << ']';
     } else if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
         oss << '[';
         bool first = true;
         for (auto& x : std::get<std::vector<TimeValue>>(pv))
-            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToString(x) << '\'';
+            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToIsoString(x) << '\'';
         oss << ']';
     } else if (std::holds_alternative<std::vector<DurationValue>>(pv)) {
         oss << '[';
         bool first = true;
         for (auto& x : std::get<std::vector<DurationValue>>(pv))
-            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToString(x) << '\'';
+            oss << (first ? (first = false, "") : ", ") << '\'' << temporalToIsoString(x) << '\'';
         oss << ']';
     }
 }
@@ -382,6 +392,12 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
             }
         }
         oss << '"';
+    } else if (std::holds_alternative<std::vector<uint8_t>>(pv)) {
+        static const char* kHex = "0123456789abcdef";
+        oss << '"';
+        for (uint8_t b : std::get<std::vector<uint8_t>>(pv))
+            oss << kHex[b >> 4] << kHex[b & 0x0F];
+        oss << '"';
     } else if (std::holds_alternative<std::vector<int64_t>>(pv)) {
         oss << '[';
         bool first = true;
@@ -413,18 +429,18 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
         }
         oss << ']';
     } else if (std::holds_alternative<DateTimeValue>(pv)) {
-        oss << '"' << temporalToString(std::get<DateTimeValue>(pv)) << '"';
+        oss << '"' << temporalToIsoString(std::get<DateTimeValue>(pv)) << '"';
     } else if (std::holds_alternative<TimeValue>(pv)) {
-        oss << '"' << temporalToString(std::get<TimeValue>(pv)) << '"';
+        oss << '"' << temporalToIsoString(std::get<TimeValue>(pv)) << '"';
     } else if (std::holds_alternative<DurationValue>(pv)) {
-        oss << '"' << temporalToString(std::get<DurationValue>(pv)) << '"';
+        oss << '"' << temporalToIsoString(std::get<DurationValue>(pv)) << '"';
     } else if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
         oss << '[';
         bool first = true;
         for (auto& x : std::get<std::vector<DateTimeValue>>(pv)) {
             if (!first)
                 oss << ',';
-            oss << '"' << temporalToString(x) << '"';
+            oss << '"' << temporalToIsoString(x) << '"';
             first = false;
         }
         oss << ']';
@@ -434,7 +450,7 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
         for (auto& x : std::get<std::vector<TimeValue>>(pv)) {
             if (!first)
                 oss << ',';
-            oss << '"' << temporalToString(x) << '"';
+            oss << '"' << temporalToIsoString(x) << '"';
             first = false;
         }
         oss << ']';
@@ -444,7 +460,7 @@ void appendJsonValue(std::ostringstream& oss, const PropertyValue& pv) {
         for (auto& x : std::get<std::vector<DurationValue>>(pv)) {
             if (!first)
                 oss << ',';
-            oss << '"' << temporalToString(x) << '"';
+            oss << '"' << temporalToIsoString(x) << '"';
             first = false;
         }
         oss << ']';
@@ -471,6 +487,18 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         rv.set_double_val(std::get<double>(val));
     } else if (std::holds_alternative<std::string>(val)) {
         rv.set_string_val(std::get<std::string>(val));
+    } else if (std::holds_alternative<BytesValue>(val)) {
+        // Thrift IDL 里没有二进制字段（ResultValue 是既有兼容面，不新增字段），
+        // 这里按十六进制文本给出；Bolt 客户端拿到的是真正的 Bytes。
+        const auto& bytes = std::get<BytesValue>(val).data;
+        static const char* kHex = "0123456789abcdef";
+        std::string hex;
+        hex.reserve(bytes.size() * 2);
+        for (uint8_t b : bytes) {
+            hex.push_back(kHex[b >> 4]);
+            hex.push_back(kHex[b & 0x0F]);
+        }
+        rv.set_string_val(hex);
     } else if (std::holds_alternative<VertexValue>(val)) {
         auto& v = std::get<VertexValue>(val);
         std::ostringstream oss;
@@ -639,11 +667,11 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         oss << ">";
         rv.set_path_json(oss.str());
     } else if (std::holds_alternative<DateTimeValue>(val)) {
-        rv.set_string_val(temporalToString(std::get<DateTimeValue>(val)));
+        rv.set_string_val(temporalToIsoString(std::get<DateTimeValue>(val)));
     } else if (std::holds_alternative<TimeValue>(val)) {
-        rv.set_string_val(temporalToString(std::get<TimeValue>(val)));
+        rv.set_string_val(temporalToIsoString(std::get<TimeValue>(val)));
     } else if (std::holds_alternative<DurationValue>(val)) {
-        rv.set_string_val(temporalToString(std::get<DurationValue>(val)));
+        rv.set_string_val(temporalToIsoString(std::get<DurationValue>(val)));
     } else if (std::holds_alternative<ListValue>(val)) {
         auto& lv = std::get<ListValue>(val);
         std::ostringstream oss;

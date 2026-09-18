@@ -122,6 +122,10 @@ std::string ValueCodec::encode(const PropertyValue& value) {
                     appendU16(result, static_cast<uint16_t>(tv.tz_name.size()));
                     result.append(tv.tz_name);
                 }
+            } else if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
+                result.push_back(static_cast<char>(TAG_BYTES));
+                appendU32(result, static_cast<uint32_t>(arg.size()));
+                result.append(reinterpret_cast<const char*>(arg.data()), arg.size());
             } else if constexpr (std::is_same_v<T, std::vector<DurationValue>>) {
                 result.push_back(static_cast<char>(TAG_DURATION_ARRAY));
                 appendU32(result, static_cast<uint32_t>(arg.size()));
@@ -299,6 +303,13 @@ PropertyValue ValueCodec::decode(std::string_view data) {
             off += tz_len;
         }
         return arr;
+    }
+
+    case TAG_BYTES: {
+        uint32_t len = readU32(data, off);
+        // 用 substr 而不是迭代器相加：损坏/超长的长度字段不会越界（substr 自己会判界）。
+        const std::string_view raw = data.substr(off, len);
+        return std::vector<uint8_t>(raw.begin(), raw.end());
     }
 
     case TAG_DURATION_ARRAY: {

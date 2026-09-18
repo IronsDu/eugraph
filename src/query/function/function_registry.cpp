@@ -70,6 +70,19 @@ void FunctionRegistry::registerScalarBuiltins() {
     functions_["id"].push_back(
         {"id", {BoundType::EdgeKey()}, BoundType::Int64(), false, false, scalar::idBatchFn, {}, {}, {}});
 
+    // elementId(Vertex|VertexRef|Edge|EdgeKey) -> String
+    // 注册名与 neo4j 一致（驼峰）；element_id 作为历史别名保留。
+    for (const char* name : {"elementId", "element_id"}) {
+        functions_[name].push_back(
+            {name, {BoundType::Vertex()}, BoundType::String(), false, false, scalar::elementIdBatchFn, {}, {}, {}});
+        functions_[name].push_back(
+            {name, {BoundType::VertexRef()}, BoundType::String(), false, false, scalar::elementIdBatchFn, {}, {}, {}});
+        functions_[name].push_back(
+            {name, {BoundType::Edge()}, BoundType::String(), false, false, scalar::elementIdBatchFn, {}, {}, {}});
+        functions_[name].push_back(
+            {name, {BoundType::EdgeKey()}, BoundType::String(), false, false, scalar::elementIdBatchFn, {}, {}, {}});
+    }
+
     // abs(Int64) -> Int64
     functions_["abs"].push_back(
         {"abs", {BoundType::Int64()}, BoundType::Int64(), false, false, scalar::absBatchFn, {}, {}, {}});
@@ -332,14 +345,44 @@ void FunctionRegistry::registerScalarBuiltins() {
     // trim(String) -> String
     functions_["trim"].push_back(
         {"trim", {BoundType::String()}, BoundType::String(), false, false, scalar::trimBatchFn, {}, {}, {}});
+    // trim(String, String) -> String：去掉两端/单端出现的任意 trim 字符
+    functions_["trim"].push_back({"trim",
+                                  {BoundType::String(), BoundType::String()},
+                                  BoundType::String(),
+                                  false,
+                                  false,
+                                  scalar::trimBatchFn,
+                                  {},
+                                  {},
+                                  {}});
 
     // ltrim(String) -> String
     functions_["ltrim"].push_back(
         {"ltrim", {BoundType::String()}, BoundType::String(), false, false, scalar::ltrimBatchFn, {}, {}, {}});
+    // ltrim(String, String) -> String：去掉两端/单端出现的任意 trim 字符
+    functions_["ltrim"].push_back({"ltrim",
+                                   {BoundType::String(), BoundType::String()},
+                                   BoundType::String(),
+                                   false,
+                                   false,
+                                   scalar::ltrimBatchFn,
+                                   {},
+                                   {},
+                                   {}});
 
     // rtrim(String) -> String
     functions_["rtrim"].push_back(
         {"rtrim", {BoundType::String()}, BoundType::String(), false, false, scalar::rtrimBatchFn, {}, {}, {}});
+    // rtrim(String, String) -> String：去掉两端/单端出现的任意 trim 字符
+    functions_["rtrim"].push_back({"rtrim",
+                                   {BoundType::String(), BoundType::String()},
+                                   BoundType::String(),
+                                   false,
+                                   false,
+                                   scalar::rtrimBatchFn,
+                                   {},
+                                   {},
+                                   {}});
 
     // split(String, String) -> List<String>
     functions_["split"].push_back({"split",

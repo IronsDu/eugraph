@@ -189,6 +189,8 @@ inline Value propertyValueToRuntimeValue(const PropertyValue& pv) {
                 for (const auto& elem : v)
                     lv.elements.push_back(ValueStorage{Value(elem)});
                 return Value(std::move(lv));
+            } else if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
+                return Value(BytesValue{v});
             }
         },
         pv);

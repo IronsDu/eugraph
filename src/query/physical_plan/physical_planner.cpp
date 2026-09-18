@@ -18,6 +18,7 @@
 #include "query/physical_plan/operator/path_element_property_read_physical_op.hpp"
 #include "query/physical_plan/operator/pattern_comprehension_apply_physical_op.hpp"
 #include "query/physical_plan/operator/projection_extract_physical_op.hpp"
+#include "query/physical_plan/operator/property_value_convert.hpp"
 #include "query/physical_plan/operator/semi_join_physical_op.hpp"
 #include "query/physical_plan/operator/singleton_physical_op.hpp"
 #include "query/physical_plan/operator/union_physical_op.hpp"
@@ -600,23 +601,6 @@ static void remapLogicalOpColumnIndices(binder::BoundLogicalOperator& op, uint32
 }
 
 // Convert a Value (runtime literal) to PropertyValue for storage.
-static PropertyValue valueToPropertyValue(const Value& v) {
-    if (std::holds_alternative<bool>(v))
-        return std::get<bool>(v);
-    if (std::holds_alternative<int64_t>(v))
-        return std::get<int64_t>(v);
-    if (std::holds_alternative<double>(v))
-        return std::get<double>(v);
-    if (std::holds_alternative<std::string>(v))
-        return std::get<std::string>(v);
-    if (std::holds_alternative<DateTimeValue>(v))
-        return std::get<DateTimeValue>(v);
-    if (std::holds_alternative<TimeValue>(v))
-        return std::get<TimeValue>(v);
-    if (std::holds_alternative<DurationValue>(v))
-        return std::get<DurationValue>(v);
-    return PropertyValue{};
-}
 
 /// Infer PropertyType from a BoundExpression's result type.
 static PropertyType boundExprToPropertyType(const binder::BoundExpression& expr) {

@@ -28,6 +28,10 @@ void classifyError(const std::string& errMsg, std::string& errorType, std::strin
         // Runtime argument validation failures (e.g. range() step=0, invalid types)
         errorType = "ArgumentError";
         errorPhase = "runtime";
+    } else if (errMsg.find("ArithmeticError") != std::string::npos) {
+        // 整数溢出/除零（生产侧分类见 src/common/types/query_error.hpp）
+        errorType = "ArithmeticError";
+        errorPhase = "runtime";
     } else if (errMsg.find("EntityNotFound") != std::string::npos) {
         errorType = "EntityNotFound";
         errorPhase = "runtime";

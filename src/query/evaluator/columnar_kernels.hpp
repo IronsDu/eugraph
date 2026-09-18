@@ -1,11 +1,14 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
+#include "common/types/query_error.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <type_traits>
 
 namespace eugraph {
 namespace compute {
@@ -37,7 +40,9 @@ inline int cypherTypeCategory(const Value& v) {
                 return 7;
             if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, double>)
                 return 8;
-            return 9; // unknown values sort before NULL
+            if constexpr (std::is_same_v<T, BytesValue>)
+                return 9; // 二进制只能判等，不能排序（与其它非可排序值同组）
+            return 9;     // unknown values sort before NULL
         },
         v);
 }
@@ -92,8 +97,11 @@ template <typename T> inline int compareTemporal(const T& a, const T& b) {
 }
 
 inline int compareDuration(const DurationValue& a, const DurationValue& b) {
-    int64_t totalA = a.months * 30LL * 86400LL + a.days * 86400LL + a.seconds * 1000000000LL + a.nanos;
-    int64_t totalB = b.months * 30LL * 86400LL + b.days * 86400LL + b.seconds * 1000000000LL + b.nanos;
+    // 128 位加权和：大 duration（例如 duration.between 两个极端年份）在 int64 里会溢出。
+    const __int128 totalA = static_cast<__int128>(a.months) * 30 * 86400 + static_cast<__int128>(a.days) * 86400 +
+                            static_cast<__int128>(a.seconds) * 1000000000 + a.nanos;
+    const __int128 totalB = static_cast<__int128>(b.months) * 30 * 86400 + static_cast<__int128>(b.days) * 86400 +
+                            static_cast<__int128>(b.seconds) * 1000000000 + b.nanos;
     if (totalA == totalB)
         return 0;
     return totalA < totalB ? -1 : 1;
@@ -142,6 +150,17 @@ inline int cypherCompareValues(const Value& a, const Value& b) {
                 return compareTemporal(la, std::get<TimeValue>(b));
             if constexpr (std::is_same_v<A, DurationValue>)
                 return compareDuration(la, std::get<DurationValue>(b));
+            if constexpr (std::is_same_v<A, BytesValue>) {
+                if (auto* bb = std::get_if<BytesValue>(&b)) {
+                    if (la.data == bb->data)
+                        return 0;
+                    return std::lexicographical_compare(la.data.begin(), la.data.end(), bb->data.begin(),
+                                                        bb->data.end())
+                               ? -1
+                               : 1;
+                }
+                return 0;
+            }
             return 0;
         },
         a);
@@ -149,11 +168,84 @@ inline int cypherCompareValues(const Value& a, const Value& b) {
 
 namespace detail {
 
+/// 整数运算的溢出检查。
+///
+/// Cypher 语义（以 neo4j 为准）：INT64 的 + - * 与一元取负溢出都是
+/// `Neo.ClientError.Statement.ArithmeticError`（message "long overflow"），
+/// 而不是静默回绕 —— 回绕会给出一个看起来合法、实际错误的结果。
+inline int64_t checkedAdd(int64_t lhs, int64_t rhs) {
+    if ((rhs > 0 && lhs > std::numeric_limits<int64_t>::max() - rhs) ||
+        (rhs < 0 && lhs < std::numeric_limits<int64_t>::min() - rhs))
+        throw QueryException(QueryErrorKind::Arithmetic, "long overflow");
+    return lhs + rhs;
+}
+
+inline int64_t checkedSub(int64_t lhs, int64_t rhs) {
+    if ((rhs < 0 && lhs > std::numeric_limits<int64_t>::max() + rhs) ||
+        (rhs > 0 && lhs < std::numeric_limits<int64_t>::min() + rhs))
+        throw QueryException(QueryErrorKind::Arithmetic, "long overflow");
+    return lhs - rhs;
+}
+
+inline int64_t checkedMul(int64_t lhs, int64_t rhs) {
+    if (lhs == 0 || rhs == 0)
+        return 0;
+    // INT64_MIN 没有可表示的相反数，先单独处理 ±1，避免取负时再次溢出。
+    if (lhs == -1) {
+        if (rhs == std::numeric_limits<int64_t>::min())
+            throw QueryException(QueryErrorKind::Arithmetic, "long overflow");
+        return -rhs;
+    }
+    if (rhs == -1) {
+        if (lhs == std::numeric_limits<int64_t>::min())
+            throw QueryException(QueryErrorKind::Arithmetic, "long overflow");
+        return -lhs;
+    }
+    // 先比界再相乘：直接乘出结果再校验，乘法本身就已经是未定义行为。
+    constexpr int64_t kMax = std::numeric_limits<int64_t>::max();
+    constexpr int64_t kMin = std::numeric_limits<int64_t>::min();
+    if (lhs > 0) {
+        if (rhs > 0 ? lhs > kMax / rhs : rhs < kMin / lhs)
+            throw QueryException(QueryErrorKind::Arithmetic, "long overflow");
+    } else {
+        if (rhs > 0 ? lhs < kMin / rhs : lhs < kMax / rhs)
+            throw QueryException(QueryErrorKind::Arithmetic, "long overflow");
+    }
+    return lhs * rhs;
+}
+
+inline int64_t checkedNegate(int64_t v) {
+    if (v == std::numeric_limits<int64_t>::min())
+        throw QueryException(QueryErrorKind::Arithmetic, "long overflow");
+    return -v;
+}
+
+inline int64_t checkedDivide(int64_t lhs, int64_t rhs) {
+    if (rhs == 0)
+        throw QueryException(QueryErrorKind::Arithmetic, "/ by zero");
+    // INT64_MIN / -1 在 C++ 里是未定义行为（x86 上直接 SIGFPE 崩进程）。
+    // neo4j 返回 INT64_MIN（回绕，不报错），这里与之保持一致。
+    if (lhs == std::numeric_limits<int64_t>::min() && rhs == -1)
+        return lhs;
+    return lhs / rhs;
+}
+
+inline int64_t checkedModulo(int64_t lhs, int64_t rhs) {
+    if (rhs == 0)
+        throw QueryException(QueryErrorKind::Arithmetic, "/ by zero");
+    // 同上：INT64_MIN % -1 在 C++ 里是未定义行为；neo4j 返回 0。
+    if (rhs == -1)
+        return 0;
+    return lhs % rhs;
+}
+
 // Shared scalar operation semantics.
 /// Shared scalar operation semantics for both typed fast paths
 /// (expr/typed_common.hpp) and Value-based batch fallbacks (vector/batch_ops).
 struct AddOp {
     template <typename T> static T apply(T lhs, T rhs) {
+        if constexpr (std::is_same_v<T, int64_t>)
+            return checkedAdd(lhs, rhs);
         return lhs + rhs;
     }
 };
@@ -172,12 +264,16 @@ struct NotOp {
 
 struct SubOp {
     template <typename T> static T apply(T lhs, T rhs) {
+        if constexpr (std::is_same_v<T, int64_t>)
+            return checkedSub(lhs, rhs);
         return lhs - rhs;
     }
 };
 
 struct MulOp {
     template <typename T> static T apply(T lhs, T rhs) {
+        if constexpr (std::is_same_v<T, int64_t>)
+            return checkedMul(lhs, rhs);
         return lhs * rhs;
     }
 };
@@ -208,6 +304,8 @@ struct GtOp {
 
 struct NegOp {
     template <typename T> static T apply(T v) {
+        if constexpr (std::is_same_v<T, int64_t>)
+            return checkedNegate(v);
         return -v;
     }
 };

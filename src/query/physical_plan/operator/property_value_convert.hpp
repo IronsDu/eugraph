@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/types/graph_types.hpp"
+#include "common/types/query_error.hpp"
 #include "query/dataset/row.hpp"
 
 namespace eugraph {
@@ -14,6 +15,8 @@ inline Value propertyValueToValue(const PropertyValue& pv) {
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, std::monostate>)
                 return Value{};
+            else if constexpr (std::is_same_v<T, std::vector<uint8_t>>)
+                return Value(BytesValue{arg});
             else if constexpr (std::is_same_v<T, std::vector<int64_t>>) {
                 ListValue lv;
                 for (auto v : arg)
@@ -74,6 +77,8 @@ inline PropertyValue valueToPropertyValue(const Value& v) {
         return std::get<TimeValue>(v);
     if (std::holds_alternative<DurationValue>(v))
         return std::get<DurationValue>(v);
+    if (std::holds_alternative<BytesValue>(v))
+        return std::get<BytesValue>(v).data;
     if (std::holds_alternative<ListValue>(v)) {
         const auto& lv = std::get<ListValue>(v);
         if (lv.elements.empty())
@@ -121,6 +126,11 @@ inline PropertyValue valueToPropertyValue(const Value& v) {
                     arr.push_back(std::get<DurationValue>(e.value));
             if (arr.size() == lv.elements.size())
                 return arr;
+        } else if (std::holds_alternative<MapValue>(first)) {
+            // 属性值里不支持"map 的列表"（neo4j 同样拒绝）：必须报错而不是静默存 NULL，
+            // 否则调用方会以为写进去了（TCK Set1 [10]）。
+            throw QueryException(QueryErrorKind::Type,
+                                 "InvalidPropertyType: list of maps is not supported as a property value");
         }
     }
     return PropertyValue{};

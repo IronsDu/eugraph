@@ -11,6 +11,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -164,6 +165,9 @@ private:
     // Response builders
     std::vector<uint8_t> makeSuccess(const std::unordered_map<std::string, packstream::Value>& fields);
     std::vector<uint8_t> makeFailure(const std::string& code, const std::string& message);
+    /// FAILURE 响应：把异常翻译成 Neo4j 状态码。QueryException 自带分类；
+    /// 其它异常按消息里的分类 token 判定，认不出则归为执行失败。
+    std::vector<uint8_t> makeFailureFor(const std::exception& e);
     std::vector<uint8_t> makeIgnored();
     std::vector<uint8_t> makeRecord(const std::vector<packstream::Value>& fields);
 

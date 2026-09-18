@@ -1,10 +1,13 @@
 #pragma once
 
+#include "common/types/query_error.hpp"
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/data_chunk.hpp"
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
 
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace eugraph {
@@ -13,25 +16,53 @@ namespace scalar {
 
 // --- toInteger ---
 
+/// double → int64：Java 的 `(long)` 语义（neo4j 的实现语言）。
+/// NaN 归 0，超范围饱和到 INT64_MAX/INT64_MIN，而不是 C++ 的未定义行为。
+inline int64_t doubleToInt64Clamped(double d) {
+    if (std::isnan(d))
+        return 0;
+    if (d >= 9223372036854775808.0) // 2^63
+        return std::numeric_limits<int64_t>::max();
+    if (d <= -9223372036854775808.0)
+        return std::numeric_limits<int64_t>::min();
+    return static_cast<int64_t>(d);
+}
+
 inline Value toIntegerImpl(const Value& arg) {
     if (isNull(arg))
         return Value{};
     if (std::holds_alternative<int64_t>(arg))
         return arg;
     if (std::holds_alternative<double>(arg))
-        return Value(static_cast<int64_t>(std::get<double>(arg)));
+        return Value(doubleToInt64Clamped(std::get<double>(arg)));
     if (std::holds_alternative<bool>(arg))
         return Value(std::get<bool>(arg) ? int64_t(1) : int64_t(0));
     if (std::holds_alternative<std::string>(arg)) {
+        const auto& s = std::get<std::string>(arg);
+        if (s.empty())
+            return Value{};
+        // 整数串先按整数解析：这样越界能被精确判定（stod 会把大整数变成 double 后静默回绕）。
+        // neo4j 对超范围字符串报 TypeError，对无法解析的字符串返回 NULL。
+        size_t pos = 0;
         try {
-            const auto& s = std::get<std::string>(arg);
-            if (s.empty())
-                return Value{};
-            size_t pos = 0;
-            double d = std::stod(s, &pos);
+            const int64_t v = std::stoll(s, &pos);
+            if (pos == s.size())
+                return Value(v);
+        } catch (const std::out_of_range&) {
+            throw QueryException(QueryErrorKind::Type, "integer, " + s + ", is too large");
+        } catch (const std::invalid_argument&) {
+            // 交给下面的浮点解析（"1.9" / "1e3" 等）
+        }
+        try {
+            pos = 0;
+            const double d = std::stod(s, &pos);
             if (pos != s.size())
                 return Value{};
+            if (d >= 9223372036854775808.0 || d <= -9223372036854775809.0)
+                throw QueryException(QueryErrorKind::Type, "integer, " + s + ", is too large");
             return Value(static_cast<int64_t>(d));
+        } catch (const QueryException&) {
+            throw;
         } catch (...) {
             return Value{};
         }

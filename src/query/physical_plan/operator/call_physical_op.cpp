@@ -73,6 +73,8 @@ std::string propertyTypeName(PropertyType type) {
         return "TIME_ARRAY";
     case PropertyType::DURATION_ARRAY:
         return "DURATION_ARRAY";
+    case PropertyType::BYTES:
+        return "BYTE_ARRAY";
     case PropertyType::ANY:
         return "ANY";
     }

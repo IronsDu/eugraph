@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "common/types/graph_types.hpp"
+#include "common/types/query_error.hpp"
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row_identity.hpp"
 
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <folly/coro/BlockingWait.h>
+#include <limits>
 #include <set>
 
 using namespace eugraph;
@@ -5571,8 +5573,12 @@ TEST_F(QueryExecutorTest, TemporalDateSubtractDates) {
     ASSERT_EQ(result.rows.size(), 1);
     EXPECT_TRUE(std::holds_alternative<DurationValue>(result.rows[0][0]));
     const auto& dur = std::get<DurationValue>(result.rows[0][0]);
-    // 2024 is a leap year: Jan(31) + Feb(29) + Mar(31) + Apr(30) + May(31) = 152 days
-    EXPECT_EQ(dur.days, 152);
+    // Whole months are counted before days, exactly as duration.between() does:
+    // neo4j answers duration.between(date('2024-01-01'), date('2024-06-01')) with
+    // P5M, so `a - b` (an extension neo4j itself rejects with a type error) is P5M
+    // too, rather than 152 days. See docs/query/engine/temporal-semantics.md.
+    EXPECT_EQ(dur.months, 5);
+    EXPECT_EQ(dur.days, 0);
 }
 
 TEST_F(QueryExecutorTest, TemporalDurationAddDuration) {
@@ -5651,6 +5657,475 @@ TEST_F(QueryExecutorTest, TemporalDateAddDurationViaConstructor) {
     EXPECT_EQ(tv.year, 2025);
     EXPECT_EQ(tv.month, 1);
     EXPECT_EQ(tv.day, 1);
+}
+
+// ==================== Temporal semantics pinned to neo4j 5.26 ====================
+// Every expectation below was measured on neo4j 5.26.30 with the same statement
+// (see the BUG report driving this work and the comparison notes in
+// docs/query/engine/execution-model.md).
+
+namespace {
+
+/// `toString()` of a temporal expression, so a whole value can be asserted at once.
+std::string temporalRepr(QueryExecutor& executor, const std::string& expr) {
+    auto result = execSync(executor, "RETURN toString(" + expr + ") AS v");
+    if (!result.error.empty() || result.rows.empty() || !std::holds_alternative<std::string>(result.rows[0][0]))
+        return "<error: " + result.error + ">";
+    return std::get<std::string>(result.rows[0][0]);
+}
+
+std::string boolRepr(QueryExecutor& executor, const std::string& expr) {
+    auto result = execSync(executor, "RETURN " + expr + " AS v");
+    if (!result.error.empty() || result.rows.empty() || !std::holds_alternative<bool>(result.rows[0][0]))
+        return "<error: " + result.error + ">";
+    return std::get<bool>(result.rows[0][0]) ? "true" : "false";
+}
+
+} // namespace
+
+TEST_F(QueryExecutorTest, TemporalMonthEndClampsInsideMonthArithmetic) {
+    // Minutes-of-month overflow used to spill into the next month
+    // (2024-03-31 - P1M gave 2024-03-02); the day is clamped instead.
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-03-31') - duration('P1M')"), "2024-02-29");
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-05-31') - duration('P1M')"), "2024-04-30");
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-03-31') - duration('P1M1D')"), "2024-02-28");
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-01-31') + duration('P1M')"), "2024-02-29");
+    EXPECT_EQ(temporalRepr(*executor_, "date('2023-01-31') + duration('P1M')"), "2023-02-28");
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-02-29') + duration('P1Y')"), "2025-02-28");
+}
+
+TEST_F(QueryExecutorTest, TemporalEpochBaseIsAnAbsoluteInstant) {
+    // epochSeconds used to be ignored as a base, so the timezone was applied to the
+    // field defaults and .epochSeconds came back shifted by the offset.
+    EXPECT_EQ(temporalRepr(*executor_, "datetime({epochSeconds: 0, timezone:'+08:00'})"), "1970-01-01T08:00:00+08:00");
+    auto result = execSync(*executor_, "RETURN datetime({epochSeconds: 0, timezone:'+08:00'}).epochSeconds AS v");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 0);
+
+    auto millis = execSync(*executor_, "RETURN datetime({epochMillis: 1700000000000}).epochMillis AS v");
+    ASSERT_TRUE(millis.error.empty()) << millis.error;
+    ASSERT_TRUE(std::holds_alternative<int64_t>(millis.rows[0][0]));
+    EXPECT_EQ(std::get<int64_t>(millis.rows[0][0]), 1700000000000LL);
+}
+
+TEST_F(QueryExecutorTest, TemporalToStringKeepsZeroSeconds) {
+    // A zero second field is not omitted.
+    EXPECT_EQ(temporalRepr(*executor_, "datetime('2024-06-15T12:30:00+08:00')"), "2024-06-15T12:30:00+08:00");
+    EXPECT_EQ(temporalRepr(*executor_, "time('12:30:00+08:00')"), "12:30:00+08:00");
+    EXPECT_EQ(temporalRepr(*executor_, "localdatetime('2024-06-15T12:30:00')"), "2024-06-15T12:30:00");
+    EXPECT_EQ(temporalRepr(*executor_, "localtime('12:30:00')"), "12:30:00");
+    EXPECT_EQ(temporalRepr(*executor_, "datetime('2024-06-15T12:30:00.123+08:00')"), "2024-06-15T12:30:00.123+08:00");
+}
+
+TEST_F(QueryExecutorTest, TemporalDurationBetweenSplitsMonthsLikeNeo4j) {
+    // Month-end starts keep whole months only when the day-of-month comparison allows
+    // it, and the reverse interval is not simply the negated forward one.
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(date('2024-01-31'), date('2024-03-01'))"), "P1M1D");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(date('2024-03-01'), date('2024-01-31'))"), "P-1M-1D");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(date('2024-01-31'), date('2024-02-29'))"), "P29D");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(date('2024-02-29'), date('2024-03-31'))"), "P1M2D");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(date('2024-03-31'), date('2024-02-29'))"), "P-1M");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(date('2024-04-30'), date('2024-05-31'))"), "P1M1D");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(date('2024-05-31'), date('2024-04-30'))"), "P-1M");
+    // Values carrying a time of day use the same composition, and between() hands
+    // back the day/time borrow in canonical form.
+    EXPECT_EQ(temporalRepr(*executor_,
+                           "duration.between(datetime('2024-01-31T10:00:00Z'), datetime('2024-03-01T09:00:00Z'))"),
+              "P29DT23H");
+    EXPECT_EQ(temporalRepr(*executor_,
+                           "duration.between(datetime('2024-01-15T10:00:00Z'), datetime('2024-02-29T09:00:00Z'))"),
+              "P1M13DT23H");
+    EXPECT_EQ(temporalRepr(*executor_,
+                           "duration.between(datetime('2024-01-31T23:00:00Z'), datetime('2024-03-01T01:00:00Z'))"),
+              "P29DT2H");
+}
+
+TEST_F(QueryExecutorTest, TemporalDateSubtractMatchesDurationBetween) {
+    // neo4j rejects `date - date` (expected Duration but was Date); we keep supporting
+    // it, so it has to agree with duration.between() instead of counting plain days.
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-03-01') - date('2024-01-31')"),
+              temporalRepr(*executor_, "duration.between(date('2024-01-31'), date('2024-03-01'))"));
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-03-01') - date('2024-01-31')"), "P1M1D");
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-01-31') - date('2024-03-01')"), "P-1M-1D");
+}
+
+TEST_F(QueryExecutorTest, TemporalZonedComparisonOrdersByInstantThenLocalTime) {
+    // One instant, two zones: ordering is by instant and ties fall back to the local
+    // wall clock, while equality wants the zone to match too.
+    const std::string a = "datetime('2024-01-01T00:00:00Z')";
+    const std::string b = "datetime('2024-01-01T08:00:00+08:00')";
+    EXPECT_EQ(boolRepr(*executor_, a + " = " + b), "false");
+    EXPECT_EQ(boolRepr(*executor_, a + " < " + b), "true");
+    EXPECT_EQ(boolRepr(*executor_, a + " <= " + b), "true");
+    EXPECT_EQ(boolRepr(*executor_, a + " > " + b), "false");
+    EXPECT_EQ(boolRepr(*executor_, a + " >= " + b), "false");
+    EXPECT_EQ(boolRepr(*executor_, a + " <> " + b), "true");
+
+    // Eight hours apart in instant terms, same local wall clock.
+    const std::string c = "datetime('2024-01-01T00:00:00+08:00')";
+    EXPECT_EQ(boolRepr(*executor_, a + " = " + c), "false");
+    EXPECT_EQ(boolRepr(*executor_, a + " <= " + c), "false");
+    EXPECT_EQ(boolRepr(*executor_, a + " >= " + c), "true");
+
+    // Time follows the same rule.
+    EXPECT_EQ(boolRepr(*executor_, "time('12:00:00Z') < time('20:00:00+08:00')"), "true");
+    EXPECT_EQ(boolRepr(*executor_, "time('12:00:00+08:00') = time('04:00:00+00:00')"), "false");
+}
+
+TEST_F(QueryExecutorTest, TemporalDurationBetweenZoneFrames) {
+    // duration.between 的参照系（期望值实测自 neo4j 5.26）：
+    // 两侧都带时区才按绝对时刻，只要有一侧无时区（date / localdatetime）就退化为本地字段之差。
+    // 修复前 date → datetime(+01:00) 少算 1 小时、datetime(+02:00) → datetime(+01:00)
+    // 会给出 11M30D（月按本地算、余量按时刻算的混合结果）。
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(date('1984-10-11'), "
+                                       "datetime('2015-07-21T21:40:32.142+0100'))"),
+              "P30Y9M10DT21H40M32.142S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(localdatetime('2015-07-21T21:40:32.142'), "
+                                       "datetime('2015-07-21T21:40:32.142+0100'))"),
+              "PT0S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(datetime('2014-07-21T21:40:36.143+0200'), "
+                                       "date('2015-06-24'))"),
+              "P11M2DT2H19M23.857S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(datetime('2014-07-21T21:40:36.143+0200'), "
+                                       "localdatetime('2016-07-21T21:45:22.142'))"),
+              "P2YT4M45.999S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(datetime('2014-07-21T21:40:36.143+0200'), "
+                                       "datetime('2015-07-21T21:40:32.142+0100'))"),
+              "P1YT59M55.999S");
+    // 两侧都带时区：绝对时刻（同本地不同偏移 = -1 小时，同刻 = 0）。
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(datetime('2015-07-21T21:40:32+0100'), "
+                                       "datetime('2015-07-21T21:40:32+0200'))"),
+              "PT-1H");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(datetime('2015-07-21T21:40:32+0100'), "
+                                       "datetime('2015-07-21T22:40:32+0200'))"),
+              "PT0S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(datetime('2015-07-21T21:40:32+0100'), "
+                                       "date('2015-07-22'))"),
+              "PT2H19M28S");
+}
+
+// ==================== 错误分类与状态码（BUG-12/13） ====================
+// 期望值全部实测自 neo4j 5.26.30：错误文本 = 分类 token + neo4j 的 message，
+// Bolt 层再用同一个分类换算出 Neo4j 状态码（见 docs/query/engine/error-model.md）。
+
+namespace {
+
+/// 跑一条必然失败的语句，返回 "<分类>: <消息>"。
+std::string errorRepr(QueryExecutor& executor, const std::string& query) {
+    auto result = execSync(executor, query);
+    return result.error.empty() ? std::string{"<no error>"} : result.error;
+}
+
+/// 取回单个整数值（用于断言没有崩、且数值符合 neo4j）。
+int64_t intRepr(QueryExecutor& executor, const std::string& query) {
+    auto result = execSync(executor, query);
+    if (!result.error.empty() || result.rows.empty() || !std::holds_alternative<int64_t>(result.rows[0][0]))
+        return std::numeric_limits<int64_t>::min();
+    return std::get<int64_t>(result.rows[0][0]);
+}
+
+} // namespace
+
+TEST(QueryErrorTest, ClassificationMapsToNeo4jStatusCodes) {
+    EXPECT_STREQ(neo4jStatusCode(QueryErrorKind::Syntax), "Neo.ClientError.Statement.SyntaxError");
+    EXPECT_STREQ(neo4jStatusCode(QueryErrorKind::Type), "Neo.ClientError.Statement.TypeError");
+    EXPECT_STREQ(neo4jStatusCode(QueryErrorKind::Argument), "Neo.ClientError.Statement.ArgumentError");
+    EXPECT_STREQ(neo4jStatusCode(QueryErrorKind::Arithmetic), "Neo.ClientError.Statement.ArithmeticError");
+    EXPECT_STREQ(neo4jStatusCode(QueryErrorKind::ExecutionFailed), "Neo.DatabaseError.Statement.ExecutionFailed");
+
+    // 绑定错误里第一个 token 才是根因（binder 会把多条错误用 "; " 拼起来）。
+    EXPECT_EQ(classifyQueryErrorMessage("Binding failed; SyntaxError: UnknownFunction: x"), QueryErrorKind::Syntax);
+    EXPECT_EQ(classifyQueryErrorMessage("Binding failed; TypeError: InvalidArgumentType"), QueryErrorKind::Type);
+    EXPECT_EQ(classifyQueryErrorMessage("ArgumentError: InvalidArgumentType: x"), QueryErrorKind::Argument);
+    EXPECT_EQ(classifyQueryErrorMessage("ArithmeticError: long overflow"), QueryErrorKind::Arithmetic);
+    // 没有分类 token 的运行期错误按执行失败处理，而不是硬塞一个客户端错误码。
+    EXPECT_EQ(classifyQueryErrorMessage("client disconnected"), QueryErrorKind::ExecutionFailed);
+
+    // 绑定期错误走 ctx->error（文本里带 token），服务层用同一个分类函数翻译。
+    EXPECT_EQ(classifyQueryErrorMessage("Binding failed; SyntaxError: UnknownFunction: Function not found: x"),
+              QueryErrorKind::Syntax);
+
+    QueryException e(QueryErrorKind::Arithmetic, "long overflow");
+    EXPECT_STREQ(e.code(), "Neo.ClientError.Statement.ArithmeticError");
+    EXPECT_EQ(e.message(), "long overflow");                  // 给客户端的消息与 neo4j 一致
+    EXPECT_STREQ(e.what(), "ArithmeticError: long overflow"); // Thrift/TCK 仍能按文本分类
+}
+
+TEST_F(QueryExecutorTest, ErrorIntegerArithmeticOverflowAndDivisionByZero) {
+    EXPECT_EQ(errorRepr(*executor_, "RETURN 9223372036854775807 + 1 AS v"), "ArithmeticError: long overflow");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN -9223372036854775807 - 2 AS v"), "ArithmeticError: long overflow");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN 9223372036854775807 * 2 AS v"), "ArithmeticError: long overflow");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN -(-9223372036854775807 - 1) AS v"), "ArithmeticError: long overflow");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN 1 / 0 AS v"), "ArithmeticError: / by zero");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN 5 % 0 AS v"), "ArithmeticError: / by zero");
+
+    // 乘法边界：判界必须发生在相乘之前（先乘再验本身就已经是未定义行为）。
+    // 期望值同样实测自 neo4j 5.26。
+    EXPECT_EQ(intRepr(*executor_, "RETURN (-9223372036854775807 - 1) * 1 AS v"), std::numeric_limits<int64_t>::min());
+    EXPECT_EQ(errorRepr(*executor_, "RETURN (-9223372036854775807 - 1) * -1 AS v"), "ArithmeticError: long overflow");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN (-9223372036854775807 - 1) * 2 AS v"), "ArithmeticError: long overflow");
+    EXPECT_EQ(intRepr(*executor_, "RETURN 9223372036854775807 * -1 AS v"), -9223372036854775807LL);
+    EXPECT_EQ(intRepr(*executor_, "RETURN (-4611686018427387904) * 2 AS v"), std::numeric_limits<int64_t>::min());
+    EXPECT_EQ(errorRepr(*executor_, "RETURN (-4611686018427387904) * 3 AS v"), "ArithmeticError: long overflow");
+    EXPECT_EQ(intRepr(*executor_, "RETURN 3037000499 * 3037000499 AS v"), 9223372030926249001LL);
+    EXPECT_EQ(errorRepr(*executor_, "RETURN 3037000500 * 3037000500 AS v"), "ArithmeticError: long overflow");
+
+    // 没有溢出的整数除法保持截断语义。
+    EXPECT_EQ(intRepr(*executor_, "RETURN 7 / 2 AS v"), 3);
+    EXPECT_EQ(intRepr(*executor_, "RETURN -7 / 2 AS v"), -3);
+    EXPECT_EQ(intRepr(*executor_, "RETURN -7 % 2 AS v"), -1);
+}
+
+TEST_F(QueryExecutorTest, ErrorInt64MinDivisionDoesNotCrashServer) {
+    // INT64_MIN / -1 在 C++ 里是未定义行为，曾以 SIGFPE 直接打死服务进程。
+    // neo4j 这里回绕返回 INT64_MIN（% -1 返回 0），我们与之一致。
+    EXPECT_EQ(intRepr(*executor_, "RETURN (-9223372036854775807 - 1) / -1 AS v"), std::numeric_limits<int64_t>::min());
+    EXPECT_EQ(intRepr(*executor_, "RETURN (-9223372036854775807 - 1) % -1 AS v"), 0);
+}
+
+TEST_F(QueryExecutorTest, ErrorToIntegerRejectsOutOfRangeStrings) {
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toInteger('9223372036854775808') AS v"),
+              "TypeError: integer, 9223372036854775808, is too large");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toInteger('-9223372036854775809') AS v"),
+              "TypeError: integer, -9223372036854775809, is too large");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toInteger('1e30') AS v"), "TypeError: integer, 1e30, is too large");
+
+    // double 走 Java 的 (long) 语义：饱和而不是回绕，NaN 归 0。
+    EXPECT_EQ(intRepr(*executor_, "RETURN toInteger(1e30) AS v"), std::numeric_limits<int64_t>::max());
+    EXPECT_EQ(intRepr(*executor_, "RETURN toInteger(0.0/0.0) AS v"), 0);
+    // 无法解析的字符串仍然是 NULL（neo4j 同样返回 NULL）。
+    EXPECT_EQ(intRepr(*executor_, "RETURN toInteger('1.9') AS v"), 1);
+    auto null_result = execSync(*executor_, "RETURN toInteger('abc') AS v");
+    ASSERT_TRUE(null_result.error.empty()) << null_result.error;
+    ASSERT_EQ(null_result.rows.size(), 1);
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(null_result.rows[0][0]));
+}
+
+TEST_F(QueryExecutorTest, ErrorSubstringRejectsNegativeIndex) {
+    EXPECT_EQ(errorRepr(*executor_, "RETURN substring('hello', -2) AS v"),
+              "ExecutionFailed: Cannot handle negative start index nor negative length");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN substring('hello', 1, -2) AS v"),
+              "ExecutionFailed: Cannot handle negative start index nor negative length");
+
+    // 越界起点/零长度返回空串（不是 NULL、不是错误）。
+    auto empty_result = execSync(*executor_, "RETURN substring('hello', 99) AS v");
+    ASSERT_TRUE(empty_result.error.empty()) << empty_result.error;
+    ASSERT_EQ(empty_result.rows.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<std::string>(empty_result.rows[0][0]));
+    EXPECT_EQ(std::get<std::string>(empty_result.rows[0][0]), "");
+}
+
+TEST_F(QueryExecutorTest, ErrorTemporalMapArgumentsAreTypeChecked) {
+    // BUG-03：以前类型不对会静默按默认值构造（date({year:'2024'}) 得到 1970-01-01）。
+    EXPECT_EQ(errorRepr(*executor_, "RETURN date({year:'2024'}) AS v"),
+              "ExecutionFailed: year must be an integer value, but was a UTF8StringValue");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN date({year:2024.5}) AS v"),
+              "ExecutionFailed: year must be an integer value, but was a DoubleValue");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN localdatetime({year:'2024'}) AS v"),
+              "ExecutionFailed: year must be an integer value, but was a UTF8StringValue");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN time({hour:'12'}) AS v"),
+              "ExecutionFailed: hour must be an integer value, but was a UTF8StringValue");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN duration({days:'x'}) AS v"),
+              "ExecutionFailed: days must be a number value, but was a UTF8StringValue");
+}
+
+TEST_F(QueryExecutorTest, ErrorTemporalMapRejectsUnknownAndOutOfRangeFields) {
+    EXPECT_EQ(errorRepr(*executor_, "RETURN date({year:2024, bogus:1}) AS v"), "ArgumentError: No such field: bogus");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN duration({days:1, bogus:1}) AS v"),
+              "ExecutionFailed: Unknown field: bogus");
+
+    // 越界值以前会被 normalizeDate 顺延到下一月/年（date({year:2024, month:13}) → 2025-01-01）。
+    EXPECT_EQ(errorRepr(*executor_, "RETURN date({year:1000000000}) AS v"),
+              "ArgumentError: Invalid value for Year (valid values -999999999 - 999999999): 1000000000");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN date({year:2024, month:13, day:1}) AS v"),
+              "ArgumentError: Invalid value for MonthOfYear (valid values 1 - 12): 13");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN time({hour:25}) AS v"),
+              "ArgumentError: Invalid value for HourOfDay (valid values 0 - 23): 25");
+    // 越界日期客户端根本无法解码，字符串形式同样按解析失败处理。
+    EXPECT_EQ(errorRepr(*executor_, "RETURN date('1000000000-01-01') AS v"),
+              "SyntaxError: Text cannot be parsed to a Date");
+}
+
+TEST_F(QueryExecutorTest, ErrorTruncateRejectsImpossibleUnits) {
+    // date 截断到小时：以前静默返回原日期。
+    EXPECT_EQ(errorRepr(*executor_, "RETURN date.truncate('hour', date('2024-06-15')) AS v"),
+              "TypeError: Unit too small for truncation: Hours");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN date.truncate('millisecond', date('2024-06-15')) AS v"),
+              "TypeError: Unit too small for truncation: Millis");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN time.truncate('week', time('12:34:56')) AS v"),
+              "TypeError: Unit is too large to be used for truncation");
+    // 边界内仍然有效：date 可以截断到天，time 可以截断到天（取当天 00:00:00）。
+    EXPECT_EQ(temporalRepr(*executor_, "date.truncate('day', date('2024-06-15'))"), "2024-06-15");
+    EXPECT_EQ(temporalRepr(*executor_, "time.truncate('day', time('12:34:56'))"),
+              temporalRepr(*executor_, "time('00:00:00')"));
+}
+
+TEST_F(QueryExecutorTest, ErrorTimeStringRejectsNamedTimezone) {
+    // time('12:00:00[UTC]') 以前被接受（命名时区被忽略成偏移 0）；命名时区需要日期。
+    auto err = errorRepr(*executor_, "RETURN time('12:00:00[UTC]') AS v");
+    EXPECT_NE(err.find("ArgumentError"), std::string::npos) << err;
+    EXPECT_NE(err.find("Using a named time zone"), std::string::npos) << err;
+    // datetime 的字符串形式仍然支持命名时区（我们的 toString 会额外保留 [Zone] 后缀，
+    // neo4j 只打印偏移 —— 见 docs/query/engine/temporal-semantics.md 第 7 节）。
+    auto dt = temporalRepr(*executor_, "datetime('2024-01-01T12:00:00[UTC]')");
+    EXPECT_EQ(dt.rfind("2024-01-01T12:00:00+00:00", 0), 0u) << dt;
+}
+
+// ==================== elementId / trim 两参数（BUG-15/16） ====================
+
+TEST_F(QueryExecutorTest, SetListOfMapsAsPropertyFails) {
+    // 属性值不支持"map 的列表"：必须报错而不是静默写 NULL。
+    // （Value → PropertyValue 合并成一份实现时曾把这条检查漏掉，TCK Set1 [10] 因此回归。）
+    auto result = execSync(*executor_, "CREATE (n:ListMapProbe {m: [{a: 1}]})");
+    EXPECT_NE(result.error.find("TypeError"), std::string::npos) << result.error;
+    EXPECT_NE(result.error.find("list of maps"), std::string::npos) << result.error;
+}
+
+TEST_F(QueryExecutorTest, BytesParamsAndPropertiesRoundtrip) {
+    // BUG-11：参数里的二进制以前落到 NULL，属性方向也没有二进制类型。
+    BytesValue blob;
+    blob.data = {0x00, 0x01, 0x02, 0xFF};
+    const std::unordered_map<std::string, Value> params = {{"b", Value{blob}}};
+
+    // 1) 参数回传
+    auto returned = execSyncParams(*executor_, "RETURN $b AS v", params);
+    ASSERT_TRUE(returned.error.empty()) << returned.error;
+    ASSERT_EQ(returned.rows.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<BytesValue>(returned.rows[0][0])) << "参数应回传二进制而不是 NULL";
+    EXPECT_TRUE(std::get<BytesValue>(returned.rows[0][0]).data == blob.data);
+
+    // 2) 写入属性并读回（CREATE 直接返回写进去的属性）
+    auto created = execSyncParams(*executor_, "CREATE (n:BlobProbe {blob: $b}) RETURN n.blob AS v", params);
+    ASSERT_TRUE(created.error.empty()) << created.error;
+    ASSERT_EQ(created.rows.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<BytesValue>(created.rows[0][0])) << "属性读回应为二进制";
+    EXPECT_TRUE(std::get<BytesValue>(created.rows[0][0]).data == blob.data);
+
+    // 3) MATCH 读回 + 与参数比较（按内容相等）
+    auto matched = execSyncParams(*executor_, "MATCH (n:BlobProbe) RETURN n.blob AS v, n.blob = $b AS eq", params);
+    ASSERT_TRUE(matched.error.empty()) << matched.error;
+    ASSERT_EQ(matched.rows.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<BytesValue>(matched.rows[0][0]));
+    EXPECT_TRUE(std::get<BytesValue>(matched.rows[0][0]).data == blob.data);
+    ASSERT_TRUE(std::holds_alternative<bool>(matched.rows[0][1]));
+    EXPECT_TRUE(std::get<bool>(matched.rows[0][1]));
+
+    // 4) SET 覆盖写
+    BytesValue other;
+    other.data = {0x10, 0x20};
+    auto updated =
+        execSyncParams(*executor_, "MATCH (n:BlobProbe) SET n.blob2 = $b RETURN n.blob2 AS v", {{"b", Value{other}}});
+    ASSERT_TRUE(updated.error.empty()) << updated.error;
+    ASSERT_TRUE(std::holds_alternative<BytesValue>(updated.rows[0][0]));
+    EXPECT_TRUE(std::get<BytesValue>(updated.rows[0][0]).data == other.data);
+}
+
+TEST_F(QueryExecutorTest, TemporalZonedOrderingBeyondYear2262) {
+    // 纪元纳秒坐标曾经用 int64 存：days * 8.64e13 在公元 2262 年之后溢出，
+    // 于是带偏移的远期 datetime 排序错乱（TCK WithOrderBy1/2 的 [19]/[20]）。
+    // 期望顺序实测自 neo4j：按绝对时刻。
+    auto result = execSync(*executor_, "UNWIND [datetime('1984-10-11T12:31:14.645876123+00:17'), "
+                                       "datetime('0001-01-01T01:01:01.000000001-11:59'), "
+                                       "datetime('9999-09-09T09:59:59.999999999+11:59'), "
+                                       "datetime('1980-12-11T12:31:14-11:59')] AS d "
+                                       "RETURN toString(d) AS s ORDER BY d");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    std::vector<std::string> got;
+    for (auto& row : result.rows)
+        got.push_back(std::get<std::string>(row[0]));
+    const std::vector<std::string> expected = {"0001-01-01T01:01:01.000000001-11:59", "1980-12-11T12:31:14-11:59",
+                                               "1984-10-11T12:31:14.645876123+00:17",
+                                               "9999-09-09T09:59:59.999999999+11:59"};
+    EXPECT_EQ(got, expected);
+}
+
+TEST_F(QueryExecutorTest, TemporalMapAcceptsTimeBaseKey) {
+    // localdatetime/datetime 的 map 支持 time 基准键（TCK Temporal3 [5]，共 96 个场景）：
+    // 白名单曾经漏掉它，把本来能用的组合打成 "No such field: time"。
+    EXPECT_EQ(temporalRepr(*executor_, "localdatetime({year: 1984, month: 10, day: 11, "
+                                       "time: localtime({hour: 12, minute: 31, second: 14, nanosecond: 645876123})})"),
+              "1984-10-11T12:31:14.645876123");
+    EXPECT_EQ(temporalRepr(*executor_, "localdatetime({year: 1984, month: 10, day: 11, second: 42, "
+                                       "time: localtime({hour: 12, minute: 31, second: 14, nanosecond: 645876123})})"),
+              "1984-10-11T12:31:42.645876123");
+    EXPECT_EQ(temporalRepr(*executor_, "localdatetime({year: 1984, month: 10, day: 11, "
+                                       "time: time({hour: 12, minute: 31, second: 14, microsecond: 645876, "
+                                       "timezone: '+01:00'})})"),
+              "1984-10-11T12:31:14.645876");
+}
+
+TEST_F(QueryExecutorTest, TemporalDurationNanosAreNormalized) {
+    // java.time.Duration 的不变量：纳秒分量恒在 [0, 1e9)，符号由 seconds 承担。
+    // 期望值实测自 neo4j 5.26；
+    // 文本形式以前就一致，差别只在 .seconds / .nanosecondsOfSecond。
+    auto int_of = [&](const std::string& expr) {
+        auto result = execSync(*executor_, "RETURN " + expr + " AS v");
+        if (!result.error.empty() || result.rows.empty() || !std::holds_alternative<int64_t>(result.rows[0][0]))
+            return std::numeric_limits<int64_t>::min();
+        return std::get<int64_t>(result.rows[0][0]);
+    };
+    EXPECT_EQ(int_of("duration({seconds:-86399, nanoseconds:-900000000}).seconds"), -86400);
+    EXPECT_EQ(int_of("duration({seconds:-86399, nanoseconds:-900000000}).nanosecondsOfSecond"), 100000000);
+    EXPECT_EQ(int_of("duration({nanoseconds:-900000000}).seconds"), -1);
+    EXPECT_EQ(int_of("duration({nanoseconds:-900000000}).nanosecondsOfSecond"), 100000000);
+    EXPECT_EQ(int_of("duration.between(localdatetime('2018-01-02T10:00:00.1'), "
+                     "localdatetime('2018-01-01T10:00:00.2')).seconds"),
+              -86400);
+    EXPECT_EQ(int_of("duration.between(localdatetime('2018-01-02T10:00:00.1'), "
+                     "localdatetime('2018-01-01T10:00:00.2')).nanosecondsOfSecond"),
+              100000000);
+    // 文本形式不受影响。
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds:1, nanoseconds:-900000000})"), "PT0.1S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds:-86399, nanoseconds:-900000000})"), "PT-23H-59M-59.9S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds:-1}) + duration({nanoseconds:-1})"), "PT-1.000000001S");
+}
+
+TEST_F(QueryExecutorTest, ElementIdReturnsStringId) {
+    auto created = execSync(*executor_, "CREATE (n:ElementIdProbe {p: 1})");
+    ASSERT_TRUE(created.error.empty()) << created.error;
+
+    auto result = execSync(*executor_, "MATCH (n:ElementIdProbe) RETURN elementId(n) AS e, id(n) AS i");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1);
+    // elementId 是字符串，id 仍是整数，两者指向同一个元素（我们的 element_id 就是 id）。
+    ASSERT_TRUE(std::holds_alternative<std::string>(result.rows[0][0])) << "elementId 应为 String";
+    ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[0][1]));
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), std::to_string(std::get<int64_t>(result.rows[0][1])));
+
+    // 历史别名同样可用。
+    auto alias = execSync(*executor_, "MATCH (n:ElementIdProbe) RETURN element_id(n) AS e");
+    ASSERT_TRUE(alias.error.empty()) << alias.error;
+    EXPECT_EQ(std::get<std::string>(alias.rows[0][0]), std::get<std::string>(result.rows[0][0]));
+
+    // 关系同样支持。
+    auto rel_created =
+        execSync(*executor_, "MATCH (n:ElementIdProbe) CREATE (n)-[r:KNOWS]->(m:ElementIdProbe2) RETURN elementId(r)");
+    ASSERT_TRUE(rel_created.error.empty()) << rel_created.error;
+    ASSERT_EQ(rel_created.rows.size(), 1);
+    EXPECT_TRUE(std::holds_alternative<std::string>(rel_created.rows[0][0]));
+}
+
+TEST_F(QueryExecutorTest, TrimWithCharacterSet) {
+    // 文档语义：去掉两端出现的任意字符；neo4j 5.26 的 trim(s, chars) 会直接返回第二个
+    // 参数（bug），这里按其文档实现，ltrim/rtrim 与 neo4j 一致。
+    auto text = [&](const std::string& expr) {
+        auto result = execSync(*executor_, "RETURN " + expr + " AS v");
+        if (!result.error.empty() || result.rows.empty() || !std::holds_alternative<std::string>(result.rows[0][0]))
+            return std::string{"<error: " + result.error + ">"};
+        return std::get<std::string>(result.rows[0][0]);
+    };
+    EXPECT_EQ(text("trim('xxhelloxx', 'x')"), "hello");
+    EXPECT_EQ(text("trim('abcHELLOcba', 'abc')"), "HELLO");
+    EXPECT_EQ(text("trim('hello', 'x')"), "hello");
+    EXPECT_EQ(text("trim('xxxx', 'x')"), "");
+    EXPECT_EQ(text("ltrim('xxhelloxx', 'x')"), "helloxx");
+    EXPECT_EQ(text("rtrim('xxhelloxx', 'x')"), "xxhello");
+    // 默认（空白）形式不受影响。
+    EXPECT_EQ(text("trim('  hi  ')"), "hi");
+    EXPECT_EQ(text("ltrim('  hi  ')"), "hi  ");
+    EXPECT_EQ(text("rtrim('  hi  ')"), "  hi");
 }
 
 // ==================== Mixed Mode Tests ====================
