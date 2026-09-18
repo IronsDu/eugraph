@@ -1,5 +1,6 @@
 #include "service/graph_service.hpp"
 
+#include "common/types/query_error.hpp"
 #include "query/function/function_registry.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
 
@@ -227,7 +228,9 @@ GraphService::executeCypher(const std::string& query, const std::unordered_map<s
     auto ctx = co_await inst->executor->prepareStream(query, params, std::move(cancel));
 
     if (!ctx->error.empty()) {
-        throw std::runtime_error(ctx->error);
+        // 绑定/解析错误的原因分类写在消息里（"Binding failed; SyntaxError: ..."），
+        // 在这里统一翻译成 Neo4j 状态码，而不是让每个前端各自猜。
+        throw QueryException(classifyQueryErrorMessage(ctx->error), ctx->error);
     }
 
     auto labels = co_await inst->async_meta->listLabels();

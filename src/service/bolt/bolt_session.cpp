@@ -1,5 +1,7 @@
 #include "service/bolt/bolt_session.hpp"
 
+#include "common/types/query_error.hpp"
+
 #include <spdlog/spdlog.h>
 
 namespace eugraph {
@@ -130,6 +132,13 @@ std::vector<uint8_t> BoltSession::makeFailure(const std::string& code, const std
     s.fields.push_back(packstream::PackStreamValueStorage{std::move(meta)});
     enc.writeValue(s);
     return enc.release();
+}
+
+std::vector<uint8_t> BoltSession::makeFailureFor(const std::exception& e) {
+    if (const auto* query_error = dynamic_cast<const QueryException*>(&e))
+        return makeFailure(query_error->code(), query_error->message());
+    const std::string what = e.what();
+    return makeFailure(neo4jStatusCode(classifyQueryErrorMessage(what)), what);
 }
 
 std::vector<uint8_t> BoltSession::makeIgnored() {
@@ -296,7 +305,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::processMessage(const uint8_
         if (state_ != SessionState::FAILED) {
             state_ = SessionState::FAILED;
         }
-        co_return makeFailure("DatabaseError", e.what());
+        co_return makeFailureFor(e);
     }
 }
 
@@ -476,7 +485,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handleRun(const RunMessage&
     } catch (const std::exception& e) {
         spdlog::error("[bolt] RUN failed db='{}' query='{}' error='{}'", db_name, msg.query, e.what());
         state_ = SessionState::FAILED;
-        co_return makeFailure("DatabaseError", e.what());
+        co_return makeFailureFor(e);
     }
 }
 
@@ -661,7 +670,7 @@ folly::coro::Task<std::vector<uint8_t>> BoltSession::handlePull(const PullMessag
         // The query died mid-stream: end its transaction instead of dropping the
         // handle (an explicit one stays parked for the client's ROLLBACK).
         abandonStream(false);
-        co_return makeFailure("DatabaseError", e.what());
+        co_return makeFailureFor(e);
     }
 }
 

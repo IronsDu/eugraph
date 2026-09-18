@@ -58,6 +58,13 @@ struct MapValue {
     bool operator==(const MapValue& o) const;
 };
 
+/// 二进制值（Bolt Bytes / neo4j 的 byte[]）。Cypher 没有二进制字面量，
+/// 它只从参数或属性进来；相等性按内容比较。
+struct BytesValue {
+    std::vector<uint8_t> data;
+    bool operator==(const BytesValue& o) const;
+};
+
 // Forward-declare the storage variant.
 struct ValueStorage;
 
@@ -70,7 +77,7 @@ struct ValueStorage;
 // upgrade them in-place to their semantic counterparts.
 using Value =
     std::variant<std::monostate, bool, int64_t, double, std::string, VertexRef, EdgeKey, PathTopology, VertexValue,
-                 EdgeValue, PathValue, DateTimeValue, TimeValue, DurationValue, ListValue, MapValue>;
+                 EdgeValue, PathValue, DateTimeValue, TimeValue, DurationValue, ListValue, MapValue, BytesValue>;
 
 struct ValueStorage {
     Value value;
@@ -86,6 +93,10 @@ inline bool PathValue::operator==(const PathValue& o) const {
             return false;
     }
     return true;
+}
+
+inline bool BytesValue::operator==(const BytesValue& o) const {
+    return data == o.data;
 }
 
 inline bool ListValue::operator==(const ListValue& o) const {

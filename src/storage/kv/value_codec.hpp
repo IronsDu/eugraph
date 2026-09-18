@@ -27,6 +27,7 @@ namespace eugraph {
 //   0x0B: vector<DateTimeValue>  - 4 bytes count + N*DateTimeValue(no tag)
 //   0x0C: vector<TimeValue>      - 4 bytes count + N*TimeValue(no tag)
 //   0x0D: vector<DurationValue>  - 4 bytes count + N*DurationValue(no tag)
+//   0x0E: vector<uint8_t>        - 4 bytes length (BE) + data（二进制属性，neo4j 的 byte[]）
 
 class ValueCodec {
 public:
@@ -58,6 +59,7 @@ private:
     static constexpr uint8_t TAG_DATETIME_ARRAY = 0x0B;
     static constexpr uint8_t TAG_TIME_ARRAY = 0x0C;
     static constexpr uint8_t TAG_DURATION_ARRAY = 0x0D;
+    static constexpr uint8_t TAG_BYTES = 0x0E;
 };
 
 } // namespace eugraph

@@ -1,10 +1,12 @@
 #include "service/bolt/bolt_value_mapping.hpp"
 
 #include "common/types/graph_types.hpp"
+#include "common/types/query_error.hpp"
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
 #include "service/bolt/bolt_messages.hpp"
 
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -131,6 +133,8 @@ packstream::Value propertyToBolt(const PropertyValue& pv, uint32_t bolt_version)
         return timeToStruct(std::get<TimeValue>(pv));
     } else if (std::holds_alternative<DurationValue>(pv)) {
         return durationToStruct(std::get<DurationValue>(pv));
+    } else if (std::holds_alternative<std::vector<uint8_t>>(pv)) {
+        return std::get<std::vector<uint8_t>>(pv);
     } else if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
         std::vector<PS> list;
         for (auto& tv : std::get<std::vector<DateTimeValue>>(pv))
@@ -300,6 +304,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         return dateTimeToStruct(std::get<DateTimeValue>(val), bolt_version);
     } else if (std::holds_alternative<TimeValue>(val)) {
         return timeToStruct(std::get<TimeValue>(val));
+    } else if (std::holds_alternative<BytesValue>(val)) {
+        return packstream::Value{std::get<BytesValue>(val).data};
     } else if (std::holds_alternative<DurationValue>(val)) {
         return durationToStruct(std::get<DurationValue>(val));
     } else if (std::holds_alternative<ListValue>(val)) {
@@ -319,6 +325,116 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
     return std::monostate{};
 }
 
+namespace {
+
+/// nanos-of-day → hour/minute/second/nanos
+void fillTimeOfDayNanos(TimeValue& tv, int64_t nanos_of_day) {
+    constexpr int64_t kNanosPerSecond = 1'000'000'000LL;
+    tv.nanos = nanos_of_day % kNanosPerSecond;
+    int64_t sec_of_day = nanos_of_day / kNanosPerSecond;
+    tv.second = sec_of_day % 60;
+    sec_of_day /= 60;
+    tv.minute = sec_of_day % 60;
+    tv.hour = sec_of_day / 60;
+}
+
+/// Bolt 时间结构体参数 → 内部时间值（BUG-10：以前参数里的时间类型直接落到 NULL）。
+///
+/// 结构体字段布局取自 Bolt 规范：
+///   Date 'D'          {days}
+///   Time 'T'          {nanoseconds, tz_offset_seconds}
+///   LocalTime 't'     {nanoseconds}
+///   DateTime 'I'/'F'  {seconds, nanoseconds, tz_offset_seconds}
+///   DateTime 'i'/'f'  {seconds, nanoseconds, tz_id}
+///   LocalDateTime 'd' {seconds, nanoseconds}
+///   Duration 'E'      {months, days, seconds, nanoseconds}
+std::optional<Value> temporalFromStruct(const packstream::PackStreamStruct& s) {
+    auto as_int = [&s](size_t i) { return std::get<int64_t>(s.fields.at(i).value); };
+    auto as_str = [&s](size_t i) { return std::get<std::string>(s.fields.at(i).value); };
+
+    switch (s.tag) {
+    case tags::DATE: {
+        if (s.fields.size() != 1)
+            return std::nullopt;
+        DateTimeValue tv;
+        tv.kind = DateTimeKind::DATE;
+        civilFromDays(as_int(0), tv.year, tv.month, tv.day);
+        return Value{tv};
+    }
+    case tags::LOCAL_TIME: {
+        if (s.fields.size() != 1)
+            return std::nullopt;
+        TimeValue tv;
+        tv.kind = TimeKind::LOCAL_TIME;
+        fillTimeOfDayNanos(tv, as_int(0));
+        return Value{tv};
+    }
+    case tags::TIME: {
+        if (s.fields.size() != 2)
+            return std::nullopt;
+        TimeValue tv;
+        tv.kind = TimeKind::TIME;
+        fillTimeOfDayNanos(tv, as_int(0));
+        tv.tz_offset_sec = static_cast<int32_t>(as_int(1));
+        return Value{tv};
+    }
+    case tags::LOCAL_DATETIME: {
+        if (s.fields.size() != 2)
+            return std::nullopt;
+        auto tv = datetimeFromEpoch(as_int(0), as_int(1));
+        tv.kind = DateTimeKind::LOCAL_DATETIME;
+        return Value{tv};
+    }
+    case tags::DATETIME:
+    case tags::DATETIME_V4: {
+        if (s.fields.size() != 3)
+            return std::nullopt;
+        const int32_t offset = static_cast<int32_t>(as_int(2));
+        // 本地字段 = 绝对时刻 + 偏移；时区按偏移表示。用 128 位相加再判界：
+        // 参数来自客户端，seconds 取 INT64_MAX 时直接相加是有符号溢出（UB）。
+        const __int128 local_seconds = static_cast<__int128>(as_int(0)) + offset;
+        if (local_seconds > std::numeric_limits<int64_t>::max() || local_seconds < std::numeric_limits<int64_t>::min())
+            throw QueryException(QueryErrorKind::Argument, "datetime parameter out of range");
+        auto tv = datetimeFromEpoch(static_cast<int64_t>(local_seconds), as_int(1));
+        tv.kind = DateTimeKind::DATETIME;
+        tv.tz_offset_sec = offset;
+        return Value{tv};
+    }
+    case tags::DATETIME_ZONE_ID:
+    case tags::DATETIME_ZONE_ID_V4: {
+        if (s.fields.size() != 3)
+            return std::nullopt;
+        const std::string zone = as_str(2);
+        auto utc = datetimeFromEpoch(as_int(0), as_int(1));
+        // 命名时区的偏移取决于日期；先用 UTC 日期定位，再折算成该时区的本地字段。
+        const int32_t offset = lookupNamedTimezoneOffset(utc.year, utc.month, utc.day, zone);
+        const __int128 local_seconds = static_cast<__int128>(as_int(0)) + offset;
+        if (local_seconds > std::numeric_limits<int64_t>::max() || local_seconds < std::numeric_limits<int64_t>::min())
+            throw QueryException(QueryErrorKind::Argument, "datetime parameter out of range");
+        auto tv = datetimeFromEpoch(static_cast<int64_t>(local_seconds), as_int(1));
+        tv.kind = DateTimeKind::DATETIME;
+        tv.tz_offset_sec = offset;
+        tv.tz_name = zone;
+        return Value{tv};
+    }
+    case tags::DURATION: {
+        if (s.fields.size() != 4)
+            return std::nullopt;
+        DurationValue dv;
+        dv.months = as_int(0);
+        dv.days = as_int(1);
+        dv.seconds = as_int(2);
+        dv.nanos = as_int(3);
+        normalizeDurationNanos(dv);
+        return Value{dv};
+    }
+    default:
+        return std::nullopt;
+    }
+}
+
+} // namespace
+
 Value boltParamToValue(const packstream::Value& v) {
     if (std::holds_alternative<std::monostate>(v)) {
         return Value{};
@@ -330,6 +446,13 @@ Value boltParamToValue(const packstream::Value& v) {
         return std::get<double>(v);
     } else if (std::holds_alternative<std::string>(v)) {
         return std::get<std::string>(v);
+    } else if (std::holds_alternative<std::vector<uint8_t>>(v)) {
+        return BytesValue{std::get<std::vector<uint8_t>>(v)};
+    } else if (std::holds_alternative<packstream::PackStreamStruct>(v)) {
+        const auto& s = std::get<packstream::PackStreamStruct>(v);
+        if (auto temporal = temporalFromStruct(s))
+            return *temporal;
+        return Value{};
     } else if (std::holds_alternative<std::vector<PS>>(v)) {
         ListValue lv;
         for (auto& elem : std::get<std::vector<PS>>(v)) {

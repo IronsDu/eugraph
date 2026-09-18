@@ -31,6 +31,8 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
             return Value(std::get<TimeValue>(pv));
         if (std::holds_alternative<DurationValue>(pv))
             return Value(std::get<DurationValue>(pv));
+        if (std::holds_alternative<std::vector<uint8_t>>(pv))
+            return Value(BytesValue{std::get<std::vector<uint8_t>>(pv)});
         if (std::holds_alternative<std::vector<int64_t>>(pv)) {
             ListValue lv;
             for (auto v : std::get<std::vector<int64_t>>(pv))
@@ -246,6 +248,8 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
             return Value(std::get<TimeValue>(pv));
         if (std::holds_alternative<DurationValue>(pv))
             return Value(std::get<DurationValue>(pv));
+        if (std::holds_alternative<std::vector<uint8_t>>(pv))
+            return Value(BytesValue{std::get<std::vector<uint8_t>>(pv)});
         if (std::holds_alternative<std::vector<int64_t>>(pv)) {
             ListValue lv;
             for (auto v : std::get<std::vector<int64_t>>(pv))

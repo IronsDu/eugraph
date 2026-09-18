@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/types/query_error.hpp"
 #include "common/types/temporal_value.hpp"
 #include "query/dataset/row.hpp"
 #include "query/function/function_def.hpp"
@@ -8,7 +9,9 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <initializer_list>
 #include <string>
+#include <string_view>
 
 namespace eugraph {
 namespace function {
@@ -108,7 +111,41 @@ bool hasMapKey(const MapValue* mv, const std::string& key) {
     return false;
 }
 
-int64_t intFromMap(const MapValue* mv, const std::string& key, int64_t def = 0) {
+/// Value 的 Neo4j 值类型名，用于 "X must be an integer value, but was a <T>Value"。
+std::string neo4jValueTypeName(const Value& v) {
+    if (std::holds_alternative<std::monostate>(v))
+        return "NullValue";
+    if (std::holds_alternative<bool>(v))
+        return "BooleanValue";
+    if (std::holds_alternative<int64_t>(v))
+        return "IntegerValue";
+    if (std::holds_alternative<double>(v))
+        return "DoubleValue";
+    if (std::holds_alternative<std::string>(v))
+        return "UTF8StringValue";
+    if (std::holds_alternative<ListValue>(v))
+        return "ArrayListValue";
+    if (std::holds_alternative<MapValue>(v))
+        return "MapValue";
+    if (std::holds_alternative<VertexRef>(v) || std::holds_alternative<VertexValue>(v))
+        return "NodeValue";
+    if (std::holds_alternative<EdgeKey>(v) || std::holds_alternative<EdgeValue>(v))
+        return "RelationshipValue";
+    if (std::holds_alternative<DateTimeValue>(v))
+        return "DateTimeValue";
+    if (std::holds_alternative<TimeValue>(v))
+        return "TimeValue";
+    if (std::holds_alternative<DurationValue>(v))
+        return "DurationValue";
+    return "PathValue";
+}
+
+/// 取 map 里的整数字段。
+///
+/// 类型不对时报错（neo4j: Neo.DatabaseError.Statement.ExecutionFailed
+/// "<field> must be an integer value, but was a <Type>Value"），而不是静默按默认值
+/// 构造一个看起来正常、实际错误的时间值 —— 后者会把「参数写错」变成「数据不对」。
+int64_t requireIntFromMap(const MapValue* mv, const std::string& key, int64_t def = 0) {
     if (!mv)
         return def;
     for (const auto& [k, vs] : mv->entries) {
@@ -116,10 +153,57 @@ int64_t intFromMap(const MapValue* mv, const std::string& key, int64_t def = 0) 
             continue;
         if (std::holds_alternative<int64_t>(vs.value))
             return std::get<int64_t>(vs.value);
-        if (std::holds_alternative<double>(vs.value))
-            return static_cast<int64_t>(std::get<double>(vs.value));
+        throw QueryException(QueryErrorKind::ExecutionFailed,
+                             key + " must be an integer value, but was a " + neo4jValueTypeName(vs.value));
     }
     return def;
+}
+
+/// duration 的字段可以是整数或浮点（neo4j: "must be a number value"）。
+double requireNumberFromMap(const MapValue* mv, const std::string& key, double def = 0.0) {
+    if (!mv)
+        return def;
+    for (const auto& [k, vs] : mv->entries) {
+        if (k != key || std::holds_alternative<std::monostate>(vs.value))
+            continue;
+        if (std::holds_alternative<int64_t>(vs.value))
+            return static_cast<double>(std::get<int64_t>(vs.value));
+        if (std::holds_alternative<double>(vs.value))
+            return std::get<double>(vs.value);
+        throw QueryException(QueryErrorKind::ExecutionFailed,
+                             key + " must be a number value, but was a " + neo4jValueTypeName(vs.value));
+    }
+    return def;
+}
+
+/// 字段取值区间校验（字段名与区间文本沿用 neo4j，便于与 Neo4j 报错逐字对照）。
+void checkTemporalRange(const std::string& field, int64_t value, int64_t lo, int64_t hi, const std::string& range) {
+    if (value < lo || value > hi)
+        throw QueryException(QueryErrorKind::Argument,
+                             "Invalid value for " + field + " (valid values " + range + "): " + std::to_string(value));
+}
+
+/// 拒绝构造 map 里不认识的字段：拼错的键被静默忽略是更糟的失败模式。
+/// 时间构造用 ArgumentError "No such field: X"；duration 用 ExecutionFailed "Unknown field: X"（同 neo4j）。
+void rejectUnknownTemporalFields(const MapValue* mv, std::initializer_list<std::string_view> allowed,
+                                 bool duration_style = false) {
+    if (!mv)
+        return;
+    for (const auto& [k, vs] : mv->entries) {
+        (void)vs;
+        bool known = false;
+        for (std::string_view a : allowed) {
+            if (k == a) {
+                known = true;
+                break;
+            }
+        }
+        if (known)
+            continue;
+        if (duration_style)
+            throw QueryException(QueryErrorKind::ExecutionFailed, "Unknown field: " + k);
+        throw QueryException(QueryErrorKind::Argument, "No such field: " + k);
+    }
 }
 
 std::string strFromMap(const MapValue* mv, const std::string& key) {
@@ -132,30 +216,50 @@ std::string strFromMap(const MapValue* mv, const std::string& key) {
     return {};
 }
 
-int64_t extractNanosFromMap(const MapValue* mv) {
+/// 从 map 取亚秒分量。`integer_only` 为真时字段必须是整数（时间构造），
+/// 否则允许浮点（duration 构造，neo4j 的 duration 字段是 number）。
+int64_t extractNanosFromMap(const MapValue* mv, bool integer_only = false) {
+    auto field = [&](const char* singular, const char* plural) -> int64_t {
+        const bool use_singular = hasMapKey(mv, singular);
+        const std::string key = use_singular ? singular : plural;
+        if (integer_only)
+            return requireIntFromMap(mv, key);
+        return static_cast<int64_t>(requireNumberFromMap(mv, key));
+    };
     // Support both singular (temporal constructors) and plural (duration constructor) forms
     bool has_ms = hasMapKey(mv, "millisecond") || hasMapKey(mv, "milliseconds");
     bool has_us = hasMapKey(mv, "microsecond") || hasMapKey(mv, "microseconds");
     bool has_ns = hasMapKey(mv, "nanosecond") || hasMapKey(mv, "nanoseconds");
-    if (has_ns && !has_ms && !has_us) {
-        if (hasMapKey(mv, "nanosecond"))
-            return intFromMap(mv, "nanosecond");
-        return intFromMap(mv, "nanoseconds");
-    }
+    if (has_ns && !has_ms && !has_us)
+        return field("nanosecond", "nanoseconds");
     int64_t total = 0;
-    if (hasMapKey(mv, "millisecond"))
-        total += intFromMap(mv, "millisecond") * 1'000'000LL;
-    else if (hasMapKey(mv, "milliseconds"))
-        total += intFromMap(mv, "milliseconds") * 1'000'000LL;
-    if (hasMapKey(mv, "microsecond"))
-        total += intFromMap(mv, "microsecond") * 1'000LL;
-    else if (hasMapKey(mv, "microseconds"))
-        total += intFromMap(mv, "microseconds") * 1'000LL;
-    if (hasMapKey(mv, "nanosecond"))
-        total += intFromMap(mv, "nanosecond");
-    else if (hasMapKey(mv, "nanoseconds"))
-        total += intFromMap(mv, "nanoseconds");
+    if (has_ms)
+        total += field("millisecond", "milliseconds") * 1'000'000LL;
+    if (has_us)
+        total += field("microsecond", "microseconds") * 1'000LL;
+    if (has_ns)
+        total += field("nanosecond", "nanoseconds");
     return total;
+}
+
+/// 把 map 里的时间字段应用到 hour/minute/second/nanos 上（带类型与区间校验）。
+void applyTimeFieldsFromMap(const MapValue* mv, int64_t& hour, int64_t& minute, int64_t& second, int64_t& nanos) {
+    if (hasMapKey(mv, "hour")) {
+        hour = requireIntFromMap(mv, "hour");
+        checkTemporalRange("HourOfDay", hour, 0, 23, "0 - 23");
+    }
+    if (hasMapKey(mv, "minute")) {
+        minute = requireIntFromMap(mv, "minute");
+        checkTemporalRange("MinuteOfHour", minute, 0, 59, "0 - 59");
+    }
+    if (hasMapKey(mv, "second")) {
+        second = requireIntFromMap(mv, "second");
+        checkTemporalRange("SecondOfMinute", second, 0, 59, "0 - 59");
+    }
+    if (hasMapKey(mv, "nanosecond") || hasMapKey(mv, "millisecond") || hasMapKey(mv, "microsecond")) {
+        nanos = extractNanosFromMap(mv, /*integer_only=*/true);
+        checkTemporalRange("NanoOfSecond", nanos, 0, 999999999, "0 - 999999999");
+    }
 }
 
 int32_t parseTzOffset(const std::string& tz) {
@@ -219,12 +323,18 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
     bool explicit_day = hasMapKey(mv, "day");
     // Save original base date fields before explicit overrides, for week/ordinal/quarter dow preservation
     int64_t base_year = year, base_month = month, base_day = day;
-    if (explicit_year)
-        year = intFromMap(mv, "year", 1970);
-    if (explicit_month)
-        month = intFromMap(mv, "month", 1);
-    if (explicit_day)
-        day = intFromMap(mv, "day", 1);
+    if (explicit_year) {
+        year = requireIntFromMap(mv, "year", 1970);
+        checkTemporalRange("Year", year, -999999999, 999999999, "-999999999 - 999999999");
+    }
+    if (explicit_month) {
+        month = requireIntFromMap(mv, "month", 1);
+        checkTemporalRange("MonthOfYear", month, 1, 12, "1 - 12");
+    }
+    if (explicit_day) {
+        day = requireIntFromMap(mv, "day", 1);
+        checkTemporalRange("DayOfMonth", day, 1, 31, "1 - 28/31");
+    }
 
     bool use_week = hasMapKey(mv, "week");
     bool use_ordinal = hasMapKey(mv, "ordinalDay");
@@ -232,10 +342,12 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
     bool has_week_year = hasMapKey(mv, "weekYear");
 
     if (use_week) {
-        int64_t wk = intFromMap(mv, "week", 1);
+        int64_t wk = requireIntFromMap(mv, "week", 1);
+        checkTemporalRange("WeekOfWeekBasedYear", wk, 1, 53, "1 - 52/53");
         int64_t dow;
         if (hasMapKey(mv, "dayOfWeek")) {
-            dow = intFromMap(mv, "dayOfWeek", 1);
+            dow = requireIntFromMap(mv, "dayOfWeek", 1);
+            checkTemporalRange("DayOfWeek", dow, 1, 7, "1 - 7");
         } else if (has_date_base) {
             // Preserve day-of-week from the base date (use original base fields before overrides)
             int64_t days = daysFromCivil(base_year, base_month, base_day);
@@ -248,20 +360,24 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
         // When a base date is present without explicit year/weekYear, use the base date's ISO week-year
         int64_t iso_year = year;
         if (!explicit_year) {
-            if (has_week_year)
-                iso_year = intFromMap(mv, "weekYear", 1970);
-            else if (has_date_base)
+            if (has_week_year) {
+                iso_year = requireIntFromMap(mv, "weekYear", 1970);
+                checkTemporalRange("WeekYear", iso_year, -999999999, 999999999, "-999999999 - 999999999");
+            } else if (has_date_base)
                 iso_year = isoWeekYear(base_year, base_month, base_day);
         }
         isoWeekToDate(iso_year, wk, dow, year, month, day);
     } else if (use_ordinal) {
-        int64_t ord = intFromMap(mv, "ordinalDay", 1);
+        int64_t ord = requireIntFromMap(mv, "ordinalDay", 1);
+        checkTemporalRange("DayOfYear", ord, 1, 366, "1 - 365/366");
         ordinalToDate(year, ord, month, day);
     } else if (use_quarter) {
-        int64_t q = intFromMap(mv, "quarter", 1);
+        int64_t q = requireIntFromMap(mv, "quarter", 1);
+        checkTemporalRange("QuarterOfYear", q, 1, 4, "1 - 4");
         int64_t doq;
         if (hasMapKey(mv, "dayOfQuarter")) {
-            doq = intFromMap(mv, "dayOfQuarter", 1);
+            doq = requireIntFromMap(mv, "dayOfQuarter", 1);
+            checkTemporalRange("DayOfQuarter", doq, 1, 92, "1 - 90/92");
         } else if (has_date_base) {
             // Preserve day-of-quarter from the base date (use original base fields before overrides)
             int64_t start_month = (base_month - 1) / 3 * 3 + 1;
@@ -281,21 +397,22 @@ void extractDateFields(const MapValue* mv, int64_t& year, int64_t& month, int64_
 
 // Fractional value extraction for duration
 double doubleFromMap(const MapValue* mv, const std::string& key, double def = 0.0) {
-    if (!mv)
-        return def;
-    for (const auto& [k, vs] : mv->entries) {
-        if (k != key || std::holds_alternative<std::monostate>(vs.value))
-            continue;
-        if (std::holds_alternative<double>(vs.value))
-            return std::get<double>(vs.value);
-        if (std::holds_alternative<int64_t>(vs.value))
-            return static_cast<double>(std::get<int64_t>(vs.value));
-    }
-    return def;
+    return requireNumberFromMap(mv, key, def);
 }
 
 // String parsing for temporal values
+DateTimeValue parseDateFromStringRaw(const std::string& s);
+
+/// 解析日期字符串。年份超出 neo4j 的取值范围（±999999999）时按解析失败处理：
+/// 越界日期客户端根本无法解码，送出去只会让客户端在解码时报错。
 DateTimeValue parseDateFromString(const std::string& s) {
+    auto tv = parseDateFromStringRaw(s);
+    if (tv.year < -999999999 || tv.year > 999999999)
+        throw QueryException(QueryErrorKind::Syntax, "Text cannot be parsed to a Date");
+    return tv;
+}
+
+DateTimeValue parseDateFromStringRaw(const std::string& s) {
     DateTimeValue tv;
     if (s.empty())
         return tv;
@@ -391,7 +508,9 @@ DateTimeValue parseDateFromString(const std::string& s) {
     return tv;
 }
 
-TimeValue parseTimeStr(const std::string& s, TimeKind kind) {
+/// `allow_named_tz` 为真时允许 `[Zone]` 形式（datetime 的时区段：那里有日期可定位），
+/// 否则命名时区无从确定偏移，按 neo4j 报错而不是静默忽略。
+TimeValue parseTimeStr(const std::string& s, TimeKind kind, bool allow_named_tz = false) {
     TimeValue tv;
     tv.kind = kind;
     if (s.empty())
@@ -459,8 +578,17 @@ TimeValue parseTimeStr(const std::string& s, TimeKind kind) {
         }
         if (tz != "Z" && !tz.empty())
             tv.tz_offset_sec = parseTzOffset(tz);
-        if (!tz_name_str.empty())
+        if (!tz_name_str.empty()) {
+            // 命名时区需要日期才能确定偏移：time('12:00:00[UTC]') 在 neo4j 里是
+            // ArgumentError（改用 '+00:00' 或 datetime）。map 形式仍然允许，
+            // 因为那里的时区用于换算而不是定位某一天。
+            if (!allow_named_tz)
+                throw QueryException(QueryErrorKind::Argument,
+                                     "Using a named time zone e.g. [" + tz_name_str +
+                                         "] is not valid for a time without a date. Instead, use a specific time zone "
+                                         "string e.g. +00:00.");
             tv.tz_name = tz_name_str;
+        }
     }
     return tv;
 }
@@ -490,7 +618,7 @@ DateTimeValue parseDatetimeStr(const std::string& s, DateTimeKind kind) {
 
         // Parse time portion using parseTimeStr (handles compact and separator formats)
         TimeKind time_kind = (kind == DateTimeKind::DATETIME) ? TimeKind::TIME : TimeKind::LOCAL_TIME;
-        auto time_tv = parseTimeStr(s.substr(t_pos + 1), time_kind);
+        auto time_tv = parseTimeStr(s.substr(t_pos + 1), time_kind, /*allow_named_tz=*/true);
         tv.hour = time_tv.hour;
         tv.minute = time_tv.minute;
         tv.second = time_tv.second;
@@ -655,6 +783,8 @@ inline Value dateImpl(const Value& arg) {
         return Value{};
 
     if (auto* mv = asMap(arg)) {
+        rejectUnknownTemporalFields(mv, {"year", "month", "day", "week", "ordinalDay", "quarter", "weekYear",
+                                         "dayOfWeek", "dayOfQuarter", "date", "datetime"});
         DateTimeValue tv;
         tv.kind = DateTimeKind::DATE;
         extractDateFields(mv, tv.year, tv.month, tv.day);
@@ -693,6 +823,8 @@ inline Value localtimeImpl(const Value& arg) {
         return Value{};
 
     if (auto* mv = asMap(arg)) {
+        rejectUnknownTemporalFields(mv,
+                                    {"hour", "minute", "second", "millisecond", "microsecond", "nanosecond", "time"});
         TimeValue tv;
         tv.kind = TimeKind::LOCAL_TIME;
         // Check for 'time' key as base
@@ -711,14 +843,7 @@ inline Value localtimeImpl(const Value& arg) {
                 break;
             }
         }
-        if (hasMapKey(mv, "hour"))
-            tv.hour = intFromMap(mv, "hour");
-        if (hasMapKey(mv, "minute"))
-            tv.minute = intFromMap(mv, "minute");
-        if (hasMapKey(mv, "second"))
-            tv.second = intFromMap(mv, "second");
-        if (hasMapKey(mv, "nanosecond") || hasMapKey(mv, "millisecond") || hasMapKey(mv, "microsecond"))
-            tv.nanos = extractNanosFromMap(mv);
+        applyTimeFieldsFromMap(mv, tv.hour, tv.minute, tv.second, tv.nanos);
         return Value{tv};
     }
 
@@ -765,6 +890,8 @@ inline Value timeImpl(const Value& arg) {
         return Value{};
 
     if (auto* mv = asMap(arg)) {
+        rejectUnknownTemporalFields(
+            mv, {"hour", "minute", "second", "millisecond", "microsecond", "nanosecond", "timezone", "time"});
         TimeValue tv;
         tv.kind = TimeKind::TIME;
         // Check for 'time' key as base
@@ -790,14 +917,7 @@ inline Value timeImpl(const Value& arg) {
                 break;
             }
         }
-        if (hasMapKey(mv, "hour"))
-            tv.hour = intFromMap(mv, "hour");
-        if (hasMapKey(mv, "minute"))
-            tv.minute = intFromMap(mv, "minute");
-        if (hasMapKey(mv, "second"))
-            tv.second = intFromMap(mv, "second");
-        if (hasMapKey(mv, "nanosecond") || hasMapKey(mv, "millisecond") || hasMapKey(mv, "microsecond"))
-            tv.nanos = extractNanosFromMap(mv);
+        applyTimeFieldsFromMap(mv, tv.hour, tv.minute, tv.second, tv.nanos);
         bool explicit_tz = hasMapKey(mv, "timezone");
         if (!has_base || explicit_tz) {
             std::string tz = strFromMap(mv, "timezone");
@@ -897,6 +1017,9 @@ inline Value localdatetimeImpl(const Value& arg) {
         return Value{};
 
     if (auto* mv = asMap(arg)) {
+        rejectUnknownTemporalFields(mv, {"year", "month", "day", "week", "ordinalDay", "quarter", "weekYear",
+                                         "dayOfWeek", "dayOfQuarter", "hour", "minute", "second", "millisecond",
+                                         "microsecond", "nanosecond", "date", "datetime", "time"});
         DateTimeValue tv;
         tv.kind = DateTimeKind::LOCAL_DATETIME;
         // Check for 'datetime' or 'date' key as base (for date part)
@@ -944,14 +1067,7 @@ inline Value localdatetimeImpl(const Value& arg) {
         }
         tv.kind = DateTimeKind::LOCAL_DATETIME;
         extractDateFields(mv, tv.year, tv.month, tv.day);
-        if (hasMapKey(mv, "hour"))
-            tv.hour = intFromMap(mv, "hour");
-        if (hasMapKey(mv, "minute"))
-            tv.minute = intFromMap(mv, "minute");
-        if (hasMapKey(mv, "second"))
-            tv.second = intFromMap(mv, "second");
-        if (hasMapKey(mv, "nanosecond") || hasMapKey(mv, "millisecond") || hasMapKey(mv, "microsecond"))
-            tv.nanos = extractNanosFromMap(mv);
+        applyTimeFieldsFromMap(mv, tv.hour, tv.minute, tv.second, tv.nanos);
         return Value{tv};
     }
 
@@ -988,6 +1104,11 @@ inline Value datetimeImpl(const Value& arg) {
         return Value{};
 
     if (auto* mv = asMap(arg)) {
+        rejectUnknownTemporalFields(mv, {"year",     "month",        "day",         "week",         "ordinalDay",
+                                         "quarter",  "weekYear",     "dayOfWeek",   "dayOfQuarter", "hour",
+                                         "minute",   "second",       "millisecond", "microsecond",  "nanosecond",
+                                         "timezone", "epochSeconds", "epochMillis", "date",         "datetime",
+                                         "time"});
         DateTimeValue tv;
         tv.kind = DateTimeKind::DATETIME;
         // Check for 'datetime' or 'date' key as base (for date part)
@@ -1052,40 +1173,42 @@ inline Value datetimeImpl(const Value& arg) {
             }
         }
         tv.kind = DateTimeKind::DATETIME;
-        // `epochMillis` is a base for both the date and the time-of-day, like a
-        // `datetime`/`date`/`time` key. Without this the key was silently
-        // ignored and the constructor returned the epoch (1970-01-01), which is
-        // what LDBC complex-10 fed into `datetime({epochMillis: friend.birthday})`.
-        if (hasMapKey(mv, "epochMillis")) {
-            // `epochMillis` is a base for both the date and the time-of-day, like
-            // a `datetime` / `date` / `time` key. Without this the key was
-            // silently ignored and the constructor returned the epoch
-            // (1970-01-01) -- what LDBC complex-10 fed into
-            // `datetime({epochMillis: friend.birthday})`.
-            int64_t epoch_millis = intFromMap(mv, "epochMillis");
-            int64_t seconds = epoch_millis / 1'000LL;
-            int64_t nanos = (epoch_millis % 1'000LL) * 1'000'000LL;
-            if (nanos < 0) {
-                nanos += 1'000'000'000LL;
-                --seconds;
+        // `epochSeconds` / `epochMillis` are bases for the whole value: the epoch
+        // names an absolute instant and `timezone` only chooses the zone its local
+        // fields are shown in. (neo4j accepts exactly these two; epochMicros and
+        // epochNanos are not fields there, so we do not invent them.) Handling just
+        // `epochMillis` made datetime({epochSeconds: 0, timezone: '+08:00'}) fall
+        // through to the field defaults, so it produced 1970-01-01T00:00+08:00 and
+        // .epochSeconds came back as -28800 instead of 0.
+        {
+            int64_t epoch_seconds = 0;
+            int64_t epoch_nanos = 0;
+            bool has_epoch = false;
+            if (hasMapKey(mv, "epochSeconds")) {
+                epoch_seconds = requireIntFromMap(mv, "epochSeconds");
+                has_epoch = true;
+            } else if (hasMapKey(mv, "epochMillis")) {
+                int64_t millis = requireIntFromMap(mv, "epochMillis");
+                epoch_seconds = millis / 1'000LL;
+                epoch_nanos = (millis % 1'000LL) * 1'000'000LL;
+                has_epoch = true;
             }
-            // Guard the seconds * 1e9 intermediate inside datetimeFromEpoch.
-            if (seconds > 9'000'000'000LL || seconds < -9'000'000'000LL)
-                return Value{};
-            tv = datetimeFromEpoch(seconds, nanos);
-            has_base = true;
-            base_has_tz = true;
-            tv.tz_offset_sec = 0;
+            if (has_epoch) {
+                if (epoch_nanos < 0) {
+                    epoch_nanos += 1'000'000'000LL;
+                    --epoch_seconds;
+                }
+                // Guard the seconds * 1e9 intermediate inside datetimeFromEpoch.
+                if (epoch_seconds > 9'000'000'000LL || epoch_seconds < -9'000'000'000LL)
+                    return Value{};
+                tv = datetimeFromEpoch(epoch_seconds, epoch_nanos);
+                has_base = true;
+                base_has_tz = true;
+                tv.tz_offset_sec = 0;
+            }
         }
         extractDateFields(mv, tv.year, tv.month, tv.day, has_base);
-        if (hasMapKey(mv, "hour"))
-            tv.hour = intFromMap(mv, "hour");
-        if (hasMapKey(mv, "minute"))
-            tv.minute = intFromMap(mv, "minute");
-        if (hasMapKey(mv, "second"))
-            tv.second = intFromMap(mv, "second");
-        if (hasMapKey(mv, "nanosecond") || hasMapKey(mv, "millisecond") || hasMapKey(mv, "microsecond"))
-            tv.nanos = extractNanosFromMap(mv);
+        applyTimeFieldsFromMap(mv, tv.hour, tv.minute, tv.second, tv.nanos);
         // Recompute base named timezone offset for final date before any tz conversion
         if (base_has_tz && !tv.tz_name.empty())
             tv.tz_offset_sec =
@@ -1205,6 +1328,10 @@ inline Value durationImpl(const Value& arg) {
         return Value{};
 
     if (auto* mv = asMap(arg)) {
+        rejectUnknownTemporalFields(mv,
+                                    {"years", "months", "weeks", "days", "hours", "minutes", "seconds", "milliseconds",
+                                     "microseconds", "nanoseconds"},
+                                    /*duration_style=*/true);
         DurationValue dv;
 
         double years = doubleFromMap(mv, "years");
@@ -1257,11 +1384,21 @@ inline Value durationImpl(const Value& arg) {
         }
 
         normalizeDuration(dv);
+        normalizeDurationNanos(dv);
         return Value{dv};
     }
 
-    if (std::holds_alternative<std::string>(arg))
-        return Value{parseDurationFromString(std::get<std::string>(arg))};
+    if (std::holds_alternative<std::string>(arg)) {
+        auto parsed = parseDurationFromString(std::get<std::string>(arg));
+        normalizeDurationNanos(parsed);
+        return Value{parsed};
+    }
+
+    if (std::holds_alternative<DurationValue>(arg)) {
+        auto dur = std::get<DurationValue>(arg);
+        normalizeDurationNanos(dur);
+        return Value{dur};
+    }
 
     return Value{};
 }
@@ -1409,11 +1546,12 @@ inline Value temporalAccessorImpl(const Value& tv_val, int64_t field_raw) {
         case DateTimeField::EPOCH_SECONDS:
             if (k != DateTimeKind::DATETIME)
                 return Value{};
-            return Value{temporalToComparable(tv) / 1'000'000'000LL};
+            // epochSeconds/Millis 是 int64 字段：2262 年以后本就放不下，显式截断。
+            return Value{static_cast<int64_t>(temporalToComparable(tv) / 1'000'000'000LL)};
         case DateTimeField::EPOCH_MILLIS:
             if (k != DateTimeKind::DATETIME)
                 return Value{};
-            return Value{temporalToComparable(tv) / 1'000'000LL};
+            return Value{static_cast<int64_t>(temporalToComparable(tv) / 1'000'000LL)};
 
         default:
             return Value{};
@@ -1610,6 +1748,71 @@ int64_t truncateToUnit(int64_t value, const std::string& unit) {
         unit == "minute" || unit == "second" || unit == "millisecond" || unit == "microsecond" || unit == "nanosecond")
         return value; // field-level truncation handled by zeroing sub-fields
     return value;
+}
+
+/// 截断单位的粒度序（越大越粗）。未知单位返回 -1。
+int truncateUnitRank(const std::string& unit) {
+    if (unit == "nanosecond")
+        return 0;
+    if (unit == "microsecond")
+        return 1;
+    if (unit == "millisecond")
+        return 2;
+    if (unit == "second")
+        return 3;
+    if (unit == "minute")
+        return 4;
+    if (unit == "hour")
+        return 5;
+    if (unit == "day")
+        return 6;
+    if (unit == "week" || unit == "weekday")
+        return 7;
+    if (unit == "month")
+        return 8;
+    if (unit == "quarter")
+        return 9;
+    if (unit == "year" || unit == "weekYear")
+        return 10;
+    if (unit == "decade")
+        return 11;
+    if (unit == "century")
+        return 12;
+    if (unit == "millennium")
+        return 13;
+    return -1; // 未知单位：保持既有行为（不在此处新增错误）
+}
+
+/// neo4j 的单位显示名（错误消息 "Unit too small for truncation: Hours"）。
+std::string truncateUnitDisplayName(const std::string& unit) {
+    if (unit == "hour")
+        return "Hours";
+    if (unit == "minute")
+        return "Minutes";
+    if (unit == "second")
+        return "Seconds";
+    if (unit == "millisecond")
+        return "Millis";
+    if (unit == "microsecond")
+        return "Micros";
+    if (unit == "nanosecond")
+        return "Nanos";
+    return unit;
+}
+
+/// 单位必须落在目标类型的粒度范围内：date 不能截断到天以下、time 不能截断到天以上。
+/// 静默返回原值会让调用方以为截断生效了（neo4j 报 TypeError）。
+void checkTruncateUnit(const std::string& unit, bool time_family, uint8_t target_kind_raw) {
+    const int rank = truncateUnitRank(unit);
+    if (rank < 0)
+        return;
+    if (time_family) {
+        if (rank > 6) // 比 day 更粗
+            throw QueryException(QueryErrorKind::Type, "Unit is too large to be used for truncation");
+        return;
+    }
+    if (static_cast<DateTimeKind>(target_kind_raw) == DateTimeKind::DATE && rank < 6)
+        throw QueryException(QueryErrorKind::Type, "Unit too small for truncation: " + truncateUnitDisplayName(unit));
 }
 
 DateTimeValue temporalTruncate(const DateTimeValue& tv, const std::string& unit, const MapValue* fields) {
@@ -1840,7 +2043,8 @@ TimeValue temporalTruncateTime(const TimeValue& tv, const std::string& unit, con
 } // namespace
 
 inline Value temporalTruncateImpl(const Value& temporal_val, const std::string& unit, const Value& fields_val,
-                                  int target_kind_raw) {
+                                  int target_kind_raw, bool time_family = false) {
+    checkTruncateUnit(unit, time_family, static_cast<uint8_t>(target_kind_raw));
     const MapValue* fields = nullptr;
     if (std::holds_alternative<MapValue>(fields_val))
         fields = &std::get<MapValue>(fields_val);
@@ -1887,7 +2091,7 @@ inline void temporalTruncateBatchFn(const std::vector<const Column*>& args, Colu
                 temporal_val = Value{tv};
             }
         }
-        result.setValue(i, temporalTruncateImpl(temporal_val, unit, fields, TargetKindRaw));
+        result.setValue(i, temporalTruncateImpl(temporal_val, unit, fields, TargetKindRaw, IsTimeKind));
     }
 }
 

@@ -246,7 +246,7 @@ void BoltConnection::dispatchMessage(std::vector<uint8_t> message) {
                 co_return self->session_.makeFailure("ProtocolError", e.what());
             } catch (const std::exception& e) {
                 spdlog::error("[bolt] session error: {}", e.what());
-                co_return self->session_.makeFailure("DatabaseError", e.what());
+                co_return self->session_.makeFailureFor(e);
             }
         });
     std::move(task)

@@ -40,7 +40,7 @@ static constexpr GraphTxnHandle INVALID_GRAPH_TXN = nullptr;
 using PropertyValue =
     std::variant<std::monostate, bool, int64_t, double, std::string, std::vector<int64_t>, std::vector<double>,
                  std::vector<std::string>, DateTimeValue, TimeValue, DurationValue, std::vector<DateTimeValue>,
-                 std::vector<TimeValue>, std::vector<DurationValue>>;
+                 std::vector<TimeValue>, std::vector<DurationValue>, std::vector<uint8_t>>;
 
 // Properties indexed by prop_id
 using Properties = std::vector<std::optional<PropertyValue>>;
@@ -83,7 +83,10 @@ enum class PropertyType {
     DATETIME_ARRAY,
     TIME_ARRAY,
     DURATION_ARRAY,
-    ANY
+    ANY,
+    /// 二进制属性（neo4j 的 byte[]）。追加在 ANY 之后：PropertyType 按序号落盘，
+    /// 既有取值的序号不能变。
+    BYTES
 };
 
 // ==================== Temporal Property Type Mapping ====================
@@ -138,6 +141,8 @@ inline PropertyType propertyValueToPropertyType(const PropertyValue& pv) {
         return PropertyType::TIME_ARRAY;
     if (std::holds_alternative<std::vector<DurationValue>>(pv))
         return PropertyType::DURATION_ARRAY;
+    if (std::holds_alternative<std::vector<uint8_t>>(pv))
+        return PropertyType::BYTES;
     return PropertyType::ANY;
 }
 
