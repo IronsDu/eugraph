@@ -15,6 +15,8 @@
 #include <sstream>
 #include <unordered_set>
 
+#include <folly/Executor.h>
+#include <folly/coro/Coroutine.h>
 #include <folly/io/async/EventBaseManager.h>
 
 namespace {
@@ -22,6 +24,20 @@ namespace {
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
         .count();
+}
+
+/// Moves the calling coroutine onto `executor` and leaves it running there.
+///
+/// Used to come back to the exact EventBase that owns the request before the
+/// handler returns. Hopping back to the IO *pool* is not sufficient: fbthrift
+/// sends a reply inline only when it is produced on the request's own EventBase
+/// thread (`HandlerCallbackBase::sendReply`); otherwise the reply goes through
+/// `IOWorkerContext::ReplyQueue`, which fbthrift registers with
+/// `startConsumingInternal` -- an internal event that folly documents as
+/// "may be skipped if EventBase doesn't have any other registered events".
+/// With an otherwise idle event base that shows up as seconds of reply latency.
+folly::coro::Task<void> hopTo(folly::Executor::KeepAlive<> executor) {
+    co_await folly::coro::co_withExecutor(std::move(executor), []() -> folly::coro::Task<void> { co_return; }());
 }
 
 /// Ends a query's transaction when its result stream is abandoned.
@@ -65,11 +81,17 @@ folly::coro::AsyncGenerator<eugraph::thrift_service::ResultRowBatch&&>
 makeStreamGenerator(std::shared_ptr<eugraph::compute::StreamContext> ctx,
                     std::unordered_map<eugraph::LabelId, eugraph::LabelDef> label_defs,
                     std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef> edge_label_defs,
-                    eugraph::service::thrift::EuGraphHandler& handler, int64_t t0) {
+                    eugraph::service::thrift::EuGraphHandler& handler, int64_t t0,
+                    folly::Executor::KeepAlive<> compute) {
     StreamAbandonRollback abandon_rollback{ctx};
     size_t total_rows = 0;
     bool labels_merged = false;
-    while (auto chunk = co_await ctx->gen.next()) {
+    // Bind each pull to the compute pool. The generator's promise carries an
+    // executor and routes every await inside the operator tree through it, so
+    // this is what actually keeps per-batch execution (and row conversion) off
+    // the Thrift IO thread -- simply starting the query there is not enough,
+    // because the consumer drives the generator.
+    while (auto chunk = co_await ctx->gen.next().viaIfAsync(compute)) {
         if (!labels_merged) {
             labels_merged = true;
             for (const auto& [lid, def] : ctx->label_defs) {
@@ -958,7 +980,22 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
         }
     }
 
-    auto exec_ctx = co_await graph_service_.executeCypher(*query, params, *graph_name);
+    // Planning and execution setup run on the shared compute pool so they do not
+    // occupy the network IO thread. We must then return to *this request's*
+    // EventBase before the handler returns -- see hopTo() for why hopping back to
+    // the IO pool instead is not enough.
+    folly::EventBase* request_evb = folly::EventBaseManager::get()->getEventBase();
+    auto compute_ka = folly::getKeepAliveToken(graph_service_.computeExecutor());
+    eugraph::service::CypherExecutionContext exec_ctx;
+    if (compute_ka) {
+        exec_ctx = co_await folly::coro::co_withExecutor(compute_ka,
+                                                         graph_service_.executeCypher(*query, params, *graph_name));
+        if (request_evb) {
+            co_await hopTo(folly::getKeepAliveToken(request_evb));
+        }
+    } else {
+        exec_ctx = co_await graph_service_.executeCypher(*query, params, *graph_name);
+    }
 
     thrift_service::QueryStreamMeta meta;
     meta.columns() = exec_ctx.ctx->columns;
@@ -966,7 +1003,7 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
     // metadata (label order); the assignment above copies, so ctx keeps them.
 
     auto gen = makeStreamGenerator(std::move(exec_ctx.ctx), std::move(exec_ctx.label_defs),
-                                   std::move(exec_ctx.edge_label_defs), *this, t0);
+                                   std::move(exec_ctx.edge_label_defs), *this, t0, compute_ka);
 
     co_return apache::thrift::ResponseAndServerStream<thrift_service::QueryStreamMeta, thrift_service::ResultRowBatch>{
         std::move(meta), std::move(gen)};

@@ -30,9 +30,15 @@ public:
     /// so every path that abandons a stream must call this (or rollbackTran).
     /// Safe from any thread; the store guards its transaction table with a mutex.
     virtual bool rollbackTranNow(GraphTxnHandle txn) = 0;
-    virtual void setTransaction(GraphTxnHandle txn) = 0;
     /// Create an isolated view bound to one transaction. Concurrent query
     /// streams each own one so transaction handles never leak across calls.
+    ///
+    /// A transaction handle reaches an async store ONLY through here. There used to
+    /// be a setTransaction() as well, which let a statement write its handle into a
+    /// store shared with every other statement -- a race, and a dangling handle once
+    /// that transaction ended: the handle is a TxnState*, so the freed address gets
+    /// reused by the next beginTran and the stale handle then aliases someone else's
+    /// live transaction, which WT detects as two threads on one session and aborts.
     virtual std::unique_ptr<IAsyncGraphDataStore> forkTransaction(GraphTxnHandle txn) = 0;
 
     // ==================== DDL ====================

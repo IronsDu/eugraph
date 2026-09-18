@@ -17,10 +17,9 @@ GraphManager::~GraphManager() {
 }
 
 bool GraphManager::init(const std::string& data_dir, int io_threads, int compute_threads, int checkpoint_interval_sec,
-                        const std::string& data_wt_config) {
+                        const std::string& data_wt_config, std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool) {
     data_dir_ = data_dir;
     io_threads_ = io_threads;
-    compute_threads_ = compute_threads;
     checkpoint_interval_sec_ = checkpoint_interval_sec;
     data_wt_config_ = data_wt_config;
 
@@ -40,6 +39,10 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
     }
 
     io_scheduler_ = std::make_shared<IoScheduler>(io_threads_);
+    // Prefer the process-wide pool handed in by the application entry point; fall
+    // back to a private one only when none was supplied (tests).
+    compute_pool_ =
+        compute_pool ? std::move(compute_pool) : std::make_shared<folly::CPUThreadPoolExecutor>(compute_threads);
 
     auto entries = catalog_.listGraphs();
     spdlog::info("Found {} graph(s) in catalog, opening...", entries.size());
@@ -235,7 +238,7 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstance(uint32_t graph_id
     }
 
     compute::QueryExecutor::Config executor_config;
-    executor_config.compute_threads = compute_threads_;
+    executor_config.compute_pool = compute_pool_;
     instance->executor =
         std::make_unique<compute::QueryExecutor>(*instance->async_data, *instance->async_meta, executor_config);
 

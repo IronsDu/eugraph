@@ -8,6 +8,7 @@
 
 #include <args.hxx>
 
+#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/init/Init.h>
 #include <spdlog/spdlog.h>
 
@@ -123,14 +124,19 @@ int main(int argc, char* argv[]) {
     spdlog::info("  Data dir: {}", config.data_dir);
     spdlog::info("  WiredTiger data config: {}", data_wt_config);
 
+    // The single process-wide compute pool. It is shared by every graph's
+    // QueryExecutor and handed to the service layer, which runs query work on it
+    // instead of on the Thrift IO threads (Bolt does the same per message).
+    auto compute_pool = std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads);
+
     auto graph_manager = std::make_shared<GraphManager>();
     if (!graph_manager->init(config.data_dir, config.storage_io_threads, config.compute_threads,
-                             GraphManager::kDefaultCheckpointIntervalSec, data_wt_config)) {
+                             GraphManager::kDefaultCheckpointIntervalSec, data_wt_config, compute_pool)) {
         spdlog::error("Failed to initialize graph manager");
         return 1;
     }
 
-    auto graph_service = std::make_shared<service::GraphService>(*graph_manager);
+    auto graph_service = std::make_shared<service::GraphService>(*graph_manager, compute_pool);
     auto handler = std::make_shared<service::thrift::EuGraphHandler>(*graph_service);
 
     auto server = std::make_shared<apache::thrift::ThriftServer>();

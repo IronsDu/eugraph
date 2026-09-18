@@ -6,6 +6,7 @@
 #include "storage/graph_manager.hpp"
 
 #include <folly/coro/Task.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include <memory>
 #include <string>
@@ -31,11 +32,15 @@ struct CypherExecutionContext {
 /// delegate to this service.
 class GraphService {
 public:
-    explicit GraphService(GraphManager& gm) : gm_(gm) {}
+    /// `compute_pool` is the process-wide compute pool created by the application
+    /// entry point. When null the manager's pool is used instead (tests).
+    explicit GraphService(GraphManager& gm, std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool = nullptr)
+        : gm_(gm), compute_pool_(std::move(compute_pool)) {}
 
     GraphInstance* resolveGraph(const std::string& name);
-    /// Executor used for Cypher evaluation; Bolt uses it to run query
-    /// coroutines off the socket EventBase.
+    /// Executor used for Cypher evaluation and for the Thrift handler's query
+    /// planning; Bolt also uses it to run session coroutines off the socket
+    /// EventBase.
     folly::Executor* computeExecutor();
 
     // Graph lifecycle
@@ -91,6 +96,8 @@ public:
 
 private:
     GraphManager& gm_;
+    /// Process-wide compute pool, owned by the application entry point.
+    std::shared_ptr<folly::CPUThreadPoolExecutor> compute_pool_;
 
     folly::coro::Task<CypherExecutionContext> handleDatabaseDdl(const DatabaseDdlStatement& stmt,
                                                                 IAsyncGraphDataStore& data_store);
