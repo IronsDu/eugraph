@@ -205,7 +205,7 @@ READ of size 4 at 0x0000011af000 thread T0
 
 ### 现象
 
-ASan job（`code-quality.yml`：`build/` + `-fsanitize=address` + `-O0`）运行一个多小时后，日志停在
+ASan job（`ci.yml` 的 `asan`：`build/` + `-fsanitize=address` + `-O0`）运行一个多小时后，日志停在
 `QueryExecutorTest.TckWith7Scenario2MultipleWiths` 不再前进：该用例已完成 CREATE 的大部分日志输出，
 之后既无报错也无后续输出。日志中 `Test timeout computed to be: 10000000`，即**没有有效的单测超时**。
 

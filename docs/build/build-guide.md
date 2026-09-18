@@ -219,6 +219,6 @@ grep "^// Generated from" src/query/parser/generated/grammar/Cypher*.{h,cpp}
 项目使用 GitHub Actions，配置在 `.github/workflows/`：
 
 - **ci.yml** — GCC 构建 + 测试、Clang 构建 + 测试、代码覆盖率
-- **code-quality.yml** — clang-format 检查、ASan、UBSan、clang-tidy、-Werror 构建
+- **ci.yml** — 唯一的工作流：clang-format 检查、GCC/Clang 编译、coverage、ASan（跑测试）、UBSan（跑测试）、clang-tidy
 
 所有 CI 作业使用 vcpkg 二进制缓存，首次构建后后续构建会复用缓存加速。
