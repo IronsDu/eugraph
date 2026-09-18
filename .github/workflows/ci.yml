@@ -239,6 +239,22 @@ jobs:
     - name: Configure CMake with Clang
       run: cmake --preset=clang-release
 
+    # 临时诊断：clang 链接偶发 undefined reference，先确认 CI 里这份 folly 是否含这些符号，
+    # 以及 eugraph-server 真实链接行的库顺序（比本机 GCC 构建的 link.txt 更有说服力）。
+    - name: Diagnose link inputs
+      run: |
+        echo "=== folly archives ==="
+        find build -name 'libfolly.a' -printf '%p  %s bytes\n' 2>/dev/null || true
+        FOL=$(find build -name 'libfolly.a' | head -1)
+        for sym in 'coro::Mutex::unlock' 'coro::Baton::~Baton' 'resumeCoroutineWithNewAsyncStackRoot'; do
+          printf '%-42s %s\n' "$sym" "$(nm -C "$FOL" 2>/dev/null | grep -c "$sym")"
+        done
+        echo "=== eugraph-server link line (libs only) ==="
+        tr ' ' '\n' < build/clang-release/CMakeFiles/eugraph-server.dir/link.txt 2>/dev/null \
+          | grep -E '\.a$|^-l' | sed 's|.*/||' | head -60 || echo "link.txt not found"
+        echo "=== cmake / clang / ld ==="
+        cmake --version | head -1; clang++ --version | head -1; ld --version | head -1
+
     - name: Build
       run: cmake --build --preset=clang-release
 
