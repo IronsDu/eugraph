@@ -172,6 +172,32 @@ Binding failed; UndefinedVariable: Variable 'friends' not defined
 `WITH` 同时携带了分组键 `forum`（`WITH forum, collect(friend) AS friends`）——
 疑似「聚合结果列在该子句作用域内的可见性」问题，值得单独定位。
 
+### 更正与确认：作用域是对的，问题在「`IN` 列表约束未驱动计划」
+
+上文推测「规划器重新展开 `KNOWS*1..2`」—— 经实测**不成立**。用计数判据验证：
+
+```cypher
+MATCH (p:Person {id:933})-[:KNOWS*1..2]-(friend:Person) WHERE NOT p=friend
+WITH collect(DISTINCT friend) AS friends
+OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post:Post)
+RETURN count(post)
+```
+
+| 量 | 值 |
+|---|---:|
+| 该查询计数 | **135,169** |
+| 全部 `Post` 总数 | **135,701** |
+
+计数**几乎等于全部 Post** → OPTIONAL MATCH 里的 `friend` 是**新的、无约束的变量**，
+**Cypher 作用域是正确的**（`friend` 已被 `collect` 消费，不在作用域内）。
+
+**因此根因更精确地表述为**：`friend` 无约束 → 规划器必须**扫描全部节点**产生候选，
+再与外层的相关行（每个 `forum`）做 `CrossProduct`，`friend IN friends` **仅在最后当过滤器**。
+
+**修复方向不变但更明确**：当新引入的节点变量被 `x IN <list>` 约束时，
+应以**该列表驱动**（`Unwind(list AS x)` → 再展开其模式），而不是「扫描全部 + 笛卡尔积 + 事后过滤」。
+这是**计划改写**层的改动，且 `Unwind` 算子已存在、刚优化过透传。
+
 **complex-5 剩余问题**（未修）：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)
 <-[:CONTAINER_OF]-(forum) WHERE friend IN friends` 未完成 —— 需查 join order /
 `IN` 谓词下推，与内存无关。
