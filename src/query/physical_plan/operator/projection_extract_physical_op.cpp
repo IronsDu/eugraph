@@ -115,8 +115,21 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
         output.columns.reserve(n_specs);
         for (const auto& spec : specs_) {
             binder::BoundTypeKind kind = spec.output_type.kind;
-            if (spec.kind == ColumnSpec::Kind::Passthrough && spec.source_col < chunk->columns.size())
-                kind = chunk->columns[spec.source_col].type;
+            if (spec.kind == ColumnSpec::Kind::Passthrough && spec.source_col < chunk->columns.size()) {
+                const Column& src = chunk->columns[spec.source_col];
+                kind = src.type;
+                // Keep a broadcast source broadcast. This operator maps input rows
+                // to output rows one for one, so a constant column stays constant;
+                // materialising it into a FLAT column instead costs row_count deep
+                // copies of the same value. When that value is a collected list --
+                // LDBC complex-5/6/9 all do `WITH collect(...) AS xs UNWIND xs AS x`
+                // and then never read xs again -- those copies are what turned a
+                // 671 MB query into one that exceeded 6 GB.
+                if (src.isConstant()) {
+                    output.columns.push_back(Column::constant(src.getValue(0)));
+                    continue;
+                }
+            }
             output.columns.push_back(Column::flat(kind, row_count));
         }
         output.count = row_count;
@@ -380,6 +393,11 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 const auto& spec = specs_[i];
                 switch (spec.kind) {
                 case ColumnSpec::Kind::Passthrough: {
+                    // A broadcast source was installed as a CONSTANT column above; its
+                    // single value already serves every row, and writing to it would
+                    // overwrite the broadcast for all of them.
+                    if (output.columns[i].isConstant())
+                        break;
                     // Pure pass-through: copy the typed payload directly instead of
                     // getValue (which builds a Value, deep-copying the payload) followed
                     // by setValue (which copies it again out of that Value).

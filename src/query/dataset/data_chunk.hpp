@@ -437,6 +437,14 @@ struct Column {
             buffer->setValid(i);
     }
 
+    /// True when every row of this column returns the same stored value. Callers
+    /// that would otherwise materialise a per-row copy can keep the broadcast form
+    /// instead -- for a heavy payload that is the difference between one copy and
+    /// row_count copies.
+    bool isConstant() const {
+        return form == VectorForm::CONSTANT;
+    }
+
     // ── Value access ──
 
     /// Extract the value at logical row i as a runtime Value.
