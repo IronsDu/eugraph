@@ -56,7 +56,10 @@ folly::coro::AsyncGenerator<DataChunk> LeftJoinPhysicalOp::executeChunk() {
                         output.columns[lc].setValue(output.count, left_chunk->getValue(lc, i));
                     }
                     for (size_t rc = 0; rc < right_cols; ++rc) {
-                        output.columns[left_cols + rc].setValue(output.count, right_chunk->getValue(rc, ri));
+                        // Same shape as the ProjectionExtract pass-through: the value is
+                        // only relocated, so copy it typed and skip the Value round-trip.
+                        if (!output.columns[left_cols + rc].copyValueFrom(right_chunk->columns[rc], ri, output.count))
+                            output.columns[left_cols + rc].setValue(output.count, right_chunk->getValue(rc, ri));
                     }
                     output.count++;
 

@@ -801,6 +801,31 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 if (v)
                     collectExprReqs(v->list_expr, reqs, resolver, "", label_defs);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
+                // A comprehension walks its patterns for MATCHING only; the
+                // properties of the vertices it touches are never read. Collect
+                // requirements from the LEFT side (the correlation inputs, which
+                // real consumers may still need as whole objects) but do NOT
+                // descend into the RIGHT sub-plan: doing so marked its loop
+                // variable as need_whole_vertex, and for LDBC's
+                //   WITH collect(post) AS posts, p
+                //   RETURN size([x IN posts WHERE (x)-[:HAS_TAG]->()])
+                // that made the planner emit ConstructVertex, so each of 18321
+                // posts built a full VertexValue whose property map was empty
+                // (measured: 80% of samples in alloc/free, +3460 ms on the query).
+                //
+                // This is the same idea as current_skip above -- a comprehension's
+                // variable must not demand whole-object materialisation -- applied
+                // to the comprehension as a whole. current_skip could not express
+                // it because the marking happens while walking the right
+                // sub-plan's Unwind and Filter, not within a single expression.
+                //
+                // The right side still gets its own requirements from its own
+                // traversal elsewhere; skipping it here only removes the
+                // whole-object demand it would raise on the outer variables it
+                // names, which no consumer reads.
+                collectOpReqs(v->left, reqs, resolver, label_defs);
+                return;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>>) {
                 if (v) {
                     for (const auto& item : v->items) {

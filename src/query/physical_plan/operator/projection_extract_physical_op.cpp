@@ -352,15 +352,39 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             std::unordered_map<size_t, EdgeValue> edge_obj;
             // source_col → resolved labels (LoadVertexLabels / ConstructVertex)
             std::unordered_map<size_t, LabelIdSet> labels;
+
+            /// Reset for the next row. The maps keep their bucket arrays, which is
+            /// the point: constructing a fresh RowCache per row made every first
+            /// insert allocate a bucket array, and the per-row maps are exactly
+            /// where the profiler put the remaining cost (the emplace into
+            /// edge_obj). Values are owned by the maps, so clearing releases them
+            /// and leaves nothing dangling.
+            void clear() {
+                vid_col = SIZE_MAX;
+                vid = INVALID_VERTEX_ID;
+                eid_col = SIZE_MAX;
+                eid = INVALID_EDGE_ID;
+                eid_label = INVALID_EDGE_LABEL_ID;
+                vertex_obj.clear();
+                edge_obj.clear();
+                labels.clear();
+            }
         };
 
+        // Reused across rows so the maps' bucket arrays are allocated once per
+        // chunk rather than once per row.
+        RowCache rc;
         for (size_t row = 0; row < row_count; ++row) {
-            RowCache rc;
+            rc.clear();
             for (size_t i = 0; i < n_specs; ++i) {
                 const auto& spec = specs_[i];
                 switch (spec.kind) {
                 case ColumnSpec::Kind::Passthrough: {
-                    output.columns[i].setValue(row, chunk->columns[spec.source_col].getValue(row));
+                    // Pure pass-through: copy the typed payload directly instead of
+                    // getValue (which builds a Value, deep-copying the payload) followed
+                    // by setValue (which copies it again out of that Value).
+                    if (!output.columns[i].copyValueFrom(chunk->columns[spec.source_col], row, row))
+                        output.columns[i].setValue(row, chunk->columns[spec.source_col].getValue(row));
                     break;
                 }
                 case ColumnSpec::Kind::LoadVertexProp: {
@@ -441,7 +465,12 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                 }
                 case ColumnSpec::Kind::ConstructVertex: {
                     if (row < vertex_ctor_cache[i].size() && vertex_ctor_cache[i][row].has_value()) {
-                        output.columns[i].setValue(row, Value(*vertex_ctor_cache[i][row]));
+                        // The cache entry is keyed by (spec, row) and consumed exactly
+                        // once, so hand the VertexValue over instead of deep-copying it
+                        // into a Value first -- the payload owns an
+                        // unordered_map<LabelId, Properties>.
+                        if (!output.columns[i].setVertexValue(row, std::move(*vertex_ctor_cache[i][row])))
+                            output.columns[i].setValue(row, Value(*vertex_ctor_cache[i][row]));
                     } else {
                         output.columns[i].setNull(row);
                     }
@@ -476,7 +505,12 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         rc.eid_label = ev.label_id;
                         eit = rc.edge_obj.emplace(spec.source_col, std::move(ev)).first;
                     }
-                    output.columns[i].setValue(row, Value(eit->second));
+                    // eit->second may be reused by a later spec naming the same
+                    // source column, so copy rather than move -- but assign the typed
+                    // payload directly instead of wrapping it in a Value, which would
+                    // deep-copy it once more.
+                    if (!output.columns[i].setEdgeValue(row, eit->second))
+                        output.columns[i].setValue(row, Value(eit->second));
                     break;
                 }
                 }

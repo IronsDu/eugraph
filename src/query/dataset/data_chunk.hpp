@@ -3,9 +3,16 @@
 #include "query/dataset/row.hpp"
 #include "query/planner/bound_type.hpp"
 
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -201,7 +208,47 @@ struct ColumnBuffer {
         return Value{};
     }
 
+    /// Set row i from a runtime Value.
+    ///
+    /// Two overloads: const& copies the active alternative out of the variant,
+    /// && moves it. The move overload matters because callers often hold a Value
+    /// they already own and are done with -- notably UNWIND walking a list it
+    /// copied locally -- and a single const& signature forced a deep copy at the
+    /// call boundary anyway. For the entity alternatives that copy is an
+    /// unordered_map<LabelId, Properties> clone.
     void setValue(size_t i, const Value& val) {
+        setValueImpl(i, val);
+    }
+
+    void setValue(size_t i, Value&& val) {
+        setValueImpl(i, std::move(val));
+    }
+
+    /// Assign a typed payload directly, skipping the Value variant entirely.
+    ///
+    /// Callers that already hold the concrete type (a constructed VertexValue or
+    /// EdgeValue, a resolved label set) previously had to wrap it in a Value to
+    /// reach setValue, which deep-copied the payload a second time -- for an
+    /// entity that means cloning its unordered_map<LabelId, Properties>. These
+    /// overloads assign straight into the typed vector, leaving the single copy
+    /// that storing the value inherently requires.
+    void setVertexValue(size_t i, const VertexValue& v) {
+        setValid(i);
+        vertex_data[i] = v;
+    }
+
+    void setVertexValue(size_t i, VertexValue&& v) {
+        setValid(i);
+        vertex_data[i] = std::move(v);
+    }
+
+    void setEdgeValue(size_t i, const EdgeValue& v) {
+        setValid(i);
+        edge_data[i] = v;
+    }
+
+private:
+    template <typename V> void setValueImpl(size_t i, V&& val) {
         if (::eugraph::isNull(val)) {
             setNull(i);
             return;
@@ -226,39 +273,39 @@ struct ColumnBuffer {
             break;
         case binder::BoundTypeKind::STRING:
             if (std::holds_alternative<std::string>(val))
-                string_data[i] = std::get<std::string>(val);
+                string_data[i] = std::get<std::string>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::VERTEX_REF:
             if (std::holds_alternative<VertexRef>(val))
-                vertex_ref_data[i] = std::get<VertexRef>(val);
+                vertex_ref_data[i] = std::get<VertexRef>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::EDGE_KEY:
             if (std::holds_alternative<EdgeKey>(val))
-                edge_key_data[i] = std::get<EdgeKey>(val);
+                edge_key_data[i] = std::get<EdgeKey>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::PATH_TOPOLOGY:
             if (std::holds_alternative<PathTopology>(val))
-                path_topology_data[i] = std::get<PathTopology>(val);
+                path_topology_data[i] = std::get<PathTopology>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::VERTEX:
             if (std::holds_alternative<VertexValue>(val))
-                vertex_data[i] = std::get<VertexValue>(val);
+                vertex_data[i] = std::get<VertexValue>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::EDGE:
             if (std::holds_alternative<EdgeValue>(val))
-                edge_data[i] = std::get<EdgeValue>(val);
+                edge_data[i] = std::get<EdgeValue>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::PATH:
             if (std::holds_alternative<PathValue>(val))
-                path_data[i] = std::get<PathValue>(val);
+                path_data[i] = std::get<PathValue>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::LIST:
             if (std::holds_alternative<ListValue>(val))
-                list_data[i] = std::get<ListValue>(val);
+                list_data[i] = std::get<ListValue>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::MAP:
             if (std::holds_alternative<MapValue>(val))
-                map_data[i] = std::get<MapValue>(val);
+                map_data[i] = std::get<MapValue>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::DATETIME:
         case binder::BoundTypeKind::TIME:
@@ -266,7 +313,7 @@ struct ColumnBuffer {
         case binder::BoundTypeKind::ANY:
         case binder::BoundTypeKind::NULL_TYPE:
             if (i < any_data.size())
-                any_data[i] = val;
+                any_data[i] = std::forward<V>(val);
             break;
         }
     }
@@ -409,8 +456,143 @@ struct Column {
     /// Only valid for FLAT columns. DICTIONARY columns are read-only
     /// (they share data with another column).
     void setValue(size_t i, const Value& val) {
+        setValueImpl(i, val);
+    }
+
+    /// Move form: avoids copying the alternative out of the variant. See
+    /// ColumnBuffer::setValue for why this matters for entity alternatives.
+    void setValue(size_t i, Value&& val) {
+        setValueImpl(i, std::move(val));
+    }
+
+    /// Copy src's value at src_row into this column's dst_row without routing
+    /// through a Value.
+    ///
+    /// The getValue/setValue pair deep-copies twice for a pure pass-through -- once
+    /// building the variant, once assigning out of it. This copies the typed payload
+    /// once. Returns false when the fast path does not apply (kind mismatch,
+    /// non-FLAT forms, or out-of-range rows), leaving the caller to fall back, so
+    /// behaviour is unchanged wherever it declines.
+    bool copyValueFrom(const Column& src, size_t src_row, size_t dst_row) {
+        if (form != VectorForm::FLAT || src.form != VectorForm::FLAT)
+            return false;
+        if (type != src.type || !buffer || !src.buffer)
+            return false;
+        if (dst_row >= buffer->capacity || src_row >= src.buffer->capacity)
+            return false;
+        if (src.buffer->isNull(src_row)) {
+            setNull(dst_row);
+            return true;
+        }
+        switch (type) {
+#define EUGRAPH_COPY_TYPED(KIND, MEMBER)                                                                               \
+    case binder::BoundTypeKind::KIND:                                                                                  \
+        buffer->MEMBER##_data[dst_row] = src.buffer->MEMBER##_data[src_row];                                           \
+        break;
+            EUGRAPH_COPY_TYPED(INT64, int64)
+            EUGRAPH_COPY_TYPED(DOUBLE, double)
+            EUGRAPH_COPY_TYPED(STRING, string)
+            EUGRAPH_COPY_TYPED(BOOL, bool)
+            EUGRAPH_COPY_TYPED(VERTEX_REF, vertex_ref)
+            EUGRAPH_COPY_TYPED(EDGE_KEY, edge_key)
+            EUGRAPH_COPY_TYPED(PATH_TOPOLOGY, path_topology)
+            EUGRAPH_COPY_TYPED(VERTEX, vertex)
+            EUGRAPH_COPY_TYPED(EDGE, edge)
+            EUGRAPH_COPY_TYPED(PATH, path)
+            EUGRAPH_COPY_TYPED(LIST, list)
+            EUGRAPH_COPY_TYPED(MAP, map)
+#undef EUGRAPH_COPY_TYPED
+        default:
+            return false;
+        }
+        setValid(dst_row);
+        return true;
+    }
+
+    /// Borrow the ListValue at logical row i without copying it.
+    ///
+    /// Returns nullptr when row i holds no list. The pointer aliases this column's
+    /// storage, so it is valid only while the column lives and is not written to --
+    /// exactly what a caller iterating the list once, immediately, needs. Use it
+    /// instead of getValue() when the list is only read: getValue returns a Value by
+    /// value, which deep-copies the element vector.
+    ///
+    /// Mutable form additionally requires sole ownership of the buffer: a FLAT
+    /// column can share its ColumnBuffer (see the DICTIONARY form), and handing out
+    /// a mutable reference into shared storage would let the caller move elements
+    /// out from under another reader.
+    const ListValue* borrowList(size_t i) const {
+        return borrowListImpl(i);
+    }
+
+    ListValue* borrowList(size_t i) {
+        if (form != VectorForm::FLAT || !buffer || buffer.use_count() != 1)
+            return nullptr;
+        return borrowListImplMut(i);
+    }
+
+    /// Typed payload assignment, skipping the Value variant. Returns false when
+    /// this column cannot hold the payload (wrong kind, or a read-only DICTIONARY
+    /// form), leaving the caller to fall back to the Value path. The point is to
+    /// avoid the extra deep copy that wrapping in a Value costs -- for an entity
+    /// that copy clones its unordered_map<LabelId, Properties>.
+    bool setVertexValue(size_t i, const VertexValue& v) {
+        return setTypedImpl(binder::BoundTypeKind::VERTEX, [&](ColumnBuffer& b) { b.setVertexValue(i, v); });
+    }
+
+    bool setVertexValue(size_t i, VertexValue&& v) {
+        return setTypedImpl(binder::BoundTypeKind::VERTEX, [&](ColumnBuffer& b) { b.setVertexValue(i, std::move(v)); });
+    }
+
+    bool setEdgeValue(size_t i, const EdgeValue& v) {
+        return setTypedImpl(binder::BoundTypeKind::EDGE, [&](ColumnBuffer& b) { b.setEdgeValue(i, v); });
+    }
+
+private:
+    /// Non-const twin of borrowListImpl. Kept separate rather than casting away
+    /// constness so the mutable path is visible at the point it is granted; its
+    /// caller has already established FLAT form and sole buffer ownership.
+    ListValue* borrowListImplMut(size_t i) {
+        if (type != binder::BoundTypeKind::LIST || form != VectorForm::FLAT || !buffer)
+            return nullptr;
+        if (i >= buffer->list_data.size())
+            return nullptr;
+        return &buffer->list_data[i];
+    }
+
+    const ListValue* borrowListImpl(size_t i) const {
+        if (type != binder::BoundTypeKind::LIST)
+            return nullptr;
         if (form == VectorForm::CONSTANT) {
-            constant_value = val;
+            const auto* lv = std::get_if<ListValue>(&constant_value);
+            return lv;
+        }
+        if (!buffer)
+            return nullptr;
+        const size_t physical = (form == VectorForm::DICTIONARY) ? dict_sel[i] : i;
+        if (physical >= buffer->list_data.size())
+            return nullptr;
+        return &buffer->list_data[physical];
+    }
+
+    /// Shared plumbing for the typed setters: validate the column kind and form,
+    /// make sure a buffer exists, then let the caller assign into it. The row index
+    /// is deliberately not a parameter -- the caller's lambda captures it, and
+    /// taking it here only to ignore it trips -Wunused-parameter.
+    template <typename Assign> bool setTypedImpl(binder::BoundTypeKind expected, Assign&& assign) {
+        if (type != expected || form == VectorForm::DICTIONARY)
+            return false;
+        if (!buffer) {
+            buffer = std::make_shared<ColumnBuffer>();
+            buffer->type = type;
+        }
+        assign(*buffer);
+        return true;
+    }
+
+    template <typename V> void setValueImpl(size_t i, V&& val) {
+        if (form == VectorForm::CONSTANT) {
+            constant_value = std::forward<V>(val);
             return;
         }
         if (form == VectorForm::DICTIONARY)
@@ -419,9 +601,10 @@ struct Column {
             buffer = std::make_shared<ColumnBuffer>();
             buffer->type = type;
         }
-        buffer->setValue(i, val);
+        buffer->setValue(i, std::forward<V>(val));
     }
 
+public:
     /// Number of allocated rows in the buffer (FLAT form only).
     size_t capacity() const {
         if (!buffer)
