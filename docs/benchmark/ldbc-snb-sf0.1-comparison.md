@@ -115,6 +115,43 @@ CONSTANT 广播列重新逐行物化成 FLAT，于是「1 份值」变成 `行�
 **行数一致**说明两个引擎的**结果正确**（complex-6 与 complex-9 逐行内容未逐条比对，
 但行数与首行一致）。**complex-5 是当前最大差距**：neo4j 96 ms 完成，eugraph 200 s 不返回。
 
+### complex-5 不返回的根因（2026-09-19，已定位）
+
+**CPU 121%（4 线程上限 400%），内存仅 1.1 GB** —— 是 CPU 密集而非内存问题，
+与 complex-6/9 的分配爆炸**根因完全不同**。
+
+GDB 采样 40 次（11 个执行中线程）：
+
+| 算子 | 占比 |
+|---|---:|
+| `ProjectionExtractPhysicalOp` | 45.5% |
+| **`CrossProductPhysicalOp`** | **27.3%** |
+| `FilterPhysicalOp` | 18.2% |
+| `ExpandPhysicalOp` | 9.1% |
+
+计划里出现 **`CrossProduct`**，位置在 **`LeftJoin` 的右支**（即 `OPTIONAL MATCH` 的子计划）：
+
+```
+LeftJoin
+  └─ 右支：CorrelatedSource(forum, friends) → CrossProduct → Filter
+                                            └─ VarLenExpand(person → friend, hops=[1..2])
+                                                 ← 从 IndexScan(person) 重新展开整个 1-2 跳 KNOWS 邻域
+```
+
+**问题**：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)<-[:CONTAINER_OF]-(forum)
+WHERE friend IN friends` 中的 **`friend` 是 OPTIONAL MATCH 新引入的变量**，并非外层收集进
+`friends` 的那个。规划器因此**从 `IndexScan(person)` 重新做一遍 `KNOWS*1..2` 展开**来得到候选
+`friend`，再与外层的 `forum` 做**笛卡尔积**，最后才用 `friend IN friends` 过滤。
+
+**代价**：每个 forum × 重新展开的 174 个 friend，而 forum 有 13750 个 → 永不返回。
+
+**正确方向**：让 `friend IN friends` **驱动**计划而非事后过滤 ——
+
+1. **迭代列表**：`CorrelatedSource(friends) → Unwind(friends AS friend)
+   → Expand(friend←HAS_CREATOR-post) → Expand(post←CONTAINER_OF-forum) → 校验 forum`；或
+2. **半连接**：以 `friends` 为 hash 表对 `friend` 做 semi-join；
+3. 至少应**复用**外层已算出的 `friends`，而非重新展开 `KNOWS*1..2`。
+
 **complex-5 剩余问题**（未修）：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)
 <-[:CONTAINER_OF]-(forum) WHERE friend IN friends` 未完成 —— 需查 join order /
 `IN` 谓词下推，与内存无关。
