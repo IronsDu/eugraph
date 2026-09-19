@@ -198,6 +198,46 @@ RETURN count(post)
 应以**该列表驱动**（`Unwind(list AS x)` → 再展开其模式），而不是「扫描全部 + 笛卡尔积 + 事后过滤」。
 这是**计划改写**层的改动，且 `Unwind` 算子已存在、刚优化过透传。
 
+### 修复入口已定位：`bind_match.cpp` 的 `first_node_bound` 判断
+
+`bind_match.cpp:1991` 已有**同类修复**，但**未覆盖 complex-5 的情形**：
+
+```cpp
+const bool first_node_bound = /* 模式首个节点是否已绑定 */;
+
+// 注释原文：若起始节点已绑定，就从它继续模式，即使另一端也已绑定 ——
+// 重新扫描起始节点并用 CrossProduct 连接两端，会把一次有界查找
+// 变成大得多的 AllNodeScan/CrossProduct 计划（见 TCK Match7[9] 与 SHORT-7）
+if (!bound_vars.empty() && first_node_bound) { /* 从绑定节点继续 */ }
+```
+
+complex-5 的 OPTIONAL MATCH 模式是
+`(friend)<-[:HAS_CREATOR]-(post)<-[:CONTAINER_OF]-(forum)`：
+
+| 节点 | 绑定状态 |
+|---|---|
+| `friend`（**首个**）| **未绑定** |
+| `post` | 未绑定 |
+| `forum` | **已绑定**（来自外层 `WITH forum, ...`）|
+
+`first_node_bound == false` → 落入 `else`：**扫描未绑定的起始节点 → 与已有行 CrossProduct
+→ 事后 `friend IN friends` 过滤**。
+
+**即：代码已解决「首节点已绑定」，但未解决「首节点未绑定、而模式中其他节点已绑定」。**
+
+**修复形态**：首个节点未绑定时，**在模式中寻找任一已绑定节点作为起点**（此处 `forum`），
+从它向前展开：
+
+```
+forum → Expand(CONTAINER_OF, IN) → post → Expand(HAS_CREATOR, IN) → friend → Filter(friend IN friends)
+```
+
+**预期代价**：每个 forum 展开其约 20 条 post（271,402 / 13,750），合计约 27 万次展开，
+而非「13,750 × 扫描全部节点」。
+
+**判据**：complex-5 应从「永不返回」变为与 neo4j 同量级（**~96 ms / 20 行**）；
+上面的探测查询应从 **16.0 s** 降到亚秒。
+
 **complex-5 剩余问题**（未修）：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)
 <-[:CONTAINER_OF]-(forum) WHERE friend IN friends` 未完成 —— 需查 join order /
 `IN` 谓词下推，与内存无关。
