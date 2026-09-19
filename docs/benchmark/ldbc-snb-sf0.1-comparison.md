@@ -92,6 +92,29 @@ CONSTANT 广播列重新逐行物化成 FLAT，于是「1 份值」变成 `行�
 修复：`ProjectionExtractPhysicalOp` 对 CONSTANT 源列的透传**保持 CONSTANT**
 （该算子输入输出行 1:1，故广播形式仍成立）。详见该修复的提交说明。
 
+### complex-5/6/9 与 neo4j 对比（2026-09-19，personId=933）
+
+**测量前对 neo4j 实例补了三处数据差异**（与此前补 `City`/`Country`/`Continent`、`birthday`
+的做法一致）—— 否则 neo4j 侧的耗时无意义：
+
+| 差异 | neo4j 原状 | 补齐 |
+|---|---|---|
+| 派生标签 `Message` | **不存在**（警告 `label does not exist`），complex-9 返回 0 行 | `MATCH (n:Post) SET n:Message` + `Comment` 同理 → **286,744**，与 eugraph 一致 |
+| `Message.creationDate` | **字符串** | `toInteger()` → complex-9 的 `WHERE creationDate < $maxDate` 才能生效 |
+| `HAS_MEMBER.joinDate` | **字符串** | `toInteger()` → complex-5 的 `WHERE joinDate > $minDate` 才能生效 |
+
+> 后两处与文档早先记录的 `birthday` 是同一类问题：旧转换把 LONG 表头当字符串处理。
+> **补之前**：complex-9 与 complex-5 在 neo4j 上均返回 **0 行**（耗时 13–28 ms，无参考价值）。
+
+| 查询 | eugraph | neo4j | 倍数 | 行数（eugraph / neo4j）|
+|---|---:|---:|---:|:---:|
+| **complex-6** | 0.49 s | **30.8 ms**（median 35.6） | ~16× | **3 / 3** ✅ |
+| **complex-9** | 3.96 s | **36.9 ms**（median 40.4） | ~107× | **20 / 20** ✅ |
+| **complex-5** | 未完成（>200 s） | **92.3 ms**（median 96.6） | — | — / 20 |
+
+**行数一致**说明两个引擎的**结果正确**（complex-6 与 complex-9 逐行内容未逐条比对，
+但行数与首行一致）。**complex-5 是当前最大差距**：neo4j 96 ms 完成，eugraph 200 s 不返回。
+
 **complex-5 剩余问题**（未修）：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)
 <-[:CONTAINER_OF]-(forum) WHERE friend IN friends` 未完成 —— 需查 join order /
 `IN` 谓词下推，与内存无关。
