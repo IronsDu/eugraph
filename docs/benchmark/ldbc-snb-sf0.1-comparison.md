@@ -152,6 +152,26 @@ WHERE friend IN friends` 中的 **`friend` 是 OPTIONAL MATCH 新引入的变量
 2. **半连接**：以 `friends` 为 hash 表对 `friend` 做 semi-join；
 3. 至少应**复用**外层已算出的 `friends`，而非重新展开 `KNOWS*1..2`。
 
+### 附带发现：`WITH collect(...) AS list` 后列表在裸 OPTIONAL MATCH 的 WHERE 里不可见
+
+尝试用最小形态隔离 complex-5 时发现一个**独立缺陷**（与交叉积无关）：
+
+```cypher
+MATCH (p:Person {id:933})-[:KNOWS*1..2]-(f:Person) WHERE NOT p=f
+WITH collect(DISTINCT f) AS friends
+OPTIONAL MATCH (x)<-[:HAS_CREATOR]-(post:Post)
+WHERE x IN friends                    // ← 报错
+RETURN count(post)
+```
+
+```
+Binding failed; UndefinedVariable: Variable 'friends' not defined
+```
+
+`friends` 由上一条 `WITH` 定义，理应在此可见。complex-5 之所以不报该错，是因为它的
+`WITH` 同时携带了分组键 `forum`（`WITH forum, collect(friend) AS friends`）——
+疑似「聚合结果列在该子句作用域内的可见性」问题，值得单独定位。
+
 **complex-5 剩余问题**（未修）：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)
 <-[:CONTAINER_OF]-(forum) WHERE friend IN friends` 未完成 —— 需查 join order /
 `IN` 谓词下推，与内存无关。
