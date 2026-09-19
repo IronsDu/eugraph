@@ -238,6 +238,44 @@ forum → Expand(CONTAINER_OF, IN) → post → Expand(HAS_CREATOR, IN) → frie
 **判据**：complex-5 应从「永不返回」变为与 neo4j 同量级（**~96 ms / 20 行**）；
 上面的探测查询应从 **16.0 s** 降到亚秒。
 
+### 尝试实施 HashJoin 改写：定位到关键障碍，但引入 SIGSEGV，已回退
+
+**已验证的事实（插桩实测，与上一节的推断有出入）**：
+
+| 检查 | 结果 |
+|---|---|
+| `bindMatch` 走哪个分支 | **Branch 2**（"First node is new but later variables are bound"）|
+| `bindCrossWithEqualities` 是否生成等值 | ✅ **是** —— `left_scope: friends forum`、`right_scope: post forum …`、**`shared=1 equalities=1`** |
+| 物理规划器看到的谓词 | `op=6`（`EQ`），但**两个操作数都不是列引用** |
+
+**关键障碍**：`makeEqualityExpr` 对**图实体**会把两侧包进 `id()`：
+
+```cpp
+if (isGraphEntity(left.type.kind) || isGraphEntity(right.type.kind)) {
+    bin->left  = wrapId(left);    // id(__eq_left__forum)
+    bin->right = wrapId(right);   // id(__eq_right__forum)
+}
+```
+
+所以等值的操作数是 `BoundFunctionCall`，**不是 `BoundColumnRef`** ——
+基于「列引用」的识别（`__eq_left__` 前缀）永远不会命中。
+
+**已实施的改写**（`tryPlanCrossEqualityHashJoin`，接在既有 `tryPlanListIndexJoin` 同一钩子点）：
+识别 `Filter(Cross) + 跨作用域等值` → 剥开 `id()` 包装 → 用实体列作 HashJoin 键 → 残余谓词逐条套 Filter。
+回归 **547/547 通过**，但 **complex-5 触发 SIGSEGV**（`Signal 11`，崩在查询执行路径内），
+**已全部回退**，代码恢复到未改状态。
+
+**崩溃的最可能原因（下一轮的起点）**：等值比较的是 **`id()` 的值**，而我把**实体列本身**当成了哈希键。
+哈希连接要按**值**哈希 —— 而实体的哈希（`VertexValue` / `VertexRef` 的 variant 哈希）
+与「按 id 相等」并不一致，跨类型（`VERTEX` vs `VERTEX_REF`）尤其如此。
+
+**正确的修法方向**：
+1. 哈希键应当是 **`id` 值**（数值列）—— 或
+2. 让 `HashJoinPhysicalOp` 的**哈希侧**也按 id 归一（目前它只在键**比较**上支持跨类型 id 等价，
+   哈希桶的计算可能没归一，导致同一实体落进不同桶）。
+
+**注意**：`bindCrossWithEqualityties` 生成等值这一步是**正确的**，无需改动；问题在「如何把它落成哈希连接」。
+
 **complex-5 剩余问题**（未修）：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)
 <-[:CONTAINER_OF]-(forum) WHERE friend IN friends` 未完成 —— 需查 join order /
 `IN` 谓词下推，与内存无关。
