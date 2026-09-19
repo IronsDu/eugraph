@@ -17,30 +17,46 @@ int graphEntityKind(const Value& value) {
     return 0;
 }
 
+/// Identity of a graph entity, whichever representation it arrived in.
+uint64_t entityId(const Value& value) {
+    if (std::holds_alternative<VertexRef>(value))
+        return std::get<VertexRef>(value).id;
+    if (std::holds_alternative<VertexValue>(value))
+        return std::get<VertexValue>(value).id;
+    if (std::holds_alternative<EdgeKey>(value))
+        return std::get<EdgeKey>(value).id;
+    return std::get<EdgeValue>(value).id;
+}
+
 bool joinValueEquals(const Value& a, const Value& b) {
     int kind_a = graphEntityKind(a);
     int kind_b = graphEntityKind(b);
-    if (kind_a != 0 && kind_a == kind_b) {
-        auto entityId = [](const Value& value) -> uint64_t {
-            if (std::holds_alternative<VertexRef>(value))
-                return std::get<VertexRef>(value).id;
-            if (std::holds_alternative<VertexValue>(value))
-                return std::get<VertexValue>(value).id;
-            if (std::holds_alternative<EdgeKey>(value))
-                return std::get<EdgeKey>(value).id;
-            return std::get<EdgeValue>(value).id;
-        };
+    if (kind_a != 0 && kind_a == kind_b)
         return entityId(a) == entityId(b);
-    }
     auto eq = valueEquals(a, b);
     return eq && *eq;
+}
+
+/// Hash of one key element, normalised the same way joinValueEquals compares.
+///
+/// The two must agree: an unordered_map requires that equal keys hash equally.
+/// Hashing the raw Value broke that for entities -- VertexRef{id} and
+/// VertexValue{id} compare equal but landed in different buckets, so a matching
+/// pair could be silently missed rather than merely costing a comparison. This
+/// path is reached whenever one side is still a topology reference while the
+/// other has been materialised, which is the normal state after a projection
+/// extract.
+size_t joinValueHash(const Value& value) {
+    if (graphEntityKind(value) != 0)
+        return std::hash<uint64_t>{}(entityId(value));
+    return ValueHash{}(value);
 }
 
 struct KeyHash {
     size_t operator()(const Key& k) const noexcept {
         size_t h = 0x9e3779b9;
         for (const auto& v : k)
-            h ^= ValueHash{}(v) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= joinValueHash(v) + 0x9e3779b9 + (h << 6) + (h >> 2);
         return h;
     }
 };
