@@ -276,6 +276,43 @@ if (isGraphEntity(left.type.kind) || isGraphEntity(right.type.kind)) {
 
 **注意**：`bindCrossWithEqualityties` 生成等值这一步是**正确的**，无需改动；问题在「如何把它落成哈希连接」。
 
+### HashJoin 改写：两次尝试均崩溃，未落地；但途中修掉一个真实的边哈希缺陷
+
+**已落地的独立修复**（`b96ff738`）：`HashJoinPhysicalOp` 的 `KeyHash` 与 `KeyEq`
+**不满足哈希表不变式**（相等的键必须哈希相同）：
+
+| 类型 | `ValueHash` | 与 `joinValueEquals` 是否一致 |
+|---|---|---|
+| `VertexRef` → `hash(id)`；`VertexValue` → `hash(id)` | **相同** | ✅ 一致，**无缺陷** |
+| `EdgeKey` → `hash(id)^hash(src)^hash(dst)`；`EdgeValue` → `hash(id)` | **不同** | ❌ **相等的边可能落进不同桶 → 静默漏匹配** |
+
+> **更正**：我最初的提交说明称 `VertexRef`/`VertexValue` 也会漏匹配 —— **那是错的**，
+> 二者都只按 id 哈希。缺陷**只存在于边**（`EdgeKey` vs `EdgeValue`）。已在提交说明中更正。
+
+修复：`KeyHash` 复用与比较相同的归一（`entityId()`），`query_executor_tests` **547/547**。
+
+**complex-5 的改写未落地**（两次尝试均 SIGSEGV，已完整回退）：
+
+| 尝试 | 结果 |
+|---|---|
+| 1. 直接用实体列作哈希键 | SIGSEGV |
+| 2. 加键索引范围防护后重试 | SIGSEGV |
+| 3. 移走谓词后补 `true` 填洞 | SIGSEGV（延后到 6.07s，位置不同）|
+
+**gdb 定位到的崩溃点**（第 1、2 次）：
+
+```
+#3 remapExprColumnIndices at physical_planner.cpp:420
+   → variant [index 9] = unique_ptr<BoundFunctionCall>   ← 空指针解引用
+#9 remapLogicalOpColumnIndices → #10 operator()<BoundBinaryJoinOp>
+```
+
+即：**移走谓词内容后，原逻辑计划树里留下空的 `unique_ptr`，而后续的重映射遍历会解引用它们**。
+第 3 次补了填洞与空值守卫后仍崩（时间点不同），说明还有**第二处**此类问题未定位。
+
+**结论**：这条路径需要更系统的处理（移动语义与计划树遍历的交互），不是一次局部改动能收口的。
+本次**未提交任何会崩溃的代码**，分支只保留分析结论与那个已验证的边哈希修复。
+
 **complex-5 剩余问题**（未修）：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)
 <-[:CONTAINER_OF]-(forum) WHERE friend IN friends` 未完成 —— 需查 join order /
 `IN` 谓词下推，与内存无关。
