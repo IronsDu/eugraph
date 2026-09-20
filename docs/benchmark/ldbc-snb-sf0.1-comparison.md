@@ -358,6 +358,20 @@ return {&col, true};
 或直接从崩溃点的 `frame 0` 取出 `val` 的 **variant index** 与内容，
 定位是哪个表达式节点 —— 这比继续加防御性检查更有信息量。
 
+### 第三次尝试（最小改动）：修正 `join_type` 的代价模型输入 —— 计划未变，已撤回
+
+思路：`bindCrossWithEqualities` 有等值却标 `JoinType::Cross`，而代价模型对两者区别对待
+（`log_prop.cpp:382`：`Cross` 估 `left × right`，`Inner` 再乘 `kDefaultSelectivity`），
+基数估计差数量级，**理应影响连接顺序决策**。改动仅 2 行且**语义等价**
+（Inner = Cross + 等值过滤，正是该函数所构造的）。
+
+**结果**：`query_executor_tests` **547/547** 通过、服务**不再崩溃**，但
+**计划完全没变**（`EXPLAIN` 仍是 1 个 `CrossProduct`、0 个 `HashJoin`），查询依然不返回。
+
+**因此该改动无效**：该子树位于相关子计划内，优化器**没有可选的替代计划**，
+基数估计的修正无从发挥。且它**改变代价模型输入**、可能影响其他查询的计划，
+而 547/547 通过**不能证明计划等价** —— **已撤回**，未提交。
+
 **complex-5 剩余问题**（未修）：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)
 <-[:CONTAINER_OF]-(forum) WHERE friend IN friends` 未完成 —— 需查 join order /
 `IN` 谓词下推，与内存无关。
