@@ -9,6 +9,12 @@ on:
 env:
   # 原 code-quality.yml 的顶层 env（asan / ubsan / static-analysis 会用到）
   BUILD_TYPE: Debug
+  # vcpkg 二进制缓存放到 workflow 级：cmake --preset=... 会在 CMake 内部再触发一次
+  # manifest 安装，那种"隐式安装"不在任何步骤的 env 里，缺了这行就会从源码重建
+  # folly/fbthrift（build-gcc / coverage / asan / ubsan 都因此很慢）。
+  # 前置步骤 actions/github-script 已把 ACTIONS_CACHE_URL / ACTIONS_RUNTIME_TOKEN
+  # 导出到后续步骤，x-gha 后端才能生效。
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
 jobs:
   # Ubuntu with GCC
@@ -268,10 +274,6 @@ jobs:
     # undefined reference。CI 实测：clang 装的 folly 里 coro::Mutex/unlock、Baton、 
     # resumeCoroutineWithNewAsyncStackRoot 计数全为 0，archive 只有 188MB（GCC 那份 350MB）。
     - name: Install vcpkg dependencies (GCC)
-      env:
-        # 不带这个，vcpkg 既读不到也写不了 GitHub Actions 二进制缓存，
-        # 每次都会从源码重建 folly/fbthrift（clang 作业因此极慢）。
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
       run: |
         ./vcpkg/vcpkg install --triplet x64-linux \
           --x-install-root="$PWD/build/clang-release/vcpkg_installed"
