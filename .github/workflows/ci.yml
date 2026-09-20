@@ -66,7 +66,7 @@ jobs:
       with:
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
         vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
-        runVcpkgInstall: true
+        runVcpkgInstall: false
         doNotCache: false
         vcpkgJsonGlob: vcpkg.json
         vcpkgJsonIgnores: "['**/vcpkg/**']"
@@ -147,7 +147,7 @@ jobs:
       with:
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
         vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
-        runVcpkgInstall: true
+        runVcpkgInstall: false
         doNotCache: false
         vcpkgJsonGlob: vcpkg.json
         vcpkgJsonIgnores: "['**/vcpkg/**']"
@@ -405,12 +405,6 @@ jobs:
           echo "Using cached vcpkg"
         fi
 
-    - name: Install vcpkg dependencies
-      env:
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-      run: |
-        ./vcpkg/vcpkg install --triplet=x64-linux-release
-
     - name: Configure CMake with ASan
       run: |
         mkdir build
@@ -501,6 +495,10 @@ jobs:
   ubsan:
     name: Undefined Behavior Sanitizer
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
 
     steps:
     - name: Checkout code
@@ -596,12 +594,6 @@ jobs:
           echo "Using cached vcpkg"
         fi
 
-    - name: Install vcpkg dependencies
-      env:
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-      run: |
-        ./vcpkg/vcpkg install --triplet=x64-linux-release
-
     - name: Configure CMake with UBSan
       run: |
         mkdir build
@@ -627,7 +619,15 @@ jobs:
     - name: Run tests with UBSan
       working-directory: build
       run: |
-        ctest --output-on-failure --verbose
+        ctest --output-on-failure --verbose --output-junit junit.xml
+
+    - name: Publish unit test results
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      if: always() && hashFiles('build/junit.xml') != ''
+      with:
+        files: build/junit.xml
+        check_name: Unit Test Results (UBSan)
+        comment_title: Unit Test Report (UBSan)
       env:
         UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
 
@@ -688,12 +688,6 @@ jobs:
         else
           echo "Using cached vcpkg"
         fi
-
-    - name: Install vcpkg dependencies
-      env:
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-      run: |
-        ./vcpkg/vcpkg install --triplet=x64-linux-release
 
     - name: Configure CMake and generate compile_commands.json
       run: |
