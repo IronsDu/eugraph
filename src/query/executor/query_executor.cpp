@@ -19,8 +19,10 @@ namespace eugraph {
 namespace compute {
 
 QueryExecutor::QueryExecutor(IAsyncGraphDataStore& async_data, IAsyncGraphMetaStore& async_meta, Config config)
-    : async_data_(async_data), async_meta_(async_meta), config_(config),
-      compute_pool_(std::make_shared<folly::CPUThreadPoolExecutor>(config.compute_threads)) {}
+    : async_data_(async_data), async_meta_(async_meta), config_(std::move(config)) {
+    compute_pool_ = config_.compute_pool ? config_.compute_pool
+                                         : std::make_shared<folly::CPUThreadPoolExecutor>(config_.compute_threads);
+}
 
 QueryExecutor::~QueryExecutor() = default;
 
@@ -436,20 +438,29 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         bool hasConflict = false;
         {
             GraphTxnHandle txn = co_await async_data_.beginTran();
-            async_data_.setTransaction(txn);
+            // Run the backfill on a fork of the shared store. The shared instance is
+            // used by every concurrent statement, so writing this transaction into it
+            // (the old setTransaction(txn)) both raced with them and left a dangling
+            // handle behind after commit -- GraphTxnHandle is a TxnState*, and once the
+            // address was reused by the next beginTran the stale handle aliased another
+            // live transaction, putting two coroutines on one WT session (WT's thread
+            // check aborts on that). The fork carries its own handle, exactly like the
+            // per-statement store prepareStream() builds for queries.
+            auto backfill_store = async_data_.forkTransaction(txn);
+            IAsyncGraphDataStore& store = *backfill_store;
 
             {
-                auto gen = async_data_.scanVerticesByLabel(label_def->id);
+                auto gen = store.scanVerticesByLabel(label_def->id);
                 while (auto batch = co_await gen.next()) {
                     for (auto vid : *batch) {
                         std::vector<PropertyValue> values;
                         bool allPresent = true;
                         bool conflict = false;
 
-                        auto vertex_labels = co_await async_data_.getVertexLabels(vid);
+                        auto vertex_labels = co_await store.getVertexLabels(vid);
                         for (const auto& ra : resolved) {
                             if (ra.is_strong) {
-                                auto props_opt = co_await async_data_.getVertexProperties(vid, ra.source_label_id);
+                                auto props_opt = co_await store.getVertexProperties(vid, ra.source_label_id);
                                 if (!props_opt || ra.source_prop_id >= props_opt->size() ||
                                     !(*props_opt)[ra.source_prop_id].has_value()) {
                                     allPresent = false;
@@ -471,7 +482,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                                     }
                                     if (pid == UINT16_MAX)
                                         continue;
-                                    auto props_opt = co_await async_data_.getVertexProperties(vid, lid);
+                                    auto props_opt = co_await store.getVertexProperties(vid, lid);
                                     if (!props_opt || pid >= props_opt->size() || !(*props_opt)[pid].has_value())
                                         continue;
                                     const auto& candidate = (*props_opt)[pid].value();
@@ -505,7 +516,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                             continue;
 
                         if (stmt.unique) {
-                            bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
+                            bool constraint_ok = co_await store.checkUniqueConstraint(table, values);
                             if (!constraint_ok) {
                                 spdlog::warn("Unique index '{}' backfill found duplicate value on vertex {}",
                                              stmt.index_name, vid);
@@ -513,14 +524,14 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                                 break;
                             }
                         }
-                        co_await async_data_.insertIndexEntry(table, values, vid);
+                        co_await store.insertIndexEntry(table, values, vid);
                     }
                     if (hasConflict)
                         break;
                 }
             } // gen destroyed before commit
 
-            co_await async_data_.commitTran(txn);
+            co_await store.commitTran(txn);
         }
 
         if (hasConflict) {
@@ -583,13 +594,16 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
         bool hasConflict = false;
         {
             GraphTxnHandle txn = co_await async_data_.beginTran();
-            async_data_.setTransaction(txn);
+            // Same reasoning as the vertex backfill above: use a fork so the shared
+            // store's transaction handle is never touched.
+            auto backfill_store = async_data_.forkTransaction(txn);
+            IAsyncGraphDataStore& store = *backfill_store;
 
             {
-                auto gen = async_data_.scanEdgesByType(edge_label_def->id, std::nullopt, std::nullopt);
+                auto gen = store.scanEdgesByType(edge_label_def->id, std::nullopt, std::nullopt);
                 while (auto batch = co_await gen.next()) {
                     for (const auto& entry : *batch) {
-                        auto props_opt = co_await async_data_.getEdgeProperties(edge_label_def->id, entry.edge_id);
+                        auto props_opt = co_await store.getEdgeProperties(edge_label_def->id, entry.edge_id);
                         // Note: getEdgeProperties not currently exposed in IAsyncGraphDataStore
                         // For now skip properties; index entries will be created when properties API is added
                         if (!props_opt.has_value())
@@ -610,7 +624,7 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                             continue;
 
                         if (stmt.unique) {
-                            bool constraint_ok = co_await async_data_.checkUniqueConstraint(table, values);
+                            bool constraint_ok = co_await store.checkUniqueConstraint(table, values);
                             if (!constraint_ok) {
                                 spdlog::warn("Unique edge index '{}' backfill found duplicate value on edge {}",
                                              stmt.index_name, entry.edge_id);
@@ -620,14 +634,14 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                         }
                         auto adj_value = ValueCodec::encodeEdgeAdjacency(entry.src_vertex_id, entry.dst_vertex_id,
                                                                          entry.seq, edge_label_def->id);
-                        co_await async_data_.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
+                        co_await store.insertIndexEntry(table, values, entry.edge_id, std::move(adj_value));
                     }
                     if (hasConflict)
                         break;
                 }
             } // gen destroyed before commit
 
-            co_await async_data_.commitTran(txn);
+            co_await store.commitTran(txn);
         }
 
         if (hasConflict) {
