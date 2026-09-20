@@ -335,6 +335,29 @@ if (isGraphEntity(left.type.kind) || isGraphEntity(right.type.kind)) {
 与规划 schema 是否一致），而不是继续试探。**本轮未提交任何会崩溃的代码**，
 两次尝试的改动均已完整回退并复验（**547/547**、服务正常）。
 
+### 更正：运行期崩溃不是「列索引越界」
+
+我先前建议「给 `evalColumnRef` 加边界检查」—— **该前提是错的**：它**已经有边界检查**：
+
+```cpp
+if (ref.column_index < input.columns.size())
+    return {&input.columns[ref.column_index], false};
+spdlog::warn("BoundColumnRef name='{}' idx={} but input has {} columns", ...);
+auto& col = acquireTempColumn(binder::BoundTypeKind::ANY, input.numRows());
+return {&col, true};
+```
+
+越界只会 **warn 并返回一个空列**，不会崩溃。所以运行期（6.33s）那次 SIGSEGV
+**另有原因** —— 崩溃点虽在 `evaluatePredicate → evaluateInternal` 的 visitor 内，
+但**不是**读取超范围列，而是该 visitor 处理的某个表达式节点本身有问题
+（候选：`BoundBinaryOp` / `BoundFunctionCall` 分支中的空指针或类型不符）。
+
+**因此 `evalColumnRef` 不需要改动**，那条建议作废。
+
+**下一步应改为**：在 `evaluateInternal` 的 visitor 各分支加空值/类型校验，
+或直接从崩溃点的 `frame 0` 取出 `val` 的 **variant index** 与内容，
+定位是哪个表达式节点 —— 这比继续加防御性检查更有信息量。
+
 **complex-5 剩余问题**（未修）：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)
 <-[:CONTAINER_OF]-(forum) WHERE friend IN friends` 未完成 —— 需查 join order /
 `IN` 谓词下推，与内存无关。
