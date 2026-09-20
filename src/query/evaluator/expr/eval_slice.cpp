@@ -41,7 +41,7 @@ void finishSlice(const ListValue& lv, int64_t from_idx, int64_t to_idx, Column& 
     for (int64_t j = from_idx; j < to_idx; ++j) {
         result_lv.elements.push_back(lv.elements[static_cast<size_t>(j)]);
     }
-    result.setValue(i, Value(std::move(result_lv)));
+    result.setValue(i, Value(mk<ListValue>(std::move(result_lv))));
 }
 } // namespace
 
@@ -57,11 +57,11 @@ void ExpressionEvaluator::evalSlice(const binder::BoundSlice& slice, const DataC
             continue;
         }
         Value val = list_eval.column->getValue(i);
-        if (!std::holds_alternative<ListValue>(val)) {
+        if (!std::holds_alternative<ListValuePtr>(val)) {
             result.setNull(i);
             continue;
         }
-        const auto& lv = std::get<ListValue>(val);
+        const auto& lv = (*std::get<ListValuePtr>(val));
 
         // Cypher: if either bound is null, the slice result is null.
         if (slice.from) {

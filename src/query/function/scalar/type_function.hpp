@@ -11,8 +11,8 @@ namespace scalar {
 
 /// type(Edge) -> String: returns the edge type name.
 inline Value typeImpl(const Value& arg, const EvalContext& ctx) {
-    if (std::holds_alternative<EdgeValue>(arg)) {
-        const auto& ev = std::get<EdgeValue>(arg);
+    if (std::holds_alternative<EdgeValuePtr>(arg)) {
+        const auto& ev = (*std::get<EdgeValuePtr>(arg));
         if (!ctx.catalog)
             return Value{};
         auto* def = ctx.catalog->lookupEdgeLabel(ev.label_id);

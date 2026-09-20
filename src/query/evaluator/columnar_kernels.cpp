@@ -102,11 +102,11 @@ void inBatch(const Column& left, const Column& right, Column& result, size_t cou
         }
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        if (!std::holds_alternative<ListValue>(rv)) {
+        if (!std::holds_alternative<ListValuePtr>(rv)) {
             result.setNull(i);
             continue;
         }
-        const auto& list = std::get<ListValue>(rv);
+        const auto& list = (*std::get<ListValuePtr>(rv));
         bool found = false;
         bool saw_null = false;
         for (const auto& elem : list.elements) {
@@ -138,23 +138,23 @@ void listConcatBatch(const Column& left, const Column& right, Column& result, si
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        if (std::holds_alternative<ListValue>(lv) && std::holds_alternative<ListValue>(rv)) {
-            ListValue result_list = std::get<ListValue>(lv);
-            const auto& rlist = std::get<ListValue>(rv);
+        if (std::holds_alternative<ListValuePtr>(lv) && std::holds_alternative<ListValuePtr>(rv)) {
+            ListValue result_list = (*std::get<ListValuePtr>(lv));
+            const auto& rlist = (*std::get<ListValuePtr>(rv));
             result_list.elements.insert(result_list.elements.end(), rlist.elements.begin(), rlist.elements.end());
-            result.setValue(i, Value(std::move(result_list)));
-        } else if (std::holds_alternative<ListValue>(lv)) {
+            result.setValue(i, Value(mk<ListValue>(std::move(result_list))));
+        } else if (std::holds_alternative<ListValuePtr>(lv)) {
             // list + scalar: append scalar as single element
-            ListValue result_list = std::get<ListValue>(lv);
+            ListValue result_list = (*std::get<ListValuePtr>(lv));
             result_list.elements.push_back(ValueStorage{rv});
-            result.setValue(i, Value(std::move(result_list)));
-        } else if (std::holds_alternative<ListValue>(rv)) {
+            result.setValue(i, Value(mk<ListValue>(std::move(result_list))));
+        } else if (std::holds_alternative<ListValuePtr>(rv)) {
             // scalar + list: prepend scalar
             ListValue result_list;
             result_list.elements.push_back(ValueStorage{lv});
-            const auto& rlist = std::get<ListValue>(rv);
+            const auto& rlist = (*std::get<ListValuePtr>(rv));
             result_list.elements.insert(result_list.elements.end(), rlist.elements.begin(), rlist.elements.end());
-            result.setValue(i, Value(std::move(result_list)));
+            result.setValue(i, Value(mk<ListValue>(std::move(result_list))));
         } else {
             result.setNull(i);
         }
@@ -173,12 +173,12 @@ void listCmpBatchImpl(const Column& left, const Column& right, Column& result, s
     for (size_t i = 0; i < count; ++i) {
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
-        if (!std::holds_alternative<ListValue>(lv) || !std::holds_alternative<ListValue>(rv)) {
+        if (!std::holds_alternative<ListValuePtr>(lv) || !std::holds_alternative<ListValuePtr>(rv)) {
             result.setNull(i);
             continue;
         }
-        const auto& la = std::get<ListValue>(lv);
-        const auto& lb = std::get<ListValue>(rv);
+        const auto& la = (*std::get<ListValuePtr>(lv));
+        const auto& lb = (*std::get<ListValuePtr>(rv));
         size_t min_len = std::min(la.elements.size(), lb.elements.size());
         bool saw_null = false;
         for (size_t j = 0; j < min_len; ++j) {
@@ -238,22 +238,22 @@ void genericAddBatch(const Column& left, const Column& right, Column& result, si
         Value lv = left.getValue(i);
         Value rv = right.getValue(i);
         // lists: concatenation, append, or prepend
-        if (std::holds_alternative<ListValue>(lv) || std::holds_alternative<ListValue>(rv)) {
-            if (std::holds_alternative<ListValue>(lv) && std::holds_alternative<ListValue>(rv)) {
-                ListValue res = std::get<ListValue>(lv);
-                const auto& rlist = std::get<ListValue>(rv);
+        if (std::holds_alternative<ListValuePtr>(lv) || std::holds_alternative<ListValuePtr>(rv)) {
+            if (std::holds_alternative<ListValuePtr>(lv) && std::holds_alternative<ListValuePtr>(rv)) {
+                ListValue res = (*std::get<ListValuePtr>(lv));
+                const auto& rlist = (*std::get<ListValuePtr>(rv));
                 res.elements.insert(res.elements.end(), rlist.elements.begin(), rlist.elements.end());
-                result.setValue(i, Value(std::move(res)));
-            } else if (std::holds_alternative<ListValue>(lv)) {
-                ListValue res = std::get<ListValue>(lv);
+                result.setValue(i, Value(mk<ListValue>(std::move(res))));
+            } else if (std::holds_alternative<ListValuePtr>(lv)) {
+                ListValue res = (*std::get<ListValuePtr>(lv));
                 res.elements.push_back(ValueStorage{rv});
-                result.setValue(i, Value(std::move(res)));
+                result.setValue(i, Value(mk<ListValue>(std::move(res))));
             } else {
                 ListValue res;
                 res.elements.push_back(ValueStorage{lv});
-                const auto& rlist = std::get<ListValue>(rv);
+                const auto& rlist = (*std::get<ListValuePtr>(rv));
                 res.elements.insert(res.elements.end(), rlist.elements.begin(), rlist.elements.end());
-                result.setValue(i, Value(std::move(res)));
+                result.setValue(i, Value(mk<ListValue>(std::move(res))));
             }
         } else if (std::holds_alternative<int64_t>(lv) && std::holds_alternative<int64_t>(rv))
             result.setValue(i, Value(AddOp::apply(std::get<int64_t>(lv), std::get<int64_t>(rv))));

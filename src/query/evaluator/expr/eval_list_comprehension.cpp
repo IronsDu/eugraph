@@ -13,17 +13,17 @@ void ExpressionEvaluator::evalListComprehension(const binder::BoundListComprehen
         ListValue result_list;
 
         if (!list_eval.column || list_eval.column->isNull(i)) {
-            result.setValue(i, Value(std::move(result_list)));
+            result.setValue(i, Value(mk<ListValue>(std::move(result_list))));
             continue;
         }
 
         Value list_val = list_eval.column->getValue(i);
-        if (!std::holds_alternative<ListValue>(list_val)) {
-            result.setValue(i, Value(std::move(result_list)));
+        if (!std::holds_alternative<ListValuePtr>(list_val)) {
+            result.setValue(i, Value(mk<ListValue>(std::move(result_list))));
             continue;
         }
 
-        const auto& lv = std::get<ListValue>(list_val);
+        const auto& lv = (*std::get<ListValuePtr>(list_val));
 
         for (const auto& elem_storage : lv.elements) {
             Value elem_val = elem_storage.value;
@@ -75,7 +75,7 @@ void ExpressionEvaluator::evalListComprehension(const binder::BoundListComprehen
             }
         }
 
-        result.setValue(i, Value(std::move(result_list)));
+        result.setValue(i, Value(mk<ListValue>(std::move(result_list))));
     }
 }
 

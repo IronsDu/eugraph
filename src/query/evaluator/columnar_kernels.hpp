@@ -143,7 +143,7 @@ inline int cypherCompareValues(const Value& a, const Value& b) {
                 return la == lb ? 0 : (la ? 1 : -1);
             }
             if constexpr (std::is_same_v<A, ListValue>)
-                return compareLists(la, std::get<ListValue>(b));
+                return compareLists(la, (*std::get<ListValuePtr>(b)));
             if constexpr (std::is_same_v<A, DateTimeValue>)
                 return compareTemporal(la, std::get<DateTimeValue>(b));
             if constexpr (std::is_same_v<A, TimeValue>)
@@ -151,11 +151,13 @@ inline int cypherCompareValues(const Value& a, const Value& b) {
             if constexpr (std::is_same_v<A, DurationValue>)
                 return compareDuration(la, std::get<DurationValue>(b));
             if constexpr (std::is_same_v<A, BytesValue>) {
-                if (auto* bb = std::get_if<BytesValue>(&b)) {
-                    if (la.data == bb->data)
+                if (auto* bb = std::get_if<BytesValuePtr>(&b)) {
+                    if (!*bb)
+                        return 1;
+                    if (la.data == (*bb)->data)
                         return 0;
-                    return std::lexicographical_compare(la.data.begin(), la.data.end(), bb->data.begin(),
-                                                        bb->data.end())
+                    return std::lexicographical_compare(la.data.begin(), la.data.end(), (*bb)->data.begin(),
+                                                        (*bb)->data.end())
                                ? -1
                                : 1;
                 }

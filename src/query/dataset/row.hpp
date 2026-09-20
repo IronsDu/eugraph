@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -76,9 +77,37 @@ struct ValueStorage;
 // Topology-stage alternatives (VertexRef/EdgeKey/PathTopology) carry bare IDs
 // only and are produced by Scan/Expand/VarLenExpand. Enricher operators
 // upgrade them in-place to their semantic counterparts.
-using Value =
-    std::variant<std::monostate, bool, int64_t, double, std::string, VertexRef, EdgeKey, PathTopology, VertexValue,
-                 EdgeValue, PathValue, DateTimeValue, TimeValue, DurationValue, ListValue, MapValue, BytesValue>;
+/// Heavy value kinds are held behind a shared pointer.
+///
+/// Copying a Value used to deep-copy whatever it carried, and the heavy kinds own
+/// containers -- VertexValue an unordered_map plus a set, ListValue/PathValue a
+/// vector of variants, MapValue a vector of (string, variant). Every row a Value
+/// travelled through paid for that. Sharing the payload turns a copy into a
+/// reference-count bump.
+///
+/// Discipline that keeps this safe, and the reason no read site needs a null check:
+/// a pointer is never left empty (construct through `mk<T>(...)`), and the payload
+/// is treated as immutable once published. The one exception is the lazy
+/// enrichment in path_element_property_read_physical_op.cpp, which fills in data
+/// keyed by the entity id and is therefore idempotent.
+template <typename T> using ValPtr = std::shared_ptr<T>;
+
+using VertexValuePtr = ValPtr<VertexValue>;
+using EdgeValuePtr = ValPtr<EdgeValue>;
+using PathValuePtr = ValPtr<PathValue>;
+using ListValuePtr = ValPtr<ListValue>;
+using MapValuePtr = ValPtr<MapValue>;
+using BytesValuePtr = ValPtr<BytesValue>;
+
+/// Construct a heavy value. Every construction goes through this so an empty
+/// pointer cannot appear in a Value by accident.
+template <typename T, typename... Args> ValPtr<T> mk(Args&&... args) {
+    return std::make_shared<T>(std::forward<Args>(args)...);
+}
+
+using Value = std::variant<std::monostate, bool, int64_t, double, std::string, VertexRef, EdgeKey, PathTopology,
+                           VertexValuePtr, EdgeValuePtr, PathValuePtr, DateTimeValue, TimeValue, DurationValue,
+                           ListValuePtr, MapValuePtr, BytesValuePtr>;
 
 struct ValueStorage {
     Value value;
@@ -88,11 +117,21 @@ inline MapValue::~MapValue() = default;
 
 // ==================== Deep equality for container types ====================
 
+// Defined below; the container comparisons recurse through them so a list or path
+// holding heavy kinds compares payloads rather than handles.
+inline bool isNull(const Value& v);
+inline std::optional<bool> valueEquals(const Value& a, const Value& b);
+
 inline bool PathValue::operator==(const PathValue& o) const {
     if (elements.size() != o.elements.size())
         return false;
     for (size_t i = 0; i < elements.size(); ++i) {
-        if (!(elements[i].value == o.elements[i].value))
+        // Recursive three-valued equality: the heavy kinds are handles, so comparing
+        // the variant directly would compare pointers for a path of vertices.
+        if (isNull(elements[i].value) && isNull(o.elements[i].value))
+            continue;
+        auto eq = valueEquals(elements[i].value, o.elements[i].value);
+        if (!eq || !*eq)
             return false;
     }
     return true;
@@ -106,7 +145,10 @@ inline bool ListValue::operator==(const ListValue& o) const {
     if (elements.size() != o.elements.size())
         return false;
     for (size_t i = 0; i < elements.size(); ++i) {
-        if (!(elements[i].value == o.elements[i].value))
+        if (isNull(elements[i].value) && isNull(o.elements[i].value))
+            continue;
+        auto eq = valueEquals(elements[i].value, o.elements[i].value);
+        if (!eq || !*eq)
             return false;
     }
     return true;
@@ -119,7 +161,14 @@ inline bool MapValue::operator==(const MapValue& o) const {
     for (const auto& lhs_entry : entries) {
         bool found = false;
         for (const auto& rhs_entry : o.entries) {
-            if (lhs_entry.first == rhs_entry.first && lhs_entry.second.value == rhs_entry.second.value) {
+            if (lhs_entry.first != rhs_entry.first)
+                continue;
+            if (isNull(lhs_entry.second.value) && isNull(rhs_entry.second.value)) {
+                found = true;
+                break;
+            }
+            auto eq = valueEquals(lhs_entry.second.value, rhs_entry.second.value);
+            if (eq && *eq) {
                 found = true;
                 break;
             }
@@ -132,7 +181,26 @@ inline bool MapValue::operator==(const MapValue& o) const {
 
 // Helper to check if a Value is null (monostate).
 inline bool isNull(const Value& v) {
-    return std::holds_alternative<std::monostate>(v);
+    if (std::holds_alternative<std::monostate>(v))
+        return true;
+    // A heavy kind is a handle, and an empty handle means no payload was ever
+    // published -- which is exactly what a reserved-but-unwritten column slot looks
+    // like. Treating it as null here is what keeps every nullness check in the
+    // engine agreeing: `holds_alternative<ListValuePtr>` is true for an empty
+    // handle, so a slot that slipped past this would be dereferenced as a list.
+    if (const auto* p = std::get_if<VertexValuePtr>(&v))
+        return !*p;
+    if (const auto* p = std::get_if<EdgeValuePtr>(&v))
+        return !*p;
+    if (const auto* p = std::get_if<PathValuePtr>(&v))
+        return !*p;
+    if (const auto* p = std::get_if<ListValuePtr>(&v))
+        return !*p;
+    if (const auto* p = std::get_if<MapValuePtr>(&v))
+        return !*p;
+    if (const auto* p = std::get_if<BytesValuePtr>(&v))
+        return !*p;
+    return false;
 }
 
 // ==================== Three-valued equality ====================
@@ -150,9 +218,9 @@ inline std::optional<bool> valueEquals(const Value& a, const Value& b) {
         return std::nullopt;
 
     // ListValue
-    if (std::holds_alternative<ListValue>(a) && std::holds_alternative<ListValue>(b)) {
-        const auto& la = std::get<ListValue>(a);
-        const auto& lb = std::get<ListValue>(b);
+    if (std::holds_alternative<ListValuePtr>(a) && std::holds_alternative<ListValuePtr>(b)) {
+        const auto& la = (*std::get<ListValuePtr>(a));
+        const auto& lb = (*std::get<ListValuePtr>(b));
         if (la.elements.size() != lb.elements.size())
             return false;
         bool hasNull = false;
@@ -167,9 +235,9 @@ inline std::optional<bool> valueEquals(const Value& a, const Value& b) {
     }
 
     // MapValue (order-independent key matching)
-    if (std::holds_alternative<MapValue>(a) && std::holds_alternative<MapValue>(b)) {
-        const auto& ma = std::get<MapValue>(a);
-        const auto& mb = std::get<MapValue>(b);
+    if (std::holds_alternative<MapValuePtr>(a) && std::holds_alternative<MapValuePtr>(b)) {
+        const auto& ma = (*std::get<MapValuePtr>(a));
+        const auto& mb = (*std::get<MapValuePtr>(b));
         if (ma.entries.size() != mb.entries.size())
             return false;
         bool hasNull = false;
@@ -194,9 +262,9 @@ inline std::optional<bool> valueEquals(const Value& a, const Value& b) {
     }
 
     // PathValue
-    if (std::holds_alternative<PathValue>(a) && std::holds_alternative<PathValue>(b)) {
-        const auto& pa = std::get<PathValue>(a);
-        const auto& pb = std::get<PathValue>(b);
+    if (std::holds_alternative<PathValuePtr>(a) && std::holds_alternative<PathValuePtr>(b)) {
+        const auto& pa = (*std::get<PathValuePtr>(a));
+        const auto& pb = (*std::get<PathValuePtr>(b));
         if (pa.elements.size() != pb.elements.size())
             return false;
         bool hasNull = false;
@@ -209,6 +277,16 @@ inline std::optional<bool> valueEquals(const Value& a, const Value& b) {
         }
         return hasNull ? std::optional<bool>(std::nullopt) : std::optional<bool>(true);
     }
+
+    // Vertices, edges and bytes. The variant holds handles, so the built-in
+    // comparison below would compare pointers rather than payloads; reach through
+    // and keep each type's own semantics (entities by identity, bytes by content).
+    if (std::holds_alternative<VertexValuePtr>(a) && std::holds_alternative<VertexValuePtr>(b))
+        return *std::get<VertexValuePtr>(a) == *std::get<VertexValuePtr>(b);
+    if (std::holds_alternative<EdgeValuePtr>(a) && std::holds_alternative<EdgeValuePtr>(b))
+        return *std::get<EdgeValuePtr>(a) == *std::get<EdgeValuePtr>(b);
+    if (std::holds_alternative<BytesValuePtr>(a) && std::holds_alternative<BytesValuePtr>(b))
+        return *std::get<BytesValuePtr>(a) == *std::get<BytesValuePtr>(b);
 
     // int64/double cross-type: promote to double
     if (std::holds_alternative<int64_t>(a) && std::holds_alternative<double>(b))
@@ -326,12 +404,12 @@ struct RowBatch {
 
 // Convenience: check if a Value holds a ListValue
 inline bool isList(const Value& v) {
-    return std::holds_alternative<ListValue>(v);
+    return std::holds_alternative<ListValuePtr>(v);
 }
 
 // Convenience: check if a Value holds a MapValue
 inline bool isMap(const Value& v) {
-    return std::holds_alternative<MapValue>(v);
+    return std::holds_alternative<MapValuePtr>(v);
 }
 
 // ==================== Hash Support ====================
@@ -367,33 +445,61 @@ struct ValueHash {
                         h ^= std::hash<uint64_t>{}(e) + 0x9e3779b9 + (h << 6) + (h >> 2);
                     }
                     return h;
-                } else if constexpr (std::is_same_v<T, VertexValue>) {
-                    return std::hash<uint64_t>{}(val.id);
-                } else if constexpr (std::is_same_v<T, EdgeValue>) {
-                    return std::hash<uint64_t>{}(val.id);
-                } else if constexpr (std::is_same_v<T, PathValue>) {
+                } else if constexpr (std::is_same_v<T, VertexValuePtr>) {
+                    // Hashing stays id-based, as when these were stored inline: the
+                    // hash has to agree with the equality above, which is by identity.
+                    return val ? std::hash<uint64_t>{}(val->id) : 0;
+                } else if constexpr (std::is_same_v<T, EdgeValuePtr>) {
+                    return val ? std::hash<uint64_t>{}(val->id) : 0;
+                } else if constexpr (std::is_same_v<T, BytesValuePtr>) {
                     size_t h = 0;
-                    for (const auto& elem : val.elements) {
-                        h ^= ValueHash{}(elem.value) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    if (val) {
+                        for (uint8_t byte : val->data)
+                            h ^= std::hash<uint8_t>{}(byte) + 0x9e3779b9 + (h << 6) + (h >> 2);
                     }
                     return h;
-                } else if constexpr (std::is_same_v<T, ListValue>) {
+                } else if constexpr (std::is_same_v<T, PathValuePtr>) {
                     size_t h = 0;
-                    for (const auto& elem : val.elements) {
-                        h ^= ValueHash{}(elem.value) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    if (val) {
+                        for (const auto& elem : val->elements)
+                            h ^= ValueHash{}(elem.value) + 0x9e3779b9 + (h << 6) + (h >> 2);
                     }
                     return h;
-                } else if constexpr (std::is_same_v<T, MapValue>) {
+                } else if constexpr (std::is_same_v<T, ListValuePtr>) {
                     size_t h = 0;
-                    for (const auto& [k, v] : val.entries) {
-                        h ^= std::hash<std::string>{}(k) + 0x9e3779b9 + (h << 6) + (h >> 2);
-                        h ^= ValueHash{}(v.value) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    if (val) {
+                        for (const auto& elem : val->elements)
+                            h ^= ValueHash{}(elem.value) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    }
+                    return h;
+                } else if constexpr (std::is_same_v<T, MapValuePtr>) {
+                    size_t h = 0;
+                    if (val) {
+                        for (const auto& [k, v] : val->entries) {
+                            h ^= std::hash<std::string>{}(k) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                            h ^= ValueHash{}(v.value) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                        }
                     }
                     return h;
                 }
                 return 0;
             },
             v);
+    }
+};
+
+/// Equality that matches ValueHash, for containers keyed on a Value.
+///
+/// std::equal_to<Value> would compare the variant directly, and the heavy kinds are
+/// handles -- so two handles to the same entity compare unequal while ValueHash gives
+/// them the same digest. A container that inserts on "not found" then keeps both,
+/// which is how DISTINCT stopped deduplicating. Use this alongside ValueHash.
+struct ValueContentEqual {
+    bool operator()(const Value& a, const Value& b) const noexcept {
+        if (isNull(a) && isNull(b))
+            return true;
+        auto eq = valueEquals(a, b);
+        return eq && *eq;
     }
 };
 
@@ -412,7 +518,15 @@ struct RowEqual {
         if (a.size() != b.size())
             return false;
         for (size_t i = 0; i < a.size(); ++i) {
-            if (!(a[i] == b[i]))
+            // Compare through valueEquals rather than the variant's operator==. The
+            // heavy kinds are handles, so the built-in comparison compares pointers,
+            // and DISTINCT would stop deduplicating rows that hold different handles
+            // to the same entity. RowHash already hashes payloads, so this also keeps
+            // the two halves of the unordered_set contract in agreement.
+            if (isNull(a[i]) && isNull(b[i]))
+                continue;
+            auto eq = valueEquals(a[i], b[i]);
+            if (!eq || !*eq)
                 return false;
         }
         return true;

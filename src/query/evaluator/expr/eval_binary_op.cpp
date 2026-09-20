@@ -39,11 +39,11 @@ void ExpressionEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
                 continue;
             }
             Value rv = right.column->getValue(i);
-            if (!std::holds_alternative<ListValue>(rv)) {
+            if (!std::holds_alternative<ListValuePtr>(rv)) {
                 result.setNull(i);
                 continue;
             }
-            const auto& list = std::get<ListValue>(rv);
+            const auto& list = (*std::get<ListValuePtr>(rv));
             // null IN [] → false (null is definitely not in an empty list)
             if (left.column->isNull(i)) {
                 if (list.elements.empty()) {

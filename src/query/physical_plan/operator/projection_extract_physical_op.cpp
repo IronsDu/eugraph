@@ -18,8 +18,8 @@ inline VertexId resolveVertexId(const DataChunk& chunk, size_t col, size_t row, 
     auto v = chunk.columns[col].getValue(row);
     if (std::holds_alternative<VertexRef>(v))
         vid = std::get<VertexRef>(v).id;
-    else if (std::holds_alternative<VertexValue>(v))
-        vid = std::get<VertexValue>(v).id;
+    else if (std::holds_alternative<VertexValuePtr>(v))
+        vid = (*std::get<VertexValuePtr>(v)).id;
     cached_col = col;
     cached_vid = vid;
     return vid;
@@ -38,8 +38,8 @@ inline EdgeId resolveEdgeId(const DataChunk& chunk, size_t col, size_t row, size
         auto& ek = std::get<EdgeKey>(v);
         eid = ek.id;
         elid = ek.label_id;
-    } else if (std::holds_alternative<EdgeValue>(v)) {
-        auto& ev = std::get<EdgeValue>(v);
+    } else if (std::holds_alternative<EdgeValuePtr>(v)) {
+        auto& ev = (*std::get<EdgeValuePtr>(v));
         eid = ev.id;
         elid = ev.label_id;
     }
@@ -157,8 +157,11 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     const auto& ek = src_col.buffer->edge_key_data[row];
                     eid = ek.id;
                     elid = ek.label_id;
-                } else if (src_edge_values) {
-                    const auto& ev = src_col.buffer->edge_data[row];
+                } else if (src_edge_values && row < src_col.buffer->edge_data.size() &&
+                           src_col.buffer->edge_data[row]) {
+                    // The column holds handles now; reserve() leaves a slot empty, so
+                    // check it before binding the payload.
+                    const auto& ev = *src_col.buffer->edge_data[row];
                     eid = ev.id;
                     elid = ev.label_id;
                 } else {
@@ -167,8 +170,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         const auto& ek = std::get<EdgeKey>(v);
                         eid = ek.id;
                         elid = ek.label_id;
-                    } else if (std::holds_alternative<EdgeValue>(v)) {
-                        const auto& ev = std::get<EdgeValue>(v);
+                    } else if (std::holds_alternative<EdgeValuePtr>(v)) {
+                        const auto& ev = (*std::get<EdgeValuePtr>(v));
                         eid = ev.id;
                         elid = ev.label_id;
                     }
@@ -277,8 +280,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
             std::vector<size_t> anon_rows;
             for (size_t row = 0; row < row_count; ++row) {
                 const auto& v = chunk->columns[spec.source_col].getValue(row);
-                if (std::holds_alternative<VertexValue>(v)) {
-                    VertexValue vv = std::get<VertexValue>(v);
+                if (std::holds_alternative<VertexValuePtr>(v)) {
+                    VertexValue vv = (*std::get<VertexValuePtr>(v));
                     if (vv.labels.has_value()) {
                         LabelIdSet labels = *vv.labels;
                         labels.erase(INVALID_LABEL_ID);
@@ -430,7 +433,7 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                             lv.elements.reserve(values.size());
                             for (const auto& pv : values)
                                 lv.elements.push_back(ValueStorage{propertyValueToValue(pv)});
-                            output.columns[i].setValue(row, Value(std::move(lv)));
+                            output.columns[i].setValue(row, Value(mk<ListValue>(std::move(lv))));
                         }
                     } else {
                         output.columns[i].setNull(row);
@@ -469,7 +472,7 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         if (nit != vertex_label_names_.end())
                             lv.elements.push_back(ValueStorage{Value(nit->second)});
                     }
-                    output.columns[i].setValue(row, Value(std::move(lv)));
+                    output.columns[i].setValue(row, Value(mk<ListValue>(std::move(lv))));
                     break;
                 }
                 case ColumnSpec::Kind::LoadEdgeType: {
@@ -487,8 +490,11 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                         // once, so hand the VertexValue over instead of deep-copying it
                         // into a Value first -- the payload owns an
                         // unordered_map<LabelId, Properties>.
-                        if (!output.columns[i].setVertexValue(row, std::move(*vertex_ctor_cache[i][row])))
-                            output.columns[i].setValue(row, Value(*vertex_ctor_cache[i][row]));
+                        // Publish the constructed vertex once, then let both the typed
+                        // and the Value path share that same handle.
+                        auto vv = mk<VertexValue>(std::move(*vertex_ctor_cache[i][row]));
+                        if (!output.columns[i].setVertexValue(row, vv))
+                            output.columns[i].setValue(row, Value(std::move(vv)));
                     } else {
                         output.columns[i].setNull(row);
                     }
@@ -506,8 +512,8 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                             ev.dst_id = ek.dst_id;
                             ev.label_id = ek.label_id;
                             ev.seq = ek.seq;
-                        } else if (std::holds_alternative<EdgeValue>(v)) {
-                            ev = std::get<EdgeValue>(v);
+                        } else if (std::holds_alternative<EdgeValuePtr>(v)) {
+                            ev = (*std::get<EdgeValuePtr>(v));
                         } else {
                             break;
                         }
@@ -527,8 +533,9 @@ folly::coro::AsyncGenerator<DataChunk> ProjectionExtractPhysicalOp::executeChunk
                     // source column, so copy rather than move -- but assign the typed
                     // payload directly instead of wrapping it in a Value, which would
                     // deep-copy it once more.
-                    if (!output.columns[i].setEdgeValue(row, eit->second))
-                        output.columns[i].setValue(row, Value(eit->second));
+                    auto ev = mk<EdgeValue>(eit->second);
+                    if (!output.columns[i].setEdgeValue(row, ev))
+                        output.columns[i].setValue(row, Value(std::move(ev)));
                     break;
                 }
                 }

@@ -9,8 +9,8 @@ namespace compute {
 namespace {
 
 VertexId vertexIdFromValue(const Value& val) {
-    if (std::holds_alternative<VertexValue>(val))
-        return std::get<VertexValue>(val).id;
+    if (std::holds_alternative<VertexValuePtr>(val))
+        return (*std::get<VertexValuePtr>(val)).id;
     if (std::holds_alternative<VertexRef>(val))
         return std::get<VertexRef>(val).id;
     if (std::holds_alternative<int64_t>(val))
@@ -19,8 +19,8 @@ VertexId vertexIdFromValue(const Value& val) {
 }
 
 EdgeId edgeIdFromValue(const Value& val) {
-    if (std::holds_alternative<EdgeValue>(val))
-        return std::get<EdgeValue>(val).id;
+    if (std::holds_alternative<EdgeValuePtr>(val))
+        return (*std::get<EdgeValuePtr>(val)).id;
     if (std::holds_alternative<EdgeKey>(val))
         return std::get<EdgeKey>(val).id;
     return INVALID_EDGE_ID;
@@ -266,8 +266,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 VertexId src_id = INVALID_VERTEX_ID;
                 if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < input_cols) {
                     const Value& val = chunk->columns[src_col_idx_].getValue(src_row);
-                    if (std::holds_alternative<VertexValue>(val))
-                        src_id = std::get<VertexValue>(val).id;
+                    if (std::holds_alternative<VertexValuePtr>(val))
+                        src_id = (*std::get<VertexValuePtr>(val)).id;
                     else if (std::holds_alternative<VertexRef>(val))
                         src_id = std::get<VertexRef>(val).id;
                     else if (std::holds_alternative<int64_t>(val))
@@ -307,8 +307,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 VertexId src_id = INVALID_VERTEX_ID;
                 if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < input_cols) {
                     const Value& val = chunk->columns[src_col_idx_].getValue(src_row);
-                    if (std::holds_alternative<VertexValue>(val)) {
-                        src_id = std::get<VertexValue>(val).id;
+                    if (std::holds_alternative<VertexValuePtr>(val)) {
+                        src_id = (*std::get<VertexValuePtr>(val)).id;
                     } else if (std::holds_alternative<VertexRef>(val)) {
                         src_id = std::get<VertexRef>(val).id;
                     } else if (std::holds_alternative<int64_t>(val)) {
@@ -473,8 +473,8 @@ folly::coro::AsyncGenerator<DataChunk> ExpandPhysicalOp::executeChunk() {
                 VertexId sid = INVALID_VERTEX_ID;
                 if (src_col_idx_ >= 0 && static_cast<size_t>(src_col_idx_) < input_cols) {
                     const Value& val = chunk->columns[src_col_idx_].getValue(edges[i].src_row);
-                    if (std::holds_alternative<VertexValue>(val))
-                        sid = std::get<VertexValue>(val).id;
+                    if (std::holds_alternative<VertexValuePtr>(val))
+                        sid = (*std::get<VertexValuePtr>(val)).id;
                     else if (std::holds_alternative<VertexRef>(val))
                         sid = std::get<VertexRef>(val).id;
                 }

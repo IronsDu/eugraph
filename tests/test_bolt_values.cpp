@@ -102,7 +102,7 @@ TEST_F(BoltValueMappingTest, ConvertVertexToNode) {
     props[1] = PropertyValue{int64_t{30}};
     v.properties[1] = std::move(props);
 
-    Value val{std::move(v)};
+    Value val{mk<VertexValue>(std::move(v))};
     auto result = valueToBolt(val, label_defs_, edge_label_defs_);
 
     ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
@@ -132,7 +132,7 @@ TEST_F(BoltValueMappingTest, ConvertVertexWithAnonLabel) {
     v.id = 200;
     v.labels = LabelIdSet{INVALID_LABEL_ID}; // anonymous label
 
-    Value val{std::move(v)};
+    Value val{mk<VertexValue>(std::move(v))};
     auto result = valueToBolt(val, label_defs_, edge_label_defs_);
 
     ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
@@ -156,7 +156,7 @@ TEST_F(BoltValueMappingTest, ConvertEdgeToRelationship) {
     props[0] = PropertyValue{int64_t{2020}};
     e.properties = std::move(props);
 
-    Value val{std::move(e)};
+    Value val{mk<EdgeValue>(std::move(e))};
     auto result = valueToBolt(val, label_defs_, edge_label_defs_);
 
     ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
@@ -185,7 +185,7 @@ TEST_F(BoltValueMappingTest, ConvertList) {
     lv.elements.push_back({Value{int64_t{1}}});
     lv.elements.push_back({Value{int64_t{2}}});
 
-    Value val{std::move(lv)};
+    Value val{mk<ListValue>(std::move(lv))};
     auto result = valueToBolt(val, label_defs_, edge_label_defs_);
 
     ASSERT_TRUE(std::holds_alternative<PSList>(result));
@@ -202,7 +202,7 @@ TEST_F(BoltValueMappingTest, ConvertMap) {
     mv.entries.push_back({"key1", {Value{std::string{"val1"}}}});
     mv.entries.push_back({"key2", {Value{int64_t{100}}}});
 
-    Value val{std::move(mv)};
+    Value val{mk<MapValue>(std::move(mv))};
     auto result = valueToBolt(val, label_defs_, edge_label_defs_);
 
     ASSERT_TRUE(std::holds_alternative<PSMap>(result));
@@ -254,8 +254,8 @@ TEST_F(BoltValueMappingTest, ParamListToValue) {
     list.push_back(PS{int64_t{2}});
     packstream::Value pv{std::move(list)};
     auto result = boltParamToValue(pv);
-    ASSERT_TRUE(std::holds_alternative<ListValue>(result));
-    auto& lv = std::get<ListValue>(result);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result));
+    auto& lv = (*std::get<ListValuePtr>(result));
     ASSERT_EQ(lv.elements.size(), 2u);
     EXPECT_EQ(std::get<int64_t>(lv.elements[0].value), 1);
     EXPECT_EQ(std::get<int64_t>(lv.elements[1].value), 2);
@@ -267,8 +267,8 @@ TEST_F(BoltValueMappingTest, ParamDictToValue) {
     dict["y"] = PS{std::string{"hello"}};
     packstream::Value pv{std::move(dict)};
     auto result = boltParamToValue(pv);
-    ASSERT_TRUE(std::holds_alternative<MapValue>(result));
-    auto& mv = std::get<MapValue>(result);
+    ASSERT_TRUE(std::holds_alternative<MapValuePtr>(result));
+    auto& mv = (*std::get<MapValuePtr>(result));
     ASSERT_EQ(mv.entries.size(), 2u);
     // Entries are in insertion order
     bool found_x = false, found_y = false;
@@ -293,20 +293,20 @@ TEST_F(BoltValueMappingTest, ConvertPath) {
     // Path: node 100 → edge 500 → node 200
     VertexValue v1;
     v1.id = 100;
-    pv.elements.push_back({Value{std::move(v1)}});
+    pv.elements.push_back({Value(mk<VertexValue>(std::move(v1)))});
 
     EdgeValue e1;
     e1.id = 500;
     e1.src_id = 100;
     e1.dst_id = 200;
     e1.label_id = 10;
-    pv.elements.push_back({Value{std::move(e1)}});
+    pv.elements.push_back({Value(mk<EdgeValue>(std::move(e1)))});
 
     VertexValue v2;
     v2.id = 200;
-    pv.elements.push_back({Value{std::move(v2)}});
+    pv.elements.push_back({Value(mk<VertexValue>(std::move(v2)))});
 
-    Value val{std::move(pv)};
+    Value val{mk<PathValue>(std::move(pv))};
     auto result = valueToBolt(val, label_defs_, edge_label_defs_);
 
     ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
@@ -334,20 +334,20 @@ TEST_F(BoltValueMappingTest, ConvertPathReversedRelationship) {
     PathValue pv;
     VertexValue v1;
     v1.id = 100;
-    pv.elements.push_back({Value{std::move(v1)}});
+    pv.elements.push_back({Value(mk<VertexValue>(std::move(v1)))});
 
     EdgeValue e1;
     e1.id = 500;
     e1.src_id = 200;
     e1.dst_id = 100;
     e1.label_id = 10;
-    pv.elements.push_back({Value{std::move(e1)}});
+    pv.elements.push_back({Value(mk<EdgeValue>(std::move(e1)))});
 
     VertexValue v2;
     v2.id = 200;
-    pv.elements.push_back({Value{std::move(v2)}});
+    pv.elements.push_back({Value(mk<VertexValue>(std::move(v2)))});
 
-    Value val{std::move(pv)};
+    Value val{mk<PathValue>(std::move(pv))};
     auto result = valueToBolt(val, label_defs_, edge_label_defs_);
     ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
     auto& path = std::get<packstream::PackStreamStruct>(result);
@@ -532,11 +532,11 @@ TEST_F(BoltValueMappingTest, ConvertPathRelationshipIsUnbound) {
     (*e.properties)[0] = PropertyValue{int64_t{2020}};
 
     PathValue path;
-    path.elements.push_back(ValueStorage{Value(std::move(a))});
-    path.elements.push_back(ValueStorage{Value(std::move(e))});
-    path.elements.push_back(ValueStorage{Value(std::move(b))});
+    path.elements.push_back(ValueStorage{Value(mk<VertexValue>(std::move(a)))});
+    path.elements.push_back(ValueStorage{Value(mk<EdgeValue>(std::move(e)))});
+    path.elements.push_back(ValueStorage{Value(mk<VertexValue>(std::move(b)))});
 
-    auto result = valueToBolt(Value(std::move(path)), label_defs_, edge_label_defs_);
+    auto result = valueToBolt(Value(mk<PathValue>(std::move(path))), label_defs_, edge_label_defs_);
     ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
     auto& path_struct = std::get<packstream::PackStreamStruct>(result);
     EXPECT_EQ(path_struct.tag, tags::PATH);
@@ -569,7 +569,7 @@ TEST_F(BoltValueMappingTest, ConvertStandaloneRelationshipKeepsFullStruct) {
     e.properties = Properties(1);
     (*e.properties)[0] = PropertyValue{int64_t{2020}};
 
-    auto result = valueToBolt(Value(std::move(e)), label_defs_, edge_label_defs_);
+    auto result = valueToBolt(Value(mk<EdgeValue>(std::move(e))), label_defs_, edge_label_defs_);
     ASSERT_TRUE(std::holds_alternative<packstream::PackStreamStruct>(result));
     auto& rel = std::get<packstream::PackStreamStruct>(result);
     EXPECT_EQ(rel.tag, tags::RELATIONSHIP);

@@ -67,9 +67,9 @@ inline Value toIntegerImpl(const Value& arg) {
             return Value{};
         }
     }
-    if (std::holds_alternative<ListValue>(arg) || std::holds_alternative<MapValue>(arg) ||
-        std::holds_alternative<VertexValue>(arg) || std::holds_alternative<EdgeValue>(arg) ||
-        std::holds_alternative<PathValue>(arg))
+    if (std::holds_alternative<ListValuePtr>(arg) || std::holds_alternative<MapValuePtr>(arg) ||
+        std::holds_alternative<VertexValuePtr>(arg) || std::holds_alternative<EdgeValuePtr>(arg) ||
+        std::holds_alternative<PathValuePtr>(arg))
         throw std::runtime_error("TypeError: InvalidArgumentValue");
     return Value{};
 }
@@ -107,9 +107,9 @@ inline Value toFloatImpl(const Value& arg) {
             return Value{};
         }
     }
-    if (std::holds_alternative<bool>(arg) || std::holds_alternative<ListValue>(arg) ||
-        std::holds_alternative<MapValue>(arg) || std::holds_alternative<VertexValue>(arg) ||
-        std::holds_alternative<EdgeValue>(arg) || std::holds_alternative<PathValue>(arg))
+    if (std::holds_alternative<bool>(arg) || std::holds_alternative<ListValuePtr>(arg) ||
+        std::holds_alternative<MapValuePtr>(arg) || std::holds_alternative<VertexValuePtr>(arg) ||
+        std::holds_alternative<EdgeValuePtr>(arg) || std::holds_alternative<PathValuePtr>(arg))
         throw std::runtime_error("TypeError: InvalidArgumentValue");
     return Value{};
 }
@@ -155,9 +155,9 @@ inline Value toStringImpl(const Value& arg) {
         return Value(temporalToString(std::get<TimeValue>(arg)));
     if (std::holds_alternative<DurationValue>(arg))
         return Value(temporalToString(std::get<DurationValue>(arg)));
-    if (std::holds_alternative<ListValue>(arg) || std::holds_alternative<MapValue>(arg) ||
-        std::holds_alternative<VertexValue>(arg) || std::holds_alternative<EdgeValue>(arg) ||
-        std::holds_alternative<PathValue>(arg))
+    if (std::holds_alternative<ListValuePtr>(arg) || std::holds_alternative<MapValuePtr>(arg) ||
+        std::holds_alternative<VertexValuePtr>(arg) || std::holds_alternative<EdgeValuePtr>(arg) ||
+        std::holds_alternative<PathValuePtr>(arg))
         throw std::runtime_error("TypeError: InvalidArgumentValue");
     return Value{};
 }
@@ -189,9 +189,9 @@ inline Value toBooleanImpl(const Value& arg) {
             return Value(false);
         return Value{};
     }
-    if (std::holds_alternative<double>(arg) || std::holds_alternative<ListValue>(arg) ||
-        std::holds_alternative<MapValue>(arg) || std::holds_alternative<VertexValue>(arg) ||
-        std::holds_alternative<EdgeValue>(arg) || std::holds_alternative<PathValue>(arg))
+    if (std::holds_alternative<double>(arg) || std::holds_alternative<ListValuePtr>(arg) ||
+        std::holds_alternative<MapValuePtr>(arg) || std::holds_alternative<VertexValuePtr>(arg) ||
+        std::holds_alternative<EdgeValuePtr>(arg) || std::holds_alternative<PathValuePtr>(arg))
         throw std::runtime_error("TypeError: InvalidArgumentValue");
     return Value{};
 }

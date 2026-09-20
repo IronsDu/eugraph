@@ -44,13 +44,13 @@ void ExpressionEvaluator::evalQuantifierExpr(QuantifierKind kind, uint32_t loop_
         }
 
         Value list_val = list_eval.column->getValue(i);
-        if (!std::holds_alternative<ListValue>(list_val)) {
+        if (!std::holds_alternative<ListValuePtr>(list_val)) {
             final_result = (kind == QuantifierKind::ALL || kind == QuantifierKind::NONE);
             result.setValue(i, Value(final_result));
             continue;
         }
 
-        const auto& lv = std::get<ListValue>(list_val);
+        const auto& lv = (*std::get<ListValuePtr>(list_val));
 
         if (lv.elements.empty()) {
             final_result = (kind == QuantifierKind::ALL || kind == QuantifierKind::NONE);

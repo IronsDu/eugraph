@@ -95,11 +95,11 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
 
                 // Edge handling: SET on edges. SET_LABELS does not apply (edges
                 // have a single label), so it is silently skipped.
-                if (std::holds_alternative<EdgeValue>(val)) {
+                if (std::holds_alternative<EdgeValuePtr>(val)) {
                     if (item.kind == cypher::SetItemKind::SET_LABELS)
                         continue;
 
-                    EdgeValue edge = std::get<EdgeValue>(val);
+                    EdgeValue edge = (*std::get<EdgeValuePtr>(val));
                     EdgeId eid = edge.id;
                     EdgeLabelId elid = edge.label_id;
 
@@ -164,7 +164,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         auto new_index_entries = co_await collectEdgeIndexEntries(store_, edge_label_defs_, eid, elid);
                         co_await deleteEdgeIndexEntries(store_, old_index_entries);
                         co_await insertEdgeIndexEntries(store_, new_index_entries);
-                        mirrorEdgeToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(edge));
+                        mirrorEdgeToAllReferences(*chunk, static_cast<size_t>(col), row_idx,
+                                                  mk<EdgeValue>(std::move(edge)));
                         continue;
                     }
 
@@ -172,9 +173,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         if (!item.value.has_value())
                             continue;
                         Value v = value_results[idx][row_idx];
-                        if (!std::holds_alternative<MapValue>(v))
+                        if (!std::holds_alternative<MapValuePtr>(v))
                             continue;
-                        const auto& mv = std::get<MapValue>(v);
+                        const auto& mv = (*std::get<MapValuePtr>(v));
                         bool modified = false;
                         auto old_index_entries = co_await collectEdgeIndexEntries(store_, edge_label_defs_, eid, elid);
 
@@ -252,17 +253,18 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                                 co_await collectEdgeIndexEntries(store_, edge_label_defs_, eid, elid);
                             co_await deleteEdgeIndexEntries(store_, old_index_entries);
                             co_await insertEdgeIndexEntries(store_, new_index_entries);
-                            mirrorEdgeToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(edge));
+                            mirrorEdgeToAllReferences(*chunk, static_cast<size_t>(col), row_idx,
+                                                      mk<EdgeValue>(std::move(edge)));
                         }
                         continue;
                     }
                     continue;
                 }
 
-                if (!std::holds_alternative<VertexValue>(val))
+                if (!std::holds_alternative<VertexValuePtr>(val))
                     continue;
 
-                const auto& vertex = std::get<VertexValue>(val);
+                const auto& vertex = (*std::get<VertexValuePtr>(val));
                 VertexId vid = vertex.id;
                 std::optional<std::vector<VertexIndexEntry>> old_index_entries;
 
@@ -302,7 +304,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     if (!updated.labels.has_value())
                         updated.labels = LabelIdSet{};
                     updated.labels->insert(lit->second);
-                    mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(updated));
+                    mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx,
+                                                mk<VertexValue>(std::move(updated)));
                 } else if (item.kind == cypher::SetItemKind::SET_PROPERTY) {
                     if (item.prop_name.empty() || !item.value.has_value())
                         continue;
@@ -352,7 +355,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                             auto it = updated.properties.find(removed_at->first);
                             if (it != updated.properties.end() && it->second.size() > removed_at->second)
                                 it->second[removed_at->second].reset();
-                            mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(updated));
+                            mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx,
+                                                        mk<VertexValue>(std::move(updated)));
                         }
                         auto new_index_entries =
                             co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
@@ -496,7 +500,8 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         if (props_vec.size() <= written_at->second)
                             props_vec.resize(written_at->second + 1);
                         props_vec[written_at->second] = pv;
-                        mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx, std::move(updated));
+                        mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx,
+                                                    mk<VertexValue>(std::move(updated)));
                     }
 
                     auto new_index_entries =
@@ -519,9 +524,9 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                         continue;
 
                     Value v = value_results[idx][row_idx];
-                    if (!std::holds_alternative<MapValue>(v))
+                    if (!std::holds_alternative<MapValuePtr>(v))
                         continue;
-                    const auto& mv = std::get<MapValue>(v);
+                    const auto& mv = (*std::get<MapValuePtr>(v));
                     old_index_entries = co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);
 
                     LabelIdSet old_labels = co_await store_.getVertexLabels(vid);
@@ -708,7 +713,7 @@ folly::coro::AsyncGenerator<DataChunk> SetPhysicalOp::executeChunk() {
                     // Write updated vertex back to chunk so RETURN sees the mutated state
                     if (vertex_modified)
                         mirrorVertexToAllReferences(*chunk, static_cast<size_t>(col), row_idx,
-                                                    std::move(updated_vertex));
+                                                    mk<VertexValue>(std::move(updated_vertex)));
 
                     auto new_index_entries =
                         co_await collectVertexIndexEntries(store_, label_defs_, vid, anon_label_id_);

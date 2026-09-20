@@ -96,8 +96,8 @@ int64_t isoWeekYear(int64_t year, int64_t month, int64_t day) {
 
 // Map value extraction
 const MapValue* asMap(const Value& v) {
-    if (std::holds_alternative<MapValue>(v))
-        return &std::get<MapValue>(v);
+    if (std::holds_alternative<MapValuePtr>(v))
+        return &(*std::get<MapValuePtr>(v));
     return nullptr;
 }
 
@@ -123,13 +123,13 @@ std::string neo4jValueTypeName(const Value& v) {
         return "DoubleValue";
     if (std::holds_alternative<std::string>(v))
         return "UTF8StringValue";
-    if (std::holds_alternative<ListValue>(v))
+    if (std::holds_alternative<ListValuePtr>(v))
         return "ArrayListValue";
-    if (std::holds_alternative<MapValue>(v))
+    if (std::holds_alternative<MapValuePtr>(v))
         return "MapValue";
-    if (std::holds_alternative<VertexRef>(v) || std::holds_alternative<VertexValue>(v))
+    if (std::holds_alternative<VertexRef>(v) || std::holds_alternative<VertexValuePtr>(v))
         return "NodeValue";
-    if (std::holds_alternative<EdgeKey>(v) || std::holds_alternative<EdgeValue>(v))
+    if (std::holds_alternative<EdgeKey>(v) || std::holds_alternative<EdgeValuePtr>(v))
         return "RelationshipValue";
     if (std::holds_alternative<DateTimeValue>(v))
         return "DateTimeValue";
@@ -2046,8 +2046,8 @@ inline Value temporalTruncateImpl(const Value& temporal_val, const std::string& 
                                   int target_kind_raw, bool time_family = false) {
     checkTruncateUnit(unit, time_family, static_cast<uint8_t>(target_kind_raw));
     const MapValue* fields = nullptr;
-    if (std::holds_alternative<MapValue>(fields_val))
-        fields = &std::get<MapValue>(fields_val);
+    if (std::holds_alternative<MapValuePtr>(fields_val))
+        fields = &(*std::get<MapValuePtr>(fields_val));
 
     if (std::holds_alternative<DateTimeValue>(temporal_val)) {
         auto tv = std::get<DateTimeValue>(temporal_val);

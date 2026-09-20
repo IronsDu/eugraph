@@ -15,7 +15,7 @@ folly::coro::AsyncGenerator<DataChunk> AggregatePhysicalOp::executeChunk() {
     struct GroupState {
         std::vector<std::unique_ptr<function::AggStateBase>> agg_states;
         // Per-aggregate distinct sets (only used when aggregate.distinct == true).
-        std::vector<std::unordered_set<Value, ValueHash>> distinct_sets;
+        std::vector<std::unordered_set<Value, ValueHash, ValueContentEqual>> distinct_sets;
     };
 
     std::unordered_map<Row, GroupState, RowHash, RowEqual> groups;

@@ -368,13 +368,13 @@ TEST(DataChunkReplaceColumnTest, UpgradeVertexRefToVertex) {
 
     // Simulate an Enricher upgrading the column in place.
     Column vertex_col = Column::flat(BoundTypeKind::VERTEX, 1);
-    vertex_col.buffer->vertex_data[0] = VertexValue{42, {}, std::nullopt, false};
+    vertex_col.buffer->vertex_data[0] = mk<VertexValue>(VertexValue{42, {}, std::nullopt, false});
     chunk.replaceColumn(0, std::move(vertex_col));
 
     EXPECT_EQ(chunk.columns[0].type, BoundTypeKind::VERTEX);
     Value v = chunk.getValue(0, 0);
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(v));
-    EXPECT_EQ(std::get<VertexValue>(v).id, 42u);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(v));
+    EXPECT_EQ((*std::get<VertexValuePtr>(v)).id, 42u);
 }
 
 TEST(DataChunkReplaceColumnTest, UpgradeEdgeKeyToEdge) {
@@ -384,11 +384,11 @@ TEST(DataChunkReplaceColumnTest, UpgradeEdgeKeyToEdge) {
     chunk.columns[0].buffer->edge_key_data[0] = EdgeKey{7, 1, 2, 5, 0};
 
     Column edge_col = Column::flat(BoundTypeKind::EDGE, 1);
-    edge_col.buffer->edge_data[0] = EdgeValue{7, 1, 2, 5, 0, std::nullopt, false};
+    edge_col.buffer->edge_data[0] = mk<EdgeValue>(EdgeValue{7, 1, 2, 5, 0, std::nullopt, false});
     chunk.replaceColumn(0, std::move(edge_col));
 
     EXPECT_EQ(chunk.columns[0].type, BoundTypeKind::EDGE);
-    EXPECT_EQ(std::get<EdgeValue>(chunk.getValue(0, 0)).id, 7u);
+    EXPECT_EQ((*std::get<EdgeValuePtr>(chunk.getValue(0, 0))).id, 7u);
 }
 
 TEST(DataChunkReplaceColumnTest, UpgradePathTopologyToPath) {
@@ -413,9 +413,9 @@ TEST(DataChunkReplaceColumnTest, UpgradePathTopologyToPath) {
 TEST(TopologyTypesRegressionTest, LegacyTypesStillWork) {
     // VertexValue / EdgeValue / PathValue still behave as before.
     VertexValue vv{42, {}, std::nullopt, false};
-    Value v = vv;
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(v));
-    EXPECT_EQ(std::get<VertexValue>(v).id, 42u);
+    Value v = mk<VertexValue>(vv);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(v));
+    EXPECT_EQ((*std::get<VertexValuePtr>(v)).id, 42u);
 
     // The original column kinds still reserve / read / write.
     ColumnBuffer ibuf;

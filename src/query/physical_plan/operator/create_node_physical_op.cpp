@@ -283,7 +283,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
                 vv.labels = LabelIdSet(label_ids_.begin(), label_ids_.end());
                 for (const auto& [lid, lp] : label_props)
                     vv.properties[lid] = lp;
-                vertex_col.setValue(output.count, Value(std::move(vv)));
+                vertex_col.setValue(output.count, Value(mk<VertexValue>(std::move(vv))));
                 output.count++;
             }
             output.columns.push_back(std::move(vertex_col));
@@ -305,7 +305,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateNodePhysicalOp::executeChunk() {
 
             DataChunk output;
             output.columns.push_back(Column::flat(binder::BoundTypeKind::VERTEX, 1));
-            output.columns[0].setValue(0, Value(std::move(vv)));
+            output.columns[0].setValue(0, Value(mk<VertexValue>(std::move(vv))));
             output.count = 1;
             co_yield std::move(output);
         }

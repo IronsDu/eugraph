@@ -14,9 +14,9 @@ namespace scalar {
 // --- last ---
 
 inline Value lastImpl(const Value& arg) {
-    if (!std::holds_alternative<ListValue>(arg))
+    if (!std::holds_alternative<ListValuePtr>(arg))
         return Value{};
-    const auto& lv = std::get<ListValue>(arg);
+    const auto& lv = (*std::get<ListValuePtr>(arg));
     if (lv.elements.empty())
         return Value{};
     return lv.elements.back().value;
@@ -35,9 +35,9 @@ inline void lastBatchFn(const std::vector<const Column*>& args, Column& result, 
 // --- head ---
 
 inline Value headImpl(const Value& arg) {
-    if (!std::holds_alternative<ListValue>(arg))
+    if (!std::holds_alternative<ListValuePtr>(arg))
         return Value{};
-    const auto& lv = std::get<ListValue>(arg);
+    const auto& lv = (*std::get<ListValuePtr>(arg));
     if (lv.elements.empty())
         return Value{};
     return lv.elements.front().value;
@@ -56,14 +56,14 @@ inline void headBatchFn(const std::vector<const Column*>& args, Column& result, 
 // --- tail ---
 
 inline Value tailImpl(const Value& arg) {
-    if (!std::holds_alternative<ListValue>(arg))
+    if (!std::holds_alternative<ListValuePtr>(arg))
         return Value{};
-    const auto& lv = std::get<ListValue>(arg);
+    const auto& lv = (*std::get<ListValuePtr>(arg));
     if (lv.elements.size() <= 1)
-        return Value{ListValue{}};
+        return Value(mk<ListValue>());
     ListValue result;
     result.elements.assign(lv.elements.begin() + 1, lv.elements.end());
-    return Value{std::move(result)};
+    return Value(mk<ListValue>(std::move(result)));
 }
 
 struct TailOp {
@@ -104,12 +104,12 @@ inline void tailBatchFn(const std::vector<const Column*>& args, Column& result, 
 // --- reverse ---
 
 inline Value reverseImpl(const Value& arg) {
-    if (!std::holds_alternative<ListValue>(arg))
+    if (!std::holds_alternative<ListValuePtr>(arg))
         return Value{};
-    const auto& lv = std::get<ListValue>(arg);
+    const auto& lv = (*std::get<ListValuePtr>(arg));
     ListValue result;
     result.elements.assign(lv.elements.rbegin(), lv.elements.rend());
-    return Value{std::move(result)};
+    return Value(mk<ListValue>(std::move(result)));
 }
 
 inline void reverseBatchFn(const std::vector<const Column*>& args, Column& result, size_t count,
@@ -152,9 +152,9 @@ inline Value sizeListImpl(const Value& arg) {
     // Cypher: size(null) = null. Any non-list non-null is a type error -> null.
     if (isNull(arg))
         return Value{};
-    if (!std::holds_alternative<ListValue>(arg))
+    if (!std::holds_alternative<ListValuePtr>(arg))
         return Value{};
-    return Value{static_cast<int64_t>(std::get<ListValue>(arg).elements.size())};
+    return Value{static_cast<int64_t>((*std::get<ListValuePtr>(arg)).elements.size())};
 }
 
 inline Value sizeStringImpl(const Value& arg) {
@@ -198,7 +198,7 @@ inline Value rangeImpl(int64_t start, int64_t end, int64_t step) {
             lv.elements.push_back(ValueStorage{Value(i)});
         }
     }
-    return Value(std::move(lv));
+    return Value(mk<ListValue>(std::move(lv)));
 }
 
 inline Value rangeScalarFn(const std::vector<Value>& args, const EvalContext& /*ctx*/) {

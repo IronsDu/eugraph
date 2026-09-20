@@ -169,8 +169,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         return std::get<double>(val);
     } else if (std::holds_alternative<std::string>(val)) {
         return std::get<std::string>(val);
-    } else if (std::holds_alternative<VertexValue>(val)) {
-        auto& v = std::get<VertexValue>(val);
+    } else if (std::holds_alternative<VertexValuePtr>(val)) {
+        auto& v = (*std::get<VertexValuePtr>(val));
 
         std::vector<PS> label_list;
         if (v.labels.has_value()) {
@@ -203,8 +203,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         if (boltMajorVersion(bolt_version) >= 5)
             node_s.fields.push_back(PS{std::to_string(static_cast<int64_t>(v.id))}); // element_id (Bolt v5.x)
         return node_s;
-    } else if (std::holds_alternative<EdgeValue>(val)) {
-        auto& e = std::get<EdgeValue>(val);
+    } else if (std::holds_alternative<EdgeValuePtr>(val)) {
+        auto& e = (*std::get<EdgeValuePtr>(val));
 
         std::string type_name;
         auto elit = edge_label_defs.find(e.label_id);
@@ -235,8 +235,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
             rel_s.fields.push_back(PS{std::to_string(static_cast<int64_t>(e.dst_id))}); // endNodeElementId
         }
         return rel_s;
-    } else if (std::holds_alternative<PathValue>(val)) {
-        auto& p = std::get<PathValue>(val);
+    } else if (std::holds_alternative<PathValuePtr>(val)) {
+        auto& p = (*std::get<PathValuePtr>(val));
 
         std::vector<PS> nodes;
         std::vector<PS> rels;
@@ -250,8 +250,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         // end->start.
         for (size_t i = 0; i < p.elements.size(); ++i) {
             const auto& elem = p.elements[i].value;
-            if (std::holds_alternative<VertexValue>(elem)) {
-                const auto& node = std::get<VertexValue>(elem);
+            if (std::holds_alternative<VertexValuePtr>(elem)) {
+                const auto& node = (*std::get<VertexValuePtr>(elem));
                 auto node_bolt = valueToBolt(elem, label_defs, edge_label_defs, bolt_version);
                 nodes.push_back(PS{std::move(node_bolt)});
                 if (pending_rel) {
@@ -260,8 +260,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
                     pending_rel.reset();
                 }
                 last_node_id = node.id;
-            } else if (std::holds_alternative<EdgeValue>(elem)) {
-                const auto& edge = std::get<EdgeValue>(elem);
+            } else if (std::holds_alternative<EdgeValuePtr>(elem)) {
+                const auto& edge = (*std::get<EdgeValuePtr>(elem));
 
                 std::string type_name;
                 auto elit = edge_label_defs.find(edge.label_id);
@@ -304,18 +304,18 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         return dateTimeToStruct(std::get<DateTimeValue>(val), bolt_version);
     } else if (std::holds_alternative<TimeValue>(val)) {
         return timeToStruct(std::get<TimeValue>(val));
-    } else if (std::holds_alternative<BytesValue>(val)) {
-        return packstream::Value{std::get<BytesValue>(val).data};
+    } else if (std::holds_alternative<BytesValuePtr>(val)) {
+        return packstream::Value{(*std::get<BytesValuePtr>(val)).data};
     } else if (std::holds_alternative<DurationValue>(val)) {
         return durationToStruct(std::get<DurationValue>(val));
-    } else if (std::holds_alternative<ListValue>(val)) {
-        auto& lv = std::get<ListValue>(val);
+    } else if (std::holds_alternative<ListValuePtr>(val)) {
+        auto& lv = (*std::get<ListValuePtr>(val));
         std::vector<PS> list;
         for (auto& elem : lv.elements)
             list.push_back(PS{valueToBolt(elem.value, label_defs, edge_label_defs, bolt_version)});
         return list;
-    } else if (std::holds_alternative<MapValue>(val)) {
-        auto& mv = std::get<MapValue>(val);
+    } else if (std::holds_alternative<MapValuePtr>(val)) {
+        auto& mv = (*std::get<MapValuePtr>(val));
         std::unordered_map<std::string, PS> dict;
         for (auto& [key, elem] : mv.entries)
             dict[key] = PS{valueToBolt(elem.value, label_defs, edge_label_defs, bolt_version)};
@@ -447,7 +447,7 @@ Value boltParamToValue(const packstream::Value& v) {
     } else if (std::holds_alternative<std::string>(v)) {
         return std::get<std::string>(v);
     } else if (std::holds_alternative<std::vector<uint8_t>>(v)) {
-        return BytesValue{std::get<std::vector<uint8_t>>(v)};
+        return Value(mk<BytesValue>(BytesValue{std::get<std::vector<uint8_t>>(v)}));
     } else if (std::holds_alternative<packstream::PackStreamStruct>(v)) {
         const auto& s = std::get<packstream::PackStreamStruct>(v);
         if (auto temporal = temporalFromStruct(s))
@@ -459,14 +459,14 @@ Value boltParamToValue(const packstream::Value& v) {
             auto internal = boltParamToValue(elem.value);
             lv.elements.push_back({std::move(internal)});
         }
-        return lv;
+        return Value(mk<ListValue>(std::move(lv)));
     } else if (std::holds_alternative<std::unordered_map<std::string, PS>>(v)) {
         MapValue mv;
         for (auto& [key, elem] : std::get<std::unordered_map<std::string, PS>>(v)) {
             auto internal = boltParamToValue(elem.value);
             mv.entries.push_back({key, ValueStorage{std::move(internal)}});
         }
-        return mv;
+        return Value(mk<MapValue>(std::move(mv)));
     }
     return Value{};
 }

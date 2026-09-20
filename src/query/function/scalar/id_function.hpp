@@ -12,14 +12,14 @@ namespace scalar {
 /// id(vertex) -> vertex.id as int64
 /// id(edge)   -> edge.id as int64
 inline Value idImpl(const Value& arg) {
-    if (std::holds_alternative<VertexValue>(arg)) {
-        return Value(static_cast<int64_t>(std::get<VertexValue>(arg).id));
+    if (std::holds_alternative<VertexValuePtr>(arg)) {
+        return Value(static_cast<int64_t>((*std::get<VertexValuePtr>(arg)).id));
     }
     if (std::holds_alternative<VertexRef>(arg)) {
         return Value(static_cast<int64_t>(std::get<VertexRef>(arg).id));
     }
-    if (std::holds_alternative<EdgeValue>(arg)) {
-        return Value(static_cast<int64_t>(std::get<EdgeValue>(arg).id));
+    if (std::holds_alternative<EdgeValuePtr>(arg)) {
+        return Value(static_cast<int64_t>((*std::get<EdgeValuePtr>(arg)).id));
     }
     if (std::holds_alternative<EdgeKey>(arg)) {
         return Value(static_cast<int64_t>(std::get<EdgeKey>(arg).id));

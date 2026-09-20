@@ -216,7 +216,7 @@ inline Value splitImpl(const Value& str_val, const Value& sep_val) {
         lv.elements.push_back(ValueStorage{Value{s.substr(pos, next - pos)}});
         pos = next + sep.size();
     }
-    return Value{std::move(lv)};
+    return Value(mk<ListValue>(std::move(lv)));
 }
 
 inline void splitBatchFn(const std::vector<const Column*>& args, Column& result, size_t count, const EvalContext&) {

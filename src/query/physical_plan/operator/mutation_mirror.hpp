@@ -40,7 +40,7 @@ inline void ensureExclusiveBuffer(Column& col, size_t n) {
 /// 场景：MATCH (a) WITH a AS a1, a AS a2 SET a1.p = 1 RETURN a2.p
 /// 同一 vid 在 chunk 中可能被多列引用（值语义独立拷贝），只更新触发列
 /// 会让别名列读到旧值。
-inline void mirrorVertexToAllReferences(DataChunk& chunk, size_t trigger_col, size_t row, VertexValue updated) {
+inline void mirrorVertexToAllReferences(DataChunk& chunk, size_t trigger_col, size_t row, VertexValuePtr updated) {
     ensureExclusiveBuffer(chunk.columns[trigger_col], chunk.count);
     chunk.columns[trigger_col].setValue(row, Value(updated));
 
@@ -51,10 +51,10 @@ inline void mirrorVertexToAllReferences(DataChunk& chunk, size_t trigger_col, si
         if (col.type != binder::BoundTypeKind::VERTEX)
             continue;
         Value v = col.getValue(row);
-        if (!std::holds_alternative<VertexValue>(v))
+        if (!std::holds_alternative<VertexValuePtr>(v))
             continue;
-        const auto& vv = std::get<VertexValue>(v);
-        if (vv.id != updated.id)
+        const auto& vv = (*std::get<VertexValuePtr>(v));
+        if (vv.id != updated->id)
             continue;
         ensureExclusiveBuffer(col, chunk.count);
         col.setValue(row, Value(updated));
@@ -63,7 +63,7 @@ inline void mirrorVertexToAllReferences(DataChunk& chunk, size_t trigger_col, si
 
 /// 把 chunk 中 (trigger_col, row) 处的 edge 替换为 updated，
 /// 并扫描同一 row 的其他 EDGE 列，对 edge.id 相同的列一并替换。
-inline void mirrorEdgeToAllReferences(DataChunk& chunk, size_t trigger_col, size_t row, EdgeValue updated) {
+inline void mirrorEdgeToAllReferences(DataChunk& chunk, size_t trigger_col, size_t row, EdgeValuePtr updated) {
     ensureExclusiveBuffer(chunk.columns[trigger_col], chunk.count);
     chunk.columns[trigger_col].setValue(row, Value(updated));
 
@@ -74,10 +74,10 @@ inline void mirrorEdgeToAllReferences(DataChunk& chunk, size_t trigger_col, size
         if (col.type != binder::BoundTypeKind::EDGE)
             continue;
         Value v = col.getValue(row);
-        if (!std::holds_alternative<EdgeValue>(v))
+        if (!std::holds_alternative<EdgeValuePtr>(v))
             continue;
-        const auto& ev = std::get<EdgeValue>(v);
-        if (ev.id != updated.id)
+        const auto& ev = (*std::get<EdgeValuePtr>(v));
+        if (ev.id != updated->id)
             continue;
         ensureExclusiveBuffer(col, chunk.count);
         col.setValue(row, Value(updated));

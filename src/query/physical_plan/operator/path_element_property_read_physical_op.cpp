@@ -35,28 +35,28 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
                 pv.elements.reserve(pt.vertexCount() + pt.hopCount());
                 for (size_t j = 0; j < pt.vertex_ids.size(); ++j) {
                     ValueStorage ve;
-                    ve.value = VertexValue{pt.vertex_ids[j], {}, {}, false};
+                    ve.value = Value(mk<VertexValue>(VertexValue{pt.vertex_ids[j], {}, {}, false}));
                     pv.elements.push_back(std::move(ve));
                     if (j < pt.edge_ids.size()) {
                         VertexId src = j < pt.edge_src_ids.size() ? pt.edge_src_ids[j] : pt.vertex_ids[j];
                         VertexId dst = j < pt.edge_dst_ids.size() ? pt.edge_dst_ids[j] : pt.vertex_ids[j + 1];
                         ValueStorage ee;
-                        ee.value =
-                            EdgeValue{pt.edge_ids[j], src, dst, pt.edge_label_ids[j], pt.seqs[j], std::nullopt, false};
+                        ee.value = Value(mk<EdgeValue>(EdgeValue{pt.edge_ids[j], src, dst, pt.edge_label_ids[j],
+                                                                 pt.seqs[j], std::nullopt, false}));
                         pv.elements.push_back(std::move(ee));
                     }
                 }
-                val = Value(std::move(pv));
+                val = Value(mk<PathValue>(std::move(pv)));
             }
-            if (!std::holds_alternative<PathValue>(val)) {
+            if (!std::holds_alternative<PathValuePtr>(val)) {
                 path_out[i] = std::move(val);
                 continue;
             }
-            auto& pv = std::get<PathValue>(val);
+            auto& pv = (*std::get<PathValuePtr>(val));
 
             for (auto& elem : pv.elements) {
-                if (std::holds_alternative<VertexValue>(elem.value)) {
-                    auto& vv = std::get<VertexValue>(elem.value);
+                if (std::holds_alternative<VertexValuePtr>(elem.value)) {
+                    auto& vv = (*std::get<VertexValuePtr>(elem.value));
                     if (!vv.labels.has_value() || vv.properties.empty()) {
                         auto labels = co_await store_.getVertexLabels(vv.id);
                         if (!vv.labels.has_value())
@@ -67,8 +67,8 @@ folly::coro::AsyncGenerator<DataChunk> PathElementPropertyReadPhysicalOp::execut
                                 vv.properties[lid] = std::move(*props);
                         }
                     }
-                } else if (std::holds_alternative<EdgeValue>(elem.value)) {
-                    auto& ev = std::get<EdgeValue>(elem.value);
+                } else if (std::holds_alternative<EdgeValuePtr>(elem.value)) {
+                    auto& ev = (*std::get<EdgeValuePtr>(elem.value));
                     if (!ev.properties.has_value() || ev.properties->empty()) {
                         auto props = co_await store_.getEdgeProperties(ev.label_id, ev.id);
                         if (props)

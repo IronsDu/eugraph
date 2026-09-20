@@ -55,8 +55,8 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                 // on the same variable accumulate their modifications.
                 Value val = chunk->getValue(static_cast<size_t>(col), row_idx);
 
-                if (std::holds_alternative<VertexValue>(val)) {
-                    const auto& vertex = std::get<VertexValue>(val);
+                if (std::holds_alternative<VertexValuePtr>(val)) {
+                    const auto& vertex = (*std::get<VertexValuePtr>(val));
                     VertexId vid = vertex.id;
                     VertexValue updated = vertex;
                     bool modified = false;
@@ -164,12 +164,12 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                     }
 
                     if (modified)
-                        chunk->setValue(static_cast<size_t>(col), row_idx, Value(std::move(updated)));
-                } else if (std::holds_alternative<EdgeValue>(val)) {
+                        chunk->setValue(static_cast<size_t>(col), row_idx, Value(mk<VertexValue>(std::move(updated))));
+                } else if (std::holds_alternative<EdgeValuePtr>(val)) {
                     if (item.kind != BoundRemoveItem::Kind::PROPERTY)
                         continue;
 
-                    const auto& edge = std::get<EdgeValue>(val);
+                    const auto& edge = (*std::get<EdgeValuePtr>(val));
                     auto def_it = edge_label_defs_.find(edge.label_id);
                     if (def_it == edge_label_defs_.end())
                         continue;
@@ -183,7 +183,8 @@ folly::coro::AsyncGenerator<DataChunk> RemovePhysicalOp::executeChunk() {
                             EdgeValue updated = edge;
                             if (updated.properties.has_value() && updated.properties->size() > pd.id) {
                                 (*updated.properties)[pd.id] = std::nullopt;
-                                chunk->setValue(static_cast<size_t>(col), row_idx, Value(std::move(updated)));
+                                chunk->setValue(static_cast<size_t>(col), row_idx,
+                                                Value(mk<EdgeValue>(std::move(updated))));
                             }
                             break;
                         }

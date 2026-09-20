@@ -71,7 +71,7 @@ TEST_F(VertexSerializationTest, OutputsIdNotVid) {
     std::unordered_map<LabelId, LabelDef> label_defs = {{1, label_def}};
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
 
-    auto result = handler_->valueToThrift(Value{v}, label_defs, edge_label_defs);
+    auto result = handler_->valueToThrift(Value(mk<VertexValue>(v)), label_defs, edge_label_defs);
     ASSERT_EQ(result.getType(), thrift_service::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
@@ -93,7 +93,7 @@ TEST_F(VertexSerializationTest, IncludesLabelName) {
     std::unordered_map<LabelId, LabelDef> label_defs = {{2, label_def}};
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
 
-    auto result = handler_->valueToThrift(Value{v}, label_defs, edge_label_defs);
+    auto result = handler_->valueToThrift(Value(mk<VertexValue>(v)), label_defs, edge_label_defs);
     ASSERT_EQ(result.getType(), thrift_service::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
@@ -116,7 +116,7 @@ TEST_F(VertexSerializationTest, SerializesProperties) {
     std::unordered_map<LabelId, LabelDef> label_defs = {{1, label_def}};
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
 
-    auto result = handler_->valueToThrift(Value{v}, label_defs, edge_label_defs);
+    auto result = handler_->valueToThrift(Value(mk<VertexValue>(v)), label_defs, edge_label_defs);
     ASSERT_EQ(result.getType(), thrift_service::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();
@@ -133,7 +133,7 @@ TEST_F(VertexSerializationTest, VertexWithoutLabels) {
     std::unordered_map<LabelId, LabelDef> label_defs;
     std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
 
-    auto result = handler_->valueToThrift(Value{v}, label_defs, edge_label_defs);
+    auto result = handler_->valueToThrift(Value(mk<VertexValue>(v)), label_defs, edge_label_defs);
     ASSERT_EQ(result.getType(), thrift_service::ResultValue::Type::vertex_json);
 
     const std::string& json = result.get_vertex_json();

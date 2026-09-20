@@ -37,20 +37,20 @@ struct DeleteEntity {
 void collectDeleteEntities(const Value& value, std::vector<DeleteEntity>& out) {
     if (isNull(value)) {
         return;
-    } else if (std::holds_alternative<VertexValue>(value)) {
-        const auto& v = std::get<VertexValue>(value);
+    } else if (std::holds_alternative<VertexValuePtr>(value)) {
+        const auto& v = (*std::get<VertexValuePtr>(value));
         out.push_back({false, INVALID_EDGE_ID, INVALID_EDGE_LABEL_ID, INVALID_VERTEX_ID, INVALID_VERTEX_ID, 0, v.id});
     } else if (std::holds_alternative<VertexRef>(value)) {
         const auto& v = std::get<VertexRef>(value);
         out.push_back({false, INVALID_EDGE_ID, INVALID_EDGE_LABEL_ID, INVALID_VERTEX_ID, INVALID_VERTEX_ID, 0, v.id});
-    } else if (std::holds_alternative<EdgeValue>(value)) {
-        const auto& e = std::get<EdgeValue>(value);
+    } else if (std::holds_alternative<EdgeValuePtr>(value)) {
+        const auto& e = (*std::get<EdgeValuePtr>(value));
         out.push_back({true, e.id, e.label_id, e.src_id, e.dst_id, e.seq, INVALID_VERTEX_ID});
     } else if (std::holds_alternative<EdgeKey>(value)) {
         const auto& e = std::get<EdgeKey>(value);
         out.push_back({true, e.id, e.label_id, e.src_id, e.dst_id, e.seq, INVALID_VERTEX_ID});
-    } else if (std::holds_alternative<PathValue>(value)) {
-        for (const auto& elem : std::get<PathValue>(value).elements)
+    } else if (std::holds_alternative<PathValuePtr>(value)) {
+        for (const auto& elem : (*std::get<PathValuePtr>(value)).elements)
             collectDeleteEntities(elem.value, out);
     } else if (std::holds_alternative<PathTopology>(value)) {
         const auto& p = std::get<PathTopology>(value);
@@ -61,11 +61,11 @@ void collectDeleteEntities(const Value& value, std::vector<DeleteEntity>& out) {
         for (VertexId vid : p.vertex_ids)
             out.push_back(
                 {false, INVALID_EDGE_ID, INVALID_EDGE_LABEL_ID, INVALID_VERTEX_ID, INVALID_VERTEX_ID, 0, vid});
-    } else if (std::holds_alternative<ListValue>(value)) {
-        for (const auto& elem : std::get<ListValue>(value).elements)
+    } else if (std::holds_alternative<ListValuePtr>(value)) {
+        for (const auto& elem : (*std::get<ListValuePtr>(value)).elements)
             collectDeleteEntities(elem.value, out);
-    } else if (std::holds_alternative<MapValue>(value)) {
-        for (const auto& [k, v] : std::get<MapValue>(value).entries) {
+    } else if (std::holds_alternative<MapValuePtr>(value)) {
+        for (const auto& [k, v] : (*std::get<MapValuePtr>(value)).entries) {
             (void)k;
             collectDeleteEntities(v.value, out);
         }
@@ -212,14 +212,14 @@ folly::coro::AsyncGenerator<DataChunk> DeletePhysicalOp::executeChunk() {
                 if (col < 0 || static_cast<size_t>(col) >= chunk->numColumns())
                     continue;
                 Value val = chunk->getValue(static_cast<size_t>(col), row_idx);
-                if (*target.kind == TargetKind::EDGE && std::holds_alternative<EdgeValue>(val)) {
-                    auto edge = std::get<EdgeValue>(val);
+                if (*target.kind == TargetKind::EDGE && std::holds_alternative<EdgeValuePtr>(val)) {
+                    auto edge = (*std::get<EdgeValuePtr>(val));
                     edge.deleted = true;
-                    writeBack(col, row_idx, Value(std::move(edge)));
-                } else if (*target.kind == TargetKind::VERTEX && std::holds_alternative<VertexValue>(val)) {
-                    auto vertex = std::get<VertexValue>(val);
+                    writeBack(col, row_idx, Value(mk<EdgeValue>(std::move(edge))));
+                } else if (*target.kind == TargetKind::VERTEX && std::holds_alternative<VertexValuePtr>(val)) {
+                    auto vertex = (*std::get<VertexValuePtr>(val));
                     vertex.deleted = true;
-                    writeBack(col, row_idx, Value(std::move(vertex)));
+                    writeBack(col, row_idx, Value(mk<VertexValue>(std::move(vertex))));
                 }
             }
         }

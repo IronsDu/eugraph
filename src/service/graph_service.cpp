@@ -383,7 +383,7 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
                 Row row;
                 row.push_back(std::string(g.name));
                 row.push_back(std::string("standard"));
-                row.push_back(Value{ListValue{}});
+                row.push_back(Value(mk<ListValue>()));
                 row.push_back(std::string("READ_WRITE"));
                 row.push_back(std::string("localhost:17687"));
                 row.push_back(Value{});
@@ -393,7 +393,7 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
                 row.push_back(std::string(""));
                 row.push_back(bool(is_default));
                 row.push_back(bool(is_default));
-                row.push_back(Value{ListValue{}});
+                row.push_back(Value(mk<ListValue>()));
                 row.push_back(std::string(""));
                 row.push_back(bool(false));
                 rows.push_back(std::move(row));
@@ -433,7 +433,7 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
         columns = {"user", "roles", "passwordChangeRequired", "suspended", "home"};
         Row row;
         row.push_back(std::string("neo4j"));
-        row.push_back(catalogStringList({"PUBLIC"}));
+        row.push_back(Value(mk<ListValue>(catalogStringList({"PUBLIC"}))));
         row.push_back(bool(false));
         row.push_back(bool(false));
         row.push_back(Value{});
@@ -451,8 +451,8 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
             row.push_back(std::string("READ"));
             row.push_back(bool(false));
             row.push_back(bool(false));
-            row.push_back(Value{MapValue{}});
-            row.push_back(Value{ListValue{}});
+            row.push_back(Value(mk<MapValue>()));
+            row.push_back(Value(mk<ListValue>()));
             row.push_back(std::string(""));
             rows.push_back(std::move(row));
         }
@@ -477,7 +477,7 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
                 arg.entries.push_back({"name", ValueStorage{Value{std::string{"input"} + std::to_string(i)}}});
                 arg.entries.push_back({"description", ValueStorage{Value{std::string{}}}});
                 arg.entries.push_back({"type", ValueStorage{Value{catalogTypeName(def.arg_types[i])}}});
-                args.elements.push_back({ValueStorage{Value{arg}}});
+                args.elements.push_back({ValueStorage{Value(mk<MapValue>(std::move(arg)))}});
             }
 
             Row row;
@@ -487,7 +487,7 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
             row.push_back(bool(def.is_aggregate));
             row.push_back(std::string(def.is_aggregate ? "Aggregate" : "Scalar"));
             row.push_back(bool(true));
-            row.push_back(Value{args});
+            row.push_back(Value(mk<ListValue>(std::move(args))));
             row.push_back(catalogTypeName(def.return_type));
             rows.push_back(std::move(row));
         }

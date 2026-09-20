@@ -28,7 +28,7 @@ struct CollectState : AggStateBase {
         for (const auto& v : values) {
             lv.elements.push_back(ValueStorage{v});
         }
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
 
     void reset() {

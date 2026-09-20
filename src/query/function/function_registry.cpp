@@ -1124,8 +1124,8 @@ Value edgeUniqueScalar(const std::vector<Value>& args, const EvalContext&) {
         if (isNull(value))
             return;
         uint64_t edge_id = 0;
-        if (std::holds_alternative<EdgeValue>(value))
-            edge_id = std::get<EdgeValue>(value).id;
+        if (std::holds_alternative<EdgeValuePtr>(value))
+            edge_id = (*std::get<EdgeValuePtr>(value)).id;
         else if (std::holds_alternative<EdgeKey>(value))
             edge_id = std::get<EdgeKey>(value).id;
         else
@@ -1134,8 +1134,8 @@ Value edgeUniqueScalar(const std::vector<Value>& args, const EvalContext&) {
             seen.insert(edge_id);
     };
     for (const auto& arg : args) {
-        if (std::holds_alternative<ListValue>(arg)) {
-            for (const auto& elem : std::get<ListValue>(arg).elements)
+        if (std::holds_alternative<ListValuePtr>(arg)) {
+            for (const auto& elem : (*std::get<ListValuePtr>(arg)).elements)
                 check_edge(elem.value);
         } else {
             check_edge(arg);
@@ -1147,13 +1147,13 @@ Value edgeUniqueScalar(const std::vector<Value>& args, const EvalContext&) {
     // non-edge values should not be counted against uniqueness.
     size_t valid = 0;
     for (const auto& arg : args) {
-        if (std::holds_alternative<ListValue>(arg)) {
-            for (const auto& elem : std::get<ListValue>(arg).elements) {
-                if (std::holds_alternative<EdgeValue>(elem.value) || std::holds_alternative<EdgeKey>(elem.value)) {
+        if (std::holds_alternative<ListValuePtr>(arg)) {
+            for (const auto& elem : (*std::get<ListValuePtr>(arg)).elements) {
+                if (std::holds_alternative<EdgeValuePtr>(elem.value) || std::holds_alternative<EdgeKey>(elem.value)) {
                     ++valid;
                 }
             }
-        } else if (std::holds_alternative<EdgeValue>(arg) || std::holds_alternative<EdgeKey>(arg)) {
+        } else if (std::holds_alternative<EdgeValuePtr>(arg) || std::holds_alternative<EdgeKey>(arg)) {
             ++valid;
         }
     }

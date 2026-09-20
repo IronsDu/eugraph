@@ -18,7 +18,7 @@ ExpressionEvaluator::EvalResult ExpressionEvaluator::evalList(const binder::Boun
                 lv.elements.push_back(ValueStorage{Value{}});
             }
         }
-        col.setValue(i, Value(std::move(lv)));
+        col.setValue(i, Value(mk<ListValue>(std::move(lv))));
     }
     return {&col, true};
 }

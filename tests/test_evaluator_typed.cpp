@@ -379,8 +379,11 @@ TEST(EvaluatorTypedKernelTest, TypedSizeList) {
     input.addColumn(BoundTypeKind::LIST);
     auto& col = input.columns[0];
     col.reserve(n);
-    for (size_t i = 0; i < n; ++i)
-        col.buffer->list_data[i].elements.resize(i);
+    for (size_t i = 0; i < n; ++i) {
+        // reserve() leaves a handle slot empty; publish a list before filling it.
+        col.buffer->list_data[i] = mk<ListValue>();
+        col.buffer->list_data[i]->elements.resize(i);
+    }
 
     function::FunctionRegistry registry;
     registry.registerBuiltins();
@@ -527,8 +530,11 @@ TEST(EvaluatorTypedKernelTest, NestedTailDoesNotCrash) {
     input.addColumn(BoundTypeKind::LIST);
     auto& col = input.columns[0];
     col.reserve(n);
-    for (size_t j = 0; j < 5; ++j)
-        col.buffer->list_data[0].elements.push_back(ValueStorage{Value(static_cast<int64_t>(j))});
+    for (size_t j = 0; j < 5; ++j) {
+        if (!col.buffer->list_data[0])
+            col.buffer->list_data[0] = mk<ListValue>();
+        col.buffer->list_data[0]->elements.push_back(ValueStorage{Value(static_cast<int64_t>(j))});
+    }
 
     function::FunctionRegistry registry;
     registry.registerBuiltins();
@@ -549,5 +555,5 @@ TEST(EvaluatorTypedKernelTest, NestedTailDoesNotCrash) {
     ExpressionEvaluator evaluator;
     Column out = Column::flat(BoundTypeKind::LIST, n);
     evaluator.evaluate(std::move(outer), input, out);
-    EXPECT_EQ(out.buffer->list_data[0].elements.size(), 3);
+    EXPECT_EQ(out.buffer->list_data[0]->elements.size(), 3);
 }

@@ -58,8 +58,8 @@ folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::exec
                     if (oi >= right_chunk->columns.size())
                         break;
                     Value v = right_chunk->columns[oi].getValue(0);
-                    if (std::holds_alternative<ListValue>(v)) {
-                        auto& lv = std::get<ListValue>(v);
+                    if (std::holds_alternative<ListValuePtr>(v)) {
+                        auto& lv = (*std::get<ListValuePtr>(v));
                         if (existence_only_) {
                             if (!lv.elements.empty() && collected[oi].elements.empty())
                                 collected[oi].elements.push_back(ValueStorage{Value{int64_t{1}}});
@@ -82,7 +82,7 @@ folly::coro::AsyncGenerator<DataChunk> PatternComprehensionApplyPhysicalOp::exec
                 }
             }
             for (size_t oi = 0; oi < list_element_types_.size(); ++oi) {
-                list_buffers[oi]->list_data[i] = std::move(collected[oi]);
+                list_buffers[oi]->list_data[i] = mk<ListValue>(std::move(collected[oi]));
             }
         }
 
