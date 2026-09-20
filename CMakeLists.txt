@@ -13,6 +13,23 @@ option(EUGRAPH_BUILD_TESTS "Build unit tests" ON)
 option(EUGRAPH_ENABLE_BENCHMARK "Build benchmark targets" OFF)
 option(EUGRAPH_ENABLE_CCACHE "Enable ccache for faster rebuilds" OFF)
 option(EUGRAPH_UNITY_BUILD "Enable unity builds to reduce compilation time" OFF)
+option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+
+if(ENABLE_COVERAGE)
+    add_compile_options(--coverage)
+    add_link_options(--coverage)
+endif()
+
+# clang 不会自动链接 libatomic：fbthrift/fizz 里的 std::atomic<T>::compare_exchange_weak
+# 会被降低成对 __atomic_compare_exchange 的调用（GCC 会自动带上 libatomic）。
+# 这里刻意挂在 CMAKE_CXX_STANDARD_LIBRARIES 上：它追加在链接行的最后（所有目标库之后），
+# 既能解析 __atomic_*，又不像 target_link_libraries(atomic) 那样参与 CMake 的依赖遍历 ——
+# 库顺序一旦被改变，GNU ld 的单遍扫描就会漏掉后置库引用的符号（实测会把 libfolly.a 排到
+# eugraph_* 之前，于是 EuGraphService/bolt_server/eugraph_handler 里的 folly/thrift
+# 协程符号 undefined）。
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} -latomic")
+endif()
 
 # ccache support
 if(EUGRAPH_ENABLE_CCACHE)

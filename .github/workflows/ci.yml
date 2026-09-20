@@ -6,11 +6,25 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+env:
+  # 原 code-quality.yml 的顶层 env（asan / ubsan / static-analysis 会用到）
+  BUILD_TYPE: Debug
+  # vcpkg 二进制缓存放到 workflow 级：cmake --preset=... 会在 CMake 内部再触发一次
+  # manifest 安装，那种"隐式安装"不在任何步骤的 env 里，缺了这行就会从源码重建
+  # folly/fbthrift（build-gcc / coverage / asan / ubsan 都因此很慢）。
+  # 前置步骤 actions/github-script 已把 ACTIONS_CACHE_URL / ACTIONS_RUNTIME_TOKEN
+  # 导出到后续步骤，x-gha 后端才能生效。
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
 jobs:
   # Ubuntu with GCC
   build-gcc:
     name: Ubuntu (GCC)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
 
     steps:
     - name: Checkout code
@@ -52,11 +66,11 @@ jobs:
       with:
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
         vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
-        runVcpkgInstall: true
+        runVcpkgInstall: false
         doNotCache: false
         vcpkgJsonGlob: vcpkg.json
-        vcpkgJsonIgnores: ['**/vcpkg/**']
-        runVcpkgFormatString: ['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']
+        vcpkgJsonIgnores: "['**/vcpkg/**']"
+        runVcpkgFormatString: "['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']"
 
     - name: Debug vcpkg environment
       run: |
@@ -78,9 +92,6 @@ jobs:
     - name: Build
       run: cmake --build --preset=release
 
-    - name: Run tests
-      run: ctest --preset=release --verbose
-
     - name: Check library linking
       working-directory: build/release
       run: |
@@ -91,6 +102,9 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
     - name: Checkout code
@@ -133,11 +147,11 @@ jobs:
       with:
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
         vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
-        runVcpkgInstall: true
+        runVcpkgInstall: false
         doNotCache: false
         vcpkgJsonGlob: vcpkg.json
-        vcpkgJsonIgnores: ['**/vcpkg/**']
-        runVcpkgFormatString: ['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']
+        vcpkgJsonIgnores: "['**/vcpkg/**']"
+        runVcpkgFormatString: "['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']"
 
     - name: Configure CMake with Coverage
       run: cmake --preset=coverage
@@ -151,11 +165,26 @@ jobs:
     - name: Generate coverage report
       working-directory: build/coverage
       run: |
+        set -o pipefail
         gcovr --xml-pretty --exclude-unreachable-branches --print-summary \
           --output coverage.xml \
           --root ${{ github.workspace }} \
-          --filter ${{ github.workspace }}/src
-
+          --filter '${{ github.workspace }}/src' \
+          --exclude '${{ github.workspace }}/src/service/thrift/gen-cpp2/.*' \
+          --exclude '${{ github.workspace }}/src/query/parser/generated/.*' | tee gcovr-summary.txt
+        # 同一份 summary 写成 markdown，直接贴到 PR（不依赖 Codecov 认证）
+        {
+          echo "### Coverage Report"
+          echo
+          echo '```'
+          cat gcovr-summary.txt
+          echo '```'
+          echo
+          echo "commit: `${{ github.sha }}`"
+        } > coverage-comment.md
+        # 顺带确认采集真的开了、且有 .gcda，避免"静默 0%"
+        grep -E '^ENABLE_COVERAGE' "${{ github.workspace }}/build/coverage/CMakeCache.txt" || true
+        echo "gcda files: $(find "${{ github.workspace }}/build/coverage" -name '*.gcda' | wc -l)"
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
       with:
@@ -167,6 +196,13 @@ jobs:
         verbose: true
 
   # Ubuntu with Clang
+    - name: Post coverage report to PR
+      uses: marocchino/sticky-pull-request-comment@v2
+      if: github.event_name == 'pull_request' && hashFiles('build/coverage/coverage-comment.md') != '' && always()
+      with:
+        path: build/coverage/coverage-comment.md
+        header: coverage-report
+
   build-clang:
     name: Ubuntu (Clang)
     runs-on: ubuntu-latest
@@ -212,11 +248,11 @@ jobs:
       with:
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
         vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
-        runVcpkgInstall: true
+        runVcpkgInstall: false
         doNotCache: false
         vcpkgJsonGlob: vcpkg.json
-        vcpkgJsonIgnores: ['**/vcpkg/**']
-        runVcpkgFormatString: ['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']
+        vcpkgJsonIgnores: "['**/vcpkg/**']"
+        runVcpkgFormatString: "['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']"
 
     - name: Debug vcpkg environment
       run: |
@@ -229,11 +265,456 @@ jobs:
         echo "=== VCPKG Version ==="
         ${{ github.workspace }}/vcpkg/vcpkg version
 
+    # 依赖用 GCC 构建（与 gcc/asan/ubsan 作业共用同一份产物），只有我们的代码用 clang 编译。
+    #
+    # 为什么必须这样：folly 的 Portability.h 按编译器/标准决定 FOLLY_HAS_COROUTINES，
+    # clang 编 folly 时该宏为 0（folly 自己的 CMake 用 C++17 探测），于是 libfolly.a 里
+    # 根本没有 folly/coro 模块；而我们的 TU 以 C++20 编译、看到 FOLLY_HAS_COROUTINES=1，
+    # 引用 folly::coro::*（以及 fbthrift 里同样条件编译的 HandlerCallbackBase::*）→ 链接必然
+    # undefined reference。CI 实测：clang 装的 folly 里 coro::Mutex/unlock、Baton、 
+    # resumeCoroutineWithNewAsyncStackRoot 计数全为 0，archive 只有 188MB（GCC 那份 350MB）。
+    - name: Install vcpkg dependencies (GCC)
+      run: |
+        ./vcpkg/vcpkg install --triplet x64-linux \
+          --x-install-root="$PWD/build/clang-release/vcpkg_installed"
     - name: Configure CMake with Clang
-      run: cmake --preset=clang-release
+      run: cmake --preset=clang-release -DVCPKG_MANIFEST_INSTALL=OFF
 
     - name: Build
       run: cmake --build --preset=clang-release
 
-    - name: Run tests
-      run: ctest --preset=clang-release --verbose
+  # Format Check with clang-format
+  format-check:
+    name: Format Check
+    runs-on: ubuntu-latest
+    container:
+      image: silkeh/clang:18
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Show clang-format version
+      run: clang-format --version
+
+    - name: Run format check
+      run: |
+        chmod +x ./scripts/check-format.sh
+        ./scripts/check-format.sh
+
+  # Address Sanitizer
+  asan:
+    name: Address Sanitizer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake \
+          build-essential \
+          git \
+          pkg-config \
+          ninja-build \
+          ccache \
+          maven \
+          python3 \
+          python3-pip \
+          python3-venv
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - name: Install Neo4j Java driver
+      run: |
+        mkdir -p "$RUNNER_TEMP/neo4j-driver"
+        cat > "$RUNNER_TEMP/neo4j-driver/pom.xml" <<'EOF'
+        <project xmlns="http://maven.apache.org/POM/4.0.0">
+          <modelVersion>4.0.0</modelVersion>
+          <groupId>eugraph</groupId>
+          <artifactId>bolt-java-driver</artifactId>
+          <version>1.0</version>
+          <dependencies>
+            <dependency>
+              <groupId>org.neo4j.driver</groupId>
+              <artifactId>neo4j-java-driver</artifactId>
+              <version>5.28.14</version>
+            </dependency>
+          </dependencies>
+        </project>
+        EOF
+        mvn -q -f "$RUNNER_TEMP/neo4j-driver/pom.xml" dependency:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/neo4j-driver/lib"
+        sudo mkdir -p /usr/share/neo4j/lib
+        sudo cp "$RUNNER_TEMP/neo4j-driver/lib/"*.jar /usr/share/neo4j/lib/
+
+    - name: Install Python test dependencies (Bolt integration tests)
+      run: pip install neo4j pytest --break-system-packages
+
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@v7
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ${{ runner.os }}-ccache-asan-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-ccache-asan-
+
+    - name: Cache vcpkg packages
+      id: cache-vcpkg
+      uses: actions/cache@v4
+      with:
+        # 只缓存 vcpkg 工具本身（省掉 clone + bootstrap）。依赖交给 x-gha 二进制缓存：
+        # VCPKG_BINARY_SOURCES 里的 clear 会清掉 vcpkg 默认的本地 files 缓存源，
+        # 所以 ~/.cache/vcpkg/archives 永远不会被写入；vcpkg_installed 是构建不使用的目录。
+        path: |
+          vcpkg
+        key: ${{ runner.os }}-vcpkg-asan-${{ hashFiles('vcpkg.json') }}
+
+    - name: Install vcpkg
+      run: |
+        if [ ! -f "vcpkg/vcpkg" ]; then
+          echo "vcpkg not found or incomplete, cloning..."
+          rm -rf vcpkg
+          git clone https://github.com/Microsoft/vcpkg.git
+          cd vcpkg
+          git checkout 2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec
+          ./bootstrap-vcpkg.sh
+        else
+          echo "Using cached vcpkg"
+        fi
+
+    - name: Configure CMake with ASan
+      run: |
+        mkdir build
+        cd build
+        cmake .. \
+          -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
+          -DVCPKG_TARGET_TRIPLET=x64-linux-release \
+          -DEUGRAPH_ENABLE_CCACHE=ON \
+          -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+          -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+          -DCMAKE_CXX_FLAGS_DEBUG="-O0" \
+          -DCMAKE_C_FLAGS_DEBUG="-O0" \
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address -s" \
+          -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=address"
+
+    - name: Build
+      run: |
+        cd build
+        ninja -j$(nproc)
+
+    - name: Restore TCK baseline report
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@v4
+      with:
+        path: build/tck-baseline-report.md
+        key: tck-baseline-report-${{ github.base_ref }}-${{ github.sha }}
+        restore-keys: tck-baseline-report-${{ github.base_ref }}-
+
+    - name: Restore TCK step baseline
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@v4
+      with:
+        path: build/tck-step-baseline.json
+        key: tck-step-baseline-${{ github.base_ref }}-${{ github.sha }}
+        restore-keys: tck-step-baseline-${{ github.base_ref }}-
+
+    - name: Run tests with ASan
+      working-directory: build
+      run: |
+        ctest --output-on-failure --verbose --output-junit junit.xml
+      env:
+        ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        TCK_REPORT_PATH: ${{ github.workspace }}/build/tck-report.md
+        TCK_BASELINE_REPORT_PATH: ${{ github.workspace }}/build/tck-baseline-report.md
+        TCK_STEP_RESULTS_PATH: ${{ github.workspace }}/build/tck-step-results.json
+        TCK_STEP_BASELINE_PATH: ${{ github.workspace }}/build/tck-step-baseline.json
+
+    - name: Publish unit test results
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      if: always() && hashFiles('build/junit.xml') != ''
+      with:
+        files: build/junit.xml
+        check_name: Unit Test Results
+        comment_title: Unit Test Report
+
+    - name: Post TCK report to PR
+      uses: marocchino/sticky-pull-request-comment@v2
+      if: github.event_name == 'pull_request' && hashFiles('build/tck-report.md') != '' && always()
+      with:
+        path: build/tck-report.md
+        header: tck-report
+
+    - name: Save TCK baseline report
+      if: github.event_name == 'push' && hashFiles('build/tck-report.md') != ''
+      run: cp build/tck-report.md build/tck-baseline-report.md
+
+    - name: Cache TCK baseline report
+      if: github.event_name == 'push'
+      uses: actions/cache/save@v4
+      with:
+        path: build/tck-baseline-report.md
+        key: tck-baseline-report-${{ github.ref_name }}-${{ github.sha }}
+
+    - name: Save TCK step baseline
+      if: github.event_name == 'push' && hashFiles('build/tck-step-results.json') != ''
+      run: cp build/tck-step-results.json build/tck-step-baseline.json
+
+    - name: Cache TCK step baseline
+      if: github.event_name == 'push'
+      uses: actions/cache/save@v4
+      with:
+        path: build/tck-step-baseline.json
+        key: tck-step-baseline-${{ github.ref_name }}-${{ github.sha }}
+
+  # Undefined Behavior Sanitizer
+  ubsan:
+    name: Undefined Behavior Sanitizer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake \
+          build-essential \
+          git \
+          pkg-config \
+          ninja-build \
+          ccache \
+          maven \
+          python3 \
+          python3-pip \
+          python3-venv
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+
+    - name: Install Neo4j Java driver
+      run: |
+        mkdir -p "$RUNNER_TEMP/neo4j-driver"
+        cat > "$RUNNER_TEMP/neo4j-driver/pom.xml" <<'EOF'
+        <project xmlns="http://maven.apache.org/POM/4.0.0">
+          <modelVersion>4.0.0</modelVersion>
+          <groupId>eugraph</groupId>
+          <artifactId>bolt-java-driver</artifactId>
+          <version>1.0</version>
+          <dependencies>
+            <dependency>
+              <groupId>org.neo4j.driver</groupId>
+              <artifactId>neo4j-java-driver</artifactId>
+              <version>5.28.14</version>
+            </dependency>
+          </dependencies>
+        </project>
+        EOF
+        mvn -q -f "$RUNNER_TEMP/neo4j-driver/pom.xml" dependency:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/neo4j-driver/lib"
+        sudo mkdir -p /usr/share/neo4j/lib
+        sudo cp "$RUNNER_TEMP/neo4j-driver/lib/"*.jar /usr/share/neo4j/lib/
+
+    - name: Install Python test dependencies (Bolt integration tests)
+      run: pip install neo4j pytest --break-system-packages
+
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@v7
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ${{ runner.os }}-ccache-ubsan-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-ccache-ubsan-
+
+    - name: Cache vcpkg packages
+      id: cache-vcpkg
+      uses: actions/cache@v4
+      with:
+        # 只缓存 vcpkg 工具本身（省掉 clone + bootstrap）。依赖交给 x-gha 二进制缓存：
+        # VCPKG_BINARY_SOURCES 里的 clear 会清掉 vcpkg 默认的本地 files 缓存源，
+        # 所以 ~/.cache/vcpkg/archives 永远不会被写入；vcpkg_installed 是构建不使用的目录。
+        path: |
+          vcpkg
+        key: ${{ runner.os }}-vcpkg-ubsan-${{ hashFiles('vcpkg.json') }}
+
+    - name: Install vcpkg
+      run: |
+        if [ ! -f "vcpkg/vcpkg" ]; then
+          echo "vcpkg not found or incomplete, cloning..."
+          rm -rf vcpkg
+          git clone https://github.com/Microsoft/vcpkg.git
+          cd vcpkg
+          git checkout 2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec
+          ./bootstrap-vcpkg.sh
+        else
+          echo "Using cached vcpkg"
+        fi
+
+    - name: Configure CMake with UBSan
+      run: |
+        mkdir build
+        cd build
+        cmake .. \
+          -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
+          -DVCPKG_TARGET_TRIPLET=x64-linux-release \
+          -DEUGRAPH_ENABLE_CCACHE=ON \
+          -DCMAKE_CXX_FLAGS="-fsanitize=undefined" \
+          -DCMAKE_C_FLAGS="-fsanitize=undefined" \
+          -DCMAKE_CXX_FLAGS_DEBUG="-O0" \
+          -DCMAKE_C_FLAGS_DEBUG="-O0" \
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined -s" \
+          -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=undefined"
+
+    - name: Build
+      run: |
+        cd build
+        ninja -j$(nproc)
+
+    - name: Run tests with UBSan
+      working-directory: build
+      run: |
+        ctest --output-on-failure --verbose --output-junit junit.xml
+
+    - name: Publish unit test results
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      if: always() && hashFiles('build/junit.xml') != ''
+      with:
+        files: build/junit.xml
+        check_name: Unit Test Results (UBSan)
+        comment_title: Unit Test Report (UBSan)
+      env:
+        UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+  # Static Analysis with clang-tidy
+  static-analysis:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake \
+          clang-tidy \
+          build-essential \
+          git \
+          pkg-config \
+          ninja-build \
+          python3 \
+          python3-pip \
+          python3-venv
+
+    - name: Install Python test dependencies (Bolt integration tests)
+      run: pip install neo4j pytest --break-system-packages
+
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@v7
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+    - name: Cache vcpkg packages
+      id: cache-vcpkg
+      uses: actions/cache@v4
+      with:
+        # 只缓存 vcpkg 工具本身（省掉 clone + bootstrap）。依赖交给 x-gha 二进制缓存：
+        # VCPKG_BINARY_SOURCES 里的 clear 会清掉 vcpkg 默认的本地 files 缓存源，
+        # 所以 ~/.cache/vcpkg/archives 永远不会被写入；vcpkg_installed 是构建不使用的目录。
+        path: |
+          vcpkg
+        key: ${{ runner.os }}-vcpkg-clang-tidy-${{ hashFiles('vcpkg.json') }}
+
+    - name: Install vcpkg
+      run: |
+        if [ ! -f "vcpkg/vcpkg" ]; then
+          echo "vcpkg not found or incomplete, cloning..."
+          rm -rf vcpkg
+          git clone https://github.com/Microsoft/vcpkg.git
+          cd vcpkg
+          git checkout 2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec
+          ./bootstrap-vcpkg.sh
+        else
+          echo "Using cached vcpkg"
+        fi
+
+    - name: Configure CMake and generate compile_commands.json
+      run: |
+        mkdir build
+        cd build
+        cmake .. \
+          -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
+          -DVCPKG_TARGET_TRIPLET=x64-linux-release \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+    - name: Run clang-tidy
+      run: |
+        find src tests \( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) | head -20 | xargs clang-tidy \
+          -p build \
+          2>&1 | tee clang-tidy-output.txt
+
+    - name: Upload clang-tidy results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: clang-tidy-results
+        path: clang-tidy-output.txt
+
+  # Build with all warnings as errors
+
