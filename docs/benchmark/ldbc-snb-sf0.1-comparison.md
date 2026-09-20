@@ -313,6 +313,28 @@ if (isGraphEntity(left.type.kind) || isGraphEntity(right.type.kind)) {
 **结论**：这条路径需要更系统的处理（移动语义与计划树遍历的交互），不是一次局部改动能收口的。
 本次**未提交任何会崩溃的代码**，分支只保留分析结论与那个已验证的边哈希修复。
 
+### 第二次尝试（不移动任何东西）：仍崩溃，但两次崩溃点已精确定位
+
+改成**完全不移动谓词内容**（要求谓词**恰好全是**跨作用域等值，此时连接本身即保证谓词，
+故无需再套 Filter）后，**仍然 SIGSEGV** —— 这证明**崩溃与「移动」无关**，是更底层的问题。
+
+**两次崩溃点（gdb 实测，均在新位置）**：
+
+| 阶段 | 崩溃点 | 说明 |
+|---|---|---|
+| **规划期**（2.17s） | `remapExprColumnIndices` → 解引用**空的** `unique_ptr<BoundFunctionCall>`（`physical_planner.cpp:420`），经 `remapChildOps` 的 `BoundFilterOp` 分支到达 | 该重映射函数**并非统一空值安全**：`remapExprColumnIndices` 有 **22** 处、`remapChildOps` 有 **15** 处 `unique_ptr` 分支**缺少 `if (!val)` 守卫**（同一函数内部分分支已有守卫，说明它本应容忍空值）|
+| **运行期**（6.33s） | `ExpressionEvaluator::evaluatePredicate` → `evaluateInternal` 的 visitor | **列索引契约**问题：哈希连接的输出列布局与下游谓词期望的索引不一致 |
+
+**补齐全部 37 处空值守卫后**，规划期崩溃消失，查询推进到运行期才崩 —— 说明守卫本身是**有效的**，
+但**运行期的列索引契约**才是真正的拦路石：
+
+> `CorrelatedSource` / 模式计划 / 外层 `LeftJoin` 之间的列索引约定，
+> 与本改写构造的 `left_schema + right_schema` 输出之间尚未对齐。
+
+**结论**：这条改写需要**先吃透那三者的列索引契约**（尤其是 `CorrelatedSource` 实际输出的列数
+与规划 schema 是否一致），而不是继续试探。**本轮未提交任何会崩溃的代码**，
+两次尝试的改动均已完整回退并复验（**547/547**、服务正常）。
+
 **complex-5 剩余问题**（未修）：`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)
 <-[:CONTAINER_OF]-(forum) WHERE friend IN friends` 未完成 —— 需查 join order /
 `IN` 谓词下推，与内存无关。
