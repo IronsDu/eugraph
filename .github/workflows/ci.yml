@@ -386,10 +386,11 @@ jobs:
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
+        # 只缓存 vcpkg 工具本身（省掉 clone + bootstrap）。依赖交给 x-gha 二进制缓存：
+        # VCPKG_BINARY_SOURCES 里的 clear 会清掉 vcpkg 默认的本地 files 缓存源，
+        # 所以 ~/.cache/vcpkg/archives 永远不会被写入；vcpkg_installed 是构建不使用的目录。
         path: |
           vcpkg
-          ~/.cache/vcpkg/archives
-          vcpkg_installed
         key: ${{ runner.os }}-vcpkg-asan-${{ hashFiles('vcpkg.json') }}
 
     - name: Install vcpkg
@@ -575,10 +576,11 @@ jobs:
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
+        # 只缓存 vcpkg 工具本身（省掉 clone + bootstrap）。依赖交给 x-gha 二进制缓存：
+        # VCPKG_BINARY_SOURCES 里的 clear 会清掉 vcpkg 默认的本地 files 缓存源，
+        # 所以 ~/.cache/vcpkg/archives 永远不会被写入；vcpkg_installed 是构建不使用的目录。
         path: |
           vcpkg
-          ~/.cache/vcpkg/archives
-          vcpkg_installed
         key: ${{ runner.os }}-vcpkg-ubsan-${{ hashFiles('vcpkg.json') }}
 
     - name: Install vcpkg
@@ -670,10 +672,11 @@ jobs:
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
+        # 只缓存 vcpkg 工具本身（省掉 clone + bootstrap）。依赖交给 x-gha 二进制缓存：
+        # VCPKG_BINARY_SOURCES 里的 clear 会清掉 vcpkg 默认的本地 files 缓存源，
+        # 所以 ~/.cache/vcpkg/archives 永远不会被写入；vcpkg_installed 是构建不使用的目录。
         path: |
           vcpkg
-          ~/.cache/vcpkg/archives
-          vcpkg_installed
         key: ${{ runner.os }}-vcpkg-clang-tidy-${{ hashFiles('vcpkg.json') }}
 
     - name: Install vcpkg
