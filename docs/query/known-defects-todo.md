@@ -1,9 +1,15 @@
 # 已知缺陷待办
 
-> 排查 complex-10 正确性缺陷过程中**顺带确认**、但与 complex-10 **无关**的既有缺陷。
-> 每条都附最小复现或代码位置，可直接开工。
+> 排查过程中**顺带确认**、但与当前任务**无关**的既有缺陷。每条都附最小复现或代码位置，可直接开工。
 >
-> 来源复盘见 [comprehension-defect-debugging-notes.md](comprehension-defect-debugging-notes.md)。
+> **来源**：
+> * §1–§7：complex-10 正确性缺陷排查（复盘见
+>   [comprehension-defect-debugging-notes.md](comprehension-defect-debugging-notes.md)）；
+> * §8–§12：complex-5 性能排查（根因与三轮尝试的证据链见
+>   [../benchmark/ldbc-snb-sf0.1-comparison.md](../benchmark/ldbc-snb-sf0.1-comparison.md)）。
+>
+> 其中 §8 是**架构层面的缺口**（相关子计划内的连接不受代价模型影响），建议独立立项；
+> §9、§10 是可直接开工的具体修复。
 
 ## 1. 反向关系模式不匹配
 
@@ -102,3 +108,79 @@ stl_vector.h:1253: vector<int>::operator[]: Assertion '__n < this->size()' faile
 客户端报 `Failed to read from defunct connection`；**服务器未崩溃**（仍在监听、日志正常、内存充足）。
 
 **影响**：基准脚本需每轮新建连接，否则会把「连接断开」误判为「服务器崩溃 / 查询超时」。
+
+## 8. 相关子计划内的连接不受代价模型影响（complex-5 不返回的根因）
+
+**现象**：LDBC complex-5 永不返回（CPU 121%、内存仅 1.1 GB，非内存问题）。
+`OPTIONAL MATCH (friend)<-[:HAS_CREATOR]-(post)<-[:CONTAINER_OF]-(forum) WHERE friend IN friends`
+被规划为 `CorrelatedSource → CrossProduct → Filter`，其中 `friend` 无约束 →
+**扫描全部节点再与外层的每个 forum 做笛卡尔积**，`friend IN friends` 只在最后当过滤器。
+
+**本质**：`bindCrossWithEqualities` 有等值却产出 `Cross + Filter`，而该子树位于**相关子计划内** ——
+优化器**没有可选的替代计划**，代价估计改得再准也**无从发挥**（已实测：把 `join_type`
+从 `Cross` 改成 `Inner`，`EXPLAIN` 计划**完全不变**）。
+
+**已验证不可行的三类局部方案**：
+1. 把 `Cross + Filter` 改写成 `HashJoin`（实现在 `physical_planner.cpp` 的 `BoundFilterOp` 钩子点，
+   与既有 `tryPlanListIndexJoin` 并列）→ **三次尝试均 SIGSEGV**（见第 9、10 项）；
+2. 修正 `join_type` 的代价模型输入 → **计划不变**；
+3. 在模式中改从已绑定节点起遍历（`bind_match.cpp:1991` 的 `first_node_bound` 只覆盖「首节点已绑定」）
+   → **需 AST 层重排模式，未尝试**。
+
+**结论**：这是**架构层面的缺口** —— 需要让相关子计划内的连接进入优化器的选择范围，
+或为该形态提供专门的规划路径。**建议独立立项**，不要再做局部试探。
+
+**排查记录**：`docs/benchmark/ldbc-snb-sf0.1-comparison.md`（含三轮尝试的完整证据链）。
+
+## 9. 列索引重映射遍历缺 37 处空值守卫
+
+**位置**：`physical_planner.cpp` 的 `remapExprColumnIndices`（22 处）与 `remapChildOps`（15 处）。
+
+**现象**：这些函数遍历逻辑计划树、解引用每个 `unique_ptr` 节点，但**部分分支有 `if (val)` 守卫、
+部分没有** —— 同一函数内不一致。一旦某个节点的 `unique_ptr` 为空（例如谓词内容被 `std::move`
+取走后留下的空洞），就会**解引用空指针 → SIGSEGV**。
+
+**证据**：complex-5 的改写尝试中，gdb 抓到
+`remapExprColumnIndices (physical_planner.cpp:420)` 解引用空的 `unique_ptr<BoundFunctionCall>`；
+补齐全部 37 处守卫后该崩溃消失（查询推进到运行期才崩）。
+
+**建议**：统一补齐守卫（**安全**：空节点跳过比崩溃好），并**顺带核查**
+「为何计划树中会出现空节点」——若正常路径也会产生空洞，那是更根本的问题。
+
+## 10. `WITH collect(...)` 无分组键时，列表在后续 OPTIONAL MATCH 的 WHERE 中不可见
+
+```cypher
+MATCH (p:Person {id:933})-[:KNOWS*1..2]-(f:Person) WHERE NOT p=f
+WITH collect(DISTINCT f) AS friends
+OPTIONAL MATCH (x)<-[:HAS_CREATOR]-(post:Post)
+WHERE x IN friends                    -- → Binding failed; UndefinedVariable: 'friends' not defined
+RETURN count(post)
+```
+
+**现象**：`friends` 由上一条 `WITH` 定义，理应可见，却报 `UndefinedVariable`。
+
+**对比**：complex-5 的 `WITH forum, collect(friend) AS friends`（**带分组键**）**不报此错**。
+
+**推测**：疑似「无分组键的聚合结果列在后续子句中的可见性」问题。**未定位**。
+
+## 11. 测量陷阱：固定顺序的 A/B 会让后跑者偏快约 7%
+
+**现象**：同一二进制交错 A/B 时，若**固定顺序**（总是 A 先 B 后），
+后跑版本的**基线查询**（该改动不可能影响）也快了约 7%（344/355/334 vs 377/380/356 ms）。
+
+**教训**：**每轮交换顺序**（A→B、B→A、A→B），并用**相对同轮基线的比值**判读，
+而非绝对耗时。本次实测中，固定顺序曾让我把「无变化」误读为「改进」。
+
+## 12. `CorrelatedSource` 运行时按值推断列类型（规划类型可能与运行时不符）
+
+**位置**：`correlated_source_physical_op.cpp` 的 `kindFromValue()`。
+
+**代码注释原文**：*"The binder types the correlated variable as VERTEX (semantic), but
+LeftJoin passes whatever form the left column actually holds at runtime — typically VertexRef
+from a topology-stage Scan."*
+
+**含义**：该算子的输出列类型**由运行时的值决定**，而非规划时的 `types_`。
+这解释了为何 `HashJoinPhysicalOp` 需要在**比较**与**哈希**两侧都按 id 归一
+（见已修缺陷 `b96ff738`：`KeyHash` 与 `KeyEq` 对边不一致）。
+
+**风险提示**：任何在规划期推断「某列必为 VERTEX」的代码都可能与运行时不符。
