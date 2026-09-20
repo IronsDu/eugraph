@@ -291,6 +291,57 @@ struct SelectionVector {
 };
 ```
 
+### 重型值类型由共享指针持有
+
+`Value` 里的**重型类型**是句柄（`shared_ptr`），而非内联对象：
+
+```cpp
+using Value = std::variant<std::monostate, bool, int64_t, double, std::string,
+                           VertexRef, EdgeKey, PathTopology,
+                           VertexValuePtr, EdgeValuePtr, PathValuePtr,   // 句柄
+                           DateTimeValue, TimeValue, DurationValue,
+                           ListValuePtr, MapValuePtr, BytesValuePtr>;    // 句柄
+
+template <typename T> using ValPtr = std::shared_ptr<T>;
+template <typename T, typename... Args> ValPtr<T> mk(Args&&...);         // 唯一构造入口
+```
+
+**动机**：此前每次拷贝 `Value` 都会深拷贝其载荷 —— `VertexValue` 持有
+`unordered_map<LabelId, Properties>` 与 `std::set`，`ListValue`/`PathValue` 持有 variant 数组，
+`MapValue` 持有 `(string, variant)` 数组。值在算子间每经过一行就要付一次这个代价。
+改为句柄后，拷贝是**引用计数递增**；`ColumnBuffer` 的类型数组（`vertex_data` 等）也存句柄。
+
+#### 两条不变量（改动本模块前必须遵守）
+
+1. **句柄永不为空**：所有构造都经 `mk<T>(...)`。这是读取处**不需要判空**的前提。
+2. **载荷发布后视为不可变**：共享之后原地修改会透过所有副本可见。
+   `evalDynamicPropertyRef` 的惰性富化是唯一例外，它在**私有副本**上做富化
+   （这正是它改造前的语义 —— 当时那句赋值本身就在拷贝 `VertexValue`）。
+
+#### 空句柄 == null
+
+`reserve()` 只为槽位分配句柄，**不发布载荷**；而
+`std::holds_alternative<ListValuePtr>` 对**空句柄也为真**。因此：
+
+* `isNull(Value)` **把空句柄视为 null** —— 这是全引擎空值判断一致的关键，
+  否则空槽位会被当成列表解引用（曾在 TCK 下打崩服务）；
+* `Column::getValue` 对空句柄返回 `Value{}`，直接读缓冲的少量快速路径自行判空。
+
+#### 相等性与哈希必须同时按载荷
+
+句柄化之后，**任何依赖 variant 内建 `operator==` 的比较都会退化成比指针**。
+以下四处必须走载荷（已修）：
+
+| 位置 | 后果（未修时） |
+|------|----------------|
+| `valueEquals` | 顶点/边/字节落到 `a == b`，同实体不同句柄判为不等 |
+| `ValueHash` | 重型类型分支不再匹配，全部哈希为 0 |
+| `RowEqual` | DISTINCT 不再去重 |
+| 聚合的 per-group distinct 集合 | `unordered_set<Value, ValueHash>` 的相等来自 `std::equal_to`：同实体哈希相同、比较不等，**两行都留下** |
+
+`ValueHash` 与 `ValueContentEqual` 需成对使用；`ListValue`/`PathValue`/`MapValue` 的
+`operator==` 递归走 `valueEquals`，而非直接比较元素。
+
 ---
 
 ## 七、Bound Logical Plan（绑定后逻辑计划）

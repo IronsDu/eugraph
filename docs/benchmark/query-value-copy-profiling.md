@@ -1824,3 +1824,45 @@ map 的取舍取决于复用率），而本轮上下文不足以完成实现 + �
 
 **本节的 `count_only` 记述作为排查记录保留** —— 它记录了一条「看似合理但实测无效」的路径，
 以及判定它无效所需的判据。
+
+---
+
+# 重型值类型句柄化：结果
+
+把 `Value` 的重型类型改为 `shared_ptr`、`ColumnBuffer` 存句柄（设计与不变量见
+[query-engine-design.md](../query/engine/query-engine-design.md) 第六节）。
+
+## 口径
+
+**交错 A/B**：`scripts/bench_ldbc_interactive.py`，`personId=933`，warmup 1 / iters 3，
+**每轮交换两个构建的先后顺序**（固定顺序会让后跑者快约 7%，见 known-defects-todo.md §11），
+取两轮最小值。同机、同数据（`eugraph-sf0.1-fresh`）、同参数（4 计算线程、1 GB WT cache）。
+
+## 结果
+
+| 查询 | 改造前 (ms) | 改造后 (ms) | 比值 | 行数 |
+|------|------------:|------------:|-----:|------|
+| complex-9 | 1439.8 | **575.8** | **0.40** | 20 / 20 |
+| complex-10 | 98.1 | **63.0** | **0.64** | 10 / 10 |
+| complex-3 | 663.4 | **550.8** | 0.83 | 0 / 0 |
+| complex-6 | 282.8 | **250.2** | 0.88 | 3 / 3 |
+| complex-2 | 24.9 | 24.0 | 0.97 | 20 / 20 |
+| complex-8 | 3.0 | 3.0 | 0.99 | 0 / 0 |
+| complex-12 | 466.9 | 477.5 | 1.02 | 3 / 3 |
+
+**无回归**（complex-2/8/12 在噪声范围内）。
+
+## 正确性
+
+* 全量 `ctest`：**1100/1100 通过**（含 TCK 与驱动兼容性）；
+* **结果内容比对**：同一批查询在两个构建上逐行比对，6 条查询**完全一致**
+  （不只是行数 —— 行数相等仍可能内容不同，complex-9 一度就多出一行重复）。
+
+## 途中修掉的四处缺陷
+
+句柄化会让**一切依赖 variant 内建 `operator==` 的比较退化成比指针**，
+而 `ValueHash` 我按载荷哈希 —— 哈希与相等不再一致。依次暴露并修复：
+`valueEquals` 的兜底分支、`ValueHash` 失效的重型分支、`RowEqual`（DISTINCT 失去去重）、
+聚合 per-group distinct 集合的 `std::equal_to`。另加 `isNull` 视空句柄为 null ——
+`reserve()` 分配句柄但不发布载荷，而 `holds_alternative<ListValuePtr>` 对空句柄为真，
+空槽位会被当列表解引用（曾在 TCK 下打崩服务）。
