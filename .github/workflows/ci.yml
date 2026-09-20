@@ -236,19 +236,36 @@ jobs:
         echo "=== VCPKG Version ==="
         ${{ github.workspace }}/vcpkg/vcpkg version
 
+    # 依赖用 GCC 构建（与 gcc/asan/ubsan 作业共用同一份产物），只有我们的代码用 clang 编译。
+    #
+    # 为什么必须这样：folly 的 Portability.h 按编译器/标准决定 FOLLY_HAS_COROUTINES，
+    # clang 编 folly 时该宏为 0（folly 自己的 CMake 用 C++17 探测），于是 libfolly.a 里
+    # 根本没有 folly/coro 模块；而我们的 TU 以 C++20 编译、看到 FOLLY_HAS_COROUTINES=1，
+    # 引用 folly::coro::*（以及 fbthrift 里同样条件编译的 HandlerCallbackBase::*）→ 链接必然
+    # undefined reference。CI 实测：clang 装的 folly 里 coro::Mutex/unlock、Baton、 
+    # resumeCoroutineWithNewAsyncStackRoot 计数全为 0，archive 只有 188MB（GCC 那份 350MB）。
+    - name: Install vcpkg dependencies (GCC)
+      run: |
+        ./vcpkg/vcpkg install --triplet x64-linux \
+          --x-install-root="$PWD/build/clang-release/vcpkg_installed"
     - name: Configure CMake with Clang
-      run: cmake --preset=clang-release
+      run: cmake --preset=clang-release -DVCPKG_MANIFEST_INSTALL=OFF
 
     # 临时诊断：clang 链接偶发 undefined reference，先确认 CI 里这份 folly 是否含这些符号，
     # 以及 eugraph-server 真实链接行的库顺序（比本机 GCC 构建的 link.txt 更有说服力）。
     - name: Diagnose link inputs
       run: |
         echo "=== folly archives ==="
+
         find build -name 'libfolly.a' -printf '%p  %s bytes\n' 2>/dev/null || true
         FOL=$(find build -name 'libfolly.a' | head -1)
         for sym in 'coro::Mutex::unlock' 'coro::Baton::~Baton' 'resumeCoroutineWithNewAsyncStackRoot'; do
           printf '%-42s %s\n' "$sym" "$(nm -C "$FOL" 2>/dev/null | grep -c "$sym")"
         done
+        printf '%-42s %s\n' 'folly::coro:: (total)' "$(nm -C "$FOL" 2>/dev/null | grep -c 'folly::coro::')"
+        # 关键信号：用 clang + C++20 预处理后 FOLLY_HAS_COROUTINES 的实际取值
+        printf '#include <folly/Portability.h>\nFOLLY_HAS_COROUTINES\n' > /tmp/fh.cpp
+        clang++ -std=c++20 -I build/clang-release/vcpkg_installed/x64-linux/include -E /tmp/fh.cpp | tail -1
         echo "=== eugraph-server link line (libs only) ==="
         tr ' ' '\n' < build/clang-release/CMakeFiles/eugraph-server.dir/link.txt 2>/dev/null \
           | grep -E '\.a$|^-l' | sed 's|.*/||' | head -60 || echo "link.txt not found"
