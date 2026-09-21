@@ -98,6 +98,7 @@ using PathValuePtr = ValPtr<PathValue>;
 using ListValuePtr = ValPtr<ListValue>;
 using MapValuePtr = ValPtr<MapValue>;
 using BytesValuePtr = ValPtr<BytesValue>;
+using PathTopologyPtr = ValPtr<PathTopology>;
 
 /// Construct a heavy value. Every construction goes through this so an empty
 /// pointer cannot appear in a Value by accident.
@@ -105,7 +106,7 @@ template <typename T, typename... Args> ValPtr<T> mk(Args&&... args) {
     return std::make_shared<T>(std::forward<Args>(args)...);
 }
 
-using Value = std::variant<std::monostate, bool, int64_t, double, std::string, VertexRef, EdgeKey, PathTopology,
+using Value = std::variant<std::monostate, bool, int64_t, double, std::string, VertexRef, EdgeKey, PathTopologyPtr,
                            VertexValuePtr, EdgeValuePtr, PathValuePtr, DateTimeValue, TimeValue, DurationValue,
                            ListValuePtr, MapValuePtr, BytesValuePtr>;
 
@@ -188,6 +189,8 @@ inline bool isNull(const Value& v) {
     // like. Treating it as null here is what keeps every nullness check in the
     // engine agreeing: `holds_alternative<ListValuePtr>` is true for an empty
     // handle, so a slot that slipped past this would be dereferenced as a list.
+    if (const auto* p = std::get_if<PathTopologyPtr>(&v))
+        return !*p;
     if (const auto* p = std::get_if<VertexValuePtr>(&v))
         return !*p;
     if (const auto* p = std::get_if<EdgeValuePtr>(&v))
@@ -281,6 +284,12 @@ inline std::optional<bool> valueEquals(const Value& a, const Value& b) {
     // Vertices, edges and bytes. The variant holds handles, so the built-in
     // comparison below would compare pointers rather than payloads; reach through
     // and keep each type's own semantics (entities by identity, bytes by content).
+    if (std::holds_alternative<PathTopologyPtr>(a) && std::holds_alternative<PathTopologyPtr>(b)) {
+        const auto& pa = *std::get<PathTopologyPtr>(a);
+        const auto& pb = *std::get<PathTopologyPtr>(b);
+        return pa.vertex_ids == pb.vertex_ids && pa.edge_ids == pb.edge_ids && pa.edge_label_ids == pb.edge_label_ids &&
+               pa.seqs == pb.seqs && pa.edge_src_ids == pb.edge_src_ids && pa.edge_dst_ids == pb.edge_dst_ids;
+    }
     if (std::holds_alternative<VertexValuePtr>(a) && std::holds_alternative<VertexValuePtr>(b))
         return *std::get<VertexValuePtr>(a) == *std::get<VertexValuePtr>(b);
     if (std::holds_alternative<EdgeValuePtr>(a) && std::holds_alternative<EdgeValuePtr>(b))
@@ -436,13 +445,13 @@ struct ValueHash {
                     h ^= std::hash<uint64_t>{}(val.src_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
                     h ^= std::hash<uint64_t>{}(val.dst_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
                     return h;
-                } else if constexpr (std::is_same_v<T, PathTopology>) {
+                } else if constexpr (std::is_same_v<T, PathTopologyPtr>) {
                     size_t h = 0;
-                    for (auto v : val.vertex_ids) {
-                        h ^= std::hash<uint64_t>{}(v) + 0x9e3779b9 + (h << 6) + (h >> 2);
-                    }
-                    for (auto e : val.edge_ids) {
-                        h ^= std::hash<uint64_t>{}(e) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                    if (val) {
+                        for (auto v : val->vertex_ids)
+                            h ^= std::hash<uint64_t>{}(v) + 0x9e3779b9 + (h << 6) + (h >> 2);
+                        for (auto e : val->edge_ids)
+                            h ^= std::hash<uint64_t>{}(e) + 0x9e3779b9 + (h << 6) + (h >> 2);
                     }
                     return h;
                 } else if constexpr (std::is_same_v<T, VertexValuePtr>) {

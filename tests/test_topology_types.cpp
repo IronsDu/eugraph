@@ -211,11 +211,11 @@ TEST(TopologyTypesTest, ValueHoldsPathTopology) {
     p.edge_label_ids = {5, 5};
     p.seqs = {0, 0};
 
-    Value v = p;
-    ASSERT_TRUE(std::holds_alternative<PathTopology>(v));
-    EXPECT_EQ(std::get<PathTopology>(v).vertexCount(), 3u);
+    Value v = mk<PathTopology>(p);
+    ASSERT_TRUE(std::holds_alternative<PathTopologyPtr>(v));
+    EXPECT_EQ((*std::get<PathTopologyPtr>(v)).vertexCount(), 3u);
 
-    Value same = p;
+    Value same = mk<PathTopology>(p);
     EXPECT_TRUE(*valueEquals(v, same));
 }
 
@@ -232,8 +232,8 @@ TEST(TopologyTypesTest, ValueHashHandlesNewTypes) {
 
     PathTopology p;
     p.vertex_ids = {1, 2};
-    Value pv = p;
-    EXPECT_EQ(ValueHash{}(pv), ValueHash{}(Value(p)));
+    Value pv = mk<PathTopology>(p);
+    EXPECT_EQ(ValueHash{}(pv), ValueHash{}(Value(mk<PathTopology>(p))));
 }
 
 // ==================== TC-A06: ColumnBuffer supports new types ====================
@@ -276,11 +276,11 @@ TEST(ColumnBufferTest, ReservesAndReadsPathTopologyColumn) {
     p.edge_ids = {10, 11};
     p.edge_label_ids = {5, 5};
     p.seqs = {0, 0};
-    buf.path_topology_data[0] = p;
+    buf.path_topology_data[0] = mk<PathTopology>(p);
 
     Value v = buf.getValue(0);
-    ASSERT_TRUE(std::holds_alternative<PathTopology>(v));
-    EXPECT_EQ(std::get<PathTopology>(v).vertexCount(), 3u);
+    ASSERT_TRUE(std::holds_alternative<PathTopologyPtr>(v));
+    EXPECT_EQ((*std::get<PathTopologyPtr>(v)).vertexCount(), 3u);
 }
 
 TEST(ColumnBufferTest, SetValueRoundTripsNewTypes) {
@@ -401,7 +401,7 @@ TEST(DataChunkReplaceColumnTest, UpgradePathTopologyToPath) {
     pt.edge_ids = {10};
     pt.edge_label_ids = {5};
     pt.seqs = {0};
-    chunk.columns[0].buffer->path_topology_data[0] = pt;
+    chunk.columns[0].buffer->path_topology_data[0] = mk<PathTopology>(pt);
 
     Column path_col = Column::flat(BoundTypeKind::PATH, 1);
     chunk.replaceColumn(0, std::move(path_col));

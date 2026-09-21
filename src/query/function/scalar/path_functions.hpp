@@ -19,8 +19,8 @@ inline Value nodesImpl(const Value& arg) {
             lv.elements.push_back(pv.elements[i]);
         return Value(mk<ListValue>(std::move(lv)));
     }
-    if (std::holds_alternative<PathTopology>(arg)) {
-        const auto& pt = std::get<PathTopology>(arg);
+    if (std::holds_alternative<PathTopologyPtr>(arg)) {
+        const auto& pt = (*std::get<PathTopologyPtr>(arg));
         ListValue lv;
         for (size_t i = 0; i < pt.vertex_ids.size(); ++i) {
             VertexValue vv;
@@ -41,8 +41,8 @@ inline Value relationshipsImpl(const Value& arg) {
             lv.elements.push_back(pv.elements[i]);
         return Value(mk<ListValue>(std::move(lv)));
     }
-    if (std::holds_alternative<PathTopology>(arg)) {
-        const auto& pt = std::get<PathTopology>(arg);
+    if (std::holds_alternative<PathTopologyPtr>(arg)) {
+        const auto& pt = (*std::get<PathTopologyPtr>(arg));
         ListValue lv;
         for (size_t i = 0; i < pt.edge_ids.size(); ++i) {
             EdgeValue ev;
@@ -60,8 +60,8 @@ inline Value relationshipsImpl(const Value& arg) {
 inline Value lengthImpl(const Value& arg) {
     if (std::holds_alternative<PathValuePtr>(arg))
         return Value(static_cast<int64_t>(((*std::get<PathValuePtr>(arg)).elements.size() - 1) / 2));
-    if (std::holds_alternative<PathTopology>(arg))
-        return Value(static_cast<int64_t>(std::get<PathTopology>(arg).edge_ids.size()));
+    if (std::holds_alternative<PathTopologyPtr>(arg))
+        return Value(static_cast<int64_t>((*std::get<PathTopologyPtr>(arg)).edge_ids.size()));
     return Value{};
 }
 

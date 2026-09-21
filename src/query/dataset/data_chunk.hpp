@@ -88,7 +88,7 @@ struct ColumnBuffer {
     std::vector<std::string> string_data;
     std::vector<VertexRef> vertex_ref_data;
     std::vector<EdgeKey> edge_key_data;
-    std::vector<PathTopology> path_topology_data;
+    std::vector<PathTopologyPtr> path_topology_data;
     // Heavy payloads are stored as shared pointers, matching the Value variant. A
     // column is a contiguous array of handles, so moving a row between operators
     // copies a pointer instead of the payload it owns.
@@ -190,7 +190,7 @@ struct ColumnBuffer {
         case binder::BoundTypeKind::EDGE_KEY:
             return Value(edge_key_data[i]);
         case binder::BoundTypeKind::PATH_TOPOLOGY:
-            return Value(path_topology_data[i]);
+            return path_topology_data[i] ? Value(path_topology_data[i]) : Value{};
         // A heavy slot is a handle, and reserve() leaves it empty until something
         // publishes a payload. Treat that as null rather than handing out a Value
         // that dereferences to nothing.
@@ -285,8 +285,8 @@ private:
                 edge_key_data[i] = std::get<EdgeKey>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::PATH_TOPOLOGY:
-            if (std::holds_alternative<PathTopology>(val))
-                path_topology_data[i] = std::get<PathTopology>(std::forward<V>(val));
+            if (std::holds_alternative<PathTopologyPtr>(val))
+                path_topology_data[i] = std::get<PathTopologyPtr>(std::forward<V>(val));
             break;
         case binder::BoundTypeKind::VERTEX:
             if (std::holds_alternative<VertexValuePtr>(val))

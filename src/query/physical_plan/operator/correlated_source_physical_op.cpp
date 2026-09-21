@@ -14,7 +14,7 @@ binder::BoundTypeKind kindFromValue(const Value& v) {
         return binder::BoundTypeKind::EDGE_KEY;
     if (std::holds_alternative<EdgeValuePtr>(v))
         return binder::BoundTypeKind::EDGE;
-    if (std::holds_alternative<PathTopology>(v))
+    if (std::holds_alternative<PathTopologyPtr>(v))
         return binder::BoundTypeKind::PATH_TOPOLOGY;
     if (std::holds_alternative<PathValuePtr>(v))
         return binder::BoundTypeKind::PATH;

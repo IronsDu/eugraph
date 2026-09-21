@@ -52,8 +52,8 @@ void collectDeleteEntities(const Value& value, std::vector<DeleteEntity>& out) {
     } else if (std::holds_alternative<PathValuePtr>(value)) {
         for (const auto& elem : (*std::get<PathValuePtr>(value)).elements)
             collectDeleteEntities(elem.value, out);
-    } else if (std::holds_alternative<PathTopology>(value)) {
-        const auto& p = std::get<PathTopology>(value);
+    } else if (std::holds_alternative<PathTopologyPtr>(value)) {
+        const auto& p = (*std::get<PathTopologyPtr>(value));
         for (size_t i = 0; i < p.edge_ids.size(); ++i) {
             out.push_back({true, p.edge_ids[i], p.edge_label_ids[i], p.edge_src_ids[i], p.edge_dst_ids[i], p.seqs[i],
                            INVALID_VERTEX_ID});

@@ -82,7 +82,7 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
                 output.columns[c].setValue(row_idx, chunk->columns[c].getValue(row_idx));
             }
             if (output.columns.size() > input_cols)
-                output.columns[input_cols].setValue(row_idx, Value(std::move(pt)));
+                output.columns[input_cols].setValue(row_idx, Value(mk<PathTopology>(std::move(pt))));
         }
         if (output.count > 0) {
             co_yield std::move(output);
