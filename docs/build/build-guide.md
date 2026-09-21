@@ -218,7 +218,39 @@ grep "^// Generated from" src/query/parser/generated/grammar/Cypher*.{h,cpp}
 
 项目使用 GitHub Actions，配置在 `.github/workflows/`：
 
-- **ci.yml** — GCC 构建 + 测试、Clang 构建 + 测试、代码覆盖率
-- **ci.yml** — 唯一的工作流：clang-format 检查、GCC/Clang 编译、coverage、ASan（跑测试）、UBSan（跑测试）、clang-tidy
+- **ci.yml** — 唯一的工作流，7 个作业：`build-gcc`（Release 构建）、`coverage`、`build-clang`、
+  `format-check`、`asan`（跑测试）、`ubsan`（跑测试）、`static-analysis`（clang-tidy）
 
-所有 CI 作业使用 vcpkg 二进制缓存，首次构建后后续构建会复用缓存加速。
+### 10.1 vcpkg 依赖缓存
+
+需要安装依赖的 6 个作业（`build-gcc` / `coverage` / `build-clang` / `asan` / `ubsan` /
+`static-analysis`）各自用 `actions/cache` 缓存 **vcpkg 二进制包缓存**（`~/.cache/vcpkg/archives`，约 1GB）：
+
+- 缓存的是**已编译好的依赖包**，命中时 vcpkg 直接按 ABI 解包，不再源码重建（这是 CI 耗时的大头）。
+- **不缓存 vcpkg 工具目录**：它由 `actions/checkout` 的 submodule 提供（固定在 `2cf2bcc`），
+  而其下的 `buildtrees/`、`packages/`、`downloads/` 单次可达数 GB，会把仓库 10GB 的缓存总额度挤爆，
+  连带淘汰 ccache、TCK 基线等条目。
+- 每个作业使用独立 key（`<os>-vcpkg-archives-<job>-<vcpkg.json 哈希>`），因为 triplet、overlay ports
+  不同时包的 ABI 哈希不同；同时配置 `restore-keys` 前缀兜底，主键 miss（PR 关闭后 GitHub 会删除该 PR
+  作用域的缓存、或 `vcpkg.json` 变更）时回退到最近条目，vcpkg 会按 ABI 校验，回退只会部分复用、不会用错包。
+- key 前缀带 `archives`：GitHub 的缓存条目按 key 不可变，命中同名 key 时不会再保存。改变缓存内容范围
+  （如从"vcpkg 工具目录"改为"只缓存 archives"）必须同时改 key，否则旧的、不含 archives 的条目会一直
+  挡住新条目的写入。
+- 不要设置 `VCPKG_BINARY_SOURCES`：固定版本的 vcpkg 已移除 `x-gha` 后端，
+  写 `clear;x-gha,readwrite` 会连带清掉默认的 files 缓存源，等于禁用全部缓存。
+- **不要引入 `lukka/run-vcpkg` 之类的 vcpkg 安装类 action**：它们会把 vcpkg 的二进制缓存接管到
+  GitHub Actions 的 `x-gha` 后端（该后端在固定版本里已被移除），结果是依赖包从不写入
+  `~/.cache/vcpkg/archives`，`actions/cache` 无内容可存，作业每次全量源码重建依赖，
+  而 post 阶段只会报一句 `Path Validation Error: Path(s) ... do not exist`。
+  六个作业统一为：`Cache vcpkg packages` → `Bootstrap vcpkg`（就地 `vcpkg/bootstrap-vcpkg.sh`，
+  工具目录由 submodule 提供）→ 安装依赖（`cmake --preset=...` 隐式安装，或 build-clang 的显式安装）。
+- 每个作业在依赖安装之后都有一步 `Verify vcpkg binary cache` 作为判据：缓存目录不存在或为空时直接
+  失败。历史上这个问题是"静默"的——CI 只是变慢，没有任何报错，所以必须有显式断言。
+- **key 前缀不得与其它作业的 key 构成前缀关系**：`restore-keys` 是按前缀匹配的。曾经 `build-clang`
+  用的是 `…-vcpkg-archives-clang-`，而它是 `…-vcpkg-archives-clang-tidy-` 的前缀，于是该作业主键
+  miss 时回退拿到了 `static-analysis` 的 `x64-linux-release` 条目（ABI 不同、一个包都用不上），
+  作业结束时这份借来的内容又被原样存成它自己的条目；此后同名 key 精确命中错误内容，且因为 key 不可变
+  再也写不进正确内容，该作业长期全量源码重建。作业名段现已改为 `buildclang`。
+- `build-clang` 的依赖用 **GCC** 预装（`--triplet x64-linux --overlay-ports=ports`）：clang 编出来的
+  folly 没有协程符号（`FOLLY_HAS_COROUTINES=0`），并且必须带上 `ports/` overlay，否则装的是上游
+  mvfst，与 `build-gcc`/`coverage` 的依赖集合不一致。
