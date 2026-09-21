@@ -218,7 +218,23 @@ grep "^// Generated from" src/query/parser/generated/grammar/Cypher*.{h,cpp}
 
 项目使用 GitHub Actions，配置在 `.github/workflows/`：
 
-- **ci.yml** — GCC 构建 + 测试、Clang 构建 + 测试、代码覆盖率
-- **ci.yml** — 唯一的工作流：clang-format 检查、GCC/Clang 编译、coverage、ASan（跑测试）、UBSan（跑测试）、clang-tidy
+- **ci.yml** — 唯一的工作流，7 个作业：`build-gcc`（Release 构建）、`coverage`、`build-clang`、
+  `format-check`、`asan`（跑测试）、`ubsan`（跑测试）、`static-analysis`（clang-tidy）
 
-所有 CI 作业使用 vcpkg 二进制缓存，首次构建后后续构建会复用缓存加速。
+### 10.1 vcpkg 依赖缓存
+
+需要安装依赖的 6 个作业（`build-gcc` / `coverage` / `build-clang` / `asan` / `ubsan` /
+`static-analysis`）各自用 `actions/cache` 缓存 **vcpkg 二进制包缓存**（`~/.cache/vcpkg/archives`，约 1GB）：
+
+- 缓存的是**已编译好的依赖包**，命中时 vcpkg 直接按 ABI 解包，不再源码重建（这是 CI 耗时的大头）。
+- **不缓存 vcpkg 工具目录**：它由 `actions/checkout` 的 submodule 提供（固定在 `2cf2bcc`），
+  而其下的 `buildtrees/`、`packages/`、`downloads/` 单次可达数 GB，会把仓库 10GB 的缓存总额度挤爆，
+  连带淘汰 ccache、TCK 基线等条目。
+- 每个作业使用独立 key（`<os>-vcpkg-archives-<job>-<vcpkg.json 哈希>`），因为 triplet、overlay ports
+  不同时包的 ABI 哈希不同；同时配置 `restore-keys` 前缀兜底，主键 miss（PR 关闭后 GitHub 会删除该 PR
+  作用域的缓存、或 `vcpkg.json` 变更）时回退到最近条目，vcpkg 会按 ABI 校验，回退只会部分复用、不会用错包。
+- key 前缀带 `archives`：GitHub 的缓存条目按 key 不可变，命中同名 key 时不会再保存。改变缓存内容范围
+  （如从"vcpkg 工具目录"改为"只缓存 archives"）必须同时改 key，否则旧的、不含 archives 的条目会一直
+  挡住新条目的写入。
+- 不要设置 `VCPKG_BINARY_SOURCES`：固定版本的 vcpkg 已移除 `x-gha` 后端，
+  写 `clear;x-gha,readwrite` 会连带清掉默认的 files 缓存源，等于禁用全部缓存。

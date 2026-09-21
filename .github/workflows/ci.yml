@@ -7,14 +7,8 @@ on:
     branches: [ main, develop ]
 
 env:
-  # 原 code-quality.yml 的顶层 env（asan / ubsan / static-analysis 会用到）
+  # 原 code-quality.yml 的顶层 env
   BUILD_TYPE: Debug
-  # vcpkg 二进制缓存放到 workflow 级：cmake --preset=... 会在 CMake 内部再触发一次
-  # manifest 安装，那种"隐式安装"不在任何步骤的 env 里，缺了这行就会从源码重建
-  # folly/fbthrift（build-gcc / coverage / asan / ubsan 都因此很慢）。
-  # 前置步骤 actions/github-script 已把 ACTIONS_CACHE_URL / ACTIONS_RUNTIME_TOKEN
-  # 导出到后续步骤，x-gha 后端才能生效。
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
 jobs:
   # Ubuntu with GCC
@@ -59,10 +53,23 @@ jobs:
           core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
           core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
+    - name: Cache vcpkg packages
+      id: cache-vcpkg
+      uses: actions/cache@v4
+      with:
+        # 只缓存二进制包缓存（~/.cache/vcpkg/archives，约 1GB）：安装时 vcpkg 按 ABI 直接解包，
+        # 不再源码重建依赖。vcpkg 工具目录由 actions/checkout 的 submodule 提供（固定 2cf2bcc），
+        # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
+        # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
+        path: ~/.cache/vcpkg/archives
+        key: ${{ runner.os }}-vcpkg-archives-gcc-${{ hashFiles('vcpkg.json') }}
+        # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
+        # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-archives-gcc-
+
     - name: Setup vcpkg with binary caching
       uses: lukka/run-vcpkg@v11
-      env:
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
       with:
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
         vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
@@ -140,10 +147,23 @@ jobs:
           core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
           core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
+    - name: Cache vcpkg packages
+      id: cache-vcpkg
+      uses: actions/cache@v4
+      with:
+        # 只缓存二进制包缓存（~/.cache/vcpkg/archives，约 1GB）：安装时 vcpkg 按 ABI 直接解包，
+        # 不再源码重建依赖。vcpkg 工具目录由 actions/checkout 的 submodule 提供（固定 2cf2bcc），
+        # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
+        # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
+        path: ~/.cache/vcpkg/archives
+        key: ${{ runner.os }}-vcpkg-archives-coverage-${{ hashFiles('vcpkg.json') }}
+        # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
+        # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-archives-coverage-
+
     - name: Setup vcpkg with binary caching
       uses: lukka/run-vcpkg@v11
-      env:
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
       with:
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
         vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
@@ -241,10 +261,20 @@ jobs:
           core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
           core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
+    - name: Cache vcpkg packages
+      id: cache-vcpkg
+      uses: actions/cache@v4
+      with:
+        # 只缓存二进制包缓存（~/.cache/vcpkg/archives，约 1GB）：见 build-gcc 作业同名步骤的说明。
+        # 本作业的依赖用 GCC 预装（--triplet x64-linux，不带 preset 的 overlay ports），
+        # 与 build-gcc/coverage 的 ABI 不同，因此使用独立 key，避免互相覆盖后永远无法持久化。
+        path: ~/.cache/vcpkg/archives
+        key: ${{ runner.os }}-vcpkg-archives-clang-${{ hashFiles('vcpkg.json') }}
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-archives-clang-
+
     - name: Setup vcpkg with binary caching
       uses: lukka/run-vcpkg@v11
-      env:
-        VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
       with:
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
         vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
@@ -386,12 +416,16 @@ jobs:
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
-        # 只缓存 vcpkg 工具本身（省掉 clone + bootstrap）。依赖交给 x-gha 二进制缓存：
-        # VCPKG_BINARY_SOURCES 里的 clear 会清掉 vcpkg 默认的本地 files 缓存源，
-        # 所以 ~/.cache/vcpkg/archives 永远不会被写入；vcpkg_installed 是构建不使用的目录。
-        path: |
-          vcpkg
-        key: ${{ runner.os }}-vcpkg-asan-${{ hashFiles('vcpkg.json') }}
+        # 只缓存二进制包缓存（~/.cache/vcpkg/archives，约 1GB）：安装时 vcpkg 按 ABI 直接解包，
+        # 不再源码重建依赖。vcpkg 工具目录由 actions/checkout 的 submodule 提供（固定 2cf2bcc），
+        # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
+        # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
+        path: ~/.cache/vcpkg/archives
+        key: ${{ runner.os }}-vcpkg-archives-asan-${{ hashFiles('vcpkg.json') }}
+        # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
+        # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-archives-asan-
 
     - name: Install vcpkg
       run: |
@@ -576,12 +610,16 @@ jobs:
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
-        # 只缓存 vcpkg 工具本身（省掉 clone + bootstrap）。依赖交给 x-gha 二进制缓存：
-        # VCPKG_BINARY_SOURCES 里的 clear 会清掉 vcpkg 默认的本地 files 缓存源，
-        # 所以 ~/.cache/vcpkg/archives 永远不会被写入；vcpkg_installed 是构建不使用的目录。
-        path: |
-          vcpkg
-        key: ${{ runner.os }}-vcpkg-ubsan-${{ hashFiles('vcpkg.json') }}
+        # 只缓存二进制包缓存（~/.cache/vcpkg/archives，约 1GB）：安装时 vcpkg 按 ABI 直接解包，
+        # 不再源码重建依赖。vcpkg 工具目录由 actions/checkout 的 submodule 提供（固定 2cf2bcc），
+        # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
+        # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
+        path: ~/.cache/vcpkg/archives
+        key: ${{ runner.os }}-vcpkg-archives-ubsan-${{ hashFiles('vcpkg.json') }}
+        # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
+        # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-archives-ubsan-
 
     - name: Install vcpkg
       run: |
@@ -620,6 +658,8 @@ jobs:
 
     - name: Run tests with UBSan
       working-directory: build
+      env:
+        UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
       run: |
         ctest --output-on-failure --verbose --output-junit junit.xml
 
@@ -630,8 +670,6 @@ jobs:
         files: build/junit.xml
         check_name: Unit Test Results (UBSan)
         comment_title: Unit Test Report (UBSan)
-      env:
-        UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
 
   # Static Analysis with clang-tidy
   static-analysis:
@@ -672,12 +710,16 @@ jobs:
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
-        # 只缓存 vcpkg 工具本身（省掉 clone + bootstrap）。依赖交给 x-gha 二进制缓存：
-        # VCPKG_BINARY_SOURCES 里的 clear 会清掉 vcpkg 默认的本地 files 缓存源，
-        # 所以 ~/.cache/vcpkg/archives 永远不会被写入；vcpkg_installed 是构建不使用的目录。
-        path: |
-          vcpkg
-        key: ${{ runner.os }}-vcpkg-clang-tidy-${{ hashFiles('vcpkg.json') }}
+        # 只缓存二进制包缓存（~/.cache/vcpkg/archives，约 1GB）：安装时 vcpkg 按 ABI 直接解包，
+        # 不再源码重建依赖。vcpkg 工具目录由 actions/checkout 的 submodule 提供（固定 2cf2bcc），
+        # 不缓存它 —— 其 buildtrees/packages/downloads 单次可达数 GB，会挤爆仓库 10GB 缓存额度，
+        # 连带淘汰 ccache/基线等条目（这也是主键长期 miss 的原因之一）。
+        path: ~/.cache/vcpkg/archives
+        key: ${{ runner.os }}-vcpkg-archives-clang-tidy-${{ hashFiles('vcpkg.json') }}
+        # 主键一 miss（PR 缓存随 PR 关闭被删除、vcpkg.json 改动等）时回退到旧条目，
+        # 避免从零源码重建；vcpkg 会按 ABI 校验每个包，回退只会部分复用，不会用错。
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-archives-clang-tidy-
 
     - name: Install vcpkg
       run: |
