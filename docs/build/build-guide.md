@@ -246,6 +246,11 @@ grep "^// Generated from" src/query/parser/generated/grammar/Cypher*.{h,cpp}
   工具目录由 submodule 提供）→ 安装依赖（`cmake --preset=...` 隐式安装，或 build-clang 的显式安装）。
 - 每个作业在依赖安装之后都有一步 `Verify vcpkg binary cache` 作为判据：缓存目录不存在或为空时直接
   失败。历史上这个问题是"静默"的——CI 只是变慢，没有任何报错，所以必须有显式断言。
+- **key 前缀不得与其它作业的 key 构成前缀关系**：`restore-keys` 是按前缀匹配的。曾经 `build-clang`
+  用的是 `…-vcpkg-archives-clang-`，而它是 `…-vcpkg-archives-clang-tidy-` 的前缀，于是该作业主键
+  miss 时回退拿到了 `static-analysis` 的 `x64-linux-release` 条目（ABI 不同、一个包都用不上），
+  作业结束时这份借来的内容又被原样存成它自己的条目；此后同名 key 精确命中错误内容，且因为 key 不可变
+  再也写不进正确内容，该作业长期全量源码重建。作业名段现已改为 `buildclang`。
 - `build-clang` 的依赖用 **GCC** 预装（`--triplet x64-linux --overlay-ports=ports`）：clang 编出来的
   folly 没有协程符号（`FOLLY_HAS_COROUTINES=0`），并且必须带上 `ports/` overlay，否则装的是上游
   mvfst，与 `build-gcc`/`coverage` 的依赖集合不一致。

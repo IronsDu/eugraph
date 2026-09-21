@@ -280,13 +280,17 @@ jobs:
       id: cache-vcpkg
       uses: actions/cache@v4
       with:
-        # 只缓存二进制包缓存（~/.cache/vcpkg/archives，约 1GB）：见 build-gcc 作业同名步骤的说明。
-        # 本作业的依赖用 GCC 预装（--triplet x64-linux，不带 preset 的 overlay ports），
-        # 与 build-gcc/coverage 的 ABI 不同，因此使用独立 key，避免互相覆盖后永远无法持久化。
+        # 只缓存二进制包缓存（~/.cache/vcpkg/archives）：见 build-gcc 作业同名步骤的说明。
+        # 本作业的依赖用 GCC 预装（--triplet x64-linux --overlay-ports=ports），与 build-gcc/coverage
+        # 同 ABI，因此使用独立 key（不共用条目，避免"先写入者定稿"导致后续作业永远无法持久化）。
+        # 名字用 buildclang 而不是 clang：restore-keys 是按前缀匹配的，
+        # `-vcpkg-archives-clang-` 曾经是 `-vcpkg-archives-clang-tidy-` 的前缀，导致本作业回退拿到
+        # clang-tidy 的 x64-linux-release 条目（ABI 不同、一个包都用不上），并被当成自己的内容存了下来。
+        # 新增作业时注意：key 前缀不得是其它作业 key 的前缀。
         path: ~/.cache/vcpkg/archives
-        key: ${{ runner.os }}-vcpkg-archives-clang-${{ hashFiles('vcpkg.json') }}
+        key: ${{ runner.os }}-vcpkg-archives-buildclang-${{ hashFiles('vcpkg.json') }}
         restore-keys: |
-          ${{ runner.os }}-vcpkg-archives-clang-
+          ${{ runner.os }}-vcpkg-archives-buildclang-
 
     - name: Bootstrap vcpkg
       # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
