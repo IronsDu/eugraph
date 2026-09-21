@@ -42,11 +42,11 @@ packstream::PackStreamStruct dateTimeToStruct(const DateTimeValue& tv, uint32_t 
         bool is_v4 = boltMajorVersion(bolt_version) <= 4;
         if (is_v4) {
             // v4.x: local wall-clock seconds, tags 0x46/0x66
-            if (!tv.tz_name.empty()) {
+            if (static_cast<bool>(tv.tz_name)) {
                 s.tag = tags::DATETIME_ZONE_ID_V4;
                 s.fields.push_back(PS{local_seconds});
                 s.fields.push_back(PS{tv.nanos});
-                s.fields.push_back(PS{std::string{tv.tz_name}});
+                s.fields.push_back(PS{tzNameOrEmpty(tv.tz_name)});
             } else {
                 s.tag = tags::DATETIME_V4;
                 s.fields.push_back(PS{local_seconds});
@@ -56,11 +56,11 @@ packstream::PackStreamStruct dateTimeToStruct(const DateTimeValue& tv, uint32_t 
         } else {
             // v5.x: UTC epoch seconds, tags 0x49/0x69
             int64_t utc_seconds = local_seconds - tv.tz_offset_sec;
-            if (!tv.tz_name.empty()) {
+            if (static_cast<bool>(tv.tz_name)) {
                 s.tag = tags::DATETIME_ZONE_ID;
                 s.fields.push_back(PS{utc_seconds});
                 s.fields.push_back(PS{tv.nanos});
-                s.fields.push_back(PS{std::string{tv.tz_name}});
+                s.fields.push_back(PS{tzNameOrEmpty(tv.tz_name)});
             } else {
                 s.tag = tags::DATETIME;
                 s.fields.push_back(PS{utc_seconds});
@@ -358,7 +358,13 @@ std::optional<Value> temporalFromStruct(const packstream::PackStreamStruct& s) {
             return std::nullopt;
         DateTimeValue tv;
         tv.kind = DateTimeKind::DATE;
-        civilFromDays(as_int(0), tv.year, tv.month, tv.day);
+        {
+            int64_t _y = 0, _m = 0, _d = 0;
+            civilFromDays(as_int(0), _y, _m, _d);
+            tv.year = static_cast<int32_t>(_y);
+            tv.month = static_cast<int8_t>(_m);
+            tv.day = static_cast<int8_t>(_d);
+        }
         return Value{tv};
     }
     case tags::LOCAL_TIME: {
@@ -414,7 +420,7 @@ std::optional<Value> temporalFromStruct(const packstream::PackStreamStruct& s) {
         auto tv = datetimeFromEpoch(static_cast<int64_t>(local_seconds), as_int(1));
         tv.kind = DateTimeKind::DATETIME;
         tv.tz_offset_sec = offset;
-        tv.tz_name = zone;
+        setTzName(tv.tz_name, zone);
         return Value{tv};
     }
     case tags::DURATION: {

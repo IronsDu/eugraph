@@ -49,6 +49,22 @@ uint16_t readU16(std::string_view data, size_t& off) {
 
 namespace eugraph {
 
+namespace {
+/// A timezone name is absent in the common case, so it is a null pointer rather than
+/// an empty string. The wire format is unchanged: a u16 length followed by the bytes,
+/// with length 0 meaning absent.
+uint16_t tzNameLen(const TzNamePtr& tz) {
+    return tz ? static_cast<uint16_t>(tz->size()) : 0;
+}
+void appendTzName(std::string& out, const TzNamePtr& tz) {
+    if (tz)
+        out.append(*tz);
+}
+TzNamePtr readTzName(std::string_view data, size_t off, uint16_t len) {
+    return len ? std::make_shared<const std::string>(data.substr(off, len)) : nullptr;
+}
+} // namespace
+
 std::string ValueCodec::encode(const PropertyValue& value) {
     std::string result;
 
@@ -106,8 +122,8 @@ std::string ValueCodec::encode(const PropertyValue& value) {
                     appendU64(result, static_cast<uint64_t>(tv.second));
                     appendU64(result, static_cast<uint64_t>(tv.nanos));
                     appendU32(result, static_cast<uint32_t>(tv.tz_offset_sec));
-                    appendU16(result, static_cast<uint16_t>(tv.tz_name.size()));
-                    result.append(tv.tz_name);
+                    appendU16(result, tzNameLen(tv.tz_name));
+                    appendTzName(result, tv.tz_name);
                 }
             } else if constexpr (std::is_same_v<T, std::vector<TimeValue>>) {
                 result.push_back(static_cast<char>(TAG_TIME_ARRAY));
@@ -119,8 +135,8 @@ std::string ValueCodec::encode(const PropertyValue& value) {
                     appendU64(result, static_cast<uint64_t>(tv.second));
                     appendU64(result, static_cast<uint64_t>(tv.nanos));
                     appendU32(result, static_cast<uint32_t>(tv.tz_offset_sec));
-                    appendU16(result, static_cast<uint16_t>(tv.tz_name.size()));
-                    result.append(tv.tz_name);
+                    appendU16(result, tzNameLen(tv.tz_name));
+                    appendTzName(result, tv.tz_name);
                 }
             } else if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
                 result.push_back(static_cast<char>(TAG_BYTES));
@@ -146,8 +162,8 @@ std::string ValueCodec::encode(const PropertyValue& value) {
                 appendU64(result, static_cast<uint64_t>(arg.second));
                 appendU64(result, static_cast<uint64_t>(arg.nanos));
                 appendU32(result, static_cast<uint32_t>(arg.tz_offset_sec));
-                appendU16(result, static_cast<uint16_t>(arg.tz_name.size()));
-                result.append(arg.tz_name);
+                appendU16(result, tzNameLen(arg.tz_name));
+                appendTzName(result, arg.tz_name);
             } else if constexpr (std::is_same_v<T, TimeValue>) {
                 result.push_back(static_cast<char>(TAG_TIME));
                 result.push_back(static_cast<uint8_t>(arg.kind));
@@ -156,8 +172,8 @@ std::string ValueCodec::encode(const PropertyValue& value) {
                 appendU64(result, static_cast<uint64_t>(arg.second));
                 appendU64(result, static_cast<uint64_t>(arg.nanos));
                 appendU32(result, static_cast<uint32_t>(arg.tz_offset_sec));
-                appendU16(result, static_cast<uint16_t>(arg.tz_name.size()));
-                result.append(arg.tz_name);
+                appendU16(result, tzNameLen(arg.tz_name));
+                appendTzName(result, arg.tz_name);
             } else if constexpr (std::is_same_v<T, DurationValue>) {
                 result.push_back(static_cast<char>(TAG_DURATION));
                 appendU64(result, static_cast<uint64_t>(arg.months));
@@ -242,7 +258,7 @@ PropertyValue ValueCodec::decode(std::string_view data) {
         tv.nanos = static_cast<int64_t>(readU64(data, off));
         tv.tz_offset_sec = static_cast<int32_t>(readU32(data, off));
         uint16_t tz_len = readU16(data, off);
-        tv.tz_name = std::string(data.substr(off, tz_len));
+        tv.tz_name = readTzName(data, off, tz_len);
         return tv;
     }
 
@@ -255,7 +271,7 @@ PropertyValue ValueCodec::decode(std::string_view data) {
         tv.nanos = static_cast<int64_t>(readU64(data, off));
         tv.tz_offset_sec = static_cast<int32_t>(readU32(data, off));
         uint16_t tz_len = readU16(data, off);
-        tv.tz_name = std::string(data.substr(off, tz_len));
+        tv.tz_name = readTzName(data, off, tz_len);
         return tv;
     }
 
@@ -282,7 +298,7 @@ PropertyValue ValueCodec::decode(std::string_view data) {
             arr[i].nanos = static_cast<int64_t>(readU64(data, off));
             arr[i].tz_offset_sec = static_cast<int32_t>(readU32(data, off));
             uint16_t tz_len = readU16(data, off);
-            arr[i].tz_name = std::string(data.substr(off, tz_len));
+            arr[i].tz_name = readTzName(data, off, tz_len);
             off += tz_len;
         }
         return arr;
@@ -299,7 +315,7 @@ PropertyValue ValueCodec::decode(std::string_view data) {
             arr[i].nanos = static_cast<int64_t>(readU64(data, off));
             arr[i].tz_offset_sec = static_cast<int32_t>(readU32(data, off));
             uint16_t tz_len = readU16(data, off);
-            arr[i].tz_name = std::string(data.substr(off, tz_len));
+            arr[i].tz_name = readTzName(data, off, tz_len);
             off += tz_len;
         }
         return arr;

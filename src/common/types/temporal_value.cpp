@@ -341,6 +341,21 @@ bool temporalLess(const TimeValue& a, const TimeValue& b) {
 
 DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& duration) {
     DateTimeValue result = temporal;
+    // These fields leave their normal range between an addition and its
+    // normalisation, so the arithmetic runs in wide locals and is narrowed once, at
+    // the end. Storing them narrow throughout would silently overflow.
+    int64_t year = result.year, month = result.month, day = result.day, hour = result.hour, minute = result.minute,
+            second = result.second, nanos = result.nanos;
+    // There are two exits (DATE returns early), so the narrowing lives in one place.
+    auto narrow = [&] {
+        result.year = static_cast<int32_t>(year);
+        result.month = static_cast<int8_t>(month);
+        result.day = static_cast<int8_t>(day);
+        result.hour = static_cast<int8_t>(hour);
+        result.minute = static_cast<int8_t>(minute);
+        result.second = static_cast<int8_t>(second);
+        result.nanos = static_cast<int32_t>(nanos);
+    };
     // Months first, clamping the day to the last day of the target month. Adding
     // months and days together and then normalizing (the old behaviour) turned
     // date('2024-03-31') - duration('P1M') into 2024-03-02: February has no 31st,
@@ -348,23 +363,24 @@ DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& du
     // 2024-03-31 - P1M = 2024-02-29, 2024-05-31 - P1M = 2024-04-30, and
     // 2024-03-31 - P1M1D = 2024-02-28.
     if (duration.months != 0) {
-        int64_t total_months = result.year * 12 + (result.month - 1) + duration.months;
+        int64_t total_months = year * 12 + (month - 1) + duration.months;
         int64_t new_year = total_months >= 0 ? total_months / 12 : -((-total_months + 11) / 12);
-        result.year = new_year;
-        result.month = total_months - new_year * 12 + 1;
-        int64_t last_day = daysInMonth(result.year, result.month);
-        if (last_day > 0 && result.day > last_day)
-            result.day = last_day;
+        year = new_year;
+        month = total_months - new_year * 12 + 1;
+        int64_t last_day = daysInMonth(year, month);
+        if (last_day > 0 && day > last_day)
+            day = last_day;
     }
-    result.day += duration.days;
-    normalizeDate(result.year, result.month, result.day);
+    day += duration.days;
+    normalizeDate(year, month, day);
 
     if (result.kind == DateTimeKind::DATE) {
         static constexpr int64_t kDayNanos = 86'400LL * 1'000'000'000LL;
         int64_t total_nanos = duration.seconds * 1'000'000'000LL + duration.nanos;
         int64_t extra_days = total_nanos / kDayNanos;
-        result.day += extra_days;
-        normalizeDate(result.year, result.month, result.day);
+        day += extra_days;
+        normalizeDate(year, month, day);
+        narrow();
         return result;
     }
 
@@ -376,48 +392,51 @@ DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& du
         add_seconds -= 1;
     }
 
-    result.nanos += add_nanos;
-    result.second += add_seconds;
-    result.second += result.nanos / 1'000'000'000LL;
-    result.nanos %= 1'000'000'000LL;
-    result.minute += result.second / 60;
-    result.second %= 60;
-    result.hour += result.minute / 60;
-    result.minute %= 60;
+    nanos += add_nanos;
+    second += add_seconds;
+    second += nanos / 1'000'000'000LL;
+    nanos %= 1'000'000'000LL;
+    minute += second / 60;
+    second %= 60;
+    hour += minute / 60;
+    minute %= 60;
 
-    int64_t extra_days = result.hour / 24;
-    if (result.hour < 0)
-        extra_days = (result.hour - 23) / 24;
-    result.hour -= extra_days * 24;
-    result.day += extra_days;
-    normalizeDate(result.year, result.month, result.day);
+    int64_t extra_days = hour / 24;
+    if (hour < 0)
+        extra_days = (hour - 23) / 24;
+    hour -= extra_days * 24;
+    day += extra_days;
+    normalizeDate(year, month, day);
 
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.second -= 1;
+    if (nanos < 0) {
+        nanos += 1'000'000'000LL;
+        second -= 1;
     }
-    if (result.second < 0) {
-        int64_t bm = (-result.second + 59) / 60;
-        result.second += bm * 60;
-        result.minute -= bm;
+    if (second < 0) {
+        int64_t bm = (-second + 59) / 60;
+        second += bm * 60;
+        minute -= bm;
     }
-    if (result.minute < 0) {
-        int64_t bh = (-result.minute + 59) / 60;
-        result.minute += bh * 60;
-        result.hour -= bh;
+    if (minute < 0) {
+        int64_t bh = (-minute + 59) / 60;
+        minute += bh * 60;
+        hour -= bh;
     }
-    if (result.hour < 0) {
-        int64_t bd = (-result.hour + 23) / 24;
-        result.hour += bd * 24;
-        result.day -= bd;
-        normalizeDate(result.year, result.month, result.day);
+    if (hour < 0) {
+        int64_t bd = (-hour + 23) / 24;
+        hour += bd * 24;
+        day -= bd;
+        normalizeDate(year, month, day);
     }
 
+    narrow();
     return result;
 }
 
 TimeValue addDuration(const TimeValue& temporal, const DurationValue& duration) {
     TimeValue result = temporal;
+    // Same wide-local rule as the DateTimeValue overload above.
+    int64_t hour = result.hour, minute = result.minute, second = result.second, nanos = result.nanos;
 
     int64_t total_nanos = duration.seconds * 1'000'000'000LL + duration.nanos;
     int64_t add_seconds = total_nanos / 1'000'000'000LL;
@@ -427,33 +446,37 @@ TimeValue addDuration(const TimeValue& temporal, const DurationValue& duration) 
         add_seconds -= 1;
     }
 
-    result.nanos += add_nanos;
-    result.second += add_seconds;
-    result.second += result.nanos / 1'000'000'000LL;
-    result.nanos %= 1'000'000'000LL;
-    result.minute += result.second / 60;
-    result.second %= 60;
-    result.hour += result.minute / 60;
-    result.minute %= 60;
-    result.hour %= 24;
-    if (result.hour < 0)
-        result.hour += 24;
+    nanos += add_nanos;
+    second += add_seconds;
+    second += nanos / 1'000'000'000LL;
+    nanos %= 1'000'000'000LL;
+    minute += second / 60;
+    second %= 60;
+    hour += minute / 60;
+    minute %= 60;
+    hour %= 24;
+    if (hour < 0)
+        hour += 24;
 
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.second -= 1;
+    if (nanos < 0) {
+        nanos += 1'000'000'000LL;
+        second -= 1;
     }
-    if (result.second < 0) {
-        int64_t bm = (-result.second + 59) / 60;
-        result.second += bm * 60;
-        result.minute -= bm;
+    if (second < 0) {
+        int64_t bm = (-second + 59) / 60;
+        second += bm * 60;
+        minute -= bm;
     }
-    if (result.minute < 0) {
-        int64_t bh = (-result.minute + 59) / 60;
-        result.minute += bh * 60;
-        result.hour -= bh;
+    if (minute < 0) {
+        int64_t bh = (-minute + 59) / 60;
+        minute += bh * 60;
+        hour -= bh;
     }
 
+    result.hour = static_cast<int32_t>(hour);
+    result.minute = static_cast<int8_t>(minute);
+    result.second = static_cast<int8_t>(second);
+    result.nanos = static_cast<int8_t>(nanos);
     return result;
 }
 
@@ -782,7 +805,13 @@ DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos) {
     }
 
     // Convert days since epoch to year/month/day
-    civilFromDays(days, result.year, result.month, result.day);
+    {
+        int64_t y = 0, m = 0, d = 0;
+        civilFromDays(days, y, m, d);
+        result.year = static_cast<int32_t>(y);
+        result.month = static_cast<int8_t>(m);
+        result.day = static_cast<int8_t>(d);
+    }
 
     // Convert day_ns to hour/minute/second/nanos (UTC, no offset)
     int64_t sec_of_day = day_ns / NANOS_PER_SEC;
@@ -915,7 +944,7 @@ std::string fmtDateTime(const DateTimeValue& tv, bool always_seconds) {
     case DateTimeKind::DATETIME:
         return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" +
                fmtTimeOfDay(tv.hour, tv.minute, tv.second, tv.nanos, always_seconds) +
-               fmtTimezone(tv.tz_offset_sec, tv.tz_name);
+               fmtTimezone(tv.tz_offset_sec, tzNameOrEmpty(tv.tz_name));
     default:
         return "";
     }
@@ -924,7 +953,7 @@ std::string fmtDateTime(const DateTimeValue& tv, bool always_seconds) {
 std::string fmtTime(const TimeValue& tv, bool always_seconds) {
     std::string s = fmtTimeOfDay(tv.hour, tv.minute, tv.second, tv.nanos, always_seconds);
     if (tv.kind == TimeKind::TIME)
-        s += fmtTimezone(tv.tz_offset_sec, tv.tz_name);
+        s += fmtTimezone(tv.tz_offset_sec, tzNameOrEmpty(tv.tz_name));
     return s;
 }
 

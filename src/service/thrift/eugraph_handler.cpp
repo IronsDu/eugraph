@@ -1019,7 +1019,7 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift_service::Proper
         tv.second = *dt.second();
         tv.nanos = *dt.nanos();
         tv.tz_offset_sec = *dt.tz_offset_min() * 60;
-        tv.tz_name = *dt.tz_name();
+        setTzName(tv.tz_name, *dt.tz_name());
         return tv;
     }
     case thrift_service::PropertyValueThrift::Type::time_val: {
@@ -1038,7 +1038,7 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift_service::Proper
         tv.second = *t.second();
         tv.nanos = *t.nanos();
         tv.tz_offset_sec = *t.tz_offset_min() * 60;
-        tv.tz_name = *t.tz_name();
+        setTzName(tv.tz_name, *t.tz_name());
         return tv;
     }
     case thrift_service::PropertyValueThrift::Type::duration_val: {
@@ -1075,7 +1075,7 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift_service::Proper
             tv.second = *dt.second();
             tv.nanos = *dt.nanos();
             tv.tz_offset_sec = *dt.tz_offset_min() * 60;
-            tv.tz_name = *dt.tz_name();
+            setTzName(tv.tz_name, *dt.tz_name());
             result.push_back(std::move(tv));
         }
         return result;
@@ -1099,7 +1099,7 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift_service::Proper
             tv.second = *t.second();
             tv.nanos = *t.nanos();
             tv.tz_offset_sec = *t.tz_offset_min() * 60;
-            tv.tz_name = *t.tz_name();
+            setTzName(tv.tz_name, *t.tz_name());
             result.push_back(std::move(tv));
         }
         return result;

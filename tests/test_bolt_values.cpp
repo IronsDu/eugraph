@@ -438,7 +438,7 @@ TEST_F(BoltValueMappingTest, ConvertDateTimeZoneId) {
     tv.minute = 0;
     tv.second = 0;
     tv.nanos = 0;
-    tv.tz_name = "Asia/Shanghai";
+    setTzName(tv.tz_name, "Asia/Shanghai");
 
     Value val{std::move(tv)};
     auto result = valueToBolt(val, label_defs_, edge_label_defs_);

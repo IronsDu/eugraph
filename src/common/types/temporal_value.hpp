@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -91,17 +92,36 @@ bool timeFieldReturnsString(TimeField f);
 
 // ==================== Date/DateTime type ====================
 
+/// A timezone name. Having none is the common case, so it is held rather than
+/// inlined: as a std::string it cost 32 bytes of SSO buffer in every date, and a
+/// Value variant is as large as its largest alternative. Null means absent; a
+/// non-null pointer always points at a non-empty name.
+using TzNamePtr = std::shared_ptr<const std::string>;
+
+/// Absent and empty are the same thing, so both directions of that conversion live
+/// here rather than being spelled out at every use.
+inline void setTzName(TzNamePtr& slot, const std::string& name) {
+    slot = name.empty() ? nullptr : std::make_shared<const std::string>(name);
+}
+inline std::string tzNameOrEmpty(const TzNamePtr& tz) {
+    return tz ? *tz : std::string{};
+}
+
+/// Field widths come from the range a calendar value can take, not from int64 by
+/// default. Between an addition and its normalisation these fields do exceed their
+/// normal range, so addDuration computes in wide locals and writes back once at the
+/// end -- see the note there. Wide members come first to keep the padding down.
 struct DateTimeValue {
-    DateTimeKind kind = DateTimeKind::DATE;
-    int64_t year = 1970;
-    int64_t month = 1;
-    int64_t day = 1;
-    int64_t hour = 0;
-    int64_t minute = 0;
-    int64_t second = 0;
-    int64_t nanos = 0;
+    int32_t year = 1970;
+    int32_t nanos = 0;
     int32_t tz_offset_sec = 0;
-    std::string tz_name;
+    int8_t month = 1;
+    int8_t day = 1;
+    int8_t hour = 0;
+    int8_t minute = 0;
+    int8_t second = 0;
+    DateTimeKind kind = DateTimeKind::DATE;
+    TzNamePtr tz_name;
 
     bool operator==(const DateTimeValue& o) const;
 };
@@ -109,13 +129,13 @@ struct DateTimeValue {
 // ==================== Time type ====================
 
 struct TimeValue {
-    TimeKind kind = TimeKind::LOCAL_TIME;
-    int64_t hour = 0;
-    int64_t minute = 0;
-    int64_t second = 0;
-    int64_t nanos = 0;
+    int32_t nanos = 0;
     int32_t tz_offset_sec = 0;
-    std::string tz_name;
+    int8_t hour = 0;
+    int8_t minute = 0;
+    int8_t second = 0;
+    TimeKind kind = TimeKind::LOCAL_TIME;
+    TzNamePtr tz_name;
 
     bool operator==(const TimeValue& o) const;
 };
