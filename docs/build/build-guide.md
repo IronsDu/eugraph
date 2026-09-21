@@ -238,3 +238,14 @@ grep "^// Generated from" src/query/parser/generated/grammar/Cypher*.{h,cpp}
   挡住新条目的写入。
 - 不要设置 `VCPKG_BINARY_SOURCES`：固定版本的 vcpkg 已移除 `x-gha` 后端，
   写 `clear;x-gha,readwrite` 会连带清掉默认的 files 缓存源，等于禁用全部缓存。
+- **不要引入 `lukka/run-vcpkg` 之类的 vcpkg 安装类 action**：它们会把 vcpkg 的二进制缓存接管到
+  GitHub Actions 的 `x-gha` 后端（该后端在固定版本里已被移除），结果是依赖包从不写入
+  `~/.cache/vcpkg/archives`，`actions/cache` 无内容可存，作业每次全量源码重建依赖，
+  而 post 阶段只会报一句 `Path Validation Error: Path(s) ... do not exist`。
+  六个作业统一为：`Cache vcpkg packages` → `Bootstrap vcpkg`（就地 `vcpkg/bootstrap-vcpkg.sh`，
+  工具目录由 submodule 提供）→ 安装依赖（`cmake --preset=...` 隐式安装，或 build-clang 的显式安装）。
+- 每个作业在依赖安装之后都有一步 `Verify vcpkg binary cache` 作为判据：缓存目录不存在或为空时直接
+  失败。历史上这个问题是"静默"的——CI 只是变慢，没有任何报错，所以必须有显式断言。
+- `build-clang` 的依赖用 **GCC** 预装（`--triplet x64-linux --overlay-ports=ports`）：clang 编出来的
+  folly 没有协程符号（`FOLLY_HAS_COROUTINES=0`），并且必须带上 `ports/` overlay，否则装的是上游
+  mvfst，与 `build-gcc`/`coverage` 的依赖集合不一致。

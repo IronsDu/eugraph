@@ -46,13 +46,6 @@ jobs:
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
-    - name: Export GitHub Actions cache environment variables
-      uses: actions/github-script@v7
-      with:
-        script: |
-          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
     - name: Cache vcpkg packages
       id: cache-vcpkg
       uses: actions/cache@v4
@@ -68,16 +61,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-gcc-
 
-    - name: Setup vcpkg with binary caching
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-        vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
-        runVcpkgInstall: false
-        doNotCache: false
-        vcpkgJsonGlob: vcpkg.json
-        vcpkgJsonIgnores: "['**/vcpkg/**']"
-        runVcpkgFormatString: "['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']"
+    - name: Bootstrap vcpkg
+      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
+      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
+      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
+      # 可存，作业退化成每次源码重建全部依赖）。
+      run: |
+        if [ -f "vcpkg/vcpkg" ]; then
+          echo "Using existing vcpkg binary"
+        else
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+        fi
+        ./vcpkg/vcpkg version
 
     - name: Debug vcpkg environment
       run: |
@@ -95,6 +90,22 @@ jobs:
       # within GitHub's limits. Debug symbols are not needed for green/red
       # test results; local debug builds remain unchanged.
       run: cmake --preset=release -DCMAKE_EXE_LINKER_FLAGS="-s"
+
+    - name: Verify vcpkg binary cache
+      # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
+      # 否则 actions/cache 无内容可存，作业会退化成每次源码重建全部依赖。
+      run: |
+        dir="$HOME/.cache/vcpkg/archives"
+        if [ ! -d "$dir" ]; then
+          echo "::error::vcpkg 二进制缓存目录不存在：$dir"
+          exit 1
+        fi
+        count=$(find "$dir" -name '*.zip' | wc -l)
+        echo "vcpkg 二进制缓存：$count 个包，$(du -sh "$dir" | cut -f1)，路径 $dir"
+        if [ "$count" -eq 0 ]; then
+          echo "::error::$dir 为空，依赖没有被缓存"
+          exit 1
+        fi
 
     - name: Build
       run: cmake --build --preset=release
@@ -140,13 +151,6 @@ jobs:
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
-    - name: Export GitHub Actions cache environment variables
-      uses: actions/github-script@v7
-      with:
-        script: |
-          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
     - name: Cache vcpkg packages
       id: cache-vcpkg
       uses: actions/cache@v4
@@ -162,19 +166,37 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-coverage-
 
-    - name: Setup vcpkg with binary caching
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-        vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
-        runVcpkgInstall: false
-        doNotCache: false
-        vcpkgJsonGlob: vcpkg.json
-        vcpkgJsonIgnores: "['**/vcpkg/**']"
-        runVcpkgFormatString: "['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']"
+    - name: Bootstrap vcpkg
+      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
+      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
+      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
+      # 可存，作业退化成每次源码重建全部依赖）。
+      run: |
+        if [ -f "vcpkg/vcpkg" ]; then
+          echo "Using existing vcpkg binary"
+        else
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+        fi
+        ./vcpkg/vcpkg version
 
     - name: Configure CMake with Coverage
       run: cmake --preset=coverage
+
+    - name: Verify vcpkg binary cache
+      # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
+      # 否则 actions/cache 无内容可存，作业会退化成每次源码重建全部依赖。
+      run: |
+        dir="$HOME/.cache/vcpkg/archives"
+        if [ ! -d "$dir" ]; then
+          echo "::error::vcpkg 二进制缓存目录不存在：$dir"
+          exit 1
+        fi
+        count=$(find "$dir" -name '*.zip' | wc -l)
+        echo "vcpkg 二进制缓存：$count 个包，$(du -sh "$dir" | cut -f1)，路径 $dir"
+        if [ "$count" -eq 0 ]; then
+          echo "::error::$dir 为空，依赖没有被缓存"
+          exit 1
+        fi
 
     - name: Build
       run: cmake --build --preset=coverage
@@ -254,13 +276,6 @@ jobs:
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
-    - name: Export GitHub Actions cache environment variables
-      uses: actions/github-script@v7
-      with:
-        script: |
-          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
     - name: Cache vcpkg packages
       id: cache-vcpkg
       uses: actions/cache@v4
@@ -273,16 +288,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-clang-
 
-    - name: Setup vcpkg with binary caching
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-        vcpkgGitCommitId: '2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec'
-        runVcpkgInstall: false
-        doNotCache: false
-        vcpkgJsonGlob: vcpkg.json
-        vcpkgJsonIgnores: "['**/vcpkg/**']"
-        runVcpkgFormatString: "['install', '--recurse', '--clean-after-build', '--x-install-root', '$[env.VCPKG_INSTALLED_DIR]', '--triplet', 'x64-linux']"
+    - name: Bootstrap vcpkg
+      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
+      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
+      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
+      # 可存，作业退化成每次源码重建全部依赖）。
+      run: |
+        if [ -f "vcpkg/vcpkg" ]; then
+          echo "Using existing vcpkg binary"
+        else
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+        fi
+        ./vcpkg/vcpkg version
 
     - name: Debug vcpkg environment
       run: |
@@ -306,7 +323,25 @@ jobs:
     - name: Install vcpkg dependencies (GCC)
       run: |
         ./vcpkg/vcpkg install --triplet x64-linux \
+          --overlay-ports="$PWD/ports" \
           --x-install-root="$PWD/build/clang-release/vcpkg_installed"
+
+    - name: Verify vcpkg binary cache
+      # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
+      # 否则 actions/cache 无内容可存，作业会退化成每次源码重建全部依赖。
+      run: |
+        dir="$HOME/.cache/vcpkg/archives"
+        if [ ! -d "$dir" ]; then
+          echo "::error::vcpkg 二进制缓存目录不存在：$dir"
+          exit 1
+        fi
+        count=$(find "$dir" -name '*.zip' | wc -l)
+        echo "vcpkg 二进制缓存：$count 个包，$(du -sh "$dir" | cut -f1)，路径 $dir"
+        if [ "$count" -eq 0 ]; then
+          echo "::error::$dir 为空，依赖没有被缓存"
+          exit 1
+        fi
+
     - name: Configure CMake with Clang
       run: cmake --preset=clang-release -DVCPKG_MANIFEST_INSTALL=OFF
 
@@ -398,13 +433,6 @@ jobs:
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
-    - name: Export GitHub Actions cache environment variables
-      uses: actions/github-script@v7
-      with:
-        script: |
-          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
     - name: Cache ccache
       uses: actions/cache@v4
       with:
@@ -427,18 +455,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-asan-
 
-    - name: Install vcpkg
+    - name: Bootstrap vcpkg
+      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
+      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
+      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
+      # 可存，作业退化成每次源码重建全部依赖）。
       run: |
-        if [ ! -f "vcpkg/vcpkg" ]; then
-          echo "vcpkg not found or incomplete, cloning..."
-          rm -rf vcpkg
-          git clone https://github.com/Microsoft/vcpkg.git
-          cd vcpkg
-          git checkout 2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec
-          ./bootstrap-vcpkg.sh
+        if [ -f "vcpkg/vcpkg" ]; then
+          echo "Using existing vcpkg binary"
         else
-          echo "Using cached vcpkg"
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
         fi
+        ./vcpkg/vcpkg version
 
     - name: Configure CMake with ASan
       run: |
@@ -456,6 +484,22 @@ jobs:
           -DCMAKE_C_FLAGS_DEBUG="-O0" \
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address -s" \
           -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=address"
+
+    - name: Verify vcpkg binary cache
+      # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
+      # 否则 actions/cache 无内容可存，作业会退化成每次源码重建全部依赖。
+      run: |
+        dir="$HOME/.cache/vcpkg/archives"
+        if [ ! -d "$dir" ]; then
+          echo "::error::vcpkg 二进制缓存目录不存在：$dir"
+          exit 1
+        fi
+        count=$(find "$dir" -name '*.zip' | wc -l)
+        echo "vcpkg 二进制缓存：$count 个包，$(du -sh "$dir" | cut -f1)，路径 $dir"
+        if [ "$count" -eq 0 ]; then
+          echo "::error::$dir 为空，依赖没有被缓存"
+          exit 1
+        fi
 
     - name: Build
       run: |
@@ -592,13 +636,6 @@ jobs:
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
-    - name: Export GitHub Actions cache environment variables
-      uses: actions/github-script@v7
-      with:
-        script: |
-          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
     - name: Cache ccache
       uses: actions/cache@v4
       with:
@@ -621,18 +658,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-ubsan-
 
-    - name: Install vcpkg
+    - name: Bootstrap vcpkg
+      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
+      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
+      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
+      # 可存，作业退化成每次源码重建全部依赖）。
       run: |
-        if [ ! -f "vcpkg/vcpkg" ]; then
-          echo "vcpkg not found or incomplete, cloning..."
-          rm -rf vcpkg
-          git clone https://github.com/Microsoft/vcpkg.git
-          cd vcpkg
-          git checkout 2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec
-          ./bootstrap-vcpkg.sh
+        if [ -f "vcpkg/vcpkg" ]; then
+          echo "Using existing vcpkg binary"
         else
-          echo "Using cached vcpkg"
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
         fi
+        ./vcpkg/vcpkg version
 
     - name: Configure CMake with UBSan
       run: |
@@ -650,6 +687,22 @@ jobs:
           -DCMAKE_C_FLAGS_DEBUG="-O0" \
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined -s" \
           -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=undefined"
+
+    - name: Verify vcpkg binary cache
+      # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
+      # 否则 actions/cache 无内容可存，作业会退化成每次源码重建全部依赖。
+      run: |
+        dir="$HOME/.cache/vcpkg/archives"
+        if [ ! -d "$dir" ]; then
+          echo "::error::vcpkg 二进制缓存目录不存在：$dir"
+          exit 1
+        fi
+        count=$(find "$dir" -name '*.zip' | wc -l)
+        echo "vcpkg 二进制缓存：$count 个包，$(du -sh "$dir" | cut -f1)，路径 $dir"
+        if [ "$count" -eq 0 ]; then
+          echo "::error::$dir 为空，依赖没有被缓存"
+          exit 1
+        fi
 
     - name: Build
       run: |
@@ -699,13 +752,6 @@ jobs:
     - name: Install Python test dependencies (Bolt integration tests)
       run: pip install neo4j pytest --break-system-packages
 
-    - name: Export GitHub Actions cache environment variables
-      uses: actions/github-script@v7
-      with:
-        script: |
-          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
     - name: Cache vcpkg packages
       id: cache-vcpkg
       uses: actions/cache@v4
@@ -721,18 +767,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vcpkg-archives-clang-tidy-
 
-    - name: Install vcpkg
+    - name: Bootstrap vcpkg
+      # 直接用 submodule 里的 vcpkg（固定 2cf2bcc）就地 bootstrap，不再使用 lukka/run-vcpkg：
+      # 该 action 会把 vcpkg 的二进制缓存接管到 GitHub Actions 的 x-gha 后端，而固定版本的
+      # vcpkg 已移除 x-gha，依赖包因此从不写入 ~/.cache/vcpkg/archives（actions/cache 无内容
+      # 可存，作业退化成每次源码重建全部依赖）。
       run: |
-        if [ ! -f "vcpkg/vcpkg" ]; then
-          echo "vcpkg not found or incomplete, cloning..."
-          rm -rf vcpkg
-          git clone https://github.com/Microsoft/vcpkg.git
-          cd vcpkg
-          git checkout 2cf2bcc60add50f79b2c418487d9cd1b6c7c1fec
-          ./bootstrap-vcpkg.sh
+        if [ -f "vcpkg/vcpkg" ]; then
+          echo "Using existing vcpkg binary"
         else
-          echo "Using cached vcpkg"
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
         fi
+        ./vcpkg/vcpkg version
 
     - name: Configure CMake and generate compile_commands.json
       run: |
@@ -744,6 +790,22 @@ jobs:
           -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
           -DVCPKG_TARGET_TRIPLET=x64-linux-release \
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+    - name: Verify vcpkg binary cache
+      # 判据：vcpkg 必须把编译好的依赖包写进默认的本地二进制缓存（~/.cache/vcpkg/archives），
+      # 否则 actions/cache 无内容可存，作业会退化成每次源码重建全部依赖。
+      run: |
+        dir="$HOME/.cache/vcpkg/archives"
+        if [ ! -d "$dir" ]; then
+          echo "::error::vcpkg 二进制缓存目录不存在：$dir"
+          exit 1
+        fi
+        count=$(find "$dir" -name '*.zip' | wc -l)
+        echo "vcpkg 二进制缓存：$count 个包，$(du -sh "$dir" | cut -f1)，路径 $dir"
+        if [ "$count" -eq 0 ]; then
+          echo "::error::$dir 为空，依赖没有被缓存"
+          exit 1
+        fi
 
     - name: Run clang-tidy
       run: |
