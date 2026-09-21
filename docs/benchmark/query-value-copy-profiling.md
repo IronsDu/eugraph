@@ -1929,3 +1929,50 @@ map 的取舍取决于复用率），而本轮上下文不足以完成实现 + �
 处理它（句柄化整个类型，或改用紧凑表示）可把 `Value` 降到 ~48 字节 ——
 **但按上面的实测，在存储受限的查询上同样不会带来延迟收益**，
 所以优先级应低于「攻存储访问」那条线。
+
+## 为什么 `DateTimeValue` / `TimeValue` **不应该**继续优化（结论：就此停止）
+
+按上面的记录，`Value` 现在 112 字节，最大分支换成了 `DateTimeValue`（104）与 `TimeValue`（80），
+两者都被一个 **`std::string tz_name`（32 字节）** 和 **7 个 `int64_t` 字段**撑大。
+看起来是显然的下一步。**但两条路都走不通，已实测确认，记录在此以免重走：**
+
+### 路线一：收窄字段（`int64` → `int8`/`int32`）—— **静默溢出**
+
+`temporal_value.cpp` 的日期算术把字段当作**无界累加器**，规范化之前可以任意大：
+
+```cpp
+result.day    += duration.days;                  // 任意大
+result.nanos  += add_nanos;
+result.second += add_seconds;
+result.minute += result.second / 60;             // 级联放大
+result.hour   += result.minute / 60;
+...
+normalizeDate(result.year, result.month, result.day);   // 之后才修正回合法范围
+```
+
+`normalizeDate(int64_t&, int64_t&, int64_t&)` 是**按引用**拿字段的 —— 编译器会直接报错
+（`int64_t&` 绑不到 `int32_t`），正好证明这些字段必须是宽的。**收窄 `day`/`month`/`hour`/
+`minute`/`second`/`nanos` 中的任何一个都会在日期运算中溢出。**
+
+可安全收窄的只有 `year`（int32）与 `kind`，收益约 16 字节 —— 到不了 48 的目标。
+
+### 路线二：句柄化整个类型 —— **给热类型加逐行分配**
+
+前 9 个类型是**冷类型**（`PathTopology` 只由 VLE 产生），包指针无害。
+但 temporal 是**热类型**：`datetime({epochMillis: ...})` 在 complex-6/7/9/10 里**逐行执行**。
+句柄化会让**每次日期运算结果都堆分配一次**，这是实打实的退化 ——
+而 `int64` 字段改指针唯一省下的是「拷贝成本」，日期值本来就没有可省的深拷贝。
+
+### 路线三：`tz_name` 改 interned id —— **动 KV 兼容性表面**
+
+`value_codec.cpp` 会**持久化** `tz_name`（`tv.tz_name = std::string(data.substr(off, tz_len))`）。
+改成 interned id 必须同时改 KV 编码，而 KV 编码是 `AGENTS.md` 列的兼容性表面，需单独评审。
+
+### 结论
+
+**收益为零，代价明确 —— 因此不做。** 本轮的实测已经证明：`sizeof(Value)` 从 152 降到 112
+（甚至合成测量里 48 字节的布局快 2.8 倍）**在 LDBC 查询上没有带来任何延迟变化**，
+因为这些查询**存储受限**（complex-9 的 48.8% 采样在 WiredTiger 行扫描）。
+
+**内存布局这条线的正确终点就是这里。** 继续投入的收益是 0，而两条可行路线分别带来
+静默溢出与热路径分配。下一轮的力气应当花在**存储访问**上。
