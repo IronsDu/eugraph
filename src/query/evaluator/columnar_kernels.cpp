@@ -860,9 +860,9 @@ void temporalLtBatch(const Column& left, const Column& right, Column& result, si
         // DurationValue vs DurationValue: compare by normalized representation
         DurationValue d_a, d_b;
         if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
-            // durationOrderNanos：月按 365.2425/12 天（与 neo4j 的排序一致），且必须 128 位 —— int64
-            // 版本在 months 很大（例如 duration.between 两个极值日期）时直接溢出（UB）。
-            result.setValue(i, Value(durationOrderNanos(d_a) < durationOrderNanos(d_b)));
+            // neo4j 的 duration 只能做 = / <> 比较：< 与 > 返回 null（不是布尔值）。
+            // ORDER BY / min / max 走的是 cypherCompareValues → compareDuration，不受影响。
+            result.setNull(i);
             continue;
         }
 
@@ -897,7 +897,7 @@ void temporalGtBatch(const Column& left, const Column& right, Column& result, si
 
         DurationValue d_a, d_b;
         if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
-            result.setValue(i, Value(durationOrderNanos(d_a) > durationOrderNanos(d_b)));
+            result.setNull(i); // 同 Lt 分支：duration 的 > 是 null
             continue;
         }
 
@@ -932,7 +932,12 @@ void temporalLteBatch(const Column& left, const Column& right, Column& result, s
 
         DurationValue d_a, d_b;
         if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
-            result.setValue(i, Value(durationOrderNanos(d_a) <= durationOrderNanos(d_b)));
+            // `a <= b` 在 neo4j 里等价于 `(a < b) OR (a = b)`：a < b 是 null，
+            // 所以只有相等时得到 true，否则 null。
+            if (d_a == d_b)
+                result.setValue(i, Value(true));
+            else
+                result.setNull(i);
             continue;
         }
 
@@ -967,7 +972,12 @@ void temporalGteBatch(const Column& left, const Column& right, Column& result, s
 
         DurationValue d_a, d_b;
         if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
-            result.setValue(i, Value(durationOrderNanos(d_a) >= durationOrderNanos(d_b)));
+            // `a >= b` 在 neo4j 里等价于 `(a < b) OR (a = b)`：a < b 是 null，
+            // 所以只有相等时得到 true，否则 null。
+            if (d_a == d_b)
+                result.setValue(i, Value(true));
+            else
+                result.setNull(i);
             continue;
         }
 

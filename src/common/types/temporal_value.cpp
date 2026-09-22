@@ -478,10 +478,12 @@ TimeValue addDuration(const TimeValue& temporal, const DurationValue& duration) 
         hour -= bh;
     }
 
-    result.hour = static_cast<int32_t>(hour);
+    result.hour = static_cast<int8_t>(hour);
     result.minute = static_cast<int8_t>(minute);
     result.second = static_cast<int8_t>(second);
-    result.nanos = static_cast<int8_t>(nanos);
+    // nanos 是 int32（0..999'999'999）：收窄成 int8 会把 999'999'999 截成 -1，
+    // 于是 time / localtime ± duration 的亚秒部分出错（TCK Temporal8 [2]/[3] 回归）。
+    result.nanos = static_cast<int32_t>(nanos);
     return result;
 }
 

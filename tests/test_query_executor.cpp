@@ -5681,6 +5681,20 @@ std::string boolRepr(QueryExecutor& executor, const std::string& expr) {
     return std::get<bool>(result.rows[0][0]) ? "true" : "false";
 }
 
+/// Cypher 是三值逻辑：把 true / false / null 都区分开（boolRepr 会把 null 也当成错误）。
+std::string ternaryRepr(QueryExecutor& executor, const std::string& expr) {
+    auto result = execSync(executor, "RETURN " + expr + " AS v");
+    if (!result.error.empty())
+        return "<error: " + result.error + ">";
+    if (result.rows.empty() || result.rows[0].empty())
+        return "<no rows>";
+    if (std::holds_alternative<bool>(result.rows[0][0]))
+        return std::get<bool>(result.rows[0][0]) ? "true" : "false";
+    if (std::holds_alternative<std::monostate>(result.rows[0][0]))
+        return "null";
+    return "<other>";
+}
+
 } // namespace
 
 TEST_F(QueryExecutorTest, TemporalMonthEndClampsInsideMonthArithmetic) {
@@ -5838,6 +5852,57 @@ TEST_F(QueryExecutorTest, TemporalDurationOrderingMatchesNeo4j) {
               (std::vector<std::string>{"PT1S", "P1D", "P166666666Y6M"}));
     EXPECT_EQ(ordered("[duration({months: 1999999998}), duration({days: 40}), duration({seconds: 1})]", " DESC"),
               (std::vector<std::string>{"P166666666Y6M", "P40D", "PT1S"}));
+}
+
+TEST_F(QueryExecutorTest, TemporalDurationOrderingOperatorsAreNullLikeNeo4j) {
+    // neo4j 的 duration 只能做 = / <>：`<` 与 `>` 返回 null；`<=` / `>=` 等价于
+    // `(a < b) OR (a = b)`，a < b 是 null，所以只有相等时得到 true，不等时也是 null。
+    // （ORDER BY / min / max 走的是内部排序长度，不受这条影响，见上一个用例。）
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) <= duration({seconds:1})"), "true");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) >= duration({seconds:1})"), "true");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) < duration({seconds:1})"), "null");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) > duration({seconds:1})"), "null");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) < duration({seconds:2})"), "null");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) > duration({seconds:2})"), "null");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) <= duration({seconds:2})"), "null");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) >= duration({seconds:2})"), "null");
+    // 等值比较照旧
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) = duration({seconds:1})"), "true");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({months:1}) = duration({days:30})"), "false");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({months:1}) <> duration({days:30})"), "true");
+    // 因此 WHERE 里的排序比较恒不成立（null 当作 false 过滤），neo4j 同样返回空
+    EXPECT_TRUE(collectStrings(execSync(*executor_, "UNWIND [duration({seconds:1}), duration({seconds:2})] AS d WITH d "
+                                                    "WHERE d > duration({seconds:1}) RETURN toString(d) AS v"))
+                    .empty());
+    // min / max 仍然按内部排序长度工作
+    EXPECT_EQ(collectStrings(execSync(*executor_, "UNWIND [duration({seconds:1}), duration({seconds:2})] AS d "
+                                                  "RETURN toString(min(d)) AS v")),
+              (std::vector<std::string>{"PT1S"}));
+    EXPECT_EQ(collectStrings(execSync(*executor_, "UNWIND [duration({seconds:1}), duration({seconds:2})] AS d "
+                                                  "RETURN toString(max(d)) AS v")),
+              (std::vector<std::string>{"PT2S"}));
+}
+
+TEST_F(QueryExecutorTest, TemporalTimeSubsecondArithmeticKeepsNanos) {
+    // TimeValue::nanos 是 int32、值域到 999'999'999：打包时误写成 static_cast<int8_t>(nanos)
+    // 会把 999'999'999 截成 -1，于是 time / localtime ± duration 的亚秒部分出错
+    // （TCK Temporal8 [2]/[3] 的回归）。期望值取自该 feature。
+    EXPECT_EQ(temporalRepr(*executor_, "localtime({hour: 12, minute: 31, second: 14, nanosecond: 1}) + "
+                                       "duration({years: 12, months: 5, days: 14, hours: 16, minutes: 12, seconds: 70, "
+                                       "nanoseconds: 2})"),
+              "04:44:24.000000003");
+    EXPECT_EQ(temporalRepr(*executor_, "localtime({hour: 12, minute: 31, second: 14, nanosecond: 1}) - "
+                                       "duration({years: 12, months: 5, days: 14, hours: 16, minutes: 12, seconds: 70, "
+                                       "nanoseconds: 2})"),
+              "20:18:03.999999999");
+    EXPECT_EQ(temporalRepr(*executor_, "time({hour: 12, minute: 31, second: 14, nanosecond: 1, timezone: '+01:00'}) - "
+                                       "duration({months: 1, days: -14, hours: 16, minutes: -12, seconds: 70})"),
+              "20:42:04.000000001+01:00");
+    // 小数 duration（Temporal8 ex #3）
+    EXPECT_EQ(temporalRepr(*executor_, "localtime({hour: 12, minute: 31, second: 14, nanosecond: 1}) - "
+                                       "duration({years: 12.5, months: 5.5, days: 14.5, hours: 16.5, minutes: 12.5, "
+                                       "seconds: 70.5, nanoseconds: 3})"),
+              "02:33:00.499999998");
 }
 
 TEST_F(QueryExecutorTest, TemporalZonedComparisonOrdersByInstantThenLocalTime) {
@@ -9025,4 +9090,59 @@ TEST_F(QueryExecutorTest, RelationshipReuseFailsCompileTime) {
     auto result = execSync(*executor_, "MATCH (a)-[r]->()-[r]->(a) RETURN r");
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("RelationshipUniquenessViolation"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ScalarFunctionsOnEntityAndCollectionValues) {
+    // 值打包后 list/map/node/edge/path 走的是 ListValuePtr / VertexValuePtr / EdgeValuePtr /
+    // PathValuePtr 的持有式表示，这些"非 typed-batch"的通用分支 TCK 覆盖不到，
+    // 显式钉住返回值，免得重构时静默坏掉。
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:N {name:'a', num: 1})-[:R {w: 2}]->(b:N {name:'b'})").error.empty());
+
+    // 一次取值辅助：整型/字符串/布尔统一渲染成字符串再比较。
+    auto of = [&](const std::string& query) {
+        auto r = execSync(*executor_, query);
+        if (!r.error.empty())
+            return std::string("<error: ") + r.error + ">";
+        if (r.rows.empty() || r.rows[0].empty())
+            return std::string("<none>");
+        const auto& v = r.rows[0][0];
+        if (std::holds_alternative<int64_t>(v))
+            return std::to_string(std::get<int64_t>(v));
+        if (std::holds_alternative<std::string>(v))
+            return std::get<std::string>(v);
+        if (std::holds_alternative<bool>(v))
+            return std::string(std::get<bool>(v) ? "true" : "false");
+        return std::string("<other>");
+    };
+
+    // 路径函数：nodes / relationships / length（MATCH 出来的路径是拓扑表示）
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(size(nodes(p))) AS v"), "2");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(size(relationships(p))) AS v"), "1");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(length(p)) AS v"), "1");
+    // 图函数：type / labels / keys / 属性读取（节点与边两条路径）
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(type(r)) AS v"), "R");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(size(labels(a))) AS v"), "1");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(head(labels(a))) AS v"), "N");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(size(keys(a))) AS v"), "2");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(size(keys(r))) AS v"), "1");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(r.w) AS v"), "2");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN a.name AS v"), "a");
+    // 列表函数与下标
+    EXPECT_EQ(of("RETURN toString(size(split('a,b,c', ','))) AS v"), "3");
+    EXPECT_EQ(of("RETURN head(split('a,b', ',')) AS v"), "a");
+    EXPECT_EQ(of("RETURN toString(head([1,2,3])) AS v"), "1");
+    EXPECT_EQ(of("RETURN toString(last([1,2,3])) AS v"), "3");
+    EXPECT_EQ(of("RETURN toString(size(tail([1,2,3]))) AS v"), "2");
+    EXPECT_EQ(of("RETURN toString(size(range(1,5))) AS v"), "5");
+    EXPECT_EQ(of("RETURN toString([1,2,3][1]) AS v"), "2");
+    EXPECT_EQ(of("RETURN toString({a: 1}['a']) AS v"), "1");
+    // 转换函数：成功路径 + "集合/实体不可转换" 的通用分支（TypeError）
+    EXPECT_EQ(of("RETURN toString(toInteger('42')) AS v"), "42");
+    EXPECT_EQ(of("RETURN toString(toInteger(toFloat('1.9'))) AS v"), "1");
+    EXPECT_EQ(of("RETURN toString(toBoolean('true')) AS v"), "true");
+    EXPECT_EQ(of("RETURN toString(1.5) AS v"), "1.5");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toInteger([1,2]) AS v"), "TypeError: InvalidArgumentValue");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toFloat(true) AS v"), "TypeError: InvalidArgumentValue");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toString([1,2]) AS v"), "TypeError: InvalidArgumentValue");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toBoolean(1.5) AS v"), "TypeError: InvalidArgumentValue");
 }
