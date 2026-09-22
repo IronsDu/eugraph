@@ -181,6 +181,19 @@ void normalizeDate(int64_t& year, int64_t& month, int64_t& day);
 int64_t daysFromCivil(int64_t y, int64_t m, int64_t d);
 void civilFromDays(int64_t days, int64_t& y, int64_t& m, int64_t& d);
 
+/// 绝对月序号（year*12 + month-1，0 基）与 java.time 的"月+日"打包坐标。
+///
+/// 必须在 64 位下运算：DateTimeValue::year 是 int32，合法范围到 ±999'999'999，
+/// 而 `year * 12` 直接在 int 里算会溢出（UBSan: signed integer overflow，
+/// 见 TCK Temporal10 的极值场景）。参数与返回值都按 int64 走，
+/// 凡是"用年月做算术"的地方都经过这里，避免再有人拿窄字段直接乘。
+constexpr int64_t absoluteMonths(int64_t year, int64_t month) {
+    return year * 12 + (month - 1);
+}
+constexpr int64_t packedMonthDay(int64_t year, int64_t month, int64_t day) {
+    return absoluteMonths(year, month) * 32 + day;
+}
+
 // ==================== Temporal arithmetic ====================
 
 DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& duration);

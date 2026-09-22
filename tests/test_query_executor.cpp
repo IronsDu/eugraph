@@ -5751,6 +5751,30 @@ TEST_F(QueryExecutorTest, TemporalDateSubtractMatchesDurationBetween) {
     EXPECT_EQ(temporalRepr(*executor_, "date('2024-01-31') - date('2024-03-01')"), "P-1M-1D");
 }
 
+TEST_F(QueryExecutorTest, TemporalExtremeYearSpanStaysWide) {
+    // ±999'999'999 年的跨度：year 是 int32，`year * 12` / `days * 8.64e13` 这类中间量
+    // 必须在 64 位（必要时 128 位）下算，否则 UBSan 直接报 signed integer overflow
+    // 并打挂 server —— 正是 TCK Temporal10 的两条极值场景。
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(date('-999999999-01-01'), date('+999999999-12-31'))"),
+              "P1999999998Y11M30D");
+    // duration.inSeconds：带时区分支（days * 8.64e13）与非带时区分支（先换算成秒）都要过。
+    EXPECT_EQ(temporalRepr(*executor_, "duration.inSeconds(datetime('-999999999-01-01T00:00:00+00:00'), "
+                                       "datetime('+999999999-12-31T23:59:59+00:00'))"),
+              "PT17531639991215H59M59S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.inSeconds(localdatetime('-999999999-01-01'), "
+                                       "localdatetime('+999999999-12-31T23:59:59'))"),
+              "PT17531639991215H59M59S");
+}
+
+TEST_F(QueryExecutorTest, TemporalDatetimeFromEpochUsesWideIntermediates) {
+    // seconds * 1e9 在 |seconds| > ~9.2e9（公元 2262 年之后）就溢出 int64，
+    // 而 datetime 的合法范围一直开到 ±999'999'999 年。
+    EXPECT_EQ(temporalRepr(*executor_, "datetime.fromepoch(100000000000, 0)"), "5138-11-16T09:46:40Z");
+    // 超出可表示范围时报明确错误，而不是让收窄回绕成静默的错误值。
+    auto out_of_range = execSync(*executor_, "RETURN datetime.fromepoch(1000000000000000000, 0) AS v");
+    EXPECT_FALSE(out_of_range.error.empty());
+}
+
 TEST_F(QueryExecutorTest, TemporalZonedComparisonOrdersByInstantThenLocalTime) {
     // One instant, two zones: ordering is by instant and ties fall back to the local
     // wall clock, while equality wants the zone to match too.

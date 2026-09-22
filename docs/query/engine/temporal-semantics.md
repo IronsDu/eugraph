@@ -123,6 +123,36 @@ neo4j 只输出偏移（`2024-01-01T12:00:00+00:00`）。保留 `[Zone]` 让 `da
 两者都是各自数据库里的 Stockholm LMT，属于**环境差异**而不是换算逻辑错误：
 1879 年以前的 LMT 在不同 tzdata 版本间被修订过。TCK 的 `Temporal2 [6] ex #5` 因此仍失败 1 个场景。
 
+### 10. 极值年份：字段可以窄，算术必须宽
+
+`year` 是 `int32`（合法范围 ±999'999'999）、`month/day/hour/minute/second` 是 `int8`、`nanos` 是 `int32`
+—— 这只约束**存储**，不约束中间量。凡是拿字段做算术的地方都必须先拓宽，否则 UBSan 直接报
+`signed integer overflow` 并打挂 server（CI 的 ubsan 作业就是按这个判据抓的，TCK `Temporal10 [9]` 曾因此崩在
+`duration.between` 上）：
+
+| 场景 | 中间量 | 收口位置 |
+|---|---|---|
+| 年月算术（`year*12 + month`、java.time 的"月+日"打包坐标） | `int64` | `absoluteMonths()` / `packedMonthDay()`（`temporal_value.hpp`）；不要再手写 `year * 12` |
+| 日 → 纳秒、两个时刻相减（`between` 与 `inSeconds` 的带时区分支） | `__int128` | `localFieldsNanos()`、`durationInSecondsScalarFn` 的 `utcNanos` |
+| epoch 秒 → 纳秒（`datetime.fromepoch`、Bolt 参数解码） | `__int128` | `datetimeFromEpoch()`；结果年份超出 ±999'999'999 时报 `ArgumentError`，不静默回绕 |
+
+判据（都在 `tests/test_query_executor.cpp` 的 `Temporal*` 里）：
+
+* `duration.between(date('-999999999-01-01'), date('+999999999-12-31'))` = `P1999999998Y11M30D`（TCK `Temporal10 [9]`）
+* `duration.inSeconds(localdatetime('-999999999-01-01'), localdatetime('+999999999-12-31T23:59:59'))` = `PT17531639991215H59M59S`（`[10]`）
+* `datetime.fromepoch(100000000000, 0)` = `5138-11-16T09:46:40Z`（`|seconds| > 9.2e9` 即超出 int64 的纳秒容量）
+
+**已知缺口（未处理）**：日期/时间的**渲染**是按位取数（`pad4`/`pad2`），只支持 0–9999 的四位年份。
+负年份会打印出非数字字符，年份 ≥ 10000 会被截成低四位 —— 值本身是对的：
+
+| 表达式 | 值（正确） | 当前打印（错） |
+|---|---|---|
+| `datetime.fromepoch(-100000000000, 0)` | `year = -1199` | `//''-02-15T14:13:20Z` |
+| `datetime.fromepoch(300000000000, 0)` | `year = 11476` | `1476-08-15T05:20:00Z` |
+
+TCK 目前只用极值年份做 duration 的输入，所以还没暴露；修它要同时对齐 neo4j 的文本形式
+（`-0001-01-01`、`10000-01-01`）。
+
 ## 验证方式
 
 开发期把用例同时打到 neo4j 5.26（7687）与 eugraph（7688）逐条比对，输出一致才写入断言；

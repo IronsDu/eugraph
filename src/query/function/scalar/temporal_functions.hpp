@@ -666,7 +666,9 @@ DurationValue parseDurationFromString(const std::string& s) {
         s[4] >= '0' && s[4] <= '9' && s[5] == '-') {
         // Date-based format: extract components from date-time string
         auto date_tv = parseDatetimeStr(s.substr(1), DateTimeKind::DATE);
-        dv.months = date_tv.year * 12 + date_tv.month;
+        // year 是 int32：先拓宽再乘（这里年份被 4 位数字门禁限制在 9999 内，
+        // 属于防御性统一，与 temporal_value.hpp 的 absoluteMonths 同一原因）。
+        dv.months = static_cast<int64_t>(date_tv.year) * 12 + date_tv.month;
         dv.days = date_tv.day;
         dv.seconds = date_tv.hour * 3600 + date_tv.minute * 60 + date_tv.second;
         dv.nanos = date_tv.nanos;
@@ -2304,7 +2306,10 @@ inline Value durationInSecondsScalarFn(const std::vector<Value>& args, const Eva
         bool a_zoned = (a.kind == DateTimeKind::DATETIME);
         bool b_zoned = (b.kind == DateTimeKind::DATETIME);
 
-        auto utcNanos = [](const DateTimeValue& dtv, const std::string& ref_tz_name, int32_t ref_tz_offset) -> int64_t {
+        // 128 位：极值年份下 days * 8.64e13 直接溢出 int64，两个坐标相减的结果也超出 int64
+        // （本地字段那条路径同样处理，见 temporal_value.cpp 的 localFieldsNanos）。
+        auto utcNanos = [](const DateTimeValue& dtv, const std::string& ref_tz_name,
+                           int32_t ref_tz_offset) -> __int128 {
             int64_t days = daysFromCivil(dtv.year, dtv.month, dtv.day);
             int64_t day_ns = ((dtv.hour * 3600 + dtv.minute * 60 + dtv.second) * 1'000'000'000LL) + dtv.nanos;
             if (dtv.kind == DateTimeKind::DATETIME) {
@@ -2316,18 +2321,20 @@ inline Value durationInSecondsScalarFn(const std::vector<Value>& args, const Eva
             } else {
                 day_ns -= static_cast<int64_t>(ref_tz_offset) * 1'000'000'000LL;
             }
-            return days * 86'400'000'000'000LL + day_ns;
+            return static_cast<__int128>(days) * 86'400'000'000'000LL + day_ns;
         };
 
         if (a_zoned || b_zoned) {
             const auto& zoned = a_zoned ? a : b;
-            int64_t a_utc = utcNanos(a, tzNameOrEmpty(zoned.tz_name), zoned.tz_offset_sec);
-            int64_t b_utc = utcNanos(b, tzNameOrEmpty(zoned.tz_name), zoned.tz_offset_sec);
-            int64_t total_ns = b_utc - a_utc;
+            const __int128 a_utc = utcNanos(a, tzNameOrEmpty(zoned.tz_name), zoned.tz_offset_sec);
+            const __int128 b_utc = utcNanos(b, tzNameOrEmpty(zoned.tz_name), zoned.tz_offset_sec);
+            const __int128 total_ns = b_utc - a_utc;
 
+            // 秒数落回 int64（极值差约 6.3e16 秒，安全），余数再按 java.time 的符号规则归位。
+            const __int128 total_sec = total_ns / 1'000'000'000LL;
             DurationValue result;
-            result.seconds = total_ns / 1'000'000'000LL;
-            result.nanos = total_ns % 1'000'000'000LL;
+            result.seconds = static_cast<int64_t>(total_sec);
+            result.nanos = static_cast<int64_t>(total_ns - total_sec * 1'000'000'000LL);
             if (result.nanos < 0) {
                 result.nanos += 1'000'000'000LL;
                 result.seconds -= 1;

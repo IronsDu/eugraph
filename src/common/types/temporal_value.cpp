@@ -363,7 +363,7 @@ DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& du
     // 2024-03-31 - P1M = 2024-02-29, 2024-05-31 - P1M = 2024-04-30, and
     // 2024-03-31 - P1M1D = 2024-02-28.
     if (duration.months != 0) {
-        int64_t total_months = year * 12 + (month - 1) + duration.months;
+        int64_t total_months = absoluteMonths(year, month) + duration.months;
         int64_t new_year = total_months >= 0 ? total_months / 12 : -((-total_months + 11) / 12);
         year = new_year;
         month = total_months - new_year * 12 + 1;
@@ -673,7 +673,7 @@ DateTimeValue addMonthsClamped(const DateTimeValue& a, int64_t months) {
     DateTimeValue r = a;
     if (months == 0)
         return r;
-    int64_t total = r.year * 12 + (r.month - 1) + months;
+    int64_t total = absoluteMonths(r.year, r.month) + months;
     int64_t y = total >= 0 ? total / 12 : -((-total + 11) / 12);
     r.year = y;
     r.month = total - y * 12 + 1;
@@ -744,8 +744,8 @@ DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b) {
             end_day = daysInMonth(end_year, end_month);
         }
     }
-    const int64_t packed_a = (a.year * 12 + (a.month - 1)) * 32 + a.day;
-    const int64_t packed_b = (end_year * 12 + (end_month - 1)) * 32 + end_day;
+    const int64_t packed_a = packedMonthDay(a.year, a.month, a.day);
+    const int64_t packed_b = packedMonthDay(end_year, end_month, end_day);
     const int64_t months = (packed_b - packed_a) / 32; // C++ truncation matches Java's
 
     const DateTimeValue mid = addMonthsClamped(a, months);
@@ -794,11 +794,13 @@ DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos) {
     constexpr int64_t NANOS_PER_DAY = 86'400'000'000'000LL;
     constexpr int64_t NANOS_PER_SEC = 1'000'000'000LL;
 
-    int64_t total_nanos = seconds * NANOS_PER_SEC + nanos;
+    // 128 位：seconds * 1e9 在 |seconds| > ~9.2e9（公元 2262 年之后）就溢出 int64，
+    // 而 date/datetime 的合法范围一直开到 ±999'999'999 年（约 ±3.2e16 秒）。
+    const __int128 total_nanos = static_cast<__int128>(seconds) * NANOS_PER_SEC + nanos;
 
-    // Split into days and day-nanos
-    int64_t days = total_nanos / NANOS_PER_DAY;
-    int64_t day_ns = total_nanos % NANOS_PER_DAY;
+    // Split into days and day-nanos（|days| ≤ 3.7e11，收窄回 int64 安全）
+    int64_t days = static_cast<int64_t>(total_nanos / NANOS_PER_DAY);
+    int64_t day_ns = static_cast<int64_t>(total_nanos % NANOS_PER_DAY);
     if (day_ns < 0) {
         day_ns += NANOS_PER_DAY;
         days--;
@@ -808,6 +810,11 @@ DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos) {
     {
         int64_t y = 0, m = 0, d = 0;
         civilFromDays(days, y, m, d);
+        // 超出可表示的年份（±999'999'999，与 neo4j 一致）时报错，而不是让收窄成 int32
+        // 静默回绕。调用方要么已经做过范围检查（datetime({epochSeconds: ...})），
+        // 要么拿到一个明确的 ArgumentError（datetime.fromepoch / Bolt 参数）。
+        if (y < -999999999 || y > 999999999)
+            throw QueryException(QueryErrorKind::Argument, "datetime out of range");
         result.year = static_cast<int32_t>(y);
         result.month = static_cast<int8_t>(m);
         result.day = static_cast<int8_t>(d);
