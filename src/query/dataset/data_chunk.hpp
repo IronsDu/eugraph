@@ -560,10 +560,19 @@ private:
     /// Non-const twin of borrowListImpl. Kept separate rather than casting away
     /// constness so the mutable path is visible at the point it is granted; its
     /// caller has already established FLAT form and sole buffer ownership.
+    ///
+    /// Sole ownership has to cover the *payload*, not just the buffer. The heavy kinds
+    /// are handles now, so a pass-through column can hold another reference to this very
+    /// list -- a unique buffer says nothing about that. Callers of this move elements out
+    /// (UNWIND does), which would leave that other column holding a list of the right
+    /// length whose elements have all been moved from. UNWIND's pass-through CONSTANT
+    /// plus a list comprehension over the same list is exactly that shape.
     ListValue* borrowListImplMut(size_t i) {
         if (type != binder::BoundTypeKind::LIST || form != VectorForm::FLAT || !buffer)
             return nullptr;
         if (i >= buffer->list_data.size() || !buffer->list_data[i])
+            return nullptr;
+        if (buffer->list_data[i].use_count() != 1)
             return nullptr;
         return buffer->list_data[i].get();
     }
