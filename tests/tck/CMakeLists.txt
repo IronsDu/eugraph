@@ -258,6 +258,11 @@ if(TCK_RUN_TESTS)
     if(TCK_STEP_BASELINE_FILE)
         set(TCK_STEP_BASELINE_ARG "--step-baseline-file" "${TCK_STEP_BASELINE_FILE}")
     endif()
+    # 只在 CI（设置 TCK_FAIL_ON_REGRESSION）时把"相对基线的新增回归"当成失败。
+    set(TCK_FAIL_ON_REGRESSION_ARG "")
+    if(DEFINED ENV{TCK_FAIL_ON_REGRESSION})
+        set(TCK_FAIL_ON_REGRESSION_ARG "--fail-on-regression")
+    endif()
     add_test(NAME tck_tests
         COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/run_tck.py"
             --server-bin "$<TARGET_FILE:eugraph-server>"
@@ -267,6 +272,7 @@ if(TCK_RUN_TESTS)
             ${TCK_BASELINE_ARG}
             ${TCK_STEP_RESULTS_ARG}
             ${TCK_STEP_BASELINE_ARG}
+            ${TCK_FAIL_ON_REGRESSION_ARG}
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     )
 endif()
