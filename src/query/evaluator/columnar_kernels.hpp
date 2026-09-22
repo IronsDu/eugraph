@@ -21,15 +21,18 @@ inline int cypherTypeCategory(const Value& v) {
             using T = std::decay_t<decltype(x)>;
             if constexpr (std::is_same_v<T, std::monostate>)
                 return 10;
-            if constexpr (std::is_same_v<T, MapValue>)
+            // 注意：值打包后 Value 的备选类型是"持有式"的（MapValuePtr/ListValuePtr/…），
+            // 这里必须按实际类型判断，否则这些分支全是死代码、所有容器/实体都落到同一个
+            // 类别并互相判等（ORDER BY 原样输出、min/max 只取第一个）。
+            if constexpr (std::is_same_v<T, MapValuePtr>)
                 return 0;
-            if constexpr (std::is_same_v<T, VertexRef> || std::is_same_v<T, VertexValue>)
+            if constexpr (std::is_same_v<T, VertexRef> || std::is_same_v<T, VertexValuePtr>)
                 return 1;
-            if constexpr (std::is_same_v<T, EdgeKey> || std::is_same_v<T, EdgeValue>)
+            if constexpr (std::is_same_v<T, EdgeKey> || std::is_same_v<T, EdgeValuePtr>)
                 return 2;
-            if constexpr (std::is_same_v<T, ListValue>)
+            if constexpr (std::is_same_v<T, ListValuePtr>)
                 return 3;
-            if constexpr (std::is_same_v<T, PathTopology> || std::is_same_v<T, PathValue>)
+            if constexpr (std::is_same_v<T, PathTopologyPtr> || std::is_same_v<T, PathValuePtr>)
                 return 4;
             if constexpr (std::is_same_v<T, DateTimeValue> || std::is_same_v<T, TimeValue> ||
                           std::is_same_v<T, DurationValue>)
@@ -40,7 +43,7 @@ inline int cypherTypeCategory(const Value& v) {
                 return 7;
             if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, double>)
                 return 8;
-            if constexpr (std::is_same_v<T, BytesValue>)
+            if constexpr (std::is_same_v<T, BytesValuePtr>)
                 return 9; // 二进制只能判等，不能排序（与其它非可排序值同组）
             return 9;     // unknown values sort before NULL
         },
@@ -141,21 +144,21 @@ inline int cypherCompareValues(const Value& a, const Value& b) {
                 bool lb = std::get<bool>(b);
                 return la == lb ? 0 : (la ? 1 : -1);
             }
-            if constexpr (std::is_same_v<A, ListValue>)
-                return compareLists(la, (*std::get<ListValuePtr>(b)));
+            if constexpr (std::is_same_v<A, ListValuePtr>)
+                return compareLists(*la, *std::get<ListValuePtr>(b));
             if constexpr (std::is_same_v<A, DateTimeValue>)
                 return compareTemporal(la, std::get<DateTimeValue>(b));
             if constexpr (std::is_same_v<A, TimeValue>)
                 return compareTemporal(la, std::get<TimeValue>(b));
             if constexpr (std::is_same_v<A, DurationValue>)
                 return compareDuration(la, std::get<DurationValue>(b));
-            if constexpr (std::is_same_v<A, BytesValue>) {
+            if constexpr (std::is_same_v<A, BytesValuePtr>) {
                 if (auto* bb = std::get_if<BytesValuePtr>(&b)) {
-                    if (!*bb)
-                        return 1;
-                    if (la.data == (*bb)->data)
+                    if (!*bb || !la)
                         return 0;
-                    return std::lexicographical_compare(la.data.begin(), la.data.end(), (*bb)->data.begin(),
+                    if (la->data == (*bb)->data)
+                        return 0;
+                    return std::lexicographical_compare(la->data.begin(), la->data.end(), (*bb)->data.begin(),
                                                         (*bb)->data.end())
                                ? -1
                                : 1;
