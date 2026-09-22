@@ -433,3 +433,85 @@ TEST(TopologyTypesRegressionTest, LegacyTypesStillWork) {
     EXPECT_EQ(chunk.columns[0].type, BoundTypeKind::INT64);
     EXPECT_EQ(chunk.columns[1].type, BoundTypeKind::STRING);
 }
+
+// ==================== 值打包后的句柄语义回归 ====================
+//
+// 重型类型改为 shared_ptr 之后，出现了三类只有"共享/空"才会暴露的问题。
+// 下面每个测试都对应一次真实踩过的坑，且都能在守卫被删掉时失败。
+
+TEST(TopologyTypesTest, ReservedHandleSlotReadsAsNull) {
+    // reserve() 给重型数组分配了槽位，但没有发布载荷 —— 槽位在有人写入之前是空句柄。
+    // 而 holds_alternative<ListValuePtr> 对空句柄**也为真**，所以凡是用这个判断来
+    // 决定"要不要当列表解引用"的地方，都会对空指针下手（TCK 下曾直接打崩服务）。
+    // isNull 因此必须把空句柄也算作 null。
+    // ① 列这一侧：getValue 不能把空句柄交出去
+    Column col = Column::flat(binder::BoundTypeKind::LIST, 4);
+    col.reserve(4);
+    Value from_column = col.getValue(0);
+    EXPECT_TRUE(isNull(from_column)) << "空槽位必须读作 null";
+    EXPECT_FALSE(std::holds_alternative<ListValuePtr>(from_column))
+        << "getValue 不能把空句柄交出去，否则调用方一解引用就是空指针";
+
+    // ② isNull 自身的契约：variant 里【持有】一个空句柄时也必须判为 null。
+    //    这一条才是 isNull 的守卫在管的事 —— 空句柄可以从别的路径进来
+    //    （例如 CONSTANT 列的 constant_value），那时 holds_alternative 仍为真。
+    Value holding_empty_handle = ListValuePtr{};
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(holding_empty_handle))
+        << "前提：variant 确实持有 ListValuePtr 这一分支";
+    EXPECT_TRUE(isNull(holding_empty_handle)) << "持有空句柄 == null";
+
+    // ③ 非空句柄不受影响，否则 isNull 会退化成恒真
+    Value holding_real_handle = mk<ListValue>();
+    EXPECT_FALSE(isNull(holding_real_handle));
+}
+
+TEST(TopologyTypesTest, EqualEntitiesInDistinctHandlesStayEqualAndHashAlike) {
+    // 哈希与相等必须同时按载荷：unordered_map/unordered_set 要求"相等必同哈希"。
+    // 直接比较 variant 会退化成比指针，于是同一个实体的两个句柄被判为不同 ——
+    // DISTINCT 就这样多出一行重复（complex-9 一度 LIMIT 20 里挤掉了最后一行）。
+    auto a = mk<VertexValue>();
+    a->id = 7;
+    auto b = mk<VertexValue>();
+    b->id = 7;
+    ASSERT_NE(a.get(), b.get()) << "前提：两个不同的句柄";
+
+    Value va = a, vb = b;
+    ASSERT_TRUE(valueEquals(va, vb).has_value());
+    EXPECT_TRUE(*valueEquals(va, vb)) << "按 id 判等，两个句柄应相等";
+    EXPECT_EQ(ValueHash{}(va), ValueHash{}(vb)) << "相等必须同哈希";
+    EXPECT_TRUE(ValueContentEqual{}(va, vb)) << "与 ValueHash 配套的相等函子";
+
+    // 不同 id 仍必须不等，否则测试自身就没有区分力
+    auto c = mk<VertexValue>();
+    c->id = 8;
+    Value vc = c;
+    ASSERT_TRUE(valueEquals(va, vc).has_value());
+    EXPECT_FALSE(*valueEquals(va, vc));
+}
+
+TEST(TopologyTypesTest, MutableBorrowIsRefusedWhenThePayloadIsShared) {
+    // 可变 borrowList 的调用方（UNWIND）会把元素 move 走，所以必须确认**载荷**独占。
+    // 只检查 ColumnBuffer 的 use_count 是不够的：句柄化之后，一个透传的 CONSTANT 列
+    // 可以持有同一个 ListValue 的另一个引用，而 buffer 仍然是独占的 —— 搬移会把那个
+    // 列里的列表掏空（长度不变、元素全是被 move 走的空值）。
+    auto shared = mk<ListValue>();
+    shared->elements.push_back(ValueStorage{Value(std::string{"x"})});
+
+    Column owner = Column::flat(binder::BoundTypeKind::LIST, 1);
+    owner.reserve(1);
+    owner.setValue(0, Value(shared));
+
+    // 第二个列持有同一个列表的另一个句柄 —— 这正是 UNWIND 透传 CONSTANT 列的形态。
+    // （Column::constant() 不推断 type，所以后面不通过它做只读借用断言：
+    //   非 FLAT 形态本来就不接受可变借用，与本测试要证明的事无关。）
+    Column alias = Column::constant(Value(shared));
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(alias.constant_value));
+    ASSERT_EQ(std::get<ListValuePtr>(alias.constant_value).get(), owner.buffer->list_data[0].get())
+        << "前提：两个列确实指向同一个列表";
+
+    EXPECT_EQ(owner.borrowList(0), nullptr) << "载荷被共享时必须拒绝可变借用，否则调用方会搬空另一个列看到的同一个列表";
+
+    // 独占时应当放行，否则这个守卫会退化成"永远拒绝"，测试也就失去区分力
+    owner.buffer->list_data[0] = mk<ListValue>(*shared);
+    EXPECT_NE(owner.borrowList(0), nullptr) << "载荷独占时必须允许可变借用";
+}

@@ -9146,3 +9146,37 @@ TEST_F(QueryExecutorTest, ScalarFunctionsOnEntityAndCollectionValues) {
     EXPECT_EQ(errorRepr(*executor_, "RETURN toString([1,2]) AS v"), "TypeError: InvalidArgumentValue");
     EXPECT_EQ(errorRepr(*executor_, "RETURN toBoolean(1.5) AS v"), "TypeError: InvalidArgumentValue");
 }
+
+// UNWIND 的按元素搬移与透传列共享同一个列表（句柄化之后的别名问题）。
+// TCK WithOrderBy1 [45] 的 string/lists 两个 example 就是被它打挂的：
+// 推导返回 ['', '', ''] —— 长度正确、元素全是搬空后的空值。
+TEST_F(QueryExecutorTest, UnwindKeepsPassThroughListIntact) {
+    auto result = execSync(*executor_, "WITH ['c','a','b'] AS v UNWIND v AS x RETURN x, [y IN v | y] AS lst");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3);
+
+    // 每一行都必须看到完整的原始列表，而不是被搬空的空壳
+    for (const auto& row : result.rows) {
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[1]));
+        const auto& lst = *std::get<ListValuePtr>(row[1]);
+        ASSERT_EQ(lst.elements.size(), 3);
+        EXPECT_EQ(std::get<std::string>(lst.elements[0].value), "c");
+        EXPECT_EQ(std::get<std::string>(lst.elements[1].value), "a");
+        EXPECT_EQ(std::get<std::string>(lst.elements[2].value), "b");
+    }
+}
+
+// 同一个形状在 size() 上也必须一致：它此前返回的是整个列表长度（WHERE 被绕过的假象）。
+TEST_F(QueryExecutorTest, UnwindKeepsComprehensionCountingConsistent) {
+    auto result = execSync(*executor_, "WITH ['c','a','b'] AS v UNWIND v AS x "
+                                       "RETURN x, size([y IN v WHERE y < x]) AS n ORDER BY x");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3);
+    // ORDER BY x 之后应为 a,b,c，对应的严格小于个数为 0,1,2
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "a");
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 0);
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "b");
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][1]), 1);
+    EXPECT_EQ(std::get<std::string>(result.rows[2][0]), "c");
+    EXPECT_EQ(std::get<int64_t>(result.rows[2][1]), 2);
+}
