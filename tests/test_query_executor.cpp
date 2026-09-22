@@ -5775,6 +5775,71 @@ TEST_F(QueryExecutorTest, TemporalDatetimeFromEpochUsesWideIntermediates) {
     EXPECT_FALSE(out_of_range.error.empty());
 }
 
+TEST_F(QueryExecutorTest, TemporalExpandedYearRenderingMatchesNeo4j) {
+    // ISO-8601 扩展年份：0..9999 四位补零、负年份带 '-'、|year| > 9999 时带显式符号。
+    // 期望值本机 neo4j 5 实测；此前 pad4 是按位取数，负年份渲染出非数字字符，五位年份被截成低四位。
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: 0, month: 1, day: 1})"), "0000-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: 9999, month: 1, day: 1})"), "9999-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: 10000, month: 1, day: 1})"), "+10000-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: 11476, month: 8, day: 15})"), "+11476-08-15");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: -1, month: 1, day: 1})"), "-0001-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: -1199, month: 2, day: 15})"), "-1199-02-15");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: -10000, month: 1, day: 1})"), "-10000-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: -999999999, month: 1, day: 1})"), "-999999999-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "localdatetime({year: -5, month: 12, day: 31})"), "-0005-12-31T00:00:00");
+    EXPECT_EQ(temporalRepr(*executor_, "datetime.fromepoch(-100000000000, 0)"), "-1199-02-15T14:13:20Z");
+    EXPECT_EQ(temporalRepr(*executor_, "datetime.fromepoch(300000000000, 0)"), "+11476-08-15T05:20:00Z");
+    // 渲染出的文本必须能被解析回来（TCK 的期望值就是这个字符串形式）。
+    EXPECT_EQ(temporalRepr(*executor_, "date('-0001-01-01')"), "-0001-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date('+11476-08-15')"), "+11476-08-15");
+}
+
+TEST_F(QueryExecutorTest, TemporalLargeDurationArithmeticMatchesNeo4j) {
+    // 1e10 秒（约 317 年）已超出 `seconds * 1e9` 的 int64 容量：neo4j 正常给出结果，
+    // 旧实现回绕成 1756-05-02（UBSan 下是 signed integer overflow，会打挂 server）。
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-01-01') + duration({seconds: 10000000000})"), "2340-11-20");
+    EXPECT_EQ(temporalRepr(*executor_, "datetime('2024-01-01T00:00:00Z') + duration({seconds: 10000000000})"),
+              "2340-11-20T17:46:40Z");
+    EXPECT_EQ(temporalRepr(*executor_, "localdatetime('2024-01-01T00:00:00') + duration({seconds: 10000000000})"),
+              "2340-11-20T17:46:40");
+    EXPECT_EQ(temporalRepr(*executor_, "localtime('12:00:00') + duration({seconds: 10000000000})"), "05:46:40");
+    EXPECT_EQ(temporalRepr(*executor_, "time('12:00:00Z') + duration({seconds: 10000000000})"), "05:46:40Z");
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-01-01') + duration({seconds: 999999999999999})"), "+31690762-07-05");
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-01-01') + duration({days: 400000000})"), "+1097186-10-21");
+    // 超出 EpochDay 范围报 ArithmeticError（消息与 neo4j 相同），而不是给出回绕的日期。
+    auto too_far = execSync(*executor_, "RETURN date('2024-01-01') + duration({seconds: 1000000000000000000}) AS v");
+    EXPECT_FALSE(too_far.error.empty());
+    EXPECT_NE(too_far.error.find("EpochDay"), std::string::npos) << too_far.error;
+    // 乘法：秒与纳秒分开乘（旧写法在大 seconds 上既溢出又丢精度）。
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds: 10000000000}) * 2"), "PT5555555H33M20S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds: 10000000000}) * 1.5"), "PT4166666H40M");
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds: 1000000000000, nanoseconds: 500000000}) * 1.5"),
+              "PT416666666H40M0.75S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds: 10000000000, nanoseconds: 123456789}) * 1.5"),
+              "PT4166666H40M0.185185183S");
+}
+
+TEST_F(QueryExecutorTest, TemporalDurationOrderingMatchesNeo4j) {
+    // ORDER BY 按"近似长度"比较：1 个月 = 365.2425/12 天 = 30 天 + 37'746 秒（neo4j 的取值，
+    // 此前按整 30 天算，P1Y 会被排到 P365D 前面）；长度还必须按 128 位算，否则极值 duration
+    // （months ≈ 2.4e10）会让 int64 权重溢出。
+    auto ordered = [&](const std::string& list, const std::string& direction = "") {
+        return collectStrings(
+            execSync(*executor_, "UNWIND " + list + " AS x RETURN toString(x) AS v ORDER BY x" + direction));
+    };
+    EXPECT_EQ(ordered("[duration('P30D'), duration('P1M'), duration('P31D')]"),
+              (std::vector<std::string>{"P30D", "P1M", "P31D"}));
+    EXPECT_EQ(ordered("[duration('P365D'), duration('P1Y'), duration('P366D')]"),
+              (std::vector<std::string>{"P365D", "P1Y", "P366D"}));
+    EXPECT_EQ(
+        ordered("[duration({days: 30, seconds: 37745}), duration({months: 1}), duration({days: 30, seconds: 37747})]"),
+        (std::vector<std::string>{"P30DT10H29M5S", "P1M", "P30DT10H29M7S"}));
+    EXPECT_EQ(ordered("[duration({months: 1999999998}), duration({days: 1}), duration({seconds: 1})]"),
+              (std::vector<std::string>{"PT1S", "P1D", "P166666666Y6M"}));
+    EXPECT_EQ(ordered("[duration({months: 1999999998}), duration({days: 40}), duration({seconds: 1})]", " DESC"),
+              (std::vector<std::string>{"P166666666Y6M", "P40D", "PT1S"}));
+}
+
 TEST_F(QueryExecutorTest, TemporalZonedComparisonOrdersByInstantThenLocalTime) {
     // One instant, two zones: ordering is by instant and ties fall back to the local
     // wall clock, while equality wants the zone to match too.

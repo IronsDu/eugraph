@@ -1088,6 +1088,12 @@ static void collectAllVariables(const cypher::Expression& expr, std::set<std::st
         expr);
 }
 
+// GCC 13 在 -O3 下会把 std::variant（cypher::Expression，成员全是 unique_ptr）的 move
+// 内联进 std::vector 的 _M_realloc_insert，然后误判成 "writing 1 byte into a region of
+// size 0"（目标对象其实是 vector 刚分配的缓冲区）。实测与我们的写法无关：显式 move 构造、
+// reserve(2)、就地 emplace 都拦不住；升级 GCC 之后应重新检查并删掉这两行。
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
 bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListComprehension& lc,
                                                             BoundLogicalOperator& child, SlotId& out_slot,
                                                             std::string& out_name, BoundType& out_elem_type) {
@@ -1302,6 +1308,8 @@ bool Binder::lowerListComprehensionWithPatternComprehension(const cypher::ListCo
     ctx_.symbols[out_name] = std::move(out_info);
     return true;
 }
+
+#pragma GCC diagnostic pop
 
 // Collect variables from expressions OUTSIDE aggregate function calls.
 // Variables inside aggregate calls (e.g. `n` in `collect(n)`) are skipped

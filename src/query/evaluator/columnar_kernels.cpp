@@ -860,12 +860,9 @@ void temporalLtBatch(const Column& left, const Column& right, Column& result, si
         // DurationValue vs DurationValue: compare by normalized representation
         DurationValue d_a, d_b;
         if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
-            // Duration comparison: total nanoseconds approximation
-            int64_t total_a = d_a.months * 30LL * 86400LL * 1000000000LL + d_a.days * 86400LL * 1000000000LL +
-                              d_a.seconds * 1000000000LL + d_a.nanos;
-            int64_t total_b = d_b.months * 30LL * 86400LL * 1000000000LL + d_b.days * 86400LL * 1000000000LL +
-                              d_b.seconds * 1000000000LL + d_b.nanos;
-            result.setValue(i, Value(total_a < total_b));
+            // durationOrderNanos：月按 365.2425/12 天（与 neo4j 的排序一致），且必须 128 位 —— int64
+            // 版本在 months 很大（例如 duration.between 两个极值日期）时直接溢出（UB）。
+            result.setValue(i, Value(durationOrderNanos(d_a) < durationOrderNanos(d_b)));
             continue;
         }
 
@@ -900,11 +897,7 @@ void temporalGtBatch(const Column& left, const Column& right, Column& result, si
 
         DurationValue d_a, d_b;
         if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
-            int64_t total_a = d_a.months * 30LL * 86400LL * 1000000000LL + d_a.days * 86400LL * 1000000000LL +
-                              d_a.seconds * 1000000000LL + d_a.nanos;
-            int64_t total_b = d_b.months * 30LL * 86400LL * 1000000000LL + d_b.days * 86400LL * 1000000000LL +
-                              d_b.seconds * 1000000000LL + d_b.nanos;
-            result.setValue(i, Value(total_a > total_b));
+            result.setValue(i, Value(durationOrderNanos(d_a) > durationOrderNanos(d_b)));
             continue;
         }
 
@@ -939,11 +932,7 @@ void temporalLteBatch(const Column& left, const Column& right, Column& result, s
 
         DurationValue d_a, d_b;
         if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
-            int64_t total_a = d_a.months * 30LL * 86400LL * 1000000000LL + d_a.days * 86400LL * 1000000000LL +
-                              d_a.seconds * 1000000000LL + d_a.nanos;
-            int64_t total_b = d_b.months * 30LL * 86400LL * 1000000000LL + d_b.days * 86400LL * 1000000000LL +
-                              d_b.seconds * 1000000000LL + d_b.nanos;
-            result.setValue(i, Value(total_a <= total_b));
+            result.setValue(i, Value(durationOrderNanos(d_a) <= durationOrderNanos(d_b)));
             continue;
         }
 
@@ -978,11 +967,7 @@ void temporalGteBatch(const Column& left, const Column& right, Column& result, s
 
         DurationValue d_a, d_b;
         if (tryGetDuration(lv, d_a) && tryGetDuration(rv, d_b)) {
-            int64_t total_a = d_a.months * 30LL * 86400LL * 1000000000LL + d_a.days * 86400LL * 1000000000LL +
-                              d_a.seconds * 1000000000LL + d_a.nanos;
-            int64_t total_b = d_b.months * 30LL * 86400LL * 1000000000LL + d_b.days * 86400LL * 1000000000LL +
-                              d_b.seconds * 1000000000LL + d_b.nanos;
-            result.setValue(i, Value(total_a >= total_b));
+            result.setValue(i, Value(durationOrderNanos(d_a) >= durationOrderNanos(d_b)));
             continue;
         }
 

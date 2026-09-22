@@ -97,11 +97,10 @@ template <typename T> inline int compareTemporal(const T& a, const T& b) {
 }
 
 inline int compareDuration(const DurationValue& a, const DurationValue& b) {
-    // 128 位加权和：大 duration（例如 duration.between 两个极端年份）在 int64 里会溢出。
-    const __int128 totalA = static_cast<__int128>(a.months) * 30 * 86400 + static_cast<__int128>(a.days) * 86400 +
-                            static_cast<__int128>(a.seconds) * 1000000000 + a.nanos;
-    const __int128 totalB = static_cast<__int128>(b.months) * 30 * 86400 + static_cast<__int128>(b.days) * 86400 +
-                            static_cast<__int128>(b.seconds) * 1000000000 + b.nanos;
+    // 用 durationOrderNanos 的近似长度（1 个月 = 365.2425/12 天，与 neo4j 的 ORDER BY 一致，
+    // 见 temporal_value.hpp）：此前这里按 30 天/月算，会把 P1Y 排到 P365D 前面。
+    const __int128 totalA = durationOrderNanos(a);
+    const __int128 totalB = durationOrderNanos(b);
     if (totalA == totalB)
         return 0;
     return totalA < totalB ? -1 : 1;

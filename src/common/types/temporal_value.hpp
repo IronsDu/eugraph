@@ -219,6 +219,14 @@ DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos);
 /// 所有构造 duration 的地方都应调用它，否则 .seconds / .nanosecondsOfSecond 会与 neo4j 不一致。
 void normalizeDurationNanos(DurationValue& dur);
 
+/// duration 排序用的"近似长度"（纳秒）：1 个月记为 365.2425/12 天 = 2'629'746 秒
+/// （= 30 天 + 37'746 秒），与 neo4j 的 ORDER BY 一致 —— P30D < P1M < P31D、P365D < P1Y < P366D，
+/// 也与 mulDuration/divDuration/duration.inMonths 折叠小数月用的是同一个常数。
+///
+/// 返回 128 位：duration.between 两个 ±999'999'999 年能给出 2.4e10 个月，
+/// 任何 64 位中间量都会溢出（UB）。
+__int128 durationOrderNanos(const DurationValue& dur);
+
 int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, const std::string& tz_name);
 int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, int64_t hour, int64_t minute,
                                   int64_t second, const std::string& tz_name);

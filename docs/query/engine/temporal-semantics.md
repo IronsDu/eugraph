@@ -142,16 +142,32 @@ neo4j 只输出偏移（`2024-01-01T12:00:00+00:00`）。保留 `[Zone]` 让 `da
 * `duration.inSeconds(localdatetime('-999999999-01-01'), localdatetime('+999999999-12-31T23:59:59'))` = `PT17531639991215H59M59S`（`[10]`）
 * `datetime.fromepoch(100000000000, 0)` = `5138-11-16T09:46:40Z`（`|seconds| > 9.2e9` 即超出 int64 的纳秒容量）
 
-**已知缺口（未处理）**：日期/时间的**渲染**是按位取数（`pad4`/`pad2`），只支持 0–9999 的四位年份。
-负年份会打印出非数字字符，年份 ≥ 10000 会被截成低四位 —— 值本身是对的：
+### 11. 大 duration 与扩展年份：另外四条规则（本轮补齐，逐条对过 neo4j）
 
-| 表达式 | 值（正确） | 当前打印（错） |
-|---|---|---|
-| `datetime.fromepoch(-100000000000, 0)` | `year = -1199` | `//''-02-15T14:13:20Z` |
-| `datetime.fromepoch(300000000000, 0)` | `year = 11476` | `1476-08-15T05:20:00Z` |
+* **扩展年份的文本形式**（`formatYear()`，取代按位取数的 `pad4`）：0–9999 四位补零、负年份带 `-`、
+  `|year| > 9999` 时带显式符号。neo4j 实测：`0000-01-01`、`-0001-01-01`、`-1199-02-15`、`+10000-01-01`、
+  `+11476-08-15`、`-999999999-01-01`；渲染出的文本也必须能被解析回来（此前负年份会打印出非数字字符、
+  五位年份被截成低四位）。
+* **`temporal ± duration` 的中间量**：`seconds * 1e9` 必须是 128 位 —— `|seconds| > 9.2e9`（约 292 年）就溢出
+  int64。`date('2024-01-01') + duration({seconds: 10000000000})` = `2340-11-20`
+  （`+ duration({seconds: 999999999999999})` = `+31690762-07-05`）；结果落在 EpochDay 范围
+  （±999'999'999 年）之外时报 `ArithmeticError`，消息与 neo4j 相同。
+  另外 `normalizeDate()` 的"日"归一化必须是 **O(1)**（按纪元日反算）：逐月循环在
+  `+ duration({seconds: 1e15})`（≈1.2e10 天）这类输入上会空转上亿次，表现为查询挂死。
+* **`duration * factor`（double 路径）**：秒与纳秒分开乘。合成 `seconds * 1e9 + nanos` 再转 double，
+  既在大 seconds 上溢出，也会在总量超过 2^53 后丢掉纳秒：
+  `duration({seconds: 1e12, nanoseconds: 500000000}) * 1.5` = `PT416666666H40M0.75S`、
+  `duration({seconds: 10000000000, nanoseconds: 123456789}) * 1.5` = `PT4166666H40M0.185185183S`。
+* **duration 的排序长度**：统一走 `durationOrderNanos()`，1 个月 = 365.2425/12 天 = 2'629'746 秒
+  （与 neo4j 一致：`P365D < P1Y < P366D`、`P30D < P1M < P31D`；此前按整 30 天算会把 `P1Y` 排到 `P365D`
+  前面），128 位以免极值 duration 溢出。ORDER BY / `min` / `max` / list 比较都用它。
 
-TCK 目前只用极值年份做 duration 的输入，所以还没暴露；修它要同时对齐 neo4j 的文本形式
-（`-0001-01-01`、`10000-01-01`）。
+### 12. 已知缺口（对 neo4j 实测仍有差异，待处理）
+
+| 表达式 | neo4j | eugraph | 说明 |
+|---|---|---|---|
+| `duration({seconds:1}) < duration({seconds:2})` | `null` | `true` | duration 只有 `=`/`<>` 可比较：相等时 `<=`/`>=` 给 `true`、`<`/`>` 给 `null`，不等时四个都是 `null`。ORDER BY / `min` / `max` 不受影响（走 `durationOrderNanos`），但 `WHERE d1 < d2` 的结果会不同 |
+| `datetime({year: 9999, month: 1, day: 1, timezone: 'UTC'})` | `9999-01-01T00:00:00Z[UTC]` | `ExecutionFailed: stoll` | 不带 `/` 的命名时区（`UTC`）在 map 构造路径上被当数字偏移解析，抛 `std::invalid_argument` |
 
 ## 验证方式
 
