@@ -33,8 +33,8 @@ eugraph::Value evaluateExpr(eugraph::compute::ExpressionEvaluator& evaluator,
 
 eugraph::VertexId extractVidFromColumn(const eugraph::Column& col, size_t row_idx) {
     const auto& val = col.getValue(row_idx);
-    if (std::holds_alternative<eugraph::VertexValue>(val))
-        return std::get<eugraph::VertexValue>(val).id;
+    if (std::holds_alternative<eugraph::VertexValuePtr>(val))
+        return (*std::get<eugraph::VertexValuePtr>(val)).id;
     if (std::holds_alternative<eugraph::VertexRef>(val))
         return std::get<eugraph::VertexRef>(val).id;
     return 0;
@@ -222,7 +222,7 @@ folly::coro::AsyncGenerator<DataChunk> CreateEdgePhysicalOp::executeChunk() {
                     ev.properties = props;
 
                 Column edge_col = Column::flat(binder::BoundTypeKind::EDGE, 1);
-                edge_col.setValue(0, Value(std::move(ev)));
+                edge_col.setValue(0, Value(mk<EdgeValue>(std::move(ev))));
                 output.columns.push_back(std::move(edge_col));
                 output.count = 1;
                 co_yield std::move(output);

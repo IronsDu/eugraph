@@ -252,11 +252,13 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
         // CALL dbms.procedures()/dbms.functions() (both are implemented).
         ListValue kernel_versions;
         kernel_versions.elements.push_back({ValueStorage{Value{std::string{"4.4.3"}}}});
-        rows.push_back({Value{std::string{"Neo4j Kernel"}}, Value{kernel_versions}, Value{std::string{"community"}}});
+        rows.push_back({Value{std::string{"Neo4j Kernel"}}, Value(mk<ListValue>(std::move(kernel_versions))),
+                        Value{std::string{"community"}}});
 
         ListValue cypher_versions;
         cypher_versions.elements.push_back({ValueStorage{Value{std::string{"5"}}}});
-        rows.push_back({Value{std::string{"Cypher"}}, Value{cypher_versions}, Value{std::string{"community"}}});
+        rows.push_back({Value{std::string{"Cypher"}}, Value(mk<ListValue>(std::move(cypher_versions))),
+                        Value{std::string{"community"}}});
     } else if (procedure == "dbms.clientConfig") {
         for (const auto& [name, value] : clientConfigRows())
             rows.push_back({Value{name}, value});
@@ -276,14 +278,15 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
                                 Value{indexPopulationPercent(idx.state)},
                                 Value{std::string{idx.unique ? "UNIQUE" : "NONUNIQUE"}}, Value{std::string{"BTREE"}},
                                 Value{std::string{idx.is_edge ? "RELATIONSHIP" : "NODE"}},
-                                Value{stringList({idx.label_name})}, Value{stringList(idx.property_names)}, Value{}});
+                                Value(mk<ListValue>(stringList({idx.label_name}))),
+                                Value(mk<ListValue>(stringList(idx.property_names))), Value{}});
             }
         }
     } else if (procedure == "dbms.procedures") {
         for (const auto& entry : builtinProcedures()) {
             rows.push_back({Value{std::string{entry.name}}, Value{std::string{entry.signature}},
                             Value{std::string{entry.description}}, Value{std::string{entry.mode}},
-                            Value{stringList({"PUBLIC"})}});
+                            Value(mk<ListValue>(stringList({"PUBLIC"})))});
         }
     } else if (procedure == "dbms.info") {
         rows.push_back({Value{std::string{"eugraph-1"}}, Value{std::string{"EuGraph"}},
@@ -351,8 +354,8 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
                 if (label.name == kAnonLabelName)
                     continue;
                 for (const auto& prop : label.properties) {
-                    rows.push_back({Value{stringList({label.name})}, Value{prop.name},
-                                    Value{stringList({propertyTypeName(prop.type)})}});
+                    rows.push_back({Value(mk<ListValue>(stringList({label.name}))), Value{prop.name},
+                                    Value(mk<ListValue>(stringList({propertyTypeName(prop.type)})))});
                 }
             }
         }
@@ -363,8 +366,8 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
                       [](const auto& a, const auto& b) { return a.name < b.name; });
             for (const auto& edge_label : edge_labels) {
                 for (const auto& prop : edge_label.properties) {
-                    rows.push_back(
-                        {Value{edge_label.name}, Value{prop.name}, Value{stringList({propertyTypeName(prop.type)})}});
+                    rows.push_back({Value{edge_label.name}, Value{prop.name},
+                                    Value(mk<ListValue>(stringList({propertyTypeName(prop.type)})))});
                 }
             }
         }
@@ -396,7 +399,7 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
             std::unordered_map<LabelId, VertexId> virtual_ids;
             for (const auto& ldef : labels_in_use) {
                 virtual_ids[ldef.id] = virtualNodeId(ldef.id);
-                nodes.elements.push_back({ValueStorage{Value{buildVirtualNode(ldef.id)}}});
+                nodes.elements.push_back({ValueStorage{Value(mk<VertexValue>(buildVirtualNode(ldef.id)))}});
             }
 
             // Relationship types in use: scan edges of each type, collect the
@@ -442,15 +445,15 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
 
                 for (LabelId start_label : start_labels) {
                     for (LabelId end_label : end_labels) {
-                        rels.elements.push_back({ValueStorage{Value{buildVirtualRelationship(
-                            virtual_ids[start_label], virtual_ids[end_label], eldef.id, next_virtual_edge_id--)}}});
+                        rels.elements.push_back({ValueStorage{Value(mk<EdgeValue>(buildVirtualRelationship(
+                            virtual_ids[start_label], virtual_ids[end_label], eldef.id, next_virtual_edge_id--)))}});
                     }
                 }
             }
         }
 
         spdlog::info("[CallPhysicalOp] built schema: {} nodes, {} rels", nodes.elements.size(), rels.elements.size());
-        rows.push_back({Value{std::move(nodes)}, Value{std::move(rels)}});
+        rows.push_back({Value(mk<ListValue>(std::move(nodes))), Value(mk<ListValue>(std::move(rels)))});
     }
 
     if (rows.empty()) {

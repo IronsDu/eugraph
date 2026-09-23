@@ -536,6 +536,8 @@ jobs:
         TCK_BASELINE_REPORT_PATH: ${{ github.workspace }}/build/tck-baseline-report.md
         TCK_STEP_RESULTS_PATH: ${{ github.workspace }}/build/tck-step-results.json
         TCK_STEP_BASELINE_PATH: ${{ github.workspace }}/build/tck-step-baseline.json
+        # 相对 main 基线出现新增回归时让作业失败（默认关闭，本地运行不受影响）
+        TCK_FAIL_ON_REGRESSION: 1
 
     - name: Publish unit test results
       uses: EnricoMi/publish-unit-test-result-action@v2

@@ -37,7 +37,7 @@ void ExpressionEvaluator::evalMap(const binder::BoundMap& map, const DataChunk& 
                 mv.entries.push_back({map.entries[e].first, ValueStorage{Value{}}});
             }
         }
-        result.setValue(i, Value(std::move(mv)));
+        result.setValue(i, Value(mk<MapValue>(std::move(mv))));
     }
 }
 

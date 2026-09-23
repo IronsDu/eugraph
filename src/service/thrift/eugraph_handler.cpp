@@ -487,10 +487,10 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         rv.set_double_val(std::get<double>(val));
     } else if (std::holds_alternative<std::string>(val)) {
         rv.set_string_val(std::get<std::string>(val));
-    } else if (std::holds_alternative<BytesValue>(val)) {
+    } else if (std::holds_alternative<BytesValuePtr>(val)) {
         // Thrift IDL 里没有二进制字段（ResultValue 是既有兼容面，不新增字段），
         // 这里按十六进制文本给出；Bolt 客户端拿到的是真正的 Bytes。
-        const auto& bytes = std::get<BytesValue>(val).data;
+        const auto& bytes = (*std::get<BytesValuePtr>(val)).data;
         static const char* kHex = "0123456789abcdef";
         std::string hex;
         hex.reserve(bytes.size() * 2);
@@ -499,8 +499,8 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
             hex.push_back(kHex[b & 0x0F]);
         }
         rv.set_string_val(hex);
-    } else if (std::holds_alternative<VertexValue>(val)) {
-        auto& v = std::get<VertexValue>(val);
+    } else if (std::holds_alternative<VertexValuePtr>(val)) {
+        auto& v = (*std::get<VertexValuePtr>(val));
         std::ostringstream oss;
         oss << "{\"id\":" << v.id;
 
@@ -550,8 +550,8 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         oss << ']';
         oss << '}';
         rv.set_vertex_json(oss.str());
-    } else if (std::holds_alternative<EdgeValue>(val)) {
-        auto& e = std::get<EdgeValue>(val);
+    } else if (std::holds_alternative<EdgeValuePtr>(val)) {
+        auto& e = (*std::get<EdgeValuePtr>(val));
         std::ostringstream oss;
         oss << "{\"id\":" << e.id << ",\"start\":" << e.src_id << ",\"end\":" << e.dst_id;
 
@@ -579,14 +579,14 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         oss << '}';
         oss << '}';
         rv.set_edge_json(oss.str());
-    } else if (std::holds_alternative<PathValue>(val)) {
-        auto& p = std::get<PathValue>(val);
+    } else if (std::holds_alternative<PathValuePtr>(val)) {
+        auto& p = (*std::get<PathValuePtr>(val));
         std::ostringstream oss;
         oss << "<";
         for (size_t i = 0; i < p.elements.size(); ++i) {
             const auto& elem = p.elements[i].value;
-            if (std::holds_alternative<VertexValue>(elem)) {
-                auto& v = std::get<VertexValue>(elem);
+            if (std::holds_alternative<VertexValuePtr>(elem)) {
+                auto& v = (*std::get<VertexValuePtr>(elem));
                 oss << "(";
                 std::optional<LabelId> display_lid;
                 if (v.labels.has_value() && !v.labels->empty()) {
@@ -628,15 +628,16 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
                 if (!first_prop)
                     oss << "}";
                 oss << ")";
-            } else if (std::holds_alternative<EdgeValue>(elem)) {
-                auto& e = std::get<EdgeValue>(elem);
+            } else if (std::holds_alternative<EdgeValuePtr>(elem)) {
+                auto& e = (*std::get<EdgeValuePtr>(elem));
                 bool outgoing = true;
                 if (i > 0 && i + 1 < p.elements.size()) {
                     const auto& prev_v = p.elements[i - 1].value;
                     const auto& next_v = p.elements[i + 1].value;
-                    if (std::holds_alternative<VertexValue>(prev_v) && std::holds_alternative<VertexValue>(next_v)) {
-                        auto prev_id = std::get<VertexValue>(prev_v).id;
-                        auto next_id = std::get<VertexValue>(next_v).id;
+                    if (std::holds_alternative<VertexValuePtr>(prev_v) &&
+                        std::holds_alternative<VertexValuePtr>(next_v)) {
+                        auto prev_id = (*std::get<VertexValuePtr>(prev_v)).id;
+                        auto next_id = (*std::get<VertexValuePtr>(next_v)).id;
                         outgoing = (e.src_id == prev_id && e.dst_id == next_id);
                     }
                 }
@@ -672,8 +673,8 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         rv.set_string_val(temporalToIsoString(std::get<TimeValue>(val)));
     } else if (std::holds_alternative<DurationValue>(val)) {
         rv.set_string_val(temporalToIsoString(std::get<DurationValue>(val)));
-    } else if (std::holds_alternative<ListValue>(val)) {
-        auto& lv = std::get<ListValue>(val);
+    } else if (std::holds_alternative<ListValuePtr>(val)) {
+        auto& lv = (*std::get<ListValuePtr>(val));
         std::ostringstream oss;
         oss << "[";
         for (size_t i = 0; i < lv.elements.size(); ++i) {
@@ -722,8 +723,8 @@ EuGraphHandler::valueToThrift(const Value& val, const std::unordered_map<LabelId
         }
         oss << "]";
         rv.set_list_json(oss.str());
-    } else if (std::holds_alternative<MapValue>(val)) {
-        auto& mv = std::get<MapValue>(val);
+    } else if (std::holds_alternative<MapValuePtr>(val)) {
+        auto& mv = (*std::get<MapValuePtr>(val));
         std::ostringstream oss;
         oss << "{";
         for (size_t i = 0; i < mv.entries.size(); ++i) {
@@ -925,7 +926,7 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
                     if (val)
                         mv.entries.push_back({k, ValueStorage{std::move(*val)}});
                 }
-                return Value(std::move(mv));
+                return Value(mk<MapValue>(std::move(mv)));
             }
             if (auto* list = std::get_if<std::unique_ptr<cypher::ListExpr>>(&expr)) {
                 if (!*list)
@@ -936,7 +937,7 @@ EuGraphHandler::co_executeCypher(std::unique_ptr<std::string> query, std::unique
                     if (val)
                         lv.elements.push_back(ValueStorage{std::move(*val)});
                 }
-                return Value(std::move(lv));
+                return Value(mk<ListValue>(std::move(lv)));
             }
             return std::nullopt;
         };
@@ -1018,7 +1019,7 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift_service::Proper
         tv.second = *dt.second();
         tv.nanos = *dt.nanos();
         tv.tz_offset_sec = *dt.tz_offset_min() * 60;
-        tv.tz_name = *dt.tz_name();
+        setTzName(tv.tz_name, *dt.tz_name());
         return tv;
     }
     case thrift_service::PropertyValueThrift::Type::time_val: {
@@ -1037,7 +1038,7 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift_service::Proper
         tv.second = *t.second();
         tv.nanos = *t.nanos();
         tv.tz_offset_sec = *t.tz_offset_min() * 60;
-        tv.tz_name = *t.tz_name();
+        setTzName(tv.tz_name, *t.tz_name());
         return tv;
     }
     case thrift_service::PropertyValueThrift::Type::duration_val: {
@@ -1074,7 +1075,7 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift_service::Proper
             tv.second = *dt.second();
             tv.nanos = *dt.nanos();
             tv.tz_offset_sec = *dt.tz_offset_min() * 60;
-            tv.tz_name = *dt.tz_name();
+            setTzName(tv.tz_name, *dt.tz_name());
             result.push_back(std::move(tv));
         }
         return result;
@@ -1098,7 +1099,7 @@ PropertyValue EuGraphHandler::thriftToPropertyValue(const thrift_service::Proper
             tv.second = *t.second();
             tv.nanos = *t.nanos();
             tv.tz_offset_sec = *t.tz_offset_min() * 60;
-            tv.tz_name = *t.tz_name();
+            setTzName(tv.tz_name, *t.tz_name());
             result.push_back(std::move(tv));
         }
         return result;

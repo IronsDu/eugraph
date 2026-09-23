@@ -128,13 +128,18 @@ uint64_t hashValue(uint64_t seed, const Value& v) {
                 seed = hashScalar(seed, x);
             } else if constexpr (std::is_same_v<T, std::string>) {
                 seed = hashBytes(seed, x);
-            } else if constexpr (std::is_same_v<T, VertexValue>) {
-                seed = combine(seed, x.id);
-            } else if constexpr (std::is_same_v<T, EdgeValue>) {
-                seed = combine(seed, x.id);
-                seed = combine(seed, x.src_id);
-                seed = combine(seed, x.dst_id);
-                seed = combine(seed, static_cast<uint64_t>(x.label_id));
+            } else if constexpr (std::is_same_v<T, VertexValuePtr>) {
+                // 打包后实体在 Value 里是持有式；此前写成 VertexValue/EdgeValue，
+                // 分支永远不成立 → 实体的 DISTINCT / 分组 / join 全部落到下面的兜底。
+                if (x)
+                    seed = combine(seed, x->id);
+            } else if constexpr (std::is_same_v<T, EdgeValuePtr>) {
+                if (x) {
+                    seed = combine(seed, x->id);
+                    seed = combine(seed, x->src_id);
+                    seed = combine(seed, x->dst_id);
+                    seed = combine(seed, static_cast<uint64_t>(x->label_id));
+                }
             } else {
                 // PathValue / ListValue / MapValue / temporal
                 // Use the existing operator==. We don't deep-hash these — they

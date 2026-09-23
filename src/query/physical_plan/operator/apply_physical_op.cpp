@@ -31,9 +31,9 @@ folly::coro::AsyncGenerator<DataChunk> ApplyPhysicalOp::executeChunk() {
             if (correlated_source_)
                 correlated_source_->setValues(std::move(corr_values));
 
-            if (value_sink_ && !corr_values.empty() && std::holds_alternative<ListValue>(corr_values[0])) {
+            if (value_sink_ && !corr_values.empty() && std::holds_alternative<ListValuePtr>(corr_values[0])) {
                 auto allowed = std::make_shared<std::vector<PropertyValue>>();
-                for (const auto& elem : std::get<ListValue>(corr_values[0]).elements) {
+                for (const auto& elem : (*std::get<ListValuePtr>(corr_values[0])).elements) {
                     if (std::holds_alternative<int64_t>(elem.value))
                         allowed->push_back(int64_t{std::get<int64_t>(elem.value)});
                     else if (std::holds_alternative<std::string>(elem.value))

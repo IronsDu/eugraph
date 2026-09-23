@@ -10,9 +10,9 @@ using Key = std::vector<Value>;
 // EdgeKey) denote the same graph entity with the same identity even when one
 // side was materialized and the other is still a topology reference.
 int graphEntityKind(const Value& value) {
-    if (std::holds_alternative<VertexRef>(value) || std::holds_alternative<VertexValue>(value))
+    if (std::holds_alternative<VertexRef>(value) || std::holds_alternative<VertexValuePtr>(value))
         return 1;
-    if (std::holds_alternative<EdgeKey>(value) || std::holds_alternative<EdgeValue>(value))
+    if (std::holds_alternative<EdgeKey>(value) || std::holds_alternative<EdgeValuePtr>(value))
         return 2;
     return 0;
 }
@@ -24,11 +24,11 @@ bool joinValueEquals(const Value& a, const Value& b) {
         auto entityId = [](const Value& value) -> uint64_t {
             if (std::holds_alternative<VertexRef>(value))
                 return std::get<VertexRef>(value).id;
-            if (std::holds_alternative<VertexValue>(value))
-                return std::get<VertexValue>(value).id;
+            if (std::holds_alternative<VertexValuePtr>(value))
+                return (*std::get<VertexValuePtr>(value)).id;
             if (std::holds_alternative<EdgeKey>(value))
                 return std::get<EdgeKey>(value).id;
-            return std::get<EdgeValue>(value).id;
+            return (*std::get<EdgeValuePtr>(value)).id;
         };
         return entityId(a) == entityId(b);
     }

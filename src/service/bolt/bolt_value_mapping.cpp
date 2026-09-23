@@ -42,11 +42,11 @@ packstream::PackStreamStruct dateTimeToStruct(const DateTimeValue& tv, uint32_t 
         bool is_v4 = boltMajorVersion(bolt_version) <= 4;
         if (is_v4) {
             // v4.x: local wall-clock seconds, tags 0x46/0x66
-            if (!tv.tz_name.empty()) {
+            if (static_cast<bool>(tv.tz_name)) {
                 s.tag = tags::DATETIME_ZONE_ID_V4;
                 s.fields.push_back(PS{local_seconds});
                 s.fields.push_back(PS{tv.nanos});
-                s.fields.push_back(PS{std::string{tv.tz_name}});
+                s.fields.push_back(PS{tzNameOrEmpty(tv.tz_name)});
             } else {
                 s.tag = tags::DATETIME_V4;
                 s.fields.push_back(PS{local_seconds});
@@ -56,11 +56,11 @@ packstream::PackStreamStruct dateTimeToStruct(const DateTimeValue& tv, uint32_t 
         } else {
             // v5.x: UTC epoch seconds, tags 0x49/0x69
             int64_t utc_seconds = local_seconds - tv.tz_offset_sec;
-            if (!tv.tz_name.empty()) {
+            if (static_cast<bool>(tv.tz_name)) {
                 s.tag = tags::DATETIME_ZONE_ID;
                 s.fields.push_back(PS{utc_seconds});
                 s.fields.push_back(PS{tv.nanos});
-                s.fields.push_back(PS{std::string{tv.tz_name}});
+                s.fields.push_back(PS{tzNameOrEmpty(tv.tz_name)});
             } else {
                 s.tag = tags::DATETIME;
                 s.fields.push_back(PS{utc_seconds});
@@ -169,8 +169,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         return std::get<double>(val);
     } else if (std::holds_alternative<std::string>(val)) {
         return std::get<std::string>(val);
-    } else if (std::holds_alternative<VertexValue>(val)) {
-        auto& v = std::get<VertexValue>(val);
+    } else if (std::holds_alternative<VertexValuePtr>(val)) {
+        auto& v = (*std::get<VertexValuePtr>(val));
 
         std::vector<PS> label_list;
         if (v.labels.has_value()) {
@@ -203,8 +203,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         if (boltMajorVersion(bolt_version) >= 5)
             node_s.fields.push_back(PS{std::to_string(static_cast<int64_t>(v.id))}); // element_id (Bolt v5.x)
         return node_s;
-    } else if (std::holds_alternative<EdgeValue>(val)) {
-        auto& e = std::get<EdgeValue>(val);
+    } else if (std::holds_alternative<EdgeValuePtr>(val)) {
+        auto& e = (*std::get<EdgeValuePtr>(val));
 
         std::string type_name;
         auto elit = edge_label_defs.find(e.label_id);
@@ -235,8 +235,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
             rel_s.fields.push_back(PS{std::to_string(static_cast<int64_t>(e.dst_id))}); // endNodeElementId
         }
         return rel_s;
-    } else if (std::holds_alternative<PathValue>(val)) {
-        auto& p = std::get<PathValue>(val);
+    } else if (std::holds_alternative<PathValuePtr>(val)) {
+        auto& p = (*std::get<PathValuePtr>(val));
 
         std::vector<PS> nodes;
         std::vector<PS> rels;
@@ -250,8 +250,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         // end->start.
         for (size_t i = 0; i < p.elements.size(); ++i) {
             const auto& elem = p.elements[i].value;
-            if (std::holds_alternative<VertexValue>(elem)) {
-                const auto& node = std::get<VertexValue>(elem);
+            if (std::holds_alternative<VertexValuePtr>(elem)) {
+                const auto& node = (*std::get<VertexValuePtr>(elem));
                 auto node_bolt = valueToBolt(elem, label_defs, edge_label_defs, bolt_version);
                 nodes.push_back(PS{std::move(node_bolt)});
                 if (pending_rel) {
@@ -260,8 +260,8 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
                     pending_rel.reset();
                 }
                 last_node_id = node.id;
-            } else if (std::holds_alternative<EdgeValue>(elem)) {
-                const auto& edge = std::get<EdgeValue>(elem);
+            } else if (std::holds_alternative<EdgeValuePtr>(elem)) {
+                const auto& edge = (*std::get<EdgeValuePtr>(elem));
 
                 std::string type_name;
                 auto elit = edge_label_defs.find(edge.label_id);
@@ -304,18 +304,18 @@ packstream::Value valueToBolt(const Value& val, const std::unordered_map<LabelId
         return dateTimeToStruct(std::get<DateTimeValue>(val), bolt_version);
     } else if (std::holds_alternative<TimeValue>(val)) {
         return timeToStruct(std::get<TimeValue>(val));
-    } else if (std::holds_alternative<BytesValue>(val)) {
-        return packstream::Value{std::get<BytesValue>(val).data};
+    } else if (std::holds_alternative<BytesValuePtr>(val)) {
+        return packstream::Value{(*std::get<BytesValuePtr>(val)).data};
     } else if (std::holds_alternative<DurationValue>(val)) {
         return durationToStruct(std::get<DurationValue>(val));
-    } else if (std::holds_alternative<ListValue>(val)) {
-        auto& lv = std::get<ListValue>(val);
+    } else if (std::holds_alternative<ListValuePtr>(val)) {
+        auto& lv = (*std::get<ListValuePtr>(val));
         std::vector<PS> list;
         for (auto& elem : lv.elements)
             list.push_back(PS{valueToBolt(elem.value, label_defs, edge_label_defs, bolt_version)});
         return list;
-    } else if (std::holds_alternative<MapValue>(val)) {
-        auto& mv = std::get<MapValue>(val);
+    } else if (std::holds_alternative<MapValuePtr>(val)) {
+        auto& mv = (*std::get<MapValuePtr>(val));
         std::unordered_map<std::string, PS> dict;
         for (auto& [key, elem] : mv.entries)
             dict[key] = PS{valueToBolt(elem.value, label_defs, edge_label_defs, bolt_version)};
@@ -358,7 +358,13 @@ std::optional<Value> temporalFromStruct(const packstream::PackStreamStruct& s) {
             return std::nullopt;
         DateTimeValue tv;
         tv.kind = DateTimeKind::DATE;
-        civilFromDays(as_int(0), tv.year, tv.month, tv.day);
+        {
+            int64_t _y = 0, _m = 0, _d = 0;
+            civilFromDays(as_int(0), _y, _m, _d);
+            tv.year = static_cast<int32_t>(_y);
+            tv.month = static_cast<int8_t>(_m);
+            tv.day = static_cast<int8_t>(_d);
+        }
         return Value{tv};
     }
     case tags::LOCAL_TIME: {
@@ -414,7 +420,7 @@ std::optional<Value> temporalFromStruct(const packstream::PackStreamStruct& s) {
         auto tv = datetimeFromEpoch(static_cast<int64_t>(local_seconds), as_int(1));
         tv.kind = DateTimeKind::DATETIME;
         tv.tz_offset_sec = offset;
-        tv.tz_name = zone;
+        setTzName(tv.tz_name, zone);
         return Value{tv};
     }
     case tags::DURATION: {
@@ -447,7 +453,7 @@ Value boltParamToValue(const packstream::Value& v) {
     } else if (std::holds_alternative<std::string>(v)) {
         return std::get<std::string>(v);
     } else if (std::holds_alternative<std::vector<uint8_t>>(v)) {
-        return BytesValue{std::get<std::vector<uint8_t>>(v)};
+        return Value(mk<BytesValue>(BytesValue{std::get<std::vector<uint8_t>>(v)}));
     } else if (std::holds_alternative<packstream::PackStreamStruct>(v)) {
         const auto& s = std::get<packstream::PackStreamStruct>(v);
         if (auto temporal = temporalFromStruct(s))
@@ -459,14 +465,14 @@ Value boltParamToValue(const packstream::Value& v) {
             auto internal = boltParamToValue(elem.value);
             lv.elements.push_back({std::move(internal)});
         }
-        return lv;
+        return Value(mk<ListValue>(std::move(lv)));
     } else if (std::holds_alternative<std::unordered_map<std::string, PS>>(v)) {
         MapValue mv;
         for (auto& [key, elem] : std::get<std::unordered_map<std::string, PS>>(v)) {
             auto internal = boltParamToValue(elem.value);
             mv.entries.push_back({key, ValueStorage{std::move(internal)}});
         }
-        return mv;
+        return Value(mk<MapValue>(std::move(mv)));
     }
     return Value{};
 }

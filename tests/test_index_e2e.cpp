@@ -220,8 +220,8 @@ TEST_F(IndexE2ETest, QueryByIndexEquality) {
     ASSERT_EQ(rows.size(), 1u);
     // The vertex with age=30 is vid=3
     auto& val = rows[0][0];
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(val));
-    EXPECT_EQ(std::get<VertexValue>(val).id, 3u);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(val));
+    EXPECT_EQ((*std::get<VertexValuePtr>(val)).id, 3u);
 }
 
 TEST_F(IndexE2ETest, QueryWithoutIndexUsesLabelScan) {
@@ -504,8 +504,8 @@ TEST_F(IndexE2ETest, DdlCreateWeakIndexBackfillAcrossLabels) {
     // The weak index should be usable by the query planner.
     auto rows = runQuery(executor, "MATCH (n:Message) WHERE n.creationDate = 123 RETURN n");
     ASSERT_EQ(rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(rows[0][0]));
-    EXPECT_EQ(std::get<VertexValue>(rows[0][0]).id, 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(rows[0][0]));
+    EXPECT_EQ((*std::get<VertexValuePtr>(rows[0][0])).id, 1u);
 }
 
 TEST_F(IndexE2ETest, WeakIndexMaintainsOnLabelAddRemove) {
@@ -734,8 +734,8 @@ TEST_F(IndexE2ETest, WeakIndexUsedWhenNodeCreatedAfterIndex) {
 
     auto rows = runQuery(executor, "MATCH (n:Message) WHERE n.id = 123 RETURN n");
     ASSERT_EQ(rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(rows[0][0]));
-    EXPECT_EQ(std::get<VertexValue>(rows[0][0]).id, 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(rows[0][0]));
+    EXPECT_EQ((*std::get<VertexValuePtr>(rows[0][0])).id, 1u);
 }
 
 TEST_F(IndexE2ETest, StrongIndexPointLookup) {
@@ -753,8 +753,8 @@ TEST_F(IndexE2ETest, StrongIndexPointLookup) {
 
     auto rows = runQuery(executor, "MATCH (n:Message) WHERE n::Post.creationDate = 123 RETURN n");
     ASSERT_EQ(rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(rows[0][0]));
-    EXPECT_EQ(std::get<VertexValue>(rows[0][0]).id, 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(rows[0][0]));
+    EXPECT_EQ((*std::get<VertexValuePtr>(rows[0][0])).id, 1u);
 }
 
 TEST_F(IndexE2ETest, MixedStrongWeakCompositeIndexQuery) {
@@ -775,8 +775,8 @@ TEST_F(IndexE2ETest, MixedStrongWeakCompositeIndexQuery) {
     auto rows = runQuery(executor, "MATCH (n:Message) WHERE n::Post.creationDate = 123 AND n.browserUsed = 'Firefox' "
                                    "RETURN n");
     ASSERT_EQ(rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(rows[0][0]));
-    EXPECT_EQ(std::get<VertexValue>(rows[0][0]).id, 1u);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(rows[0][0]));
+    EXPECT_EQ((*std::get<VertexValuePtr>(rows[0][0])).id, 1u);
 }
 
 TEST_F(IndexE2ETest, StrongIndexRejectsMissingSourceProperty) {
@@ -1060,8 +1060,8 @@ TEST_F(IndexE2ETest, DdlCreateCompositeIndexViaExecutor) {
     auto rows = runQuery(executor, "MATCH (n:Person) WHERE n.age = 30 AND n.city = 'NYC' RETURN n");
     ASSERT_EQ(rows.size(), 1u);
     auto& val = rows[0][0];
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(val));
-    auto& vv = std::get<VertexValue>(val);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(val));
+    auto& vv = (*std::get<VertexValuePtr>(val));
     // Verify the correct vertex was returned
     auto props = vv.properties;
     // Should be vertex with age=30 and city='NYC' (alice)

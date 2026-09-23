@@ -51,8 +51,8 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
                 if (std::holds_alternative<EdgeKey>(edge_value)) {
                     const auto& ek = std::get<EdgeKey>(edge_value);
                     append_edge(ek.src_id, ek.dst_id, ek.id, ek.label_id, ek.seq);
-                } else if (std::holds_alternative<EdgeValue>(edge_value)) {
-                    const auto& ev = std::get<EdgeValue>(edge_value);
+                } else if (std::holds_alternative<EdgeValuePtr>(edge_value)) {
+                    const auto& ev = (*std::get<EdgeValuePtr>(edge_value));
                     append_edge(ev.src_id, ev.dst_id, ev.id, ev.label_id, ev.seq);
                 }
             };
@@ -64,10 +64,10 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
                 const Value& val = chunk->columns[col].getValue(row_idx);
                 if (std::holds_alternative<VertexRef>(val)) {
                     append_vertex(std::get<VertexRef>(val).id);
-                } else if (std::holds_alternative<VertexValue>(val)) {
-                    append_vertex(std::get<VertexValue>(val).id);
-                } else if (std::holds_alternative<ListValue>(val)) {
-                    for (const auto& elem : std::get<ListValue>(val).elements)
+                } else if (std::holds_alternative<VertexValuePtr>(val)) {
+                    append_vertex((*std::get<VertexValuePtr>(val)).id);
+                } else if (std::holds_alternative<ListValuePtr>(val)) {
+                    for (const auto& elem : (*std::get<ListValuePtr>(val)).elements)
                         append_edge_value(elem.value);
                 } else {
                     append_edge_value(val);
@@ -82,7 +82,7 @@ folly::coro::AsyncGenerator<DataChunk> PathBuildPhysicalOp::executeChunk() {
                 output.columns[c].setValue(row_idx, chunk->columns[c].getValue(row_idx));
             }
             if (output.columns.size() > input_cols)
-                output.columns[input_cols].setValue(row_idx, Value(std::move(pt)));
+                output.columns[input_cols].setValue(row_idx, Value(mk<PathTopology>(std::move(pt))));
         }
         if (output.count > 0) {
             co_yield std::move(output);

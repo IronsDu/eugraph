@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -91,17 +92,36 @@ bool timeFieldReturnsString(TimeField f);
 
 // ==================== Date/DateTime type ====================
 
+/// A timezone name. Having none is the common case, so it is held rather than
+/// inlined: as a std::string it cost 32 bytes of SSO buffer in every date, and a
+/// Value variant is as large as its largest alternative. Null means absent; a
+/// non-null pointer always points at a non-empty name.
+using TzNamePtr = std::shared_ptr<const std::string>;
+
+/// Absent and empty are the same thing, so both directions of that conversion live
+/// here rather than being spelled out at every use.
+inline void setTzName(TzNamePtr& slot, const std::string& name) {
+    slot = name.empty() ? nullptr : std::make_shared<const std::string>(name);
+}
+inline std::string tzNameOrEmpty(const TzNamePtr& tz) {
+    return tz ? *tz : std::string{};
+}
+
+/// Field widths come from the range a calendar value can take, not from int64 by
+/// default. Between an addition and its normalisation these fields do exceed their
+/// normal range, so addDuration computes in wide locals and writes back once at the
+/// end -- see the note there. Wide members come first to keep the padding down.
 struct DateTimeValue {
-    DateTimeKind kind = DateTimeKind::DATE;
-    int64_t year = 1970;
-    int64_t month = 1;
-    int64_t day = 1;
-    int64_t hour = 0;
-    int64_t minute = 0;
-    int64_t second = 0;
-    int64_t nanos = 0;
+    int32_t year = 1970;
+    int32_t nanos = 0;
     int32_t tz_offset_sec = 0;
-    std::string tz_name;
+    int8_t month = 1;
+    int8_t day = 1;
+    int8_t hour = 0;
+    int8_t minute = 0;
+    int8_t second = 0;
+    DateTimeKind kind = DateTimeKind::DATE;
+    TzNamePtr tz_name;
 
     bool operator==(const DateTimeValue& o) const;
 };
@@ -109,13 +129,13 @@ struct DateTimeValue {
 // ==================== Time type ====================
 
 struct TimeValue {
-    TimeKind kind = TimeKind::LOCAL_TIME;
-    int64_t hour = 0;
-    int64_t minute = 0;
-    int64_t second = 0;
-    int64_t nanos = 0;
+    int32_t nanos = 0;
     int32_t tz_offset_sec = 0;
-    std::string tz_name;
+    int8_t hour = 0;
+    int8_t minute = 0;
+    int8_t second = 0;
+    TimeKind kind = TimeKind::LOCAL_TIME;
+    TzNamePtr tz_name;
 
     bool operator==(const TimeValue& o) const;
 };
@@ -161,6 +181,19 @@ void normalizeDate(int64_t& year, int64_t& month, int64_t& day);
 int64_t daysFromCivil(int64_t y, int64_t m, int64_t d);
 void civilFromDays(int64_t days, int64_t& y, int64_t& m, int64_t& d);
 
+/// 绝对月序号（year*12 + month-1，0 基）与 java.time 的"月+日"打包坐标。
+///
+/// 必须在 64 位下运算：DateTimeValue::year 是 int32，合法范围到 ±999'999'999，
+/// 而 `year * 12` 直接在 int 里算会溢出（UBSan: signed integer overflow，
+/// 见 TCK Temporal10 的极值场景）。参数与返回值都按 int64 走，
+/// 凡是"用年月做算术"的地方都经过这里，避免再有人拿窄字段直接乘。
+constexpr int64_t absoluteMonths(int64_t year, int64_t month) {
+    return year * 12 + (month - 1);
+}
+constexpr int64_t packedMonthDay(int64_t year, int64_t month, int64_t day) {
+    return absoluteMonths(year, month) * 32 + day;
+}
+
 // ==================== Temporal arithmetic ====================
 
 DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& duration);
@@ -185,6 +218,14 @@ DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos);
 /// 把 duration 的纳秒分量收进 [0, 1e9)（java.time.Duration 的不变量，neo4j 沿用）。
 /// 所有构造 duration 的地方都应调用它，否则 .seconds / .nanosecondsOfSecond 会与 neo4j 不一致。
 void normalizeDurationNanos(DurationValue& dur);
+
+/// duration 排序用的"近似长度"（纳秒）：1 个月记为 365.2425/12 天 = 2'629'746 秒
+/// （= 30 天 + 37'746 秒），与 neo4j 的 ORDER BY 一致 —— P30D < P1M < P31D、P365D < P1Y < P366D，
+/// 也与 mulDuration/divDuration/duration.inMonths 折叠小数月用的是同一个常数。
+///
+/// 返回 128 位：duration.between 两个 ±999'999'999 年能给出 2.4e10 个月，
+/// 任何 64 位中间量都会溢出（UB）。
+__int128 durationOrderNanos(const DurationValue& dur);
 
 int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, const std::string& tz_name);
 int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, int64_t hour, int64_t minute,

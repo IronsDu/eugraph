@@ -84,7 +84,7 @@ public:
                                                  uint16_t prop_id) override;
     std::vector<std::optional<PropertyValue>> getEdgePropertyBatch(GraphTxnHandle txn, EdgeLabelId label_id,
                                                                    const std::vector<EdgeId>& edge_ids,
-                                                                   uint16_t prop_id);
+                                                                   uint16_t prop_id) override;
     bool putEdgeProperty(GraphTxnHandle txn, EdgeLabelId label_id, EdgeId eid, uint16_t prop_id,
                          const PropertyValue& value) override;
     bool deleteEdgeProperty(GraphTxnHandle txn, EdgeLabelId label_id, EdgeId eid, uint16_t prop_id) override;

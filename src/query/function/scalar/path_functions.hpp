@@ -12,56 +12,56 @@ namespace scalar {
 
 /// nodes(path) -> list of vertices (even-indexed elements)
 inline Value nodesImpl(const Value& arg) {
-    if (std::holds_alternative<PathValue>(arg)) {
-        const auto& pv = std::get<PathValue>(arg);
+    if (std::holds_alternative<PathValuePtr>(arg)) {
+        const auto& pv = (*std::get<PathValuePtr>(arg));
         ListValue lv;
         for (size_t i = 0; i < pv.elements.size(); i += 2)
             lv.elements.push_back(pv.elements[i]);
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
-    if (std::holds_alternative<PathTopology>(arg)) {
-        const auto& pt = std::get<PathTopology>(arg);
+    if (std::holds_alternative<PathTopologyPtr>(arg)) {
+        const auto& pt = (*std::get<PathTopologyPtr>(arg));
         ListValue lv;
         for (size_t i = 0; i < pt.vertex_ids.size(); ++i) {
             VertexValue vv;
             vv.id = pt.vertex_ids[i];
-            lv.elements.push_back(ValueStorage{Value(std::move(vv))});
+            lv.elements.push_back(ValueStorage{Value(mk<VertexValue>(std::move(vv)))});
         }
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
     return Value{};
 }
 
 /// relationships(path) -> list of edges (odd-indexed elements)
 inline Value relationshipsImpl(const Value& arg) {
-    if (std::holds_alternative<PathValue>(arg)) {
-        const auto& pv = std::get<PathValue>(arg);
+    if (std::holds_alternative<PathValuePtr>(arg)) {
+        const auto& pv = (*std::get<PathValuePtr>(arg));
         ListValue lv;
         for (size_t i = 1; i < pv.elements.size(); i += 2)
             lv.elements.push_back(pv.elements[i]);
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
-    if (std::holds_alternative<PathTopology>(arg)) {
-        const auto& pt = std::get<PathTopology>(arg);
+    if (std::holds_alternative<PathTopologyPtr>(arg)) {
+        const auto& pt = (*std::get<PathTopologyPtr>(arg));
         ListValue lv;
         for (size_t i = 0; i < pt.edge_ids.size(); ++i) {
             EdgeValue ev;
             ev.id = pt.edge_ids[i];
             ev.label_id = pt.edge_label_ids[i];
             ev.seq = pt.seqs[i];
-            lv.elements.push_back(ValueStorage{Value(std::move(ev))});
+            lv.elements.push_back(ValueStorage{Value(mk<EdgeValue>(std::move(ev)))});
         }
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
     return Value{};
 }
 
 /// length(path) -> number of edges in path
 inline Value lengthImpl(const Value& arg) {
-    if (std::holds_alternative<PathValue>(arg))
-        return Value(static_cast<int64_t>((std::get<PathValue>(arg).elements.size() - 1) / 2));
-    if (std::holds_alternative<PathTopology>(arg))
-        return Value(static_cast<int64_t>(std::get<PathTopology>(arg).edge_ids.size()));
+    if (std::holds_alternative<PathValuePtr>(arg))
+        return Value(static_cast<int64_t>(((*std::get<PathValuePtr>(arg)).elements.size() - 1) / 2));
+    if (std::holds_alternative<PathTopologyPtr>(arg))
+        return Value(static_cast<int64_t>((*std::get<PathTopologyPtr>(arg)).edge_ids.size()));
     return Value{};
 }
 

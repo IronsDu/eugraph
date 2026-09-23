@@ -674,13 +674,13 @@ TEST_F(QueryExecutorTest, ReturnNamedPathSingleHop) {
     EXPECT_EQ(result.columns[0], "p");
     for (const auto& row : result.rows) {
         ASSERT_EQ(row.size(), 1);
-        ASSERT_TRUE(std::holds_alternative<PathValue>(row[0]));
-        const auto& pv = std::get<PathValue>(row[0]);
+        ASSERT_TRUE(std::holds_alternative<PathValuePtr>(row[0]));
+        const auto& pv = (*std::get<PathValuePtr>(row[0]));
         // Path has 3 elements: src vertex, edge, dst vertex
         ASSERT_EQ(pv.elements.size(), 3);
-        EXPECT_TRUE(std::holds_alternative<VertexValue>(pv.elements[0].value));
-        EXPECT_TRUE(std::holds_alternative<EdgeValue>(pv.elements[1].value));
-        EXPECT_TRUE(std::holds_alternative<VertexValue>(pv.elements[2].value));
+        EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(pv.elements[0].value));
+        EXPECT_TRUE(std::holds_alternative<EdgeValuePtr>(pv.elements[1].value));
+        EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(pv.elements[2].value));
     }
 }
 
@@ -693,15 +693,15 @@ TEST_F(QueryExecutorTest, ReturnNamedPathTwoHop) {
     ASSERT_EQ(result.rows.size(), 2);
     for (const auto& row : result.rows) {
         ASSERT_EQ(row.size(), 1);
-        ASSERT_TRUE(std::holds_alternative<PathValue>(row[0]));
-        const auto& pv = std::get<PathValue>(row[0]);
+        ASSERT_TRUE(std::holds_alternative<PathValuePtr>(row[0]));
+        const auto& pv = (*std::get<PathValuePtr>(row[0]));
         // Path has 5 elements: v1, e1, v2, e2, v3
         ASSERT_EQ(pv.elements.size(), 5);
-        EXPECT_TRUE(std::holds_alternative<VertexValue>(pv.elements[0].value));
-        EXPECT_TRUE(std::holds_alternative<EdgeValue>(pv.elements[1].value));
-        EXPECT_TRUE(std::holds_alternative<VertexValue>(pv.elements[2].value));
-        EXPECT_TRUE(std::holds_alternative<EdgeValue>(pv.elements[3].value));
-        EXPECT_TRUE(std::holds_alternative<VertexValue>(pv.elements[4].value));
+        EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(pv.elements[0].value));
+        EXPECT_TRUE(std::holds_alternative<EdgeValuePtr>(pv.elements[1].value));
+        EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(pv.elements[2].value));
+        EXPECT_TRUE(std::holds_alternative<EdgeValuePtr>(pv.elements[3].value));
+        EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(pv.elements[4].value));
     }
 }
 
@@ -714,8 +714,8 @@ TEST_F(QueryExecutorTest, ReturnPathMixedWithNode) {
     ASSERT_EQ(result.rows.size(), 2);
     for (const auto& row : result.rows) {
         ASSERT_EQ(row.size(), 2);
-        EXPECT_TRUE(std::holds_alternative<VertexValue>(row[0])); // a
-        EXPECT_TRUE(std::holds_alternative<PathValue>(row[1]));   // p
+        EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(row[0])); // a
+        EXPECT_TRUE(std::holds_alternative<PathValuePtr>(row[1]));   // p
     }
 }
 
@@ -735,12 +735,12 @@ TEST_F(QueryExecutorTest, PathNodes) {
     ASSERT_EQ(result.rows.size(), 2);
     for (const auto& row : result.rows) {
         ASSERT_EQ(row.size(), 1);
-        ASSERT_TRUE(std::holds_alternative<ListValue>(row[0]));
-        const auto& lv = std::get<ListValue>(row[0]);
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[0]));
+        const auto& lv = (*std::get<ListValuePtr>(row[0]));
         // 2-hop path has 3 vertices: start, intermediate, end
         ASSERT_EQ(lv.elements.size(), 3);
         for (const auto& elem : lv.elements) {
-            EXPECT_TRUE(std::holds_alternative<VertexValue>(elem.value));
+            EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(elem.value));
         }
     }
 }
@@ -753,12 +753,12 @@ TEST_F(QueryExecutorTest, PathRelationships) {
     ASSERT_EQ(result.rows.size(), 2);
     for (const auto& row : result.rows) {
         ASSERT_EQ(row.size(), 1);
-        ASSERT_TRUE(std::holds_alternative<ListValue>(row[0]));
-        const auto& lv = std::get<ListValue>(row[0]);
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[0]));
+        const auto& lv = (*std::get<ListValuePtr>(row[0]));
         // 2-hop path has 2 edges
         ASSERT_EQ(lv.elements.size(), 2);
         for (const auto& elem : lv.elements) {
-            EXPECT_TRUE(std::holds_alternative<EdgeValue>(elem.value));
+            EXPECT_TRUE(std::holds_alternative<EdgeValuePtr>(elem.value));
         }
     }
 }
@@ -787,8 +787,8 @@ TEST_F(QueryExecutorTest, CreateNodeReturnsId) {
     // Verify node was created via MATCH
     auto scan = execSync(*executor_, "MATCH (n:Person) RETURN n");
     ASSERT_EQ(scan.rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(scan.rows[0][0]));
-    EXPECT_GT(std::get<VertexValue>(scan.rows[0][0]).id, 0);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(scan.rows[0][0]));
+    EXPECT_GT((*std::get<VertexValuePtr>(scan.rows[0][0])).id, 0);
 }
 
 TEST_F(QueryExecutorTest, CreateMultipleNodesSequentially) {
@@ -803,10 +803,10 @@ TEST_F(QueryExecutorTest, CreateMultipleNodesSequentially) {
     EXPECT_EQ(scan_rows.size(), 2);
 
     // Verify they have different IDs
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(scan_rows[0][0]));
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(scan_rows[1][0]));
-    auto id1 = std::get<VertexValue>(scan_rows[0][0]).id;
-    auto id2 = std::get<VertexValue>(scan_rows[1][0]).id;
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(scan_rows[0][0]));
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(scan_rows[1][0]));
+    auto id1 = (*std::get<VertexValuePtr>(scan_rows[0][0])).id;
+    auto id2 = (*std::get<VertexValuePtr>(scan_rows[1][0])).id;
     EXPECT_NE(id1, id2);
 }
 
@@ -852,8 +852,8 @@ TEST_F(QueryExecutorTest, CreateEdgeReturnsId) {
     // Verify edge was created via MATCH
     auto expand = execSync(*executor_, "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN r");
     ASSERT_EQ(expand.rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<EdgeValue>(expand.rows[0][0]));
-    EXPECT_GT(std::get<EdgeValue>(expand.rows[0][0]).id, 0);
+    ASSERT_TRUE(std::holds_alternative<EdgeValuePtr>(expand.rows[0][0]));
+    EXPECT_GT((*std::get<EdgeValuePtr>(expand.rows[0][0])).id, 0);
 }
 
 TEST_F(QueryExecutorTest, CreateEdgeReturnProperty) {
@@ -2185,8 +2185,8 @@ TEST_F(QueryExecutorMultiLabelTest, PropertyConflictToList) {
 
     // Should be a ListValue with both names
     auto& val = result.rows[0][0];
-    ASSERT_TRUE(std::holds_alternative<ListValue>(val)) << "Expected ListValue, got variant index " << val.index();
-    auto& lv = std::get<ListValue>(val);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(val)) << "Expected ListValue, got variant index " << val.index();
+    auto& lv = (*std::get<ListValuePtr>(val));
     ASSERT_EQ(lv.elements.size(), 2);
 }
 
@@ -2227,8 +2227,8 @@ TEST_F(QueryExecutorMultiLabelTest, LabelCastAllProperties) {
     ASSERT_EQ(result.rows.size(), 1);
 
     // Result should be a VertexValue with only the Employee label's properties
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(result.rows[0][0]));
-    auto& vv = std::get<VertexValue>(result.rows[0][0]);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(result.rows[0][0]));
+    auto& vv = (*std::get<VertexValuePtr>(result.rows[0][0]));
     EXPECT_EQ(vv.properties.size(), 1);
     EXPECT_NE(vv.properties.find(EMPLOYEE_LABEL), vv.properties.end());
 }
@@ -2248,8 +2248,8 @@ TEST_F(QueryExecutorMultiLabelTest, SetVertexLabelAutoCreate) {
     auto r2 = execSync(*executor_, "MATCH (n:Message) RETURN labels(n)");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
     ASSERT_EQ(r2.rows.size(), 1);
-    ASSERT_TRUE(std::holds_alternative<ListValue>(r2.rows[0][0]));
-    auto labels = std::get<ListValue>(r2.rows[0][0]);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(r2.rows[0][0]));
+    auto labels = (*std::get<ListValuePtr>(r2.rows[0][0]));
     bool has_message = false;
     bool has_empty = false;
     for (const auto& elem : labels.elements) {
@@ -2337,8 +2337,8 @@ TEST_F(QueryExecutorMultiLabelTest, NoPropertyLabel) {
     auto r2 = execSync(*executor_, "MATCH (n:VIP) RETURN n");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
     ASSERT_EQ(r2.rows.size(), 1);
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(r2.rows[0][0]));
-    auto& vv = std::get<VertexValue>(r2.rows[0][0]);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(r2.rows[0][0]));
+    auto& vv = (*std::get<VertexValuePtr>(r2.rows[0][0]));
     EXPECT_EQ(vv.id, 1);
 }
 
@@ -2416,7 +2416,7 @@ TEST_F(QueryExecutorMultiLabelTest, StreamingSetLabelSurvivesPlanContextLifetime
     auto result = execSync(*executor_, "MATCH (n:Employee) RETURN n");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1);
-    auto& vv = std::get<VertexValue>(result.rows[0][0]);
+    auto& vv = (*std::get<VertexValuePtr>(result.rows[0][0]));
     EXPECT_TRUE(vv.labels.has_value());
     EXPECT_TRUE(vv.labels->count(EMPLOYEE_LABEL)) << "Employee label should be set";
 }
@@ -2448,7 +2448,7 @@ TEST_F(QueryExecutorMultiLabelTest, ScanByLabelLoadsAllLabelProperties) {
     auto r4 = execSync(*executor_, "MATCH (n:Employee) RETURN n");
     ASSERT_TRUE(r4.error.empty()) << r4.error;
     ASSERT_EQ(r4.rows.size(), 1);
-    auto& vv = std::get<VertexValue>(r4.rows[0][0]);
+    auto& vv = (*std::get<VertexValuePtr>(r4.rows[0][0]));
     ASSERT_TRUE(vv.properties.count(PERSON_LABEL)) << "Should have Person label properties";
     EXPECT_EQ(std::get<std::string>((*vv.properties.at(PERSON_LABEL).at(name_pid))), "Alice");
 }
@@ -2474,7 +2474,7 @@ TEST_F(QueryExecutorMultiLabelTest, ScanByNoPropertyLabelReturnsAllProperties) {
     auto r3 = execSync(*executor_, "MATCH (n:VIP) RETURN n");
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 1);
-    auto& vv = std::get<VertexValue>(r3.rows[0][0]);
+    auto& vv = (*std::get<VertexValuePtr>(r3.rows[0][0]));
     EXPECT_TRUE(vv.properties.count(PERSON_LABEL)) << "VIP scan should include Person properties";
 }
 
@@ -2630,8 +2630,8 @@ TEST_F(QueryExecutorTest, CreateEdgeMaintainsIndex) {
     auto match_result = execSync(executor, "MATCH (a:Person)-[e:RATED]->(b:Person) RETURN e");
     ASSERT_EQ(match_result.rows.size(), 1u);
     auto& edge_val = match_result.rows[0][0];
-    ASSERT_TRUE(std::holds_alternative<EdgeValue>(edge_val));
-    auto& ev = std::get<EdgeValue>(edge_val);
+    ASSERT_TRUE(std::holds_alternative<EdgeValuePtr>(edge_val));
+    auto& ev = (*std::get<EdgeValuePtr>(edge_val));
     EXPECT_GT(ev.id, 0u);
     EXPECT_EQ(ev.label_id, edge_label_id);
 }
@@ -2919,7 +2919,7 @@ TEST(RowIdentityTest, EntityRepresentationsCollapse) {
     value_col.reserve(1);
     VertexValue vv;
     vv.id = vid;
-    value_col.setValue(0, Value(vv));
+    value_col.setValue(0, Value(mk<VertexValue>(vv)));
     value_chunk.count = 1;
 
     RowDigest ref_key;
@@ -3393,8 +3393,8 @@ TEST_F(QueryExecutorTest, MergeOnCreateOnMatchSetDynamicEdgeProp) {
     ASSERT_EQ(pcheck.rows.size(), 4u);
     int total_props = 0;
     for (const auto& row : pcheck.rows) {
-        ASSERT_TRUE(std::holds_alternative<MapValue>(row[1]));
-        total_props += std::get<MapValue>(row[1]).entries.size();
+        ASSERT_TRUE(std::holds_alternative<MapValuePtr>(row[1]));
+        total_props += (*std::get<MapValuePtr>(row[1])).entries.size();
     }
     EXPECT_EQ(total_props, 4);
 }
@@ -3423,8 +3423,8 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicVertexProp) {
     auto pcheck = execSync(*executor_, "MATCH (b:B) RETURN properties(b)");
     ASSERT_TRUE(pcheck.error.empty()) << pcheck.error;
     ASSERT_EQ(pcheck.rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<MapValue>(pcheck.rows[0][0]));
-    const auto& mv = std::get<MapValue>(pcheck.rows[0][0]);
+    ASSERT_TRUE(std::holds_alternative<MapValuePtr>(pcheck.rows[0][0]));
+    const auto& mv = (*std::get<MapValuePtr>(pcheck.rows[0][0]));
     EXPECT_EQ(mv.entries.size(), 1u);
     bool found_created = false;
     for (const auto& [k, v] : mv.entries) {
@@ -3468,9 +3468,9 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetEdgeFromNodeProperties) {
     auto keys_check = execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN keys(r)");
     ASSERT_TRUE(keys_check.error.empty()) << keys_check.error;
     ASSERT_EQ(keys_check.rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<ListValue>(keys_check.rows[0][0]))
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(keys_check.rows[0][0]))
         << "variant index: " << keys_check.rows[0][0].index();
-    const auto& keys = std::get<ListValue>(keys_check.rows[0][0]);
+    const auto& keys = (*std::get<ListValuePtr>(keys_check.rows[0][0]));
     EXPECT_EQ(keys.elements.size(), 1u);
     if (!keys.elements.empty()) {
         EXPECT_TRUE(std::holds_alternative<std::string>(keys.elements[0].value));
@@ -3500,9 +3500,9 @@ TEST_F(QueryExecutorTest, MergeUndirectedCreate) {
                                       "RETURN r");
     ASSERT_TRUE(merge.error.empty()) << merge.error;
     ASSERT_EQ(merge.rows.size(), 1u) << merge.error;
-    EXPECT_TRUE(std::holds_alternative<EdgeValue>(merge.rows[0][0]))
+    EXPECT_TRUE(std::holds_alternative<EdgeValuePtr>(merge.rows[0][0]))
         << "r variant=" << merge.rows[0][0].index()
-        << " is_vertex=" << std::holds_alternative<VertexValue>(merge.rows[0][0]);
+        << " is_vertex=" << std::holds_alternative<VertexValuePtr>(merge.rows[0][0]);
 
     // Then check startNode(r).id works
     auto sn = execSync(*executor_, "MATCH (a {id: 2}), (b {id: 1}) "
@@ -3566,9 +3566,9 @@ TEST_F(QueryExecutorTest, MergeOnCreateSetDynamicEdgePropKeys) {
         execSync(*executor_, "MATCH ()-[r:TYPE]->() RETURN [key IN keys(r) | key + '->' + r[key]] AS keyValue");
     ASSERT_TRUE(control.error.empty()) << control.error;
     ASSERT_EQ(control.rows.size(), 1u) << "rows: " << control.rows.size();
-    ASSERT_TRUE(std::holds_alternative<ListValue>(control.rows[0][0]))
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(control.rows[0][0]))
         << "variant index: " << control.rows[0][0].index();
-    const auto& kv = std::get<ListValue>(control.rows[0][0]);
+    const auto& kv = (*std::get<ListValuePtr>(control.rows[0][0]));
     EXPECT_EQ(kv.elements.size(), 1u);
     if (!kv.elements.empty()) {
         const auto& v = kv.elements[0].value;
@@ -3668,10 +3668,10 @@ TEST_F(QueryExecutorTest, VarLenExpandMixedLabelChainReturnsDstProperty) {
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     ASSERT_EQ(result.rows[0].size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<ListValue>(result.rows[0][0]))
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][0]))
         << "expected ListValue, got variant idx=" << result.rows[0][0].index();
     {
-        const auto& lv = std::get<ListValue>(result.rows[0][0]);
+        const auto& lv = (*std::get<ListValuePtr>(result.rows[0][0]));
         EXPECT_EQ(lv.elements.size(), 2u);
         bool has_name4 = false, has_city4 = false;
         for (const auto& elem : lv.elements) {
@@ -3785,11 +3785,11 @@ TEST_F(QueryExecutorTest, VarLenExpandNamedEdgeVariable) {
     EXPECT_EQ(result.rows.size(), 2u);
     for (const auto& row : result.rows) {
         ASSERT_EQ(row.size(), 1u);
-        EXPECT_TRUE(std::holds_alternative<ListValue>(row[0]));
-        auto& lv = std::get<ListValue>(row[0]);
+        EXPECT_TRUE(std::holds_alternative<ListValuePtr>(row[0]));
+        auto& lv = (*std::get<ListValuePtr>(row[0]));
         EXPECT_EQ(lv.elements.size(), 2u); // 2 edges
         for (auto& es : lv.elements) {
-            EXPECT_TRUE(std::holds_alternative<EdgeValue>(es.value));
+            EXPECT_TRUE(std::holds_alternative<EdgeValuePtr>(es.value));
         }
     }
 }
@@ -3881,8 +3881,8 @@ TEST_F(QueryExecutorTest, VarLenExpandNamedPath) {
     EXPECT_EQ(result.rows.size(), 2u); // 1->3 and 2->4
     for (const auto& row : result.rows) {
         ASSERT_EQ(row.size(), 1u);
-        EXPECT_TRUE(std::holds_alternative<PathValue>(row[0]));
-        auto& pv = std::get<PathValue>(row[0]);
+        EXPECT_TRUE(std::holds_alternative<PathValuePtr>(row[0]));
+        auto& pv = (*std::get<PathValuePtr>(row[0]));
         EXPECT_EQ(pv.elements.size(), 5u); // v1, e, v2, e, v3
     }
 }
@@ -3898,12 +3898,12 @@ TEST_F(QueryExecutorTest, VarLenExpandPathNodes) {
     EXPECT_EQ(result.rows.size(), 8u); // 5 one-hop + 3 two-hop
     for (const auto& row : result.rows) {
         ASSERT_EQ(row.size(), 1u);
-        EXPECT_TRUE(std::holds_alternative<ListValue>(row[0]));
-        auto& lv = std::get<ListValue>(row[0]);
+        EXPECT_TRUE(std::holds_alternative<ListValuePtr>(row[0]));
+        auto& lv = (*std::get<ListValuePtr>(row[0]));
         EXPECT_GE(lv.elements.size(), 2u); // at least src + dst
         // All elements should be vertices
         for (auto& es : lv.elements) {
-            EXPECT_TRUE(std::holds_alternative<VertexValue>(es.value));
+            EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(es.value));
         }
     }
 }
@@ -3916,11 +3916,11 @@ TEST_F(QueryExecutorTest, VarLenExpandPathRelationships) {
     EXPECT_EQ(result.rows.size(), 8u);
     for (const auto& row : result.rows) {
         ASSERT_EQ(row.size(), 1u);
-        EXPECT_TRUE(std::holds_alternative<ListValue>(row[0]));
-        auto& lv = std::get<ListValue>(row[0]);
+        EXPECT_TRUE(std::holds_alternative<ListValuePtr>(row[0]));
+        auto& lv = (*std::get<ListValuePtr>(row[0]));
         EXPECT_GE(lv.elements.size(), 1u);
         for (auto& es : lv.elements) {
-            EXPECT_TRUE(std::holds_alternative<EdgeValue>(es.value));
+            EXPECT_TRUE(std::holds_alternative<EdgeValuePtr>(es.value));
         }
     }
 }
@@ -4706,8 +4706,8 @@ TEST_F(QueryExecutorTest, BarePatternInListComprehensionWhere) {
     ASSERT_EQ(result.rows.size(), 5u);
     const size_t expected_sizes[] = {2, 2, 2, 0, 0};
     for (size_t i = 0; i < result.rows.size(); ++i) {
-        ASSERT_TRUE(std::holds_alternative<ListValue>(result.rows[i][1])) << "row " << i;
-        const auto& list = std::get<ListValue>(result.rows[i][1]);
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[i][1])) << "row " << i;
+        const auto& list = (*std::get<ListValuePtr>(result.rows[i][1]));
         EXPECT_EQ(list.elements.size(), expected_sizes[i]) << "row " << i;
     }
 }
@@ -4778,8 +4778,8 @@ TEST_F(QueryExecutorTest, PatternComprehensionInsideListComprehension) {
     for (size_t i = 0; i < result.rows.size(); ++i) {
         ASSERT_TRUE(std::holds_alternative<int64_t>(result.rows[i][0]));
         EXPECT_EQ(std::get<int64_t>(result.rows[i][0]), static_cast<int64_t>(i + 1));
-        ASSERT_TRUE(std::holds_alternative<ListValue>(result.rows[i][1]));
-        const auto& lv = std::get<ListValue>(result.rows[i][1]);
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[i][1]));
+        const auto& lv = (*std::get<ListValuePtr>(result.rows[i][1]));
         ASSERT_EQ(lv.elements.size(), 2u);
         for (size_t j = 0; j < lv.elements.size(); ++j) {
             ASSERT_TRUE(std::holds_alternative<int64_t>(lv.elements[j].value));
@@ -4995,8 +4995,8 @@ TEST_F(QueryExecutorTest, PropertiesVertex) {
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     ASSERT_EQ(result.rows[0].size(), 1u);
-    EXPECT_TRUE(std::holds_alternative<MapValue>(result.rows[0][0]));
-    const auto& mv = std::get<MapValue>(result.rows[0][0]);
+    EXPECT_TRUE(std::holds_alternative<MapValuePtr>(result.rows[0][0]));
+    const auto& mv = (*std::get<MapValuePtr>(result.rows[0][0]));
     ASSERT_EQ(mv.entries.size(), 2u);
     EXPECT_EQ(mv.entries[0].first, "name");
     EXPECT_EQ(mv.entries[1].first, "age");
@@ -5017,8 +5017,8 @@ TEST_F(QueryExecutorTest, PropertiesVertexEmpty) {
     auto result = execSync(*executor_, "MATCH (n:PersonEmpty) RETURN properties(n)");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
-    EXPECT_TRUE(std::holds_alternative<MapValue>(result.rows[0][0]));
-    const auto& mv = std::get<MapValue>(result.rows[0][0]);
+    EXPECT_TRUE(std::holds_alternative<MapValuePtr>(result.rows[0][0]));
+    const auto& mv = (*std::get<MapValuePtr>(result.rows[0][0]));
     EXPECT_EQ(mv.entries.size(), 0u); // no properties set
 }
 
@@ -5038,7 +5038,7 @@ TEST_F(QueryExecutorTest, PropertiesEdge) {
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     // properties() returns a MapValue; entries may be empty until Expand loads edge properties
-    EXPECT_TRUE(std::holds_alternative<MapValue>(result.rows[0][0]));
+    EXPECT_TRUE(std::holds_alternative<MapValuePtr>(result.rows[0][0]));
 }
 
 TEST_F(QueryExecutorTest, KeysMap) {
@@ -5056,8 +5056,8 @@ TEST_F(QueryExecutorTest, KeysMap) {
     auto result = execSync(*executor_, "MATCH (n:KeyMapTest) RETURN keys(properties(n))");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
-    EXPECT_TRUE(std::holds_alternative<ListValue>(result.rows[0][0]));
-    const auto& lv = std::get<ListValue>(result.rows[0][0]);
+    EXPECT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][0]));
+    const auto& lv = (*std::get<ListValuePtr>(result.rows[0][0]));
     ASSERT_EQ(lv.elements.size(), 1u);
     EXPECT_TRUE(std::holds_alternative<std::string>(lv.elements[0].value));
     EXPECT_EQ(std::get<std::string>(lv.elements[0].value), "name");
@@ -5068,8 +5068,8 @@ TEST_F(QueryExecutorTest, MapLiteral) {
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
     ASSERT_EQ(result.rows[0].size(), 1u);
-    EXPECT_TRUE(std::holds_alternative<MapValue>(result.rows[0][0]));
-    const auto& mv = std::get<MapValue>(result.rows[0][0]);
+    EXPECT_TRUE(std::holds_alternative<MapValuePtr>(result.rows[0][0]));
+    const auto& mv = (*std::get<MapValuePtr>(result.rows[0][0]));
     ASSERT_EQ(mv.entries.size(), 2u);
     EXPECT_EQ(mv.entries[0].first, "name");
     EXPECT_EQ(mv.entries[1].first, "age");
@@ -5342,16 +5342,16 @@ TEST_F(QueryExecutorTest, OptionalMatchColumnTypeVerification) {
     for (const auto& row : result.rows) {
         ASSERT_GE(row.size(), 3u);
         // a is always a valid vertex
-        EXPECT_TRUE(std::holds_alternative<VertexValue>(row[0])) << "a should be VertexValue";
+        EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(row[0])) << "a should be VertexValue";
 
         if (isNull(row[2])) {
             // Unmatched row: r and b should both be null
             EXPECT_TRUE(isNull(row[1])) << "r should be null when b is null";
         } else {
             // Matched row: r must be an EdgeValue, b must be a VertexValue
-            EXPECT_TRUE(std::holds_alternative<EdgeValue>(row[1]))
+            EXPECT_TRUE(std::holds_alternative<EdgeValuePtr>(row[1]))
                 << "r should be EdgeValue in matched row, got type index " << row[1].index();
-            EXPECT_TRUE(std::holds_alternative<VertexValue>(row[2]))
+            EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(row[2]))
                 << "b should be VertexValue in matched row, got type index " << row[2].index();
         }
     }
@@ -5382,8 +5382,8 @@ TEST_F(QueryExecutorTest, OptionalMatchBoundStartAndBoundEndUsesCorrelatedChain)
     ASSERT_EQ(result.rows[0].size(), 1u);
     ASSERT_FALSE(isNull(result.rows[0][0])) << "optional chain should match Person 2";
 
-    if (std::holds_alternative<VertexValue>(result.rows[0][0])) {
-        EXPECT_EQ(std::get<VertexValue>(result.rows[0][0]).id, 2u);
+    if (std::holds_alternative<VertexValuePtr>(result.rows[0][0])) {
+        EXPECT_EQ((*std::get<VertexValuePtr>(result.rows[0][0])).id, 2u);
     } else {
         ASSERT_TRUE(std::holds_alternative<VertexRef>(result.rows[0][0])) << "b should be a vertex reference/value";
         EXPECT_EQ(std::get<VertexRef>(result.rows[0][0]).id, 2u);
@@ -5681,6 +5681,20 @@ std::string boolRepr(QueryExecutor& executor, const std::string& expr) {
     return std::get<bool>(result.rows[0][0]) ? "true" : "false";
 }
 
+/// Cypher 是三值逻辑：把 true / false / null 都区分开（boolRepr 会把 null 也当成错误）。
+std::string ternaryRepr(QueryExecutor& executor, const std::string& expr) {
+    auto result = execSync(executor, "RETURN " + expr + " AS v");
+    if (!result.error.empty())
+        return "<error: " + result.error + ">";
+    if (result.rows.empty() || result.rows[0].empty())
+        return "<no rows>";
+    if (std::holds_alternative<bool>(result.rows[0][0]))
+        return std::get<bool>(result.rows[0][0]) ? "true" : "false";
+    if (std::holds_alternative<std::monostate>(result.rows[0][0]))
+        return "null";
+    return "<other>";
+}
+
 } // namespace
 
 TEST_F(QueryExecutorTest, TemporalMonthEndClampsInsideMonthArithmetic) {
@@ -5749,6 +5763,146 @@ TEST_F(QueryExecutorTest, TemporalDateSubtractMatchesDurationBetween) {
               temporalRepr(*executor_, "duration.between(date('2024-01-31'), date('2024-03-01'))"));
     EXPECT_EQ(temporalRepr(*executor_, "date('2024-03-01') - date('2024-01-31')"), "P1M1D");
     EXPECT_EQ(temporalRepr(*executor_, "date('2024-01-31') - date('2024-03-01')"), "P-1M-1D");
+}
+
+TEST_F(QueryExecutorTest, TemporalExtremeYearSpanStaysWide) {
+    // ±999'999'999 年的跨度：year 是 int32，`year * 12` / `days * 8.64e13` 这类中间量
+    // 必须在 64 位（必要时 128 位）下算，否则 UBSan 直接报 signed integer overflow
+    // 并打挂 server —— 正是 TCK Temporal10 的两条极值场景。
+    EXPECT_EQ(temporalRepr(*executor_, "duration.between(date('-999999999-01-01'), date('+999999999-12-31'))"),
+              "P1999999998Y11M30D");
+    // duration.inSeconds：带时区分支（days * 8.64e13）与非带时区分支（先换算成秒）都要过。
+    EXPECT_EQ(temporalRepr(*executor_, "duration.inSeconds(datetime('-999999999-01-01T00:00:00+00:00'), "
+                                       "datetime('+999999999-12-31T23:59:59+00:00'))"),
+              "PT17531639991215H59M59S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration.inSeconds(localdatetime('-999999999-01-01'), "
+                                       "localdatetime('+999999999-12-31T23:59:59'))"),
+              "PT17531639991215H59M59S");
+}
+
+TEST_F(QueryExecutorTest, TemporalDatetimeFromEpochUsesWideIntermediates) {
+    // seconds * 1e9 在 |seconds| > ~9.2e9（公元 2262 年之后）就溢出 int64，
+    // 而 datetime 的合法范围一直开到 ±999'999'999 年。
+    EXPECT_EQ(temporalRepr(*executor_, "datetime.fromepoch(100000000000, 0)"), "5138-11-16T09:46:40Z");
+    // 超出可表示范围时报明确错误，而不是让收窄回绕成静默的错误值。
+    auto out_of_range = execSync(*executor_, "RETURN datetime.fromepoch(1000000000000000000, 0) AS v");
+    EXPECT_FALSE(out_of_range.error.empty());
+}
+
+TEST_F(QueryExecutorTest, TemporalExpandedYearRenderingMatchesNeo4j) {
+    // ISO-8601 扩展年份：0..9999 四位补零、负年份带 '-'、|year| > 9999 时带显式符号。
+    // 期望值本机 neo4j 5 实测；此前 pad4 是按位取数，负年份渲染出非数字字符，五位年份被截成低四位。
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: 0, month: 1, day: 1})"), "0000-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: 9999, month: 1, day: 1})"), "9999-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: 10000, month: 1, day: 1})"), "+10000-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: 11476, month: 8, day: 15})"), "+11476-08-15");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: -1, month: 1, day: 1})"), "-0001-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: -1199, month: 2, day: 15})"), "-1199-02-15");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: -10000, month: 1, day: 1})"), "-10000-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date({year: -999999999, month: 1, day: 1})"), "-999999999-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "localdatetime({year: -5, month: 12, day: 31})"), "-0005-12-31T00:00:00");
+    EXPECT_EQ(temporalRepr(*executor_, "datetime.fromepoch(-100000000000, 0)"), "-1199-02-15T14:13:20Z");
+    EXPECT_EQ(temporalRepr(*executor_, "datetime.fromepoch(300000000000, 0)"), "+11476-08-15T05:20:00Z");
+    // 渲染出的文本必须能被解析回来（TCK 的期望值就是这个字符串形式）。
+    EXPECT_EQ(temporalRepr(*executor_, "date('-0001-01-01')"), "-0001-01-01");
+    EXPECT_EQ(temporalRepr(*executor_, "date('+11476-08-15')"), "+11476-08-15");
+}
+
+TEST_F(QueryExecutorTest, TemporalLargeDurationArithmeticMatchesNeo4j) {
+    // 1e10 秒（约 317 年）已超出 `seconds * 1e9` 的 int64 容量：neo4j 正常给出结果，
+    // 旧实现回绕成 1756-05-02（UBSan 下是 signed integer overflow，会打挂 server）。
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-01-01') + duration({seconds: 10000000000})"), "2340-11-20");
+    EXPECT_EQ(temporalRepr(*executor_, "datetime('2024-01-01T00:00:00Z') + duration({seconds: 10000000000})"),
+              "2340-11-20T17:46:40Z");
+    EXPECT_EQ(temporalRepr(*executor_, "localdatetime('2024-01-01T00:00:00') + duration({seconds: 10000000000})"),
+              "2340-11-20T17:46:40");
+    EXPECT_EQ(temporalRepr(*executor_, "localtime('12:00:00') + duration({seconds: 10000000000})"), "05:46:40");
+    EXPECT_EQ(temporalRepr(*executor_, "time('12:00:00Z') + duration({seconds: 10000000000})"), "05:46:40Z");
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-01-01') + duration({seconds: 999999999999999})"), "+31690762-07-05");
+    EXPECT_EQ(temporalRepr(*executor_, "date('2024-01-01') + duration({days: 400000000})"), "+1097186-10-21");
+    // 超出 EpochDay 范围报 ArithmeticError（消息与 neo4j 相同），而不是给出回绕的日期。
+    auto too_far = execSync(*executor_, "RETURN date('2024-01-01') + duration({seconds: 1000000000000000000}) AS v");
+    EXPECT_FALSE(too_far.error.empty());
+    EXPECT_NE(too_far.error.find("EpochDay"), std::string::npos) << too_far.error;
+    // 乘法：秒与纳秒分开乘（旧写法在大 seconds 上既溢出又丢精度）。
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds: 10000000000}) * 2"), "PT5555555H33M20S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds: 10000000000}) * 1.5"), "PT4166666H40M");
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds: 1000000000000, nanoseconds: 500000000}) * 1.5"),
+              "PT416666666H40M0.75S");
+    EXPECT_EQ(temporalRepr(*executor_, "duration({seconds: 10000000000, nanoseconds: 123456789}) * 1.5"),
+              "PT4166666H40M0.185185183S");
+}
+
+TEST_F(QueryExecutorTest, TemporalDurationOrderingMatchesNeo4j) {
+    // ORDER BY 按"近似长度"比较：1 个月 = 365.2425/12 天 = 30 天 + 37'746 秒（neo4j 的取值，
+    // 此前按整 30 天算，P1Y 会被排到 P365D 前面）；长度还必须按 128 位算，否则极值 duration
+    // （months ≈ 2.4e10）会让 int64 权重溢出。
+    auto ordered = [&](const std::string& list, const std::string& direction = "") {
+        return collectStrings(
+            execSync(*executor_, "UNWIND " + list + " AS x RETURN toString(x) AS v ORDER BY x" + direction));
+    };
+    EXPECT_EQ(ordered("[duration('P30D'), duration('P1M'), duration('P31D')]"),
+              (std::vector<std::string>{"P30D", "P1M", "P31D"}));
+    EXPECT_EQ(ordered("[duration('P365D'), duration('P1Y'), duration('P366D')]"),
+              (std::vector<std::string>{"P365D", "P1Y", "P366D"}));
+    EXPECT_EQ(
+        ordered("[duration({days: 30, seconds: 37745}), duration({months: 1}), duration({days: 30, seconds: 37747})]"),
+        (std::vector<std::string>{"P30DT10H29M5S", "P1M", "P30DT10H29M7S"}));
+    EXPECT_EQ(ordered("[duration({months: 1999999998}), duration({days: 1}), duration({seconds: 1})]"),
+              (std::vector<std::string>{"PT1S", "P1D", "P166666666Y6M"}));
+    EXPECT_EQ(ordered("[duration({months: 1999999998}), duration({days: 40}), duration({seconds: 1})]", " DESC"),
+              (std::vector<std::string>{"P166666666Y6M", "P40D", "PT1S"}));
+}
+
+TEST_F(QueryExecutorTest, TemporalDurationOrderingOperatorsAreNullLikeNeo4j) {
+    // neo4j 的 duration 只能做 = / <>：`<` 与 `>` 返回 null；`<=` / `>=` 等价于
+    // `(a < b) OR (a = b)`，a < b 是 null，所以只有相等时得到 true，不等时也是 null。
+    // （ORDER BY / min / max 走的是内部排序长度，不受这条影响，见上一个用例。）
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) <= duration({seconds:1})"), "true");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) >= duration({seconds:1})"), "true");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) < duration({seconds:1})"), "null");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) > duration({seconds:1})"), "null");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) < duration({seconds:2})"), "null");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) > duration({seconds:2})"), "null");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) <= duration({seconds:2})"), "null");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) >= duration({seconds:2})"), "null");
+    // 等值比较照旧
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({seconds:1}) = duration({seconds:1})"), "true");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({months:1}) = duration({days:30})"), "false");
+    EXPECT_EQ(ternaryRepr(*executor_, "duration({months:1}) <> duration({days:30})"), "true");
+    // 因此 WHERE 里的排序比较恒不成立（null 当作 false 过滤），neo4j 同样返回空
+    EXPECT_TRUE(collectStrings(execSync(*executor_, "UNWIND [duration({seconds:1}), duration({seconds:2})] AS d WITH d "
+                                                    "WHERE d > duration({seconds:1}) RETURN toString(d) AS v"))
+                    .empty());
+    // min / max 仍然按内部排序长度工作
+    EXPECT_EQ(collectStrings(execSync(*executor_, "UNWIND [duration({seconds:1}), duration({seconds:2})] AS d "
+                                                  "RETURN toString(min(d)) AS v")),
+              (std::vector<std::string>{"PT1S"}));
+    EXPECT_EQ(collectStrings(execSync(*executor_, "UNWIND [duration({seconds:1}), duration({seconds:2})] AS d "
+                                                  "RETURN toString(max(d)) AS v")),
+              (std::vector<std::string>{"PT2S"}));
+}
+
+TEST_F(QueryExecutorTest, TemporalTimeSubsecondArithmeticKeepsNanos) {
+    // TimeValue::nanos 是 int32、值域到 999'999'999：打包时误写成 static_cast<int8_t>(nanos)
+    // 会把 999'999'999 截成 -1，于是 time / localtime ± duration 的亚秒部分出错
+    // （TCK Temporal8 [2]/[3] 的回归）。期望值取自该 feature。
+    EXPECT_EQ(temporalRepr(*executor_, "localtime({hour: 12, minute: 31, second: 14, nanosecond: 1}) + "
+                                       "duration({years: 12, months: 5, days: 14, hours: 16, minutes: 12, seconds: 70, "
+                                       "nanoseconds: 2})"),
+              "04:44:24.000000003");
+    EXPECT_EQ(temporalRepr(*executor_, "localtime({hour: 12, minute: 31, second: 14, nanosecond: 1}) - "
+                                       "duration({years: 12, months: 5, days: 14, hours: 16, minutes: 12, seconds: 70, "
+                                       "nanoseconds: 2})"),
+              "20:18:03.999999999");
+    EXPECT_EQ(temporalRepr(*executor_, "time({hour: 12, minute: 31, second: 14, nanosecond: 1, timezone: '+01:00'}) - "
+                                       "duration({months: 1, days: -14, hours: 16, minutes: -12, seconds: 70})"),
+              "20:42:04.000000001+01:00");
+    // 小数 duration（Temporal8 ex #3）
+    EXPECT_EQ(temporalRepr(*executor_, "localtime({hour: 12, minute: 31, second: 14, nanosecond: 1}) - "
+                                       "duration({years: 12.5, months: 5.5, days: 14.5, hours: 16.5, minutes: 12.5, "
+                                       "seconds: 70.5, nanoseconds: 3})"),
+              "02:33:00.499999998");
 }
 
 TEST_F(QueryExecutorTest, TemporalZonedComparisonOrdersByInstantThenLocalTime) {
@@ -5987,39 +6141,39 @@ TEST_F(QueryExecutorTest, BytesParamsAndPropertiesRoundtrip) {
     // BUG-11：参数里的二进制以前落到 NULL，属性方向也没有二进制类型。
     BytesValue blob;
     blob.data = {0x00, 0x01, 0x02, 0xFF};
-    const std::unordered_map<std::string, Value> params = {{"b", Value{blob}}};
+    const std::unordered_map<std::string, Value> params = {{"b", Value(mk<BytesValue>(blob))}};
 
     // 1) 参数回传
     auto returned = execSyncParams(*executor_, "RETURN $b AS v", params);
     ASSERT_TRUE(returned.error.empty()) << returned.error;
     ASSERT_EQ(returned.rows.size(), 1);
-    ASSERT_TRUE(std::holds_alternative<BytesValue>(returned.rows[0][0])) << "参数应回传二进制而不是 NULL";
-    EXPECT_TRUE(std::get<BytesValue>(returned.rows[0][0]).data == blob.data);
+    ASSERT_TRUE(std::holds_alternative<BytesValuePtr>(returned.rows[0][0])) << "参数应回传二进制而不是 NULL";
+    EXPECT_TRUE((*std::get<BytesValuePtr>(returned.rows[0][0])).data == blob.data);
 
     // 2) 写入属性并读回（CREATE 直接返回写进去的属性）
     auto created = execSyncParams(*executor_, "CREATE (n:BlobProbe {blob: $b}) RETURN n.blob AS v", params);
     ASSERT_TRUE(created.error.empty()) << created.error;
     ASSERT_EQ(created.rows.size(), 1);
-    ASSERT_TRUE(std::holds_alternative<BytesValue>(created.rows[0][0])) << "属性读回应为二进制";
-    EXPECT_TRUE(std::get<BytesValue>(created.rows[0][0]).data == blob.data);
+    ASSERT_TRUE(std::holds_alternative<BytesValuePtr>(created.rows[0][0])) << "属性读回应为二进制";
+    EXPECT_TRUE((*std::get<BytesValuePtr>(created.rows[0][0])).data == blob.data);
 
     // 3) MATCH 读回 + 与参数比较（按内容相等）
     auto matched = execSyncParams(*executor_, "MATCH (n:BlobProbe) RETURN n.blob AS v, n.blob = $b AS eq", params);
     ASSERT_TRUE(matched.error.empty()) << matched.error;
     ASSERT_EQ(matched.rows.size(), 1);
-    ASSERT_TRUE(std::holds_alternative<BytesValue>(matched.rows[0][0]));
-    EXPECT_TRUE(std::get<BytesValue>(matched.rows[0][0]).data == blob.data);
+    ASSERT_TRUE(std::holds_alternative<BytesValuePtr>(matched.rows[0][0]));
+    EXPECT_TRUE((*std::get<BytesValuePtr>(matched.rows[0][0])).data == blob.data);
     ASSERT_TRUE(std::holds_alternative<bool>(matched.rows[0][1]));
     EXPECT_TRUE(std::get<bool>(matched.rows[0][1]));
 
     // 4) SET 覆盖写
     BytesValue other;
     other.data = {0x10, 0x20};
-    auto updated =
-        execSyncParams(*executor_, "MATCH (n:BlobProbe) SET n.blob2 = $b RETURN n.blob2 AS v", {{"b", Value{other}}});
+    auto updated = execSyncParams(*executor_, "MATCH (n:BlobProbe) SET n.blob2 = $b RETURN n.blob2 AS v",
+                                  {{"b", Value(mk<BytesValue>(other))}});
     ASSERT_TRUE(updated.error.empty()) << updated.error;
-    ASSERT_TRUE(std::holds_alternative<BytesValue>(updated.rows[0][0]));
-    EXPECT_TRUE(std::get<BytesValue>(updated.rows[0][0]).data == other.data);
+    ASSERT_TRUE(std::holds_alternative<BytesValuePtr>(updated.rows[0][0]));
+    EXPECT_TRUE((*std::get<BytesValuePtr>(updated.rows[0][0])).data == other.data);
 }
 
 TEST_F(QueryExecutorTest, TemporalZonedOrderingBeyondYear2262) {
@@ -6607,7 +6761,7 @@ TEST_F(QueryExecutorMultiLabelTest, RemoveVertexLabelVerifyRemoved) {
     auto r3 = execSync(*executor_, "MATCH (n:Person) RETURN labels(n)");
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 1);
-    auto labels = std::get<ListValue>(r3.rows[0][0]);
+    auto labels = (*std::get<ListValuePtr>(r3.rows[0][0]));
     // Should only contain "Person", not "Employee"
     bool has_employee = false;
     for (const auto& elem : labels.elements) {
@@ -6639,13 +6793,13 @@ TEST_F(QueryExecutorTest, CreateNodeDynamicVidAllocation) {
     auto r1 = execSync(*executor_, "CREATE (n:Person) RETURN n");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
     ASSERT_EQ(r1.rows.size(), 1);
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(r1.rows[0][0]));
-    VertexId vid1 = std::get<VertexValue>(r1.rows[0][0]).id;
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(r1.rows[0][0]));
+    VertexId vid1 = (*std::get<VertexValuePtr>(r1.rows[0][0])).id;
     EXPECT_GT(vid1, 0);
 
     auto r2 = execSync(*executor_, "CREATE (n:Person) RETURN n");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
-    VertexId vid2 = std::get<VertexValue>(r2.rows[0][0]).id;
+    VertexId vid2 = (*std::get<VertexValuePtr>(r2.rows[0][0])).id;
     EXPECT_GT(vid2, vid1);
 }
 
@@ -6654,8 +6808,8 @@ TEST_F(QueryExecutorTest, CreateNodeDistinctVidsAcrossStatements) {
     auto r1 = execSync(*executor_, "CREATE (n:Person) RETURN n");
     auto r2 = execSync(*executor_, "CREATE (n:City) RETURN n");
     ASSERT_TRUE(r1.error.empty() && r2.error.empty());
-    VertexId vid1 = std::get<VertexValue>(r1.rows[0][0]).id;
-    VertexId vid2 = std::get<VertexValue>(r2.rows[0][0]).id;
+    VertexId vid1 = (*std::get<VertexValuePtr>(r1.rows[0][0])).id;
+    VertexId vid2 = (*std::get<VertexValuePtr>(r2.rows[0][0])).id;
     EXPECT_NE(vid1, vid2);
 }
 
@@ -6683,8 +6837,8 @@ TEST_F(QueryExecutorTest, CreateEdgeDynamicEidAllocation) {
     auto expand = execSync(*executor_, "MATCH ()-[r:KNOWS]->() RETURN r");
     ASSERT_EQ(expand.rows.size(), 1u);
     auto& edge_val = expand.rows[0][0];
-    ASSERT_TRUE(std::holds_alternative<EdgeValue>(edge_val));
-    EdgeId eid = std::get<EdgeValue>(edge_val).id;
+    ASSERT_TRUE(std::holds_alternative<EdgeValuePtr>(edge_val));
+    EdgeId eid = (*std::get<EdgeValuePtr>(edge_val)).id;
     EXPECT_GT(eid, 0);
 }
 
@@ -6694,12 +6848,12 @@ TEST_F(QueryExecutorTest, CreateEdgeSrcDstMatchCreatedNodeVids) {
     ASSERT_TRUE(r1.error.empty()) << r1.error;
     ASSERT_GE(r1.rows[0].size(), 2u);
 
-    VertexId src_vid = std::get<VertexValue>(r1.rows[0][0]).id;
-    VertexId dst_vid = std::get<VertexValue>(r1.rows[0][1]).id;
+    VertexId src_vid = (*std::get<VertexValuePtr>(r1.rows[0][0])).id;
+    VertexId dst_vid = (*std::get<VertexValuePtr>(r1.rows[0][1])).id;
 
     auto edges = execSync(*executor_, "MATCH ()-[r:KNOWS]->() RETURN r");
     ASSERT_EQ(edges.rows.size(), 1u);
-    auto& ev = std::get<EdgeValue>(edges.rows[0][0]);
+    auto& ev = (*std::get<EdgeValuePtr>(edges.rows[0][0]));
     EXPECT_EQ(ev.src_id, src_vid);
     EXPECT_EQ(ev.dst_id, dst_vid);
     EXPECT_GT(ev.id, 0);
@@ -6746,7 +6900,7 @@ TEST_F(QueryExecutorTest, CreateEdgeWithPropsDynamicEid) {
 
     auto edges = execSync(*executor_, "MATCH ()-[r:LINK]->() RETURN r");
     ASSERT_EQ(edges.rows.size(), 1u);
-    auto& ev = std::get<EdgeValue>(edges.rows[0][0]);
+    auto& ev = (*std::get<EdgeValuePtr>(edges.rows[0][0]));
     EXPECT_GT(ev.id, 0);
 }
 
@@ -6762,7 +6916,7 @@ TEST_F(QueryExecutorTest, MatchThenCreateEdgeWithVidFromDataChunk) {
     ASSERT_TRUE(r3.error.empty()) << r3.error;
     ASSERT_EQ(r3.rows.size(), 2);
     for (auto& row : r3.rows) {
-        auto& ev = std::get<EdgeValue>(row.back());
+        auto& ev = (*std::get<EdgeValuePtr>(row.back()));
         EXPECT_NE(ev.src_id, ev.dst_id);
     }
 }
@@ -6845,8 +6999,8 @@ TEST_F(QueryExecutorTest, CreateEdgeWithStringProperty) {
     auto r2 = execSync(*executor_, "MATCH ()-[r:FRIEND]->() RETURN r");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
     ASSERT_EQ(r2.rows.size(), 1);
-    ASSERT_TRUE(std::holds_alternative<EdgeValue>(r2.rows[0][0]));
-    EXPECT_GT(std::get<EdgeValue>(r2.rows[0][0]).id, 0);
+    ASSERT_TRUE(std::holds_alternative<EdgeValuePtr>(r2.rows[0][0]));
+    EXPECT_GT((*std::get<EdgeValuePtr>(r2.rows[0][0])).id, 0);
 }
 
 // --- Node VID monotonicity: sequential CREATEs produce monotonically increasing VIDs ---
@@ -6855,7 +7009,7 @@ TEST_F(QueryExecutorTest, CreateNodeVidMonotonic) {
     for (int i = 0; i < 5; ++i) {
         auto r = execSync(*executor_, "CREATE (n:Person) RETURN n");
         ASSERT_TRUE(r.error.empty()) << r.error;
-        vids.push_back(std::get<VertexValue>(r.rows[0][0]).id);
+        vids.push_back((*std::get<VertexValuePtr>(r.rows[0][0])).id);
     }
     for (size_t i = 1; i < vids.size(); ++i) {
         EXPECT_GT(vids[i], vids[i - 1]) << "VID at step " << i << " should be greater than previous";
@@ -6871,8 +7025,8 @@ TEST_F(QueryExecutorTest, CreateEdgeEidMonotonic) {
     auto edges = execSync(*executor_, "MATCH ()-[r:KNOWS]->() RETURN r ORDER BY r.id");
     ASSERT_EQ(edges.rows.size(), 3u);
     for (size_t i = 1; i < edges.rows.size(); ++i) {
-        auto prev = std::get<EdgeValue>(edges.rows[i - 1][0]).id;
-        auto curr = std::get<EdgeValue>(edges.rows[i][0]).id;
+        auto prev = (*std::get<EdgeValuePtr>(edges.rows[i - 1][0])).id;
+        auto curr = (*std::get<EdgeValuePtr>(edges.rows[i][0])).id;
         EXPECT_LT(prev, curr) << "EID at position " << i << " should be greater than previous";
     }
 }
@@ -6933,8 +7087,8 @@ TEST_F(QueryExecutorTest, CreateEdgePreservesChildColumns) {
     ASSERT_TRUE(r.error.empty()) << r.error;
     ASSERT_EQ(r.rows.size(), 2);
     for (auto& row : r.rows) {
-        EXPECT_TRUE(std::holds_alternative<VertexValue>(row[0]));
-        EXPECT_TRUE(std::holds_alternative<VertexValue>(row[1]));
+        EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(row[0]));
+        EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(row[1]));
     }
 }
 
@@ -6967,7 +7121,7 @@ TEST_F(QueryExecutorMultiLabelTest, CreateNodeLabelsInOutput) {
     ASSERT_TRUE(r.error.empty()) << r.error;
     ASSERT_EQ(r.rows.size(), 1);
 
-    auto& vv = std::get<VertexValue>(r.rows[0][0]);
+    auto& vv = (*std::get<VertexValuePtr>(r.rows[0][0]));
     ASSERT_TRUE(vv.labels.has_value());
     EXPECT_TRUE(vv.labels->count(PERSON_LABEL) > 0);
     EXPECT_TRUE(vv.labels->count(EMPLOYEE_LABEL) > 0);
@@ -6981,7 +7135,7 @@ TEST_F(QueryExecutorTest, CreateEdgeLabelInOutput) {
 
     auto edges = execSync(*executor_, "MATCH ()-[r:KNOWS]->() RETURN r");
     ASSERT_EQ(edges.rows.size(), 1u);
-    auto& ev = std::get<EdgeValue>(edges.rows[0][0]);
+    auto& ev = (*std::get<EdgeValuePtr>(edges.rows[0][0]));
     EXPECT_EQ(ev.label_id, KNOWS_LABEL);
 }
 
@@ -7090,9 +7244,9 @@ TEST_F(QueryExecutorTest, TckCreate3Scenario6WithLabel) {
     auto r = execSync(*executor_, "MATCH (n) WITH n AS a CREATE (a)-[:KNOWS]->() RETURN a");
     ASSERT_TRUE(r.error.empty()) << r.error;
     ASSERT_EQ(r.rows.size(), 1u) << "expected single aliased row";
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(r.rows[0][0]))
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(r.rows[0][0]))
         << "expected VertexValue, got variant " << r.rows[0][0].index();
-    const auto& vv = std::get<VertexValue>(r.rows[0][0]);
+    const auto& vv = (*std::get<VertexValuePtr>(r.rows[0][0]));
     ASSERT_TRUE(vv.labels.has_value());
     EXPECT_FALSE(vv.labels->empty()) << "returned vertex should carry Person label";
 
@@ -7121,12 +7275,12 @@ TEST_F(QueryExecutorTest, TckUnwind1Scenario14UnwindWithMerge) {
         MapValue m;
         m.entries.emplace_back("login", Value(login));
         m.entries.emplace_back("name", Value(name));
-        props.elements.emplace_back(Value(std::move(m)));
+        props.elements.emplace_back(Value(mk<MapValue>(std::move(m))));
     }
 
     auto ctx = blockingWait(executor_->prepareStream(
         "UNWIND $props AS prop MERGE (p:Person {login: prop.login}) SET p.name = prop.name RETURN p.name, p.login",
-        {{"props", Value(std::move(props))}}));
+        {{"props", Value(mk<ListValue>(std::move(props)))}}));
     ASSERT_TRUE(ctx->error.empty()) << ctx->error;
 
     ExecutionResult result;
@@ -7164,8 +7318,8 @@ TEST_F(QueryExecutorTest, TckGraph8Scenario1KeysOnNode) {
     auto debug_props = execSync(*executor_, "MATCH (n) RETURN properties(n) AS p");
     std::cout << "DEBUG properties: rows=" << debug_props.rows.size() << std::endl;
     for (auto& row : debug_props.rows) {
-        if (std::holds_alternative<MapValue>(row[0])) {
-            const auto& mv = std::get<MapValue>(row[0]);
+        if (std::holds_alternative<MapValuePtr>(row[0])) {
+            const auto& mv = (*std::get<MapValuePtr>(row[0]));
             std::cout << "  map entries: " << mv.entries.size() << std::endl;
             for (const auto& [k, v] : mv.entries)
                 std::cout << "    " << k << std::endl;
@@ -7175,8 +7329,8 @@ TEST_F(QueryExecutorTest, TckGraph8Scenario1KeysOnNode) {
     auto debug_keys = execSync(*executor_, "MATCH (n) RETURN keys(n) AS k");
     std::cout << "DEBUG keys: rows=" << debug_keys.rows.size() << std::endl;
     for (auto& row : debug_keys.rows) {
-        if (std::holds_alternative<ListValue>(row[0])) {
-            const auto& lv = std::get<ListValue>(row[0]);
+        if (std::holds_alternative<ListValuePtr>(row[0])) {
+            const auto& lv = (*std::get<ListValuePtr>(row[0]));
             std::cout << "  list size: " << lv.elements.size() << std::endl;
             for (const auto& el : lv.elements) {
                 if (std::holds_alternative<std::string>(el.value))
@@ -7225,7 +7379,7 @@ TEST_F(QueryExecutorTest, TckReturn6Scenario12CountingPerGroup) {
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u) << "expected 1 group";
     ASSERT_EQ(result.rows[0].size(), 2u);
-    EXPECT_TRUE(std::holds_alternative<VertexValue>(result.rows[0][0]));
+    EXPECT_TRUE(std::holds_alternative<VertexValuePtr>(result.rows[0][0]));
     EXPECT_TRUE(std::holds_alternative<int64_t>(result.rows[0][1]));
     EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 2);
 }
@@ -7336,8 +7490,8 @@ TEST_F(QueryExecutorTest, TckProjectingListOfNodes) {
     if (result.error.empty()) {
         ASSERT_EQ(result.rows.size(), 1u);
         ASSERT_EQ(result.rows[0].size(), 1u);
-        EXPECT_TRUE(std::holds_alternative<ListValue>(result.rows[0][0]));
-        EXPECT_EQ(std::get<ListValue>(result.rows[0][0]).elements.size(), 2u);
+        EXPECT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][0]));
+        EXPECT_EQ((*std::get<ListValuePtr>(result.rows[0][0])).elements.size(), 2u);
     }
 }
 
@@ -7846,12 +8000,12 @@ TEST_F(QueryExecutorTest, TckWith7Scenario1BoundEndpoint) {
         const auto& row = result.rows[0];
         ASSERT_EQ(row.size(), 3u);
         const auto& a_val = row[0];
-        ASSERT_TRUE(std::holds_alternative<VertexValue>(a_val));
-        EXPECT_EQ(std::get<VertexValue>(a_val).id, VertexId(301)) << "a should be original :A";
+        ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(a_val));
+        EXPECT_EQ((*std::get<VertexValuePtr>(a_val)).id, VertexId(301)) << "a should be original :A";
         const auto& b_val = row[2];
-        ASSERT_TRUE(std::holds_alternative<VertexValue>(b_val)) << "b should be a vertex";
-        EXPECT_EQ(std::get<VertexValue>(b_val).id, VertexId(302))
-            << "b should be :B (vid 302) but got vid " << std::get<VertexValue>(b_val).id;
+        ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(b_val)) << "b should be a vertex";
+        EXPECT_EQ((*std::get<VertexValuePtr>(b_val)).id, VertexId(302))
+            << "b should be :B (vid 302) but got vid " << (*std::get<VertexValuePtr>(b_val)).id;
     }
 }
 
@@ -8042,7 +8196,7 @@ TEST_F(QueryExecutorTest, TckMap3Scenario5KeysInMap) {
     auto r2 = execSync(*executor_, "WITH {exists: 42} AS map RETURN keys(map) AS k");
     EXPECT_TRUE(r2.error.empty()) << r2.error;
     ASSERT_EQ(r2.rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<ListValue>(r2.rows[0][0]))
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(r2.rows[0][0]))
         << "keys(map) should be a list, got variant idx=" << r2.rows[0][0].index();
 
     auto r3 = execSync(*executor_, "WITH {exists: 42, notMissing: null} AS map "
@@ -8347,7 +8501,7 @@ TEST_F(PropertyExtractPlanTest, ExecuteReturnVertex) {
     auto result = execSync(*executor_, "MATCH (n:Person) WHERE n.name = 'Alice' RETURN n");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(result.rows[0][0]));
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(result.rows[0][0]));
 }
 
 TEST_F(PropertyExtractPlanTest, ExecutePathLength) {
@@ -8437,19 +8591,19 @@ TEST_F(QueryExecutorTest, PathFormatCheck) {
     // Zero-length named path: MATCH p = (a:A) RETURN p
     auto r1 = execSync(*executor_, "MATCH p = (a:A {name: 'A'}) RETURN p");
     ASSERT_TRUE(r1.error.empty()) << r1.error;
-    if (r1.rows.size() > 0 && std::holds_alternative<PathValue>(r1.rows[0][0])) {
-        auto& pv = std::get<PathValue>(r1.rows[0][0]);
+    if (r1.rows.size() > 0 && std::holds_alternative<PathValuePtr>(r1.rows[0][0])) {
+        auto& pv = (*std::get<PathValuePtr>(r1.rows[0][0]));
         std::cerr << "PathFormatCheck: elements=" << pv.elements.size() << "\n";
         for (size_t i = 0; i < pv.elements.size(); ++i) {
             const auto& elem = pv.elements[i].value;
-            if (std::holds_alternative<VertexValue>(elem)) {
-                auto& v = std::get<VertexValue>(elem);
+            if (std::holds_alternative<VertexValuePtr>(elem)) {
+                auto& v = (*std::get<VertexValuePtr>(elem));
                 std::cerr << "  V[" << i << "] id=" << v.id << " labels.has=" << v.labels.has_value();
                 if (v.labels.has_value())
                     std::cerr << " labels(" << v.labels->size() << ")";
                 std::cerr << " props.empty=" << v.properties.empty() << "\n";
-            } else if (std::holds_alternative<EdgeValue>(elem)) {
-                auto& e = std::get<EdgeValue>(elem);
+            } else if (std::holds_alternative<EdgeValuePtr>(elem)) {
+                auto& e = (*std::get<EdgeValuePtr>(elem));
                 std::cerr << "  E[" << i << "] id=" << e.id << " src=" << e.src_id << " dst=" << e.dst_id
                           << " label=" << e.label_id << "\n";
             }
@@ -8461,19 +8615,19 @@ TEST_F(QueryExecutorTest, PathFormatCheck) {
     // Simple path: MATCH p = (a)-->(b) RETURN p
     auto r2 = execSync(*executor_, "MATCH p = (a:A {name: 'A'})-->(b) RETURN p");
     ASSERT_TRUE(r2.error.empty()) << r2.error;
-    if (r2.rows.size() > 0 && std::holds_alternative<PathValue>(r2.rows[0][0])) {
-        auto& pv = std::get<PathValue>(r2.rows[0][0]);
+    if (r2.rows.size() > 0 && std::holds_alternative<PathValuePtr>(r2.rows[0][0])) {
+        auto& pv = (*std::get<PathValuePtr>(r2.rows[0][0]));
         std::cerr << "PathFormatCheck simple: elements=" << pv.elements.size() << "\n";
         for (size_t i = 0; i < pv.elements.size(); ++i) {
             const auto& elem = pv.elements[i].value;
-            if (std::holds_alternative<VertexValue>(elem)) {
-                auto& v = std::get<VertexValue>(elem);
+            if (std::holds_alternative<VertexValuePtr>(elem)) {
+                auto& v = (*std::get<VertexValuePtr>(elem));
                 std::cerr << "  V[" << i << "] id=" << v.id << " labels.has=" << v.labels.has_value();
                 if (v.labels.has_value())
                     std::cerr << " labels(" << v.labels->size() << ")";
                 std::cerr << " props.empty=" << v.properties.empty() << "\n";
-            } else if (std::holds_alternative<EdgeValue>(elem)) {
-                auto& e = std::get<EdgeValue>(elem);
+            } else if (std::holds_alternative<EdgeValuePtr>(elem)) {
+                auto& e = (*std::get<EdgeValuePtr>(elem));
                 std::cerr << "  E[" << i << "] id=" << e.id << " label=" << e.label_id << "\n";
             }
         }
@@ -8564,8 +8718,8 @@ TEST_F(QueryExecutorTest, SliceAcceptsIntegralDoubleBounds) {
     auto result = execSync(*executor_, "RETURN [10, 20, 30][..2.0] AS value");
     ASSERT_TRUE(result.error.empty()) << result.error;
     ASSERT_EQ(result.rows.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<ListValue>(result.rows[0][0]));
-    const auto& list = std::get<ListValue>(result.rows[0][0]);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(result.rows[0][0]));
+    const auto& list = (*std::get<ListValuePtr>(result.rows[0][0]));
     ASSERT_EQ(list.elements.size(), 2u);
     EXPECT_TRUE(std::holds_alternative<int64_t>(list.elements[0].value));
     EXPECT_EQ(std::get<int64_t>(list.elements[0].value), 10);
@@ -8644,7 +8798,7 @@ TEST_F(QueryExecutorTest, ProcedureDbmsComponentsReturnsBrowserComponents) {
     for (const auto& row : result.rows) {
         ASSERT_TRUE(std::holds_alternative<std::string>(row[0]));
         names.insert(std::get<std::string>(row[0]));
-        ASSERT_TRUE(std::holds_alternative<ListValue>(row[1]));
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[1]));
         ASSERT_TRUE(std::holds_alternative<std::string>(row[2]));
     }
     EXPECT_TRUE(names.count("Neo4j Kernel"));
@@ -8658,9 +8812,9 @@ TEST_F(QueryExecutorTest, ProcedureDbSchemaTypePropertiesReturnsCatalog) {
     ASSERT_GE(node_result.rows.size(), 2u);
     bool saw_person_name = false;
     for (const auto& row : node_result.rows) {
-        ASSERT_TRUE(std::holds_alternative<ListValue>(row[0]));
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[0]));
         ASSERT_TRUE(std::holds_alternative<std::string>(row[1]));
-        const auto& labels = std::get<ListValue>(row[0]);
+        const auto& labels = (*std::get<ListValuePtr>(row[0]));
         const auto& prop = std::get<std::string>(row[1]);
         if (labels.elements.size() == 1u && std::holds_alternative<std::string>(labels.elements[0].value) &&
             std::get<std::string>(labels.elements[0].value) == "Person" && prop == "name") {
@@ -8708,22 +8862,22 @@ TEST_F(QueryExecutorTest, ProcedureDbSchemaVisualizationReturnsVirtualGraph) {
     ASSERT_EQ(result.rows.size(), 1u);
 
     const auto& row = result.rows[0];
-    ASSERT_TRUE(std::holds_alternative<ListValue>(row[0]));
-    ASSERT_TRUE(std::holds_alternative<ListValue>(row[1]));
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[0]));
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[1]));
 
-    const auto& nodes = std::get<ListValue>(row[0]);
+    const auto& nodes = (*std::get<ListValuePtr>(row[0]));
     ASSERT_EQ(nodes.elements.size(), 1u);
-    ASSERT_TRUE(std::holds_alternative<VertexValue>(nodes.elements[0].value));
-    const auto& node = std::get<VertexValue>(nodes.elements[0].value);
+    ASSERT_TRUE(std::holds_alternative<VertexValuePtr>(nodes.elements[0].value));
+    const auto& node = (*std::get<VertexValuePtr>(nodes.elements[0].value));
     ASSERT_TRUE(node.labels.has_value());
     EXPECT_TRUE(node.labels->count(PERSON_LABEL));
 
-    const auto& rels = std::get<ListValue>(row[1]);
+    const auto& rels = (*std::get<ListValuePtr>(row[1]));
     ASSERT_EQ(rels.elements.size(), 2u);
     std::set<EdgeLabelId> rel_types;
     for (const auto& elem : rels.elements) {
-        ASSERT_TRUE(std::holds_alternative<EdgeValue>(elem.value));
-        const auto& edge = std::get<EdgeValue>(elem.value);
+        ASSERT_TRUE(std::holds_alternative<EdgeValuePtr>(elem.value));
+        const auto& edge = (*std::get<EdgeValuePtr>(elem.value));
         EXPECT_EQ(edge.src_id, node.id);
         EXPECT_EQ(edge.dst_id, node.id);
         rel_types.insert(edge.label_id);
@@ -8755,14 +8909,14 @@ TEST_F(QueryExecutorTest, ProcedureDbIndexesReturnsMetaIndex) {
     ASSERT_TRUE(std::holds_alternative<std::string>(row[5]));
     EXPECT_EQ(std::get<std::string>(row[5]), "NODE");
 
-    ASSERT_TRUE(std::holds_alternative<ListValue>(row[6]));
-    const auto& labels = std::get<ListValue>(row[6]);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[6]));
+    const auto& labels = (*std::get<ListValuePtr>(row[6]));
     ASSERT_EQ(labels.elements.size(), 1u);
     ASSERT_TRUE(std::holds_alternative<std::string>(labels.elements[0].value));
     EXPECT_EQ(std::get<std::string>(labels.elements[0].value), "Person");
 
-    ASSERT_TRUE(std::holds_alternative<ListValue>(row[7]));
-    const auto& props = std::get<ListValue>(row[7]);
+    ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[7]));
+    const auto& props = (*std::get<ListValuePtr>(row[7]));
     ASSERT_EQ(props.elements.size(), 1u);
     ASSERT_TRUE(std::holds_alternative<std::string>(props.elements[0].value));
     EXPECT_EQ(std::get<std::string>(props.elements[0].value), "name");
@@ -8936,4 +9090,108 @@ TEST_F(QueryExecutorTest, RelationshipReuseFailsCompileTime) {
     auto result = execSync(*executor_, "MATCH (a)-[r]->()-[r]->(a) RETURN r");
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("RelationshipUniquenessViolation"), std::string::npos);
+}
+
+TEST_F(QueryExecutorTest, ScalarFunctionsOnEntityAndCollectionValues) {
+    // 值打包后 list/map/node/edge/path 走的是 ListValuePtr / VertexValuePtr / EdgeValuePtr /
+    // PathValuePtr 的持有式表示，这些"非 typed-batch"的通用分支 TCK 覆盖不到，
+    // 显式钉住返回值，免得重构时静默坏掉。
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:N {name:'a', num: 1})-[:R {w: 2}]->(b:N {name:'b'})").error.empty());
+
+    // 一次取值辅助：整型/字符串/布尔统一渲染成字符串再比较。
+    auto of = [&](const std::string& query) {
+        auto r = execSync(*executor_, query);
+        if (!r.error.empty())
+            return std::string("<error: ") + r.error + ">";
+        if (r.rows.empty() || r.rows[0].empty())
+            return std::string("<none>");
+        const auto& v = r.rows[0][0];
+        if (std::holds_alternative<int64_t>(v))
+            return std::to_string(std::get<int64_t>(v));
+        if (std::holds_alternative<std::string>(v))
+            return std::get<std::string>(v);
+        if (std::holds_alternative<bool>(v))
+            return std::string(std::get<bool>(v) ? "true" : "false");
+        return std::string("<other>");
+    };
+
+    // 路径函数：nodes / relationships / length（MATCH 出来的路径是拓扑表示）
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(size(nodes(p))) AS v"), "2");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(size(relationships(p))) AS v"), "1");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(length(p)) AS v"), "1");
+    // 图函数：type / labels / keys / 属性读取（节点与边两条路径）
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(type(r)) AS v"), "R");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(size(labels(a))) AS v"), "1");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(head(labels(a))) AS v"), "N");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(size(keys(a))) AS v"), "2");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(size(keys(r))) AS v"), "1");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN toString(r.w) AS v"), "2");
+    EXPECT_EQ(of("MATCH p=(a)-[r]->(b) RETURN a.name AS v"), "a");
+    // 列表函数与下标
+    EXPECT_EQ(of("RETURN toString(size(split('a,b,c', ','))) AS v"), "3");
+    EXPECT_EQ(of("RETURN head(split('a,b', ',')) AS v"), "a");
+    EXPECT_EQ(of("RETURN toString(head([1,2,3])) AS v"), "1");
+    EXPECT_EQ(of("RETURN toString(last([1,2,3])) AS v"), "3");
+    EXPECT_EQ(of("RETURN toString(size(tail([1,2,3]))) AS v"), "2");
+    EXPECT_EQ(of("RETURN toString(size(range(1,5))) AS v"), "5");
+    EXPECT_EQ(of("RETURN toString([1,2,3][1]) AS v"), "2");
+    EXPECT_EQ(of("RETURN toString({a: 1}['a']) AS v"), "1");
+    // 转换函数：成功路径 + "集合/实体不可转换" 的通用分支（TypeError）
+    EXPECT_EQ(of("RETURN toString(toInteger('42')) AS v"), "42");
+    EXPECT_EQ(of("RETURN toString(toInteger(toFloat('1.9'))) AS v"), "1");
+    EXPECT_EQ(of("RETURN toString(toBoolean('true')) AS v"), "true");
+    EXPECT_EQ(of("RETURN toString(1.5) AS v"), "1.5");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toInteger([1,2]) AS v"), "TypeError: InvalidArgumentValue");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toFloat(true) AS v"), "TypeError: InvalidArgumentValue");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toString([1,2]) AS v"), "TypeError: InvalidArgumentValue");
+    EXPECT_EQ(errorRepr(*executor_, "RETURN toBoolean(1.5) AS v"), "TypeError: InvalidArgumentValue");
+}
+
+// UNWIND 的按元素搬移与透传列共享同一个列表（句柄化之后的别名问题）。
+// TCK WithOrderBy1 [45] 的 string/lists 两个 example 就是被它打挂的：
+// 推导返回 ['', '', ''] —— 长度正确、元素全是搬空后的空值。
+TEST_F(QueryExecutorTest, UnwindKeepsPassThroughListIntact) {
+    auto result = execSync(*executor_, "WITH ['c','a','b'] AS v UNWIND v AS x RETURN x, [y IN v | y] AS lst");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3);
+
+    // 每一行都必须看到完整的原始列表，而不是被搬空的空壳
+    for (const auto& row : result.rows) {
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[1]));
+        const auto& lst = *std::get<ListValuePtr>(row[1]);
+        ASSERT_EQ(lst.elements.size(), 3);
+        EXPECT_EQ(std::get<std::string>(lst.elements[0].value), "c");
+        EXPECT_EQ(std::get<std::string>(lst.elements[1].value), "a");
+        EXPECT_EQ(std::get<std::string>(lst.elements[2].value), "b");
+    }
+}
+
+// 同一个形状在 size() 上也必须一致：它此前返回的是整个列表长度（WHERE 被绕过的假象）。
+TEST_F(QueryExecutorTest, UnwindKeepsComprehensionCountingConsistent) {
+    auto result = execSync(*executor_, "WITH ['c','a','b'] AS v UNWIND v AS x "
+                                       "RETURN x, size([y IN v WHERE y < x]) AS n ORDER BY x");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3);
+    // ORDER BY x 之后应为 a,b,c，对应的严格小于个数为 0,1,2
+    EXPECT_EQ(std::get<std::string>(result.rows[0][0]), "a");
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 0);
+    EXPECT_EQ(std::get<std::string>(result.rows[1][0]), "b");
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][1]), 1);
+    EXPECT_EQ(std::get<std::string>(result.rows[2][0]), "c");
+    EXPECT_EQ(std::get<int64_t>(result.rows[2][1]), 2);
+}
+
+TEST_F(QueryExecutorTest, EntityHashingUsesPackedHandles) {
+    // 打包后 node/edge 在 Value 里是持有式（VertexValuePtr / EdgeValuePtr）：
+    // DISTINCT / 分组 / join 的哈希必须按持有式取字段，否则实体会退化成兜底比较。
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:N {name:'a'})-[:R {w: 2}]->(b:N {name:'b'})").error.empty());
+    auto count = [&](const std::string& query) {
+        auto r = execSync(*executor_, query);
+        if (!r.error.empty() || r.rows.empty() || !std::holds_alternative<int64_t>(r.rows[0][0]))
+            return std::numeric_limits<int64_t>::min();
+        return std::get<int64_t>(r.rows[0][0]);
+    };
+    EXPECT_EQ(count("MATCH (a)-[r]->(b) RETURN count(DISTINCT r) AS c"), 1);
+    EXPECT_EQ(count("MATCH (a)-[r]->(b) RETURN count(DISTINCT a) AS c"), 1);
+    EXPECT_EQ(count("MATCH (a)-[r]->(b) UNWIND [a, b, a] AS x RETURN count(DISTINCT x) AS c"), 2);
 }

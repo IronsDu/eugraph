@@ -379,8 +379,11 @@ TEST(EvaluatorTypedKernelTest, TypedSizeList) {
     input.addColumn(BoundTypeKind::LIST);
     auto& col = input.columns[0];
     col.reserve(n);
-    for (size_t i = 0; i < n; ++i)
-        col.buffer->list_data[i].elements.resize(i);
+    for (size_t i = 0; i < n; ++i) {
+        // reserve() leaves a handle slot empty; publish a list before filling it.
+        col.buffer->list_data[i] = mk<ListValue>();
+        col.buffer->list_data[i]->elements.resize(i);
+    }
 
     function::FunctionRegistry registry;
     registry.registerBuiltins();
@@ -527,8 +530,11 @@ TEST(EvaluatorTypedKernelTest, NestedTailDoesNotCrash) {
     input.addColumn(BoundTypeKind::LIST);
     auto& col = input.columns[0];
     col.reserve(n);
-    for (size_t j = 0; j < 5; ++j)
-        col.buffer->list_data[0].elements.push_back(ValueStorage{Value(static_cast<int64_t>(j))});
+    for (size_t j = 0; j < 5; ++j) {
+        if (!col.buffer->list_data[0])
+            col.buffer->list_data[0] = mk<ListValue>();
+        col.buffer->list_data[0]->elements.push_back(ValueStorage{Value(static_cast<int64_t>(j))});
+    }
 
     function::FunctionRegistry registry;
     registry.registerBuiltins();
@@ -549,5 +555,52 @@ TEST(EvaluatorTypedKernelTest, NestedTailDoesNotCrash) {
     ExpressionEvaluator evaluator;
     Column out = Column::flat(BoundTypeKind::LIST, n);
     evaluator.evaluate(std::move(outer), input, out);
-    EXPECT_EQ(out.buffer->list_data[0].elements.size(), 3);
+    EXPECT_EQ(out.buffer->list_data[0]->elements.size(), 3);
+}
+
+// typedUnaryBatch 的 ListValue→ListValue 路径必须走句柄感知的读写：
+// 读要解引用句柄，写要**发布新的载荷**而不是原地改（列不该改动它可能与别人共享的值）。
+// 这里验证元素内容、输出与输入不共享载荷 —— 只断言 size 是抓不到这类问题的。
+TEST(EvaluatorTypedKernelTest, TypedTailPublishesFreshPayloadWithSameElements) {
+    constexpr size_t n = 2;
+    DataChunk input;
+    input.count = n;
+    input.addColumn(BoundTypeKind::LIST);
+    auto& col = input.columns[0];
+    col.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        col.buffer->list_data[i] = mk<ListValue>();
+        for (int64_t j = 0; j < 4; ++j)
+            col.buffer->list_data[i]->elements.push_back(ValueStorage{Value(j * 10 + static_cast<int64_t>(i))});
+    }
+    auto* input_payload_before = col.buffer->list_data[0].get();
+
+    function::FunctionRegistry registry;
+    registry.registerBuiltins();
+    const auto* def = registry.lookup("tail", {BoundType::List(BoundType::Any())});
+    ASSERT_NE(def, nullptr);
+
+    BoundFunctionCall call;
+    call.func_def = def;
+    call.args.push_back(BoundExpression(BoundColumnRef(0, BoundType::List(BoundType::Any()), "l")));
+    call.return_type = BoundType::List(BoundType::Any());
+
+    ExpressionEvaluator evaluator;
+    Column out = Column::flat(BoundTypeKind::LIST, n);
+    evaluator.evaluate(BoundExpression(std::make_unique<BoundFunctionCall>(std::move(call))), input, out);
+
+    for (size_t i = 0; i < n; ++i) {
+        ASSERT_TRUE(out.buffer->list_data[i]) << "输出槽位必须已发布载荷";
+        const auto& got = out.buffer->list_data[i]->elements;
+        ASSERT_EQ(got.size(), 3) << "tail 去掉首元素";
+        // 内容必须逐元素正确（只查 size 会漏掉"元素被搬空"这类缺陷）
+        EXPECT_EQ(std::get<int64_t>(got[0].value), 10 + static_cast<int64_t>(i));
+        EXPECT_EQ(std::get<int64_t>(got[1].value), 20 + static_cast<int64_t>(i));
+        EXPECT_EQ(std::get<int64_t>(got[2].value), 30 + static_cast<int64_t>(i));
+    }
+
+    // 输入列不能被就地改写，也不能与输出共享同一个载荷
+    EXPECT_EQ(col.buffer->list_data[0].get(), input_payload_before) << "输入句柄不应被替换";
+    EXPECT_EQ(col.buffer->list_data[0]->elements.size(), 4) << "输入列表不应被改动";
+    EXPECT_NE(out.buffer->list_data[0].get(), col.buffer->list_data[0].get()) << "输出必须是新载荷，不能与输入共享";
 }

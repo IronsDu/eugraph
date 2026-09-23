@@ -16,9 +16,9 @@ folly::coro::AsyncGenerator<DataChunk> ListIndexJoinPhysicalOp::executeChunk() {
         for (size_t row = 0; row < left_chunk->count; ++row) {
             const auto& list_val = left_chunk->getValue(left_list_col_, row);
             std::shared_ptr<std::vector<PropertyValue>> allowed;
-            if (std::holds_alternative<ListValue>(list_val)) {
+            if (std::holds_alternative<ListValuePtr>(list_val)) {
                 allowed = std::make_shared<std::vector<PropertyValue>>();
-                for (const auto& elem : std::get<ListValue>(list_val).elements) {
+                for (const auto& elem : (*std::get<ListValuePtr>(list_val)).elements) {
                     if (std::holds_alternative<int64_t>(elem.value))
                         allowed->push_back(int64_t{std::get<int64_t>(elem.value)});
                     else if (std::holds_alternative<std::string>(elem.value))

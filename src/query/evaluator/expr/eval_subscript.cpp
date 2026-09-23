@@ -27,37 +27,37 @@ Value pvToValue(const PropertyValue& pv) {
         ListValue lv;
         for (auto v : std::get<std::vector<int64_t>>(pv))
             lv.elements.push_back(ValueStorage{Value(v)});
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
     if (std::holds_alternative<std::vector<double>>(pv)) {
         ListValue lv;
         for (auto v : std::get<std::vector<double>>(pv))
             lv.elements.push_back(ValueStorage{Value(v)});
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
     if (std::holds_alternative<std::vector<std::string>>(pv)) {
         ListValue lv;
         for (auto& s : std::get<std::vector<std::string>>(pv))
             lv.elements.push_back(ValueStorage{Value(std::move(s))});
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
     if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
         ListValue lv;
         for (const auto& v : std::get<std::vector<DateTimeValue>>(pv))
             lv.elements.push_back(ValueStorage{Value(v)});
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
     if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
         ListValue lv;
         for (const auto& v : std::get<std::vector<TimeValue>>(pv))
             lv.elements.push_back(ValueStorage{Value(v)});
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
     if (std::holds_alternative<std::vector<DurationValue>>(pv)) {
         ListValue lv;
         for (const auto& v : std::get<std::vector<DurationValue>>(pv))
             lv.elements.push_back(ValueStorage{Value(v)});
-        return Value(std::move(lv));
+        return Value(mk<ListValue>(std::move(lv)));
     }
     return Value{};
 }
@@ -79,8 +79,8 @@ void ExpressionEvaluator::evalSubscript(const binder::BoundSubscript& sub, const
         Value list_val = list_eval.column->getValue(i);
         Value idx_val = idx_eval.column->getValue(i);
 
-        if (std::holds_alternative<ListValue>(list_val) && std::holds_alternative<int64_t>(idx_val)) {
-            const auto& lv = std::get<ListValue>(list_val);
+        if (std::holds_alternative<ListValuePtr>(list_val) && std::holds_alternative<int64_t>(idx_val)) {
+            const auto& lv = (*std::get<ListValuePtr>(list_val));
             int64_t idx = std::get<int64_t>(idx_val);
             if (idx < 0)
                 idx += static_cast<int64_t>(lv.elements.size());
@@ -89,8 +89,8 @@ void ExpressionEvaluator::evalSubscript(const binder::BoundSubscript& sub, const
             } else {
                 result.setNull(i);
             }
-        } else if (std::holds_alternative<MapValue>(list_val) && std::holds_alternative<std::string>(idx_val)) {
-            const auto& mv = std::get<MapValue>(list_val);
+        } else if (std::holds_alternative<MapValuePtr>(list_val) && std::holds_alternative<std::string>(idx_val)) {
+            const auto& mv = (*std::get<MapValuePtr>(list_val));
             const auto& key = std::get<std::string>(idx_val);
             bool found = false;
             for (const auto& [k, v] : mv.entries) {
@@ -102,9 +102,9 @@ void ExpressionEvaluator::evalSubscript(const binder::BoundSubscript& sub, const
             }
             if (!found)
                 result.setNull(i);
-        } else if (std::holds_alternative<VertexValue>(list_val) && std::holds_alternative<std::string>(idx_val)) {
+        } else if (std::holds_alternative<VertexValuePtr>(list_val) && std::holds_alternative<std::string>(idx_val)) {
             // Dynamic property access on node: n['name']
-            const auto& vertex = std::get<VertexValue>(list_val);
+            const auto& vertex = (*std::get<VertexValuePtr>(list_val));
             const auto& key = std::get<std::string>(idx_val);
             Value r;
             for (const auto& [label_id, props_vec] : vertex.properties) {
@@ -129,9 +129,9 @@ void ExpressionEvaluator::evalSubscript(const binder::BoundSubscript& sub, const
             }
         vprop_found:
             result.setValue(i, r);
-        } else if (std::holds_alternative<EdgeValue>(list_val) && std::holds_alternative<std::string>(idx_val)) {
+        } else if (std::holds_alternative<EdgeValuePtr>(list_val) && std::holds_alternative<std::string>(idx_val)) {
             // Dynamic property access on edge: r['name']
-            const auto& edge = std::get<EdgeValue>(list_val);
+            const auto& edge = (*std::get<EdgeValuePtr>(list_val));
             const auto& key = std::get<std::string>(idx_val);
             Value r;
             if (edge.properties.has_value() && eval_ctx_.catalog) {
@@ -149,7 +149,7 @@ void ExpressionEvaluator::evalSubscript(const binder::BoundSubscript& sub, const
                 }
             }
             result.setValue(i, r);
-        } else if (std::holds_alternative<MapValue>(list_val)) {
+        } else if (std::holds_alternative<MapValuePtr>(list_val)) {
             throw std::runtime_error("TypeError: MapElementAccessByNonString");
         } else {
             throw std::runtime_error("TypeError: InvalidArgumentType");

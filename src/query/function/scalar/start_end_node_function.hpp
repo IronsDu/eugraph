@@ -9,11 +9,11 @@ namespace function {
 namespace scalar {
 
 inline Value startNodeImpl(const Value& arg) {
-    if (std::holds_alternative<EdgeValue>(arg)) {
-        const auto& ev = std::get<EdgeValue>(arg);
+    if (std::holds_alternative<EdgeValuePtr>(arg)) {
+        const auto& ev = (*std::get<EdgeValuePtr>(arg));
         VertexValue vv;
         vv.id = ev.src_id;
-        return Value(std::move(vv));
+        return Value(mk<VertexValue>(std::move(vv)));
     }
     if (std::holds_alternative<std::monostate>(arg))
         return Value{};
@@ -21,11 +21,11 @@ inline Value startNodeImpl(const Value& arg) {
 }
 
 inline Value endNodeImpl(const Value& arg) {
-    if (std::holds_alternative<EdgeValue>(arg)) {
-        const auto& ev = std::get<EdgeValue>(arg);
+    if (std::holds_alternative<EdgeValuePtr>(arg)) {
+        const auto& ev = (*std::get<EdgeValuePtr>(arg));
         VertexValue vv;
         vv.id = ev.dst_id;
-        return Value(std::move(vv));
+        return Value(mk<VertexValue>(std::move(vv)));
     }
     if (std::holds_alternative<std::monostate>(arg))
         return Value{};

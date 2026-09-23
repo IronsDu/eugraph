@@ -54,8 +54,8 @@ eugraph::MapValue entityValueToMap(const eugraph::Value& v,
                                    const std::unordered_map<eugraph::LabelId, eugraph::LabelDef>& label_defs,
                                    const std::unordered_map<eugraph::EdgeLabelId, eugraph::EdgeLabelDef>& edge_defs) {
     eugraph::MapValue mv;
-    if (std::holds_alternative<eugraph::VertexValue>(v)) {
-        const auto& vv = std::get<eugraph::VertexValue>(v);
+    if (std::holds_alternative<eugraph::VertexValuePtr>(v)) {
+        const auto& vv = (*std::get<eugraph::VertexValuePtr>(v));
         for (const auto& [lid, props] : vv.properties) {
             auto it = label_defs.find(lid);
             if (it == label_defs.end())
@@ -67,8 +67,8 @@ eugraph::MapValue entityValueToMap(const eugraph::Value& v,
                          eugraph::ValueStorage{eugraph::function::scalar::propertyValueToRuntimeValue(*props[pd.id])}});
             }
         }
-    } else if (std::holds_alternative<eugraph::EdgeValue>(v)) {
-        const auto& ev = std::get<eugraph::EdgeValue>(v);
+    } else if (std::holds_alternative<eugraph::EdgeValuePtr>(v)) {
+        const auto& ev = (*std::get<eugraph::EdgeValuePtr>(v));
         if (!ev.properties.has_value())
             return mv;
         auto it = edge_defs.find(ev.label_id);
@@ -265,9 +265,9 @@ bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Va
             } else if constexpr (std::is_same_v<T, DurationValue>) {
                 return std::holds_alternative<DurationValue>(expected) && sv == std::get<DurationValue>(expected);
             } else if constexpr (std::is_same_v<T, std::vector<int64_t>>) {
-                if (!std::holds_alternative<ListValue>(expected))
+                if (!std::holds_alternative<ListValuePtr>(expected))
                     return false;
-                const auto& lv = std::get<ListValue>(expected);
+                const auto& lv = (*std::get<ListValuePtr>(expected));
                 if (sv.size() != lv.elements.size())
                     return false;
                 for (size_t i = 0; i < sv.size(); ++i) {
@@ -277,9 +277,9 @@ bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Va
                 }
                 return true;
             } else if constexpr (std::is_same_v<T, std::vector<double>>) {
-                if (!std::holds_alternative<ListValue>(expected))
+                if (!std::holds_alternative<ListValuePtr>(expected))
                     return false;
-                const auto& lv = std::get<ListValue>(expected);
+                const auto& lv = (*std::get<ListValuePtr>(expected));
                 if (sv.size() != lv.elements.size())
                     return false;
                 for (size_t i = 0; i < sv.size(); ++i) {
@@ -289,9 +289,9 @@ bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Va
                 }
                 return true;
             } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
-                if (!std::holds_alternative<ListValue>(expected))
+                if (!std::holds_alternative<ListValuePtr>(expected))
                     return false;
-                const auto& lv = std::get<ListValue>(expected);
+                const auto& lv = (*std::get<ListValuePtr>(expected));
                 if (sv.size() != lv.elements.size())
                     return false;
                 for (size_t i = 0; i < sv.size(); ++i) {
@@ -301,9 +301,9 @@ bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Va
                 }
                 return true;
             } else if constexpr (std::is_same_v<T, std::vector<DateTimeValue>>) {
-                if (!std::holds_alternative<ListValue>(expected))
+                if (!std::holds_alternative<ListValuePtr>(expected))
                     return false;
-                const auto& lv = std::get<ListValue>(expected);
+                const auto& lv = (*std::get<ListValuePtr>(expected));
                 if (sv.size() != lv.elements.size())
                     return false;
                 for (size_t i = 0; i < sv.size(); ++i) {
@@ -313,9 +313,9 @@ bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Va
                 }
                 return true;
             } else if constexpr (std::is_same_v<T, std::vector<TimeValue>>) {
-                if (!std::holds_alternative<ListValue>(expected))
+                if (!std::holds_alternative<ListValuePtr>(expected))
                     return false;
-                const auto& lv = std::get<ListValue>(expected);
+                const auto& lv = (*std::get<ListValuePtr>(expected));
                 if (sv.size() != lv.elements.size())
                     return false;
                 for (size_t i = 0; i < sv.size(); ++i) {
@@ -325,9 +325,9 @@ bool MergePhysicalOp::comparePropertyValue(const PropertyValue& stored, const Va
                 }
                 return true;
             } else if constexpr (std::is_same_v<T, std::vector<DurationValue>>) {
-                if (!std::holds_alternative<ListValue>(expected))
+                if (!std::holds_alternative<ListValuePtr>(expected))
                     return false;
-                const auto& lv = std::get<ListValue>(expected);
+                const auto& lv = (*std::get<ListValuePtr>(expected));
                 if (sv.size() != lv.elements.size())
                     return false;
                 for (size_t i = 0; i < sv.size(); ++i) {
@@ -1044,16 +1044,16 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
     // entity sources; normalise to MapValue so the existing map-writer path
     // handles both cases.
     Value normalised;
-    if (std::holds_alternative<VertexValue>(val) || std::holds_alternative<EdgeValue>(val)) {
-        normalised = Value(entityValueToMap(val, label_defs_, edge_label_defs_));
+    if (std::holds_alternative<VertexValuePtr>(val) || std::holds_alternative<EdgeValuePtr>(val)) {
+        normalised = Value(mk<MapValue>(entityValueToMap(val, label_defs_, edge_label_defs_)));
     } else {
         normalised = val;
     }
     // Edge target
     if (has_relationship_ && item.var_name == edge_var_ && edge_id != INVALID_EDGE_ID &&
-        std::holds_alternative<MapValue>(normalised)) {
+        std::holds_alternative<MapValuePtr>(normalised)) {
         EdgeLabelId elid = edge_label_id_.value_or(INVALID_EDGE_LABEL_ID);
-        const auto& mv = std::get<MapValue>(normalised);
+        const auto& mv = (*std::get<MapValuePtr>(normalised));
         for (const auto& [k, vs] : mv.entries) {
             uint16_t pid = 0;
             bool found = false;
@@ -1091,8 +1091,8 @@ folly::coro::Task<void> MergePhysicalOp::executeSetPropertiesItem(const SetPhysi
         vid = start_vid;
     else if (has_relationship_ && item.var_name == end_var_)
         vid = end_vid;
-    if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValue>(normalised)) {
-        const auto& mv = std::get<MapValue>(normalised);
+    if (vid != INVALID_VERTEX_ID && std::holds_alternative<MapValuePtr>(normalised)) {
+        const auto& mv = (*std::get<MapValuePtr>(normalised));
         for (const auto& [k, vs] : mv.entries) {
             if (anon_label_id_ != INVALID_LABEL_ID) {
                 uint16_t pid = 0;
@@ -1241,8 +1241,8 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
             if (start_pre_bound_) {
                 for (size_t c = 0; c < chunk->numColumns(); ++c) {
                     const auto& val = chunk->getValue(c, row);
-                    if (std::holds_alternative<VertexValue>(val)) {
-                        start_pre_vv = std::get<VertexValue>(val);
+                    if (std::holds_alternative<VertexValuePtr>(val)) {
+                        start_pre_vv = (*std::get<VertexValuePtr>(val));
                         start_vid = start_pre_vv->id;
                         break;
                     }
@@ -1293,7 +1293,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                             if (props)
                                 matched_vv.properties[lid] = std::move(*props);
                         }
-                        col.setValue(0, Value(matched_vv));
+                        col.setValue(0, Value(mk<VertexValue>(matched_vv)));
                         merged.columns.push_back(std::move(col));
 
                         if (!on_match_items_.empty())
@@ -1309,15 +1309,15 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                         }
                         {
                             Column out_col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
-                            out_col.setValue(0, Value(matched_vv));
+                            out_col.setValue(0, Value(mk<VertexValue>(matched_vv)));
                             output.columns.push_back(std::move(out_col));
                         }
                         if (path_variable_.has_value()) {
                             Column out_col = Column::flat(binder::BoundTypeKind::PATH, 1);
                             PathValue pv;
-                            ValueStorage start_vs{Value(matched_vv)};
+                            ValueStorage start_vs{Value(mk<VertexValue>(matched_vv))};
                             pv.elements = {start_vs};
-                            out_col.setValue(0, Value(pv));
+                            out_col.setValue(0, Value(mk<PathValue>(pv)));
                             output.columns.push_back(std::move(out_col));
                         }
                         co_yield std::move(output);
@@ -1336,8 +1336,8 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 if (end_pre_bound_) {
                     for (size_t c = 0; c < chunk->numColumns(); ++c) {
                         const auto& val = chunk->getValue(c, row);
-                        if (std::holds_alternative<VertexValue>(val)) {
-                            VertexValue vv = std::get<VertexValue>(val);
+                        if (std::holds_alternative<VertexValuePtr>(val)) {
+                            VertexValue vv = (*std::get<VertexValuePtr>(val));
                             if (vv.id != start_vid) {
                                 end_pre_vv = vv;
                                 end_vid = vv.id;
@@ -1392,7 +1392,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                         VertexValue vv;
                         vv.id = start_vid;
                         vv.labels = LabelIdSet(start_labels_.begin(), start_labels_.end());
-                        col.setValue(0, Value(vv));
+                        col.setValue(0, Value(mk<VertexValue>(vv)));
                         merged.columns.push_back(std::move(col));
                     }
                     if (has_relationship_) {
@@ -1401,7 +1401,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                             VertexValue vv;
                             vv.id = end_vid;
                             vv.labels = LabelIdSet(end_labels_.begin(), end_labels_.end());
-                            col.setValue(0, Value(vv));
+                            col.setValue(0, Value(mk<VertexValue>(vv)));
                             merged.columns.push_back(std::move(col));
                         }
                         {
@@ -1411,7 +1411,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                             ev.src_id = start_vid;
                             ev.dst_id = end_vid;
                             ev.label_id = edge_label;
-                            col.setValue(0, Value(ev));
+                            col.setValue(0, Value(mk<EdgeValue>(ev)));
                             merged.columns.push_back(std::move(col));
                         }
                     }
@@ -1495,13 +1495,13 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     }
                     if (!start_pre_bound_) {
                         Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
-                        col.setValue(0, Value(start_vv));
+                        col.setValue(0, Value(mk<VertexValue>(start_vv)));
                         output.columns.push_back(std::move(col));
                     }
                     if (has_relationship_) {
                         if (!end_pre_bound_) {
                             Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
-                            col.setValue(0, Value(end_vv));
+                            col.setValue(0, Value(mk<VertexValue>(end_vv)));
                             output.columns.push_back(std::move(col));
                         }
                         {
@@ -1517,18 +1517,18 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                                 if (edge_props)
                                     ev.properties = std::move(*edge_props);
                             }
-                            col.setValue(0, Value(ev));
+                            col.setValue(0, Value(mk<EdgeValue>(ev)));
                             output.columns.push_back(std::move(col));
                         }
                         if (path_variable_.has_value()) {
                             Column col = Column::flat(binder::BoundTypeKind::PATH, 1);
                             PathValue pv;
-                            ValueStorage start_vs{Value(start_vv)};
+                            ValueStorage start_vs{Value(mk<VertexValue>(start_vv))};
                             ValueStorage edge_vs{
-                                Value(EdgeValue{edge_id, start_vid, end_vid, edge_label, 0, std::nullopt})};
-                            ValueStorage end_vs{Value(end_vv)};
+                                Value(mk<EdgeValue>(edge_id, start_vid, end_vid, edge_label, 0, std::nullopt))};
+                            ValueStorage end_vs{Value(mk<VertexValue>(end_vv))};
                             pv.elements = {start_vs, edge_vs, end_vs};
-                            col.setValue(0, Value(pv));
+                            col.setValue(0, Value(mk<PathValue>(pv)));
                             output.columns.push_back(std::move(col));
                         }
                     }
@@ -1550,7 +1550,7 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                     VertexValue vv;
                     vv.id = start_vid;
                     vv.labels = LabelIdSet(start_labels_.begin(), start_labels_.end());
-                    col.setValue(0, Value(vv));
+                    col.setValue(0, Value(mk<VertexValue>(vv)));
                     merged.columns.push_back(std::move(col));
                 }
 
@@ -1622,15 +1622,15 @@ folly::coro::AsyncGenerator<DataChunk> MergePhysicalOp::executeChunk() {
                 }
                 if (!start_pre_bound_) {
                     Column col = Column::flat(binder::BoundTypeKind::VERTEX, 1);
-                    col.setValue(0, Value(start_vv));
+                    col.setValue(0, Value(mk<VertexValue>(start_vv)));
                     output.columns.push_back(std::move(col));
                 }
                 if (path_variable_.has_value()) {
                     Column col = Column::flat(binder::BoundTypeKind::PATH, 1);
                     PathValue pv;
-                    ValueStorage start_vs{Value(start_vv)};
+                    ValueStorage start_vs{Value(mk<VertexValue>(start_vv))};
                     pv.elements = {start_vs};
-                    col.setValue(0, Value(pv));
+                    col.setValue(0, Value(mk<PathValue>(pv)));
                     output.columns.push_back(std::move(col));
                 }
                 co_yield std::move(output);

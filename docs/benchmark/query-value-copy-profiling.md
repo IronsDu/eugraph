@@ -1824,3 +1824,155 @@ map 的取舍取决于复用率），而本轮上下文不足以完成实现 + �
 
 **本节的 `count_only` 记述作为排查记录保留** —— 它记录了一条「看似合理但实测无效」的路径，
 以及判定它无效所需的判据。
+
+---
+
+# 重型值类型句柄化：结果
+
+把 `Value` 的重型类型改为 `shared_ptr`、`ColumnBuffer` 存句柄（设计与不变量见
+[query-engine-design.md](../query/engine/query-engine-design.md) 第六节）。
+
+## 口径
+
+**交错 A/B**：`scripts/bench_ldbc_interactive.py`，`personId=933`，warmup 1 / iters 3，
+**每轮交换两个构建的先后顺序**（固定顺序会让后跑者快约 7%，见 known-defects-todo.md §11），
+取两轮最小值。同机、同数据（`eugraph-sf0.1-fresh`）、同参数（4 计算线程、1 GB WT cache）。
+
+## 结果
+
+| 查询 | 改造前 (ms) | 改造后 (ms) | 比值 | 行数 |
+|------|------------:|------------:|-----:|------|
+| complex-9 | 1439.8 | **575.8** | **0.40** | 20 / 20 |
+| complex-10 | 98.1 | **63.0** | **0.64** | 10 / 10 |
+| complex-3 | 663.4 | **550.8** | 0.83 | 0 / 0 |
+| complex-6 | 282.8 | **250.2** | 0.88 | 3 / 3 |
+| complex-2 | 24.9 | 24.0 | 0.97 | 20 / 20 |
+| complex-8 | 3.0 | 3.0 | 0.99 | 0 / 0 |
+| complex-12 | 466.9 | 477.5 | 1.02 | 3 / 3 |
+
+**无回归**（complex-2/8/12 在噪声范围内）。
+
+## 正确性
+
+* 全量 `ctest`：**1100/1100 通过**（含 TCK 与驱动兼容性）；
+* **结果内容比对**：同一批查询在两个构建上逐行比对，6 条查询**完全一致**
+  （不只是行数 —— 行数相等仍可能内容不同，complex-9 一度就多出一行重复）。
+
+## 途中修掉的四处缺陷
+
+句柄化会让**一切依赖 variant 内建 `operator==` 的比较退化成比指针**，
+而 `ValueHash` 我按载荷哈希 —— 哈希与相等不再一致。依次暴露并修复：
+`valueEquals` 的兜底分支、`ValueHash` 失效的重型分支、`RowEqual`（DISTINCT 失去去重）、
+聚合 per-group distinct 集合的 `std::equal_to`。另加 `isNull` 视空句柄为 null ——
+`reserve()` 分配句柄但不发布载荷，而 `holds_alternative<ListValuePtr>` 对空句柄为真，
+空槽位会被当列表解引用（曾在 TCK 下打崩服务）。
+
+
+---
+
+# 补充：PathTopology 句柄化（与尺寸的实测关系）
+
+前一轮句柄化了 6 个重型类型，**漏掉了 `PathTopology`** —— 而它恰好是唯一一个带
+**6 个 `std::vector`** 的类型。内联时它把 `sizeof(Value)` 撑到 **152 字节**；
+而 **variant 的尺寸取所有分支的最大值**，所以**一个存 `int64` 的 Value 也占 152 字节**。
+
+| | `sizeof(Value)` |
+|---|---:|
+| 6 类型句柄化后（`PathTopology` 仍内联）| **152** |
+| 再句柄化 `PathTopology` | **112** |
+| 若连 `DateTimeValue`/`TimeValue` 也处理 | ~48 |
+
+## 尺寸对吞吐的影响（合成测量）
+
+800 万元素顺序读取，两种布局带宽都约 20 GB/s（**带宽受限**）：
+
+| 布局 | 耗时 |
+|---|---:|
+| 152 字节 | 58.0 ms |
+| 48 字节 | **20.4 ms** |
+
+**尺寸 3.2 倍 → 吞吐 2.8 倍。**
+
+## 但在线上查询上没有可测收益
+
+交错 A/B（对 main，各 2 轮取 min）：
+
+| 查询 | 仅 6 类型句柄化 | 再句柄化 `PathTopology` |
+|---|---:|---:|
+| complex-9 | 0.40 | **0.40** |
+| complex-10 | 0.64 | **0.65** |
+| complex-3 | 0.83 | **0.82** |
+| complex-6 | 0.88 | **0.88** |
+| complex-2 | 0.97 | **0.96** |
+| complex-12 | 1.02 | **0.98** |
+
+**两轮比值一致 → 该改动在当前 LDBC 查询集上无可测收益。**
+
+**原因**：这些查询**存储受限** —— complex-9 的采样中 **48.8% 是 WiredTiger 行扫描**
+（`__wt_row_search` / `__wt_btcur_next`），内存足迹的缩减显现不出来。
+
+**因此**：该改动是**正确性与内存足迹**的改进（消除了每个 `Value` 里 144 字节的内联对象），
+**不是延迟优化**。它的收益应在 **`Value` 密集**的场景体现（大列表、宽列物化、`Row` 数组），
+而非当前的存储受限查询。**不应据此宣称查询变快。**
+
+## 下一步：`DateTimeValue` / `TimeValue`
+
+现在最大的分支换成了它们：
+
+| 类型 | 尺寸 | 构成 |
+|---|---:|---|
+| `DateTimeValue` | **104** | 7 个整型 + **`std::string tz_name`（32）** |
+| `TimeValue` | **80** | 4 个整型 + **`std::string tz_name`（32）** |
+| `DurationValue` | 32 | 4 个 int64 ✅ |
+
+`tz_name` 在 LDBC 数据里**几乎总是空的**，但 `std::string` 固定占 32 字节。
+处理它（句柄化整个类型，或改用紧凑表示）可把 `Value` 降到 ~48 字节 ——
+**但按上面的实测，在存储受限的查询上同样不会带来延迟收益**，
+所以优先级应低于「攻存储访问」那条线。
+
+## 为什么 `DateTimeValue` / `TimeValue` **不应该**继续优化（结论：就此停止）
+
+按上面的记录，`Value` 现在 112 字节，最大分支换成了 `DateTimeValue`（104）与 `TimeValue`（80），
+两者都被一个 **`std::string tz_name`（32 字节）** 和 **7 个 `int64_t` 字段**撑大。
+看起来是显然的下一步。**但两条路都走不通，已实测确认，记录在此以免重走：**
+
+### 路线一：收窄字段（`int64` → `int8`/`int32`）—— **静默溢出**
+
+`temporal_value.cpp` 的日期算术把字段当作**无界累加器**，规范化之前可以任意大：
+
+```cpp
+result.day    += duration.days;                  // 任意大
+result.nanos  += add_nanos;
+result.second += add_seconds;
+result.minute += result.second / 60;             // 级联放大
+result.hour   += result.minute / 60;
+...
+normalizeDate(result.year, result.month, result.day);   // 之后才修正回合法范围
+```
+
+`normalizeDate(int64_t&, int64_t&, int64_t&)` 是**按引用**拿字段的 —— 编译器会直接报错
+（`int64_t&` 绑不到 `int32_t`），正好证明这些字段必须是宽的。**收窄 `day`/`month`/`hour`/
+`minute`/`second`/`nanos` 中的任何一个都会在日期运算中溢出。**
+
+可安全收窄的只有 `year`（int32）与 `kind`，收益约 16 字节 —— 到不了 48 的目标。
+
+### 路线二：句柄化整个类型 —— **给热类型加逐行分配**
+
+前 9 个类型是**冷类型**（`PathTopology` 只由 VLE 产生），包指针无害。
+但 temporal 是**热类型**：`datetime({epochMillis: ...})` 在 complex-6/7/9/10 里**逐行执行**。
+句柄化会让**每次日期运算结果都堆分配一次**，这是实打实的退化 ——
+而 `int64` 字段改指针唯一省下的是「拷贝成本」，日期值本来就没有可省的深拷贝。
+
+### 路线三：`tz_name` 改 interned id —— **动 KV 兼容性表面**
+
+`value_codec.cpp` 会**持久化** `tz_name`（`tv.tz_name = std::string(data.substr(off, tz_len))`）。
+改成 interned id 必须同时改 KV 编码，而 KV 编码是 `AGENTS.md` 列的兼容性表面，需单独评审。
+
+### 结论
+
+**收益为零，代价明确 —— 因此不做。** 本轮的实测已经证明：`sizeof(Value)` 从 152 降到 112
+（甚至合成测量里 48 字节的布局快 2.8 倍）**在 LDBC 查询上没有带来任何延迟变化**，
+因为这些查询**存储受限**（complex-9 的 48.8% 采样在 WiredTiger 行扫描）。
+
+**内存布局这条线的正确终点就是这里。** 继续投入的收益是 0，而两条可行路线分别带来
+静默溢出与热路径分配。下一轮的力气应当花在**存储访问**上。

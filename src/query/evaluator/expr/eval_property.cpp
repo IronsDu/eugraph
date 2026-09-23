@@ -32,42 +32,42 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
         if (std::holds_alternative<DurationValue>(pv))
             return Value(std::get<DurationValue>(pv));
         if (std::holds_alternative<std::vector<uint8_t>>(pv))
-            return Value(BytesValue{std::get<std::vector<uint8_t>>(pv)});
+            return Value(mk<BytesValue>(std::get<std::vector<uint8_t>>(pv)));
         if (std::holds_alternative<std::vector<int64_t>>(pv)) {
             ListValue lv;
             for (auto v : std::get<std::vector<int64_t>>(pv))
                 lv.elements.push_back(ValueStorage{Value(v)});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         if (std::holds_alternative<std::vector<double>>(pv)) {
             ListValue lv;
             for (auto v : std::get<std::vector<double>>(pv))
                 lv.elements.push_back(ValueStorage{Value(v)});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         if (std::holds_alternative<std::vector<std::string>>(pv)) {
             ListValue lv;
             for (auto& s : std::get<std::vector<std::string>>(pv))
                 lv.elements.push_back(ValueStorage{Value(std::move(s))});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
             ListValue lv;
             for (const auto& v : std::get<std::vector<DateTimeValue>>(pv))
                 lv.elements.push_back(ValueStorage{Value(v)});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
             ListValue lv;
             for (const auto& v : std::get<std::vector<TimeValue>>(pv))
                 lv.elements.push_back(ValueStorage{Value(v)});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         if (std::holds_alternative<std::vector<DurationValue>>(pv)) {
             ListValue lv;
             for (const auto& v : std::get<std::vector<DurationValue>>(pv))
                 lv.elements.push_back(ValueStorage{Value(v)});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         return Value{};
     };
@@ -75,8 +75,11 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
     for (size_t i = 0; i < count; ++i) {
         Value ov = obj.column->getValue(i);
         Value r;
-        if (std::holds_alternative<VertexValue>(ov)) {
-            const auto& vertex = std::get<VertexValue>(ov);
+        if (std::holds_alternative<VertexValuePtr>(ov)) {
+            const auto& held = std::get<VertexValuePtr>(ov);
+            if (!held)
+                continue;
+            const auto& vertex = *held;
             if (vertex.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
             std::vector<Value> found;
@@ -136,7 +139,7 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                 ListValue lv;
                 for (auto& v : found)
                     lv.elements.push_back(ValueStorage{std::move(v)});
-                r = Value(std::move(lv));
+                r = Value(mk<ListValue>(std::move(lv)));
             }
         } else if (std::holds_alternative<VertexRef>(ov)) {
             const auto& vref = std::get<VertexRef>(ov);
@@ -164,8 +167,8 @@ void ExpressionEvaluator::evalPropertyRef(const binder::BoundPropertyRef& ref, c
                     r = Value(static_cast<int64_t>(ek.label_id));
                 }
             }
-        } else if (std::holds_alternative<EdgeValue>(ov)) {
-            const auto& edge = std::get<EdgeValue>(ov);
+        } else if (std::holds_alternative<EdgeValuePtr>(ov)) {
+            const auto& edge = (*std::get<EdgeValuePtr>(ov));
             if (edge.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
             // When the property wasn't resolved at bind time (candidates empty),
@@ -249,42 +252,42 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
         if (std::holds_alternative<DurationValue>(pv))
             return Value(std::get<DurationValue>(pv));
         if (std::holds_alternative<std::vector<uint8_t>>(pv))
-            return Value(BytesValue{std::get<std::vector<uint8_t>>(pv)});
+            return Value(mk<BytesValue>(std::get<std::vector<uint8_t>>(pv)));
         if (std::holds_alternative<std::vector<int64_t>>(pv)) {
             ListValue lv;
             for (auto v : std::get<std::vector<int64_t>>(pv))
                 lv.elements.push_back(ValueStorage{Value(v)});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         if (std::holds_alternative<std::vector<double>>(pv)) {
             ListValue lv;
             for (auto v : std::get<std::vector<double>>(pv))
                 lv.elements.push_back(ValueStorage{Value(v)});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         if (std::holds_alternative<std::vector<std::string>>(pv)) {
             ListValue lv;
             for (auto& s : std::get<std::vector<std::string>>(pv))
                 lv.elements.push_back(ValueStorage{Value(std::move(s))});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         if (std::holds_alternative<std::vector<DateTimeValue>>(pv)) {
             ListValue lv;
             for (const auto& v : std::get<std::vector<DateTimeValue>>(pv))
                 lv.elements.push_back(ValueStorage{Value(v)});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         if (std::holds_alternative<std::vector<TimeValue>>(pv)) {
             ListValue lv;
             for (const auto& v : std::get<std::vector<TimeValue>>(pv))
                 lv.elements.push_back(ValueStorage{Value(v)});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         if (std::holds_alternative<std::vector<DurationValue>>(pv)) {
             ListValue lv;
             for (const auto& v : std::get<std::vector<DurationValue>>(pv))
                 lv.elements.push_back(ValueStorage{Value(v)});
-            return Value(std::move(lv));
+            return Value(mk<ListValue>(std::move(lv)));
         }
         return Value{};
     };
@@ -331,13 +334,23 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
 
     for (size_t i = 0; i < count; ++i) {
         Value ov;
-        if (obj.column->form == VectorForm::FLAT && obj.column->buffer && !obj.column->buffer->vertex_data.empty())
+        // The fast path reads the column's handle directly, so it has to check both
+        // bounds and emptiness itself: reserve() leaves a slot without a payload.
+        if (obj.column->form == VectorForm::FLAT && obj.column->buffer && i < obj.column->buffer->vertex_data.size() &&
+            obj.column->buffer->vertex_data[i])
             ov = obj.column->buffer->vertex_data[i];
         else
             ov = obj.column->getValue(i);
         Value r;
-        if (std::holds_alternative<VertexValue>(ov)) {
-            auto& vertex = const_cast<VertexValue&>(std::get<VertexValue>(ov));
+        if (std::holds_alternative<VertexValuePtr>(ov)) {
+            const auto& held = std::get<VertexValuePtr>(ov);
+            if (!held)
+                continue;
+            // Enrich a private copy. The handle may be shared with other rows and
+            // columns, and back when VertexValue was stored inline this assignment
+            // copied it -- so mutating in place would be a new, observable change.
+            auto working = mk<VertexValue>(*held);
+            VertexValue& vertex = *working;
             if (vertex.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
             // Lazy-load labels and properties for bare VertexValues (e.g. from
@@ -401,8 +414,8 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     }
                 }
             }
-        } else if (std::holds_alternative<EdgeValue>(ov)) {
-            const auto& edge = std::get<EdgeValue>(ov);
+        } else if (std::holds_alternative<EdgeValuePtr>(ov)) {
+            const auto& edge = (*std::get<EdgeValuePtr>(ov));
             if (edge.deleted)
                 throw std::runtime_error("EntityNotFound: DeletedEntityAccess");
             if (ref.property == "id") {
@@ -429,8 +442,8 @@ void ExpressionEvaluator::evalDynamicPropertyRef(const binder::BoundDynamicPrope
                     }
                 }
             }
-        } else if (std::holds_alternative<MapValue>(ov)) {
-            const auto& mv = std::get<MapValue>(ov);
+        } else if (std::holds_alternative<MapValuePtr>(ov)) {
+            const auto& mv = (*std::get<MapValuePtr>(ov));
             for (const auto& [key, storage] : mv.entries) {
                 if (key == ref.property) {
                     r = storage.value;

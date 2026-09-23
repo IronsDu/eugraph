@@ -67,17 +67,17 @@ inline uint64_t cellDigest(const Value& v, uint8_t& is_entity) {
         is_entity = 1;
         return static_cast<uint64_t>(std::get<VertexRef>(v).id);
     }
-    if (std::holds_alternative<VertexValue>(v)) {
+    if (std::holds_alternative<VertexValuePtr>(v)) {
         is_entity = 1;
-        return static_cast<uint64_t>(std::get<VertexValue>(v).id);
+        return static_cast<uint64_t>((*std::get<VertexValuePtr>(v)).id);
     }
     if (std::holds_alternative<EdgeKey>(v)) {
         is_entity = 1;
         return static_cast<uint64_t>(std::get<EdgeKey>(v).id);
     }
-    if (std::holds_alternative<EdgeValue>(v)) {
+    if (std::holds_alternative<EdgeValuePtr>(v)) {
         is_entity = 1;
-        return static_cast<uint64_t>(std::get<EdgeValue>(v).id);
+        return static_cast<uint64_t>((*std::get<EdgeValuePtr>(v)).id);
     }
     is_entity = 0;
     return static_cast<uint64_t>(ValueHash{}(v));

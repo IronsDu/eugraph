@@ -148,30 +148,17 @@ int64_t daysInMonth(int64_t year, int64_t month) {
 }
 
 void normalizeDate(int64_t& year, int64_t& month, int64_t& day) {
-    while (month > 12) {
-        month -= 12;
-        year++;
+    // 必须 O(1)：调用方给的 day 可以很大（date + duration({seconds: 1e15}) 就是 ~1.2e10 天），
+    // 逐月加减会空转上亿次，等于挂住查询。
+    if (month < 1 || month > 12) {
+        const int64_t zero_based = month - 1;
+        const int64_t year_shift = zero_based >= 0 ? zero_based / 12 : -((-zero_based + 11) / 12);
+        year += year_shift;
+        month = zero_based - year_shift * 12 + 1;
     }
-    while (month < 1) {
-        month += 12;
-        year--;
-    }
-    while (day > daysInMonth(year, month)) {
-        day -= daysInMonth(year, month);
-        month++;
-        if (month > 12) {
-            month -= 12;
-            year++;
-        }
-    }
-    while (day < 1) {
-        month--;
-        if (month < 1) {
-            month = 12;
-            year--;
-        }
-        day += daysInMonth(year, month);
-    }
+    // 该月的 1 号对应的纪元日 + (day - 1)，直接反算年月日（day 越界也没关系）。
+    const int64_t epoch_day = daysFromCivil(year, month, 1) + (day - 1);
+    civilFromDays(epoch_day, year, month, day);
 }
 
 int64_t daysFromCivil(int64_t y, int64_t m, int64_t d) {
@@ -340,7 +327,38 @@ bool temporalLess(const TimeValue& a, const TimeValue& b) {
 // ==================== Arithmetic: DateTime +/- Duration ====================
 
 DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& duration) {
+    // 粗筛（保守下限：1 个月按 28 天算）：任一分量超过整个支持范围就意味着结果必然越界。
+    // 提前报错，既不做注定越界的日历运算，也保证后面的 int64 中间量不会溢出。
+    constexpr int64_t kMaxEpochDay = 365241780471LL; // ±999'999'999 年
+    constexpr int64_t kMaxSeconds = kMaxEpochDay * 86'400LL;
+    if (duration.days < -kMaxEpochDay || duration.days > kMaxEpochDay || duration.months < -kMaxEpochDay / 28 ||
+        duration.months > kMaxEpochDay / 28 || duration.seconds < -kMaxSeconds || duration.seconds > kMaxSeconds)
+        throw QueryException(QueryErrorKind::Arithmetic,
+                             "Invalid value for EpochDay (valid values -365243219162 - 365241780471)");
     DateTimeValue result = temporal;
+    // These fields leave their normal range between an addition and its
+    // normalisation, so the arithmetic runs in wide locals and is narrowed once, at
+    // the end. Storing them narrow throughout would silently overflow.
+    int64_t year = result.year, month = result.month, day = result.day, hour = result.hour, minute = result.minute,
+            second = result.second, nanos = result.nanos;
+    // There are two exits (DATE returns early), so the narrowing lives in one place.
+    auto narrow = [&] {
+        // 日期落在 neo4j 支持的 EpochDay 范围（±999'999'999 年）之外时报 ArithmeticError，
+        // 而不是让收窄成 int32 静默回绕：date('2024-01-01') + duration({seconds: 1e18})
+        // 在 neo4j 上是 "Invalid value for EpochDay (valid values -365243219162 - 365241780471)"。
+        const int64_t epoch_day = daysFromCivil(year, month, day);
+        if (epoch_day < -365243219162LL || epoch_day > 365241780471LL)
+            throw QueryException(QueryErrorKind::Arithmetic,
+                                 "Invalid value for EpochDay (valid values -365243219162 - 365241780471): " +
+                                     std::to_string(epoch_day));
+        result.year = static_cast<int32_t>(year);
+        result.month = static_cast<int8_t>(month);
+        result.day = static_cast<int8_t>(day);
+        result.hour = static_cast<int8_t>(hour);
+        result.minute = static_cast<int8_t>(minute);
+        result.second = static_cast<int8_t>(second);
+        result.nanos = static_cast<int32_t>(nanos);
+    };
     // Months first, clamping the day to the last day of the target month. Adding
     // months and days together and then normalizing (the old behaviour) turned
     // date('2024-03-31') - duration('P1M') into 2024-03-02: February has no 31st,
@@ -348,112 +366,124 @@ DateTimeValue addDuration(const DateTimeValue& temporal, const DurationValue& du
     // 2024-03-31 - P1M = 2024-02-29, 2024-05-31 - P1M = 2024-04-30, and
     // 2024-03-31 - P1M1D = 2024-02-28.
     if (duration.months != 0) {
-        int64_t total_months = result.year * 12 + (result.month - 1) + duration.months;
+        int64_t total_months = absoluteMonths(year, month) + duration.months;
         int64_t new_year = total_months >= 0 ? total_months / 12 : -((-total_months + 11) / 12);
-        result.year = new_year;
-        result.month = total_months - new_year * 12 + 1;
-        int64_t last_day = daysInMonth(result.year, result.month);
-        if (last_day > 0 && result.day > last_day)
-            result.day = last_day;
+        year = new_year;
+        month = total_months - new_year * 12 + 1;
+        int64_t last_day = daysInMonth(year, month);
+        if (last_day > 0 && day > last_day)
+            day = last_day;
     }
-    result.day += duration.days;
-    normalizeDate(result.year, result.month, result.day);
+    day += duration.days;
+    normalizeDate(year, month, day);
 
     if (result.kind == DateTimeKind::DATE) {
         static constexpr int64_t kDayNanos = 86'400LL * 1'000'000'000LL;
-        int64_t total_nanos = duration.seconds * 1'000'000'000LL + duration.nanos;
-        int64_t extra_days = total_nanos / kDayNanos;
-        result.day += extra_days;
-        normalizeDate(result.year, result.month, result.day);
+        // 128 位：|seconds| > 9.2e9（约 292 年）时 seconds * 1e9 就溢出 int64，
+        // 而 duration 的 seconds 可以到 ±9.2e18（UBSan 之前在这里报 signed integer overflow）。
+        const __int128 total_nanos = static_cast<__int128>(duration.seconds) * 1'000'000'000LL + duration.nanos;
+        int64_t extra_days = static_cast<int64_t>(total_nanos / kDayNanos);
+        day += extra_days;
+        normalizeDate(year, month, day);
+        narrow();
         return result;
     }
 
-    int64_t total_nanos = duration.seconds * 1'000'000'000LL + duration.nanos;
-    int64_t add_seconds = total_nanos / 1'000'000'000LL;
-    int64_t add_nanos = total_nanos % 1'000'000'000LL;
+    const __int128 total_nanos = static_cast<__int128>(duration.seconds) * 1'000'000'000LL + duration.nanos;
+    int64_t add_seconds = static_cast<int64_t>(total_nanos / 1'000'000'000LL);
+    int64_t add_nanos = static_cast<int64_t>(total_nanos % 1'000'000'000LL);
     if (add_nanos < 0) {
         add_nanos += 1'000'000'000LL;
         add_seconds -= 1;
     }
 
-    result.nanos += add_nanos;
-    result.second += add_seconds;
-    result.second += result.nanos / 1'000'000'000LL;
-    result.nanos %= 1'000'000'000LL;
-    result.minute += result.second / 60;
-    result.second %= 60;
-    result.hour += result.minute / 60;
-    result.minute %= 60;
+    nanos += add_nanos;
+    second += add_seconds;
+    second += nanos / 1'000'000'000LL;
+    nanos %= 1'000'000'000LL;
+    minute += second / 60;
+    second %= 60;
+    hour += minute / 60;
+    minute %= 60;
 
-    int64_t extra_days = result.hour / 24;
-    if (result.hour < 0)
-        extra_days = (result.hour - 23) / 24;
-    result.hour -= extra_days * 24;
-    result.day += extra_days;
-    normalizeDate(result.year, result.month, result.day);
+    int64_t extra_days = hour / 24;
+    if (hour < 0)
+        extra_days = (hour - 23) / 24;
+    hour -= extra_days * 24;
+    day += extra_days;
+    normalizeDate(year, month, day);
 
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.second -= 1;
+    if (nanos < 0) {
+        nanos += 1'000'000'000LL;
+        second -= 1;
     }
-    if (result.second < 0) {
-        int64_t bm = (-result.second + 59) / 60;
-        result.second += bm * 60;
-        result.minute -= bm;
+    if (second < 0) {
+        int64_t bm = (-second + 59) / 60;
+        second += bm * 60;
+        minute -= bm;
     }
-    if (result.minute < 0) {
-        int64_t bh = (-result.minute + 59) / 60;
-        result.minute += bh * 60;
-        result.hour -= bh;
+    if (minute < 0) {
+        int64_t bh = (-minute + 59) / 60;
+        minute += bh * 60;
+        hour -= bh;
     }
-    if (result.hour < 0) {
-        int64_t bd = (-result.hour + 23) / 24;
-        result.hour += bd * 24;
-        result.day -= bd;
-        normalizeDate(result.year, result.month, result.day);
+    if (hour < 0) {
+        int64_t bd = (-hour + 23) / 24;
+        hour += bd * 24;
+        day -= bd;
+        normalizeDate(year, month, day);
     }
 
+    narrow();
     return result;
 }
 
 TimeValue addDuration(const TimeValue& temporal, const DurationValue& duration) {
     TimeValue result = temporal;
+    // Same wide-local rule as the DateTimeValue overload above.
+    int64_t hour = result.hour, minute = result.minute, second = result.second, nanos = result.nanos;
 
-    int64_t total_nanos = duration.seconds * 1'000'000'000LL + duration.nanos;
-    int64_t add_seconds = total_nanos / 1'000'000'000LL;
-    int64_t add_nanos = total_nanos % 1'000'000'000LL;
+    const __int128 total_nanos = static_cast<__int128>(duration.seconds) * 1'000'000'000LL + duration.nanos;
+    int64_t add_seconds = static_cast<int64_t>(total_nanos / 1'000'000'000LL);
+    int64_t add_nanos = static_cast<int64_t>(total_nanos % 1'000'000'000LL);
     if (add_nanos < 0) {
         add_nanos += 1'000'000'000LL;
         add_seconds -= 1;
     }
 
-    result.nanos += add_nanos;
-    result.second += add_seconds;
-    result.second += result.nanos / 1'000'000'000LL;
-    result.nanos %= 1'000'000'000LL;
-    result.minute += result.second / 60;
-    result.second %= 60;
-    result.hour += result.minute / 60;
-    result.minute %= 60;
-    result.hour %= 24;
-    if (result.hour < 0)
-        result.hour += 24;
+    nanos += add_nanos;
+    second += add_seconds;
+    second += nanos / 1'000'000'000LL;
+    nanos %= 1'000'000'000LL;
+    minute += second / 60;
+    second %= 60;
+    hour += minute / 60;
+    minute %= 60;
+    hour %= 24;
+    if (hour < 0)
+        hour += 24;
 
-    if (result.nanos < 0) {
-        result.nanos += 1'000'000'000LL;
-        result.second -= 1;
+    if (nanos < 0) {
+        nanos += 1'000'000'000LL;
+        second -= 1;
     }
-    if (result.second < 0) {
-        int64_t bm = (-result.second + 59) / 60;
-        result.second += bm * 60;
-        result.minute -= bm;
+    if (second < 0) {
+        int64_t bm = (-second + 59) / 60;
+        second += bm * 60;
+        minute -= bm;
     }
-    if (result.minute < 0) {
-        int64_t bh = (-result.minute + 59) / 60;
-        result.minute += bh * 60;
-        result.hour -= bh;
+    if (minute < 0) {
+        int64_t bh = (-minute + 59) / 60;
+        minute += bh * 60;
+        hour -= bh;
     }
 
+    result.hour = static_cast<int8_t>(hour);
+    result.minute = static_cast<int8_t>(minute);
+    result.second = static_cast<int8_t>(second);
+    // nanos 是 int32（0..999'999'999）：收窄成 int8 会把 999'999'999 截成 -1，
+    // 于是 time / localtime ± duration 的亚秒部分出错（TCK Temporal8 [2]/[3] 回归）。
+    result.nanos = static_cast<int32_t>(nanos);
     return result;
 }
 
@@ -625,10 +655,14 @@ DurationValue mulDuration(const DurationValue& dur, double factor) {
     result.days = static_cast<int64_t>(std::trunc(d));
     double frac_d = d - static_cast<double>(result.days);
 
-    // Use total nanoseconds for better precision (avoid nanos/1e9 rounding)
-    double total_ns = static_cast<double>(dur.seconds * 1'000'000'000LL + dur.nanos) * factor + frac_d * 86400.0 * 1e9;
-    result.seconds = static_cast<int64_t>(total_ns / 1e9);
-    result.nanos = static_cast<int64_t>(total_ns - static_cast<double>(result.seconds) * 1e9);
+    // 秒与纳秒分开乘（neo4j 同样如此）。旧写法把两者合成 `seconds * 1e9 + nanos` 再转 double：
+    // |seconds| > 9.2e9 时 int64 那一步就溢出（UB），总量超过 2^53 后纳秒还会被 double 吃掉
+    // —— duration({seconds: 1e12, nanoseconds: 5e8}) * 1.5 会丢掉 0.75 秒。
+    const double sec_product = static_cast<double>(dur.seconds) * factor;
+    const double ns_product = static_cast<double>(dur.nanos) * factor + frac_d * 86400.0 * 1e9;
+    const int64_t extra_seconds = static_cast<int64_t>(std::trunc(ns_product / 1e9));
+    result.seconds = static_cast<int64_t>(std::trunc(sec_product)) + extra_seconds;
+    result.nanos = static_cast<int64_t>(ns_product - static_cast<double>(extra_seconds) * 1e9);
 
     normalizeDurationNanos(result);
     return result;
@@ -638,6 +672,13 @@ DurationValue divDuration(const DurationValue& dur, double divisor) {
     if (divisor == 0.0)
         return DurationValue{};
     return mulDuration(dur, 1.0 / divisor);
+}
+
+__int128 durationOrderNanos(const DurationValue& dur) {
+    static constexpr int64_t kSecondsPerMonth = 2'629'746; // 365.2425/12 天 = 30 天 + 37'746 秒
+    const __int128 total_seconds =
+        static_cast<__int128>(dur.months) * kSecondsPerMonth + static_cast<__int128>(dur.days) * 86'400 + dur.seconds;
+    return total_seconds * 1'000'000'000 + dur.nanos;
 }
 
 // ==================== Duration between ====================
@@ -650,7 +691,7 @@ DateTimeValue addMonthsClamped(const DateTimeValue& a, int64_t months) {
     DateTimeValue r = a;
     if (months == 0)
         return r;
-    int64_t total = r.year * 12 + (r.month - 1) + months;
+    int64_t total = absoluteMonths(r.year, r.month) + months;
     int64_t y = total >= 0 ? total / 12 : -((-total + 11) / 12);
     r.year = y;
     r.month = total - y * 12 + 1;
@@ -721,8 +762,8 @@ DurationValue durationBetween(const DateTimeValue& a, const DateTimeValue& b) {
             end_day = daysInMonth(end_year, end_month);
         }
     }
-    const int64_t packed_a = (a.year * 12 + (a.month - 1)) * 32 + a.day;
-    const int64_t packed_b = (end_year * 12 + (end_month - 1)) * 32 + end_day;
+    const int64_t packed_a = packedMonthDay(a.year, a.month, a.day);
+    const int64_t packed_b = packedMonthDay(end_year, end_month, end_day);
     const int64_t months = (packed_b - packed_a) / 32; // C++ truncation matches Java's
 
     const DateTimeValue mid = addMonthsClamped(a, months);
@@ -771,18 +812,31 @@ DateTimeValue datetimeFromEpoch(int64_t seconds, int64_t nanos) {
     constexpr int64_t NANOS_PER_DAY = 86'400'000'000'000LL;
     constexpr int64_t NANOS_PER_SEC = 1'000'000'000LL;
 
-    int64_t total_nanos = seconds * NANOS_PER_SEC + nanos;
+    // 128 位：seconds * 1e9 在 |seconds| > ~9.2e9（公元 2262 年之后）就溢出 int64，
+    // 而 date/datetime 的合法范围一直开到 ±999'999'999 年（约 ±3.2e16 秒）。
+    const __int128 total_nanos = static_cast<__int128>(seconds) * NANOS_PER_SEC + nanos;
 
-    // Split into days and day-nanos
-    int64_t days = total_nanos / NANOS_PER_DAY;
-    int64_t day_ns = total_nanos % NANOS_PER_DAY;
+    // Split into days and day-nanos（|days| ≤ 3.7e11，收窄回 int64 安全）
+    int64_t days = static_cast<int64_t>(total_nanos / NANOS_PER_DAY);
+    int64_t day_ns = static_cast<int64_t>(total_nanos % NANOS_PER_DAY);
     if (day_ns < 0) {
         day_ns += NANOS_PER_DAY;
         days--;
     }
 
     // Convert days since epoch to year/month/day
-    civilFromDays(days, result.year, result.month, result.day);
+    {
+        int64_t y = 0, m = 0, d = 0;
+        civilFromDays(days, y, m, d);
+        // 超出可表示的年份（±999'999'999，与 neo4j 一致）时报错，而不是让收窄成 int32
+        // 静默回绕。调用方要么已经做过范围检查（datetime({epochSeconds: ...})），
+        // 要么拿到一个明确的 ArgumentError（datetime.fromepoch / Bolt 参数）。
+        if (y < -999999999 || y > 999999999)
+            throw QueryException(QueryErrorKind::Argument, "datetime out of range");
+        result.year = static_cast<int32_t>(y);
+        result.month = static_cast<int8_t>(m);
+        result.day = static_cast<int8_t>(d);
+    }
 
     // Convert day_ns to hour/minute/second/nanos (UTC, no offset)
     int64_t sec_of_day = day_ns / NANOS_PER_SEC;
@@ -835,14 +889,20 @@ int32_t lookupNamedTimezoneOffset(int64_t year, int64_t month, int64_t day, int6
 
 namespace {
 
-std::string pad4(int64_t v) {
-    char buf[5];
-    buf[0] = static_cast<char>('0' + ((v / 1000) % 10));
-    buf[1] = static_cast<char>('0' + ((v / 100) % 10));
-    buf[2] = static_cast<char>('0' + ((v / 10) % 10));
-    buf[3] = static_cast<char>('0' + (v % 10));
-    buf[4] = '\0';
-    return buf;
+/// ISO-8601 扩展年份（与 neo4j 一致）：
+///   0..9999   -> 四位补零（0000、0001、1970、9999）
+///   -9999..-1 -> '-' + 四位补零（-0001、-1199）
+///   |year| > 9999 -> 显式符号 + 原样位数（+10000、+11476、-100000、-999999999）
+/// pad4/ppad2 是按位取数，只能处理 0..9999 的非负数：负年份会算出非数字字符（'/'、''' 之类），
+/// 五位以上会被截成低四位。
+std::string formatYear(int32_t year) {
+    const int64_t abs_year = year < 0 ? -static_cast<int64_t>(year) : year;
+    std::string digits = std::to_string(abs_year);
+    if (abs_year <= 9999)
+        digits.insert(0, 4 - digits.size(), '0');
+    if (year < 0)
+        return "-" + digits;
+    return abs_year <= 9999 ? digits : "+" + digits;
 }
 
 std::string pad2(int64_t v) {
@@ -908,14 +968,14 @@ std::string fmtTimeOfDay(int64_t hour, int64_t minute, int64_t second, int64_t n
 std::string fmtDateTime(const DateTimeValue& tv, bool always_seconds) {
     switch (tv.kind) {
     case DateTimeKind::DATE:
-        return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day);
+        return formatYear(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day);
     case DateTimeKind::LOCAL_DATETIME:
-        return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" +
+        return formatYear(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" +
                fmtTimeOfDay(tv.hour, tv.minute, tv.second, tv.nanos, always_seconds);
     case DateTimeKind::DATETIME:
-        return pad4(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" +
+        return formatYear(tv.year) + "-" + pad2(tv.month) + "-" + pad2(tv.day) + "T" +
                fmtTimeOfDay(tv.hour, tv.minute, tv.second, tv.nanos, always_seconds) +
-               fmtTimezone(tv.tz_offset_sec, tv.tz_name);
+               fmtTimezone(tv.tz_offset_sec, tzNameOrEmpty(tv.tz_name));
     default:
         return "";
     }
@@ -924,7 +984,7 @@ std::string fmtDateTime(const DateTimeValue& tv, bool always_seconds) {
 std::string fmtTime(const TimeValue& tv, bool always_seconds) {
     std::string s = fmtTimeOfDay(tv.hour, tv.minute, tv.second, tv.nanos, always_seconds);
     if (tv.kind == TimeKind::TIME)
-        s += fmtTimezone(tv.tz_offset_sec, tv.tz_name);
+        s += fmtTimezone(tv.tz_offset_sec, tzNameOrEmpty(tv.tz_name));
     return s;
 }
 
