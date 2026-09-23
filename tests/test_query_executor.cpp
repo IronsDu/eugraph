@@ -9226,3 +9226,62 @@ TEST_F(QueryExecutorTest, AllNodeScanStreamsInVidOrderAndDedupsLabels) {
     EXPECT_TRUE(std::is_sorted(all_ids.begin(), all_ids.end()));        // 升序（此前是哈希序）
     EXPECT_EQ(idsOf("MATCH (n) RETURN id(n) AS v LIMIT 2").size(), 2u); // LIMIT 能提前结束
 }
+
+// ── complex-12 形状必须落到 IndexScanValues 分支 ──
+//
+// `tryPlanListIndexJoin`（physical_planner.cpp）识别 "x.prop IN left.list 且该属性有索引" 的
+// 形状，重写成 Apply(collect(list), HashJoin(IndexScanValues(prop IN list) + 反向 Expand, ...))。
+// 这是 IndexScanValuesPhysicalOp 唯一的构造路径（physical_planner.cpp:1491 置 index_scan_values），
+// 所以用例先断言 EXPLAIN 里确实出现该算子 —— 形状一旦不匹配，测试不能"因为没命中而通过"。
+//
+// 查询取自 LDBC interactive complex-12（参数内联，HAS_TYPE/TagClass 分支简化为 Tag.name 等值
+// 过滤，保持 collect(t.id) → "tag.id IN tags" 的骨架与多跳链不变）。
+TEST_F(QueryExecutorTest, Complex12ShapePlansIndexScanValues) {
+    // (:Person{id:1})-[:KNOWS]-(:Person{id:2})<-[:HAS_CREATOR]-(:Comment{id:10})
+    //   -[:REPLY_OF]->(:Post{id:20})-[:HAS_TAG]->(:Tag{id:1, name:'Actor'})
+    ASSERT_TRUE(execSync(*executor_, "CREATE (t:Tag {id: 1, name: 'Actor'})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (p:Person {id: 1})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (f:Person {id: 2})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (m:Post {id: 20})").error.empty());
+    ASSERT_TRUE(
+        execSync(*executor_, "MATCH (p:Person {id: 1}), (f:Person {id: 2}) CREATE (p)-[:KNOWS]->(f)").error.empty());
+    ASSERT_TRUE(
+        execSync(*executor_, "MATCH (m:Post {id: 20}), (t:Tag {id: 1}) CREATE (m)-[:HAS_TAG]->(t)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (f:Person {id: 2}), (m:Post {id: 20}) "
+                                     "CREATE (c:Comment {id: 10})-[:HAS_CREATOR]->(f), (c)-[:REPLY_OF]->(m)")
+                    .error.empty());
+
+    // 两侧都要索引：Tag.id 供 IndexScanValues 使用，Person.id 让起点走索引分支
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_c12_tag_id FOR (n:Tag) ON (n.id)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE INDEX idx_c12_person_id FOR (n:Person) ON (n.id)").error.empty());
+    auto tag_index = blockingWait(async_meta_->getIndex("idx_c12_tag_id"));
+    ASSERT_TRUE(tag_index.has_value());
+    ASSERT_EQ(tag_index->state, IndexState::PUBLIC);
+
+    const std::string query = "MATCH (t:Tag) WHERE t.name = 'Actor' "
+                              "WITH collect(t.id) AS tags "
+                              "MATCH (:Person {id: 1})-[:KNOWS]-(friend:Person)<-[:HAS_CREATOR]-(comment:Comment)"
+                              "-[:REPLY_OF]->(:Post)-[:HAS_TAG]->(tag:Tag) "
+                              "WHERE tag.id IN tags "
+                              "RETURN friend.id AS personId, count(DISTINCT comment) AS replyCount";
+
+    auto plan_result = execSync(*executor_, "EXPLAIN " + query);
+    ASSERT_TRUE(plan_result.error.empty()) << plan_result.error;
+    std::string plan_text;
+    for (const auto& row : plan_result.rows) {
+        if (!row.empty() && std::holds_alternative<std::string>(row[0]))
+            plan_text += std::get<std::string>(row[0]) + "\n";
+    }
+    EXPECT_NE(plan_text.find("IndexScanValues"), std::string::npos)
+        << "complex-12 形状没有落到 IndexScanValues，该算子仍无覆盖：\n"
+        << plan_text;
+    // 反向对照（已实测）：去掉索引 DDL 后计划退化成 Filter → CrossProduct 并让上面这条失败，
+    // 所以断言检验的是"重写是否发生"，不是形状碰巧含某个名字。
+    EXPECT_NE(plan_text.find("HashJoin"), std::string::npos) << plan_text;
+
+    auto result = execSync(*executor_, query);
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u) << plan_text;
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2); // friend.id
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 1); // replyCount
+}
