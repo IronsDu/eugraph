@@ -33,9 +33,6 @@ Feature: Large durations do not overflow
       | 'PT416666666H40M0.75S'  |
     And no side effects
 
-  # 已知未修复（本用例先当回归钉子）：列表推导式里的外层变量 v 没有随 UNWIND 的
-  # 每一行刷新 —— 实际两行都按第一个元素 [1] 计算，得到 0/0；neo4j 语义是 0/1。
-  # 上游 WithOrderBy1 [45] 的 string / lists 两条同源（同为 3 条失败）。
   Scenario: a list shared by UNWIND is not emptied element by element
     Given an empty graph
     When executing query:

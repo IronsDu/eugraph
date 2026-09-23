@@ -72,11 +72,6 @@ folly::coro::AsyncGenerator<DataChunk> UnwindPhysicalOp::executeChunk() {
                 if (!list || list->elements.empty())
                     continue;
 
-                // Non-null only when the buffer is exclusively ours, in which case the
-                // elements can be moved out (each is consumed by exactly one output
-                // row and list_col is discarded with this chunk).
-                ListValue* movable = list_col.borrowList(r);
-
                 // Emit this row's elements in slices of at most DEFAULT_CAPACITY.
                 // `one` is a fresh chunk per slice, so the pass-through CONSTANT
                 // values and the element buffer it owns are never shared with a
@@ -95,13 +90,15 @@ folly::coro::AsyncGenerator<DataChunk> UnwindPhysicalOp::executeChunk() {
                         one.columns[c] = Column::constant(chunk->columns[c].getValue(r));
                     one.reserve(n);
 
-                    if (movable) {
-                        for (size_t k = 0; k < n; ++k)
-                            one.columns[output_col_index_].setValue(k, std::move(movable->elements[emitted + k].value));
-                    } else {
-                        for (size_t k = 0; k < n; ++k)
-                            one.columns[output_col_index_].setValue(k, list->elements[emitted + k].value);
-                    }
+                    // 元素一律按值拷贝。曾经的"缓冲区独占就 move 出去"是错的：
+                    // borrowList() 的非空只说明**列缓冲区**属于本算子，而 ListValue 本体是
+                    // ListValuePtr（shared_ptr）持有的，同一个列表还可能被别的读者看到
+                    // —— 列表推导式 [x IN vs WHERE ...]、同一行的 RETURN v、后面的行……
+                    // 一旦 move，这些读者拿到的是 moved-from 的 null 元素：表现为
+                    // [x IN vs WHERE ...] 恒空、[x IN vs WHERE v > [0]] 得到 [null, null]。
+                    // 单个 Value 拷贝（48 字节，重载荷走 shared_ptr 句柄）比正确性便宜得多。
+                    for (size_t k = 0; k < n; ++k)
+                        one.columns[output_col_index_].setValue(k, list->elements[emitted + k].value);
 
                     one.count = n;
                     emitted += n;
