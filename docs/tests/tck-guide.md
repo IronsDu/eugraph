@@ -181,3 +181,39 @@ Server 输出写入 `/tmp/eugraph_tck_server.log`。如果 server 崩溃，`run_
 | `scripts/compare_tck.py` | 独立脚本：直接对比两个 cucumber 文本报告 |
 | `third_party/openCypher/tck/features/` | openCypher TCK feature 文件（git submodule） |
 | `docs/tests/tck-results.md` | 测试结果分类报告 |
+
+## 添加我们自己的 TCK 用例
+
+上游 openCypher TCK 在子模块 `third_party/openCypher` 里，不能改；我们自己的用例放在
+**`tests/tck/features-eugraph/`**（入库，与上游并列）。运行时会同时喂给 cucumber：
+
+```
+tck_tests  <repo>/third_party/openCypher/tck/features  <repo>/tests/tck/features-eugraph
+```
+
+（`tests/tck/CMakeLists.txt` 里就是这两个 `--features`；`ctest -R tck_tests` 与 CI 都走这一条，
+所以我们的用例自动进同一份报告、同一套 step 基线与 `--fail-on-regression` 回归保护。）
+
+只跑我们自己的：
+
+```bash
+python3 tests/tck/run_tck.py \
+  --server-bin build/debug/eugraph-server \
+  --tck-bin build/debug/tests/tck/tck_tests \
+  --features tests/tck/features-eugraph \
+  --report /tmp/eugraph-tck.md
+```
+
+`--features` 可以重复（runner 会把所有目录按顺序传给 cucumber），也接受单个 `.feature` 文件。
+
+写用例时：
+* 用上游 TCK 已有的 step（`Given an empty graph` / `having executed` / `executing query` /
+  `the result should be, in any order:` / `in order:` / `no side effects`），这些在
+  `tests/tck/tck_steps.cpp` 里实现；
+* 期望值里凡是**渲染形式不确定**的（扩展年份、带秒/不带秒、时区后缀），在查询里用
+  `toString(...)` 投影成字符串再断言，避免依赖客户端/服务端两种渲染的差异；
+* 需要上游没有的断言（例如"应有 N 个点/M 条边"、"应报某类错误"）时，在
+  `tests/tck/tck_steps.cpp` 里加 step，并在这里补一行说明；
+* 我们的用例和上游用例共用报告与基线：新增用例不会触发 `--fail-on-regression`
+  （只有"基线里 PASSED、现在 FAILED/SKIPPED"才算回归），但**改动已有用例的期望值**会。
+

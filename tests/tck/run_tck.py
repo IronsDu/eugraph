@@ -467,8 +467,9 @@ def main():
                         help="Server bind address (default: 127.0.0.1)")
     parser.add_argument("--data-dir", default="/tmp/eugraph_tck_data",
                         help="WiredTiger data directory (default: /tmp/eugraph_tck_data)")
-    parser.add_argument("--features", default="features",
-                        help="Feature file or directory (default: features/)")
+    parser.add_argument("--features", action="append", default=None,
+                        help="Feature file or directory；可重复指定多个（例如上游 TCK 目录 + 我们自己的目录）"
+                             "（默认 features/）")
     parser.add_argument("--timeout", type=int, default=30,
                         help="Server startup timeout in seconds (default: 30)")
     parser.add_argument("--keep-data", action="store_true",
@@ -531,7 +532,8 @@ def main():
     print(f"[run_tck] Server ready", flush=True)
 
     # ---- Run tck_tests ----
-    tck_cmd = [args.tck_bin, args.features] + args.extra
+    features = args.features if args.features else ["features"]
+    tck_cmd = [args.tck_bin] + features + args.extra
     env = os.environ.copy()
     env["EUGRAPH_HOST"] = args.host
     env["EUGRAPH_PORT"] = str(args.port)
