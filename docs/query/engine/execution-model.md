@@ -140,8 +140,8 @@ AsyncGenerator<RowBatch>
 - 检查点全部在算子侧，只有**一个原语**：`PhysicalOperator::cancellable(gen)`（`physical_operator_base.hpp` 里的模板协程），凡是"按 chunk 消费上游"的地方都包一层，两侧来源各包一次：
   - **存储侧来源**：所有 `store_.scanXxx(...)` 生成器的消费点（9 个算子文件、34 处）；
   - **算子侧来源**：所有 `child_->executeChunk()` / `->execute()` 的获取点（29 个算子文件、38 处）。
-  第二条是必需的：像 `AllNodeScanPhysicalOp` 这类"先把结果物化进内存、再逐个 chunk 吐给父算子"的算子，如果在它物化期间取消，检查只写在它消费 store 的地方是拦不住后面 10 万行输出的——必须由**上游消费者**（例如 `CreateNodePhysicalOp`）在"拿到一个上游 chunk"时检查并停止拉取（写查询尤其重要：`MATCH (n) CREATE ...` 的根算子不产出任何行，只有算子树内部的检查才能让它停下）。
-  - **精度**：代价最多是多做一个 batch——飞行中的那个 chunk 会被产出后丢弃，随后算子返回、生成器销毁。两个例外会超出"一个 batch"：`scanAllVertices()` 与顶点索引扫描在**第一次 `next()` 内就把整个匹配集收集完**（单次 dispatch），那期间取消要等收集结束；对选择性索引这个量很小，这是"让存储层保持与查询无关"所付的代价。
+  第二条是必需的：**阻断型算子**（`Sort` / `Aggregate`）在"消费完整个子算子输出"期间不会回到上游，此时取消只能靠它自己的检查点；写查询尤其重要——`MATCH (n) CREATE ...` 的根算子不产出任何行，只有算子树内部的检查才能让它停下。
+  - **精度**：代价最多是多做一个 batch——飞行中的那个 chunk 会被产出后丢弃，随后算子返回、生成器销毁。唯一会超出"一个 batch"的是**顶点索引扫描**：存储层的 `scanVerticesByIndex*` / `scanVerticesByIndexId*` 仍是单次 dispatch（同步索引 API 没有可续游标），把该索引值的全部匹配收完才开吐；对选择性索引这个量很小，这是"让存储层保持与查询无关"所付的代价。扫描算子本身已不再是例外：`AllNodeScanPhysicalOp` 与 `IndexScanValuesPhysicalOp` 都改为流式（见下节），`scanAllVertices()` 也已换成游标式分批。
   - 粒度到此为止，不打断单次长 IO。行级检查仍保留在 `expand` / `varlen_expand`（单行就能炸开整棵遍历）。
 - 被取消的算子直接 `co_return`，生成器提前结束，父算子自然退出，不需要异常传播。
 - **收敛即回滚**：生成器“提前结束”和“真的取完”在协议层都表现为 `next()` 取空，因此结束流时必须能区分二者。Bolt 侧用 `streamCancelled()` 显式判定，走与断连相同的分支：回滚事务、结束流、回 `FAILURE`，绝不提交客户端没看全的写事务。
@@ -152,7 +152,7 @@ AsyncGenerator<RowBatch>
 
 | 算子 | 特征 | IO 操作 |
 |------|------|---------|
-| AllNodeScan | 扫描所有标签，去重，产出 VertexRef（拓扑） | scanVerticesByLabel × N |
+| AllNodeScan | 流式扫描，多标签时按 vid k 路归并去重（输出顺序为 vid 升序），产出 VertexRef（拓扑） | createAllVertexScanCursor（不限标签）/ scanVerticesByLabel × N |
 | LabelScan | 按标签 ID 扫描，产出 VertexRef（拓扑） | scanVerticesByLabel |
 | IndexScan | 等值或范围扫描，通过 IndexKeyCodec | scanVerticesByIndex / scanVerticesByIndexRange |
 | ProjectionExtract | 融合点/边属性抽取 + Project 语义。7 种 ColumnSpec：Passthrough / LoadVertexProp / LoadEdgeProp / LoadVertexLabels / LoadEdgeType / ConstructVertex / ConstructEdge | getVertexLabels / getVertexProperty / getEdgeProperty 等 |

@@ -68,6 +68,7 @@ public:
     void scanVerticesByLabel(GraphTxnHandle txn, LabelId label_id,
                              const std::function<bool(VertexId)>& callback) override;
     std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphTxnHandle txn, LabelId label_id) override;
+    std::unique_ptr<IVertexScanCursor> createAllVertexScanCursor(GraphTxnHandle txn) override;
 
     // All-Vertex Scan (含无标签 vertex)
     void scanAllVertices(GraphTxnHandle txn, const std::function<bool(VertexId)>& callback) override;
@@ -157,7 +158,7 @@ public:
 
 class VertexScanCursorImpl : public ISyncGraphDataStore::IVertexScanCursor {
 public:
-    VertexScanCursorImpl(WT_SESSION* session, const std::string& table_name);
+    VertexScanCursorImpl(WT_SESSION* session, const std::string& table_name, bool existence_keys = false);
     ~VertexScanCursorImpl() override;
 
     bool valid() const override;
@@ -172,6 +173,8 @@ private:
     bool valid_ = false;
     VertexId current_vid_ = 0;
     std::string currentKey_;
+    // label 前向表用 label-forward key，顶点存在表用 vertex-existence key。
+    bool existence_keys_ = false;
 };
 
 class EdgeScanCursorImpl : public ISyncGraphDataStore::IEdgeScanCursor {

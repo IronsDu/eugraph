@@ -70,6 +70,8 @@ public:
     virtual void scanVerticesByLabel(GraphTxnHandle txn, LabelId label_id,
                                      std::function<void(VertexId)> callback) = 0;
     virtual std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphTxnHandle txn, LabelId label_id) = 0;
+    // 全图游标：走顶点存在表（vertex-existence），每点恰好一次、按 vid 升序
+    virtual std::unique_ptr<IVertexScanCursor> createAllVertexScanCursor(GraphTxnHandle txn) = 0;
 
     // Edge CRUD
     virtual bool insertEdge(GraphTxnHandle txn, EdgeId eid, VertexId src_id, VertexId dst_id,
@@ -287,3 +289,4 @@ public:
 5. **ISyncGraphMetaStore DDL 方法为 no-op**：元数据只存在自己的 `table:metadata` 中；物理表的创建由 data store 负责。
 6. **批量操作使用独立事务**：`batchInsertVertices`/`batchInsertEdges` 内部自行 begin+commit，不参与外层 Cypher 事务。
 7. **存储层不参与取消**：取消是语句级（compute 层）的概念，归属 `compute::QueryContext`（每语句一份）。早期版本把它作为 `IAsyncGraphDataStore` 的可写字段——而该类型的实例（`QueryExecutor::async_data_`）被一个图里所有查询共享，一旦有人对共享实例 setter，`forkTransaction()` 的拷贝就会让之后每个查询"一出生就是已取消"。现在存储接口上没有令牌、没有 setter，扫描算子通过 `PhysicalOperator::cancellable(gen)` 在消费上游 chunk 时检查（代价是最多多做一个 batch）。详见 [execution-model.md](../query/engine/execution-model.md)。
+8. **扫描走游标，不预先物化**：`ISyncGraphDataStore` 上的扫描有回调式（`scanVerticesByLabel(txn, label, cb)` / `scanEdges(...)`）与游标式（`createVertexScanCursor` / `createEdgeScanCursor` / `createAllVertexScanCursor`）两套；异步包装（`IAsyncGraphDataStore`）用游标实现分批流式输出，容量为 1024/批，**不把整个匹配集收进 `std::vector` 再吐**。`createAllVertexScanCursor` 服务"不限标签"的全图扫描：它读顶点存在表（vertex-existence key），因此每个顶点恰好出现一次、天然按 vid 升序；按标签扫描则读该标签的前向表（label-forward key），同样是 vid 升序且内部唯一。这两个"升序 + 内部唯一"的性质是上层 `AllNodeScanPhysicalOp` 能用 k 路归并在流式前提下完成去重的前提。早期 `scanAllVertices()` 曾把全部 vid 物化后再分批，首行延迟等于整图扫完、RSS 随图规模线性增长。

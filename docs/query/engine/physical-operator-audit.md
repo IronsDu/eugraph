@@ -394,7 +394,14 @@ map<string, PathRequirement> path_reqs;
 
 ### 1. AllNodeScanPhysicalOp
 
-**当前状态**：输出 `VertexRef`（拓扑类型）。流式扫描，不再构造 `VertexValue`。labels 与属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 加载（`LoadVertexLabels` / `LoadVertexProp` / `ConstructVertex` spec）。
+**当前状态**：输出 `VertexRef`（拓扑类型）。真流式扫描，不再构造 `VertexValue`，也不再预先把全图顶点收进容器。labels 与属性由下游 `ProjectionExtractPhysicalOp` 按 `PlanRequirements` 加载（`LoadVertexLabels` / `LoadVertexProp` / `ConstructVertex` spec）。
+
+**扫描路径**（`candidate_labels_` 来自 `ctx.static_prune_hints`，是并集剪枝，真正的谓词过滤仍在下游）：
+- 0 个候选标签：`createAllVertexScanCursor()`（顶点存在表，每点一次、vid 升序）直接转发；
+- 1 个候选标签：`scanVerticesByLabel()`（标签前向表，按 vid 升序且内部唯一）直接转发；
+- 多个候选标签：各路游标做 k 路归并——每路预取一个 vid，取最小者输出并把所有等于该值的路一起推进，从而在流式前提下完成去重；内存 O(label 数 × 批)。
+
+输出顺序因此是确定的 vid 升序（早期实现把 vid 收进 `unordered_set` 去重，输出为哈希序，且首行延迟等于整图扫完）。
 
 ---
 

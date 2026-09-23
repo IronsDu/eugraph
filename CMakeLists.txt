@@ -609,6 +609,26 @@ if(EUGRAPH_BUILD_TESTS)
 
     gtest_add_tests(TARGET topology_types_tests)
 
+    # Columnar storage (DataChunk / Column / ColumnBuffer) tests
+    add_executable(data_chunk_tests
+        tests/test_data_chunk.cpp
+    )
+
+    target_include_directories(data_chunk_tests PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+    )
+
+    target_link_libraries(data_chunk_tests PRIVATE
+        eugraph_query_engine
+        Folly::folly
+        Folly::folly_deps
+        GTest::gtest
+        GTest::gtest_main
+        dl
+    )
+
+    gtest_add_tests(TARGET data_chunk_tests)
+
     # Metadata service tests
     add_executable(metadata_tests
         tests/test_metadata_service.cpp

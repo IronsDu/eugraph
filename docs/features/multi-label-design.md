@@ -91,7 +91,7 @@ CREATE (n:Person:Employee {age: 30, salary: 50000, tag: 'x'})  -- 多标签 CREA
 | **解析器（Parser）** | `NodePattern.labels` 是 `vector<string>`，语法已支持 `(n:A:B)` |
 | **逻辑计划（LabelScanOp）** | 使用 `labels` 完整列表传递给物理算子 |
 | **物理计划（LabelScanPhysicalOp）** | 多 LabelId，加载全部指定标签属性，获取完整 `LabelIdSet` |
-| **物理计划（AllNodeScanPhysicalOp）** | 按 `VertexId` 去重，同一顶点多标签合并为一行 |
+| **物理计划（AllNodeScanPhysicalOp）** | 按 `VertexId` 去重，同一顶点多标签合并为一行。流式实现：单标签直接转发该标签前向表游标；不限标签走 `createAllVertexScanCursor`；多标签对各自前向表做 k 路归并（各路按 vid 升序且内部唯一，取最小并推进所有相等者），内存为 O(label 数 × 批)，不再预先收集全图顶点 |
 | **物理计划（ExpandPhysicalOp）** | per-label 属性存储（`map<LabelId, Properties>`） |
 | **表达式求值（PropertyAccess）** | 便捷模式遍历所有 label（冲突时合并为列表），转型模式定位指定 label |
 | **CREATE** | 支持多标签 CREATE，属性按标签解析，未匹配属性写入 `__anon__` |
