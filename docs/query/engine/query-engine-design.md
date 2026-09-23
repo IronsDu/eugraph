@@ -457,7 +457,7 @@ class PhysicalOperator {
 
 | 物理算子 | 持有的额外信息 | DataChunk 特性 |
 |----------|---------------|---------------|
-| `AllNodeScanPhysicalOp` | `IAsyncGraphDataStore&`, label 定义 | 输出 `VertexRef`（VERTEX_REF），拓扑阶段 |
+| `AllNodeScanPhysicalOp` | `IAsyncGraphDataStore&`, label 定义 | 输出 `VertexRef`（VERTEX_REF），拓扑阶段。流式：不限标签走 `createAllVertexScanCursor`，多标签 k 路归并去重（vid 升序） |
 | `LabelScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId` | 输出 `VertexRef`（VERTEX_REF），拓扑阶段 |
 | `IndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `LabelId`, `prop_id`, `ScanMode` | 输出 `VertexRef`（VERTEX_REF） |
 | `EdgeIndexScanPhysicalOp` | `IAsyncGraphDataStore&`, `EdgeLabelId`, `prop_ids` | 输出 `VertexRef` / `EdgeKey` / `VertexRef` |
