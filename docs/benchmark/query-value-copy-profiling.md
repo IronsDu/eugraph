@@ -1910,9 +1910,13 @@ chunk.appendRow({Value(VertexRef{vid})});   // 每行：临时 std::vector<Value
   句柄写入按引用接管、kind/DICTIONARY/CONSTANT 拒绝且不留痕、无 buffer 时按需创建、
   `appendVertexRefRow` 的回退路径与 `appendRow` 等价、越界写自增长、
   `appendVertexRefRow` 与 `appendRow` 结果一致、列引用在 chunk 重建后重新绑定、`count/sel/numRows` 一致；
-* `query_executor_tests` **559/559**、`index_e2e_tests` 50/50、`topology_types_tests` 29/29、
-  `evaluator_typed_tests` 19/19；
-* 全量 `ctest --preset debug`：**1124/1124 通过**；其中 TCK 与改动前逐项一致 ——
+* `query_executor_tests` **560/560**（含新增的 `Complex12ShapePlansIndexScanValues`，
+  它用 LDBC complex-12 的形状覆盖了 `IndexScanValuesPhysicalOp` —— 该算子只在
+  `tryPlanListIndexJoin` 重写里被构造，此前没有任何测试触达；用例同时断言计划出现
+  `IndexScanValues`/`HashJoin`，并用"去掉索引 DDL 后退化为 Filter → CrossProduct"做过反向对照）、
+  `index_e2e_tests` 50/50、`topology_types_tests` 29/29、`evaluator_typed_tests` 19/19；
+* 全量 `ctest --preset debug`：**1127/1127 通过**（生产代码冻结后新增上述用例，其所在二进制
+  单独全量重跑 560/560）；其中 TCK 与改动前逐项一致 ——
   3906 / Passed 3853 / Undefined 52 / Failed 1（唯一失败仍是 `Temporal2 [6]` 的
   Stockholm LMT tzdata 已知差异），步骤 16042 / 15849。
 
