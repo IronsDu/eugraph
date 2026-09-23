@@ -173,6 +173,29 @@ struct ColumnBuffer {
             validity[i / 8] |= (1U << (i % 8));
     }
 
+    /// Set validity bit i, growing the bitmap if the row was never reserved.
+    ///
+    /// reserve() sizes the bitmap for `capacity` rows, and setValid() silently
+    /// declines a bit past that; a typed write that made it into the data vector would
+    /// then still read back as NULL. Growing the bitmap keeps the two in step.
+    void ensureValid(size_t i) {
+        if (i / 8 >= validity.size())
+            validity.resize(i / 8 + 1, 0x00);
+        validity[i / 8] |= static_cast<uint8_t>(1U << (i % 8));
+    }
+
+    /// Make row i writable, then mark it non-NULL.
+    ///
+    /// Producers reserve a whole batch up front, so the fast path is a predictable
+    /// compare plus one bitmap set; the slow path only runs for a caller that appends
+    /// without reserving.
+    void ensureRow(size_t i) {
+        if (i >= capacity)
+            reserve(i + 1); // resize()s the active typed vector and the bitmap (all valid)
+        else
+            ensureValid(i);
+    }
+
     Value getValue(size_t i) const {
         if (isNull(i))
             return Value{};
@@ -230,22 +253,78 @@ struct ColumnBuffer {
         setValueImpl(i, std::move(val));
     }
 
-    /// Assign a typed payload directly, skipping the Value variant entirely.
+    // ── Typed writes (skip the Value variant) ──
+
+    /// Assign a concrete payload straight into the matching typed vector.
     ///
-    /// Callers that already hold the concrete type (a constructed VertexValue or
-    /// EdgeValue, a resolved label set) previously had to wrap it in a Value to
-    /// reach setValue, which deep-copied the payload a second time -- for an
-    /// entity that means cloning its unordered_map<LabelId, Properties>. These
-    /// overloads assign straight into the typed vector, leaving the single copy
-    /// that storing the value inherently requires.
+    /// A caller that already holds the payload used to wrap it in a Value to reach
+    /// setValue: that constructs a 48-byte variant, dispatches on the alternative on
+    /// the way in and again on the way out, and for the heavy kinds deep-copies the
+    /// payload a second time (an entity copy clones its
+    /// unordered_map<LabelId, Properties>). These overloads assign in place, leaving
+    /// only the single copy that storing the value inherently requires.
+    ///
+    /// The temporal kinds (DATETIME / TIME / DURATION) keep using setValue: their
+    /// storage is `any_data`, whose element type *is* Value, so there is no typed
+    /// vector to assign into.
+    void setBool(size_t i, bool v) {
+        ensureRow(i);
+        bool_data[i] = v ? 1 : 0;
+    }
+
+    void setInt64(size_t i, int64_t v) {
+        ensureRow(i);
+        int64_data[i] = v;
+    }
+
+    void setDouble(size_t i, double v) {
+        ensureRow(i);
+        double_data[i] = v;
+    }
+
+    void setString(size_t i, std::string v) {
+        ensureRow(i);
+        string_data[i] = std::move(v);
+    }
+
+    void setVertexRef(size_t i, VertexRef v) {
+        ensureRow(i);
+        vertex_ref_data[i] = v;
+    }
+
+    void setEdgeKey(size_t i, EdgeKey k) {
+        ensureRow(i);
+        edge_key_data[i] = k;
+    }
+
+    void setPathTopology(size_t i, PathTopologyPtr p) {
+        ensureRow(i);
+        path_topology_data[i] = std::move(p);
+    }
+
     void setVertexValue(size_t i, VertexValuePtr v) {
-        setValid(i);
+        ensureRow(i);
         vertex_data[i] = std::move(v);
     }
 
     void setEdgeValue(size_t i, EdgeValuePtr v) {
-        setValid(i);
+        ensureRow(i);
         edge_data[i] = std::move(v);
+    }
+
+    void setPathValue(size_t i, PathValuePtr p) {
+        ensureRow(i);
+        path_data[i] = std::move(p);
+    }
+
+    void setListValue(size_t i, ListValuePtr p) {
+        ensureRow(i);
+        list_data[i] = std::move(p);
+    }
+
+    void setMapValue(size_t i, MapValuePtr p) {
+        ensureRow(i);
+        map_data[i] = std::move(p);
     }
 
 private:
@@ -542,18 +621,58 @@ struct Column {
 
     /// Typed payload assignment, skipping the Value variant. Returns false when
     /// this column cannot hold the payload (wrong kind, or a read-only DICTIONARY
-    /// form), leaving the caller to fall back to the Value path. The point is to
-    /// avoid the extra deep copy that wrapping in a Value costs -- for an entity
-    /// that copy clones its unordered_map<LabelId, Properties>.
-    /// The payload arrives as a handle: a caller that owns a freshly built value
-    /// wraps it with mk<T>(...), and the column takes the reference over instead of
-    /// cloning the payload.
+    /// form), leaving the caller to fall back to the Value path -- behaviour is
+    /// unchanged wherever the fast path declines. The payload arrives as a handle
+    /// where the kind stores one: a caller that owns a freshly built value wraps it
+    /// with mk<T>(...), and the column takes the reference over instead of cloning
+    /// the payload.
+    bool setBool(size_t i, bool v) {
+        return setTypedImpl(binder::BoundTypeKind::BOOL, [&](ColumnBuffer& b) { b.setBool(i, v); });
+    }
+
+    bool setInt64(size_t i, int64_t v) {
+        return setTypedImpl(binder::BoundTypeKind::INT64, [&](ColumnBuffer& b) { b.setInt64(i, v); });
+    }
+
+    bool setDouble(size_t i, double v) {
+        return setTypedImpl(binder::BoundTypeKind::DOUBLE, [&](ColumnBuffer& b) { b.setDouble(i, v); });
+    }
+
+    bool setString(size_t i, std::string v) {
+        return setTypedImpl(binder::BoundTypeKind::STRING, [&](ColumnBuffer& b) { b.setString(i, std::move(v)); });
+    }
+
+    bool setVertexRef(size_t i, VertexRef v) {
+        return setTypedImpl(binder::BoundTypeKind::VERTEX_REF, [&](ColumnBuffer& b) { b.setVertexRef(i, v); });
+    }
+
+    bool setEdgeKey(size_t i, EdgeKey k) {
+        return setTypedImpl(binder::BoundTypeKind::EDGE_KEY, [&](ColumnBuffer& b) { b.setEdgeKey(i, k); });
+    }
+
+    bool setPathTopology(size_t i, PathTopologyPtr p) {
+        return setTypedImpl(binder::BoundTypeKind::PATH_TOPOLOGY,
+                            [&](ColumnBuffer& b) { b.setPathTopology(i, std::move(p)); });
+    }
+
     bool setVertexValue(size_t i, VertexValuePtr v) {
         return setTypedImpl(binder::BoundTypeKind::VERTEX, [&](ColumnBuffer& b) { b.setVertexValue(i, std::move(v)); });
     }
 
     bool setEdgeValue(size_t i, EdgeValuePtr v) {
         return setTypedImpl(binder::BoundTypeKind::EDGE, [&](ColumnBuffer& b) { b.setEdgeValue(i, std::move(v)); });
+    }
+
+    bool setPathValue(size_t i, PathValuePtr p) {
+        return setTypedImpl(binder::BoundTypeKind::PATH, [&](ColumnBuffer& b) { b.setPathValue(i, std::move(p)); });
+    }
+
+    bool setListValue(size_t i, ListValuePtr p) {
+        return setTypedImpl(binder::BoundTypeKind::LIST, [&](ColumnBuffer& b) { b.setListValue(i, std::move(p)); });
+    }
+
+    bool setMapValue(size_t i, MapValuePtr p) {
+        return setTypedImpl(binder::BoundTypeKind::MAP, [&](ColumnBuffer& b) { b.setMapValue(i, std::move(p)); });
     }
 
 private:
@@ -726,6 +845,28 @@ struct DataChunk {
         for (size_t i = 0; i < values.size() && i < columns.size(); ++i) {
             columns[i].setValue(count, values[i]);
         }
+        ++count;
+    }
+
+    /// Append one row whose single column is a VERTEX_REF, writing the column the
+    /// caller hoisted out of its row loop.
+    ///
+    /// Every scan operator emits exactly this shape, and used to call
+    /// appendRow({Value(VertexRef{vid})}): that built a temporary std::vector<Value>
+    /// per row -- one heap allocation -- plus a Value variant that was taken apart
+    /// again on the way into the column. Taking the Column by reference also keeps
+    /// `columns[0]` out of the row loop.
+    ///
+    /// The caller must re-bind that reference after rebuilding the chunk: `co_yield`
+    /// moves `columns` into the yielded chunk, so a reference obtained before the
+    /// yield dangles, and `out = chunk.columns[0]` on an existing reference would
+    /// copy-assign into the old Column instead of re-binding.
+    ///
+    /// When the typed write declines (kind mismatch, read-only DICTIONARY column) the
+    /// Value path still runs, so behaviour is unchanged.
+    void appendVertexRefRow(Column& out, VertexId vid) {
+        if (!out.setVertexRef(count, VertexRef{vid}))
+            out.setValue(count, Value(VertexRef{vid}));
         ++count;
     }
 

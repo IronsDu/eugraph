@@ -2,7 +2,8 @@
 #include "common/types/graph_types.hpp"
 #include "query/dataset/data_chunk.hpp"
 
-#include <unordered_set>
+#include <functional>
+#include <optional>
 
 namespace eugraph {
 namespace compute {
@@ -16,12 +17,17 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
     // 注意 candidate_labels_ 来自 static_prune_hints（WHERE n:A OR n:B 这类），
     // 是"并集剪枝"，真正的谓词过滤仍在计划里，所以并集语义不变。
     DataChunk chunk;
+    // 输出只有一列 VERTEX_REF，把列取出来复用，行内不再做 columns[0]。
+    // co_yield 会把 columns vector 整个移走，旧引用当场失效；而给引用赋值是拷贝赋值
+    // 而不是重新绑定，所以重建 chunk 之后必须重新 emplace 一次。
+    std::optional<std::reference_wrapper<Column>> out_column;
     auto resetChunk = [&] {
         chunk = DataChunk{};
         chunk.setSchema(output_types_);
         chunk.reserve(DataChunk::DEFAULT_CAPACITY);
+        out_column.emplace(chunk.columns[0]);
     };
-    auto appendVid = [&](VertexId vid) { chunk.appendRow({Value(VertexRef{vid})}); };
+    auto appendVid = [&](VertexId vid) { chunk.appendVertexRefRow(out_column->get(), vid); };
     resetChunk();
 
     if (candidate_labels_.size() <= 1) {
@@ -31,6 +37,7 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
             for (VertexId vid : *batch) {
                 appendVid(vid);
                 if (chunk.count >= DataChunk::DEFAULT_CAPACITY) {
+                    chunk.sel = SelectionVector::identity(chunk.count);
                     co_yield std::move(chunk);
                     resetChunk();
                 }
@@ -86,6 +93,7 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
             // 3) 输出它，并推进所有等于它的路 —— 这一步就是跨 label 去重
             appendVid(smallest);
             if (chunk.count >= DataChunk::DEFAULT_CAPACITY) {
+                chunk.sel = SelectionVector::identity(chunk.count);
                 co_yield std::move(chunk);
                 resetChunk();
             }
@@ -97,8 +105,10 @@ folly::coro::AsyncGenerator<DataChunk> AllNodeScanPhysicalOp::executeChunk() {
             }
         }
     }
-    if (chunk.count > 0)
+    if (chunk.count > 0) {
+        chunk.sel = SelectionVector::identity(chunk.count);
         co_yield std::move(chunk);
+    }
 }
 } // namespace compute
 } // namespace eugraph

@@ -78,12 +78,14 @@ folly::coro::AsyncGenerator<DataChunk> IndexScanPhysicalOp::executeChunk() {
         DataChunk chunk;
         chunk.setSchema(output_types_);
         chunk.reserve(batch->size());
+        // 单列 VERTEX_REF：列取一次复用，行内不再做 columns[0]（chunk 每批重建，引用随之更新）
+        Column& out = chunk.columns[0];
 
         for (VertexId vid : *batch) {
-            VertexRef vr{vid};
-            chunk.appendRow({Value(vr)});
+            chunk.appendVertexRefRow(out, vid);
         }
         if (chunk.count > 0) {
+            chunk.sel = SelectionVector::identity(chunk.count);
             co_yield std::move(chunk);
         }
     }

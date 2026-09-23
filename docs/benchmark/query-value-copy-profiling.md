@@ -1867,6 +1867,55 @@ map 的取舍取决于复用率），而本轮上下文不足以完成实现 + �
 `reserve()` 分配句柄但不发布载荷，而 `holds_alternative<ListValuePtr>` 对空句柄为真，
 空槽位会被当列表解引用（曾在 TCK 下打崩服务）。
 
+---
+
+# 扫描算子的列内直写：结果
+
+句柄化解决了**载荷**的重复拷贝，但**每行仍要构造一个 `Value` 并走一次 variant 分派**。
+扫描算子（`AllNodeScan` / `LabelScan` / `IndexScan` / `IndexScanValues`）的输出只有一列
+`VERTEX_REF`，却写成：
+
+```cpp
+chunk.appendRow({Value(VertexRef{vid})});   // 每行：临时 std::vector<Value>（一次堆分配）+ variant
+```
+
+## 改动
+
+* `ColumnBuffer` / `Column` 补齐按类型直写接口（`setVertexRef` / `setInt64` / `setString` …，
+  设计见 [query-engine-design.md](../query/engine/query-engine-design.md) 第六节），
+  拒绝时（kind 不符 / `DICTIONARY`）回退 `setValue`，行为不变；
+* 新增 `DataChunk::appendVertexRefRow(Column& out, VertexId vid)`：单列 `VERTEX_REF` 行的追加原语，
+  列引用提到行循环外，行内不再做 `columns[0]`（`co_yield` 后必须重新绑定，见同节）；
+* 上述 4 个算子改用该原语，并在吐批前统一 `sel = SelectionVector::identity(count)`
+  （此前 `AllNodeScan` / `LabelScan` / `IndexScan` 不设 `sel`，直接读 `sel.count` 的消费者会看到 0）。
+
+## 口径
+
+**同二进制交错 A/B**：把两条写入路径放进同一个可执行文件，替换全局 `operator new` 计数，
+每轮 20 万行、交错 4 轮（同一进程、同一编译单元，排除机器状态漂移）。
+程序为一次性取证工具，未入库；`Value` 内容用独立的 `getValue` 读回校验。
+
+## 结果
+
+| 路径 | 堆分配 | 20 万行耗时 |
+|------|-------:|------------:|
+| `appendRow({Value(VertexRef{vid})})` | **1.00 次/行**（200000） | 2911–3917 µs |
+| 列引用外提 + `appendVertexRefRow` | **0.00 次/行**（0） | 304–566 µs |
+
+每行一次堆分配被完全消除，纯追加路径约 **8–10 倍**。
+
+## 正确性
+
+* 新增 `data_chunk_tests`（7 例）：12 个 typed setter 与 `setValue` 逐类型对拍、
+  句柄写入按引用接管、kind/DICTIONARY 拒绝且不留痕、越界写自增长、
+  `appendVertexRefRow` 与 `appendRow` 结果一致、列引用在 chunk 重建后重新绑定、`count/sel/numRows` 一致；
+* `query_executor_tests` **559/559**、`index_e2e_tests` 50/50、`topology_types_tests` 29/29、
+  `evaluator_typed_tests` 19/19；
+* 全量 `ctest --preset debug`：**1124/1124 通过**；其中 TCK 与改动前逐项一致 ——
+  3906 / Passed 3853 / Undefined 52 / Failed 1（唯一失败仍是 `Temporal2 [6]` 的
+  Stockholm LMT tzdata 已知差异），步骤 16042 / 15849。
+
+---
 
 ---
 
