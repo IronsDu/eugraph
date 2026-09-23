@@ -9180,3 +9180,18 @@ TEST_F(QueryExecutorTest, UnwindKeepsComprehensionCountingConsistent) {
     EXPECT_EQ(std::get<std::string>(result.rows[2][0]), "c");
     EXPECT_EQ(std::get<int64_t>(result.rows[2][1]), 2);
 }
+
+TEST_F(QueryExecutorTest, EntityHashingUsesPackedHandles) {
+    // 打包后 node/edge 在 Value 里是持有式（VertexValuePtr / EdgeValuePtr）：
+    // DISTINCT / 分组 / join 的哈希必须按持有式取字段，否则实体会退化成兜底比较。
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:N {name:'a'})-[:R {w: 2}]->(b:N {name:'b'})").error.empty());
+    auto count = [&](const std::string& query) {
+        auto r = execSync(*executor_, query);
+        if (!r.error.empty() || r.rows.empty() || !std::holds_alternative<int64_t>(r.rows[0][0]))
+            return std::numeric_limits<int64_t>::min();
+        return std::get<int64_t>(r.rows[0][0]);
+    };
+    EXPECT_EQ(count("MATCH (a)-[r]->(b) RETURN count(DISTINCT r) AS c"), 1);
+    EXPECT_EQ(count("MATCH (a)-[r]->(b) RETURN count(DISTINCT a) AS c"), 1);
+    EXPECT_EQ(count("MATCH (a)-[r]->(b) UNWIND [a, b, a] AS x RETURN count(DISTINCT x) AS c"), 2);
+}

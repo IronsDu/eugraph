@@ -22,14 +22,8 @@ template <typename T> const T* columnData(const Column& column) {
         return reinterpret_cast<const T*>(column.buffer->double_data.data());
     } else if constexpr (std::is_same_v<T, VertexRef>) {
         return column.buffer->vertex_ref_data.data();
-    } else if constexpr (std::is_same_v<T, VertexValue>) {
-        return column.buffer->vertex_data.data();
     } else if constexpr (std::is_same_v<T, EdgeKey>) {
         return column.buffer->edge_key_data.data();
-    } else if constexpr (std::is_same_v<T, EdgeValue>) {
-        return column.buffer->edge_data.data();
-    } else if constexpr (std::is_same_v<T, ListValue>) {
-        return column.buffer->list_data.data();
     } else if constexpr (std::is_same_v<T, std::string>) {
         return column.buffer->string_data.data();
     } else {
@@ -48,14 +42,14 @@ template <typename T> T* columnOut(Column& column) {
         return column.buffer->bool_data.data();
     } else if constexpr (std::is_same_v<T, std::string>) {
         return column.buffer->string_data.data();
-    } else if constexpr (std::is_same_v<T, ListValue>) {
-        return column.buffer->list_data.data();
     } else {
         return nullptr;
     }
 }
 
 /// Heavy payloads are held as shared pointers (see query/dataset/row.hpp), so unlike
+/// the scalar kinds above they have no contiguous `T` array: 实体/列表/路径/映射/二进制
+/// 都不在 columnIn/columnOut 里（那里的 T 是元素类型），而是经 handlesOf<T>() 走句柄数组。
 /// the scalar kinds they have no contiguous value array to point into. The batch
 /// helpers below keep the contiguous fast path for scalars and reach handle-stored
 /// kinds through the buffer, one element at a time.
