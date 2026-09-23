@@ -208,15 +208,6 @@ target_link_options(tck_tests PRIVATE
 
 add_dependencies(tck_tests eugraph-server ccr_ext)
 
-# Symlink features/ -> openCypher TCK features for cucumber discovery
-add_custom_command(TARGET tck_tests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/features"
-    COMMAND ${CMAKE_COMMAND} -E create_symlink
-        "${PROJECT_SOURCE_DIR}/third_party/openCypher/tck/features"
-        "${CMAKE_CURRENT_BINARY_DIR}/features"
-    COMMENT "Linking TCK features for cucumber discovery"
-)
-
 # Report path: prefer env var (set by CI), fallback to build dir.
 if(DEFINED ENV{TCK_REPORT_PATH})
     set(TCK_REPORT_FILE "$ENV{TCK_REPORT_PATH}")
@@ -265,7 +256,10 @@ if(TCK_RUN_TESTS)
         COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/run_tck.py"
             --server-bin "$<TARGET_FILE:eugraph-server>"
             --tck-bin "$<TARGET_FILE:tck_tests>"
-            --features "${CMAKE_CURRENT_BINARY_DIR}/features"
+            # 可以给多个 --features：上游 openCypher TCK + 我们自己的用例目录
+            # （不做软链，直接用源码树路径）
+            --features "${PROJECT_SOURCE_DIR}/third_party/openCypher/tck/features"
+            --features "${PROJECT_SOURCE_DIR}/tests/tck/features-eugraph"
             --report "${TCK_REPORT_FILE}"
             ${TCK_BASELINE_ARG}
             ${TCK_STEP_RESULTS_ARG}
