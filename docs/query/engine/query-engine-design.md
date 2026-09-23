@@ -290,7 +290,7 @@ struct DataChunk {
 | `Column` | 同名转发，返回 `bool` |
 
 - **为什么**：`setValue(i, Value(...))` 要构造一个 48 字节的 variant，入口和出口各做一次 alternative 分派；对重型类型还会二次深拷贝载荷（实体拷贝会克隆 `unordered_map<LabelId, Properties>`）。调用方本来就持有具体类型时，这些都是纯开销。**时间类型（DATETIME / TIME / DURATION）仍走 `setValue`**：它们存在 `any_data` 里，而 `any_data` 的元素类型就是 `Value`，没有可直写的 typed vector。
-- **拒绝即回退**：kind 不符或 `DICTIONARY`（只读）列时 `Column::setXxx` 返回 `false`，调用方回退到 `setValue`，因此行为在这些路径上不变。
+- **拒绝即回退**：只有 `FLAT` 列接受 typed 写入。kind 不符、`DICTIONARY`（共享别人的 buffer，写进去会污染源列）或 `CONSTANT`（读取只认 `constant_value`，写进 buffer 是读不到的隐形写入）时 `Column::setXxx` 返回 `false`，调用方回退到 `setValue`，因此行为在这些路径上不变。
 - **越界写会自增长**：typed setter 先 `ensureRow(i)`（必要时扩 typed vector 与 validity 位图，再置位）。旧行为是 `setValid()` 对越界位静默不写 —— 数据进去了、行却读回 NULL。
 - **单列行追加**：`DataChunk::appendVertexRefRow(Column& out, VertexId vid)` 供"输出只有一列 VERTEX_REF"的扫描算子使用。列引用由调用方提到行循环外（行内不再做 `columns[0]`），但**每次重建 chunk 后必须重新绑定**：`co_yield` 会把 `columns` 整个 move 走，旧引用当场悬空；而对引用赋值是拷贝赋值、不是重新绑定。仓库里的扫描算子用"填满即吐批 → 重建 → 回到作用域顶部重新绑定"或 `resetChunk()` 内重新 `emplace` 的方式保证这一点。
 

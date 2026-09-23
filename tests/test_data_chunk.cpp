@@ -104,6 +104,75 @@ TEST(DataChunkTypedAccess, TypedSettersDeclineWrongKindAndDictionaryColumns) {
     EXPECT_EQ(std::get<VertexRef>(dict.getValue(0)).id, 5u);
 }
 
+/// CONSTANT 列也必须拒绝 typed 写入。
+///
+/// CONSTANT 的读取只认 constant_value，写进 buffer 是读不到的隐形写入；返回 false 才能让
+/// 调用方回退 setValue，把广播值改掉（这才是 appendRow 时代的行为）。
+///
+/// 不能只依赖"类型不匹配"：Column::constant() 不设 type（保持 NULL_TYPE），补上 type 之后
+/// 才真正考验 CONSTANT 这一形态本身是否被拒绝。
+TEST(DataChunkTypedAccess, TypedSettersDeclineConstantColumns) {
+    Column constant = Column::constant(Value(VertexRef{1}));
+    constant.type = BoundTypeKind::VERTEX_REF;
+    EXPECT_FALSE(constant.setVertexRef(0, VertexRef{99}));
+    EXPECT_EQ(std::get<VertexRef>(constant.getValue(0)).id, 1u);
+
+    // 回退路径能正常改广播值
+    constant.setValue(0, Value(VertexRef{99}));
+    EXPECT_EQ(std::get<VertexRef>(constant.getValue(0)).id, 99u);
+}
+
+/// Column 未持有 buffer 时（默认构造 / 手工设置的列）typed setter 应自行建一个。
+TEST(DataChunkTypedAccess, TypedSettersCreateBufferOnDemand) {
+    Column col;
+    col.type = BoundTypeKind::VERTEX_REF;
+    col.form = VectorForm::FLAT;
+    ASSERT_EQ(col.buffer, nullptr);
+
+    ASSERT_TRUE(col.setVertexRef(0, VertexRef{42}));
+    EXPECT_FALSE(col.isNull(0));
+    EXPECT_EQ(std::get<VertexRef>(col.getValue(0)).id, 42u);
+}
+
+/// appendVertexRefRow 在列拒绝 typed 写入时必须回退到 Value 路径，
+/// 结果与旧的 appendRow({Value(VertexRef{vid})}) 完全一致（含 CONSTANT / DICTIONARY）。
+TEST(DataChunkTypedAccess, AppendVertexRefRowFallsBackWhenColumnDeclines) {
+    // CONSTANT：两边的最终广播值必须相同
+    DataChunk constant_chunk;
+    constant_chunk.columns.push_back(Column::constant(Value(VertexRef{1})));
+    constant_chunk.reserve(4);
+    Column& constant_out = constant_chunk.columns[0];
+    constant_chunk.appendVertexRefRow(constant_out, 7);
+
+    DataChunk constant_legacy;
+    constant_legacy.columns.push_back(Column::constant(Value(VertexRef{1})));
+    constant_legacy.reserve(4);
+    constant_legacy.appendRow({Value(VertexRef{7})});
+
+    EXPECT_EQ(constant_chunk.count, constant_legacy.count);
+    EXPECT_TRUE(valueEquals(constant_chunk.getValue(0, 0), constant_legacy.getValue(0, 0)) ==
+                std::optional<bool>(true));
+    EXPECT_EQ(std::get<VertexRef>(constant_chunk.getValue(0, 0)).id, 7u);
+
+    // DICTIONARY（只读）：两边都只推进行数、不改共享数据
+    auto buf = std::make_shared<ColumnBuffer>();
+    buf->type = BoundTypeKind::VERTEX_REF;
+    buf->reserve(4);
+    buf->setVertexRef(0, VertexRef{5});
+
+    DataChunk dict_chunk;
+    dict_chunk.columns.push_back(Column::dict(buf, SelectionVector::identity(4)));
+    Column& dict_out = dict_chunk.columns[0];
+    dict_chunk.appendVertexRefRow(dict_out, 7);
+
+    DataChunk dict_legacy;
+    dict_legacy.columns.push_back(Column::dict(buf, SelectionVector::identity(4)));
+    dict_legacy.appendRow({Value(VertexRef{7})});
+
+    EXPECT_EQ(dict_chunk.count, dict_legacy.count);
+    EXPECT_EQ(std::get<VertexRef>(dict_chunk.getValue(0, 0)).id, 5u); // 共享数据未被改
+}
+
 /// 没 reserve 就写（超出 capacity）也必须能读回来。
 ///
 /// 旧实现里 setValid() 对越界位是静默不写，于是数据写进去了、行却读成 NULL。

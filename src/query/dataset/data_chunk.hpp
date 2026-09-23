@@ -620,12 +620,12 @@ struct Column {
     }
 
     /// Typed payload assignment, skipping the Value variant. Returns false when
-    /// this column cannot hold the payload (wrong kind, or a read-only DICTIONARY
-    /// form), leaving the caller to fall back to the Value path -- behaviour is
-    /// unchanged wherever the fast path declines. The payload arrives as a handle
-    /// where the kind stores one: a caller that owns a freshly built value wraps it
-    /// with mk<T>(...), and the column takes the reference over instead of cloning
-    /// the payload.
+    /// this column cannot hold the payload (wrong kind, or a form that does not store
+    /// per-row data: DICTIONARY is read-only, CONSTANT reads `constant_value` alone),
+    /// leaving the caller to fall back to the Value path -- behaviour is unchanged
+    /// wherever the fast path declines. The payload arrives as a handle where the kind
+    /// stores one: a caller that owns a freshly built value wraps it with mk<T>(...),
+    /// and the column takes the reference over instead of cloning the payload.
     bool setBool(size_t i, bool v) {
         return setTypedImpl(binder::BoundTypeKind::BOOL, [&](ColumnBuffer& b) { b.setBool(i, v); });
     }
@@ -715,8 +715,14 @@ private:
     /// make sure a buffer exists, then let the caller assign into it. The row index
     /// is deliberately not a parameter -- the caller's lambda captures it, and
     /// taking it here only to ignore it trips -Wunused-parameter.
+    ///
+    /// Only FLAT columns take a typed write. DICTIONARY shares another column's
+    /// buffer (writing would corrupt the source), and CONSTANT reads `constant_value`
+    /// alone -- a value written into its buffer would be invisible to every reader,
+    /// so returning false and letting the caller fall back to setValue (which updates
+    /// `constant_value`) is the only honest answer.
     template <typename Assign> bool setTypedImpl(binder::BoundTypeKind expected, Assign&& assign) {
-        if (type != expected || form == VectorForm::DICTIONARY)
+        if (type != expected || form != VectorForm::FLAT)
             return false;
         if (!buffer) {
             buffer = std::make_shared<ColumnBuffer>();

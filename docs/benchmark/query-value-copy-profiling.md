@@ -1883,7 +1883,7 @@ chunk.appendRow({Value(VertexRef{vid})});   // 每行：临时 std::vector<Value
 
 * `ColumnBuffer` / `Column` 补齐按类型直写接口（`setVertexRef` / `setInt64` / `setString` …，
   设计见 [query-engine-design.md](../query/engine/query-engine-design.md) 第六节），
-  拒绝时（kind 不符 / `DICTIONARY`）回退 `setValue`，行为不变；
+  拒绝时（kind 不符 / `DICTIONARY` / `CONSTANT`）回退 `setValue`，行为不变；
 * 新增 `DataChunk::appendVertexRefRow(Column& out, VertexId vid)`：单列 `VERTEX_REF` 行的追加原语，
   列引用提到行循环外，行内不再做 `columns[0]`（`co_yield` 后必须重新绑定，见同节）；
 * 上述 4 个算子改用该原语，并在吐批前统一 `sel = SelectionVector::identity(count)`
@@ -1906,8 +1906,9 @@ chunk.appendRow({Value(VertexRef{vid})});   // 每行：临时 std::vector<Value
 
 ## 正确性
 
-* 新增 `data_chunk_tests`（7 例）：12 个 typed setter 与 `setValue` 逐类型对拍、
-  句柄写入按引用接管、kind/DICTIONARY 拒绝且不留痕、越界写自增长、
+* 新增 `data_chunk_tests`（10 例）：12 个 typed setter 与 `setValue` 逐类型对拍、
+  句柄写入按引用接管、kind/DICTIONARY/CONSTANT 拒绝且不留痕、无 buffer 时按需创建、
+  `appendVertexRefRow` 的回退路径与 `appendRow` 等价、越界写自增长、
   `appendVertexRefRow` 与 `appendRow` 结果一致、列引用在 chunk 重建后重新绑定、`count/sel/numRows` 一致；
 * `query_executor_tests` **559/559**、`index_e2e_tests` 50/50、`topology_types_tests` 29/29、
   `evaluator_typed_tests` 19/19；
