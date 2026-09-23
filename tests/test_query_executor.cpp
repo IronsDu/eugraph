@@ -9195,3 +9195,34 @@ TEST_F(QueryExecutorTest, EntityHashingUsesPackedHandles) {
     EXPECT_EQ(count("MATCH (a)-[r]->(b) RETURN count(DISTINCT a) AS c"), 1);
     EXPECT_EQ(count("MATCH (a)-[r]->(b) UNWIND [a, b, a] AS x RETURN count(DISTINCT x) AS c"), 2);
 }
+
+TEST_F(QueryExecutorTest, AllNodeScanStreamsInVidOrderAndDedupsLabels) {
+    // 扫描算子改成流式（不再把全图 vid 收进容器）后，输出顺序从哈希序变成"按 vid 升序"，
+    // 多 label 的剪枝提示是并集，同一节点带多个 label 只能出现一次。
+    // 不带属性：A、B 两个标签如果都声明了同名属性，多标签写入会被判为歧义（合理行为）。
+    ASSERT_TRUE(execSync(*executor_, "CREATE (a:A)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (b:B)").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (c:A:B)").error.empty());
+
+    auto countOf = [&](const std::string& query) {
+        auto r = execSync(*executor_, query);
+        if (!r.error.empty() || r.rows.empty() || !std::holds_alternative<int64_t>(r.rows[0][0]))
+            return std::numeric_limits<int64_t>::min();
+        return std::get<int64_t>(r.rows[0][0]);
+    };
+    auto idsOf = [&](const std::string& query) {
+        auto r = execSync(*executor_, query);
+        std::vector<int64_t> ids;
+        for (const auto& row : r.rows)
+            if (!row.empty() && std::holds_alternative<int64_t>(row[0]))
+                ids.push_back(std::get<int64_t>(row[0]));
+        return ids;
+    };
+
+    EXPECT_EQ(countOf("MATCH (n) WHERE n:A OR n:B RETURN count(n) AS c"), 3); // 并集去重
+    EXPECT_EQ(countOf("MATCH (n:A:B) RETURN count(n) AS c"), 1);              // 交集靠谓词过滤
+    EXPECT_EQ(countOf("MATCH (n:A) RETURN count(n) AS c"), 2);
+    auto all_ids = idsOf("MATCH (n) RETURN id(n) AS v");
+    EXPECT_TRUE(std::is_sorted(all_ids.begin(), all_ids.end()));        // 升序（此前是哈希序）
+    EXPECT_EQ(idsOf("MATCH (n) RETURN id(n) AS v LIMIT 2").size(), 2u); // LIMIT 能提前结束
+}

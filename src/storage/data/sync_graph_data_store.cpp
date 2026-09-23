@@ -786,6 +786,14 @@ std::unique_ptr<ISyncGraphDataStore::IVertexScanCursor> SyncGraphDataStore::crea
     return std::make_unique<VertexScanCursorImpl>(session, labelFwdTable(label_id));
 }
 
+std::unique_ptr<ISyncGraphDataStore::IVertexScanCursor>
+SyncGraphDataStore::createAllVertexScanCursor(GraphTxnHandle txn) {
+    auto session = getSession(txn);
+    if (!session)
+        return nullptr;
+    return std::make_unique<VertexScanCursorImpl>(session, TABLE_VERTEX_EXISTENCE, /*existence_keys=*/true);
+}
+
 std::unique_ptr<ISyncGraphDataStore::IEdgeTypeScanCursor>
 SyncGraphDataStore::createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId label_id,
                                              std::optional<VertexId> src_filter, std::optional<VertexId> dst_filter) {
@@ -805,8 +813,8 @@ SyncGraphDataStore::createEdgeTypeScanCursor(GraphTxnHandle txn, EdgeLabelId lab
 
 // ==================== VertexScanCursorImpl ====================
 
-VertexScanCursorImpl::VertexScanCursorImpl(WT_SESSION* session, const std::string& table_name)
-    : cursor_(session, table_name), session_(session) {
+VertexScanCursorImpl::VertexScanCursorImpl(WT_SESSION* session, const std::string& table_name, bool existence_keys)
+    : cursor_(session, table_name), session_(session), existence_keys_(existence_keys) {
     if (!cursor_)
         return;
 
@@ -820,7 +828,8 @@ VertexScanCursorImpl::~VertexScanCursorImpl() = default;
 
 void VertexScanCursorImpl::readCurrent() {
     currentKey_ = getKeyFromCursor(cursor_.get());
-    current_vid_ = KeyCodec::decodeLabelForwardKey(currentKey_);
+    current_vid_ = existence_keys_ ? KeyCodec::decodeVertexExistenceKey(currentKey_)
+                                   : KeyCodec::decodeLabelForwardKey(currentKey_);
     valid_ = true;
 }
 

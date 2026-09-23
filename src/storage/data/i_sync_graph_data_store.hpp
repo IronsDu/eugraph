@@ -117,6 +117,9 @@ public:
     virtual void scanVerticesByLabel(GraphTxnHandle txn, LabelId label_id,
                                      const std::function<bool(VertexId)>& callback) = 0;
     virtual std::unique_ptr<IVertexScanCursor> createVertexScanCursor(GraphTxnHandle txn, LabelId label_id) = 0;
+    /// 全顶点游标（vid 升序、每个点一次）。scanAllVertices() 的回调式接口无法跨批次续扫，
+    /// 需要流式输出的算子（AllNodeScan）用它，避免把全图 vid 先收进内存。
+    virtual std::unique_ptr<IVertexScanCursor> createAllVertexScanCursor(GraphTxnHandle txn) = 0;
 
     virtual void scanAllVertices(GraphTxnHandle txn, const std::function<bool(VertexId)>& callback) = 0;
 
