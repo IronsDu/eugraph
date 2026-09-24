@@ -129,6 +129,11 @@ SCALAR     : 'SCALAR';
 OF         : 'OF';
 ADD        : 'ADD';
 DROP       : 'DROP';
+// Appended after the existing keywords on purpose: ANTLR numbers tokens in
+// declaration order, so adding it here keeps every existing token id stable
+// (the generated diff stays purely additive). Keywords are matched before ID
+// regardless of where they sit inside this block.
+FOREACH    : 'FOREACH';
 
 ID: Letter LetterOrDigit*;
 

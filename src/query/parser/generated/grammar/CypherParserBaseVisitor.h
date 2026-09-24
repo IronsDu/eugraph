@@ -111,6 +111,10 @@ public:
     return visitChildren(ctx);
   }
 
+  virtual std::any visitForeachSt(CypherParser::ForeachStContext *ctx) override {
+    return visitChildren(ctx);
+  }
+
   virtual std::any visitRemoveItem(CypherParser::RemoveItemContext *ctx) override {
     return visitChildren(ctx);
   }

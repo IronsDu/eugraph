@@ -363,6 +363,51 @@ REMOVE n.name                     -- 移除属性（便捷模式）
 REMOVE r.prop                     -- 移除边属性
 ```
 
+### FOREACH — 逐元素执行更新
+
+```cypher
+-- 对路径上的所有点打标
+MATCH p=(start)-[*]->(finish)
+FOREACH (n IN nodes(p) | SET n.marked = true)
+
+-- 用聚合出来的列表成批建点
+WITH ['E', 'F', 'G'] AS names
+FOREACH (value IN names | CREATE (:Person {name: value}))
+
+-- body 里可以套 body，也可以读写外层变量
+MATCH (p:Person {id: 1})
+FOREACH (x IN [1, 2, 3] | SET p.total = coalesce(p.total, 0) + x)
+```
+
+**语法**：`FOREACH (变量 IN 列表表达式 | 更新子句...)`
+
+**body 允许的子句**：`CREATE` / `MERGE`（含 `ON CREATE` / `ON MATCH`）/ `SET`（属性、标签）/
+`REMOVE`（属性、标签）/ `DELETE` / `DETACH DELETE` / 嵌套 `FOREACH`。**body 里不能有
+`MATCH` / `WITH` / `RETURN`** —— 语法层面直接拒绝（neo4j 报 `Invalid use of MATCH inside
+FOREACH`）；需要逐元素 MATCH 时用 `UNWIND`。
+
+**语义**（与 neo4j 5 逐条实测对齐）：
+
+| 维度 | 行为 |
+|------|------|
+| 迭代 | 列表按顺序逐元素执行 body；**空列表与 `null` 都是无操作**，不报错 |
+| 非列表值 | 当作**单元素列表**：`FOREACH (x IN 1 \| ...)` 执行一次且 `x = 1`（字符串同理） |
+| 基数 | **透传**：N 行输入 → N 行输出，副作用按元素发生（这正是不能用 `UNWIND` 表达的地方——UNWIND 会按元素复制行） |
+| 无前置子句 | 独立出现时执行一次（隐式单行） |
+| 作用域 | body 的变量上下文与外部**隔离**：迭代变量与 body 里 `CREATE` 的变量出来都不可见（`FOREACH (x IN [1] \| CREATE (:T)) RETURN x` 报 `UndefinedVariable`） |
+| 遮蔽 | 迭代变量可与外层同名，body 内指向元素，外层变量出来后不受影响 |
+| 相关性 | body 可读外层变量（`p.id + x`），也可写外层实体（`SET p.total = ...`）；**同一查询内后续子句能读到新值** |
+| 事务 | FOREACH 属更新子句，整个语句仍是单事务；body 内错误照常抛出 |
+
+**已知差异与限制**：
+
+* **同查询内的标签读回**：body 里 `SET n:Label` 之后，同一语句里 `labels(n)` 读到的仍是
+  body 执行前的标签集。这**不是 FOREACH 特有**：不带 FOREACH 的
+  `MATCH (n) SET n:Label RETURN labels(n)` 同样如此（标签列在同语句内不刷新）；新语句查询即可看到。
+* **MERGE 需要 schema 已存在**：`FOREACH (x IN [...] | MERGE (:T {v: x}))` 中若 `:T` 与其属性
+  从未登记，MERGE 不会像 CREATE 那样做隐式 DDL —— 与直接写 MERGE 的限制一致。
+* 目前不支持 `FOREACH` 出现在 `EXPLAIN` 之外的特殊上下文（如 `CALL {}` 子查询，子查询本身尚未支持）。
+
 ---
 
 ## 三、仅解析（执行层未实现）

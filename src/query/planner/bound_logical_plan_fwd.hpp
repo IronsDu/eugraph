@@ -31,6 +31,7 @@ struct BoundBinaryJoinOp;
 struct BoundLeftJoinOp;
 struct BoundSemiJoinOp;
 struct BoundUnwindOp;
+struct BoundForeachOp;
 struct BoundMergeOp;
 struct BoundUnionOp;
 struct BoundPatternComprehensionApplyOp;
@@ -46,7 +47,11 @@ using BoundLogicalOperator =
                  std::unique_ptr<BoundVarLenExpandOp>, std::unique_ptr<BoundBinaryJoinOp>,
                  std::unique_ptr<BoundLeftJoinOp>, std::unique_ptr<BoundSemiJoinOp>, std::unique_ptr<BoundUnwindOp>,
                  std::unique_ptr<BoundUnionOp>, std::unique_ptr<BoundMergeOp>,
-                 std::unique_ptr<BoundPatternComprehensionApplyOp>, std::unique_ptr<BoundCallOp>>;
+                 std::unique_ptr<BoundPatternComprehensionApplyOp>, std::unique_ptr<BoundCallOp>,
+                 // Appended last on purpose: optimizer::nodeTypeFromVariantIndex maps
+                 // variant index -> OptNodeType positionally, so inserting an operator
+                 // anywhere but the end silently shifts every later entry.
+                 std::unique_ptr<BoundForeachOp>>;
 
 struct BoundLogicalPlan;
 

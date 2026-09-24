@@ -15,6 +15,7 @@
 #include "query/planner/logical_plan/operator/bound_distinct_op.hpp"
 #include "query/planner/logical_plan/operator/bound_expand_op.hpp"
 #include "query/planner/logical_plan/operator/bound_filter_op.hpp"
+#include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
 #include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
@@ -467,6 +468,15 @@ uint64_t hashBoundLogicalOperator(const binder::BoundLogicalOperator& op) {
                 seed = combine(seed, hashBoundExpression(val->list_expr));
                 seed = hashBytes(seed, val->variable);
                 seed = combine(seed, val->variable_column_index);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                if (!val)
+                    return;
+                seed = combine(seed, hashBoundExpression(val->list_expr));
+                seed = hashBytes(seed, val->variable);
+                seed = hashBoundType(seed, val->element_type);
+                seed = combine(seed, val->element_column);
+                for (uint32_t col : val->input_columns)
+                    seed = combine(seed, col);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                 if (!val)
                     return;

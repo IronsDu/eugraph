@@ -17,7 +17,7 @@ namespace eugraph::tck {
 
 // Unsupported features are now detected by parsing the query with
 // CypherQueryParser and walking the AST. Two items have no AST
-// representation and are kept as regex: FOREACH and LOAD CSV.
+// representation and are kept as regex: LOAD CSV.
 
 // -------------------- Scenario context shared across steps --------------------
 
@@ -47,7 +47,7 @@ struct TckContext {
 
     // Check whether a Cypher query uses unsupported syntax.
     // Uses the Cypher parser AST for precise detection; falls back
-    // to regex for FOREACH and LOAD CSV (no AST nodes exist).
+    // to regex for LOAD CSV (no AST node exists).
     static bool isQuerySupported(const std::string& query);
 
     // ---------- RPC helpers ----------

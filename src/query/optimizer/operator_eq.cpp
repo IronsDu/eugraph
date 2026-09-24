@@ -14,6 +14,7 @@
 #include "query/planner/logical_plan/operator/bound_distinct_op.hpp"
 #include "query/planner/logical_plan/operator/bound_expand_op.hpp"
 #include "query/planner/logical_plan/operator/bound_filter_op.hpp"
+#include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
 #include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
@@ -477,6 +478,18 @@ bool equalBoundLogicalOperator(const binder::BoundLogicalOperator& a, const bind
                 if (av->variable != bv->variable)
                     return false;
                 return av->variable_column_index == bv->variable_column_index;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                if (!av || !bv)
+                    return !av && !bv;
+                if (!equalBoundExpression(av->list_expr, bv->list_expr))
+                    return false;
+                if (av->variable != bv->variable)
+                    return false;
+                if (!eqBoundType(av->element_type, bv->element_type))
+                    return false;
+                if (av->element_column != bv->element_column)
+                    return false;
+                return av->input_columns == bv->input_columns; // child + body: memo child groups
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                 if (!av || !bv)
                     return !av && !bv;

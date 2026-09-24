@@ -338,7 +338,21 @@ private:
             return Clause(buildDeleteClause(ctx->deleteSt()));
         if (ctx->setSt())
             return Clause(buildSetClauseFromSetSt(ctx->setSt()));
+        if (ctx->foreachSt())
+            return Clause(buildForeachClause(ctx->foreachSt()));
         return Clause(buildRemoveClause(ctx->removeSt()));
+    }
+
+    /// FOREACH (x IN list | <updating clauses>)
+    /// The body is built through the same updatingClause dispatcher, so nested
+    /// FOREACH comes for free; the grammar is what keeps MATCH/WITH/RETURN out.
+    std::unique_ptr<ForeachClause> buildForeachClause(AP::ForeachStContext* ctx) {
+        auto f = std::make_unique<ForeachClause>();
+        f->variable = ctx->symbol()->getText();
+        f->list_expr = buildExpression(ctx->expression());
+        for (auto* body_clause : ctx->updatingClause())
+            f->body.push_back(buildUpdatingStatement(body_clause));
+        return f;
     }
 
     // === Match ===

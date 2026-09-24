@@ -9,6 +9,7 @@
 #include "query/physical_plan/operator/cross_product_physical_op.hpp"
 #include "query/physical_plan/operator/delete_physical_op.hpp"
 #include "query/physical_plan/operator/distinct_physical_op.hpp"
+#include "query/physical_plan/operator/foreach_physical_op.hpp"
 #include "query/physical_plan/operator/hash_join_physical_op.hpp"
 #include "query/physical_plan/operator/index_scan_physical_op.hpp"
 #include "query/physical_plan/operator/index_scan_values_physical_op.hpp"
@@ -577,6 +578,13 @@ static void remapChildOps(binder::BoundLogicalOperator& op, uint32_t offset) {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundLimitOp>>) {
                 remapLogicalOpColumnIndices(val->child, offset);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+                remapExprColumnIndices(val->list_expr, offset);
+                remapLogicalOpColumnIndices(val->child, offset);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                // Only the outer side is remapped: the body sub-plan is planned with
+                // an empty input schema and numbers its own columns from 0 (the
+                // correlated source's columns first), so an outer offset must not be
+                // applied to it.
                 remapExprColumnIndices(val->list_expr, offset);
                 remapLogicalOpColumnIndices(val->child, offset);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>>) {
@@ -2022,6 +2030,10 @@ binder::BoundLogicalOperator materializeChosen(const optimizer::ChosenPlan& chos
             auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result);
             pc->left = materializeChosen(*chosen.children[0]);
             pc->right = materializeChosen(*chosen.children[1]);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundForeachOp>>(result)) {
+            auto& fe = std::get<std::unique_ptr<binder::BoundForeachOp>>(result);
+            fe->child = materializeChosen(*chosen.children[0]);
+            fe->body = materializeChosen(*chosen.children[1]);
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundLeftJoinOp>>(result)) {
             auto& lj = std::get<std::unique_ptr<binder::BoundLeftJoinOp>>(result);
             lj->left = materializeChosen(*chosen.children[0]);
@@ -2083,6 +2095,13 @@ void recurseChild(binder::BoundLogicalOperator& op, const std::string& var, cons
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v && v->child.has_value())
                     applyEnrichInPlace(*v->child, var, req);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                // Both inputs: the row source and the body (which reads enriched
+                // values out of the correlated source).
+                if (v) {
+                    applyEnrichInPlace(v->child, var, req);
+                    applyEnrichInPlace(v->body, var, req);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
@@ -3010,6 +3029,46 @@ PhysicalPlanner::planBoundOperator(binder::BoundLogicalOperator& op, IAsyncGraph
                     TupleSlotLayout unwind_layout = makeSlotLayout(output_schema, ctx);
                     return PlanOperatorResult{std::move(result), std::move(output_schema), std::move(output_types),
                                               std::move(unwind_layout)};
+                } else if constexpr (std::is_same_v<Elem, binder::BoundForeachOp>) {
+                    // Input rows come from the preceding clause.
+                    auto child_result = planBoundOperator(v.child, store, meta, ctx, input_schema, input_types);
+                    if (std::holds_alternative<std::string>(child_result))
+                        return std::get<std::string>(child_result);
+                    auto cr = extractChildResult(std::move(child_result));
+
+                    // The body is a correlated sub-plan: its only input is the
+                    // CorrelatedSource leaf, so it is planned against an empty input
+                    // schema (same recipe as the EXISTS / comprehension sub-plans).
+                    Schema body_input_schema;
+                    std::vector<binder::BoundType> body_input_types;
+                    auto body_result = planBoundOperator(v.body, store, meta, ctx, body_input_schema, body_input_types);
+                    if (std::holds_alternative<std::string>(body_result))
+                        return std::get<std::string>(body_result);
+                    auto br = extractChildResult(std::move(body_result));
+
+                    std::function<CorrelatedSourcePhysicalOp*(PhysicalOperator*)> findCorrelatedSource =
+                        [&](PhysicalOperator* node) -> CorrelatedSourcePhysicalOp* {
+                        if (auto* cs = dynamic_cast<CorrelatedSourcePhysicalOp*>(node))
+                            return cs;
+                        for (auto* child : node->children())
+                            if (auto* cs = findCorrelatedSource(const_cast<PhysicalOperator*>(child)))
+                                return cs;
+                        return nullptr;
+                    };
+                    CorrelatedSourcePhysicalOp* correlated = findCorrelatedSource(br.op.get());
+                    if (!correlated)
+                        return std::string("FOREACH: CorrelatedSourcePhysicalOp not found in the body sub-plan");
+
+                    auto result = std::make_unique<ForeachPhysicalOp>(std::move(v.list_expr),
+                                                                      std::move(v.input_columns), v.element_column,
+                                                                      std::move(br.op), correlated, std::move(cr.op));
+                    result->setEvalContext(ctx.eval_ctx);
+                    result->setVariable(v.variable);
+
+                    // FOREACH hands its input rows through untouched: the output
+                    // schema / types / layout are exactly the child's.
+                    return PlanOperatorResult{std::move(result), std::move(cr.output_schema),
+                                              std::move(cr.output_types), std::move(cr.slot_layout)};
                 } else if constexpr (std::is_same_v<Elem, binder::BoundUnionOp>) {
                     auto left_result = planBoundOperator(v.left, store, meta, ctx, input_schema, input_types);
                     if (std::holds_alternative<std::string>(left_result))

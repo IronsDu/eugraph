@@ -26,9 +26,9 @@ public:
     XOR = 72, FALSE = 73, TRUE = 74, NULL_W = 75, CONSTRAINT = 76, DO = 77, 
     FOR = 78, REQUIRE = 79, UNIQUE = 80, CASE = 81, WHEN = 82, THEN = 83, 
     ELSE = 84, END = 85, MANDATORY = 86, SCALAR = 87, OF = 88, ADD = 89, 
-    DROP = 90, ID = 91, ESC_LITERAL = 92, CHAR_LITERAL = 93, STRING_LITERAL = 94, 
-    DIGIT = 95, FLOAT = 96, WS = 97, COMMENT = 98, LINE_COMMENT = 99, ERRCHAR = 100, 
-    Letter = 101
+    DROP = 90, FOREACH = 91, ID = 92, ESC_LITERAL = 93, CHAR_LITERAL = 94, 
+    STRING_LITERAL = 95, DIGIT = 96, FLOAT = 97, WS = 98, COMMENT = 99, 
+    LINE_COMMENT = 100, ERRCHAR = 101, Letter = 102
   };
 
   enum {
@@ -38,26 +38,26 @@ public:
     RuleLimitSt = 12, RuleProjectionBody = 13, RuleProjectionItems = 14, 
     RuleProjectionItem = 15, RuleOrderItem = 16, RuleOrderSt = 17, RuleMatchSt = 18, 
     RuleUnwindSt = 19, RuleReadingStatement = 20, RuleUpdatingStatement = 21, 
-    RuleDeleteSt = 22, RuleRemoveSt = 23, RuleRemoveItem = 24, RuleQueryCallSt = 25, 
-    RuleParenExpressionChain = 26, RuleYieldItems = 27, RuleYieldItem = 28, 
-    RuleMergeSt = 29, RuleMergeAction = 30, RuleSetSt = 31, RuleSetItem = 32, 
-    RuleNodeLabels = 33, RuleCreateSt = 34, RulePatternWhere = 35, RuleWhere = 36, 
-    RulePattern = 37, RuleExpression = 38, RuleXorExpression = 39, RuleAndExpression = 40, 
-    RuleNotExpression = 41, RuleComparisonExpression = 42, RuleComparisonSigns = 43, 
-    RuleAddSubExpression = 44, RuleMultDivExpression = 45, RulePowerExpression = 46, 
-    RuleUnaryAddSubExpression = 47, RuleAtomicExpression = 48, RuleListExpression = 49, 
-    RuleStringExpression = 50, RuleStringExpPrefix = 51, RuleNullExpression = 52, 
-    RulePropertyOrLabelExpression = 53, RulePropertyExpression = 54, RuleLabelCast = 55, 
-    RulePatternPart = 56, RulePatternElem = 57, RulePatternElemChain = 58, 
-    RuleProperties = 59, RuleNodePattern = 60, RuleAtom = 61, RuleLhs = 62, 
-    RuleRelationshipPattern = 63, RuleRelationDetail = 64, RuleRelationshipTypes = 65, 
-    RuleUnionSt = 66, RuleSubqueryExist = 67, RuleInvocationName = 68, RuleFunctionInvocation = 69, 
-    RuleParenthesizedExpression = 70, RuleFilterWith = 71, RulePatternComprehension = 72, 
-    RuleRelationshipsChainPattern = 73, RuleListComprehension = 74, RuleFilterExpression = 75, 
-    RuleCountAll = 76, RuleExpressionChain = 77, RuleCaseExpression = 78, 
-    RuleParameter = 79, RuleLiteral = 80, RuleRangeLit = 81, RuleBoolLit = 82, 
-    RuleNumLit = 83, RuleStringLit = 84, RuleCharLit = 85, RuleListLit = 86, 
-    RuleMapLit = 87, RuleMapPair = 88, RuleName = 89, RuleSymbol = 90, RuleReservedWord = 91
+    RuleDeleteSt = 22, RuleRemoveSt = 23, RuleForeachSt = 24, RuleRemoveItem = 25, 
+    RuleQueryCallSt = 26, RuleParenExpressionChain = 27, RuleYieldItems = 28, 
+    RuleYieldItem = 29, RuleMergeSt = 30, RuleMergeAction = 31, RuleSetSt = 32, 
+    RuleSetItem = 33, RuleNodeLabels = 34, RuleCreateSt = 35, RulePatternWhere = 36, 
+    RuleWhere = 37, RulePattern = 38, RuleExpression = 39, RuleXorExpression = 40, 
+    RuleAndExpression = 41, RuleNotExpression = 42, RuleComparisonExpression = 43, 
+    RuleComparisonSigns = 44, RuleAddSubExpression = 45, RuleMultDivExpression = 46, 
+    RulePowerExpression = 47, RuleUnaryAddSubExpression = 48, RuleAtomicExpression = 49, 
+    RuleListExpression = 50, RuleStringExpression = 51, RuleStringExpPrefix = 52, 
+    RuleNullExpression = 53, RulePropertyOrLabelExpression = 54, RulePropertyExpression = 55, 
+    RuleLabelCast = 56, RulePatternPart = 57, RulePatternElem = 58, RulePatternElemChain = 59, 
+    RuleProperties = 60, RuleNodePattern = 61, RuleAtom = 62, RuleLhs = 63, 
+    RuleRelationshipPattern = 64, RuleRelationDetail = 65, RuleRelationshipTypes = 66, 
+    RuleUnionSt = 67, RuleSubqueryExist = 68, RuleInvocationName = 69, RuleFunctionInvocation = 70, 
+    RuleParenthesizedExpression = 71, RuleFilterWith = 72, RulePatternComprehension = 73, 
+    RuleRelationshipsChainPattern = 74, RuleListComprehension = 75, RuleFilterExpression = 76, 
+    RuleCountAll = 77, RuleExpressionChain = 78, RuleCaseExpression = 79, 
+    RuleParameter = 80, RuleLiteral = 81, RuleRangeLit = 82, RuleBoolLit = 83, 
+    RuleNumLit = 84, RuleStringLit = 85, RuleCharLit = 86, RuleListLit = 87, 
+    RuleMapLit = 88, RuleMapPair = 89, RuleName = 90, RuleSymbol = 91, RuleReservedWord = 92
   };
 
   explicit CypherParser(antlr4::TokenStream *input);
@@ -101,6 +101,7 @@ public:
   class UpdatingStatementContext;
   class DeleteStContext;
   class RemoveStContext;
+  class ForeachStContext;
   class RemoveItemContext;
   class QueryCallStContext;
   class ParenExpressionChainContext;
@@ -269,6 +270,7 @@ public:
     DeleteStContext *deleteSt();
     SetStContext *setSt();
     RemoveStContext *removeSt();
+    ForeachStContext *foreachSt();
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
@@ -543,6 +545,27 @@ public:
   };
 
   RemoveStContext* removeSt();
+
+  class  ForeachStContext : public antlr4::ParserRuleContext {
+  public:
+    ForeachStContext(antlr4::ParserRuleContext *parent, size_t invokingState);
+    virtual size_t getRuleIndex() const override;
+    antlr4::tree::TerminalNode *FOREACH();
+    antlr4::tree::TerminalNode *LPAREN();
+    SymbolContext *symbol();
+    antlr4::tree::TerminalNode *IN();
+    ExpressionContext *expression();
+    antlr4::tree::TerminalNode *STICK();
+    antlr4::tree::TerminalNode *RPAREN();
+    std::vector<UpdatingClauseContext *> updatingClause();
+    UpdatingClauseContext* updatingClause(size_t i);
+
+
+    virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;
+   
+  };
+
+  ForeachStContext* foreachSt();
 
   class  RemoveItemContext : public antlr4::ParserRuleContext {
   public:
@@ -1629,6 +1652,7 @@ public:
     antlr4::tree::TerminalNode *ANY();
     antlr4::tree::TerminalNode *NONE();
     antlr4::tree::TerminalNode *SINGLE();
+    antlr4::tree::TerminalNode *FOREACH();
 
 
     virtual std::any accept(antlr4::tree::ParseTreeVisitor *visitor) override;

@@ -8,6 +8,7 @@
 #include "query/optimizer/requirement_collector.hpp"
 #include "query/planner/bound_logical_plan.hpp"
 #include "query/planner/logical_plan/operator/bound_binary_join_op.hpp"
+#include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
 #include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_semi_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
@@ -52,8 +53,9 @@ void setChild(binder::BoundLogicalOperator& op, binder::BoundLogicalOperator chi
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
-                // Binary operators have left/right, not a single child — skip
+                // Binary operators have two inputs, not a single child — skip
             } else {
                 // All non-leaf operators are wrapped in unique_ptr
                 // BoundCreateNodeOp has optional<BoundLogicalOperator> child,
@@ -81,8 +83,9 @@ int getChildCount(const binder::BoundLogicalOperator& op) {
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
+                                 std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
-                return 2;
+                return 2; // two inputs: FOREACH's (input row, body sub-plan)
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 return (val && val->child.has_value()) ? 1 : 0;
             } else {
@@ -161,6 +164,7 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
                                      std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>> ||
+                                     std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>> ||
                                      std::is_same_v<T, std::unique_ptr<binder::BoundUnionOp>>) {
                     return binder::BoundScanOp{};
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
@@ -210,6 +214,17 @@ GroupId Memo::copyIn(binder::BoundLogicalOperator& op) {
             auto right = std::move(pc->right);
             pc->right = binder::BoundScanOp{};
             child_groups.push_back(copyIn(right));
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundForeachOp>>(op)) {
+            // Two inputs: the row source, and the body sub-plan (which is opaque
+            // to the rewriter but must still be carried through the memo, so it is
+            // canonicalised as a child group like any binary operator's input).
+            auto& fe = std::get<std::unique_ptr<binder::BoundForeachOp>>(op);
+            auto child = std::move(fe->child);
+            fe->child = binder::BoundScanOp{};
+            child_groups.push_back(copyIn(child));
+            auto body = std::move(fe->body);
+            fe->body = binder::BoundScanOp{};
+            child_groups.push_back(copyIn(body));
         } else if (std::holds_alternative<std::unique_ptr<binder::BoundUnionOp>>(op)) {
             auto& uo = std::get<std::unique_ptr<binder::BoundUnionOp>>(op);
             auto left = std::move(uo->left);
@@ -287,6 +302,10 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid) {
             auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result);
             pc->left = copyOut(expr.child_groups[0]);
             pc->right = copyOut(expr.child_groups[1]);
+        } else if (std::holds_alternative<std::unique_ptr<binder::BoundForeachOp>>(result)) {
+            auto& fe = std::get<std::unique_ptr<binder::BoundForeachOp>>(result);
+            fe->child = copyOut(expr.child_groups[0]);
+            fe->body = copyOut(expr.child_groups[1]);
         }
     }
 
@@ -338,6 +357,10 @@ binder::BoundLogicalOperator Memo::copyOut(GroupId root_gid, const PhysProp& pro
                 auto& pc = std::get<std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>(result);
                 pc->left = copyOut(expr.child_groups[0], PhysProp{});
                 pc->right = copyOut(expr.child_groups[1], PhysProp{});
+            } else if (std::holds_alternative<std::unique_ptr<binder::BoundForeachOp>>(result)) {
+                auto& fe = std::get<std::unique_ptr<binder::BoundForeachOp>>(result);
+                fe->child = copyOut(expr.child_groups[0], PhysProp{});
+                fe->body = copyOut(expr.child_groups[1], PhysProp{});
             }
         }
         return result;
@@ -987,6 +1010,14 @@ binder::BoundLogicalOperator cloneBoundLogicalOperator(const binder::BoundLogica
                 c->variable = val->variable;
                 c->variable_column_index = val->variable_column_index;
                 return c;
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                auto c = std::make_unique<binder::BoundForeachOp>();
+                c->list_expr = cloneBoundExpression(val->list_expr);
+                c->variable = val->variable;
+                c->element_type = binder::BoundType::clone(val->element_type);
+                c->element_column = val->element_column;
+                c->input_columns = val->input_columns;
+                return c; // child + body are restored from the memo's child groups
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCallOp>>) {
                 auto c = std::make_unique<binder::BoundCallOp>();
                 c->procedure_name = val->procedure_name;

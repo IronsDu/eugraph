@@ -990,3 +990,78 @@ TEST_F(CypherParserTest, MathFunctionSqrt) {
     auto expr_str = expressionToString(ret.items[0].expr);
     EXPECT_EQ(expr_str, "sqrt(12.96)");
 }
+
+// ==================== FOREACH ====================
+
+TEST_F(CypherParserTest, ParseForeachClause) {
+    auto stmt = parseSuccess("FOREACH (x IN [1, 2, 3] | CREATE (:T {v: x}))");
+    auto& query = getRegularQuery(stmt);
+    ASSERT_EQ(query.first.clauses.size(), 1u);
+
+    auto* foreach = std::get_if<std::unique_ptr<ForeachClause>>(&query.first.clauses[0]);
+    ASSERT_NE(foreach, nullptr);
+    EXPECT_EQ((*foreach)->variable, "x");
+    ASSERT_EQ((*foreach)->body.size(), 1u);
+    EXPECT_NE(std::get_if<std::unique_ptr<CreateClause>>(&(*foreach)->body[0]), nullptr);
+}
+
+TEST_F(CypherParserTest, ParseForeachBodyAcceptsEveryUpdatingClause) {
+    auto stmt = parseSuccess("MATCH (p:P) FOREACH (x IN [1] | "
+                             "CREATE (:A {v: x}) "
+                             "SET p.hit = true "
+                             "REMOVE p.gone "
+                             "MERGE (:B {v: x}) "
+                             "DETACH DELETE p)");
+    auto& query = getRegularQuery(stmt);
+    ASSERT_EQ(query.first.clauses.size(), 2u);
+
+    auto* foreach = std::get_if<std::unique_ptr<ForeachClause>>(&query.first.clauses[1]);
+    ASSERT_NE(foreach, nullptr);
+    ASSERT_EQ((*foreach)->body.size(), 5u);
+    EXPECT_NE(std::get_if<std::unique_ptr<CreateClause>>(&(*foreach)->body[0]), nullptr);
+    EXPECT_NE(std::get_if<std::unique_ptr<SetClause>>(&(*foreach)->body[1]), nullptr);
+    EXPECT_NE(std::get_if<std::unique_ptr<RemoveClause>>(&(*foreach)->body[2]), nullptr);
+    EXPECT_NE(std::get_if<std::unique_ptr<MergeClause>>(&(*foreach)->body[3]), nullptr);
+    EXPECT_NE(std::get_if<std::unique_ptr<DeleteClause>>(&(*foreach)->body[4]), nullptr);
+    EXPECT_TRUE(std::get<std::unique_ptr<DeleteClause>>((*foreach)->body[4])->detach);
+}
+
+/// The body nests, and the grammar (not a semantic check) is what keeps reading
+/// clauses out of it -- the same rule neo4j enforces with "Invalid use of MATCH
+/// inside FOREACH".
+TEST_F(CypherParserTest, ParseForeachNests) {
+    auto stmt = parseSuccess("FOREACH (x IN [1] | FOREACH (y IN [2] | CREATE (:T {a: x, b: y})))");
+    auto& query = getRegularQuery(stmt);
+    auto* outer = std::get_if<std::unique_ptr<ForeachClause>>(&query.first.clauses[0]);
+    ASSERT_NE(outer, nullptr);
+    ASSERT_EQ((*outer)->body.size(), 1u);
+    auto* inner = std::get_if<std::unique_ptr<ForeachClause>>(&(*outer)->body[0]);
+    ASSERT_NE(inner, nullptr);
+    EXPECT_EQ((*inner)->variable, "y");
+}
+
+TEST_F(CypherParserTest, ParseForeachRejectsReadingClausesInBody) {
+    for (const auto* q :
+         {"FOREACH (x IN [1] | MATCH (n) RETURN n)", "FOREACH (x IN [1] | WITH 1 AS y CREATE (:T {v: y}))",
+          "FOREACH (x IN [1] | RETURN 1)", "FOREACH (x IN [1] | UNWIND [1] AS y CREATE (:T))"}) {
+        auto err = parseError(q);
+        EXPECT_FALSE(err.message.empty()) << q;
+    }
+}
+
+TEST_F(CypherParserTest, ParseForeachRequiresListAndBody) {
+    for (const auto* q : {"FOREACH (x IN [1])", "FOREACH (x [1] | CREATE (:T))", "FOREACH (x IN [1] | )",
+                          "FOREACH x IN [1] | CREATE (:T)", "FOREACH (x IN [1] | CREATE (:T)"}) {
+        auto err = parseError(q);
+        EXPECT_FALSE(err.message.empty()) << q;
+    }
+}
+
+/// neo4j keeps `foreach` usable as an ordinary identifier, so the keyword must not
+/// become reserved in variable positions.
+TEST_F(CypherParserTest, ForeachStaysUsableAsAnIdentifier) {
+    auto stmt = parseSuccess("MATCH (foreach:Person) RETURN foreach.foreach AS foreach");
+    auto& query = getRegularQuery(stmt);
+    EXPECT_EQ(query.first.clauses.size(), 2u);
+    EXPECT_NE(std::get_if<std::unique_ptr<MatchClause>>(&query.first.clauses[0]), nullptr);
+}

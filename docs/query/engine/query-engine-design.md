@@ -494,6 +494,7 @@ class PhysicalOperator {
 | `SetPhysicalOp` | `IAsyncGraphDataStore&`, `IAsyncGraphMetaStore&`, items（含 `strong_mode`, `resolved_label_id`, `resolved_prop_id`） | 便捷模式：运行时推断目标标签；强模式：直接写入指定标签 |
 | `RemovePhysicalOp` | `IAsyncGraphDataStore&`, items（含 `strong_mode`, `resolved_label_id`, `resolved_prop_id`） | 便捷模式：删除所有匹配标签的属性；强模式：删除指定标签的属性 |
 | `DeletePhysicalOp` | `IAsyncGraphDataStore&`, targets, detach | child 原样 yield，detach 时先扫描并删除邻边 |
+| `ForeachPhysicalOp` | `BoundExpression list_expr`, `input_columns`, `element_column`, body 子计划, 其 `CorrelatedSourcePhysicalOp*`, child | 逐行求值列表，对每个元素把（外层相关列 + 元素）注入 body 的 `CorrelatedSource` 并**排空** body（副作用发生、输出行丢弃），最后把 body 发布过的实体按 id 回灌到外层行（同查询后续读得到新值），输入行原样透传 —— 基数不变 |
 | `PathBuildPhysicalOp` | 路径变量名, 元素列名列表 | 复制 child 列 + 新建 PATH FLAT 列 |
 | `CrossProductPhysicalOp` | 左/右 child PhysicalOperator, 左/右 Schema | 嵌套循环笛卡尔积：左输入 DICTIONARY + 右输入 DICTIONARY |
 | `UnionPhysicalOp` | `bool all`, 左/右 child PhysicalOperator | 顺序 yield 左子算子所有 chunk，再 yield 右子算子所有 chunk。UNION（`all=false`）时由 planner 在外层包裹 `DistinctPhysicalOp` 去重 |

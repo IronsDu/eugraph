@@ -125,6 +125,14 @@ template <typename OpRef, typename Visit> void forEachChild(OpRef&& op, Visit&& 
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v && v->child)
                     visit(*v->child);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                // Two inputs: the row source and the body sub-plan. The body is
+                // walked like any other subtree so slot allocation / rewriting see
+                // the operators inside it.
+                if (v) {
+                    visit(v->child);
+                    visit(v->body);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||
@@ -391,6 +399,16 @@ void allocateSlotsInOp(const binder::BoundLogicalOperator& op, NameSlotMap& name
                     if (!v->variable.empty())
                         ensureSlot(name_to_slot, alloc, v->variable);
                     allocateSlotsInOp(v->child, name_to_slot, alloc);
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                if (v) {
+                    ensureSlotsInExpr(v->list_expr, name_to_slot, alloc);
+                    // The element variable and everything the body introduces already
+                    // carry bind-time slots (the body binds in its own sub-scope, and
+                    // the correlated source publishes the element's slot explicitly),
+                    // so no name-based allocation is needed for them here.
+                    allocateSlotsInOp(v->child, name_to_slot, alloc);
+                    allocateSlotsInOp(v->body, name_to_slot, alloc);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPathBuildOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundDistinctOp>>) {
@@ -799,6 +817,12 @@ void collectOpReqs(const binder::BoundLogicalOperator& op, PlanRequirements& req
                     }
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
+                if (v)
+                    collectExprReqs(v->list_expr, reqs, resolver, "", label_defs);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                // Only this operator's own expression: the child and the body are
+                // walked separately (forEachChild), and the body's own property
+                // reads are collected by the requirement collector.
                 if (v)
                     collectExprReqs(v->list_expr, reqs, resolver, "", label_defs);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundPatternComprehensionApplyOp>>) {
@@ -1272,6 +1296,9 @@ void rewriteOp(binder::BoundLogicalOperator& op, const PEPlans& plans, const Slo
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundUnwindOp>>) {
                 if (v)
                     rewriteExpr(v->list_expr, plans, resolver);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                if (v)
+                    rewriteExpr(v->list_expr, plans, resolver);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundSetOp>>) {
                 // SET items' value_expr may reference entity variables (e.g.
                 // `SET r = a` where a is a vertex). Rewrite those BoundColumnRefs
@@ -1599,6 +1626,11 @@ void collectAliasSlotMapOp(const binder::BoundLogicalOperator& op, AliasSlotMap&
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
                 if (v && v->child)
                     collectAliasSlotMapOp(*v->child, alias_map, name_to_slot);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                if (v) {
+                    collectAliasSlotMapOp(v->child, alias_map, name_to_slot);
+                    collectAliasSlotMapOp(v->body, alias_map, name_to_slot);
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundBinaryJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundLeftJoinOp>> ||
                                  std::is_same_v<T, std::unique_ptr<binder::BoundSemiJoinOp>> ||

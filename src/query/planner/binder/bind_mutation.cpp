@@ -1,5 +1,6 @@
 #include "query/planner/binder.hpp"
 
+#include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
 #include "query/planner/logical_plan/operator/bound_unwind_op.hpp"
 
 #include <spdlog/spdlog.h>
@@ -624,6 +625,151 @@ std::optional<BoundLogicalOperator> Binder::bindUnwind(const cypher::UnwindClaus
     unwind_op->variable_column_index = var_col;
     unwind_op->child = std::move(*child);
     return unwind_op;
+}
+
+std::optional<BoundLogicalOperator> Binder::bindForeach(const cypher::ForeachClause& foreach_clause,
+                                                        std::optional<BoundLogicalOperator> child) {
+    // The list expression is evaluated in the *outer* scope: `FOREACH (x IN
+    // [p.id] | ...)` reads p from the row that entered the clause.
+    auto bound_list = bindExpression(foreach_clause.list_expr);
+    if (!bound_list)
+        return std::nullopt;
+
+    // A FOREACH with no preceding clause still runs once (over the empty list it
+    // is a no-op), matching neo4j.
+    if (!child)
+        child = BoundSingletonOp{};
+
+    // The body is updating-only (the grammar guarantees it), so the statement is a
+    // mutation exactly like a bare CREATE: static schema pruning must stay off.
+    ctx_.has_mutation = true;
+
+    // Element type: the list's element type when known, otherwise ANY. A non-list
+    // value is treated as a one-element list at execution time (neo4j does the
+    // same), so ANY is the honest type for the fallback.
+    const BoundType& list_type = getBoundExprType(*bound_list);
+    BoundType element_type = (list_type.kind == BoundTypeKind::LIST && list_type.element_type)
+                                 ? BoundType::clone(*list_type.element_type)
+                                 : BoundType::Any();
+
+    auto saved = ctx_.save();
+
+    // Body scope: independent of the outer one (so the element and anything the
+    // body creates stay local), fed only by the correlated source.
+    ctx_.beginSubScope();
+
+    // Correlated columns: every variable the outer scope can see, except a
+    // shadowed name, plus the element as the last column. Sorted by name so the
+    // sub-plan layout is deterministic across runs (ctx_.symbols is unordered).
+    std::vector<std::pair<std::string, ColumnInfo>> outer;
+    outer.reserve(saved.symbols.size());
+    for (const auto& [name, info] : saved.symbols) {
+        if (name == foreach_clause.variable)
+            continue; // the element shadows it inside the body
+        outer.emplace_back(name, info);
+    }
+    std::sort(outer.begin(), outer.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    BoundCorrelatedSourceOp source;
+    std::vector<uint32_t> input_columns;
+    source.variables.reserve(outer.size() + 1);
+    source.types.reserve(outer.size() + 1);
+    source.column_indices.reserve(outer.size() + 1);
+    source.slot_ids.reserve(outer.size() + 1);
+    input_columns.reserve(outer.size());
+
+    uint32_t sub_column = 0;
+    for (const auto& [name, info] : outer) {
+        input_columns.push_back(info.column_index); // where the value lives in the input row
+
+        ColumnInfo ci = info;
+        ci.column_index = sub_column++;
+        ctx_.symbols[name] = ci;
+
+        source.variables.push_back(name);
+        // The *semantic* type, deliberately not the topology counterpart EXISTS
+        // uses: the body writes to these entities (`SET p.x = ...`, `REMOVE p:Q`),
+        // and a write needs the materialised entity, not a bare reference. Reads
+        // alone would be happy with the topology form. Keeping the semantic type
+        // here is also what makes the outer chain materialise these variables:
+        // the body's requirements are collected, so the enforcer wraps the input
+        // with a vertex/edge/path enrichment before FOREACH runs.
+        source.types.push_back(BoundType::clone(ci.type));
+        source.column_indices.push_back(ci.column_index);
+        source.slot_ids.push_back(ci.slot_id);
+    }
+
+    const uint32_t element_column = sub_column;
+    ColumnInfo element = makeColumnInfo(foreach_clause.variable, BoundType::clone(element_type));
+    element.column_index = element_column;
+    ctx_.symbols[foreach_clause.variable] = element;
+
+    // The correlated columns occupy 0..element_column; anything the body introduces
+    // (a CREATE'd node, for instance) must continue after them, or it would collide
+    // with a correlated column.
+    ctx_.next_column_index = element_column + 1;
+
+    source.variables.push_back(foreach_clause.variable);
+    // Same reasoning as above: `FOREACH (n IN nodes(p) | SET n.marked = true)`
+    // writes to the element, so it is injected as the semantic value.
+    source.types.push_back(BoundType::clone(element.type));
+    source.column_indices.push_back(element.column_index);
+    source.slot_ids.push_back(element.slot_id);
+
+    // Body chain, rooted at the correlated source.
+    std::optional<BoundLogicalOperator> body = BoundLogicalOperator(std::move(source));
+    for (const auto& body_clause : foreach_clause.body) {
+        auto next = bindUpdatingClause(body_clause, std::move(body));
+        if (!next) {
+            ctx_.restore(saved);
+            return std::nullopt;
+        }
+        body = std::move(*next);
+    }
+
+    ctx_.restore(saved);
+
+    auto op = std::make_unique<BoundForeachOp>();
+    op->list_expr = std::move(*bound_list);
+    op->variable = foreach_clause.variable;
+    op->element_type = std::move(element_type);
+    op->element_column = element_column;
+    op->input_columns = std::move(input_columns);
+    op->body = std::move(*body);
+    op->child = std::move(*child);
+    return op;
+}
+
+std::optional<BoundLogicalOperator> Binder::bindUpdatingClause(const cypher::Clause& clause,
+                                                               std::optional<BoundLogicalOperator> current) {
+    if (!current) {
+        error("FOREACH body needs a preceding context");
+        return std::nullopt;
+    }
+    return std::visit(
+        [this, &current](const auto& ptr) -> std::optional<BoundLogicalOperator> {
+            using T = std::decay_t<decltype(ptr)>;
+            using Elem = typename T::element_type;
+            if constexpr (std::is_same_v<Elem, cypher::CreateClause>) {
+                return bindCreate(*ptr, std::move(current));
+            } else if constexpr (std::is_same_v<Elem, cypher::MergeClause>) {
+                return bindMerge(*ptr, std::move(current));
+            } else if constexpr (std::is_same_v<Elem, cypher::SetClause>) {
+                return bindSet(*ptr, std::move(*current));
+            } else if constexpr (std::is_same_v<Elem, cypher::RemoveClause>) {
+                return bindRemove(*ptr, std::move(*current));
+            } else if constexpr (std::is_same_v<Elem, cypher::DeleteClause>) {
+                return bindDelete(*ptr, std::move(*current));
+            } else if constexpr (std::is_same_v<Elem, cypher::ForeachClause>) {
+                return bindForeach(*ptr, std::move(current));
+            } else {
+                // Unreachable through the grammar (the body rule is updatingClause+),
+                // kept so a future grammar change cannot bind one silently.
+                error("FOREACH body accepts updating clauses only");
+                return std::nullopt;
+            }
+        },
+        clause);
 }
 
 namespace {

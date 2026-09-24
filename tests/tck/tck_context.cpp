@@ -299,6 +299,18 @@ bool hasUnsupportedClause(const ast::Clause& clause) {
                 if (ptr->where_pred && hasUnsupportedExpr(*ptr->where_pred))
                     return true;
                 return false;
+            } else if constexpr (std::is_same_v<Inner, ast::ForeachClause>) {
+                // FOREACH: the list expression runs in the outer scope, and every
+                // body clause is an updating clause -- check them all so an
+                // unsupported expression inside the body still skips the query
+                // instead of failing it.
+                if (hasUnsupportedExpr(ptr->list_expr))
+                    return true;
+                for (const auto& body_clause : ptr->body) {
+                    if (hasUnsupportedClause(body_clause))
+                        return true;
+                }
+                return false;
             } else if constexpr (std::is_same_v<Inner, ast::SetClause>) {
                 // SET clause: check expressions in set items
                 for (const auto& item : ptr->items) {
@@ -349,18 +361,18 @@ bool hasUnsupportedFeature(const ast::Statement& stmt) {
         stmt);
 }
 
-// Regex fallbacks for constructs with no AST representation
-const std::regex kForeachRe(R"(\bFOREACH\b)", std::regex::icase);
+// Regex fallback for constructs with no AST representation: LOAD CSV is still
+// unsupported, so a query using it is skipped rather than run.
+//
+// FOREACH used to be in this list for the same reason; it now has an AST node
+// (ast::ForeachClause) and runs, so gating on the word would silently skip every
+// FOREACH scenario -- the assertions would never execute while the scenario
+// reported a shape mismatch instead.
 const std::regex kLoadCsvRe(R"(\bLOAD\s+CSV\b)", std::regex::icase);
 
 } // anonymous namespace
 
 bool TckContext::isQuerySupported(const std::string& query) {
-    // Regex fallback: FOREACH and LOAD CSV have no AST nodes
-    if (std::regex_search(query, kForeachRe)) {
-        spdlog::info("[TCK] skipping: FOREACH");
-        return false;
-    }
     if (std::regex_search(query, kLoadCsvRe)) {
         spdlog::info("[TCK] skipping: LOAD CSV");
         return false;

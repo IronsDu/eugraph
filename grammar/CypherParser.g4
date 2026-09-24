@@ -71,6 +71,7 @@ updatingClause
     | deleteSt
     | setSt
     | removeSt
+    | foreachSt
     ;
 
 primitiveResultStatement
@@ -145,6 +146,15 @@ deleteSt
 
 removeSt
     : REMOVE removeItem (COMMA removeItem)*
+    ;
+
+// FOREACH runs its body once per element of the list, and passes the input row
+// through unchanged. The body accepts updating clauses only -- MATCH / WITH /
+// RETURN inside it are syntax errors, exactly as in neo4j ("Invalid use of
+// MATCH inside FOREACH"); use UNWIND when a MATCH is needed per element.
+// The body is parsed with the same updatingClause rule, so FOREACH nests.
+foreachSt
+    : FOREACH LPAREN symbol IN expression STICK updatingClause+ RPAREN
     ;
 
 removeItem
@@ -455,6 +465,10 @@ symbol
     | ANY
     | NONE
     | SINGLE
+    // neo4j accepts `foreach` as an ordinary identifier (`MATCH (foreach)
+    // RETURN foreach` works), so the keyword stays usable in variable
+    // positions; only the clause-initial position means the FOREACH clause.
+    | FOREACH
     ;
 
 reservedWord
