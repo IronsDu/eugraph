@@ -459,14 +459,17 @@ template <typename T, typename... Args> ValPtr<T> mk(Args&&...);         // 唯�
 
 ### 物理算子接口
 
-每个物理算子提供双接口：
+物理算子只有列存接口，且是纯虚：
 
 ```cpp
 class PhysicalOperator {
-    virtual AsyncGenerator<RowBatch> execute();      // 旧接口，桥接到 executeChunk
-    virtual AsyncGenerator<DataChunk> executeChunk(); // 列存接口
+    virtual AsyncGenerator<DataChunk> executeChunk() = 0;
 };
 ```
+
+早期的行式接口 `execute() -> AsyncGenerator<RowBatch>` 与两座桥
+（`executeViaChunk` / `rowBatchToDataChunk` / `dataChunkToRowBatch`）在全部算子都原生
+产出 `DataChunk` 后删除：它们已无调用点，只让每个算子白写一个 override。
 
 ### 物理算子列表
 
@@ -626,7 +629,8 @@ using Row = vector<Value>;       // 位置式，列索引对应 Schema
 using Schema = vector<string>;   // 列名列表
 ```
 
-`RowBatch` 和 `Row` 保留作为兼容层，用于 DDL/EXPLAIN 结果输出和最终结果转换。
+`Row` 保留作为兼容层，用于 DDL/EXPLAIN 结果输出和最终结果转换（经
+`wrapRowsToChunkGenerator` 转成 `DataChunk`）。`RowBatch` 已删除。
 
 ---
 

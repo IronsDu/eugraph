@@ -96,9 +96,6 @@ public:
           edge_label_names_(std::move(edge_label_names)), input_schema_(std::move(input_schema)),
           output_types_(std::move(output_types)), child_(std::move(child)), anon_label_id_(anon_label_id) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
     bool supportsLimitPushdown() const override {

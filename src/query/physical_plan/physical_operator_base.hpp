@@ -22,14 +22,11 @@ class PhysicalOperator {
 public:
     virtual ~PhysicalOperator() = default;
 
-    /// Legacy execute interface: yields row-based batches.
-    /// Operators override this for backward compatibility during migration.
-    virtual folly::coro::AsyncGenerator<RowBatch> execute() = 0;
-
-    /// Columnar execute interface: yields DataChunk batches.
-    /// Default implementation bridges from execute() (RowBatch→DataChunk).
-    /// Operators override this to produce DataChunk natively.
-    virtual folly::coro::AsyncGenerator<DataChunk> executeChunk();
+    /// Produce columnar batches. This is the only execution interface: the row-based
+    /// `execute()`/`RowBatch` path was removed once every operator produced chunks
+    /// natively -- keeping it cost each operator a no-op override and left a
+    /// row<->chunk bridge alive that nothing called.
+    virtual folly::coro::AsyncGenerator<DataChunk> executeChunk() = 0;
 
     virtual std::string toString() const = 0;
     virtual std::vector<const PhysicalOperator*> children() const {
@@ -145,11 +142,6 @@ protected:
         }
     }
 
-    /// Bridge for upgraded operators: wraps executeChunk() output as RowBatch.
-    /// Use for the legacy execute() override:
-    ///   folly::coro::AsyncGenerator<RowBatch> execute() override { return executeViaChunk(); }
-    folly::coro::AsyncGenerator<RowBatch> executeViaChunk();
-
 private:
     Schema output_schema_;
     std::vector<binder::BoundType> output_types_;
@@ -158,16 +150,15 @@ private:
     std::shared_ptr<QueryContext> query_ctx_;
 };
 
-// ── Conversion utilities (used by default bridge and DDL/EXPLAIN paths) ──
+// ── Conversion utilities ──
 
-/// Convert a RowBatch to DataChunk. Infers column types from first non-null value.
-DataChunk rowBatchToDataChunk(const RowBatch& batch);
-
-/// Convert DataChunk to RowBatch (legacy execute() bridge).
-RowBatch dataChunkToRowBatch(const DataChunk& chunk);
-
-/// Wrap an AsyncGenerator<RowBatch> as AsyncGenerator<DataChunk>.
-folly::coro::AsyncGenerator<DataChunk> wrapRowBatchToChunkGenerator(folly::coro::AsyncGenerator<RowBatch> gen);
+/// Wrap a hand-built row collection (index DDL, EXPLAIN, database-level DDL results)
+/// as a one-batch DataChunk stream, so those paths can feed the same chunk-consuming
+/// pipeline as operators without materialising a RowBatch.
+///
+/// Column kinds are taken from the values themselves; a column whose cells are all
+/// null falls back to ANY.
+folly::coro::AsyncGenerator<DataChunk> wrapRowsToChunkGenerator(std::vector<Row> rows);
 
 } // namespace compute
 } // namespace eugraph

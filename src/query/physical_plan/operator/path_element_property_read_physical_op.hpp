@@ -21,9 +21,6 @@ public:
         : path_variable_(std::move(path_variable)), path_col_idx_(path_col_idx), store_(store),
           input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
     std::vector<const PhysicalOperator*> children() const override {

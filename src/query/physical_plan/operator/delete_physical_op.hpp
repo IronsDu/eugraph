@@ -43,9 +43,6 @@ public:
           label_defs_(label_defs), edge_label_defs_(edge_label_defs), anon_label_id_(anon_label_id),
           child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     void compileExpressions(const TupleSlotLayout& input_layout) override;
     std::string toString() const override {

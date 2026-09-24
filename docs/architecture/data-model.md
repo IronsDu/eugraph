@@ -62,7 +62,10 @@ Value = variant<monostate, bool, int64_t, double, string,
                 VertexValue, EdgeValue, ListValue>
 Row = vector<Value>         // 位置式行（列索引对应 Schema）
 Schema = vector<string>     // 列名列表
-RowBatch { CAPACITY = 1024; vector<Row> rows; }
 ```
+
+`Row` 仅用于"手工构造的小结果集"（索引 DDL / EXPLAIN / 库级 DDL），由
+`wrapRowsToChunkGenerator` 一次性转成 `DataChunk` 交给统一管道；算子之间的传输单位是
+`DataChunk`（1024 行/批），不再有 `RowBatch`。
 
 详细见 [type-definitions.md](type-definitions.md)。

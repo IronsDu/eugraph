@@ -27,9 +27,6 @@ public:
           label_defs_(std::move(label_defs)), anon_label_id_(anon_label_id),
           candidate_labels_(std::move(candidate_labels)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         std::string labels;

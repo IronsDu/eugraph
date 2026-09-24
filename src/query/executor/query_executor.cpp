@@ -58,15 +58,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
                 co_return ctx;
             }
             ctx->columns = std::move(ddl_result.columns);
-            auto ddl_row_gen = folly::coro::co_invoke(
-                [rows = std::move(ddl_result.rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
-                    if (!rows.empty()) {
-                        RowBatch batch;
-                        batch.rows = std::move(rows);
-                        co_yield std::move(batch);
-                    }
-                });
-            ctx->gen = wrapRowBatchToChunkGenerator(std::move(ddl_row_gen));
+            ctx->gen = wrapRowsToChunkGenerator(std::move(ddl_result.rows));
             co_return ctx;
         }
     }
@@ -322,15 +314,7 @@ QueryExecutor::prepareStream(const std::string& cypher_query, const std::unorder
             }
         }
 
-        auto explain_row_gen =
-            folly::coro::co_invoke([rows = std::move(plan_rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
-                if (!rows.empty()) {
-                    RowBatch batch;
-                    batch.rows = std::move(rows);
-                    co_yield std::move(batch);
-                }
-            });
-        ctx->gen = wrapRowBatchToChunkGenerator(std::move(explain_row_gen));
+        ctx->gen = wrapRowsToChunkGenerator(std::move(plan_rows));
 
         co_await query_data.rollbackTran(txn);
         ctx->should_commit = false;

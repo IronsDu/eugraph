@@ -21,9 +21,6 @@ public:
     CorrelatedSourcePhysicalOp(std::vector<std::string> variables, std::vector<binder::BoundType> types)
         : variables_(std::move(variables)), types_(std::move(types)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "CorrelatedSource";

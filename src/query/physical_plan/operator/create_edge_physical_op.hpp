@@ -34,9 +34,6 @@ public:
           label_name_(std::move(label_name)), edge_label_name_to_id_(edge_label_name_to_id),
           pending_props_(std::move(pending_props)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "CreateEdge(variable=" + variable_ + ", src_col=" + std::to_string(src_col_idx_) +

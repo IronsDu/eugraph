@@ -18,9 +18,6 @@ public:
                    std::unique_ptr<PhysicalOperator> child)
         : skip_(skip), expr_(std::move(expr)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     void compileExpressions(const TupleSlotLayout& input_layout) override;
     std::string toString() const override {

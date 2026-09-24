@@ -627,15 +627,7 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
     }
 
     ctx->columns = std::move(columns);
-    auto ddl_row_gen =
-        folly::coro::co_invoke([rows = std::move(rows)]() mutable -> folly::coro::AsyncGenerator<RowBatch> {
-            if (!rows.empty()) {
-                RowBatch batch;
-                batch.rows = std::move(rows);
-                co_yield std::move(batch);
-            }
-        });
-    ctx->gen = compute::wrapRowBatchToChunkGenerator(std::move(ddl_row_gen));
+    ctx->gen = compute::wrapRowsToChunkGenerator(std::move(rows));
     result.ctx = std::move(ctx);
     co_return result;
 }

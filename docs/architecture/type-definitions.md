@@ -148,11 +148,6 @@ using Value = variant<monostate, bool, int64_t, double, string, VertexValue, Edg
 using Row = vector<Value>;         // 位置式行
 using Schema = vector<string>;     // 列名列表
 
-struct RowBatch {
-    static constexpr size_t CAPACITY = 1024;
-    vector<Row> rows;
-};
-
 struct ExecutionResult {
     Schema columns;
     vector<Row> rows;

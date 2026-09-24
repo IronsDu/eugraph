@@ -100,7 +100,7 @@
 关键设计：
 - **只依赖 async 接口**：`IAsyncGraphDataStore` + `IAsyncGraphMetaStore`
 - **事务通过 async 接口**：`beginTran/commitTran/rollbackTran`
-- **协程管道**：Pull-based 火山模型，批量 `AsyncGenerator<RowBatch>`
+- **协程管道**：Pull-based 火山模型，批量 `AsyncGenerator<DataChunk>`（列存，1024 行/批）
 
 ### Server Layer（服务层）
 

@@ -25,9 +25,6 @@ public:
         : procedure_name_(std::move(procedure_name)), output_names_(std::move(output_names)),
           output_types_(std::move(output_types)), data_store_(data_store), meta_(meta), func_registry_(func_registry) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
 
     std::string toString() const override {

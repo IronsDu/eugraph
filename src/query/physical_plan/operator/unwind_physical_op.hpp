@@ -23,9 +23,6 @@ public:
         : list_expr_(std::move(list_expr)), output_col_index_(output_col_index), elem_type_(std::move(elem_type)),
           input_schema_(std::move(input_schema)), output_types_(std::move(output_types)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Unwind";

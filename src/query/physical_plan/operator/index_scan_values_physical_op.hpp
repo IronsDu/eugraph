@@ -22,9 +22,6 @@ public:
         : variable_(std::move(variable)), index_id_(index_id), store_(store), output_types_(std::move(output_types)),
           output_schema_(std::move(output_schema)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "IndexScanValues(variable=" + variable_ + ", index_id=" + std::to_string(index_id_) + ")";

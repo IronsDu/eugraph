@@ -59,9 +59,6 @@ public:
                     const std::unordered_map<std::string, EdgeLabelId>& edge_label_name_to_id,
                     std::unique_ptr<PhysicalOperator> child);
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     bool mayHaveSideEffects() const override {
         return true;
     }
