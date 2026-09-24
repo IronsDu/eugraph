@@ -24,6 +24,10 @@ public:
 
     // Lifecycle
     bool open(const std::string& db_path) override;
+    /// Same, with extra WiredTiger config (diagnostics / tuning). The data store has
+    /// had this for a while; the meta store did not, so a WT problem on the meta side
+    /// (which has its own log server) could not be instrumented at all.
+    bool open(const std::string& db_path, const std::string& wt_extra_config);
     void close() override;
     bool isOpen() const override;
 

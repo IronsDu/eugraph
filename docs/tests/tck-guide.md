@@ -247,35 +247,43 @@ python3 tests/tck/run_tck.py \
 裸 `CREATE` 首次看到的属性登记为 `ANY`（见 `cypher-syntax.md` 8.4），所以 schema 用例断言
 `propertyTypes` 时不要预期推断出的具体标量类型。
 
-### ⚠️ `tck_tests` 偶发失败：WiredTiger 在 teardown 时 panic（与用例无关）
+### ⚠️ 已定位并修复：删图目录把整轮 TCK 拖死（panic / 挂死两种表现）
 
-全量 `tck_tests` 偶尔会以 `Failed` 收场，但**用例本身全过**：
+历史上全量 `tck_tests` 偶尔会收场失败，或**整轮卡住数小时**（本机实测一次挂死 6.5 小时）。现在
+两者都归到同一处，并已修（详见 [storage/interfaces.md](../storage/interfaces.md) 关键设计决策 9）：
+
+**表现 A：服务端 abort**，用例本身其实全过：
 
 ```
 [TCK] Total: 3928  |  Passed: 3928  |  Failed: 0  |  Skipped: 0
 [run_tck] Server killed by signal 6
-[run_tck] WARNING: Server crashed (signal 6)
-[run_tck] Failing due to server crash
 ```
 
-**判据**：看 `[TCK] Total:` 那行的 `Failed` 是不是 0。是 0 就说明引擎行为没问题，失败来自
-服务端进程在收尾阶段被 abort。
+`coredumpctl info <pid>` 显示崩在 WiredTiger 内部（`__wt_abort ← __wt_panic_func ← __log_server`），
+而 core 里最后的动作是它在处理某个 `graph_N/meta` 或 `graph_N/data` 目录。
 
-**根因**（`coredumpctl info <pid>` 看栈）：崩在 WiredTiger 内部，不是我们的代码：
+**表现 B：整轮挂死、没有输出**。用 `gdb -p` 抓到的现场：
 
 ```
-__wt_abort
-__wt_panic_func      ← WT 主动 panic
-__log_server         ← WT 的日志服务线程
+Thread "ThriftIO1":  state=R（在跑）  wchan=0  CPU 持续增长
+#0 unlinkat()
+#1 std::filesystem::recursive_directory_iterator::__erase
+#2 std::filesystem::remove_all
+#3 GraphManager::dropGraph        graph_manager.cpp
 ```
 
-即 WT 日志子系统 panic 后 `abort()`，与查询执行无关（此时 TCK 已跑完、最后一张图也已 drop）。
+即 `dropGraph` 删图目录时**卡在 libstdc++ 的 `remove_all` 里空转**，目录只删了一半。此时 WT 的线程
+全都正常等条件变量（`__wt_cond_wait`），客户端主线程则卡在 `rpc_client.cpp` 的
+`EventBase::loopForever` 上等一个永不到来的响应。
 
-**这是长期存在的偶发问题，不是某次改动引入**：本机 `coredumpctl list` 里 `eugraph-server`
-有 375 条 coredump，横跨 2026-05 ~ 2026-09 且每月都有。同一份二进制重跑通常就过
-（实测：首次全量 1168 项里仅 `tck_tests` 因它失败，重跑 1168/1168 全过）。
+**修法**：`dropGraph` 先 `rename` 图目录到 `trash/`（单次系统调用、效果有界，请求路径必然推进），
+再尽力删除；`GraphManager::init` 启动时清 `trash/` 里上次的遗留。
 
-所以遇到它时：**先确认 `Failed: 0`，再重跑一次**，不要把它当成引擎缺陷去改查询逻辑。
-要真正定位得单独查 WT 日志子系统（`--wt-txn-sync` / 日志文件清理路径），属独立议题。
+**排查提示**：
+* 先看 `[TCK] Total:` 的 `Failed` 是不是 0——是 0 说明引擎行为没问题，问题在收尾/清理路径；
+* 挂死时用 `cat /proc/<pid>/task/<tid>/stat`（state 是否 R）与 `/proc/<pid>/task/<tid>/syscall`
+  区分"忙转"与"阻塞"，再看 `gdb -p <pid> -ex "thread apply all bt"`；
+* runner 现在有 `--run-timeout`（默认 3600s）兜底：超时会 SIGKILL **整个进程组**并清理孙进程，
+  不会再出现子进程活着导致 `subprocess.run` 永久等待的情况（那正是那次 6.5 小时挂死的直接原因之一）。
 
 

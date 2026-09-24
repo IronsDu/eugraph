@@ -472,6 +472,9 @@ def main():
                              "（默认 features/）")
     parser.add_argument("--timeout", type=int, default=30,
                         help="Server startup timeout in seconds (default: 30)")
+    parser.add_argument("--run-timeout", type=int, default=3600,
+                        help="Wall-clock limit for tck_tests in seconds (default: 3600); "
+                             "on expiry the whole process group is killed")
     parser.add_argument("--keep-data", action="store_true",
                         help="Keep data directory after test")
     parser.add_argument("--report", default=None,
@@ -511,6 +514,10 @@ def main():
     # ---- Start server ----
     server_cmd = [args.server_bin, "--thrift-port", str(args.port), "--bolt-port", "0",
                   "--data-dir", args.data_dir]
+    # TEMP(诊断): 让 WT 把每个非零返回的函数名+错误码打出来，用于定位 log-server 的
+    # fail-stop panic（否则 panic 消息里没有任何失败细节）。
+    if os.environ.get("TCK_WT_VERBOSE"):
+        server_cmd += ["--wt-verbose", os.environ["TCK_WT_VERBOSE"]]
     print(f"[run_tck] Starting server: {' '.join(server_cmd)}", flush=True)
 
     server_log = open("/tmp/eugraph_tck_server.log", "w")
@@ -543,10 +550,35 @@ def main():
     print(f"[run_tck] Running: {' '.join(tck_cmd)}", flush=True)
     sys.stdout.flush()
     tck_start = time.monotonic()
-    tck_result = subprocess.run(tck_cmd, env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True)
+    # Popen (not run) so the timeout can kill the whole process group: a hung client
+    # that still holds a live server child used to block subprocess.run forever --
+    # a stalled run was once observed sitting here for 6.5 hours with no output.
+    tck_proc = subprocess.Popen(tck_cmd, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                start_new_session=True)
+    try:
+        out, err = tck_proc.communicate(timeout=args.run_timeout)
+        tck_timed_out = False
+    except subprocess.TimeoutExpired:
+        tck_timed_out = True
+        print(f"[run_tck] tck_tests exceeded {args.run_timeout}s, killing process group",
+              file=sys.stderr, flush=True)
+        try:
+            os.killpg(os.getpgid(tck_proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        out, err = tck_proc.communicate()
     tck_elapsed = time.monotonic() - tck_start
+
+    class _Result:
+        pass
+
+    tck_result = _Result()
+    tck_result.returncode = tck_proc.returncode
+    tck_result.stdout = out or ""
+    tck_result.stderr = err or ""
+    if tck_timed_out:
+        tck_result.returncode = -signal.SIGKILL
 
     # Print captured output
     if tck_result.stdout:

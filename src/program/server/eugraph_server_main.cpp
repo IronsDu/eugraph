@@ -34,6 +34,10 @@ struct ServerConfig {
     int wt_cache_size_mb = 256;
     int wt_evict_threads_max = 4;
     std::string wt_txn_sync = "fsync";
+    /// WiredTiger verbose categories (empty = off). Diagnostics only: `log` /
+    /// `log_server` make WT report why a log force-write failed, which is otherwise
+    /// swallowed by its fail-stop panic.
+    std::string wt_verbose;
 };
 
 static ServerConfig parseArgs(int argc, char* argv[]) {
@@ -59,6 +63,9 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
                                               config.wt_evict_threads_max);
     args::ValueFlag<std::string> wt_txn_sync(parser, "mode", "WiredTiger commit sync: fsync|none", {"wt-txn-sync"},
                                              config.wt_txn_sync);
+    args::ValueFlag<std::string> wt_verbose(parser, "cats",
+                                            "WiredTiger verbose categories, comma separated (e.g. log,log_server)",
+                                            {"wt-verbose"}, config.wt_verbose);
 
     try {
         parser.ParseCLI(argc, argv);
@@ -85,6 +92,7 @@ static ServerConfig parseArgs(int argc, char* argv[]) {
     config.wt_cache_size_mb = args::get(wt_cache_size_mb);
     config.wt_evict_threads_max = args::get(wt_evict_threads_max);
     config.wt_txn_sync = args::get(wt_txn_sync);
+    config.wt_verbose = args::get(wt_verbose);
     return config;
 }
 
@@ -117,6 +125,8 @@ int main(int argc, char* argv[]) {
 
     std::string data_wt_config = fmt::format("cache_size={}MB,eviction=(threads_max={}),{}", config.wt_cache_size_mb,
                                              config.wt_evict_threads_max, txn_sync_cfg);
+    if (!config.wt_verbose.empty())
+        data_wt_config += ",verbose=[" + config.wt_verbose + "]";
 
     spdlog::info("Starting EuGraph server...");
     spdlog::info("  Thrift RPC port: {}", config.thrift_port);

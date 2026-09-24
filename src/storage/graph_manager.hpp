@@ -61,6 +61,28 @@ private:
     int compute_threads_ = 4;
     int checkpoint_interval_sec_ = kDefaultCheckpointIntervalSec;
     std::string data_wt_config_;
+    /// Only the diagnostic categories extracted from data_wt_config: the meta store
+    /// needs the same WT verbosity to be observable, but the tuning parameters
+    /// (cache_size, eviction) are per-connection and belong to the data store.
+    std::string meta_wt_config_;
+
+    /// Remove a graph's directory tree without ever blocking on a single unlink.
+    ///
+    /// `std::filesystem::remove_all` cannot be trusted here: it was observed spinning
+    /// inside libstdc++'s recursive_directory_iterator for 6.5 hours on a dropped
+    /// graph's directory (thread state R, CPU climbing, wchan 0, directory left half
+    /// deleted) -- see docs/storage/interfaces.md. A rename is one syscall with a
+    /// bounded, atomic effect, so the request path always makes progress; the actual
+    /// tree removal happens afterwards and any leftover is swept at next startup.
+    void retireGraphDir(const std::string& graph_dir);
+
+    /// Best-effort deletion of everything under `root` (used for retired graph dirs).
+    /// Never blocks indefinitely: each directory is scanned at most twice.
+    static void removeTreeBestEffort(const std::string& root);
+
+    std::string trashDir() const {
+        return data_dir_ + "/trash";
+    }
     std::shared_ptr<IoScheduler> io_scheduler_;
 
     CatalogStore catalog_;

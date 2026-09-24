@@ -11,7 +11,11 @@ SyncGraphMetaStore::~SyncGraphMetaStore() {
 }
 
 bool SyncGraphMetaStore::open(const std::string& db_path) {
-    if (!openConnection(db_path))
+    return open(db_path, "");
+}
+
+bool SyncGraphMetaStore::open(const std::string& db_path, const std::string& wt_extra_config) {
+    if (!openConnection(db_path, wt_extra_config))
         return false;
 
     if (!ensureGlobalTable(defaultSession_.get(), TABLE_METADATA)) {

@@ -4,6 +4,7 @@
 #include "storage/graph_manager.hpp"
 
 #include <filesystem>
+#include <fstream>
 
 using namespace eugraph;
 
@@ -314,3 +315,90 @@ TEST_F(GraphManagerTest, DefaultGraphIdIsZero) {
 }
 
 } // namespace
+
+/// A dropped graph's directory must be out of the way as soon as dropGraph returns.
+///
+/// Regression: the drop path used std::filesystem::remove_all, which was observed
+/// spinning inside libstdc++'s recursive_directory_iterator for hours on a graph
+/// directory (thread state R, CPU climbing, directory left half deleted), hanging the
+/// dropping request and the TCK run with it. The path now renames the directory first
+/// (one syscall, bounded effect) and deletes the renamed tree afterwards.
+TEST_F(GraphManagerTest, DropGraphRetiresItsDirectoryBeforeReturning) {
+    GraphManager gm;
+    ASSERT_TRUE(gm.init(db_path_, 2, 2));
+
+    const auto entry = gm.createGraph("temp");
+    ASSERT_TRUE(gm.dropGraph("temp"));
+
+    // The live directory name is what the spin blocked on, so it must be gone...
+    std::error_code ec;
+    const std::string dropped_dir = db_path_ + "/graph_" + std::to_string(entry.graph_id);
+    EXPECT_FALSE(std::filesystem::exists(dropped_dir, ec)) << "dropped graph directory still present: " << dropped_dir;
+    // ...while the default graph's own directory must be untouched.
+    EXPECT_TRUE(std::filesystem::exists(db_path_ + "/graph_0", ec));
+
+    // Housekeeping should have finished too, so nothing is left in trash.
+    const std::string trash = db_path_ + "/trash";
+    if (std::filesystem::exists(trash, ec)) {
+        size_t leftovers = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(trash, ec))
+            ++leftovers;
+        EXPECT_EQ(leftovers, 0u) << "dropGraph left retired directories behind";
+    }
+
+    gm.shutdown();
+}
+
+/// Leftovers from an interrupted drop are swept at the next startup, so a crash midway
+/// cannot leak disk forever.
+TEST_F(GraphManagerTest, InitSweepsRetiredGraphDirectories) {
+    std::error_code ec;
+    const std::string trash = db_path_ + "/trash";
+    const std::string leftover = trash + "/graph_999_123";
+    std::filesystem::create_directories(leftover + "/data", ec);
+    ASSERT_FALSE(ec);
+    {
+        std::ofstream f(leftover + "/data/WiredTigerLog.0000000001", std::ios::binary);
+        f << "leftover log";
+    }
+    ASSERT_TRUE(std::filesystem::exists(leftover + "/data/WiredTigerLog.0000000001"));
+
+    GraphManager gm;
+    ASSERT_TRUE(gm.init(db_path_, 2, 2));
+
+    EXPECT_FALSE(std::filesystem::exists(leftover, ec)) << "startup sweep left the retired directory behind";
+    gm.shutdown();
+}
+
+/// Repeated create/drop leaves no retired directory behind, including when several
+/// graphs are dropped in a row and while the periodic checkpoint thread is running.
+///
+/// This is the shape the TCK exercises (a fresh graph per scenario): it is also the
+/// shape that produced both the remove_all spin and the WiredTiger log-server abort,
+/// so it doubles as a smoke test for the retirement path.
+TEST_F(GraphManagerTest, RepeatedCreateAndDropKeepsNoRetiredDirectories) {
+    GraphManager gm;
+    // Shortest legal interval, so the checkpoint thread is awake during the churn.
+    ASSERT_TRUE(gm.init(db_path_, 2, 2, /*checkpoint_interval_sec=*/1));
+
+    std::vector<uint32_t> ids;
+    for (int i = 0; i < 24; ++i) {
+        const auto entry = gm.createGraph("churn_" + std::to_string(i));
+        ids.push_back(entry.graph_id);
+        ASSERT_TRUE(gm.dropGraph("churn_" + std::to_string(i)));
+    }
+
+    std::error_code ec;
+    for (uint32_t id : ids)
+        EXPECT_FALSE(std::filesystem::exists(db_path_ + "/graph_" + std::to_string(id), ec))
+            << "graph_" << id << " survived its drop";
+
+    size_t leftovers = 0;
+    const std::string trash = db_path_ + "/trash";
+    if (std::filesystem::exists(trash, ec))
+        for (const auto& entry : std::filesystem::directory_iterator(trash, ec))
+            ++leftovers;
+    EXPECT_EQ(leftovers, 0u) << "retired directories accumulated in trash";
+
+    gm.shutdown();
+}

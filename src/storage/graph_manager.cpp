@@ -23,6 +23,8 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
     compute_threads_ = compute_threads;
     checkpoint_interval_sec_ = checkpoint_interval_sec;
     data_wt_config_ = data_wt_config;
+    if (auto pos = data_wt_config.find("verbose=["); pos != std::string::npos)
+        meta_wt_config_ = data_wt_config.substr(pos);
 
     auto t0 = std::chrono::steady_clock::now();
 
@@ -31,6 +33,25 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
     if (ec) {
         spdlog::error("Failed to create data directory: {}", ec.message());
         return false;
+    }
+
+    // Sweep graph directories retired by an earlier run (see retireGraphDir): a drop
+    // whose deletion did not finish, or a crash mid-drop, leaves them here.
+    {
+        std::filesystem::directory_iterator trash(trashDir(), ec);
+        if (!ec) {
+            size_t swept = 0;
+            for (const auto& entry : trash) {
+                std::error_code entry_ec;
+                if (!entry.is_directory(entry_ec) || entry_ec)
+                    continue;
+                spdlog::info("Sweeping retired graph directory {}", entry.path().string());
+                removeTreeBestEffort(entry.path().string());
+                ++swept;
+            }
+            if (swept > 0)
+                spdlog::info("Swept {} retired graph director{}", swept, swept == 1 ? "y" : "ies");
+        }
     }
 
     spdlog::info("Opening catalog...");
@@ -169,13 +190,77 @@ bool GraphManager::dropGraph(const std::string& name) {
     inst->sync_data->close();
     inst->sync_meta->close();
 
-    std::string graph_dir = data_dir_ + "/graph_" + std::to_string(graph_id);
-    std::error_code ec;
-    std::filesystem::remove_all(graph_dir, ec);
-    if (ec)
-        spdlog::warn("Failed to clean graph directory {}: {}", graph_dir, ec.message());
+    retireGraphDir(data_dir_ + "/graph_" + std::to_string(graph_id));
 
     return true;
+}
+
+void GraphManager::retireGraphDir(const std::string& graph_dir) {
+    std::error_code ec;
+    if (!std::filesystem::exists(graph_dir, ec))
+        return;
+
+    // Rename first: a single syscall whose effect is atomic and bounded. This is the
+    // step the request path depends on, and it cannot spin the way remove_all did.
+    std::filesystem::create_directories(trashDir(), ec);
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::string retirement =
+        trashDir() + "/" + std::filesystem::path(graph_dir).filename().string() + "_" + std::to_string(stamp);
+
+    std::filesystem::rename(graph_dir, retirement, ec);
+    if (ec) {
+        // Nothing else to do: the graph is already gone from the catalog, so a
+        // leftover directory costs disk, not correctness.
+        spdlog::warn("Failed to retire graph directory {}: {}", graph_dir, ec.message());
+        return;
+    }
+
+    // The tree is out of the way; deleting it is housekeeping and must not be able to
+    // hold up the caller.
+    removeTreeBestEffort(retirement);
+}
+
+namespace {
+
+/// Depth-first delete of `dir`, returning true when `dir` is gone.
+///
+/// Bounded on purpose: recursion depth is capped and each level is attempted at most
+/// twice, so a directory that refuses to be removed can slow this down but never spin
+/// forever -- the failure mode this helper exists to avoid.
+bool removeTreeDepthFirst(const std::string& dir, int depth) {
+    if (depth > 64)
+        return false;
+
+    std::error_code ec;
+    std::vector<std::string> subdirs;
+    std::filesystem::directory_iterator it(dir, ec);
+    if (!ec) {
+        for (const auto& entry : it) {
+            std::error_code entry_ec;
+            if (entry.is_directory(entry_ec) && !entry_ec)
+                subdirs.push_back(entry.path().string());
+            else
+                std::filesystem::remove(entry.path(), entry_ec);
+        }
+    }
+
+    for (const auto& sub : subdirs) {
+        if (!removeTreeDepthFirst(sub, depth + 1)) {
+            // One retry: a child that failed once may succeed now that its own
+            // children are gone.
+            removeTreeDepthFirst(sub, depth + 1);
+        }
+    }
+
+    std::error_code rm_ec;
+    return std::filesystem::remove(dir, rm_ec) || !std::filesystem::exists(dir);
+}
+
+} // namespace
+
+void GraphManager::removeTreeBestEffort(const std::string& root) {
+    if (!removeTreeDepthFirst(root, 0))
+        spdlog::warn("Could not fully remove {}; leaving it for the next startup sweep", root);
 }
 
 std::vector<GraphEntry> GraphManager::listGraphs() {
@@ -205,7 +290,7 @@ std::unique_ptr<GraphInstance> GraphManager::openGraphInstance(uint32_t graph_id
     }
 
     instance->sync_meta = std::make_unique<SyncGraphMetaStore>();
-    if (!instance->sync_meta->open(meta_dir)) {
+    if (!instance->sync_meta->open(meta_dir, meta_wt_config_)) {
         spdlog::error("Failed to open meta store for graph '{}' at {}", name, meta_dir);
         return nullptr;
     }
