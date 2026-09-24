@@ -217,3 +217,22 @@ python3 tests/tck/run_tck.py \
 * 我们的用例和上游用例共用报告与基线：新增用例不会触发 `--fail-on-regression`
   （只有"基线里 PASSED、现在 FAILED/SKIPPED"才算回归），但**改动已有用例的期望值**会。
 
+### 两个写用例时会踩的坑（实测）
+
+1. **`CALL` 会被当作"不支持语法"跳过。** `TckContext::isQuerySupported()` 里
+   `hasUnsupportedClause()` 对 `ast::CallClause` **无条件返回 true**（日志会打
+   `[TCK] skipping: CALL`），于是整个场景被跳过、`Then` 断言永远不执行——报告里它仍可能算作
+   Failed，看起来像"查询返回了空结果"，很容易误判成引擎缺陷。
+   **因此 `.feature` 里不要用 `CALL` 过程**；要验证过程请写 gtest
+   （`tests/test_query_executor.cpp` 的 `Procedure*` 用例）。Schema 查询改用 `DESCRIBE` 家族。
+
+2. **`ensureTypesForQuery()` 用正则 `:([A-Za-z_]\w*)` 扫整条查询自动建 label。**
+   它会把 `{prop: value}` 里的 `:value`（**冒号后紧跟标识符**）当成标签名去 `createLabel`。
+   写属性映射时**在冒号后留一个空格**（`{nickname: 'solo'}`）即可避开；`{nickname:'solo'}` 会多建一个
+   叫 `nickname` 的空标签，并污染 `no side effects` 快照。
+
+另外，**新建的图一定带匿名标签 `__anon__`**（`GraphManager` 建图时安装，用于承载无标签节点的属性），
+所以 `DESCRIBE LABELS` 在空图上就有 1 行 —— 断言空图标签列表时可以直接写全量期望值。
+裸 `CREATE` 首次看到的属性登记为 `ANY`（见 `cypher-syntax.md` 8.4），所以 schema 用例断言
+`propertyTypes` 时不要预期推断出的具体标量类型。
+

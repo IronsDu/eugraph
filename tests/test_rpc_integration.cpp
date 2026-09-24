@@ -7,6 +7,7 @@
 #include "service/graph_service.hpp"
 #include "service/thrift/eugraph_handler.hpp"
 #include "service/thrift/gen-cpp2/eugraph_types.h"
+#include "service/thrift/result_format.hpp"
 #include "storage/data/async_graph_data_store.hpp"
 #include "storage/data/sync_graph_data_store.hpp"
 #include "storage/graph_manager.hpp"
@@ -606,6 +607,74 @@ TEST_F(RpcIntegrationTest, ParameterizedQueryEmptyParams) {
     auto result = execCypherWithParams("MATCH (n:Thing) RETURN n.x", {});
     ASSERT_EQ(result.rows.size(), 1u);
     EXPECT_EQ(result.rows[0].values()->at(0).get_int_val(), 1);
+}
+
+/// A write-only statement (no RETURN, hence no result columns) must have finished its
+/// work by the time the caller sees the response.
+///
+/// Regression: the shell skipped the stream entirely when the result had no columns,
+/// so nothing pulled the server-side generator and the statement's side effects had
+/// not run yet when the next statement went out. A bare CREATE reported OK while its
+/// schema registration was still pending.
+/// A write-only statement's work happens inside its result stream, not before the
+/// response is returned -- so a caller only sees a fully applied statement once it has
+/// drained that stream.
+///
+/// This pins the mechanism behind the "schema looks asynchronous" symptom. The server
+/// hands back a lazy generator; whether/when its side effects run is tied to the
+/// stream's lifetime, not to the response. The old shell printed OK without
+/// subscribing, so the next statement could race the previous one's DDL registration.
+TEST_F(RpcIntegrationTest, WriteOnlyStatementRunsInsideItsStream) {
+    auto [meta, stream] = client_->executeCypher("CREATE (:Race {p: 1})", "default");
+    ASSERT_TRUE(meta.columns()->empty()) << "a bare CREATE must report no result columns";
+
+    // Draining it is what guarantees the work is done; the DESCRIBE below is the
+    // observable proof, and is also exactly what the shell now does before reporting OK.
+    std::move(stream).subscribeInline([](folly::Try<ResultRowBatch>) {});
+
+    auto described = execCypher("DESCRIBE LABEL Race");
+    ASSERT_TRUE(described.error.empty()) << described.error;
+    EXPECT_FALSE(described.rows.empty())
+        << "DESCRIBE LABEL Race returned nothing: the CREATE had not registered its property yet";
+    if (!described.rows.empty()) {
+        EXPECT_EQ(described.rows[0].values()->at(1).get_string_val(), "p");
+    }
+}
+
+/// Property type names accepted on the declaration path (shell `:create-label`,
+/// `createLabel` RPC) must cover the array kinds as well as the scalars.
+TEST_F(RpcIntegrationTest, ParsePropertyTypeCoversArraysAndScalars) {
+    using eugraph::service::thrift::parsePropertyType;
+    using eugraph::thrift_service::PropertyType;
+
+    EXPECT_EQ(parsePropertyType("BOOL"), PropertyType::BOOL);
+    EXPECT_EQ(parsePropertyType("INT64"), PropertyType::INT64);
+    EXPECT_EQ(parsePropertyType("int"), PropertyType::INT64);
+    EXPECT_EQ(parsePropertyType("INTEGER"), PropertyType::INT64);
+    EXPECT_EQ(parsePropertyType("DOUBLE"), PropertyType::DOUBLE);
+    EXPECT_EQ(parsePropertyType("FLOAT"), PropertyType::DOUBLE);
+    EXPECT_EQ(parsePropertyType("STRING"), PropertyType::STRING);
+    EXPECT_EQ(parsePropertyType("DATETIME"), PropertyType::DATETIME);
+    EXPECT_EQ(parsePropertyType("DATE"), PropertyType::DATETIME);
+    EXPECT_EQ(parsePropertyType("TIME"), PropertyType::TIME);
+    EXPECT_EQ(parsePropertyType("DURATION"), PropertyType::DURATION);
+
+    // Arrays: both spellings of the scalar prefix, and the bracket suffix form.
+    EXPECT_EQ(parsePropertyType("INT64_ARRAY"), PropertyType::INT64_ARRAY);
+    EXPECT_EQ(parsePropertyType("INTEGER_ARRAY"), PropertyType::INT64_ARRAY);
+    EXPECT_EQ(parsePropertyType("INT64[]"), PropertyType::INT64_ARRAY);
+    EXPECT_EQ(parsePropertyType("DOUBLE_ARRAY"), PropertyType::DOUBLE_ARRAY);
+    EXPECT_EQ(parsePropertyType("FLOAT_ARRAY"), PropertyType::DOUBLE_ARRAY);
+    EXPECT_EQ(parsePropertyType("STRING_ARRAY"), PropertyType::STRING_ARRAY);
+    EXPECT_EQ(parsePropertyType("STRING[]"), PropertyType::STRING_ARRAY);
+    EXPECT_EQ(parsePropertyType("DATETIME_ARRAY"), PropertyType::DATETIME_ARRAY);
+    EXPECT_EQ(parsePropertyType("DATE_TIME_ARRAY"), PropertyType::DATETIME_ARRAY);
+    EXPECT_EQ(parsePropertyType("TIME_ARRAY"), PropertyType::TIME_ARRAY);
+    EXPECT_EQ(parsePropertyType("DURATION_ARRAY"), PropertyType::DURATION_ARRAY);
+
+    // Case-insensitive, and unknown input still falls back to STRING.
+    EXPECT_EQ(parsePropertyType("string_array"), PropertyType::STRING_ARRAY);
+    EXPECT_EQ(parsePropertyType("who_knows"), PropertyType::STRING);
 }
 
 } // anonymous namespace

@@ -33,6 +33,34 @@ std::vector<std::string> tokenize(const std::string& s) {
     return tokens;
 }
 
+/// Strip one layer of backticks from a label/relationship-type name.
+///
+/// Labels may legitimately contain spaces, so the quoted form is written with
+/// backticks around the whole name. The whitespace tokenizer splits that into
+/// several tokens, so the name is re-joined from every token past the keyword
+/// and the surrounding backticks (if the whole name was quoted) are removed.
+/// The schema stores the bare name -- quoting is syntax, not part of the name.
+std::string joinQuotedName(const std::vector<std::string>& tokens, size_t from) {
+    std::string name;
+    for (size_t i = from; i < tokens.size(); ++i) {
+        if (!name.empty())
+            name += ' ';
+        name += tokens[i];
+    }
+    if (name.size() >= 2 && name.front() == '`' && name.back() == '`')
+        name = name.substr(1, name.size() - 2);
+    return name;
+}
+
+/// Build a `DESCRIBE LABEL <name>` / `DESCRIBE RELATIONSHIP <name>` statement.
+DatabaseDdlStatement makeDescribe(DatabaseDdlStatement::Type type, const std::vector<std::string>& tokens,
+                                  size_t name_from) {
+    DatabaseDdlStatement stmt;
+    stmt.type = type;
+    stmt.name = joinQuotedName(tokens, name_from);
+    return stmt;
+}
+
 } // namespace
 
 std::optional<DatabaseDdlStatement> DatabaseDdlParser::tryParse(const std::string& query) {
@@ -112,6 +140,46 @@ std::optional<DatabaseDdlStatement> DatabaseDdlParser::tryParse(const std::strin
         stmt.type = DatabaseDdlStatement::USE_GRAPH;
         stmt.name = tokens[1];
         return stmt;
+    }
+
+    // DESCRIBE family -- schema introspection (see the header for why these are
+    // graph-scoped rather than SHOW-style). `DESC` is accepted as an alias.
+    //
+    // Order matters: the plural forms must be checked before the singular ones,
+    // and the singular forms require a name, so `DESCRIBE LABEL` alone stays
+    // unmatched and falls through to the Cypher parser (which reports a syntax
+    // error) instead of being read as a label literally named "LABEL".
+    //
+    // The plural/singular pair is deliberately symmetric -- LABELS/LABEL and
+    // RELATIONSHIPS/RELATIONSHIP -- so one rule covers both: plural lists every
+    // schema entry, singular reports the fields of the one named.
+    if (first == "DESCRIBE" || first == "DESC") {
+        if (tokens.size() >= 2) {
+            const std::string target = toUpper(tokens[1]);
+            if (target == "LABELS") {
+                DatabaseDdlStatement stmt;
+                stmt.type = DatabaseDdlStatement::DESCRIBE_LABELS;
+                return stmt;
+            }
+            if (target == "RELATIONSHIPS") {
+                DatabaseDdlStatement stmt;
+                stmt.type = DatabaseDdlStatement::DESCRIBE_RELATIONSHIPS;
+                return stmt;
+            }
+            if (target == "RELATIONSHIP") {
+                if (tokens.size() >= 3)
+                    return makeDescribe(DatabaseDdlStatement::DESCRIBE_RELATIONSHIP, tokens, 2);
+                return std::nullopt;
+            }
+            if (target == "REL") {
+                if (tokens.size() >= 3)
+                    return makeDescribe(DatabaseDdlStatement::DESCRIBE_RELATIONSHIP, tokens, 2);
+                return std::nullopt;
+            }
+            if (target == "LABEL" && tokens.size() >= 3)
+                return makeDescribe(DatabaseDdlStatement::DESCRIBE_LABEL, tokens, 2);
+        }
+        return std::nullopt;
     }
 
     return std::nullopt;

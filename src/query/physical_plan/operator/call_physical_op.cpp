@@ -310,12 +310,14 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
         }
     } else if (procedure == "db.labels") {
         if (meta_) {
+            // The anonymous label is reported like any other: an unlabeled node still
+            // has a schema (its own property set), and hiding it made the graph's
+            // fields undiscoverable through Cypher. Callers that must not see it (Bolt
+            // value mapping, CREATE/MERGE resolution) filter it themselves.
             auto labels = co_await meta_->listLabels();
             std::vector<std::string> names;
-            for (const auto& label : labels) {
-                if (label.name != kAnonLabelName)
-                    names.push_back(label.name);
-            }
+            for (const auto& label : labels)
+                names.push_back(label.name);
             std::sort(names.begin(), names.end());
             for (const auto& name : names)
                 rows.push_back({Value{name}});
@@ -351,8 +353,8 @@ folly::coro::AsyncGenerator<DataChunk> CallPhysicalOp::executeChunk() {
             auto labels = co_await meta_->listLabels();
             std::sort(labels.begin(), labels.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
             for (const auto& label : labels) {
-                if (label.name == kAnonLabelName)
-                    continue;
+                // Anonymous label included on purpose (see db.labels above): a label with
+                // no property rows simply contributes none.
                 for (const auto& prop : label.properties) {
                     rows.push_back({Value(mk<ListValue>(stringList({label.name}))), Value{prop.name},
                                     Value(mk<ListValue>(stringList({propertyTypeName(prop.type)})))});

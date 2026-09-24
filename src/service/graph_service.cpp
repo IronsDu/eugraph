@@ -52,6 +52,47 @@ std::string catalogTypeName(const binder::BoundType& type) {
     return "ANY";
 }
 
+/// Schema property type -> the name used in catalog output.
+///
+/// Deliberately mirrors the mapping in CallPhysicalOp (same strings), so
+/// `DESCRIBE LABEL x` and `CALL db.schema.nodeTypeProperties()` report the same
+/// type name for the same field. Keep the two in sync.
+std::string propertyTypeName(PropertyType type) {
+    switch (type) {
+    case PropertyType::BOOL:
+        return "BOOLEAN";
+    case PropertyType::INT64:
+        return "INTEGER";
+    case PropertyType::DOUBLE:
+        return "FLOAT";
+    case PropertyType::STRING:
+        return "STRING";
+    case PropertyType::INT64_ARRAY:
+        return "INTEGER_ARRAY";
+    case PropertyType::DOUBLE_ARRAY:
+        return "FLOAT_ARRAY";
+    case PropertyType::STRING_ARRAY:
+        return "STRING_ARRAY";
+    case PropertyType::DATETIME:
+        return "DATE_TIME";
+    case PropertyType::TIME:
+        return "TIME";
+    case PropertyType::DURATION:
+        return "DURATION";
+    case PropertyType::DATETIME_ARRAY:
+        return "DATE_TIME_ARRAY";
+    case PropertyType::TIME_ARRAY:
+        return "TIME_ARRAY";
+    case PropertyType::DURATION_ARRAY:
+        return "DURATION_ARRAY";
+    case PropertyType::BYTES:
+        return "BYTE_ARRAY";
+    case PropertyType::ANY:
+        return "ANY";
+    }
+    return "ANY";
+}
+
 std::string catalogFunctionSignature(const function::FunctionDef& def) {
     std::string sig = def.name + "(";
     if (def.has_variadic_args) {
@@ -207,21 +248,28 @@ folly::coro::Task<std::vector<EdgeLabelDef>> GraphService::listEdgeLabels(const 
 folly::coro::Task<CypherExecutionContext>
 GraphService::executeCypher(const std::string& query, const std::unordered_map<std::string, Value>& params,
                             const std::string& graph_name, compute::QueryCancel cancel) {
-    // Check for database DDL before resolving a specific graph.
-    // Database-level DDL (CREATE/DROP/SHOW DATABASE, USE) operates on the
-    // GraphManager, not on a single graph instance.
-    auto ddl_stmt = DatabaseDdlParser::tryParse(query);
-    if (ddl_stmt.has_value()) {
-        auto* default_inst = resolveGraph(GraphManager::kDefaultGraphName);
-        co_return co_await handleDatabaseDdl(*ddl_stmt, *default_inst->async_data);
-    }
-
-    // Neo4j Browser commonly uses `neo4j` (the default DB name) or `system`
-    // (its administration DB). EuGraph currently exposes one database named
-    // `default`, so alias those well-known names for regular Cypher queries.
+    // neo4j Browser commonly uses the default DB names `neo4j` / `system`; alias them
+    // onto our single default graph. The alias applies to DDL interception too, so it
+    // has to be resolved before the graph-scoped DESCRIBE family picks an instance.
     std::string resolved_graph = graph_name;
     if (resolved_graph == "neo4j" || resolved_graph == "system")
         resolved_graph = GraphManager::kDefaultGraphName;
+
+    // Database DDL is intercepted before the normal Cypher pipeline.
+    //
+    // The instance passed here is the *selected* graph, which is what the DESCRIBE
+    // family needs. Database-level statements (CREATE/DROP/SHOW DATABASE, USE) do not
+    // read graph schema and resolve the default graph themselves inside the handler.
+    // When the requested graph does not exist (harmless for database-level DDL, e.g.
+    // `DROP DATABASE x` while x is already gone) we fall back to the default instance
+    // instead of failing the statement.
+    auto ddl_stmt = DatabaseDdlParser::tryParse(query);
+    if (ddl_stmt.has_value()) {
+        auto* ddl_inst = gm_.getGraph(resolved_graph);
+        if (!ddl_inst)
+            ddl_inst = resolveGraph(GraphManager::kDefaultGraphName);
+        co_return co_await handleDatabaseDdl(*ddl_stmt, *ddl_inst);
+    }
 
     auto* inst = resolveGraph(resolved_graph);
 
@@ -324,12 +372,15 @@ folly::coro::Task<int32_t> GraphService::batchInsertEdges(const std::string& edg
 }
 
 folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const DatabaseDdlStatement& stmt,
-                                                                          IAsyncGraphDataStore& data_store) {
+                                                                          GraphInstance& instance) {
     CypherExecutionContext result;
-    auto ctx = std::make_shared<compute::StreamContext>(data_store);
+    auto ctx = std::make_shared<compute::StreamContext>(*instance.async_data);
     Schema columns;
     std::vector<Row> rows;
 
+    // Database-level statements below are answered from the default graph regardless
+    // of which graph the session selected, so they keep resolving it themselves. The
+    // DESCRIBE family is graph-scoped and reads `instance.async_meta` directly.
     switch (stmt.type) {
     case DatabaseDdlStatement::USE_GRAPH: {
         result.switched_database = stmt.name;
@@ -497,6 +548,80 @@ folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const 
         columns = {"id",         "name",          "state",      "populationPercent", "type",
                    "entityType", "labelsOrTypes", "properties", "indexProvider",     "owningConstraint",
                    "lastRead",   "readCount",     "options"};
+        break;
+    }
+    // ── DESCRIBE family: graph-scoped schema introspection ──
+    //
+    // Unlike the SHOW statements above, these read the *selected* graph and they do
+    // NOT filter out the anonymous label: seeing the fields of unlabeled nodes is the
+    // point. `anonymous` distinguishes it, so the internal name stays legible.
+    // `CALL db.labels()` keeps filtering it out -- a documented divergence.
+    case DatabaseDdlStatement::DESCRIBE_LABELS: {
+        columns = {"name", "anonymous"};
+        auto labels = co_await instance.async_meta->listLabels();
+        std::sort(labels.begin(), labels.end(), [](const LabelDef& a, const LabelDef& b) { return a.name < b.name; });
+        for (const auto& label : labels) {
+            Row row;
+            row.push_back(std::string(label.name));
+            row.push_back(bool(label.name == kAnonLabelName));
+            rows.push_back(std::move(row));
+        }
+        break;
+    }
+    case DatabaseDdlStatement::DESCRIBE_RELATIONSHIPS: {
+        columns = {"relationshipType"};
+        auto edge_labels = co_await instance.async_meta->listEdgeLabels();
+        std::vector<std::string> names;
+        names.reserve(edge_labels.size());
+        for (const auto& edge_label : edge_labels)
+            names.push_back(edge_label.name);
+        std::sort(names.begin(), names.end());
+        for (const auto& name : names) {
+            Row row;
+            row.push_back(name);
+            rows.push_back(std::move(row));
+        }
+        break;
+    }
+    case DatabaseDdlStatement::DESCRIBE_LABEL: {
+        // `propertyType` is singular and a plain STRING: a declared field has exactly
+        // one PropertyType. (The procedures keep the plural LIST form because that is
+        // neo4j's shape; DESCRIBE is our own surface and has no such constraint.)
+        columns = {"label", "propertyName", "propertyType"};
+        auto labels = co_await instance.async_meta->listLabels();
+        for (auto& label : labels) {
+            if (label.name != stmt.name)
+                continue;
+            std::sort(label.properties.begin(), label.properties.end(),
+                      [](const PropertyDef& a, const PropertyDef& b) { return a.name < b.name; });
+            for (const auto& prop : label.properties) {
+                Row row;
+                row.push_back(std::string(label.name));
+                row.push_back(prop.name);
+                row.push_back(propertyTypeName(prop.type));
+                rows.push_back(std::move(row));
+            }
+            break; // names are unique; no second label can match
+        }
+        break;
+    }
+    case DatabaseDdlStatement::DESCRIBE_RELATIONSHIP: {
+        columns = {"relType", "propertyName", "propertyType"};
+        auto edge_labels = co_await instance.async_meta->listEdgeLabels();
+        for (auto& edge_label : edge_labels) {
+            if (edge_label.name != stmt.name)
+                continue;
+            std::sort(edge_label.properties.begin(), edge_label.properties.end(),
+                      [](const PropertyDef& a, const PropertyDef& b) { return a.name < b.name; });
+            for (const auto& prop : edge_label.properties) {
+                Row row;
+                row.push_back(std::string(edge_label.name));
+                row.push_back(prop.name);
+                row.push_back(propertyTypeName(prop.type));
+                rows.push_back(std::move(row));
+            }
+            break;
+        }
         break;
     }
     }

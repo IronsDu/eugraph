@@ -391,23 +391,36 @@ static void runRpcRepl(const ShellConfig& config) {
                 }
                 try {
                     auto [meta, stream] = client.executeCypher(query, graph_name);
-                    if (meta.columns()->empty()) {
+                    // The stream must be drained even when the result has no columns.
+                    // The server hands back a lazy generator: a write-only statement
+                    // (bare CREATE, for instance) does its actual work when the
+                    // generator is pulled. Returning "OK" without subscribing reported
+                    // success while the statement was still unexecuted, so the next
+                    // statement could observe a half-applied graph.
+                    size_t total_rows = 0;
+                    std::vector<std::vector<std::string>> all_rows;
+                    std::string stream_error;
+                    std::move(stream).subscribeInline([&](folly::Try<ResultRowBatch> batch) {
+                        if (batch.hasValue()) {
+                            for (const auto& row : *batch->rows()) {
+                                std::vector<std::string> cells;
+                                for (const auto& val : *row.values()) {
+                                    cells.push_back(service::thrift::formatResultValue(val));
+                                }
+                                all_rows.push_back(std::move(cells));
+                                ++total_rows;
+                            }
+                        } else if (batch.hasException()) {
+                            // Without this the failure would be silently dropped and
+                            // the statement would still print as successful.
+                            stream_error = batch.exception().what().toStdString();
+                        }
+                    });
+                    if (!stream_error.empty()) {
+                        std::cerr << "Error: " << stream_error << std::endl;
+                    } else if (meta.columns()->empty()) {
                         std::cout << "OK" << std::endl;
                     } else {
-                        size_t total_rows = 0;
-                        std::vector<std::vector<std::string>> all_rows;
-                        std::move(stream).subscribeInline([&](folly::Try<ResultRowBatch> batch) {
-                            if (batch.hasValue()) {
-                                for (const auto& row : *batch->rows()) {
-                                    std::vector<std::string> cells;
-                                    for (const auto& val : *row.values()) {
-                                        cells.push_back(service::thrift::formatResultValue(val));
-                                    }
-                                    all_rows.push_back(std::move(cells));
-                                    ++total_rows;
-                                }
-                            }
-                        });
                         std::cout << formatTable(*meta.columns(), all_rows);
                         std::cout << total_rows << " row" << (total_rows == 1 ? "" : "s");
                     }

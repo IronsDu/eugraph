@@ -8752,7 +8752,41 @@ TEST_F(QueryExecutorTest, ProcedureDbLabelsReturnsSchemaLabels) {
     auto labels = collectStrings(result);
     EXPECT_NE(std::find(labels.begin(), labels.end(), "Person"), labels.end());
     EXPECT_NE(std::find(labels.begin(), labels.end(), "City"), labels.end());
-    EXPECT_EQ(std::find(labels.begin(), labels.end(), std::string(kAnonLabelName)), labels.end());
+}
+
+/// The anonymous label must be reported by db.labels().
+///
+/// The fixture opens the stores directly instead of going through GraphManager, so
+/// `__anon__` does not exist until a node without a label is created. Build one and
+/// register a property on it, then both the label and db.schema.nodeTypeProperties()
+/// have something real to report.
+TEST_F(QueryExecutorTest, ProcedureDbLabelsAndNodeTypePropertiesIncludeAnonymousLabel) {
+    auto created = execSync(*executor_, "CREATE ({nickname: 'solo'})");
+    ASSERT_TRUE(created.error.empty()) << created.error;
+
+    auto labels = execSync(*executor_, "CALL db.labels() RETURN label");
+    ASSERT_TRUE(labels.error.empty()) << labels.error;
+    auto names = collectStrings(labels);
+    EXPECT_NE(std::find(names.begin(), names.end(), std::string(kAnonLabelName)), names.end())
+        << "db.labels() must report the anonymous label";
+
+    auto props = execSync(*executor_, "CALL db.schema.nodeTypeProperties() "
+                                      "RETURN nodeLabels, propertyName, propertyTypes");
+    ASSERT_TRUE(props.error.empty()) << props.error;
+    bool saw_anon_nickname = false;
+    for (const auto& row : props.rows) {
+        ASSERT_TRUE(std::holds_alternative<ListValuePtr>(row[0]));
+        const auto& list = *std::get<ListValuePtr>(row[0]);
+        if (list.elements.empty())
+            continue;
+        ASSERT_TRUE(std::holds_alternative<std::string>(list.elements[0].value));
+        if (std::get<std::string>(list.elements[0].value) != kAnonLabelName)
+            continue;
+        ASSERT_TRUE(std::holds_alternative<std::string>(row[1]));
+        if (std::get<std::string>(row[1]) == "nickname")
+            saw_anon_nickname = true;
+    }
+    EXPECT_TRUE(saw_anon_nickname) << "db.schema.nodeTypeProperties() must report the anonymous label's fields";
 }
 
 TEST_F(QueryExecutorTest, ProcedureDbRelationshipTypesReturnsSchemaEdgeTypes) {

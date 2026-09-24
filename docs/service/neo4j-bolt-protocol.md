@@ -275,6 +275,14 @@ Bolt v5.1 使用分块传输编码进行消息帧定界：
 
 通过 `DatabaseDdlParser`（token-based）在 `GraphService::executeCypher()` 中拦截 DDL 语句，Bolt 和 Thrift 两条路径共享。支持：`CREATE DATABASE`、`DROP DATABASE`、`SHOW DATABASES [YIELD *]`、`SHOW DATABASE`、`SHOW PROCEDURES`、`SHOW FUNCTIONS`、`SHOW CURRENT USER`、`SHOW VECTOR INDEXES`、`USE <graph>`。
 
+**库级 vs 图级**：上面这些（含 `SHOW *`）是库级语句，一律从**默认图**取答案；而 `DESCRIBE` 家族
+（`DESCRIBE LABELS` / `DESCRIBE RELATIONSHIPS` / `DESCRIBE LABEL <name>` /
+`DESCRIBE RELATIONSHIP <name>`，别名 `DESC` / `REL`）是**图级**的，按会话当前选中的图
+（Bolt 的 `current_database_`，即 `:use` / `session(database=...)`）取 schema。
+两者共用 `handleDatabaseDdl(stmt, GraphInstance&)`，由该函数内的语句类型分派。
+选中的图不存在时回退到默认图，因此库级语句（如 `DROP DATABASE x`）不会因会话指向一个已消失的图而失败。
+语句与输出列形状见 [query/syntax/cypher-syntax.md](../query/syntax/cypher-syntax.md) 第八节。
+
 ### 9. 结果流分页（PULL 的 has_more 语义）
 
 RUN 只负责把查询编译成算子流水线并返回 `fields`；真正的结果按 PULL 逐页拉取，服务端必须严格遵守分页契约：

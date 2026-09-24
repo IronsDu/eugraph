@@ -379,18 +379,41 @@ std::string propertyTypeToString(thrift_service::PropertyType t) {
 thrift_service::PropertyType parsePropertyType(const std::string& type_str) {
     std::string upper = type_str;
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-    if (upper == "BOOL")
+
+    // `NAME[]` is accepted as a synonym of `NAME_ARRAY`, so the array kinds can be
+    // written either way. Normalise before matching.
+    if (upper.size() >= 2 && upper.compare(upper.size() - 2, 2, "[]") == 0)
+        upper = upper.substr(0, upper.size() - 2) + "_ARRAY";
+
+    if (upper == "BOOL" || upper == "BOOLEAN")
         return thrift_service::PropertyType::BOOL;
     if (upper == "INT64" || upper == "INT" || upper == "INTEGER")
         return thrift_service::PropertyType::INT64;
     if (upper == "DOUBLE" || upper == "FLOAT")
         return thrift_service::PropertyType::DOUBLE;
-    if (upper == "DATETIME" || upper == "DATE")
+    if (upper == "DATETIME" || upper == "DATE" || upper == "DATE_TIME")
         return thrift_service::PropertyType::DATETIME;
     if (upper == "TIME")
         return thrift_service::PropertyType::TIME;
     if (upper == "DURATION")
         return thrift_service::PropertyType::DURATION;
+
+    // Array kinds. Both the INT64_* and INTEGER_* spellings are accepted because the
+    // scalar aliases above already treat INT64/INT/INTEGER as the same type, and the
+    // schema output uses INTEGER while the thrift enum says INT64.
+    if (upper == "INT64_ARRAY" || upper == "INTEGER_ARRAY")
+        return thrift_service::PropertyType::INT64_ARRAY;
+    if (upper == "DOUBLE_ARRAY" || upper == "FLOAT_ARRAY")
+        return thrift_service::PropertyType::DOUBLE_ARRAY;
+    if (upper == "STRING_ARRAY")
+        return thrift_service::PropertyType::STRING_ARRAY;
+    if (upper == "DATETIME_ARRAY" || upper == "DATE_ARRAY" || upper == "DATE_TIME_ARRAY")
+        return thrift_service::PropertyType::DATETIME_ARRAY;
+    if (upper == "TIME_ARRAY")
+        return thrift_service::PropertyType::TIME_ARRAY;
+    if (upper == "DURATION_ARRAY")
+        return thrift_service::PropertyType::DURATION_ARRAY;
+
     return thrift_service::PropertyType::STRING;
 }
 
