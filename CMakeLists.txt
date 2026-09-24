@@ -251,6 +251,7 @@ add_library(eugraph_query_engine STATIC
     src/query/physical_plan/operator/skip_physical_op.cpp
     src/query/physical_plan/operator/sort_physical_op.cpp
     src/query/physical_plan/operator/union_physical_op.cpp
+    src/query/physical_plan/operator/foreach_physical_op.cpp
     src/query/physical_plan/operator/unwind_physical_op.cpp
     src/query/physical_plan/operator/merge_physical_op.cpp
     src/query/physical_plan/operator/path_element_property_read_physical_op.cpp

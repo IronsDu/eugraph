@@ -23,6 +23,7 @@
 #include "query/planner/logical_plan/operator/bound_distinct_op.hpp"
 #include "query/planner/logical_plan/operator/bound_expand_op.hpp"
 #include "query/planner/logical_plan/operator/bound_filter_op.hpp"
+#include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
 #include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
@@ -283,6 +284,17 @@ VarRequirements collectOpRequirements(const binder::BoundLogicalOperator& op, co
                     return;
                 collectExprRequirements(val->list_expr, dst, catalog);
                 mergeVarRequirements(dst, collectOpRequirements(val->child, catalog));
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
+                if (!val)
+                    return;
+                // The body runs per element against values injected from the input
+                // row, so its property reads are requirements of the *outer* chain:
+                // `FOREACH (x IN [1] | SET p.n = p.n + x)` must have p.n loaded
+                // before the correlated source is fed. Collecting them here is what
+                // makes the left branch materialise those properties.
+                collectExprRequirements(val->list_expr, dst, catalog);
+                mergeVarRequirements(dst, collectOpRequirements(val->child, catalog));
+                mergeVarRequirements(dst, collectOpRequirements(val->body, catalog));
             } else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundExpandOp>>) {
                 if (!val)
                     return;

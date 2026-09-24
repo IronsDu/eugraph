@@ -38,10 +38,15 @@ enum class OptNodeType {
     Merge,                     // 24
     PatternComprehensionApply, // 25
     Call,                      // 26
+    Foreach,                   // 27
     Unknown                    // out-of-range / future operator
 };
 
 // Convert BoundLogicalOperator variant index to OptNodeType.
+//
+// The mapping is positional, so BoundLogicalOperator's alternative order and the
+// table in opt_rule.cpp must stay in lockstep: new operators are appended at the
+// END of the variant (and of the table). A static_assert there enforces the size.
 OptNodeType nodeTypeFromVariantIndex(size_t index);
 
 // Pattern node for rule matching — describes the tree structure to match.

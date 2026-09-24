@@ -9319,3 +9319,162 @@ TEST_F(QueryExecutorTest, Complex12ShapePlansIndexScanValues) {
     EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2); // friend.id
     EXPECT_EQ(std::get<int64_t>(result.rows[0][1]), 1); // replyCount
 }
+
+// ==================== FOREACH ====================
+//
+// Expected values below were taken from neo4j 5 on the same graph shape (see the
+// probe matrix in the commit message): iteration semantics, cardinality
+// pass-through, scoping and the read-after-write behaviour all match.
+
+namespace {
+
+/// Run a query and return its single int64 column, or INT64_MIN when the query
+/// failed or returned something else.
+int64_t scalarOf(QueryExecutor& executor, const std::string& query) {
+    auto result = execSync(executor, query);
+    if (!result.error.empty() || result.rows.size() != 1u || result.rows[0].empty())
+        return std::numeric_limits<int64_t>::min();
+    const auto& cell = result.rows[0][0];
+    return std::holds_alternative<int64_t>(cell) ? std::get<int64_t>(cell) : std::numeric_limits<int64_t>::min();
+}
+
+} // namespace
+
+TEST_F(QueryExecutorTest, ForeachCreatesOneNodePerElement) {
+    ASSERT_TRUE(execSync(*executor_, "FOREACH (x IN [1, 2, 3] | CREATE (:FT_T {v: x}))").error.empty());
+
+    auto result = execSync(*executor_, "MATCH (t:FT_T) RETURN t.v AS v ORDER BY v");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 3u);
+    for (size_t i = 0; i < result.rows.size(); ++i)
+        EXPECT_EQ(std::get<int64_t>(result.rows[i][0]), static_cast<int64_t>(i) + 1);
+}
+
+/// Empty and null lists are no-ops rather than errors, and a non-list value behaves
+/// like a one-element list -- all three verified against neo4j.
+TEST_F(QueryExecutorTest, ForeachHandlesEmptyNullAndScalarLists) {
+    ASSERT_TRUE(execSync(*executor_, "FOREACH (x IN [] | CREATE (:FT_T {v: x}))").error.empty());
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (t:FT_T) RETURN count(t) AS c"), 0);
+
+    ASSERT_TRUE(execSync(*executor_, "FOREACH (x IN null | CREATE (:FT_T {v: x}))").error.empty());
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (t:FT_T) RETURN count(t) AS c"), 0);
+
+    ASSERT_TRUE(execSync(*executor_, "FOREACH (x IN 1 | CREATE (:FT_T {v: x}))").error.empty());
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (t:FT_T) RETURN count(t) AS c"), 1);
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (t:FT_T) RETURN t.v AS v"), 1);
+}
+
+/// One output row per input row, however many elements the body runs for.
+TEST_F(QueryExecutorTest, ForeachPreservesRowCardinality) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:FT_P {id: 1})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:FT_P {id: 2})").error.empty());
+
+    auto result =
+        execSync(*executor_, "MATCH (p:FT_P) FOREACH (x IN [1, 2] | CREATE (:FT_T {v: x})) RETURN count(p) AS c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 2); // two rows in, two rows out
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (t:FT_T) RETURN count(t) AS c"), 4);
+}
+
+TEST_F(QueryExecutorTest, ForeachBodyReadsOuterVariables) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:FT_P {id: 7})").error.empty());
+    ASSERT_TRUE(
+        execSync(*executor_, "MATCH (p:FT_P) FOREACH (x IN [1, 2] | CREATE (:FT_T {v: p.id + x}))").error.empty());
+
+    auto result = execSync(*executor_, "MATCH (t:FT_T) RETURN t.v AS v ORDER BY v");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 2u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 8);
+    EXPECT_EQ(std::get<int64_t>(result.rows[1][0]), 9);
+}
+
+/// The body's writes must be visible to clauses that run after FOREACH in the same
+/// statement: the outer row already carries a materialised copy of `p`, so the
+/// operator publishes the body's updated entity back into it.
+TEST_F(QueryExecutorTest, ForeachWritesToOuterVariableAreVisibleAfterwards) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:FT_P {id: 1})").error.empty());
+
+    auto accumulated = execSync(
+        *executor_,
+        "MATCH (p:FT_P) FOREACH (x IN [1, 2, 3] | SET p.total = coalesce(p.total, 0) + x) RETURN p.total AS t");
+    ASSERT_TRUE(accumulated.error.empty()) << accumulated.error;
+    ASSERT_EQ(accumulated.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(accumulated.rows[0][0]), 6);
+
+    auto via_with =
+        execSync(*executor_, "MATCH (p:FT_P) FOREACH (x IN [1] | SET p.hit = true) WITH p RETURN p.hit AS hit");
+    ASSERT_TRUE(via_with.error.empty()) << via_with.error;
+    ASSERT_EQ(via_with.rows.size(), 1u);
+    ASSERT_TRUE(std::holds_alternative<bool>(via_with.rows[0][0]));
+    EXPECT_TRUE(std::get<bool>(via_with.rows[0][0]));
+
+    // ...and the write itself reached the store, not just the row.
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (p:FT_P) RETURN p.total AS t"), 6);
+}
+
+TEST_F(QueryExecutorTest, ForeachNests) {
+    ASSERT_TRUE(execSync(*executor_, "FOREACH (x IN [1, 2] | FOREACH (y IN [10, 20] | CREATE (:FT_T {a: x, b: y})))")
+                    .error.empty());
+
+    auto result = execSync(*executor_, "MATCH (t:FT_T) RETURN count(t) AS c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 4); // 2 x 2
+}
+
+TEST_F(QueryExecutorTest, ForeachMergeIsIdempotent) {
+    // MERGE needs the label and its property to exist at bind time -- the same
+    // precondition the other MERGE tests in this file set up: implicit schema DDL is
+    // a CREATE feature, and MERGE does not auto-register `:FT_T {v: ...}`.
+    auto lid = blockingWait(async_meta_->createLabel("FT_T", {PropertyDef{0, "v", PropertyType::INT64, false, {}}}));
+    blockingWait(async_data_->createLabel(lid));
+    executor_ = std::make_unique<QueryExecutor>(*async_data_, *async_meta_, QueryExecutor::Config{});
+
+    ASSERT_TRUE(execSync(*executor_, "FOREACH (x IN [1, 1, 2] | MERGE (:FT_T {v: x}))").error.empty());
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (t:FT_T) RETURN count(t) AS c"), 2);
+}
+
+/// The element variable shadows an outer one inside the body and leaves it alone
+/// outside -- neo4j accepts the same query and returns the outer count.
+TEST_F(QueryExecutorTest, ForeachElementShadowsOuterVariable) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:FT_P {id: 1})").error.empty());
+
+    auto result =
+        execSync(*executor_, "MATCH (n:FT_P) FOREACH (n IN [1] | CREATE (:FT_T {v: n})) RETURN count(n) AS c");
+    ASSERT_TRUE(result.error.empty()) << result.error;
+    ASSERT_EQ(result.rows.size(), 1u);
+    EXPECT_EQ(std::get<int64_t>(result.rows[0][0]), 1);
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (t:FT_T) RETURN t.v AS v"), 1); // the element, not the node
+}
+
+TEST_F(QueryExecutorTest, ForeachDetachDeleteInBody) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:FT_P {id: 1})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:FT_P {id: 2})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH (p:FT_P) FOREACH (x IN [1] | DETACH DELETE p)").error.empty());
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (p:FT_P) RETURN count(p) AS c"), 0);
+}
+
+TEST_F(QueryExecutorTest, ForeachMarksPathNodes) {
+    ASSERT_TRUE(execSync(*executor_, "CREATE (:FT_A {id: 1})-[:FT_R]->(:FT_A {id: 2})").error.empty());
+    ASSERT_TRUE(execSync(*executor_, "MATCH p=(:FT_A {id: 1})-[:FT_R]->(:FT_A {id: 2}) "
+                                     "FOREACH (n IN nodes(p) | SET n.marked = true)")
+                    .error.empty());
+
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (a:FT_A) WHERE a.marked RETURN count(a) AS c"), 2);
+}
+
+/// FOREACH with no preceding clause still runs once (neo4j: the implicit single
+/// row), and the element variable stays local to the body.
+TEST_F(QueryExecutorTest, ForeachStandaloneRunsOnceAndKeepsItsVariableLocal) {
+    ASSERT_TRUE(execSync(*executor_, "FOREACH (x IN [1, 2] | CREATE (:FT_T {v: x}))").error.empty());
+    EXPECT_EQ(scalarOf(*executor_, "MATCH (t:FT_T) RETURN count(t) AS c"), 2);
+
+    auto leaked = execSync(*executor_, "FOREACH (x IN [1] | CREATE (:FT_T {v: x})) RETURN x");
+    EXPECT_FALSE(leaked.error.empty()) << "the element variable must not be visible after FOREACH";
+}
+
+TEST_F(QueryExecutorTest, ForeachBodyRejectsReadingClauses) {
+    auto result = execSync(*executor_, "FOREACH (x IN [1] | MATCH (n) RETURN n)");
+    EXPECT_FALSE(result.error.empty());
+}

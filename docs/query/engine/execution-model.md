@@ -168,6 +168,7 @@ AsyncGenerator<RowBatch>
 | Limit | 计数到 limit 后 `co_return` | 无 |
 | CreateNode | 逐行创建：child 每行触发一次创建，动态 VID，`__anon__` 轻量属性注册，输出 = child 列 + 新顶点列 | insertVertex + insertIndexEntry + nextVertexId + getOrCreateAnonPropId |
 | CreateEdge | 逐行创建：child 每行触发一次创建，动态 EID，src/dst VID 从 DataChunk 解析，输出 = child 列 + 新边列 | insertEdge + nextEdgeId |
+| Foreach | 逐行求值列表后**逐元素**跑 body 子计划（相关源注入外层列 + 元素）并排空它（只取副作用）；body 发布过的实体按 id 回灌外层行，输入行原样透传（基数不变）。列表为空/null 时无操作；非列表值按单元素处理 | body 内各写算子的 IO |
 
 ---
 

@@ -67,6 +67,8 @@ public:
 
     virtual std::any visitRemoveSt(CypherParser::RemoveStContext *context) = 0;
 
+    virtual std::any visitForeachSt(CypherParser::ForeachStContext *context) = 0;
+
     virtual std::any visitRemoveItem(CypherParser::RemoveItemContext *context) = 0;
 
     virtual std::any visitQueryCallSt(CypherParser::QueryCallStContext *context) = 0;

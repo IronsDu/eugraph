@@ -10,6 +10,7 @@
 #include "query/planner/logical_plan/operator/bound_distinct_op.hpp"
 #include "query/planner/logical_plan/operator/bound_expand_op.hpp"
 #include "query/planner/logical_plan/operator/bound_filter_op.hpp"
+#include "query/planner/logical_plan/operator/bound_foreach_op.hpp"
 #include "query/planner/logical_plan/operator/bound_label_scan_op.hpp"
 #include "query/planner/logical_plan/operator/bound_left_join_op.hpp"
 #include "query/planner/logical_plan/operator/bound_limit_op.hpp"
@@ -96,7 +97,12 @@ LogProp LogPropDeriver::derive(const binder::BoundLogicalOperator& op, const std
                                std::is_same_v<T, std::unique_ptr<binder::BoundRemoveOp>> ||
                                std::is_same_v<T, std::unique_ptr<binder::BoundDeleteOp>> ||
                                std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>> ||
-                               std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>>) {
+                               std::is_same_v<T, std::unique_ptr<binder::BoundCreateEdgeOp>> ||
+                               // FOREACH runs side effects per element and hands its
+                               // input row through untouched: same cardinality, and no
+                               // column of its own (the body's columns stay local to
+                               // the sub-plan).
+                               std::is_same_v<T, std::unique_ptr<binder::BoundForeachOp>>) {
                 // These ops may have 0 children (standalone CREATE) or 1 child
                 if (input_lps.empty()) {
                     LogProp lp;

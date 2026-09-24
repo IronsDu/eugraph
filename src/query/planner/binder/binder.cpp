@@ -481,7 +481,10 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
 
                 if constexpr (std::is_same_v<Elem, cypher::CreateClause> || std::is_same_v<Elem, cypher::MergeClause> ||
                               std::is_same_v<Elem, cypher::SetClause> || std::is_same_v<Elem, cypher::RemoveClause> ||
-                              std::is_same_v<Elem, cypher::DeleteClause>) {
+                              std::is_same_v<Elem, cypher::DeleteClause> ||
+                              // FOREACH is an updating clause too: its body is
+                              // updating-only, so the statement writes.
+                              std::is_same_v<Elem, cypher::ForeachClause>) {
                     ctx_.has_mutation = true;
                 }
 
@@ -756,6 +759,8 @@ bool Binder::bindSingleQuery(const cypher::SingleQuery& query, BoundLogicalPlan&
                     return bindUnwind(*ptr, std::move(current));
                 } else if constexpr (std::is_same_v<Elem, cypher::MergeClause>) {
                     return bindMerge(*ptr, std::move(current));
+                } else if constexpr (std::is_same_v<Elem, cypher::ForeachClause>) {
+                    return bindForeach(*ptr, std::move(current));
                 } else if constexpr (std::is_same_v<Elem, cypher::CallClause>) {
                     return bindCall(*ptr, std::move(current));
                 } else {

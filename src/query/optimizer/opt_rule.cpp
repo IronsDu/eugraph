@@ -33,8 +33,16 @@ OptNodeType nodeTypeFromVariantIndex(size_t index) {
         OptNodeType::Union,                     // 23
         OptNodeType::Merge,                     // 24
         OptNodeType::PatternComprehensionApply, // 25
-        OptNodeType::Call                       // 26
+        OptNodeType::Call,                      // 26
+        OptNodeType::Foreach                    // 27
     };
+    // The table is positional. Adding an operator in the middle of
+    // BoundLogicalOperator used to shift every later entry silently -- FOREACH
+    // landed on Union, so the rule matcher typed it (and mis-typed the operators
+    // after it) without any diagnostic. Assert the two orders stay in lockstep.
+    static_assert(std::variant_size_v<binder::BoundLogicalOperator> == sizeof(mapping) / sizeof(mapping[0]),
+                  "nodeTypeFromVariantIndex is out of sync with BoundLogicalOperator: append new operators at the "
+                  "END of both");
     if (index >= sizeof(mapping) / sizeof(mapping[0]))
         return OptNodeType::Unknown;
     return mapping[index];

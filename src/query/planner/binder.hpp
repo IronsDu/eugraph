@@ -164,6 +164,17 @@ public:
                                                    std::optional<BoundLogicalOperator> child);
     std::optional<BoundLogicalOperator> bindMerge(const cypher::MergeClause& merge,
                                                   std::optional<BoundLogicalOperator> child);
+    /// FOREACH (variable IN list | body...): binds the body into a correlated
+    /// sub-plan rooted at a BoundCorrelatedSourceOp and wraps it in a
+    /// BoundForeachOp. The element variable is scoped to the body.
+    std::optional<BoundLogicalOperator> bindForeach(const cypher::ForeachClause& foreach_clause,
+                                                    std::optional<BoundLogicalOperator> child);
+    /// Bind one clause of a FOREACH body. The grammar restricts the body to
+    /// updating clauses, so this forwards to the same bind* implementations the
+    /// main clause chain uses (see bindSingleQuery); the body differs only in
+    /// being rooted at the correlated source rather than at the previous clause.
+    std::optional<BoundLogicalOperator> bindUpdatingClause(const cypher::Clause& clause,
+                                                           std::optional<BoundLogicalOperator> current);
     std::optional<BoundLogicalOperator> bindCall(const cypher::CallClause& call,
                                                  std::optional<BoundLogicalOperator> current);
 

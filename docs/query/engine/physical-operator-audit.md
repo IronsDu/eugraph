@@ -413,6 +413,27 @@ map<string, PathRequirement> path_reqs;
 
 ---
 
+### 2.1 ForeachPhysicalOp
+
+**当前状态**：执行 `FOREACH (x IN list | <更新子句>)`。输出 schema = 输入 schema（透传，基数不变），
+body 是挂在 `CorrelatedSourcePhysicalOp` 之上的更新链。
+
+**执行**：逐输入行求值列表 → 对每个元素把「外层相关列 + 元素」注入相关源、起一次 body 生成器并**排空**
+（副作用发生在拉取过程中，输出行丢弃）→ 把 body 发布过的实体按 id 回灌到外层行 → 原样吐出输入行。
+列表为 `null` 或空时无操作；非列表值按单元素处理（与 neo4j 一致）。
+
+**两个易错点**：
+
+* **相关列必须是语义类型**，不能像 EXISTS 那样降成拓扑形态：body 会写这些实体（`SET p.x`），
+  写需要已物化的实体。保留语义类型后，需求收集会把 body 的属性读上推，planner 在外层插入
+  `ConstructVertex`，body 才拿到完整实体。
+* **回灌是必需的**：外层行里的实体是在 FOREACH **之前**物化的快照，不回灌就会出现
+  「存储已写入、同查询读不到」（`MATCH (p:P) FOREACH (x IN [1] | SET p.n = 1) RETURN p.n` 返回 null）。
+  已知遗留：标签列（`labels(n)`）不在回灌范围内，同查询读标签仍是旧值 —— 这是既有 SET 行为
+  （不带 FOREACH 的 `SET n:Label RETURN labels(n)` 同样如此），不是 FOREACH 引入的。
+
+---
+
 ### 3. ExpandPhysicalOp
 
 **当前状态**：

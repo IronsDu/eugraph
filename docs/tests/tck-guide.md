@@ -231,6 +231,17 @@ python3 tests/tck/run_tck.py \
    写属性映射时**在冒号后留一个空格**（`{nickname: 'solo'}`）即可避开；`{nickname:'solo'}` 会多建一个
    叫 `nickname` 的空标签，并污染 `no side effects` 快照。
 
+3. **`isQuerySupported()` 里曾用正则整条跳过 `FOREACH` / `LOAD CSV`。** 这是当年这两者没有 AST
+   节点时的兜底。FOREACH 现在有 `ast::ForeachClause` 了，所以那条正则已移除 —— 留着的话
+   `.feature` 里的 FOREACH 场景会被**静默跳过**（步骤数变少），断言从不执行，只表现为
+   "结果列是空的"这类假失败。新增语法支持时，除了 `hasUnsupportedClause()` 要认识新节点，
+   也检查一下这个正则兜底列表。`LOAD CSV` 仍未支持，保留跳过。
+
+4. **`the side effects should be:` 是"全量比对"**：表里没写的指标按 0 比较，而引擎的 diff 还会统计
+   `+labels`（新增的标签名）与 `+properties`（按 key 增删）。所以 `CREATE (:T {v: 1})` 只写
+   `| +nodes | 1 |` 会因为实际 `+labels=1`、`+properties=1` 而失败。要么把全部指标写全，
+   要么改用结果断言（`MATCH ... RETURN count(*)`）；`no side effects` 只断言全零，适合空列表/null 这类 no-op 场景。
+
 另外，**新建的图一定带匿名标签 `__anon__`**（`GraphManager` 建图时安装，用于承载无标签节点的属性），
 所以 `DESCRIBE LABELS` 在空图上就有 1 行 —— 断言空图标签列表时可以直接写全量期望值。
 裸 `CREATE` 首次看到的属性登记为 `ANY`（见 `cypher-syntax.md` 8.4），所以 schema 用例断言

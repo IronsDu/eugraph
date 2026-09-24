@@ -387,10 +387,28 @@ struct CallClause {
 };
 
 // Clause variant
+//
+// ForeachClause is only forward-declared here: it owns a vector of Clauses, so
+// it can only be defined once this variant is complete (same shape as
+// ExistsExpr / SingleQuery above).
+struct ForeachClause;
+
 using Clause = std::variant<std::unique_ptr<MatchClause>, std::unique_ptr<UnwindClause>, std::unique_ptr<CallClause>,
                             std::unique_ptr<CreateClause>, std::unique_ptr<MergeClause>, std::unique_ptr<DeleteClause>,
                             std::unique_ptr<SetClause>, std::unique_ptr<RemoveClause>, std::unique_ptr<ReturnClause>,
-                            std::unique_ptr<WithClause>>;
+                            std::unique_ptr<WithClause>, std::unique_ptr<ForeachClause>>;
+
+/// FOREACH (variable IN list_expr | body...)
+///
+/// The body is a sequence of updating clauses (CREATE / MERGE / SET / REMOVE /
+/// DELETE / nested FOREACH) -- the grammar rules out MATCH / WITH / RETURN.
+/// `variable` is scoped to the body: it shadows an outer variable of the same
+/// name inside, and is invisible after the clause.
+struct ForeachClause {
+    std::string variable;
+    Expression list_expr;
+    std::vector<Clause> body;
+};
 
 // ==================== Query ====================
 

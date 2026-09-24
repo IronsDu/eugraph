@@ -122,6 +122,13 @@ void Binder::applyProjectionPushdown(BoundLogicalOperator& op) {
                     applyProjectionPushdown(v.child);
                 } else if constexpr (std::is_same_v<Elem, BoundMergeOp>) {
                     applyProjectionPushdown(v.child);
+                } else if constexpr (std::is_same_v<Elem, BoundForeachOp>) {
+                    // The body's property reads were collected as requirements of the
+                    // outer chain (see the requirement collector), so pushing them
+                    // into the input is what makes those properties available; the
+                    // body gets its own visit for anything it introduces itself.
+                    applyProjectionPushdown(v.child);
+                    applyProjectionPushdown(v.body);
                 }
             }
         },
