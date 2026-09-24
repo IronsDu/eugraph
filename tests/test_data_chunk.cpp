@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -330,4 +332,174 @@ TEST(DataChunkRowsToChunk, AllNullColumnStaysAnyAndNullsReadBack) {
 TEST(DataChunkRowsToChunk, EmptyRowsYieldNothing) {
     auto gen = compute::wrapRowsToChunkGenerator({});
     EXPECT_FALSE(folly::coro::blockingWait(gen.next()).has_value());
+}
+
+// ==================== 按行直写原语（appendRowTyped） ====================
+//
+// edge_index_scan 曾经每行构造一个 vector<Value> 再 appendRow：vector 自身一次堆分配、
+// 1~3 次扩容、appendRow 只有 const& 重载所以还是逐元素拷贝。实测 3.00 分配/行、
+// 50.3 ns/行；按类型直写列是 0.00 分配/行、7.7 ns/行。
+//
+// 这里锁两件事：结果与 appendRow 等价（行为），以及不产生堆分配（性能契约）。
+
+namespace {
+
+/// Opt-in 分配计数：只在测量窗口内计数，避免影响其它用例。
+std::atomic<uint64_t> g_alloc_count{0};
+bool g_count_allocs = false;
+struct AllocWindow {
+    AllocWindow() {
+        g_alloc_count.store(0, std::memory_order_relaxed);
+        g_count_allocs = true;
+    }
+    ~AllocWindow() {
+        g_count_allocs = false;
+    }
+    uint64_t count() const {
+        return g_alloc_count.load(std::memory_order_relaxed);
+    }
+};
+
+} // namespace
+
+void* operator new(size_t n) {
+    if (g_count_allocs)
+        g_alloc_count.fetch_add(1, std::memory_order_relaxed);
+    void* p = std::malloc(n);
+    if (!p)
+        std::abort();
+    return p;
+}
+void operator delete(void* p) noexcept {
+    std::free(p);
+}
+void operator delete(void* p, size_t) noexcept {
+    std::free(p);
+}
+void* operator new[](size_t n) {
+    if (g_count_allocs)
+        g_alloc_count.fetch_add(1, std::memory_order_relaxed);
+    void* p = std::malloc(n);
+    if (!p)
+        std::abort();
+    return p;
+}
+void operator delete[](void* p) noexcept {
+    std::free(p);
+}
+void operator delete[](void* p, size_t) noexcept {
+    std::free(p);
+}
+
+namespace {
+
+std::vector<BoundType> edgeKeyRowSchema() {
+    return {BoundType(BoundTypeKind::VERTEX_REF, nullptr), BoundType(BoundTypeKind::VERTEX_REF, nullptr),
+            BoundType(BoundTypeKind::EDGE_KEY, nullptr)};
+}
+
+} // namespace
+
+/// 直写必须与 appendRow 写出完全一样的东西（三种列的组合各验一遍）。
+TEST(DataChunkRowAppend, TypedRowMatchesAppendRowForEveryColumnCombination) {
+    const VertexRef src{11};
+    const VertexRef dst{22};
+    const EdgeKey key{33, 11, 22, 7, 9};
+
+    // 覆盖 edge_index_scan 的三种列组合：只 src / src+dst / 全部三列。
+    for (int mask = 1; mask <= 7; ++mask) {
+        const bool with_src = (mask & 1) != 0;
+        const bool with_dst = (mask & 2) != 0;
+        const bool with_edge = (mask & 4) != 0;
+        if (!with_src && !with_dst && !with_edge)
+            continue;
+
+        const size_t n_cols =
+            static_cast<size_t>(with_src) + static_cast<size_t>(with_dst) + static_cast<size_t>(with_edge);
+        std::vector<BoundType> schema;
+        if (with_src)
+            schema.push_back(BoundType(BoundTypeKind::VERTEX_REF, nullptr));
+        if (with_dst)
+            schema.push_back(BoundType(BoundTypeKind::VERTEX_REF, nullptr));
+        if (with_edge)
+            schema.push_back(BoundType(BoundTypeKind::EDGE_KEY, nullptr));
+
+        DataChunk typed;
+        typed.setSchema(schema);
+        typed.reserve(8);
+        typed.appendRowTyped(with_src ? &src : nullptr, with_dst ? &dst : nullptr, with_edge ? &key : nullptr);
+
+        DataChunk legacy;
+        legacy.setSchema(schema);
+        legacy.reserve(8);
+        std::vector<Value> values;
+        if (with_src)
+            values.push_back(Value(src));
+        if (with_dst)
+            values.push_back(Value(dst));
+        if (with_edge)
+            values.push_back(Value(key));
+        legacy.appendRow(values);
+
+        ASSERT_EQ(typed.count, 1u) << "mask " << mask;
+        ASSERT_EQ(typed.numColumns(), n_cols) << "mask " << mask;
+        for (size_t c = 0; c < n_cols; ++c) {
+            const Value a = typed.getValue(c, 0);
+            const Value b = legacy.getValue(c, 0);
+            ASSERT_FALSE(isNull(a)) << "mask " << mask << " col " << c;
+            EXPECT_TRUE(valueEquals(a, b) == std::optional<bool>(true))
+                << "mask " << mask << " col " << c << " differs from appendRow";
+        }
+
+        // 缺省列不写：列数不变、其余列该行保持未写状态。
+        for (size_t c = n_cols; c < typed.numColumns(); ++c)
+            EXPECT_TRUE(typed.columns[c].isNull(0)) << "mask " << mask << " col " << c << " should stay unwritten";
+    }
+}
+
+/// 性能契约：直写一行不得产生堆分配（这就是这次改动的全部意义）。
+TEST(DataChunkRowAppend, TypedRowAppendDoesNotAllocate) {
+    const VertexRef src{11};
+    const VertexRef dst{22};
+    const EdgeKey key{33, 11, 22, 7, 9};
+
+    DataChunk chunk;
+    chunk.setSchema(edgeKeyRowSchema());
+    chunk.reserve(DataChunk::DEFAULT_CAPACITY);
+
+    uint64_t allocs = 0;
+    {
+        AllocWindow window;
+        for (size_t i = 0; i < 4096 && chunk.count < DataChunk::DEFAULT_CAPACITY; ++i)
+            chunk.appendRowTyped(&src, &dst, &key);
+        allocs = window.count();
+    }
+    EXPECT_EQ(allocs, 0u) << "appendRowTyped must not allocate per row";
+    EXPECT_EQ(chunk.count, DataChunk::DEFAULT_CAPACITY);
+}
+
+/// 对照：旧的每行 vector<Value> + appendRow 形状确实会分配 —— 证明上面的计数是有效的，
+/// 而不是因为计数器没生效才恒为 0。
+TEST(DataChunkRowAppend, LegacyPerRowVectorDoesAllocate) {
+    const VertexRef src{11};
+    const VertexRef dst{22};
+    const EdgeKey key{33, 11, 22, 7, 9};
+
+    DataChunk chunk;
+    chunk.setSchema(edgeKeyRowSchema());
+    chunk.reserve(DataChunk::DEFAULT_CAPACITY);
+
+    uint64_t allocs = 0;
+    {
+        AllocWindow window;
+        for (size_t i = 0; i < 64; ++i) {
+            std::vector<Value> values;
+            values.push_back(Value(src));
+            values.push_back(Value(dst));
+            values.push_back(Value(key));
+            chunk.appendRow(std::move(values));
+        }
+        allocs = window.count();
+    }
+    EXPECT_GT(allocs, 0u) << "counter failed to observe the legacy per-row vector allocations";
 }

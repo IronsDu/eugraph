@@ -212,7 +212,10 @@ public:
             co_return;
 
         while (true) {
+            // reserve(BATCH): the loop below fills up to BATCH or until the cursor runs
+            // out, so one allocation replaces the log2 growths push_back would do.
             std::vector<VertexId> batch;
+            batch.reserve(BATCH);
             co_await io_.dispatchVoid([&]() {
                 for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
                     batch.push_back(cursor->vertexId());
@@ -236,6 +239,7 @@ public:
 
         while (true) {
             std::vector<VertexId> batch;
+            batch.reserve(BATCH); // 同上：填充上限已知
             co_await io_.dispatchVoid([&]() {
                 for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
                     batch.push_back(cursor->vertexId());
@@ -262,6 +266,7 @@ public:
 
         while (true) {
             std::vector<ISyncGraphDataStore::EdgeIndexEntry> batch;
+            batch.reserve(BATCH);
             co_await io_.dispatchVoid([&]() {
                 for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
                     batch.push_back(cursor->entry());
@@ -322,6 +327,7 @@ public:
 
         while (true) {
             std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> batch;
+            batch.reserve(BATCH);
             co_await io_.dispatchVoid([&]() {
                 for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
                     batch.push_back(cursor->entry());
@@ -643,6 +649,7 @@ public:
         auto val = value;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
+            batch.reserve(BATCH);
             co_await io_.dispatchVoid([this, txn, &table, &val, &batch]() {
                 store_.scanIndexEqualityWithValue(txn, table, val, [&](uint64_t entity_id, std::string_view v) {
                     EdgeIndexScanEntry entry;
@@ -669,6 +676,7 @@ public:
         auto vals = values;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
+            batch.reserve(BATCH);
             co_await io_.dispatchVoid([this, txn, &table, &vals, &batch]() {
                 store_.scanIndexEqualityWithValue(txn, table, vals, [&](uint64_t entity_id, std::string_view v) {
                     EdgeIndexScanEntry entry;
@@ -696,6 +704,7 @@ public:
         auto e = end;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
+            batch.reserve(BATCH);
             co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
                 store_.scanIndexRangeWithValue(txn, table, s, e, [&](uint64_t entity_id, std::string_view v) {
                     EdgeIndexScanEntry entry;
@@ -724,6 +733,7 @@ public:
         auto e = end;
         while (true) {
             std::vector<EdgeIndexScanEntry> batch;
+            batch.reserve(BATCH);
             co_await io_.dispatchVoid([this, txn, &table, &s, &e, &batch]() {
                 store_.scanIndexRangeWithValue(txn, table, s, e, [&](uint64_t entity_id, std::string_view v) {
                     EdgeIndexScanEntry entry;
