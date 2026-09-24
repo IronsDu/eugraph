@@ -92,8 +92,14 @@ public:
 private:
     GraphManager& gm_;
 
+    /// Handle a pre-parsed database-DDL statement.
+    ///
+    /// Takes the whole GraphInstance rather than just its data store because the
+    /// DESCRIBE family is graph-scoped: it reads the *selected* graph's schema.
+    /// Database-level statements (CREATE/DROP/SHOW DATABASE, USE) still resolve the
+    /// default graph themselves, so passing the selected instance is safe for both.
     folly::coro::Task<CypherExecutionContext> handleDatabaseDdl(const DatabaseDdlStatement& stmt,
-                                                                IAsyncGraphDataStore& data_store);
+                                                                GraphInstance& instance);
 };
 
 } // namespace service

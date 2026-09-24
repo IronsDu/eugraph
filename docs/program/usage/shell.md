@@ -35,6 +35,15 @@ eugraph-shell --host 127.0.0.1 --port 9090
 | `:list-labels` | 列出当前图的所有标签 |
 | `:list-edge-labels` | 列出当前图的所有关系类型 |
 
+`:create-label` / `:create-edge-label` 接受的类型名（大小写不敏感）：
+`BOOL` / `BOOLEAN`、`INT64` / `INT` / `INTEGER`、`DOUBLE` / `FLOAT`、`STRING`、
+`DATETIME` / `DATE` / `DATE_TIME`、`TIME`、`DURATION`，以及对应的数组形式
+`<NAME>_ARRAY` 或 `<NAME>[]`（如 `STRING_ARRAY`、`INT64[]`）。无法识别的类型名回退为 `STRING`。
+
+要看某张表有哪些字段，用 Cypher 的 `DESCRIBE`（见
+[query/syntax/cypher-syntax.md](../../query/syntax/cypher-syntax.md) 第八节）；
+`:list-labels` 只给名字。
+
 ### 其他
 
 | 命令 | 说明 |

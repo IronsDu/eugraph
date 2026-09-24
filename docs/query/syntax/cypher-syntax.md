@@ -370,7 +370,7 @@ REMOVE r.prop                     -- 移除边属性
 | 子句/特性 | 说明 |
 |-----------|------|
 | `MERGE` | 条件创建（含 ON CREATE/MATCH SET） |
-| `CALL` | 过程调用/子查询 |
+| `CALL` | 过程调用（已可用，见第八节） |
 | `CASE WHEN THEN ELSE END` | 条件表达式 |
 | `[x IN list WHERE pred \| proj]` | 列表推导 |
 | `ALL/ANY/NONE/SINGLE(...)` | 量词谓词（已实现，见 WHERE 子句） |
@@ -464,3 +464,95 @@ SHOW INDEX idx_name
 ```
 
 `CREATE INDEX` 同步回填已有数据后设为 PUBLIC 状态。
+
+---
+
+## 八、Schema 查询（图结构与字段）
+
+两条路径，语义同一份元数据，用途不同：**`CALL` 过程**适合带 `WHERE`/`YIELD` 的自定义取数，
+**`DESCRIBE`** 是单目标、一行搞定的便捷写法。
+
+### 8.1 DESCRIBE 家族
+
+`DESCRIBE`（别名 `DESC`）在 Cypher 解析之前被 `DatabaseDdlParser` 拦截，**按当前选中的图**取 schema，
+不经过算子流水线，因此不支持 `YIELD ... WHERE`、不支持 `EXPLAIN`。
+
+```cypher
+-- 图里有哪些 label / relation 类型
+DESCRIBE LABELS
+DESCRIBE RELATIONSHIPS
+
+-- 某个 label / relation 有哪些字段
+DESCRIBE LABEL Person
+DESCRIBE RELATIONSHIP KNOWS        -- 别名：DESCRIBE REL KNOWS
+
+-- 名字含空格时用反引号
+DESCRIBE LABEL `My Label`
+```
+
+命名规则是**复数=列出全部、单数=按名查字段**：`LABELS` / `LABEL x`、`RELATIONSHIPS` /
+`RELATIONSHIP x` 两组同构，记一条规则即可。`DESC` 是整个家族的别名；`REL` 只是
+`RELATIONSHIP` 的短别名（不存在 `RELS`）。这里没有保留字表——目标名可以是任何词，
+所以 `DESCRIBE RELATIONSHIP TYPES` 会被当作"名为 `TYPES` 的关系类型"，未登记时返回 0 行。
+
+输出列：
+
+| 语句 | 列 |
+|------|-----|
+| `DESCRIBE LABELS` | `name`, `anonymous` |
+| `DESCRIBE RELATIONSHIPS` | `relationshipType` |
+| `DESCRIBE LABEL x` | `label`, `propertyName`, `propertyType` |
+| `DESCRIBE RELATIONSHIP x` | `relType`, `propertyName`, `propertyType` |
+
+* `propertyType` 是**单数、纯字符串**：一个声明字段只有一个类型（`PropertyDef.type`）。
+  类型名：`BOOLEAN` / `INTEGER` / `FLOAT` / `STRING` / `*_ARRAY` / `DATE_TIME` /
+  `TIME` / `DURATION` / `BYTE_ARRAY` / `ANY`。
+  ⚠️ 过程路径（`db.schema.nodeTypeProperties()` / `relTypeProperties()`）的列名是
+  **复数 `propertyTypes` 且为列表**——那是 neo4j 的形状，保留不动；DESCRIBE 是我们自创的
+  语法面，没有该约束，因此取更好用的单值形式。
+* 字段行按 `propertyName` 升序；`DESCRIBE LABELS` 的行按 `name` 升序 —— 输出可复现。
+* **查不到不报错**：未知 label/relation 返回 0 行（列形状仍在）。
+* 名字区分大小写（关键字不区分）。
+
+### 8.2 匿名标签（`__anon__`）
+
+无标签的节点把属性挂在内部标签 `__anon__` 上，所以它和普通 label 一样有 schema。本引擎
+**把它当作普通标签暴露**出来——`DESCRIBE LABELS`、`CALL db.labels()`、
+`CALL db.schema.nodeTypeProperties()` 都会报告它，`DESCRIBE LABEL __anon__` 可以查它的字段。
+需要区分时看 `DESCRIBE LABELS` 的 `anonymous` 列。
+
+> ⚠️ 与 neo4j 的有意差异：neo4j 的 `db.labels()` / `db.schema.nodeTypeProperties()` **不返回**
+> 匿名 label（neo4j 也不存在这个内部标签）。我们返回，因为"无标签节点的字段"同样是需要发现的
+> schema；隐藏它会让这类字段在 Cypher 侧无从查起。
+
+### 8.3 CALL 过程（等价路径）
+
+```cypher
+CALL db.labels()                     RETURN label              -- 所有 label（含 __anon__）
+CALL db.relationshipTypes()          RETURN relationshipType   -- 所有 relation 类型
+CALL db.propertyKeys()               RETURN propertyKey        -- 所有属性名
+CALL db.schema.nodeTypeProperties()  RETURN nodeLabels, propertyName, propertyTypes, mandatory
+CALL db.schema.relTypeProperties()   RETURN relType, propertyName, propertyTypes
+CALL db.schema.visualization()       RETURN nodes, relationships
+```
+
+过程参数与 `YIELD` 已支持（`CALL proc(args) YIELD a, b AS c RETURN ...`），但
+**`YIELD ... WHERE ...` 绑定器尚未支持**，过滤请写在 `RETURN` 之后或用 `WITH`。
+完整清单见 `CALL dbms.procedures()` / `SHOW PROCEDURES`。
+
+### 8.4 已声明的类型 vs 实际写入
+
+`propertyType` 来自 label 的**声明 schema**，而声明由写入路径决定：
+
+* `CREATE (:Person {name: 'Alice'})` 首次看到属性时登记为 **`ANY`**（值本身按实际类型存储）；
+* `SET n.name = 'Alice'` **只写数据、不登记 schema**，不会让字段出现在 `DESCRIBE` 结果里；
+* 通过 `createLabel` / `createEdgeLabel` 声明了类型（如 `name: STRING`）时，`DESCRIBE` 报声明的类型。
+
+⚠️ **写语句返回即代表已生效**（客户端契约）：服务端把写语句的副作用放在结果流的生成器里，
+调用方**必须把流读完**才能认为语句执行完毕。历史上 `eugraph-shell` 在"结果无列"时直接打印
+`OK` 而不订阅流，于是裸 `CREATE` 会在 schema 登记尚未落定时就报告成功，紧随其后的
+`DESCRIBE` 可能看不到刚登记的字段。已修：shell 现在无论有无列都排空结果流。
+
+也就是说 `DESCRIBE` 反映的是**元数据里登记了什么**，不保证等于数据里实际出现的类型。
+（`mandatory` 列**暂未提供**：`PropertyDef.required` 目前没有任何地方置为 `true`，写入路径也不校验，
+加了会恒为 `false` 而误导。）
