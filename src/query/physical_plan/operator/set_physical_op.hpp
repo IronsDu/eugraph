@@ -48,9 +48,6 @@ public:
           label_defs_(label_defs), edge_label_defs_(edge_label_defs), label_name_to_id_(label_name_to_id),
           anon_label_id_(anon_label_id), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Set(items=" + std::to_string(items_.size()) + ")";

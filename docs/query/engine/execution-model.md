@@ -19,10 +19,11 @@ Cypher 文本 → Parser → AST（含 EXPLAIN） → Binder → BoundLogicalPla
 
 ## 二、Pull-based 火山模型
 
-所有物理算子实现 `execute() -> folly::coro::AsyncGenerator<RowBatch>`：
+所有物理算子实现 `executeChunk() -> folly::coro::AsyncGenerator<DataChunk>`（唯一的执行接口，
+纯虚）：
 
 - **消费者拉取**：父算子调用 `co_await child_gen.next()` 从子算子拉取数据
-- **批量传输**：`RowBatch::CAPACITY = 1024`，算子累积到 1024 行后 `co_yield`
+- **批量传输**：`DataChunk::DEFAULT_CAPACITY = 1024`，算子累积到 1024 行后 `co_yield`
 - **叶子算子**（Scan）：从 `IAsyncGraphDataStore` 的 `AsyncGenerator<vector<VertexId>>` 拉取批次
 - **一元算子**（Filter/Project/Expand/Limit/Skip/Distinct）：拉取子算子输出，逐批转换，攒批 yield
 - **阻断算子**（Sort/Aggregate）：先全量消费子算子输出，物化到内存，处理后再分批 yield
@@ -111,7 +112,7 @@ Thrift IO 池与 Storage IO 池是**两个独立对象**：`GraphManager::init` 
 `co_executeCypher` 中将 `StreamContext::gen` 包装为 Thrift 流：
 
 ```
-AsyncGenerator<RowBatch>
+AsyncGenerator<DataChunk>
   → makeStreamGenerator (valueToThrift 逐行转换)
     → co_yield ResultRowBatch
       → ServerStream<ResultRowBatch>

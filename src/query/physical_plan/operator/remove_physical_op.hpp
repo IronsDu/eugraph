@@ -45,9 +45,6 @@ public:
           label_defs_(label_defs), label_name_to_id_(label_name_to_id), anon_label_id_(anon_label_id),
           edge_label_defs_(edge_label_defs), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Remove(items=" + std::to_string(items_.size()) + ")";

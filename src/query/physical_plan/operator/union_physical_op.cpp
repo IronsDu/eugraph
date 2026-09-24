@@ -16,10 +16,6 @@ std::vector<const PhysicalOperator*> UnionPhysicalOp::children() const {
     return {left_.get(), right_.get()};
 }
 
-folly::coro::AsyncGenerator<RowBatch> UnionPhysicalOp::execute() {
-    return executeViaChunk();
-}
-
 folly::coro::AsyncGenerator<DataChunk> UnionPhysicalOp::executeChunk() {
     // Execute left child
     auto left_gen = cancellable(left_->executeChunk());

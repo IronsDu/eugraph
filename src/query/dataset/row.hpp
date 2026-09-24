@@ -380,37 +380,6 @@ using Row = std::vector<Value>;
 // Schema: column names in positional order.
 using Schema = std::vector<std::string>;
 
-// ==================== RowBatch ====================
-
-// Batch unit for coroutine pipeline. Reduces coroutine switch overhead by ~1000x
-// compared to per-row AsyncGenerator<Row>.
-struct RowBatch {
-    static constexpr size_t CAPACITY = 1024;
-
-    std::vector<Row> rows;
-
-    RowBatch() {
-        rows.reserve(CAPACITY);
-    }
-
-    size_t size() const {
-        return rows.size();
-    }
-    bool empty() const {
-        return rows.empty();
-    }
-    void clear() {
-        rows.clear();
-    }
-
-    void push_back(Row&& row) {
-        rows.push_back(std::move(row));
-    }
-    void push_back(const Row& row) {
-        rows.push_back(row);
-    }
-};
-
 // Convenience: check if a Value holds a ListValue
 inline bool isList(const Value& v) {
     return std::holds_alternative<ListValuePtr>(v);

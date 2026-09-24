@@ -21,7 +21,6 @@ public:
         slot_layout_ = left_->slotLayout();
     }
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override;
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
 
 private:

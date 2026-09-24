@@ -33,9 +33,6 @@ public:
           left_correlation_cols_(std::move(left_correlation_cols)), list_element_types_(std::move(list_element_types)) {
     }
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "PatternComprehensionApply";

@@ -27,9 +27,6 @@ public:
         : label_name_(std::move(label_name)), prop_defs_(std::move(prop_defs)), meta_(meta), store_(store),
           name_to_id_(name_to_id), defs_(defs), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "CreateEdgeLabel(name=" + label_name_ + ")";

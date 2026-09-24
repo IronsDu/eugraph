@@ -34,9 +34,6 @@ public:
           label_prop_exprs_(std::move(label_prop_exprs)), store_(store), meta_(meta), child_(std::move(child)),
           label_defs_(label_defs), pending_props_(std::move(pending_props)), label_names_(std::move(label_names)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
     bool mayHaveSideEffects() const override {

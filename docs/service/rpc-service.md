@@ -35,7 +35,7 @@ EuGraph 使用 fbthrift 作为 RPC 框架，定义在 `proto/eugraph.thrift`。�
 `co_executeCypher` 返回 `ResponseAndServerStream<QueryStreamMeta, ResultRowBatch>`：
 
 1. `prepareStream()` 返回 `shared_ptr<StreamContext>`（含物理算子树 + AsyncGenerator + 事务）
-2. `makeStreamGenerator` 将 `AsyncGenerator<RowBatch>` 包装：逐批转换 Value → Thrift 类型，`co_yield ResultRowBatch`
+2. `makeStreamGenerator` 将 `AsyncGenerator<DataChunk>` 包装：逐批转换 Value → Thrift 类型，`co_yield ResultRowBatch`
 3. 流正常结束时 `commitTran`；客户端断连则隐式回滚
 
 详细见 [query/engine/execution-model.md](query/engine/execution-model.md)。

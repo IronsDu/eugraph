@@ -27,9 +27,6 @@ public:
         : left_(std::move(left)), right_(std::move(right)), correlated_source_(correlated_source),
           left_correlation_cols_(std::move(left_correlation_cols)), anti_(anti) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return anti_ ? "AntiSemiJoin" : "SemiJoin";

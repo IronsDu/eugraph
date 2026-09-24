@@ -1,66 +1,106 @@
 #include "query/physical_plan/physical_operator_base.hpp"
 
+#include <algorithm>
+
 namespace eugraph {
 namespace compute {
 
-// ==================== Default executeChunk (bridge from execute) ====================
+namespace {
 
-folly::coro::AsyncGenerator<DataChunk> PhysicalOperator::executeChunk() {
-    auto gen = execute();
-    while (auto batch = co_await gen.next()) {
-        co_yield rowBatchToDataChunk(*batch);
+/// Column kind implied by a runtime Value. `nullptr` means "no opinion" (NULL or a
+/// kind this helper does not classify), which callers treat as "keep looking".
+const binder::BoundTypeKind* kindOf(const Value& v) {
+    static const binder::BoundTypeKind kBool = binder::BoundTypeKind::BOOL;
+    static const binder::BoundTypeKind kInt = binder::BoundTypeKind::INT64;
+    static const binder::BoundTypeKind kDouble = binder::BoundTypeKind::DOUBLE;
+    static const binder::BoundTypeKind kString = binder::BoundTypeKind::STRING;
+    static const binder::BoundTypeKind kVertexRef = binder::BoundTypeKind::VERTEX_REF;
+    static const binder::BoundTypeKind kEdgeKey = binder::BoundTypeKind::EDGE_KEY;
+    static const binder::BoundTypeKind kPathTopology = binder::BoundTypeKind::PATH_TOPOLOGY;
+    static const binder::BoundTypeKind kVertex = binder::BoundTypeKind::VERTEX;
+    static const binder::BoundTypeKind kEdge = binder::BoundTypeKind::EDGE;
+    static const binder::BoundTypeKind kPath = binder::BoundTypeKind::PATH;
+    static const binder::BoundTypeKind kList = binder::BoundTypeKind::LIST;
+    static const binder::BoundTypeKind kMap = binder::BoundTypeKind::MAP;
+    static const binder::BoundTypeKind kDateTime = binder::BoundTypeKind::DATETIME;
+    static const binder::BoundTypeKind kTime = binder::BoundTypeKind::TIME;
+    static const binder::BoundTypeKind kDuration = binder::BoundTypeKind::DURATION;
+
+    switch (v.index()) {
+    case 1:
+        return &kBool;
+    case 2:
+        return &kInt;
+    case 3:
+        return &kDouble;
+    case 4:
+        return &kString;
+    case 5:
+        return &kVertexRef;
+    case 6:
+        return &kEdgeKey;
+    case 7:
+        return &kPathTopology;
+    case 8:
+        return &kVertex;
+    case 9:
+        return &kEdge;
+    case 10:
+        return &kPath;
+    case 11:
+        return &kDateTime;
+    case 12:
+        return &kTime;
+    case 13:
+        return &kDuration;
+    case 14:
+        return &kList;
+    case 15:
+        return &kMap;
+    default:
+        return nullptr; // monostate / BytesValue: not classified here
     }
 }
 
-// ==================== executeViaChunk (bridge from executeChunk to execute) ====================
+} // namespace
 
-folly::coro::AsyncGenerator<RowBatch> PhysicalOperator::executeViaChunk() {
-    auto gen = executeChunk();
-    while (auto chunk = co_await gen.next()) {
-        co_yield dataChunkToRowBatch(*chunk);
-    }
-}
+folly::coro::AsyncGenerator<DataChunk> wrapRowsToChunkGenerator(std::vector<Row> rows) {
+    if (rows.empty())
+        co_return;
 
-// ==================== Conversion utilities ====================
+    size_t num_cols = 0;
+    for (const auto& row : rows)
+        num_cols = std::max(num_cols, row.size());
+    if (num_cols == 0)
+        co_return;
 
-DataChunk rowBatchToDataChunk(const RowBatch& batch) {
-    DataChunk dc;
-    if (batch.rows.empty())
-        return dc;
-
-    size_t num_cols = batch.rows[0].size();
-    for (size_t c = 0; c < num_cols; ++c) {
-        dc.columns.push_back(Column::flat(binder::BoundTypeKind::ANY, batch.rows.size()));
-    }
-
-    for (size_t r = 0; r < batch.rows.size(); ++r) {
-        for (size_t c = 0; c < num_cols && c < batch.rows[r].size(); ++c) {
-            dc.columns[c].setValue(r, batch.rows[r][c]);
+    // One column kind per position: first non-null cell wins. A position with no
+    // typed cell anywhere stays ANY, matching the old RowBatch bridge.
+    std::vector<binder::BoundTypeKind> kinds(num_cols, binder::BoundTypeKind::ANY);
+    std::vector<bool> decided(num_cols, false);
+    for (const auto& row : rows) {
+        for (size_t c = 0; c < row.size(); ++c) {
+            if (decided[c])
+                continue;
+            if (const auto* kind = kindOf(row[c])) {
+                kinds[c] = *kind;
+                decided[c] = true;
+            }
         }
     }
-    dc.count = batch.rows.size();
-    return dc;
-}
 
-RowBatch dataChunkToRowBatch(const DataChunk& chunk) {
-    RowBatch rb;
-    const size_t n = chunk.numRows();
-    const size_t cols = chunk.numColumns();
-    rb.rows.reserve(n);
-    for (size_t r = 0; r < n; ++r) {
-        Row row;
-        row.reserve(cols);
-        for (size_t c = 0; c < cols; ++c)
-            row.push_back(chunk.columns[c].getValue(r));
-        rb.push_back(std::move(row));
-    }
-    return rb;
-}
+    DataChunk chunk;
+    for (size_t c = 0; c < num_cols; ++c)
+        chunk.columns.push_back(Column::flat(kinds[c], rows.size()));
 
-folly::coro::AsyncGenerator<DataChunk> wrapRowBatchToChunkGenerator(folly::coro::AsyncGenerator<RowBatch> gen) {
-    while (auto batch = co_await gen.next()) {
-        co_yield rowBatchToDataChunk(*batch);
+    for (size_t r = 0; r < rows.size(); ++r) {
+        for (size_t c = 0; c < rows[r].size(); ++c)
+            chunk.columns[c].setValue(r, rows[r][c]);
     }
+    chunk.count = rows.size();
+    chunk.sel = SelectionVector::identity(chunk.count);
+
+    co_yield std::move(chunk);
 }
 
 } // namespace compute

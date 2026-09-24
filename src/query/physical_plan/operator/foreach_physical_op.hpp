@@ -44,9 +44,6 @@ public:
         : list_expr_(std::move(list_expr)), input_columns_(std::move(input_columns)), element_column_(element_column),
           body_(std::move(body)), correlated_source_(correlated_source), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "Foreach(" + variable_ + ")";

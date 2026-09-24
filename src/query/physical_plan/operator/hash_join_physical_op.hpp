@@ -28,9 +28,6 @@ public:
           right_key_cols_(std::move(right_key_cols)), output_types_(std::move(output_types)),
           output_schema_(std::move(output_schema)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override {
         return "HashJoin";

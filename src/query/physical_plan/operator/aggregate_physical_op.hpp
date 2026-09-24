@@ -37,9 +37,6 @@ public:
         : group_keys_(std::move(group_keys)), aggregates_(std::move(aggregates)), child_(std::move(child)),
           output_type_kinds_(std::move(output_type_kinds)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
 
     std::string toString() const override {

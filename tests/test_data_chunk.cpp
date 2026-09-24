@@ -8,6 +8,9 @@
 #include <vector>
 
 #include "query/dataset/data_chunk.hpp"
+#include "query/physical_plan/physical_operator_base.hpp"
+
+#include <folly/coro/BlockingWait.h>
 
 using namespace eugraph;
 using namespace eugraph::binder;
@@ -270,4 +273,61 @@ TEST(DataChunkTypedAccess, ProducedChunkKeepsCountAndSelectionInSync) {
     EXPECT_EQ(chunk.count, 10u);
     EXPECT_EQ(chunk.sel.count, 10u);
     EXPECT_EQ(chunk.numRows(), 10u);
+}
+
+/// The rows→chunk helper replaced the old RowBatch bridge for the hand-built result
+/// paths (index DDL, EXPLAIN, database-level DDL). Those paths used to declare every
+/// column ANY; the helper now picks the kind from the values. Pin both the kinds and
+/// the count/sel invariants so a regression cannot slip through silently.
+TEST(DataChunkRowsToChunk, DerivesColumnKindsFromValues) {
+    std::vector<Row> rows;
+    rows.push_back({Value(std::string("idx_name")), Value(int64_t{7}), Value(1.5), Value(true)});
+    rows.push_back({Value(std::string("other")), Value(int64_t{9}), Value(2.5), Value(false)});
+
+    auto gen = compute::wrapRowsToChunkGenerator(std::move(rows));
+    auto chunk = folly::coro::blockingWait(gen.next());
+    ASSERT_TRUE(chunk.has_value());
+
+    ASSERT_EQ(chunk->numColumns(), 4u);
+    EXPECT_EQ(chunk->columns[0].type, BoundTypeKind::STRING);
+    EXPECT_EQ(chunk->columns[1].type, BoundTypeKind::INT64);
+    EXPECT_EQ(chunk->columns[2].type, BoundTypeKind::DOUBLE);
+    EXPECT_EQ(chunk->columns[3].type, BoundTypeKind::BOOL);
+
+    EXPECT_EQ(chunk->count, 2u);
+    EXPECT_EQ(chunk->sel.count, 2u);
+    EXPECT_EQ(chunk->numRows(), 2u);
+
+    EXPECT_EQ(std::get<std::string>(chunk->getValue(0, 0)), "idx_name");
+    EXPECT_EQ(std::get<int64_t>(chunk->getValue(1, 1)), 9);
+    EXPECT_DOUBLE_EQ(std::get<double>(chunk->getValue(2, 0)), 1.5);
+    EXPECT_TRUE(std::get<bool>(chunk->getValue(3, 0)));
+
+    // Exactly one batch, then the generator is done.
+    EXPECT_FALSE(folly::coro::blockingWait(gen.next()).has_value());
+}
+
+/// A column with no typed cell anywhere keeps ANY, and every row is readable --
+/// including one that is NULL (the DDL paths emit NULL cells).
+TEST(DataChunkRowsToChunk, AllNullColumnStaysAnyAndNullsReadBack) {
+    std::vector<Row> rows;
+    rows.push_back({Value{}, Value(int64_t{1})});
+    rows.push_back({Value{}, Value(int64_t{2})});
+
+    auto gen = compute::wrapRowsToChunkGenerator(std::move(rows));
+    auto chunk = folly::coro::blockingWait(gen.next());
+    ASSERT_TRUE(chunk.has_value());
+    ASSERT_EQ(chunk->numColumns(), 2u);
+    EXPECT_EQ(chunk->columns[0].type, BoundTypeKind::ANY);
+    EXPECT_EQ(chunk->columns[1].type, BoundTypeKind::INT64);
+    EXPECT_TRUE(chunk->columns[0].isNull(0));
+    EXPECT_TRUE(chunk->columns[0].isNull(1));
+    EXPECT_EQ(std::get<int64_t>(chunk->getValue(1, 0)), 1);
+    EXPECT_EQ(chunk->count, 2u);
+}
+
+/// Empty input yields no batch at all, so callers do not have to special-case it.
+TEST(DataChunkRowsToChunk, EmptyRowsYieldNothing) {
+    auto gen = compute::wrapRowsToChunkGenerator({});
+    EXPECT_FALSE(folly::coro::blockingWait(gen.next()).has_value());
 }

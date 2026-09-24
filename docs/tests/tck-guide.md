@@ -247,3 +247,35 @@ python3 tests/tck/run_tck.py \
 裸 `CREATE` 首次看到的属性登记为 `ANY`（见 `cypher-syntax.md` 8.4），所以 schema 用例断言
 `propertyTypes` 时不要预期推断出的具体标量类型。
 
+### ⚠️ `tck_tests` 偶发失败：WiredTiger 在 teardown 时 panic（与用例无关）
+
+全量 `tck_tests` 偶尔会以 `Failed` 收场，但**用例本身全过**：
+
+```
+[TCK] Total: 3928  |  Passed: 3928  |  Failed: 0  |  Skipped: 0
+[run_tck] Server killed by signal 6
+[run_tck] WARNING: Server crashed (signal 6)
+[run_tck] Failing due to server crash
+```
+
+**判据**：看 `[TCK] Total:` 那行的 `Failed` 是不是 0。是 0 就说明引擎行为没问题，失败来自
+服务端进程在收尾阶段被 abort。
+
+**根因**（`coredumpctl info <pid>` 看栈）：崩在 WiredTiger 内部，不是我们的代码：
+
+```
+__wt_abort
+__wt_panic_func      ← WT 主动 panic
+__log_server         ← WT 的日志服务线程
+```
+
+即 WT 日志子系统 panic 后 `abort()`，与查询执行无关（此时 TCK 已跑完、最后一张图也已 drop）。
+
+**这是长期存在的偶发问题，不是某次改动引入**：本机 `coredumpctl list` 里 `eugraph-server`
+有 375 条 coredump，横跨 2026-05 ~ 2026-09 且每月都有。同一份二进制重跑通常就过
+（实测：首次全量 1168 项里仅 `tck_tests` 因它失败，重跑 1168/1168 全过）。
+
+所以遇到它时：**先确认 `Failed: 0`，再重跑一次**，不要把它当成引擎缺陷去改查询逻辑。
+要真正定位得单独查 WT 日志子系统（`--wt-txn-sync` / 日志文件清理路径），属独立议题。
+
+

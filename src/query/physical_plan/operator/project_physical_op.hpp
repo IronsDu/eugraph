@@ -26,9 +26,6 @@ public:
     ProjectPhysicalOp(std::vector<ProjectItem> items, Schema input_schema, std::unique_ptr<PhysicalOperator> child)
         : items_(std::move(items)), input_schema_(std::move(input_schema)), child_(std::move(child)) {}
 
-    folly::coro::AsyncGenerator<RowBatch> execute() override {
-        return executeViaChunk();
-    }
     folly::coro::AsyncGenerator<DataChunk> executeChunk() override;
     std::string toString() const override;
     std::vector<const PhysicalOperator*> children() const override {
