@@ -109,6 +109,62 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 > 两个 Vertex 文件的第二个标签（`Comment:Message`、`Post:Message`）来自
 > `import-to-neo4j.sh` 而非 `headers.txt`，脚本里以 `EXTRA_NODE_LABELS` 显式记录。
 
+## 2.3 官方 driver 端到端跑通（2026-09-25，进行中）
+
+比自写 A/B 脚本更权威的做法：**用 LDBC 官方 driver + 官方 substitution parameters** 跑。
+本轮已把这条链路打通，要素如下（复现命令见 §7.1）：
+
+| 环节 | 结论 |
+|---|---|
+| 官方 driver jar | 本机无 Maven/mvnw/`~/.m2`，已下载 Maven 3.9.16 并用 `mvn -q clean package -DskipTests -Pcypher` 构建出 `cypher-1.2.0-SNAPSHOT.jar` |
+| Java 兼容性 | 上游要求 Java 11，本机 JDK 25 需加 `--add-exports java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED`（SBE 编解码器的 `DirectBuffer`），否则 `IllegalAccessError` |
+| **Bolt 兼容性** | **官方使用的 `neo4j-java-driver 4.4.3` 可直连 eugraph**（BASIC 认证，密码固定 `eugraph`；参数化查询、long 往返、列表参数均正常） |
+| 官方参数 | `datasets.ldbcouncil.org/snb-interactive-v1-parameters/substitution_parameters-sf0.1.tar.zst`，**与本库 sf0.1 数据同一 id 空间**（如 personId=30786325579101 在我们库里存在） |
+| 数据加载 | §2.2 的 `prepare_ldbc_official_csv.py`；关系类型必须显式给大写名（见该脚本 `REL_TYPE`） |
+| 审计 | 官方 `PASSED SCHEDULE AUDIT` 已通过（complex-5 关闭时，1 线程 / 250 操作：吞吐 1.89 op/s） |
+
+### 2.3.1 官方口径下的实测延迟（warmup 阶段，1 线程）
+
+| 官方查询 | 次数 | 均值 ms | min | max |
+|---|---:|---:|---:|---:|
+| LdbcShortQuery4MessageContent | 7 | 1954.7 | 1928 | 1995 |
+| LdbcQuery3 | 1 | 1663.0 | 1663 | 1663 |
+| LdbcQuery12 | 1 | 568.0 | 568 | 568 |
+| LdbcShortQuery6MessageForum | 7 | 558.1 | 535 | 626 |
+| LdbcShortQuery7MessageReplies | 7 | 553.4 | 544 | 584 |
+| LdbcShortQuery5MessageCreator | 7 | 545.9 | 543 | 548 |
+| LdbcQuery6 | 1 | 524.0 | 524 | 524 |
+| LdbcQuery2 | 1 | 211.0 | 211 | 211 |
+| LdbcQuery10 | 1 | 201.0 | 201 | 201 |
+| LdbcShortQuery2PersonPosts | 7 | 7.1 | 6 | 8 |
+| LdbcShortQuery3PersonFriends | 7 | 5.1 | 3 | 10 |
+| LdbcShortQuery1PersonProfile | 7 | 2.4 | 1 | 5 |
+
+> 与 §2 的差异说明：§2 用的是**文件自带 `:param` 默认值 + 我选定的 messageId**，
+> 本节用**官方 substitution parameters**（16 组随机参数）与官方 driver 的调度器。
+> 两者都是有效读数，但**不可互相加减**；例如 `short-4` 在 §2 是 1.35 ms（messageId=3），
+> 本节是 1954.7 ms（官方参数指向的消息更大/更热）。**官方口径才是对外可比的数字。**
+
+### 2.3.2 官方口径暴露的三个问题（均为 eugraph 侧，待修）
+
+1. **complex-5 在官方参数下挂死**
+   单线程直接跑 `interactive-complex-5.cypher`（personId=15393162790207, minDate=1344643200000）
+   **超过 400 s 不返回**，服务端多个 compute 线程持续满载。官方 driver 4 线程跑到该查询时
+   整个 run 停滞（"Last" 3.5 分钟且不再推进）。§5.2 记录的 `IN` 下推/join order 问题在
+   **官方参数**下更容易命中，是当前 P0。
+2. **长连接被断开会把官方 driver 打挂**
+   跑到 `LdbcShortQuery2PersonPosts` 时客户端报
+   `ServiceUnavailableException: Connection to the database failed` 并终止整个 run；
+   同一时刻服务端日志有 `[bolt] read error: ... returned empty buffer` 与
+   `query cancelled mid-stream`。这正是 [known-defects-todo](../query/known-defects-todo.md) §7
+   的已知缺陷——自写脚本靠"每轮新建连接"绕过了它，**官方 driver 不会绕**，所以修掉它
+   是"能跑完整官方 benchmark"的前置条件。
+3. **short 查询明显慢于 neo4j**（官方参数，单线程）
+   `short-4` 1955 ms / `short-5` 546 ms / `short-6` 558 ms / `short-7` 553 ms，
+   而 neo4j 同查询为 68–155 ms（§2 的 71/142/69/112 ms）；`short-1/2/3` 则在 2–7 ms，
+   与 neo4j 同档。即"按 id 取一条消息 + 一跳邻域"这一形状（`Message{id}` 的索引点查）
+   在官方参数下慢了约 **5–14×**，需要查 `Message(id)` 这条查询路径的计划。
+
 ## 3. 未纳入对照的查询
 
 | 查询 | 原因 |
@@ -164,7 +220,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 
 ## 7. 复现命令
 
-### 7.0 用官方口径加载数据（推荐，见 §2.2）
+### 7.1 用官方口径加载数据（推荐，见 §2.2）
 
 ```bash
 # headers.txt 为唯一事实来源：覆盖类型化表头 + 把标签列值改成标签名，然后加载
@@ -173,40 +229,58 @@ python3 scripts/prepare_ldbc_official_csv.py \
     --load --host 127.0.0.1 --port 9090
 ```
 
+加载完成后**重启实例**（loader 建的索引只写入 catalog，运行中的实例内存里没有；
+未重启时 `MATCH (t:Tag {name:'Shakira'})` 需 51630 ms，重启后 45 ms）。
+
+### 7.2 官方 driver（§2.3）
 
 ```bash
-# 1) 一次性补齐 neo4j 的派生标签（类型差异由 --neo4j-fix-types 在查询内处理）
-python3 - <<'PY'
-import csv
-from neo4j import GraphDatabase
-rows = list(csv.DictReader(open('/home/dodo/code/fuck/ldbc-conv/static/organisation_0_0.csv'), delimiter='|'))
-g = {}
-for r in rows:
-    g.setdefault(r['type'], []).append(r['id:ID(Organisation)'])
-d = GraphDatabase.driver("bolt://127.0.0.1:7687", auth=None)
-with d.session(database="neo4j") as s:
-    for t, lbl in (('company', 'Company'), ('university', 'University')):
-        for i in range(0, len(g[t]), 1000):
-            s.run(f"MATCH (o:Organisation) WHERE o.id IN $ids SET o:{lbl}", ids=g[t][i:i+1000])
-PY
+# ① 构建官方 driver（首次；需联网拉依赖）
+MAVEN=/tmp/vbench/apache-maven-3.9.16/bin/mvn
+( cd /home/dodo/code/fuck/ldbc_snb_interactive_v1_impls && $MAVEN -q clean package -DskipTests -Pcypher )
+JAR=/home/dodo/code/fuck/ldbc_snb_interactive_v1_impls/cypher/target/cypher-1.2.0-SNAPSHOT.jar
 
-# 2) 起 eugraph Release（数据目录用 sf0.1-fresh）
-./build/release/eugraph-server --thrift-port 9090 --bolt-port 7688 \
-    --data-dir /home/dodo/code/fuck/eugraph-sf0.1-fresh
+# ② 官方 substitution parameters（与 sf0.1 数据同一 id 空间）
+curl -sSL -o sf01-params.tar.zst \
+  https://datasets.ldbcouncil.org/snb-interactive-v1-parameters/substitution_parameters-sf0.1.tar.zst
+mkdir -p sf01-params && tar --zstd -xf sf01-params.tar.zst -C sf01-params
 
-# 3) 同机交错 A/B（每个查询新建连接；eugraph 侧库名 default，neo4j 侧 neo4j）
+# ③ benchmark.properties 关键项（其余沿用官方默认 driver/benchmark.properties）
+#    endpoint=bolt://localhost:7692     ← eugraph 实例
+#    user=neo4j  password=eugraph       ← eugraph 要求 BASIC 认证
+#    queryDir=queries/                  ← 指向 cypher/queries 的副本
+#    ldbc.snb.interactive.scale_factor=0.1
+#    ldbc.snb.interactive.parameters_dir=<上一步目录>
+#    ldbc.snb.interactive.LdbcQuery{1,13,14}_enable=false   ← shortestPath 语法不支持
+#    ldbc.snb.interactive.LdbcUpdate*_enable=false          ← 只跑读（等价官方 disable-updates.sh）
+#    ldbc.snb.interactive.LdbcQuery5_enable=false           ← 见 §2.3.2 第 1 条，否则 run 停滞
+
+# ④ 运行（JDK 25 需要模块导出；JDK 11 不需要）
+java --add-exports java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED \
+  -cp $JAR org.ldbcouncil.snb.driver.Client -P benchmark.properties
+```
+
+结果落在 `results/LDBC-SNB-results.json`（per-query 均值/min/max/分位）与
+`results/LDBC-SNB-validation.json`（官方 schedule audit）。
+
+**正常噪声**：driver 会打印 `Unable to load query from file: ...-duration-as-function.cypher`
+等——那是其余 workload 变体的文件缺失。
+
+### 7.3 自写同机交错 A/B（§2）
+
+```bash
+# eugraph 侧库名 default，neo4j 侧 neo4j；每查询新建连接
 python3 scripts/bench_ldbc_ab.py \
     --queries-dir /home/dodo/code/fuck/ldbc_snb_interactive_v1_impls/cypher/queries \
     --rounds 15 --warmup 3 --neo4j-fix-types \
     --skip complex-1,complex-5,complex-6,complex-9,complex-13,complex-14
 
-# 4) 只测 eugraph 单侧
+# 只测 eugraph 单侧
 python3 scripts/bench_ldbc_interactive.py \
     --queries-dir /home/dodo/code/fuck/ldbc_snb_interactive_v1_impls/cypher/queries \
     --uri bolt://127.0.0.1:7688 --person-id 933 --override messageId=3 \
     --warmup 1 --iters 3 --skip complex-1,complex-5,complex-6,complex-9,complex-13,complex-14
 ```
 
-两个脚本的参数解析都支持 LDBC 查询文件的两种写法（`:param [{...}] => {...}` 与 `:param name: value`）；
-`--override key=value` 用于把参数换成**本数据集里真实存在**的取值（文件默认的 `personId`/`messageId`
-往往指向大数据集的 id，在 sf0.1 里不存在，会让查询静默返回 0 行）。
+两个自写脚本的参数解析都支持 LDBC 查询文件的两种写法（`:param [{...}] => {...}` 与
+`:param name: value`）；`--override key=value` 用于把参数换成**本数据集里真实存在**的取值。
