@@ -46,6 +46,37 @@ from pathlib import Path
 CSV_POSTFIX = "_0_0"
 
 # id:ID(Organisation) / :START_ID(Person) / :END_ID(Place)
+# Relationship type per file stem, exactly as import-to-neo4j.sh declares it
+# (--relationships=TYPE=file). This cannot be derived from the file name: the loader's
+# convention takes the text between the first and last underscore (person_knows_person
+# -> "knows"), which would silently leave the graph with no :KNOWS edge at all -- every
+# official query pattern would then match nothing while the edge *counts* still look right.
+REL_TYPE = {
+    "static/place_isPartOf_place": "IS_PART_OF",
+    "static/tagclass_isSubclassOf_tagclass": "IS_SUBCLASS_OF",
+    "static/organisation_isLocatedIn_place": "IS_LOCATED_IN",
+    "static/tag_hasType_tagclass": "HAS_TYPE",
+    "dynamic/comment_hasCreator_person": "HAS_CREATOR",
+    "dynamic/comment_isLocatedIn_place": "IS_LOCATED_IN",
+    "dynamic/comment_replyOf_comment": "REPLY_OF",
+    "dynamic/comment_replyOf_post": "REPLY_OF",
+    "dynamic/forum_containerOf_post": "CONTAINER_OF",
+    "dynamic/forum_hasMember_person": "HAS_MEMBER",
+    "dynamic/forum_hasModerator_person": "HAS_MODERATOR",
+    "dynamic/forum_hasTag_tag": "HAS_TAG",
+    "dynamic/person_hasInterest_tag": "HAS_INTEREST",
+    "dynamic/person_isLocatedIn_place": "IS_LOCATED_IN",
+    "dynamic/person_knows_person": "KNOWS",
+    "dynamic/person_likes_comment": "LIKES",
+    "dynamic/person_likes_post": "LIKES",
+    "dynamic/person_studyAt_organisation": "STUDY_AT",
+    "dynamic/person_workAt_organisation": "WORK_AT",
+    "dynamic/post_hasCreator_person": "HAS_CREATOR",
+    "dynamic/comment_hasTag_tag": "HAS_TAG",
+    "dynamic/post_hasTag_tag": "HAS_TAG",
+    "dynamic/post_isLocatedIn_place": "IS_LOCATED_IN",
+}
+
 # The official import script adds a second label to two vertex files on top of what
 # headers.txt declares: "--nodes=Comment:Message" and "--nodes=Post:Message". Message is
 # what complex-6/9/10 match on, so dropping it makes those queries return 0 rows.
@@ -145,7 +176,10 @@ def main() -> int:
         #     plus whatever the :LABEL column supplies per row.
         cols = header.split("|")
         if any(c.startswith(":START_ID") for c in cols) and any(c.startswith(":END_ID") for c in cols):
-            rel_args.append(f"--relationships={Path(stem).name}={dest_file}")
+            rel_type = REL_TYPE.get(stem)
+            if not rel_type:
+                sys.exit(f"no relationship type known for {stem!r} (add it to REL_TYPE)")
+            rel_args.append(f"--relationships={rel_type}={dest_file}")
         else:
             space = next((ID_SPACE.match(c).group(1) for c in cols if ID_SPACE.match(c)), None)
             if not space:
