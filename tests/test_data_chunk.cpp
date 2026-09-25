@@ -426,13 +426,24 @@ TEST(EdgeIndexScanLayout, ValuesLandInTheColumnTheirVariableOwns) {
     ASSERT_TRUE(chunk.columns[static_cast<size_t>(l.edge)].setEdgeKey(0, key));
     chunk.count = 1;
 
-    EXPECT_EQ(std::get<VertexRef>(chunk.getValue(static_cast<size_t>(l.src), 0)).id, src.id);
-    EXPECT_EQ(std::get<VertexRef>(chunk.getValue(static_cast<size_t>(l.dst), 0)).id, dst.id);
-    const auto& got = std::get<EdgeKey>(chunk.getValue(static_cast<size_t>(l.edge), 0));
+    // 先取出 Value 再比对：getValue() 返回的是临时 Value，直接
+    // `const auto& g = std::get<EdgeKey>(chunk.getValue(...))` 会绑到该临时对象内部的
+    // 成员上，语句结束即悬垂（ASan 的 stack-use-after-scope 会抓到，普通构建只是"碰巧能过"）。
+    const Value got_src = chunk.getValue(static_cast<size_t>(l.src), 0);
+    const Value got_dst = chunk.getValue(static_cast<size_t>(l.dst), 0);
+    const Value got_edge = chunk.getValue(static_cast<size_t>(l.edge), 0);
+    ASSERT_TRUE(std::holds_alternative<VertexRef>(got_src));
+    ASSERT_TRUE(std::holds_alternative<VertexRef>(got_dst));
+    ASSERT_TRUE(std::holds_alternative<EdgeKey>(got_edge));
+
+    EXPECT_EQ(std::get<VertexRef>(got_src).id, src.id);
+    EXPECT_EQ(std::get<VertexRef>(got_dst).id, dst.id);
+    const auto& got = std::get<EdgeKey>(got_edge);
     EXPECT_EQ(got.id, key.id);
     EXPECT_EQ(got.src_id, key.src_id);
     EXPECT_EQ(got.dst_id, key.dst_id);
     EXPECT_EQ(got.label_id, key.label_id);
+    EXPECT_EQ(got.seq, key.seq);
 }
 
 /// 只绑定 dst 时，它必须落在 0 号列（planner 会把它压到第一个位置）。
