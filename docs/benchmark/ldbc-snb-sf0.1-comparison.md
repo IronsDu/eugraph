@@ -74,6 +74,41 @@ neo4j 实例来自**旧转换**，与 eugraph 有 5 处差异。不补齐时 com
 * complex-10 本轮 **67 ms**（neo4j 8.5 ms，8.8×）。早前轮次记录过 7.1×，两者同档；
   机器频率与环境不同，**不宜跨会话相减**。
 
+## 2.2 用官方加载口径重导数据（消除 §1.1 那些差异的根因）
+
+§1.1 里对 neo4j 补的 5 处差异，根因**不是数据，而是加载时用错了 CSV 表头语义**。官方
+Neo4j 参考实现并不直接 `neo4j-admin import` 原始 CSV，而是先跑
+`cypher/scripts/convert-csvs.sh`：
+
+1. 用 `cypher/scripts/headers.txt` 里的**类型化表头覆盖**每个文件的原始表头。
+   该文件每行是 `文件 表头`，冒号后就是类型：`id:ID(Organisation)`（主键与其 id 空间）、
+   `:START_ID` / `:END_ID`（关系两端）、**:`LABEL`（这一列的值是标签名）**、
+   `name:STRING` / `creationDate:LONG` / `workFrom:INT`（属性类型）。
+2. 再用 sed 把标签列的值改成标签拼写：`|company|` → `|Company|`、`|city$|` → `|City|` 等。
+
+**`headers.txt` 是官方 pipeline 的数据准备输入，不是 `neo4j-admin import` 的运行时输入**——
+但缺了它就会丢 schema：原始 CSV 里 `type` 只是一列普通属性，于是 `Company` / `University` /
+`City` / `Country` / `Continent` 这些标签根本不存在（complex-11 因此匹配 0 行），
+`workFrom` / `creationDate` 的类型也没有保证。
+
+我们的 loader **支持与 `neo4j-admin import` 同形的映射**（`--nodes=Label[:Label...]=file`、
+`--relationships=TYPE=file`，并识别 `:LABEL` 列），所以可以完全按官方口径加载：
+
+```bash
+# 等价于官方 convert-csvs.sh + import-to-neo4j.sh（headers.txt 作为唯一事实来源）
+python3 scripts/prepare_ldbc_official_csv.py \
+    --src /home/dodo/code/fuck/ldbc-conv --out /tmp/ldbc-official \
+    --load --host 127.0.0.1 --port 9090
+```
+
+**实测结果**（sf0.1，全新实例）：Message 286,744 / Post 135,701 / Comment 151,043 /
+Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
+**City 1,343 / Country 111 / Continent 6** / Tag 16,080 / TagClass 71 / Forum 13,750，
+且 15 类关系计数与原始 CSV 直导**逐项相同**——即官方口径下**不再需要任何手工补丁**。
+
+> 两个 Vertex 文件的第二个标签（`Comment:Message`、`Post:Message`）来自
+> `import-to-neo4j.sh` 而非 `headers.txt`，脚本里以 `EXTRA_NODE_LABELS` 显式记录。
+
 ## 3. 未纳入对照的查询
 
 | 查询 | 原因 |
@@ -128,6 +163,16 @@ neo4j 实例来自**旧转换**，与 eugraph 有 5 处差异。不补齐时 com
 7. **重型值类型句柄化**：`VertexValue` / `EdgeValue` / `ListValue` / `MapValue` / `PathValue` 以 `shared_ptr` 承载、`ColumnBuffer` 存句柄；分配占比 80% → 11%（剖析见 [query-value-copy-profiling](query-value-copy-profiling.md)）。
 
 ## 7. 复现命令
+
+### 7.0 用官方口径加载数据（推荐，见 §2.2）
+
+```bash
+# headers.txt 为唯一事实来源：覆盖类型化表头 + 把标签列值改成标签名，然后加载
+python3 scripts/prepare_ldbc_official_csv.py \
+    --src /home/dodo/code/fuck/ldbc-conv --out /tmp/ldbc-official \
+    --load --host 127.0.0.1 --port 9090
+```
+
 
 ```bash
 # 1) 一次性补齐 neo4j 的派生标签（类型差异由 --neo4j-fix-types 在查询内处理）
