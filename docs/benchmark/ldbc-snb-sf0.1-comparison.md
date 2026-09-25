@@ -1,5 +1,9 @@
 # LDBC SNB Interactive SF0.1 复测（当前版本）
 
+> **2026-09-25 增补**：§1.0 记录"CSV 三种状态与类型从哪来"（官方原版 / ldbc-conv /
+> headers.txt 类型化版，以及 neo4j 与我们的 loader 各自如何定类型）；§8 汇总本轮发现的问题
+> （引擎缺陷 A / 加载与工具链 B / loader 专项 B2 / 并发 C / 测量陷阱 D，含我自己的失误）。
+>
 > **2026-09-25 重写**：整篇以**本次同机交错 A/B 实测**为唯一当前口径。
 > 此前各轮（2026-09-10 / 09-19 / 09-21）的耗时表口径互不相同（数据目录、参数连接方式、
 > CPU 频率都变过），留在一起只会让人误做减法，已删除；仍然有效的**根因分析与能力缺口**
@@ -20,6 +24,63 @@
 | 查询文本 | `ldbc_snb_interactive_v1_impls/cypher/queries/` **原版** | 同左（仅下述类型归一化） |
 | 参数 | 文件自带 `:param` 默认值，仅 `personId`→933、`messageId`→3 | 同左，且 id 类参数按字符串传（neo4j 的 `id` 是 STRING） |
 | 口径 | warmup 3 + 15 轮计时，两引擎交错；报 min / p50 | 同左 |
+
+### 1.0 CSV 的三种状态与"类型从哪来"（反复踩的点，先看这个）
+
+LDBC 的 CSV 到能用之间隔着一步**表头类型化**，官方原版、部分转换版、类型化版三者不同：
+
+| 状态 | 路径 / 来源 | 表头长什么样 | 有类型吗 |
+|---|---|---|---|
+| ① **官方原版** | LDBC SURF 下载包 `social_network-sf0.1-CsvBasic-LongDateFormatter` | `id\|type\|name\|url`；关系表 `Person.id\|Organisation.id\|workFrom` | **完全没有** |
+| ② **部分转换版** | `/home/dodo/code/fuck/ldbc-conv`（本仓一直用它加载） | `id:ID(Organisation)\|type\|name\|url`；`:START_ID(Person)\|:END_ID(Organisation)\|workFrom` | **只有 id 列注解，属性列无类型**；无 `:LABEL`；`type` 值仍是小写 `city`/`company` |
+| ③ **类型化版** | `cypher/scripts/headers.txt` 覆盖后的产物（本仓由 `scripts/prepare_ldbc_official_csv.py` 生成） | `id:ID(Organisation)\|:LABEL\|name:STRING\|url:STRING`；`:START_ID(Person)\|:END_ID(Organisation)\|workFrom:INT` | **全齐**：`birthday:LONG` `creationDate:LONG` `length:INT` `workFrom:INT` `classYear:INT` `speaks:STRING[]` `email:STRING[]`… |
+
+类型定义**全部**在 `cypher/scripts/headers.txt`（31 行，格式 `文件 表头`）。官方流程是：
+
+```
+① 原版 CSV（无类型）
+   │  cypher/scripts/convert-csvs.sh：
+   │    ① 用 headers.txt 的类型化表头覆盖每个文件的表头
+   │    ② sed 把标签列的值改成标签拼写（|city$|→|City|、|company|→|Company|…）
+   ▼
+③ 类型化 CSV
+   │  neo4j-admin import / 我们的 loader
+   ▼
+入库：类型为 LONG/INT，标签为 Company/University/City/Country/Continent
+```
+
+**关键点**：`neo4j-admin import` **不读 `headers.txt`**——它读的是被覆盖后的 CSV 表头。
+`headers.txt` 是**加载前的数据准备输入**。`convert-csvs.sh:25-37` 就是那段覆盖逻辑
+（`echo ${HEADER} | cat - <(tail -n +2 file)`），第 40-44 行是标签值的 sed。
+
+**neo4j 如何定类型**（源码：`community/import-util/.../csv/DataFactories.java`）：
+列头按 `name:type` 解析 → `extractors.valueOf(typeSpec)` 在 `Extractors` 注册表里查名字
+（查不到直接抛 `'xxx' is not a valid type.`）。可用类型名：`String` `Long` `Int` `Char`
+`Short` `Byte` `Boolean` `Double` `Float` 及各自 `*Array`，加 `Point`/`Date`/`Time`/
+`DateTime`/`LocalTime`/`LocalDateTime`/`Duration`（及数组）。
+**没有冒号的列 = 属性，类型默认 `String`**；`:ID(...)`/`:START_ID(...)`/`:END_ID(...)`
+的解析由命令行 `--id-type=INTEGER|STRING|ACTUAL` 决定；`:LABEL`/`:TYPE`/`:IGNORE`/`:ACTION`
+是结构性类型、不产生属性值。
+
+**与我们 loader 的差异**（能力等价，差别在"表头没写类型时"）：
+
+| 维度 | neo4j-admin import | 我们的 loader |
+|---|---|---|
+| 类型来源 | `name:type`，**无则 String** | `name:type`（`:INT`/`:LONG`/`:STRING`…），**无则按值推断** |
+| id 列 | `:ID(Group)` + `--id-type` | `id:ID(Group)`，固定 INT64 |
+| 标签 | `:LABEL` 列 / `--nodes=Label:Label` | `:LABEL` 列（`HeaderKind::LABEL`）/ `--nodes=Label:Label`（`:` 分隔） |
+| 关系类型 | `--relationships=TYPE=file` | 同左（**必须显式给**，否则用文件名推导出的类型名，见 §8 B2） |
+| 类型不符 | 报错退出 | 按推断处理 |
+
+**为什么这件事反复咬人**：直接导 ②（ldbc-conv）会同时丢两样东西——
+`Company`/`University`/`City`/`Country`/`Continent` 标签（没有 `:LABEL` 列）与属性类型
+（`workFrom` 等无声明）。前者让 complex-11 返回 0 行，后者让两引擎在日期/数值谓词上分叉
+（neo4j 旧实例里 `WORK_AT.workFrom` 是 `'2013'`、`LIKES.creationDate` 是字符串，见 §1.1）。
+**必须用 ③ 加载**（`prepare_ldbc_official_csv.py`），否则两边永远对不齐。
+
+> 想看 ③ 长什么样：`/tmp/vbench/conv4/`（本仓生成，注意 /tmp 会丢，可自行重新生成）；
+> 想看官方原生实现：设好 `NEO4J_VANILLA_CSV_DIR` / `NEO4J_CONVERTED_CSV_DIR` 后跑
+> `cypher/scripts/convert-csvs.sh`（本机这两个变量未设，故官方产物不存在）。
 
 ### 1.1 测量前对 neo4j 补齐的数据差异（否则它的读数无意义）
 
@@ -74,7 +135,7 @@ neo4j 实例来自**旧转换**，与 eugraph 有 5 处差异。不补齐时 com
 * complex-10 本轮 **67 ms**（neo4j 8.5 ms，8.8×）。早前轮次记录过 7.1×，两者同档；
   机器频率与环境不同，**不宜跨会话相减**。
 
-## 2.2 用官方加载口径重导数据（消除 §1.1 那些差异的根因）
+### 2.2 用官方加载口径重导数据（消除 §1.1 那些差异的根因）
 
 §1.1 里对 neo4j 补的 5 处差异，根因**不是数据，而是加载时用错了 CSV 表头语义**。官方
 Neo4j 参考实现并不直接 `neo4j-admin import` 原始 CSV，而是先跑
@@ -109,7 +170,7 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 > 两个 Vertex 文件的第二个标签（`Comment:Message`、`Post:Message`）来自
 > `import-to-neo4j.sh` 而非 `headers.txt`，脚本里以 `EXTRA_NODE_LABELS` 显式记录。
 
-## 2.3 官方 driver 端到端跑通（2026-09-25，进行中）
+### 2.3 官方 driver 端到端跑通（2026-09-25，进行中）
 
 比自写 A/B 脚本更权威的做法：**用 LDBC 官方 driver + 官方 substitution parameters** 跑。
 本轮已把这条链路打通，要素如下（复现命令见 §7.1）：
@@ -355,7 +416,7 @@ python3 scripts/bench_ldbc_interactive.py \
 | A4 | **complex-5 在官方参数下挂死** | personId=15393162790207 / minDate=1344643200000，单线程 **>400 s 不返回**，多个 compute 线程持续满载；官方 driver 跑到该查询整个 run 停滞 | 官方 benchmark 无法完整跑完 | 未修，见 §5.2 |
 | A5 | **规划器对多标签扫描拒绝用索引** | `physical_planner.cpp:2487`：`// Index scan only when single label (multi-label requires runtime intersection)` + `if (scan_op.label_ids.size() == 1)` | `Message`（`Post:Message`/`Comment:Message` 超类）上的属性点查永远不走索引 | 未修（设计取舍，需运行期标签交集校验后才能放开） |
 
-### B. 数据加载与工具链问题
+### B1. 数据加载与工具链问题（索引/加载/对照口径）
 
 | # | 问题 | 证据 | 结论 |
 |---|---|---|---|
@@ -364,6 +425,43 @@ python3 scripts/bench_ldbc_interactive.py \
 | B3 | **原始 CSV 表头缺类型化信息，会丢 schema** | 官方 pipeline 先用 `headers.txt` 覆盖表头再用 sed 改标签值；直接导原始 CSV 时 `Company`/`University`/`City`/`Country`/`Continent` 全部为 0（`type` 只是一列普通属性），complex-11 因此 0 行 | 已提供 `scripts/prepare_ldbc_official_csv.py`（见 §2.2），官方口径下无需任何手工补丁 |
 | B4 | **neo4j 侧旧转换的类型/标签差异会让对照失真** | `LIKES.creationDate` 为 `'1342815871582'`（complex-7 直接抛 `TypeError`）；`WORK_AT.workFrom` 为 `'2013'`（与 int 比较**静默不匹配 → 0 行**）；缺 `Message`/`Company`/`University` 派生标签 | 对照前必须先补齐（§1.1）；**"0 行"既可能是引擎错，也可能是对方数据缺**，不核验就会误判 |
 | B5 | **两引擎 id 类型不同，参数传错静默 0 行** | eugraph `id` 是 INTEGER（`933`），neo4j 是 STRING（`'933'`） | 跨引擎脚本必须按引擎转型；本项目对照脚本因此有 `id_type` 参数 |
+
+### B2. loader 专项：能力边界 vs 真缺陷
+
+为对齐"我们加载的数据"与"neo4j 加载的数据"，本轮做过的处理及其性质（避免把输入问题误记为 loader 缺陷）：
+
+| 我做过的处理 | 性质 |
+|---|---|
+| 给 **neo4j** 手工 `SET o:Company` 打派生标签 | 纯 neo4j 侧补丁，与 loader 无关 |
+| 用 `prepare_ldbc_official_csv.py` 把表头换成 `headers.txt` 的类型化表头、把 `type` 列值改成 `Company`/`City`… | **输入预处理**——原始 CSV 缺这些信息（官方 pipeline 也做同样的事），见 §1.0 |
+| 给 loader 传显式关系类型 `--relationships=KNOWS=file` | **输入映射**——官方 `neo4j-admin import` 同样要求 `--relationships=TYPE=` |
+
+**结论：官方口径下 loader 不缺关键能力**，已核实它支持：
+
+| 能力 | 证据 |
+|---|---|
+| `:LABEL` 列（一列值 → 多标签） | `csv_loader.cpp:79` `HeaderKind::LABEL`；实测 `Company` 1575 / `University` 6380 / `City` 1343 |
+| 类型化表头 | `parseTypedColumn` → `parseTypeName`；实测官方表头加载后 `r.workFrom = 2013`（整数） |
+| 多标签节点 | `--nodes=Comment:Message=file`（实测 `Message` 286,744 = Post 135,701 + Comment 151,043） |
+| 显式关系类型 | `--relationships=TYPE=file`（声明 `loader_main.cpp:38`，解析为类型 `csv_loader.cpp:178`） |
+
+**真正的 loader 缺陷**（都是"静默通过"型）：
+
+| # | 缺陷 | 证据 | 危害 |
+|---|---|---|---|
+| L1 | **索引创建失败只 warn、加载结束不校验索引可用性** | `csv_loader.cpp:782` 仅 `spdlog::warn`；与 `rpc_client.cpp:47` 的 30 s 超时共用 | 实例"加载成功"但索引为空 → 点查退化全扫描（946 ms vs 4 ms）。本轮所有错误结论的源头，与 §8 A1/A2 同源 |
+| L2 | **关系类型与查询不一致时不告警** | 传 `--relationships=person_knows_person=file` → 类型名即 `person_knows_person`，日志写 `Loaded 14073 edges for 'person_knows_person' (0 skipped)` | 边**计数正确、类型名错误**，`MATCH ()-[r:KNOWS]->()` 返回 0，只有肉眼比对日志才能发现 |
+| L3 | **扫描模式的类型名由文件名约定推导，与官方命名不符** | `person_knows_person` → 取首尾下划线之间的 `knows`（不是 `KNOWS`） | 扫描模式吃官方 CSV 时类型名全部不符，必须显式映射 |
+| L4 | 不支持从 `type` 列自动派生标签 | 原版 `organisation_0_0.csv` 的 `type=company` 只存成属性 | **设计取舍**（官方也靠 `:LABEL` 列），但意味着 loader 无法直接吃官方原版 CSV，必须先做 §1.0 的表头覆盖 |
+
+> 附：**端点 id 缺失不是静默的**——`csv_loader.cpp:869` 有 `skipped++` 计数并打印
+> （本轮所有加载都是 `0 skipped`），这条不算缺陷。
+
+**建议的 loader 改进（按优先级）**：
+1. **加载结束自检**：对每个标签做一次"已知存在的 id 点查"，非毫秒级即**报错退出**（并核对 `db.indexes()`），彻底堵住 L1；
+2. **DDL 超时独立可配**（`--ddl-timeout`，或建索引单独用长超时）；
+3. **关系类型核对**：加载后比对"实际类型 vs `--relationships`/文件名推导"，不一致就 warn；
+4. 可选：`--label-from-column=type` 支持从列值派生标签，从而能直接吃官方原版 CSV。
 
 ### C. 并发与长时间运行暴露的问题
 
