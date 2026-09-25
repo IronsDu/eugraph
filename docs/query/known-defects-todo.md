@@ -102,3 +102,35 @@ stl_vector.h:1253: vector<int>::operator[]: Assertion '__n < this->size()' faile
 客户端报 `Failed to read from defunct connection`；**服务器未崩溃**（仍在监听、日志正常、内存充足）。
 
 **影响**：基准脚本需每轮新建连接，否则会把「连接断开」误判为「服务器崩溃 / 查询超时」。
+
+## 8. `CREATE INDEX` 回填阶段 SIGSEGV，并留下空索引
+
+**现象**：在 135k–287k 行的大标签上执行 `CREATE INDEX` / `CREATE UNIQUE INDEX`，服务端日志：
+
+```
+[handler] Created vertex index 'idx_msg_cd' (id=12) on Message.(creationDate)   ← 报"成功"
+*** Signal 11 (SIGSEGV) received by PID 56168 (pthread TID ...) (code: address not mapped to object), stack trace: ***
+```
+
+即 **catalog 元数据先提交、回填时崩溃**，随后服务端无响应。
+
+**后果链**（本轮实测）：
+1. catalog 里留下**定义为空**的索引：`CALL db.indexes()` 能列出该索引，但它没有条目；
+2. 本应走索引的点查退化为全标签扫描：
+   `MATCH (m:Message {id: 3})` **946 ms**（索引完好时 4 ms）、`Post{id}` 461 ms、`Comment{id}` 495 ms；
+   而小标签（≤16k 行）回填能在超时内完成，点查仍是 1 ms —— 于是故障表现为**只在大表上慢**；
+3. LDBC 的短查询（short-4/5/6/7）全部是 `Message{id}` 点查，因此在坏实例上比 neo4j 慢 5–14×，
+   在好实例上比 neo4j 快 52–180×。**索引状态不核对，性能结论就会整体反向**。
+
+**loader 侧的放大因素**：
+* `src/program/shell/rpc_client.cpp:47` 的 `channel->setTimeout(30000)` 被 loader 共用，
+  大表回填超过 30 s 即 `TTransportException: Timed out`；
+* `csv_loader.cpp:782` 对该失败**只 log warn 后继续**，`loader_main.cpp` 也不校验索引是否可用，
+  于是"加载成功"的实例可能带着一堆空索引。
+
+**待办**：
+1. 查回填路径的 SIGSEGV 根因（崩溃在 `Created vertex index` 之后、异步栈上）；
+2. catalog 与回填改成一个事务/两阶段：回填成功后才可见，避免留空索引；
+3. loader 的 DDL 超时改为可配置（或对建索引用更长超时），并在加载结束做
+   "索引存在且点查命中"的校验，失败即报错退出；
+4. 重测 benchmark：任何 `MATCH (... {id: ...})` 类读数前，先证明目标标签的索引可用。

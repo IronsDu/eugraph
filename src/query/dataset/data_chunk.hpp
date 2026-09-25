@@ -675,7 +675,6 @@ struct Column {
         return setTypedImpl(binder::BoundTypeKind::MAP, [&](ColumnBuffer& b) { b.setMapValue(i, std::move(p)); });
     }
 
-private:
     /// Non-const twin of borrowListImpl. Kept separate rather than casting away
     /// constness so the mutable path is visible at the point it is granted; its
     /// caller has already established FLAT form and sole buffer ownership.

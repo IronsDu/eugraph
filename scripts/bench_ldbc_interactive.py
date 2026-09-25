@@ -32,12 +32,29 @@ except ImportError:  # pragma: no cover
 
 PARAM_BLOCK = re.compile(r":param\s*\[\{([^}]*)\}\]\s*=>\s*\{(.*?)\}", re.S)
 
+# The newer LDBC files spell the same thing as `:param name: <literal>`, one per line.
+# Without this the parameter is simply absent, the query runs with $personId = null and
+# reports 0 rows instead of failing -- which is how a whole run can look "fast" while
+# matching nothing.
+PARAM_COLON = re.compile(r"^\s*:param\s+([A-Za-z_]\w*)\s*:\s*(.+?)\s*$", re.M)
+
 
 def parse_params(text: str) -> dict:
     """Pull the default parameter values out of the query file's :param comment."""
     m = PARAM_BLOCK.search(text)
     if not m:
-        return {}
+        # `:param name: value` form (one per line). Values are literals, so ints and
+        # quoted strings are recognised and anything else is passed through as-is.
+        colon = {}
+        for name, raw in PARAM_COLON.findall(text):
+            token = raw.strip()
+            if token.startswith('"') and token.endswith('"'):
+                colon[name] = token[1:-1]
+            elif token.lstrip("-").isdigit():
+                colon[name] = int(token)
+            else:
+                colon[name] = token
+        return colon
     names = [n.strip() for n in m.group(1).split(",") if n.strip()]
     body = m.group(2)
     out: dict = {}
@@ -77,6 +94,10 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=60.0, help="per-execution timeout in seconds")
     ap.add_argument("--only", default=None, help="comma-separated substrings to restrict to")
     ap.add_argument("--skip", default=None, help="comma-separated substrings to skip")
+    ap.add_argument("--override", default=None,
+                    help="comma-separated key=value applied to every query that declares "
+                         "that parameter (e.g. messageId=3); lets the run use ids that "
+                         "exist in the loaded dataset")
     args = ap.parse_args()
 
     auth = (args.user, args.password) if args.user else None
@@ -85,6 +106,13 @@ def main() -> int:
     if args.only:
         wanted = [s.strip() for s in args.only.split(",")]
         files = [f for f in files if any(w in f.name for w in wanted)]
+    overrides: dict = {}
+    if args.override:
+        for item in args.override.split(","):
+            if "=" in item:
+                k, v = item.split("=", 1)
+                overrides[k.strip()] = int(v) if v.strip().lstrip("-").isdigit() else v.strip()
+
     if args.skip:
         unwanted = [s.strip() for s in args.skip.split(",")]
         files = [f for f in files if not any(w in f.name for w in unwanted)]
@@ -97,6 +125,9 @@ def main() -> int:
         params = parse_params(text)
         if "personId" in params:
             params["personId"] = args.person_id
+        for key, value in (overrides or {}).items():
+            if key in params:
+                params[key] = value
         # The endpoint may be int-typed (eugraph) or string-typed (neo4j imports).
         attempts = [params]
         if "personId" in params:

@@ -66,21 +66,63 @@ folly::coro::AsyncGenerator<DataChunk> EdgeIndexScanPhysicalOp::executeChunk() {
         chunk.setSchema(output_types_);
         chunk.reserve(batch->size());
 
-        for (const auto& entry : *batch) {
-            std::vector<Value> values;
-
-            if (!src_var_.empty()) {
-                values.push_back(Value(VertexRef{entry.src_id}));
+        // The output columns are decided at plan time: the planner pushes the bound
+        // variables in the order src? -> dst? -> edge?, skipping the unbound ones, so a
+        // variable's column index shifts when an earlier one is absent (dst alone lands
+        // in column 0). Which variables are bound is constant for the whole run, so the
+        // dispatch below happens once per batch and no row loop carries a branch.
+        //
+        // Every output column comes from setSchema(), i.e. Column::flat with the kind the
+        // planner gave the variable, so the typed write always applies.
+        //
+        // The column objects are re-read after every co_yield: `columns` is moved into
+        // the yielded chunk, so pointers and references taken earlier must not be reused.
+        if (!src_var_.empty() && !dst_var_.empty() && !edge_var_.empty()) {
+            for (const auto& entry : *batch) {
+                chunk.columns[0].setVertexRef(chunk.count, VertexRef{entry.src_id});
+                chunk.columns[1].setVertexRef(chunk.count, VertexRef{entry.dst_id});
+                chunk.columns[2].setEdgeKey(chunk.count, EdgeKey{entry.edge_id, entry.src_id, entry.dst_id,
+                                                                 entry.label_id, static_cast<uint32_t>(entry.seq)});
+                ++chunk.count;
             }
-            if (!dst_var_.empty()) {
-                values.push_back(Value(VertexRef{entry.dst_id}));
+        } else if (!src_var_.empty() && !dst_var_.empty()) {
+            for (const auto& entry : *batch) {
+                chunk.columns[0].setVertexRef(chunk.count, VertexRef{entry.src_id});
+                chunk.columns[1].setVertexRef(chunk.count, VertexRef{entry.dst_id});
+                ++chunk.count;
             }
-            if (!edge_var_.empty()) {
-                values.push_back(Value(EdgeKey{entry.edge_id, entry.src_id, entry.dst_id, entry.label_id,
-                                               static_cast<uint32_t>(entry.seq)}));
+        } else if (!src_var_.empty() && !edge_var_.empty()) {
+            for (const auto& entry : *batch) {
+                chunk.columns[0].setVertexRef(chunk.count, VertexRef{entry.src_id});
+                chunk.columns[1].setEdgeKey(chunk.count, EdgeKey{entry.edge_id, entry.src_id, entry.dst_id,
+                                                                 entry.label_id, static_cast<uint32_t>(entry.seq)});
+                ++chunk.count;
             }
-            chunk.appendRow(std::move(values));
+        } else if (!dst_var_.empty() && !edge_var_.empty()) {
+            for (const auto& entry : *batch) {
+                chunk.columns[0].setVertexRef(chunk.count, VertexRef{entry.dst_id});
+                chunk.columns[1].setEdgeKey(chunk.count, EdgeKey{entry.edge_id, entry.src_id, entry.dst_id,
+                                                                 entry.label_id, static_cast<uint32_t>(entry.seq)});
+                ++chunk.count;
+            }
+        } else if (!src_var_.empty()) {
+            for (const auto& entry : *batch) {
+                chunk.columns[0].setVertexRef(chunk.count, VertexRef{entry.src_id});
+                ++chunk.count;
+            }
+        } else if (!dst_var_.empty()) {
+            for (const auto& entry : *batch) {
+                chunk.columns[0].setVertexRef(chunk.count, VertexRef{entry.dst_id});
+                ++chunk.count;
+            }
+        } else if (!edge_var_.empty()) {
+            for (const auto& entry : *batch) {
+                chunk.columns[0].setEdgeKey(chunk.count, EdgeKey{entry.edge_id, entry.src_id, entry.dst_id,
+                                                                 entry.label_id, static_cast<uint32_t>(entry.seq)});
+                ++chunk.count;
+            }
         }
+        // No variable bound: nothing to write, the planner never produces this shape.
         if (chunk.count > 0) {
             co_yield std::move(chunk);
         }

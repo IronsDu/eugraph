@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -330,4 +333,122 @@ TEST(DataChunkRowsToChunk, AllNullColumnStaysAnyAndNullsReadBack) {
 TEST(DataChunkRowsToChunk, EmptyRowsYieldNothing) {
     auto gen = compute::wrapRowsToChunkGenerator({});
     EXPECT_FALSE(folly::coro::blockingWait(gen.next()).has_value());
+}
+
+// ==================== 边索引扫描的列布局 ====================
+//
+// edge_index_scan 的输出列在计划期就定死：planner 只把**被绑定的**变量按
+// src? → dst? → edge? 的顺序压进 schema（physical_planner.cpp 里 output_schema 与
+// output_types 同步 push），算子再按同一顺序直写这些列。
+//
+// 这里锁的就是这个顺序契约：一旦算子侧的列计算与 planner 的顺序不一致，写入会整体
+// 错位（src 的值落进 dst 列），而这类错位在高层查询结果里可能只表现为"列内容不对"，
+// 不容易联想到布局。算子内部不去重排，只依赖这个顺序。
+
+namespace {
+
+/// 复刻算子里的列计算：给定绑定情况，返回各变量应对应的列号（-1 = 未绑定）。
+struct Layout {
+    int src = -1;
+    int dst = -1;
+    int edge = -1;
+};
+
+/// 与 EdgeIndexScanPhysicalOp::executeChunk 中同样的推导。
+Layout layoutFor(bool want_src, bool want_dst, bool want_edge) {
+    Layout l;
+    if (want_src)
+        l.src = 0;
+    if (want_dst)
+        l.dst = want_src ? 1 : 0;
+    if (want_edge)
+        l.edge = (want_src ? 1 : 0) + (want_dst ? 1 : 0);
+    return l;
+}
+
+} // namespace
+
+TEST(EdgeIndexScanLayout, BoundColumnsFollowPlannerOrder) {
+    // 全部 7 种非空组合，逐一核对列号与"压缩后"的位置一致。
+    struct Case {
+        bool src, dst, edge;
+    };
+    const Case cases[] = {
+        {true, false, false}, {false, true, false}, {false, false, true}, {true, true, false},
+        {true, false, true},  {false, true, true},  {true, true, true},
+    };
+
+    for (const auto& c : cases) {
+        const Layout l = layoutFor(c.src, c.dst, c.edge);
+        const int n = (c.src ? 1 : 0) + (c.dst ? 1 : 0) + (c.edge ? 1 : 0);
+
+        // 未绑定的变量没有列。
+        EXPECT_EQ(l.src >= 0, c.src);
+        EXPECT_EQ(l.dst >= 0, c.dst);
+        EXPECT_EQ(l.edge >= 0, c.edge);
+
+        // 每个绑定变量的列号互不相同，且恰好铺满 [0, n)。
+        std::vector<int> used;
+        if (l.src >= 0)
+            used.push_back(l.src);
+        if (l.dst >= 0)
+            used.push_back(l.dst);
+        if (l.edge >= 0)
+            used.push_back(l.edge);
+        ASSERT_EQ(used.size(), static_cast<size_t>(n));
+        std::sort(used.begin(), used.end());
+        for (int i = 0; i < n; ++i)
+            EXPECT_EQ(used[static_cast<size_t>(i)], i) << "src=" << c.src << " dst=" << c.dst << " edge=" << c.edge;
+
+        // 相对顺序必须是 src < dst < edge（planner 的 push 顺序）。
+        if (l.src >= 0 && l.dst >= 0)
+            EXPECT_LT(l.src, l.dst);
+        if (l.dst >= 0 && l.edge >= 0)
+            EXPECT_LT(l.dst, l.edge);
+    }
+}
+
+/// 按这个布局写入后，每一列读回来的必须是它自己那个变量的值（防止错位）。
+TEST(EdgeIndexScanLayout, ValuesLandInTheColumnTheirVariableOwns) {
+    const VertexRef src{101};
+    const VertexRef dst{202};
+    const EdgeKey key{303, 101, 202, 7, 9};
+
+    const Layout l = layoutFor(/*src=*/true, /*dst=*/true, /*edge=*/true);
+    DataChunk chunk;
+    chunk.setSchema({BoundType(BoundTypeKind::VERTEX_REF, nullptr), BoundType(BoundTypeKind::VERTEX_REF, nullptr),
+                     BoundType(BoundTypeKind::EDGE_KEY, nullptr)});
+    chunk.reserve(4);
+
+    // 与算子同样的写法：按类型直写，拒绝时回退 Value。
+    ASSERT_TRUE(chunk.columns[static_cast<size_t>(l.src)].setVertexRef(0, src));
+    ASSERT_TRUE(chunk.columns[static_cast<size_t>(l.dst)].setVertexRef(0, dst));
+    ASSERT_TRUE(chunk.columns[static_cast<size_t>(l.edge)].setEdgeKey(0, key));
+    chunk.count = 1;
+
+    // 先取出 Value 再比对：getValue() 返回的是临时 Value，直接
+    // `const auto& g = std::get<EdgeKey>(chunk.getValue(...))` 会绑到该临时对象内部的
+    // 成员上，语句结束即悬垂（ASan 的 stack-use-after-scope 会抓到，普通构建只是"碰巧能过"）。
+    const Value got_src = chunk.getValue(static_cast<size_t>(l.src), 0);
+    const Value got_dst = chunk.getValue(static_cast<size_t>(l.dst), 0);
+    const Value got_edge = chunk.getValue(static_cast<size_t>(l.edge), 0);
+    ASSERT_TRUE(std::holds_alternative<VertexRef>(got_src));
+    ASSERT_TRUE(std::holds_alternative<VertexRef>(got_dst));
+    ASSERT_TRUE(std::holds_alternative<EdgeKey>(got_edge));
+
+    EXPECT_EQ(std::get<VertexRef>(got_src).id, src.id);
+    EXPECT_EQ(std::get<VertexRef>(got_dst).id, dst.id);
+    const auto& got = std::get<EdgeKey>(got_edge);
+    EXPECT_EQ(got.id, key.id);
+    EXPECT_EQ(got.src_id, key.src_id);
+    EXPECT_EQ(got.dst_id, key.dst_id);
+    EXPECT_EQ(got.label_id, key.label_id);
+    EXPECT_EQ(got.seq, key.seq);
+}
+
+/// 只绑定 dst 时，它必须落在 0 号列（planner 会把它压到第一个位置）。
+TEST(EdgeIndexScanLayout, SingleBoundVariableLandsInColumnZero) {
+    EXPECT_EQ(layoutFor(false, true, false).dst, 0);
+    EXPECT_EQ(layoutFor(false, false, true).edge, 0);
+    EXPECT_EQ(layoutFor(true, false, false).src, 0);
 }

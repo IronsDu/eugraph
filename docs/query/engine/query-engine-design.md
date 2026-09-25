@@ -293,6 +293,12 @@ struct DataChunk {
 - **拒绝即回退**：只有 `FLAT` 列接受 typed 写入。kind 不符、`DICTIONARY`（共享别人的 buffer，写进去会污染源列）或 `CONSTANT`（读取只认 `constant_value`，写进 buffer 是读不到的隐形写入）时 `Column::setXxx` 返回 `false`，调用方回退到 `setValue`，因此行为在这些路径上不变。
 - **越界写会自增长**：typed setter 先 `ensureRow(i)`（必要时扩 typed vector 与 validity 位图，再置位）。旧行为是 `setValid()` 对越界位静默不写 —— 数据进去了、行却读回 NULL。
 - **单列行追加**：`DataChunk::appendVertexRefRow(Column& out, VertexId vid)` 供"输出只有一列 VERTEX_REF"的扫描算子使用。列引用由调用方提到行循环外（行内不再做 `columns[0]`），但**每次重建 chunk 后必须重新绑定**：`co_yield` 会把 `columns` 整个 move 走，旧引用当场悬空；而对引用赋值是拷贝赋值、不是重新绑定。仓库里的扫描算子用"填满即吐批 → 重建 → 回到作用域顶部重新绑定"或 `resetChunk()` 内重新 `emplace` 的方式保证这一点。
+- **多列行追加（算子内联，不加接口）**：输出多列的算子（目前只有 `edge_index_scan`）**不需要** `DataChunk` 上的新接口，直接在行循环里对已知列调用 `setVertexRef` / `setEdgeKey` 即可。要点有三：
+  1. **列布局在计划期就定死**：planner 按 `src? → dst? → edge?` 的顺序把**被绑定的**变量压进 `output_schema`（同步构建 `output_types`），所以某个变量的列号会因前面的变量缺席而前移（只绑 dst 时它就是 0 号列）。算子必须按同一顺序写，不能假定恒为 0/1/2。
+  2. **分派放在行循环外**：绑定情况对整个执行期是常量，于是按 7 种组合在循环外分派、每种组合一个专门的行循环，行内不再有任何 `if`。实测（-O2，3 列形状）直写 **7.3–8.3 ns/行**、零分配，而走 `setValue` 是 **17.2–17.8 ns/行**（每行多构造 48 字节 variant、并在列类型上重新分派）；只绑一列时直写到 **4.1 ns/行**，可见"分派到具体列组合"本身也是收益。
+  3. **为什么不能退回 `appendRow`**：它需要 `std::vector<Value>`，每行一次堆分配 + 1..3 次扩容，且只有 `const&` 重载，`std::move` 进去仍是逐元素拷贝。原形状实测 **50.3 ns/行、3.00 分配/行**。
+  列由 `setSchema` 建立（恒为 `Column::flat`，kind 来自 planner 给定的变量类型），因此 typed 写入必然成功，调用点不再需要"拒绝就回退 `setValue`"的分支（那会让"不该发生的事"看起来像是预期路径）。
+- **判据**：`tests/test_data_chunk.cpp` 的 `DataChunkRowAppend.TypedRowMatchesAppendRowForEveryColumnCombination`（与 `appendRow` 逐列等价）与 `TypedRowAppendDoesNotAllocate`（4096 行零分配；同文件另有一个对照用例证明该计数器真能观察到分配，避免"计数器没生效所以恒 0"的假绿）。
 
 ### SelectionVector
 
