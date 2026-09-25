@@ -327,18 +327,6 @@ struct ColumnBuffer {
         map_data[i] = std::move(p);
     }
 
-    /// setXxx dispatcher for the row-append primitive, whose payload type is only
-    /// known from the argument it was handed.
-    template <typename V> void setTyped(size_t i, const V& v) {
-        using T = std::decay_t<V>;
-        if constexpr (std::is_same_v<T, VertexRef>)
-            setVertexRef(i, v);
-        else if constexpr (std::is_same_v<T, EdgeKey>)
-            setEdgeKey(i, v);
-        else
-            static_assert(sizeof(T) == 0, "unsupported typed payload");
-    }
-
 private:
     template <typename V> void setValueImpl(size_t i, V&& val) {
         if (::eugraph::isNull(val)) {
@@ -687,37 +675,6 @@ struct Column {
         return setTypedImpl(binder::BoundTypeKind::MAP, [&](ColumnBuffer& b) { b.setMapValue(i, std::move(p)); });
     }
 
-    /// Write row i from a concrete payload, falling back to the Value path when this
-    /// column cannot hold it (kind mismatch, or a read-only DICTIONARY form).
-    ///
-    /// Exists so a caller holding a typed payload does not have to wrap it in a Value
-    /// just to reach setValue -- and, for the row-append primitive, so the type
-    /// dispatch lives here (next to setTypedImpl's guards) instead of being repeated
-    /// per call site. `nullptr` means "write NULL", which is what the callers pass when
-    /// a column's type is unknown at compile time.
-    template <typename V> void setTypedOrValue(size_t i, const V& v) {
-        if constexpr (std::is_same_v<std::decay_t<V>, std::nullptr_t>) {
-            setValue(i, Value{});
-        } else {
-            const bool written = setTypedImpl(kindOfTyped<V>(), [&](ColumnBuffer& b) { b.setTyped<V>(i, v); });
-            if (!written)
-                setValue(i, Value(v));
-        }
-    }
-
-private:
-    /// BoundTypeKind a typed payload belongs to, for the types the row-append
-    /// primitive handles. Kept here so the mapping sits beside setTypedImpl.
-    template <typename V> static binder::BoundTypeKind kindOfTyped() {
-        using T = std::decay_t<V>;
-        if constexpr (std::is_same_v<T, VertexRef>)
-            return binder::BoundTypeKind::VERTEX_REF;
-        else if constexpr (std::is_same_v<T, EdgeKey>)
-            return binder::BoundTypeKind::EDGE_KEY;
-        else
-            static_assert(sizeof(T) == 0, "unsupported typed payload");
-    }
-
     /// Non-const twin of borrowListImpl. Kept separate rather than casting away
     /// constness so the mutable path is visible at the point it is granted; its
     /// caller has already established FLAT form and sole buffer ownership.
@@ -893,33 +850,6 @@ struct DataChunk {
         for (size_t i = 0; i < values.size() && i < columns.size(); ++i) {
             columns[i].setValue(count, values[i]);
         }
-        ++count;
-    }
-
-    /// Append one row from up to three topology values, writing each column by type.
-    ///
-    /// Generic form of appendVertexRefRow for the operators that emit a mix of
-    /// VERTEX_REF / EDGE_KEY columns (edge_index_scan). Built for the same reason:
-    /// appendRow needs a std::vector<Value>, so per row that is a heap allocation plus
-    /// 1..N growths, and appendRow only takes const& so `std::move`-ing it still copied
-    /// every Value. Measured on the edge_index_scan shape (3 columns): 50.3 ns/row and
-    /// 3.00 allocations/row -> 7.7 ns/row and 0.00 allocations/row.
-    ///
-    /// Each argument is "the value to write into the next column, or nullptr to skip
-    /// it" -- a pointer rather than an optional keeps this to one overload instead of
-    /// seven, and the caller decides which columns it wants (a scan binds only the
-    /// variables the query named).
-    ///
-    /// When a typed write declines (kind mismatch, read-only DICTIONARY column) the
-    /// Value path still runs, so behaviour matches appendRow.
-    void appendRowTyped(const VertexRef* src, const VertexRef* dst, const EdgeKey* edge) {
-        size_t col = 0;
-        if (src && col < columns.size())
-            columns[col++].setTypedOrValue(count, *src);
-        if (dst && col < columns.size())
-            columns[col++].setTypedOrValue(count, *dst);
-        if (edge && col < columns.size())
-            columns[col].setTypedOrValue(count, *edge);
         ++count;
     }
 
