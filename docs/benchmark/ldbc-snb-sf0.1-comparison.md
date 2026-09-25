@@ -125,6 +125,10 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 
 ### 2.3.1 官方口径下的实测延迟（warmup 阶段，1 线程）
 
+> ⚠️ **下表取自后来崩溃的实例**（索引不完整，详见 2.3.2 第 0/1 条），**仅保留作为过程记录**，
+> 不代表引擎当前水平；其中 short-4/5/6/7 的数值已被 2.3.3 的修正值取代
+> （0.8–1.9 ms vs 下表 546–1955 ms）。复杂查询部分尚待"索引完好实例"上重测。
+
 | 官方查询 | 次数 | 均值 ms | min | max |
 |---|---:|---:|---:|---:|
 | LdbcShortQuery4MessageContent | 7 | 1954.7 | 1928 | 1995 |
@@ -145,25 +149,73 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 > 两者都是有效读数，但**不可互相加减**；例如 `short-4` 在 §2 是 1.35 ms（messageId=3），
 > 本节是 1954.7 ms（官方参数指向的消息更大/更热）。**官方口径才是对外可比的数字。**
 
-### 2.3.2 官方口径暴露的三个问题（均为 eugraph 侧，待修）
+### 2.3.2 官方口径暴露的问题
 
-1. **complex-5 在官方参数下挂死**
+> ⚠️ **本节最重要的一条是第 0 条**：先前的"short 查询比 neo4j 慢 5–14×"结论是**错的**，
+> 它测在一个索引失效（且随后崩溃）的实例上。修正后的结论见 2.3.3。
+
+0. **索引失效会让点查慢 80–290×，并伪装成"引擎退步"**
+   `CREATE INDEX` 在大标签上**先写 catalog 元数据、再回填**；回填过程中服务器会
+   崩溃（见第 1 条），于是 catalog 里留下**没有内容的索引**。此时本应是索引点查的语句
+   退化为全标签扫描：
+
+   | 语句 | 索引失效的实例 | 索引完好的实例 |
+   |---|---:|---:|
+   | `MATCH (m:Message {id: 3}) RETURN m.id` | 946 ms | **4 ms** |
+   | `MATCH (m:Post {id: 3}) RETURN m.id` | 461 ms | 索引点查 |
+   | `MATCH (c:Comment {id: 102205})` | 495 ms | 索引点查 |
+   | `MATCH (p:Person {id: 933})`（小表，回填成功） | 1 ms | 1 ms |
+
+   loader 对此**只 warn 不报错**（`Failed to create unique index ...: TTransportException:
+   Timed out`），于是"加载成功"的实例可能带着一堆空索引，后续所有读数都是废的。
+   **复现前必须核对**：`CALL db.indexes()` 列出索引 **且** 该标签的点查是毫秒级。
+1. **`CREATE INDEX` 回填阶段会 SIGSEGV 打死服务端**（新发现，P0）
+   在 135k–287k 行的大标签上建索引，服务端日志顺序为：
+
+   ```
+   [handler] Created vertex index 'idx_msg_cd' (id=12) on Message.(creationDate)   ← 报"成功"
+   *** Signal 11 (SIGSEGV) received by PID 56168 ... stack trace: ***
+   ```
+
+   即 **catalog 先提交、回填时崩溃**：索引定义留在库里、内容为空（第 0 条的直接成因），
+   服务端随后无响应。官方 schema 那批读数正是在这个崩溃后的实例上取的。
+   > 注：小标签（≤16k 行）回填可以在 loader 的 30 s RPC 超时内完成，所以只有大表暴露此问题。
+2. **loader 的索引创建用 30 s 超时，失败只 warn**
+   `src/program/shell/rpc_client.cpp:47` 的 `channel->setTimeout(30000)` 被 loader 共用；
+   大表回填超 30 s 即报 `TTransportException: Timed out`，而 `csv_loader.cpp:782` 只 log warn
+   后继续。**加载流程缺少"索引是否真的可用"的校验**。
+3. **complex-5 在官方参数下挂死**
    单线程直接跑 `interactive-complex-5.cypher`（personId=15393162790207, minDate=1344643200000）
-   **超过 400 s 不返回**，服务端多个 compute 线程持续满载。官方 driver 4 线程跑到该查询时
-   整个 run 停滞（"Last" 3.5 分钟且不再推进）。§5.2 记录的 `IN` 下推/join order 问题在
-   **官方参数**下更容易命中，是当前 P0。
-2. **长连接被断开会把官方 driver 打挂**
+   **超过 400 s 不返回**，服务端多个 compute 线程持续满载。官方 driver 跑到该查询时整个 run
+   停滞。§5.2 记录的 join order / `IN` 下推问题在官方参数下更容易命中，P0。
+4. **长连接被断开会把官方 driver 打挂**
    跑到 `LdbcShortQuery2PersonPosts` 时客户端报
    `ServiceUnavailableException: Connection to the database failed` 并终止整个 run；
    同一时刻服务端日志有 `[bolt] read error: ... returned empty buffer` 与
-   `query cancelled mid-stream`。这正是 [known-defects-todo](../query/known-defects-todo.md) §7
-   的已知缺陷——自写脚本靠"每轮新建连接"绕过了它，**官方 driver 不会绕**，所以修掉它
-   是"能跑完整官方 benchmark"的前置条件。
-3. **short 查询明显慢于 neo4j**（官方参数，单线程）
-   `short-4` 1955 ms / `short-5` 546 ms / `short-6` 558 ms / `short-7` 553 ms，
-   而 neo4j 同查询为 68–155 ms（§2 的 71/142/69/112 ms）；`short-1/2/3` 则在 2–7 ms，
-   与 neo4j 同档。即"按 id 取一条消息 + 一跳邻域"这一形状（`Message{id}` 的索引点查）
-   在官方参数下慢了约 **5–14×**，需要查 `Message(id)` 这条查询路径的计划。
+   `query cancelled mid-stream`。这是 [known-defects-todo](../query/known-defects-todo.md) §7
+   的已知缺陷——自写脚本靠"每轮新建连接"绕过，**官方 driver 不会绕**，修掉它是跑完整
+   官方 benchmark 的前置条件。
+
+### 2.3.3 修正：short 查询仍显著快于 neo4j
+
+在**索引完好**的实例（`sf0.1-fresh`，`CALL db.indexes()` 齐全且点查毫秒级）上重测，
+用与官方 driver 同类的随机 messageId，取 3 次最小值：
+
+| 查询 | messageId | eugraph | neo4j | 倍数 |
+|---|---:|---:|---:|---:|
+| short-4 | 3 | **0.8 ms** | 78.4 ms | 98× |
+| short-4 | 618475290625 | **1.0 ms** | 76.8 ms | 77× |
+| short-5 | 3 | **0.9 ms** | 162.2 ms | 180× |
+| short-6 | 618475290625 | **1.5 ms** | 78.3 ms | 52× |
+| short-7 | 618475290625 | **1.9 ms** | 122.1 ms | 64× |
+
+即 §2 的"short-4/5/6/7 快 34–93×"结论**成立**；2.3.1 表里那组"slow"数字以及据此得出的
+"引擎在 Message{id} 上退步"的判断**作废**，它们全部来自空索引实例。同时可见 eugraph
+的**延迟与 messageId 无关**（0.8–1.9 ms 恒定），而 neo4j 在同一批参数上波动到 77–162 ms。
+
+> **教训**：索引状态是这类读数的一等前提。任何 LdbcShortQuery4/5/6/7 与
+> `MATCH (... {id: ...})` 的对比，都必须先证明目标标签的索引真的可用
+> （`CALL db.indexes()` + 一次毫秒级点查），否则测的是全表扫描。
 
 ## 3. 未纳入对照的查询
 
