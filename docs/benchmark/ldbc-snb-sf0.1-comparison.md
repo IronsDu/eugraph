@@ -336,3 +336,51 @@ python3 scripts/bench_ldbc_interactive.py \
 
 两个自写脚本的参数解析都支持 LDBC 查询文件的两种写法（`:param [{...}] => {...}` 与
 `:param name: value`）；`--override key=value` 用于把参数换成**本数据集里真实存在**的取值。
+
+---
+
+## 8. 本轮发现的问题汇总（2026-09-25）
+
+> 分类记录本轮为跑通"官方口径对比"而暴露的问题。**A 类是引擎缺陷（待修），B 类是数据加载
+> 与工具链问题，C 类是并发/长时间运行暴露的问题，D 类是测量方法本身的陷阱**——D 类里有几条
+> 是**我本轮自己犯的错**，一并留下以免后来人重踩。
+
+### A. 引擎缺陷（待修）
+
+| # | 问题 | 证据 | 影响 | 状态 |
+|---|---|---|---|---|
+| A1 | **`CREATE INDEX` 回填阶段 SIGSEGV，服务端崩溃** | 大标签建索引时日志为 `Created vertex index 'idx_msg_cd' (id=12) on Message.(creationDate)` 紧接 `*** Signal 11 (SIGSEGV) ... ***` | catalog 先提交、回填崩溃 → 留下**空索引**；服务端随后无响应 | 未修，见 [known-defects-todo §8](../query/known-defects-todo.md) |
+| A2 | **空索引不报错，点查静默退化为全标签扫描** | `Message{id}` 946 ms（索引完好 4 ms）、`Post{id}` 461 ms、`Comment{id}` 495 ms；小标签因回填能完成仍是 1 ms | 症状是"**只在大表上慢**"；所有 `MATCH (... {id: ...})` 类读数可能整体反向 | 未修（与 A1 同源，需 catalog/回填两阶段化） |
+| A3 | **loader 的 DDL 用 30 s 超时且失败只 warn** | `src/program/shell/rpc_client.cpp:47` `channel->setTimeout(30000)`；`csv_loader.cpp:782` 仅 `spdlog::warn` | "加载成功"的实例可能带着一堆空索引，加载流程结束也不校验索引可用性 | 未修 |
+| A4 | **complex-5 在官方参数下挂死** | personId=15393162790207 / minDate=1344643200000，单线程 **>400 s 不返回**，多个 compute 线程持续满载；官方 driver 跑到该查询整个 run 停滞 | 官方 benchmark 无法完整跑完 | 未修，见 §5.2 |
+| A5 | **规划器对多标签扫描拒绝用索引** | `physical_planner.cpp:2487`：`// Index scan only when single label (multi-label requires runtime intersection)` + `if (scan_op.label_ids.size() == 1)` | `Message`（`Post:Message`/`Comment:Message` 超类）上的属性点查永远不走索引 | 未修（设计取舍，需运行期标签交集校验后才能放开） |
+
+### B. 数据加载与工具链问题
+
+| # | 问题 | 证据 | 结论 |
+|---|---|---|---|
+| B1 | **loader 建完索引后不重启实例，索引不生效** | 同一查询在"加载后未重启"为 **51630 ms**，重启后 **45 ms** | 索引只写入 catalog，运行中的实例内存里没有。**加载后必须重启** |
+| B2 | **关系类型必须显式指定，否则官方查询全部匹配不到** | `--relationships=person_knows_person=file` 会把类型存成 `person_knows_person`；`MATCH ()-[r:KNOWS]->()` 返回 **0**，而 loader 日志写着 `Loaded 14073 edges for 'person_knows_person'` | **边计数正确、类型名错误**，极其隐蔽；已在 `prepare_ldbc_official_csv.py` 的 `REL_TYPE` 表中显式给出大写关系名 |
+| B3 | **原始 CSV 表头缺类型化信息，会丢 schema** | 官方 pipeline 先用 `headers.txt` 覆盖表头再用 sed 改标签值；直接导原始 CSV 时 `Company`/`University`/`City`/`Country`/`Continent` 全部为 0（`type` 只是一列普通属性），complex-11 因此 0 行 | 已提供 `scripts/prepare_ldbc_official_csv.py`（见 §2.2），官方口径下无需任何手工补丁 |
+| B4 | **neo4j 侧旧转换的类型/标签差异会让对照失真** | `LIKES.creationDate` 为 `'1342815871582'`（complex-7 直接抛 `TypeError`）；`WORK_AT.workFrom` 为 `'2013'`（与 int 比较**静默不匹配 → 0 行**）；缺 `Message`/`Company`/`University` 派生标签 | 对照前必须先补齐（§1.1）；**"0 行"既可能是引擎错，也可能是对方数据缺**，不核验就会误判 |
+| B5 | **两引擎 id 类型不同，参数传错静默 0 行** | eugraph `id` 是 INTEGER（`933`），neo4j 是 STRING（`'933'`） | 跨引擎脚本必须按引擎转型；本项目对照脚本因此有 `id_type` 参数 |
+
+### C. 并发与长时间运行暴露的问题
+
+| # | 问题 | 证据 | 结论 |
+|---|---|---|---|
+| C1 | **长连接会被服务端断开，并会打挂官方 driver** | 跑到 `LdbcShortQuery2PersonPosts` 时客户端 `ServiceUnavailableException: Connection to the database failed` 并终止整个 run；同一时刻服务端有 `[bolt] read error: ... returned empty buffer` 与 `query cancelled mid-stream` | 即 [known-defects-todo §7](../query/known-defects-todo.md)；自写脚本靠"每查询新建连接"绕过，**官方 driver 不会绕**，是跑完整官方 benchmark 的前置条件 |
+| C2 | **并发下点查延迟显著抬高** | 4 并发 short-7：单线程 550 ms → 并发每个 3.2 s（≈6×） | 官方 driver 默认多线程，读到的延迟会高于单线程直测；对比两引擎时必须同线程数 |
+| C3 | **客户端断开后，服务端算子会继续算** | complex-5 在客户端 120 s 超时断开后仍持续满载；另一例 `query cancelled mid-stream; rolling back after 0 record(s)` 才停 | 取消只在批边界生效，阻断算子内部不检查；跑基准时要留够超时，否则残留计算会污染后续读数 |
+
+### D. 测量陷阱（含本轮我自己的失误）
+
+| # | 陷阱 | 本轮实例 | 教训 |
+|---|---|---|---|
+| D1 | **在索引失效的实例上测"引擎快慢"** | 我据此得出"short-4/5/6/7 比 neo4j 慢 5–14×"，并在文档里写下"引擎在 `Message{id}` 上退步"——**结论完全错误**；修正后是**快 52–180×**（§2.3.3） | 任何 id 点查类读数前，**先证明索引可用**（`CALL db.indexes()` + 一次毫秒级点查） |
+| D2 | **忘了"加载后重启实例"** | 未重启时 `Tag{name}` 点查 51630 ms，重启后 45 ms（1148×） | 见 B1；把"没重启"误判成引擎慢 1000 倍 |
+| D3 | **官方参数 vs 自选参数混用导致读数不可比** | §2（自选 messageId）与 §2.3（官方 16 组随机参数）数字差 40× 以上；我还据此怀疑过引擎 | 两套口径都有效，但**不可互相加减**；对外引用必须注明参数来源 |
+| D4 | **`--skip`/匹配用了过宽的字符串** | 用 `complex-1.` 只跳到 `complex-1` 之外还漏跳过；`pgrep -f bench_xxx` 匹配到**自己的命令行**，导致自杀式 kill（本轮发生 3 次，误杀了 7688/9091 实例） | 匹配要用词边界；杀进程用 `ps -eo pid,comm` 过滤 comm 而不是 `pgrep -f` |
+| D5 | **端口/实例对应关系搞错** | 曾把官方 driver 指向"原始 CSV 加载、无官方 schema"的实例，读数 0.02 op/s，差点误判为引擎极慢 | 多实例并行时，把"端口 ↔ 数据目录 ↔ schema 状态"记在纸面上再测 |
+| D6 | **CPU 频率漂移与跨会话比较** | 本机同一二进制跨会话可差约 2× | 性能结论必须同机交错 A/B；绝对值只在注明条件下引用 |
+| D7 | **跨引擎"0 行/行数不符"未必是缺陷** | 多次遇到 eugraph 0 行 vs neo4j N 行，最终查明分别是：neo4j 缺派生标签（B4）、neo4j 字段为字符串（B4）、我的脚本关系类型写错（B2）、文件默认参数指向不存在的 id | 先核**双方输入是否等价**，再判引擎对错 |
