@@ -252,6 +252,46 @@ typed 内核本就有 `lhs_const`/`rhs_const` 分支（常量按第 0 行取值�
 complex-9 剩余大头仍是 117k 行的展开遍历（基线约 271 ms）与属性读取，
 见 §2.3.4 的变体拆解与"待办"。
 
+### 2.3.6 C2 未解决的部分：并发扩展性（吞吐不随线程增长）
+
+§2.3.5 的优化只作用于单查询延迟；**并发下的问题仍未解决**。本轮用官方判据复核：
+优化后跑官方 driver（4 线程 / 200 操作），连接层已干净（无 `ServiceUnavailable`），
+**warmup 阶段通过了审计**（31.33 op/s），但主阶段仍失败：
+
+```
+FAILED SCHEDULE AUDIT
+  TOO_MANY_LATE_OPERATIONS : Late Count (14) > (10) Tolerated Late Count
+  LATE_OPERATIONS_FOR_TYPE : LdbcQuery7/8/9/10/11/12、LdbcQuery4 各有 1–2 次超时
+```
+
+最慢的仍是重查询：**LdbcQuery9 均值 3.9 s**（min 2.6 / max 4.6）、LdbcQuery3 2.7 s、
+LdbcQuery6/12 各 ~1.0 s。而同一实例上 complex-9 单线程只有约 0.5–0.9 s ⇒ **4 并发下放大约 4.5×**。
+
+**并发扫描（同实例、`consume()` 引擎侧口径，12 s/档）**：
+
+| 线程 | ops/s | p50 | min |
+|---:|---:|---:|---:|
+| 1 | 1.99 | 503.7 ms | 475.6 ms |
+| 2 | 2.57 | 713.2 ms | 632.7 ms |
+| 4 | **2.80** | 1554.6 ms | 631.5 ms |
+| 8 | **2.77** | 2771.7 ms | 1595.2 ms |
+
+**吞吐 1→8 线程几乎不涨（1.99 → 2.77），而延迟随并发线性恶化**，连 min 都在退化
+（475 → 1595 ms）——说明不只是排队，而是有真实的资源争用。
+
+**已排除的两个解释**：
+1. **不是线程池太小**：`--compute-threads 8 --storage-io-threads 16` 复测，吞吐**更低**
+   （8 线程 2.39 op/s，min 815.9 ms），排除"池容量不足"；
+2. **不是锁争用**：4 并发下 20 s 墙钟内进程 CPU 时间 63 s（约 3.15 核），
+   `perf` 中 mutex/futex/spin 类符号各 <0.2% —— 排除"阻塞在锁上"。
+
+**因此当前判断**：争用在计算/存储路径的**并行度**上（每查询消耗的 CPU 无法有效并行分摊），
+而非同步原语。下一步应沿"单查询 CPU 消耗构成"继续拆（§2.3.4 的遍历 304 ms 与属性读取是候选）。
+机器有 16 核，理论上仍有扩展空间。
+
+> 复现：`scripts/profile_concurrency.py --port 7688 --query-file <complex-9> --sweep 1,2,4,8`
+> （该脚本用 `list()` 计时，看相对趋势即可；绝对值请用 `consume()` 口径）。
+
 ### 2.3.2 官方口径暴露的问题
 
 > ⚠️ **本节最重要的一条是第 0 条**：先前的"short 查询比 neo4j 慢 5–14×"结论是**错的**，
@@ -554,7 +594,7 @@ python3 scripts/bench_ldbc_interactive.py \
 | # | 问题 | 证据 | 结论 |
 |---|---|---|---|
 | C1 | **长连接会被服务端断开，并会打挂官方 driver** | 跑到 `LdbcShortQuery2PersonPosts` 时客户端 `ServiceUnavailableException: Connection to the database failed` 并终止整个 run；同一时刻服务端有 `[bolt] read error: ... returned empty buffer` 与 `query cancelled mid-stream` | 即 [known-defects-todo §7](../query/known-defects-todo.md)；自写脚本靠"每查询新建连接"绕过，**官方 driver 不会绕**，是跑完整官方 benchmark 的前置条件 |
-| C2 | **属性谓词求值 ~4.3 µs/行**（引擎侧口径；曾因仪器错误误判） | 朋友展开 `count` 552 ms → 加 `WHERE m.creationDate < $maxd` **1053 ms**（翻倍）；全表 `RETURN m.id`/`m.creationDate` 仅 45 ms（与 `count` 122 ms 同量级）；complex-9 原查询 1768 ms、官方 Q9 全形态 2688 ms | 详见 §2.3.4；已否证四个假设：每属性 B-tree 查找（微基准 miss 0.87 µs）、缓存容量（256MB→2GB）、协程派发（批量预取无改善已回退）、**顶点物化 13 µs/行（`list()` 的客户端构造成本，非引擎）** |
+| C2 | **部分解决**：单查询优化 -6~21%，**并发扩展性仍未解决** | 已落地：`列 <op> 字面量` 恢复走标量内核（§2.3.5）。未解决：官方 driver 主阶段仍 `TOO_MANY_LATE_OPERATIONS(14)`（LdbcQuery9 均值 3.9 s）；并发扫描吞吐 1→8 线程仅 1.99→2.77 op/s，延迟线性恶化、min 也退化 | 详见 §2.3.4/§2.3.5/§2.3.6；已排除线程池容量（8/16 更差）与锁争用（mutex <0.2%）；另已否证每属性 B-tree、缓存容量、协程派发、客户端物化四个假设 |
 | C3 | ~~客户端断开后服务端算子继续算~~ **已复核：取消机制正常** | 严格复测（持续负载 8 s 烧 7.75 s CPU → `kill -9` 客户端）：断开后**只再多算 0.28 s** 即停，随后 45 s 内累计仅 +0.09 s（间断采样） | 取消以**一个迭代为粒度**生效（最坏约 0.44 s），与 [bolt §10](../service/neo4j-bolt-protocol.md) 的设计一致。先前"断开后仍烧 9 分钟"是**误读 `ps` 的累计平均 CPU**所致，已更正 |
 
 ### D. 测量陷阱（含本轮我自己的失误）
