@@ -309,6 +309,29 @@ RUN 只负责把查询编译成算子流水线并返回 `fields`；真正的结�
   因此 Bolt 侧所有拆流点统一走 `BoltSession::abandonStream(rollback_explicit)`：连接断开 / GOODBYE / RESET 传 `true`（连挂起的显式事务一起回滚），DISCARD 与新 RUN 传 `false`（显式事务要留给客户端 COMMIT）。它内部顺序同样是"先销毁算子树、再 `rollbackTranNow()`"。Thrift/RPC 侧用 `StreamAbandonRollback`（`eugraph_handler.cpp`）在生成器被提前销毁时做同一件事。仓库里已无"丢句柄不回滚"的路径。
 - **事务起不来必须显式失败**：`prepareStream()` 现在遇到 `beginTran()` 返回 `INVALID_GRAPH_TXN` 会写入 `ctx->error` 并终止，而不是让查询落到共享 session 上变成非事务的逐行写。
 
+### 11. 连接生命周期与读缓冲回卷
+
+单条 Bolt 连接必须能承受**任意次数**的消息往返——官方驱动（如 LDBC 的
+`neo4j-java-driver 4.4.3`）不会为每条语句重连，一次断开就等于整轮基准被打断。
+
+读缓冲的实现要点在 `BoltConnection::getReadBuffer()`：
+
+- **残留字节是常态，不是异常**：`processMessage()` 一旦把当前消息的字节消费完就返回，
+  一个**只收到一半的 chunk 头/数据**会留在缓冲区里等下一次读。因此 `length()` 很少归零。
+- **`trimStart()` 只推进数据指针，不回收前面的空间**：于是"仅在缓冲区为空时才重置"的写法
+  会让偏移一路前进到末尾，最终 `tailroom() == 0`，而 folly 在拿到零长缓冲时抛
+  `ReadCallback::getReadBuffer() returned empty buffer` 并**断开连接**。
+- **修法**：`tailroom()` 低于阈值（`kMinReadTailroom`）时**回卷**——先把未消费残留
+  （必要时 `coalesce()` 成连续段）搬进新分配的缓冲区，再交还给 folly。缓冲区大小
+  取 `kReadBufSize` 与 `残留 + kMinReadTailroom` 的较大者，因此残留很大时也不会退化。
+
+**为什么难发现**：耗尽时间只取决于"每次执行的字节数"，与查询语义无关。
+实测（64 KiB 缓冲）：`RETURN 1`（约 78 B/次）在第 **~840** 次断开，
+`RETURN '<1.5 KB 字面量>'`（约 1560 B/次）在第 **~41** 次断开——
+两者都约等于 `64 KiB ÷ 每次字节数`，这正是"永不回卷"的指纹。
+回归测试见 `tests/bolt/test_python_driver_integration.py::TestConnectionLifetime`
+（用一个约 1 KiB 的、不依赖数据集的查询连跑 300 次）。
+
 ## 文件清单
 
 ```
@@ -346,6 +369,15 @@ tests/bolt/test_js_ws_driver.cjs                # JS 驱动 WebSocket 集成测�
 **严重程度**：低 | **影响范围**：长时间连接的会话
 
 `handleLogoff()` 返回 SUCCESS 但不释放任何资源（stream_ctx_、pending_txn_ 等），资源实际在 RESET 或 GOODBYE 时才释放。
+
+### 缺陷 2（已修复）：读缓冲不回卷导致长连接被断开
+
+**严重程度**：高（长连接场景致命）| **影响范围**：任何单连接上的长消息序列
+
+`getReadBuffer()` 仅在读缓冲为空时重置，而残留的半条消息让 `length()` 极少归零，
+于是偏移前进到 64 KiB 末尾后 folly 抛 `getReadBuffer() returned empty buffer` 并断连。
+表现为官方 LDBC driver 跑到 60–100 次操作时整个 run 被 `ServiceUnavailableException` 打断。
+修法与实测见 [§11 连接生命周期与读缓冲回卷](#11-连接生命周期与读缓冲回卷)。
 
 ### 低优先级
 
