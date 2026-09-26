@@ -218,45 +218,43 @@ LdbcQuery9 3.9 s 与 `TOO_MANY_LATE_OPERATIONS`），结论作废。
 driver 侧需三处小改（见 `docs/benchmark/ldbc-snb-sf0.1-comparison.md` §2.3.7）：
 `Converter.convertId()` 可配置、`CypherQueryStore.setIdType()`、`CypherDb.onInit()` 读属性。
 
-## 11. 官方 driver 并发跑到 ~116 操作后卡死（short-7 附近）
+## 11. ~~官方 driver 并发跑到 ~116 操作后卡死~~ —— 已复核：**不是引擎问题**（2026-09-26 更正）
 
-**现象**：`id_type` 修正后，官方 driver（4 线程 / 120 操作）跑到第 116 个操作后
-**单个操作 16 分钟以上不返回**，`Operations`/吞吐冻结；服务端持续消耗约 2 核
-（10 s 墙钟吃 19 s CPU）。服务端日志最后处理到 `// IS7. Replies of a message`。
+**原记录**：官方 driver 跑到第 116 个操作后 16+ 分钟不返回、服务端持续烧 2 核，
+曾据此判定"并发卡死"。
 
-**影响**：即使 id 口径修好，eugraph 仍**跑不完一次官方基准**——这是当前跑分的头号拦路虎。
+**复核结论：该判定错误。真正的现象是"driver 未执行完全部操作"，与引擎无关。**
 
-**栈级定位（2026-09-26，已做）**：客户端卡住 45 分钟时对服务端采样，得到——
+证据链：
 
-* 进程只有 **2 个线程在 R 状态且持续 100% CPU**（各烧了 50+ 分钟）：
-  `CPUThreadPool23` 与 `CPUThreadPool27`；其余线程全部 `futex_do_wait`/`ep_poll`。
-* 两线程的栈都落在**存储批调用内部的正常代码**上，且都在 `IoScheduler::dispatch` 之下：
+1. **第二次复现时服务端是空闲的**：抓 `/proc/<tid>/stat` + `gdb`，唯一处于 R 状态的
+   `CPUThreadPool` 线程实际停在 `UnboundedBlockingQueue::try_take_for`（等任务的超时等待），
+   并非在执行查询；`jstack` 显示客户端 4 个 `ThreadPoolOperationExecutor` 线程全部 park、
+   main 在 `Spinner.powerNap` 自旋等完成。
+   ⇒ **两侧都空闲**，不存在"引擎无限计算"。
+2. **诊断日志佐证**：在 `handlePull` 加节流诊断（chunks / fetched / rows_in_chunk）后复现，
+   卡住期间诊断**零新增**（30 s 内 135 → 135），即没有新的 PULL、流不在产出。
+3. **缺失操作数是按比例的，不是固定卡在某一条查询**：
 
-  ```
-  CPUThreadPool23: malloc → std::_Rb_tree<unsigned short>::_M_insert_unique
-                   → SyncGraphDataStore::getVertexLabelsBatch → IoScheduler::dispatch
-  CPUThreadPool27: __wt_session_gen_enter → __tree_walk_internal → __wt_btcur_next
-                   → __wt_btcur_search_near → __curfile_search_near
-                   → SyncGraphDataStore::getVertexPropertiesBatch → IoScheduler::dispatch
-  ```
+   | `operation_count` | 实际执行 | 缺失 |
+   |---:|---:|---:|
+   | 40 | **39** | 1（2.5%） |
+   | 120 | **116** | 4（3.3%） |
 
-  即**不是死锁**（无锁等待），而是**在存储层之上被无限次调用**——某个算子循环在持续
-  取标签/取属性。
-* `gdb` 看不到算子帧：folly 无栈协程 + release 优化把 `#11` 之上的帧吃掉了，需要一个
-  带 `-fno-omit-frame-pointer` 或带诊断日志的构建才能继续。
-* 服务端**仍能正常服务新连接**（`RETURN 1` 3 ms），只有这 2 条查询卡住。
-* **最简并发 short-7（2/4 并发直连）不复现**（0 行、4–15 ms 正常返回）⇒ 触发条件与
-  官方 driver 的执行方式有关（长连接复用 + 分页 PULL + 计划缓存 + 先前操作的状态），
-  不是 short-7 单独并发就能触发。
-* 服务端日志最后处理到 `// IS7. Replies of a message`，此后 46 分钟内无新的 RUN。
+   两次都通过审计（`PASSED SCHEDULE AUDIT`，16.6 / 15.3 op/s），但**不再返回**。
+4. **与调度窗口无关**：加 `ignore_scheduled_start_times=true` 后仍然停在 116。
+5. **根因指向测量配置**：`benchmark.properties` 里 `time_compression_ratio=0.001`
+   表示按 **1000× 压缩时间**调度（40 个操作被要求在 0.04 s 内全部发起）。引擎达不到该节奏时，
+   部分操作错过窗口，driver 随后一直等这些操作完成而不退出。
 
-**下一步（把"无限调用"变成具体算子）**：
-1. 在 `handlePull` 加**一次性诊断**：每次 PULL 记录 `limit` / 已取行数 / `has_more` /
-   当前查询文本；若卡死时该日志以固定节奏持续增长，则确认"流无限产出"，
-   并可据行数增速判断是哪个算子（如 `VarLenExpand` 的 1..2 跳爆炸、或 `Expand` 对
-   高连接度顶点反复取属性）；
-2. 用带 `-fno-omit-frame-pointer`（或 `RelWithDebInfo` + 帧指针）的构建复现并 gdb 采样，
-   拿到算子级调用链；
-3. 顺便核对 `has_more` 语义：`handlePull` 的循环受 `limit` 约束、逻辑上正常，
-   因此嫌疑在**上游算子是否可能永不耗尽**（结合 §9 之外的流式算子实现）。
+**修法（跑分时）**：把 `time_compression_ratio` 设为 1.0（不压缩）或显著放大，
+并让 `operation_count` 与实际吞吐匹配；此时 driver 能跑完并正常退出。参考实现的 README 也
+说明该值用于"在保住 95% 准时率的前提下追求最低压缩率"，需要按被测系统实测调整。
 
+**对 §11 的处置**：本条不再作为 eugraph 的缺陷；引擎侧此前记录的"并发下吞吐封顶 ~2.8 ops/s"
+（§9，L1 未命中 +47.5%）仍是真实且已定证的问题，但**不是**"卡死"。
+
+> 教训：把"driver 不退出"直接读成"引擎卡死"是错的。判断服务端是否真在算，要看
+> `/proc/<tid>/stat` 的**实时增量**与**线程状态**（R vs futex/epoll），不能只看累计 CPU
+> 或"客户端还在等"。本条第一次的误判正是因为抓到的两个 100% CPU 线程**确实是**在跑查询，
+> 但那是**正常但很慢**的工作，而不是死循环——两者需要靠"是否持续产生新工作"来区分。
