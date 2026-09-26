@@ -482,7 +482,7 @@ python3 scripts/bench_ldbc_interactive.py \
 |---|---|---|---|
 | C1 | **长连接会被服务端断开，并会打挂官方 driver** | 跑到 `LdbcShortQuery2PersonPosts` 时客户端 `ServiceUnavailableException: Connection to the database failed` 并终止整个 run；同一时刻服务端有 `[bolt] read error: ... returned empty buffer` 与 `query cancelled mid-stream` | 即 [known-defects-todo §7](../query/known-defects-todo.md)；自写脚本靠"每查询新建连接"绕过，**官方 driver 不会绕**，是跑完整官方 benchmark 的前置条件 |
 | C2 | **并发下点查延迟显著抬高** | 4 并发 short-7：单线程 550 ms → 并发每个 3.2 s（≈6×） | 官方 driver 默认多线程，读到的延迟会高于单线程直测；对比两引擎时必须同线程数 |
-| C3 | **客户端断开后，服务端算子会继续算** | complex-5 在客户端 120 s 超时断开后仍持续满载；另一例 `query cancelled mid-stream; rolling back after 0 record(s)` 才停 | 取消只在批边界生效，阻断算子内部不检查；跑基准时要留够超时，否则残留计算会污染后续读数 |
+| C3 | ~~客户端断开后服务端算子继续算~~ **已复核：取消机制正常** | 严格复测（持续负载 8 s 烧 7.75 s CPU → `kill -9` 客户端）：断开后**只再多算 0.28 s** 即停，随后 45 s 内累计仅 +0.09 s（间断采样） | 取消以**一个迭代为粒度**生效（最坏约 0.44 s），与 [bolt §10](../service/neo4j-bolt-protocol.md) 的设计一致。先前"断开后仍烧 9 分钟"是**误读 `ps` 的累计平均 CPU**所致，已更正 |
 
 ### D. 测量陷阱（含本轮我自己的失误）
 
