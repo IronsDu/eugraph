@@ -226,6 +226,37 @@ driver 侧需三处小改（见 `docs/benchmark/ldbc-snb-sf0.1-comparison.md` §
 
 **影响**：即使 id 口径修好，eugraph 仍**跑不完一次官方基准**——这是当前跑分的头号拦路虎。
 
-**待办**：对该卡死做栈级定位（客户端卡住时对服务端做 gdb/perf 采样，看四个 compute 线程
-各自卡在哪；重点看 short-7 的 `OPTIONAL MATCH` 与 `HAS_MEMBER`/`HAS_CREATOR` 组合，
-以及并发下的计划/流式状态）。
+**栈级定位（2026-09-26，已做）**：客户端卡住 45 分钟时对服务端采样，得到——
+
+* 进程只有 **2 个线程在 R 状态且持续 100% CPU**（各烧了 50+ 分钟）：
+  `CPUThreadPool23` 与 `CPUThreadPool27`；其余线程全部 `futex_do_wait`/`ep_poll`。
+* 两线程的栈都落在**存储批调用内部的正常代码**上，且都在 `IoScheduler::dispatch` 之下：
+
+  ```
+  CPUThreadPool23: malloc → std::_Rb_tree<unsigned short>::_M_insert_unique
+                   → SyncGraphDataStore::getVertexLabelsBatch → IoScheduler::dispatch
+  CPUThreadPool27: __wt_session_gen_enter → __tree_walk_internal → __wt_btcur_next
+                   → __wt_btcur_search_near → __curfile_search_near
+                   → SyncGraphDataStore::getVertexPropertiesBatch → IoScheduler::dispatch
+  ```
+
+  即**不是死锁**（无锁等待），而是**在存储层之上被无限次调用**——某个算子循环在持续
+  取标签/取属性。
+* `gdb` 看不到算子帧：folly 无栈协程 + release 优化把 `#11` 之上的帧吃掉了，需要一个
+  带 `-fno-omit-frame-pointer` 或带诊断日志的构建才能继续。
+* 服务端**仍能正常服务新连接**（`RETURN 1` 3 ms），只有这 2 条查询卡住。
+* **最简并发 short-7（2/4 并发直连）不复现**（0 行、4–15 ms 正常返回）⇒ 触发条件与
+  官方 driver 的执行方式有关（长连接复用 + 分页 PULL + 计划缓存 + 先前操作的状态），
+  不是 short-7 单独并发就能触发。
+* 服务端日志最后处理到 `// IS7. Replies of a message`，此后 46 分钟内无新的 RUN。
+
+**下一步（把"无限调用"变成具体算子）**：
+1. 在 `handlePull` 加**一次性诊断**：每次 PULL 记录 `limit` / 已取行数 / `has_more` /
+   当前查询文本；若卡死时该日志以固定节奏持续增长，则确认"流无限产出"，
+   并可据行数增速判断是哪个算子（如 `VarLenExpand` 的 1..2 跳爆炸、或 `Expand` 对
+   高连接度顶点反复取属性）；
+2. 用带 `-fno-omit-frame-pointer`（或 `RelWithDebInfo` + 帧指针）的构建复现并 gdb 采样，
+   拿到算子级调用链；
+3. 顺便核对 `has_more` 语义：`handlePull` 的循环受 `limit` 约束、逻辑上正常，
+   因此嫌疑在**上游算子是否可能永不耗尽**（结合 §9 之外的流式算子实现）。
+
