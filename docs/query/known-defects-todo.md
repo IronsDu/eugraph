@@ -152,44 +152,51 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
    "索引存在且点查命中"的校验，失败即报错退出；
 4. 重测 benchmark：任何 `MATCH (... {id: ...})` 类读数前，先证明目标标签的索引可用。
 
-## 9. 属性谓词求值约 4.3 µs/行（并记录一次仪器错误）
+## 9. 并发下每查询 CPU 翻倍：L1 未命中 +47.5%（吞吐封顶 ~2.8 ops/s）
 
-**引擎侧实测**（`session.run(q).consume()` 计时，3 轮取 min；官方参数 personId=32985348834013，
-451 个 2 跳朋友、116,958 条朋友 message）：
+**现象（引擎侧口径 `consume()`，complex-9 核心）**：
 
 ```
-MATCH (m:Message) RETURN count(m)                          122.2 ms
-MATCH (m:Message) RETURN m.id                               45.8 ms
-MATCH (m:Message) RETURN m.creationDate                     45.0 ms
-朋友展开 + count                                            551.7 ms
-朋友展开 + creationDate < $maxd + count                    1053.4 ms   ← +4.3 µs/行
-complex-9 原查询（排序 + LIMIT 20）                         1767.6 ms
-官方 Q9 全形态（返回 5 列含 coalesce）                       2687.9 ms
+线程   ops/s   每查询CPU   理论上限   达到比例
+  1    1.96     510 ms      1.96      100%
+  2    3.30     588 ms      3.32       97%
+  4    2.84    1104 ms      3.59       77%
+  8    ~2.7    ~1130 ms     ~7         39%
 ```
 
-**结论**：逐行读属性本身**不慢**（全表投影 45 ms，与 `count` 同量级甚至更快）；
-热点在**属性谓词求值**——`WHERE m.creationDate < $maxd` 让同一形状从 552 ms 翻到 1053 ms。
-其后是排序/物化投影与多列返回。
+1→2 线程近线性；**≥4 线程吞吐封顶 ~2.8 ops/s，每查询 CPU 从 510 ms 涨到 1104 ms（2.2×）**。
+官方 driver（4 线程 / 200 操作）因此仍报 `TOO_MANY_LATE_OPERATIONS`（LdbcQuery9 均值 3.9 s）。
 
-**⚠️ 仪器错误（记录以免重犯）**：本缺陷最初写成"顶点逐行物化 13–37 µs/行"，依据是
-`list(session.run(...))` 的计时。那个数字**几乎全是客户端驱动的开销**——Python 驱动把
-286,744 行构造成 `Record` 要 10.2 s，而服务端只需 43 ms（相差 **238×**）。
-顶点/属性类查询必须用 `consume()` 或服务端自身计时，**不能用结果物化计时**。
+**根因（perf 计数器按查询数归一，1 vs 4 线程）**：
 
-**已否证的假设（都实测）**：
-1. ~~每属性一次 B-tree 查找~~：直连 WT 微基准（`tests/tools/prop_lookup_bench.cpp`）显示
-   未命中查找 0.87 µs/call、标签扫描 0.13–0.19 µs/行；
-2. ~~缓存容量/淘汰~~：cache 256MB → 1GB → 2GB（工作集 658MB 可全驻留），结果无变化；
-3. ~~协程派发/游标建立~~：顶点属性批量预取（新增 `getVertexPropertyBatch`）实测无改善，已回退。
+| 每查询 | 1 线程 | 4 线程 | 变化 |
+|---|---:|---:|---:|
+| 指令数 | 2.537 G | 2.531 G | **+0.6%（不变）** |
+| L1-dcache 访问 | 0.947 G | 0.945 G | −0.2%（不变） |
+| **L1-dcache 未命中** | **15.8 M** | **23.3 M** | **+47.5%** |
+| **stalled-cycles-frontend** | **96.7 M** | **142.4 M** | **+47.3%** |
+| cycles | 1.249 G | 1.369 G | +9.7% |
+| IPC | 2.03 | 1.85 | −9% |
 
-**影响**：LDBC complex-9 官方参数下 1.77 s（官方 Q9 全形态 2.69 s），neo4j 同参数约 65 ms；
-官方 driver 4 线程下调度审计报 `TOO_MANY_LATE_OPERATIONS`。
+**执行的指令数与访存次数都不变，但 L1 未命中与前端 stall 翻倍** ⇒ 同样的工作因数据不再驻留
+L1（并发查询工作集互挤）而 stall。**这是并发变慢的直接机制**，不是锁、不是调度、不是迁移。
 
-**待办**：
-1. **属性比较下推到扫描/过滤层**（取到属性值即完成比较，不必构造 `Value` 再走表达式求值）
-   ——直接针对那 +4.3 µs/行；
-2. 排序/投影的物化路径（complex-9 里 +714 ms）；
-3. 多列返回（官方 Q9 再 +920 ms）。
+**已实测否证的解释（避免重走）**：
+1. 线程池容量——`--compute-threads 8 --storage-io-threads 16` 反而更差；
+2. 锁争用——`perf` 中 mutex/futex/spin 各 <0.2%；
+3. 忙等/空转——4 并发下 4 个 compute 线程各 ~100% 且都在执行有效指令；
+4. 单查询协程跨 compute 线程迁移——探针实测 91 次查询全部 `distinct_threads=1`；
+5. **跨池线程跳转（IO→compute）导致 L1 失效**——完整 POC（io 复用 compute pool +
+   原地执行消除全部跳转，hop 计数为 0）后 CPU/查询 1141→1262 ms，**无改善**；
+6. 朋友侧顶点构造——`ctor-vertex` 相关变体均 <10 ms。
 
-**验证手段**：`scripts/profile_query_costs.py`（**已改用 `consume()` 计时**）、
-`scripts/profile_concurrency.py`；存储层单位成本用 `tests/tools/prop_lookup_bench.cpp`。
+**优化方向（按预期收益）**：
+1. **缩小每次存储访问的工作集**：当前每个顶点属性存**一行**（读 k 个属性 = k 次查找、
+   k 份缓存足迹）。把同一顶点属性合并为**一个 value** 可同时减少查找次数与 L1 足迹——
+   这是唯一直接针对 L1 未命中的改法，但属存储格式变更，需单独设计（含兼容性）；
+2. **改善访问局部性**：按 vid 聚集访问、减少跨 B-tree 页跳跃；
+3. **线程数不必求多**：实测 2 线程吞吐（3.30）高于 4 线程（2.84），L1 争用下"少而快"更优；
+   官方 driver 若要跑满线程，应先降低每查询足迹。
+
+**验证手段**：`scripts/profile_concurrency.py`（并发扫描）、`tests/tools/prop_lookup_bench.cpp`
+（存储层单位成本）；计数器口径见 `docs/benchmark/ldbc-snb-sf0.1-comparison.md` §2.3.6。
