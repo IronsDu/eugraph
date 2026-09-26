@@ -291,57 +291,42 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 > `MATCH (... {id: ...})` 的对比，都必须先证明目标标签的索引真的可用
 > （`CALL db.indexes()` + 一次毫秒级点查），否则测的是全表扫描。
 
-### 2.3.4 C2 定位：顶点"逐行物化"约 35 µs/行（展开遍历另计）
+### 2.3.4 C2 定位：属性谓词求值 ~4 µs/行（并记录一次仪器错误）
 
-官方 driver 的审计失败（`TOO_MANY_LATE_OPERATIONS`，16 次 >1 s）不是连接问题（那是 C1，
-已修），也不是"并发放大 400×"。逐层量测后的结论，分两笔账：
+> ⚠️ **本节方法论比结论更重要**：顶点/属性类查询的"每行耗时"必须用**引擎侧口径**测。
+> 第一版用 `list(session.run(...))` 计时，得出的"顶点物化 13–37 µs/行"**几乎全是客户端
+> 驱动的开销**——Python 驱动把 286,744 行构造成 `Record` 对象要 10.2 s，而服务端只需 43 ms。
+> 正确做法是 `session.run(q).consume()`（只排水、不建对象），或读取服务端自己的计时。
 
-**第一笔：逐行物化顶点（返回任一顶点属性）≈ 35 µs/行。**
-全表 286,744 个 Message，交替 3 轮取 min（消除冷热顺序偏差）：
+**引擎侧实测**（官方参数 personId=32985348834013，451 个 2 跳朋友、116,958 条朋友 message，
+`consume()` 计时、3 轮取 min）：
 
-| 查询 | 耗时 | 每次行 |
+| 查询 | 耗时 | 与上一行之差 |
 |---|---:|---:|
-| `MATCH (m:Message) RETURN count(m)` | **124 ms** | **0.43 µs** |
-| `MATCH (m:Message) RETURN m.id` | 3,690 ms | 12.9 µs |
-| `MATCH (m:Message) RETURN m.creationDate` | 3,575 ms | 12.5 µs |
+| `MATCH (m:Message) RETURN count(m)`（全表扫 286,744 行 + 计数） | 122.2 ms | — |
+| `MATCH (m:Message) RETURN m.id` | **45.8 ms** | 返回属性反而更快（计数要聚合全部行） |
+| `MATCH (m:Message) RETURN m.creationDate` | **45.0 ms** | 同上 |
+| 朋友展开 + `count`（无属性谓词） | 551.7 ms | — |
+| 朋友展开 + `creationDate < $maxd` + `count` | **1053.4 ms** | **+501.7 ms ≈ +4.3 µs/行** |
+| complex-9 原查询（排序 + `LIMIT 20`） | 1767.6 ms | +714 ms |
+| 官方 Q9 全形态（返回 5 列、`coalesce`） | 2687.9 ms | +920 ms |
 
-（无 `LIMIT` 的变体为 10.5 s / 36.7 µs 每行；差别来自**回传 28 万行结果**的网络与
-DataChunk 侧成本，本节用 `LIMIT 100000` 隔离"物化"这一段。）读 `id` 与读
-`creationDate` **成本相同**，与属性大小、命中率均无关——说明这是**每行的物化管线成本**，
-不是某个属性的查找成本。
-
-**第二笔：complex-9 形状的展开遍历本身 ≈ 6.6 µs/行。**
-对 451 个 2 跳朋友、116,958 条朋友 message（官方参数）：
-
-| 步骤 | 耗时 | 增量 |
-|---|---:|---:|
-| 仅 2 跳朋友（451 人） | **8 ms** | — |
-| ＋`HAS_CREATOR` 展开 + `count`（不物化） | 777 ms | 6.6 µs/行 |
-| ＋`creationDate <` 过滤 | 1,109 ms | +2.8 µs/行 |
-| ＋物化 `id`（`LIMIT 5`，只做 5 行） | 1,061 ms | ≈0（样本只有 5 行） |
-| ＋排序 + `LIMIT 20`（= 原查询） | 1,788 ms | +246 ms |
+**结论**：
+1. **逐行读属性本身不慢**（全表 `id`/`creationDate` 45 ms，与 `count` 同量级甚至更快）；
+2. **属性谓词求值才是热点**：`WHERE m.creationDate < $maxd` 让同一形状从 552 ms 翻到 1053 ms，
+   **+4.3 µs/行**，即每行都要走一次"取值 → 比较"；
+3. 其后是排序/物化投影（+714 ms）与返回多列（再 +920 ms）。
 
 **已否证的假设（都实测，避免后来人重走）**：
+1. ~~"每属性一次 B-tree 查找"~~：直连 WT 的微基准（`tests/tools/prop_lookup_bench.cpp`）
+   显示未命中查找仅 **0.87 µs/call**、标签扫描 **0.13–0.19 µs/行**；
+2. ~~"缓存容量/淘汰"~~：cache 256 MB → 1 GB → 2 GB（工作集 658 MB 可全驻留），结果无变化；
+3. ~~"协程派发/游标建立开销"~~：实现过顶点属性批量预取（新增 `getVertexPropertyBatch`），
+   实测无改善，已回退；
+4. ~~"顶点物化 ~13 µs/行"~~：**仪器错误**，见本节开头。
 
-1. **不是"每属性一次 B-tree 查找"**（我先前写下的结论，**已被自己否证**）：存储层微基准
-   （`tests/tools/prop_lookup_bench.cpp`，直连 WT）显示**未命中的单属性查找仅 0.87 µs/call**，
-   标签扫描 0.13–0.19 µs/行 —— B-tree 查找本身远不足以解释 12–36 µs/行。
-2. **不是缓存容量/淘汰**：cache 256 MB → 1 GB → 2 GB（工作集 658 MB 可全驻留），
-   16.78 µs/行级别的结果毫无变化。
-3. **不是协程派发/游标建立开销**：实现过 `ProjectionExtract` 的顶点属性批量预取
-   （仿既有 `LoadEdgeProp` 写法，新增 `getVertexPropertyBatch` 贯穿 sync/async 接口），
-   **实测无改善**（1140 vs 1012 ms），已回退。
-
-**与 neo4j 的对照（同机同参数）**：`HAS_CREATOR` 全遍历 419 vs 59 ms（7×）、
-complex-9 核心 676 vs 65 ms（10×）；**2 跳本身已打平**（6.3 vs 5.7 ms）。
-
-**修法方向（未实施，需单独设计）**：先查清"物化一个顶点"在这条路径上到底做了什么
-（`ProjectionExtract` 的取值 + `VertexValue` 构造 + DataChunk 列写入），再决定是让
-**返回列绕过 `VertexValue` 物化**（只写标量列），还是收敛 `resolveVertexId`/列写入的每行开销。
-
-> **测量提醒**：本节所有"每行"数字都注明是否含 `LIMIT`——带小 `LIMIT` 的变体只处理几行，
-> 会把"物化成本"整段隐藏掉（我第一版就因此误判"物化免费"）。另外 `/proc/<pid>/stat`
-> 的 CPU 增量才是判断"服务端是否在算"的可靠口径，`ps` 的累计平均 PCU 会误导。
+**优化方向（未实施）**：把属性比较**下推到扫描/过滤层**（在取到属性值时就完成比较，
+不必构造 `Value` 再走表达式求值），预期直接针对那 +4.3 µs/行；其次是排序/投影的物化路径。
 
 ## 3. 未纳入对照的查询
 
@@ -533,7 +518,7 @@ python3 scripts/bench_ldbc_interactive.py \
 | # | 问题 | 证据 | 结论 |
 |---|---|---|---|
 | C1 | **长连接会被服务端断开，并会打挂官方 driver** | 跑到 `LdbcShortQuery2PersonPosts` 时客户端 `ServiceUnavailableException: Connection to the database failed` 并终止整个 run；同一时刻服务端有 `[bolt] read error: ... returned empty buffer` 与 `query cancelled mid-stream` | 即 [known-defects-todo §7](../query/known-defects-todo.md)；自写脚本靠"每查询新建连接"绕过，**官方 driver 不会绕**，是跑完整官方 benchmark 的前置条件 |
-| C2 | **顶点逐行物化 ≈ 12.9 µs/行（含回传则 36.7）；展开遍历另计 6.6 µs/行** | 全表 `RETURN m.id` 3,690 ms vs `count(m)` 124 ms（**30×**），且 `m.id` 与 `m.creationDate` 成本相同；complex-9 形状里展开占 777 ms、日期谓词 +332 ms、排序 +246 ms | 详见 §2.3.4；已否证三个假设：**"每属性一次 B-tree 查找"（微基准实测 miss 仅 0.87 µs/call）**、缓存容量（256MB→2GB 无变化）、协程派发/游标开销（批量预取无改善，已回退） |
+| C2 | **属性谓词求值 ~4.3 µs/行**（引擎侧口径；曾因仪器错误误判） | 朋友展开 `count` 552 ms → 加 `WHERE m.creationDate < $maxd` **1053 ms**（翻倍）；全表 `RETURN m.id`/`m.creationDate` 仅 45 ms（与 `count` 122 ms 同量级）；complex-9 原查询 1768 ms、官方 Q9 全形态 2688 ms | 详见 §2.3.4；已否证四个假设：每属性 B-tree 查找（微基准 miss 0.87 µs）、缓存容量（256MB→2GB）、协程派发（批量预取无改善已回退）、**顶点物化 13 µs/行（`list()` 的客户端构造成本，非引擎）** |
 | C3 | ~~客户端断开后服务端算子继续算~~ **已复核：取消机制正常** | 严格复测（持续负载 8 s 烧 7.75 s CPU → `kill -9` 客户端）：断开后**只再多算 0.28 s** 即停，随后 45 s 内累计仅 +0.09 s（间断采样） | 取消以**一个迭代为粒度**生效（最坏约 0.44 s），与 [bolt §10](../service/neo4j-bolt-protocol.md) 的设计一致。先前"断开后仍烧 9 分钟"是**误读 `ps` 的累计平均 CPU**所致，已更正 |
 
 ### D. 测量陷阱（含本轮我自己的失误）

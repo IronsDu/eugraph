@@ -33,6 +33,8 @@ except ImportError:  # pragma: no cover
 MAX_DATE = 1346112000000
 
 VARIANTS = {
+    "scan label + count (no property)": "MATCH (m:Message) RETURN count(m) AS n",
+    "project one property (whole table)": "MATCH (m:Message) RETURN m.creationDate AS cd",
     "scan label + property filter": "MATCH (m:Message) WHERE m.creationDate < $maxd RETURN count(m) AS n",
     "traverse HAS_CREATOR (all)": "MATCH (m:Message)-[:HAS_CREATOR]->(f:Person) RETURN count(m) AS n",
     "2-hop friends of person": "MATCH (r:Person {id:$pid})-[:KNOWS*1..2]-(f:Person) WHERE NOT f=r "
@@ -45,11 +47,17 @@ VARIANTS = {
 
 
 def measure(driver, database: str, query: str, params: dict, repeat: int) -> list[float]:
+    """Engine-side timing: consume() drains the stream WITHOUT building Record objects.
+
+    Using list(...) instead measures the Python driver's result construction, which for
+    ~3e5 rows costs ~10.2 s against the engine's 43 ms -- a 238x error that once produced
+    a bogus "vertex materialisation is the bottleneck" conclusion. Keep this as consume().
+    """
     times = []
     with driver.session(database=database) as session:
         for _ in range(repeat):
             start = time.perf_counter()
-            list(session.run(query, **params))
+            session.run(query, **params).consume()
             times.append((time.perf_counter() - start) * 1000)
     return times
 

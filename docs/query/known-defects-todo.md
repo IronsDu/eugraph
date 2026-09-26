@@ -152,42 +152,44 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
    "索引存在且点查命中"的校验，失败即报错退出；
 4. 重测 benchmark：任何 `MATCH (... {id: ...})` 类读数前，先证明目标标签的索引可用。
 
-## 9. 顶点逐行物化成本高（约 13 µs/行；回传结果再加到 37 µs/行）
+## 9. 属性谓词求值约 4.3 µs/行（并记录一次仪器错误）
 
-**现象**：全表返回任一顶点属性都很慢，且**与属性大小、命中率无关**（交替 3 轮取 min）：
-
-```
-MATCH (m:Message) RETURN count(m)            124 ms   0.43 µs/行
-MATCH (m:Message) RETURN m.id   LIMIT 100000  3690 ms  12.9 µs/行
-MATCH (m:Message) RETURN m.creationDate LIMIT 100000  3575 ms  12.5 µs/行
-（去掉 LIMIT、把 28 万行回传客户端：10.5 s / 36.7 µs/行）
-```
-
-complex-9 形状（451 个 2 跳朋友、116,958 条朋友 message）的成本结构：
+**引擎侧实测**（`session.run(q).consume()` 计时，3 轮取 min；官方参数 personId=32985348834013，
+451 个 2 跳朋友、116,958 条朋友 message）：
 
 ```
-仅 2 跳朋友                          8 ms
-＋HAS_CREATOR 展开 + count          777 ms   6.6 µs/行   ← 展开遍历本身
-＋creationDate < 过滤              1109 ms   +2.8 µs/行
-＋排序 + LIMIT 20（原查询）        1788 ms   +246 ms
+MATCH (m:Message) RETURN count(m)                          122.2 ms
+MATCH (m:Message) RETURN m.id                               45.8 ms
+MATCH (m:Message) RETURN m.creationDate                     45.0 ms
+朋友展开 + count                                            551.7 ms
+朋友展开 + creationDate < $maxd + count                    1053.4 ms   ← +4.3 µs/行
+complex-9 原查询（排序 + LIMIT 20）                         1767.6 ms
+官方 Q9 全形态（返回 5 列含 coalesce）                       2687.9 ms
 ```
 
-**已否证的三个假设（都实测过，避免重走）**：
-1. ~~"每属性一次 B-tree 查找"~~（一度写进本文件，**已否证**）：直连 WT 的微基准
-   （`tests/tools/prop_lookup_bench.cpp`）显示**未命中的单属性查找仅 0.87 µs/call**、
-   标签扫描 0.13–0.19 µs/行——B-tree 查找不足以解释 13–37 µs/行；
-2. 不是缓存/淘汰：cache 256MB → 1GB → 2GB（工作集 658MB 可全驻留），结果无变化；
-3. 不是协程派发/游标开销：实现过 `ProjectionExtract` 顶点属性批量预取
-   （新增 `getVertexPropertyBatch` 贯穿 sync/async），**实测无改善**，已回退。
+**结论**：逐行读属性本身**不慢**（全表投影 45 ms，与 `count` 同量级甚至更快）；
+热点在**属性谓词求值**——`WHERE m.creationDate < $maxd` 让同一形状从 552 ms 翻到 1053 ms。
+其后是排序/物化投影与多列返回。
 
-**影响**：LDBC complex-9 官方参数下约 1.1–1.8 s（neo4j 约 65 ms，10–27×）；
+**⚠️ 仪器错误（记录以免重犯）**：本缺陷最初写成"顶点逐行物化 13–37 µs/行"，依据是
+`list(session.run(...))` 的计时。那个数字**几乎全是客户端驱动的开销**——Python 驱动把
+286,744 行构造成 `Record` 要 10.2 s，而服务端只需 43 ms（相差 **238×**）。
+顶点/属性类查询必须用 `consume()` 或服务端自身计时，**不能用结果物化计时**。
+
+**已否证的假设（都实测）**：
+1. ~~每属性一次 B-tree 查找~~：直连 WT 微基准（`tests/tools/prop_lookup_bench.cpp`）显示
+   未命中查找 0.87 µs/call、标签扫描 0.13–0.19 µs/行；
+2. ~~缓存容量/淘汰~~：cache 256MB → 1GB → 2GB（工作集 658MB 可全驻留），结果无变化；
+3. ~~协程派发/游标建立~~：顶点属性批量预取（新增 `getVertexPropertyBatch`）实测无改善，已回退。
+
+**影响**：LDBC complex-9 官方参数下 1.77 s（官方 Q9 全形态 2.69 s），neo4j 同参数约 65 ms；
 官方 driver 4 线程下调度审计报 `TOO_MANY_LATE_OPERATIONS`。
 
 **待办**：
-1. 拆开"物化一个顶点"这条路径（`ProjectionExtract` 取值 + `VertexValue` 构造 +
-   DataChunk 列写入 + `resolveVertexId`），定位 13 µs/行 落在哪一段；
-2. 让**只返回属性的投影绕过 `VertexValue` 物化**（直接写标量列）——预期收益最大；
-3. 回传大结果集的 24 µs/行差额（序列化 + 列写入 + 网络）单独优化。
+1. **属性比较下推到扫描/过滤层**（取到属性值即完成比较，不必构造 `Value` 再走表达式求值）
+   ——直接针对那 +4.3 µs/行；
+2. 排序/投影的物化路径（complex-9 里 +714 ms）；
+3. 多列返回（官方 Q9 再 +920 ms）。
 
-**验证手段**：`scripts/profile_query_costs.py`、`scripts/profile_concurrency.py`；
-存储层单位成本用 `tests/tools/prop_lookup_bench.cpp`（直连 WT，绕开算子与协程层）。
+**验证手段**：`scripts/profile_query_costs.py`（**已改用 `consume()` 计时**）、
+`scripts/profile_concurrency.py`；存储层单位成本用 `tests/tools/prop_lookup_bench.cpp`。
