@@ -23,15 +23,22 @@ int main(int argc, char** argv) {
     SyncGraphDataStore store;
     if (!store.open(dir)) { std::printf("open failed: %s\n", dir.c_str()); return 1; }
 
-    // 找 Message 标签（行数 ≈ 286744）
-    LabelId msg = INVALID_LABEL_ID; size_t best = SIZE_MAX;
-    for (LabelId lid = 1; lid <= 24; ++lid) {
+    // 确定性定位 Message：行数 ≈ 286744 **且** prop=1 有命中（creationDate）
+    LabelId msg = INVALID_LABEL_ID;
+    for (LabelId lid = 1; lid <= 32; ++lid) {
+        std::vector<VertexId> probe; 
+        store.scanVerticesByLabel(INVALID_GRAPH_TXN, lid, [&](VertexId v) { if (probe.size() < 50) probe.push_back(v); return probe.size() < 50; });
+        if (probe.empty()) continue;
         size_t n = 0;
         store.scanVerticesByLabel(INVALID_GRAPH_TXN, lid, [&](VertexId) { ++n; return true; });
-        if (n > 100000 && (n > 286744 ? n - 286744 : 286744 - n) < best) { best = n > 286744 ? n - 286744 : 286744 - n; msg = lid; }
+        if (n < 100000) continue;
+        size_t hits = 0;
+        for (VertexId v : probe) if (store.getVertexProperty(INVALID_GRAPH_TXN, v, lid, 1).has_value()) ++hits;
+        std::printf("  candidate label=%u rows=%zu prop1_hits=%zu/%zu\n", lid, n, hits, probe.size());
+        if (hits > 0 && msg == INVALID_LABEL_ID) msg = lid;
     }
     if (msg == INVALID_LABEL_ID) { std::printf("Message label not found\n"); return 1; }
-    std::printf("label %u\n", msg);
+    std::printf("=> Message label = %u\n", msg);
 
     std::vector<VertexId> vids; vids.reserve(sample);
     size_t scanned = 0;
