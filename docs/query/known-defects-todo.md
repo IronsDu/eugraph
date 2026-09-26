@@ -117,7 +117,8 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
 `ServiceUnavailableException` 打断**——这是"跑完整官方 benchmark"的前置缺陷。
 
 **验证**：`TestConnectionLifetime`（4 个用例）在修复前的二进制上失败、修复后通过；
-4 并发 × 300 次与官方 driver（4 线程 / 200 操作）均完成，服务端零 read error。
+`scripts/repro_bolt_connection.py`（直接压单/多连接，基准脚本做不到）4 并发 × 300 次全过；
+官方 driver（4 线程 / 200 操作）完成且服务端零 read error。
 
 ## 8. `CREATE INDEX` 回填阶段 SIGSEGV，并留下空索引
 

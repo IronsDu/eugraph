@@ -360,7 +360,20 @@ tests/bolt/test_js_ws_driver.cjs                # JS 驱动 WebSocket 集成测�
 |--------|------|------|
 | C++ PackStream 单元测试 | 27 | 编解码往返（Null/Bool/Int/Float/String/Bytes/List/Dict/Struct） |
 | C++ Bolt 类型映射测试 | 26 | 标量/Vertex/Edge/Path/时间类型 × Param 双方向 |
-| Python 集成测试 | 22 | 连接、CRUD、全部类型往返、参数传递、显式事务提交/回滚 |
+| Python 集成测试 | 36 | 连接、CRUD、全部类型往返、参数传递、显式事务提交/回滚、并发 PULL、**长连接寿命**（`TestConnectionLifetime`） |
+
+### 长连接的验证手段
+
+`TestConnectionLifetime`（pytest）用**不依赖数据集**的查询覆盖读缓冲回卷；但单测只能经驱动间接
+验证，另有一个直接压长连接的脚本：
+
+```bash
+# 起 server 后（单独起，便于保留其日志），单连接/多连接连续执行，报第几次断开
+scripts/repro_bolt_connection.py --port 7688 --database default --queries 300 --threads 4
+```
+
+它存在的理由：本轮所有基准脚本都是"每查询新建连接"，**恰好绕过了**这类连接寿命缺陷；
+而官方 LDBC driver 不会重连，一次断开即整轮 run 失败。详见 §11。
 
 ## 已知缺陷
 
