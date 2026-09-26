@@ -96,12 +96,29 @@ stl_vector.h:1253: vector<int>::operator[]: Assertion '__n < this->size()' faile
 **教训**：跨时间比较性能前必须确认当前频率，否则会把功耗状态误判成代码回归
 （本次排查中就因此误判过一次）。性能结论一律用**同二进制交错 A/B**。
 
-## 7. 客户端长连接会被断开
+## 7. 客户端长连接会被断开 —— 已修复（2026-09-26）
 
-**现象**：单个 bolt 连接连续跑 30+ 次 complex-10（每次 0.4–3s）后，
-客户端报 `Failed to read from defunct connection`；**服务器未崩溃**（仍在监听、日志正常、内存充足）。
+**现象**：单个 bolt 连接连续执行若干次后，客户端报 `Failed to read from defunct connection`；
+**服务器未崩溃**（仍在监听、日志正常、内存充足）。服务端日志为
+`[bolt] read error: AsyncSocketException: ReadCallback::getReadBuffer() returned empty buffer`。
 
-**影响**：基准脚本需每轮新建连接，否则会把「连接断开」误判为「服务器崩溃 / 查询超时」。
+**根因**：`BoltConnection::getReadBuffer()` 只在读缓冲为空时重置，但 `processMessage()`
+消费完一条消息就返回，**半条消息的残留字节**让 `length()` 极少归零；而 `trimStart()`
+只推进数据指针、不回收前面的空间。偏移于是前进到 64 KiB 末尾，`tailroom()` 归零，
+folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次执行的字节数**：
+实测 `RETURN 1`（约 78 B/次）第 ~840 次断、`RETURN '<1.5 KB>'`（约 1560 B/次）第 ~41 次断
+（≈ 64 KiB ÷ 每次字节数）。
+
+**修法**：`getReadBuffer()` 在 `tailroom()` 低于阈值时**回卷**缓冲区（把未消费残留搬进
+新分配缓冲区）。设计与实测见 [service/neo4j-bolt-protocol.md §11](../service/neo4j-bolt-protocol.md)。
+
+**影响（修复前）**：基准脚本需每轮新建连接，否则会把「连接断开」误判为「服务器崩溃 / 查询超时」；
+官方 LDBC driver 不会为每条语句重连，因此跑到 60–100 次操作时**整个 run 被
+`ServiceUnavailableException` 打断**——这是"跑完整官方 benchmark"的前置缺陷。
+
+**验证**：`TestConnectionLifetime`（4 个用例）在修复前的二进制上失败、修复后通过；
+`scripts/repro_bolt_connection.py`（直接压单/多连接，基准脚本做不到）4 并发 × 300 次全过；
+官方 driver（4 线程 / 200 操作）完成且服务端零 read error。
 
 ## 8. `CREATE INDEX` 回填阶段 SIGSEGV，并留下空索引
 

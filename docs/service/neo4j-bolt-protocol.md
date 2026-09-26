@@ -303,11 +303,38 @@ RUN 只负责把查询编译成算子流水线并返回 `fields`；真正的结�
 - **谁来置位**：Bolt 会话把自己的连接存活标志（`BoltConnection::closed_`）作为取消标志传给 `executeCypher()`。socket 断开后，正在执行的查询在下一次检查点就会自行收敛。Thrift 路径目前传 `nullptr`（永不取消）。
 - **检查点全在算子侧，且只有一个原语**：`PhysicalOperator::cancellable(gen)`（`physical_operator_base.hpp`），凡是"按 chunk 消费上游"的地方包一层——存储来源（`store_.scanXxx()`，34 处）与算子来源（`child_->executeChunk()`，38 处）都要包；后者是必需的，因为**阻断型算子**（`Sort` / `Aggregate`，以及"先物化再吐 chunk"的存储包装）在物化期间不会回到上游，必须由消费它的上游算子（如 `CreateNodePhysicalOp`）在拿到 chunk 时检查并停止拉取。`expand` / `varlen_expand` 这类单行就能炸开整棵遍历的重算子再额外按输入行检查。精度是"最多多做一个 batch"；唯一例外是顶点索引扫描——存储层的 `scanVerticesByIndex*` / `scanVerticesByIndexId*` 在第一次 `next()` 内就把该索引值的匹配集收集完（同步索引 API 无可续游标），那期间取消要等收集结束。扫描算子已经不是例外：`AllNodeScanPhysicalOp` 与 `IndexScanValuesPhysicalOp` 现为流式（全图扫描走 `createAllVertexScanCursor`，多标签做 vid 归并去重，内存 O(label 数 × 批)），`scanAllVertices()` 也已换成游标式分批。
 - **收敛方式**：被取消的算子直接 `co_return`，生成器提前结束，父算子自然展开退出——不需要向上传播异常。
+- **实测收敛延迟**（2026-09-26）：持续负载下服务端累计烧 7.75 s CPU 时 `kill -9` 客户端，
+  断开后**只再多算 0.28 s** 即停；随后 45 s 内累计仅 +0.09 s。即取消以**一个迭代为粒度**生效
+  （最坏约 0.44 s，见上文精度说明）。测量方式：`/proc/<pid>/stat` 的 utime+stime 增量采样
+  ——注意不要用 `ps` 的累计平均 CPU 判断"是否还在算"，那会把历史平均误读成当前负载。
 - **事务语义**：取消**不等于**查询正常跑完。生成器提前结束和“真的取完”在协议层都表现为 `next()` 返回空，所以 `handlePull()` 会把“取消了”显式判定出来（`streamCancelled()`），走与客户端断开相同的分支：**回滚事务**、结束流、回 `FAILURE`，绝不提交一个客户端没看全的写事务。
 - **顺序红线：先拆流，再结束事务**（`endStream()` → `commitTran()` / `rollbackTran()`）。顶层生成器返回空**不代表**所有游标都已关闭：`LIMIT` 这类算子提前 `co_return` 时会把子生成器留在 `co_yield` 上挂着，活游标就在那些帧里，直到 `endStream()` 销毁算子树才析构。如果先 commit/rollback，WT session 与游标已被释放，随后 `~WtCursor` 再去 `cursor_->close()` 就是 use-after-free——实测直接 SIGSEGV（栈帧 `~WtCursor` ← `~VertexScanCursorImpl` ← `~StreamContext`）。`handlePull()` 因此在判定结束后先把 `txn` / `store` / `should_commit` 取出来存成局部量，再 `endStream()`，最后才结束事务。
 - **另一条红线：任何"丢掉流"的路径都必须结束它的事务**。`GraphTxnHandle` 一旦被丢弃就再也无法 commit/rollback，而 `txns_` 表只在 commit/rollback 时 erase——于是那个事务的 WT session、快照（读）和未提交修改（写）会**一直活到进程结束**。实测后果链：单个流泄漏 1 个 session → 约 185 次异常断连后 `open_session()` 开始失败（日志 `Failed to open session: error -31802`、`Failed to open transaction session`）→ 此时 `beginTran()` 返回 `INVALID_GRAPH_TXN`，而 `getSession(INVALID_GRAPH_TXN)` 会兜底到共享的 `defaultSession_`（autocommit），**写操作逐行提交、没有东西可以回滚**（实测该状态下 `SET` 的部分写入立刻可见）→ 最终 WT 在关游标时断言 `lock_success == 0` → `__wt_abort` → SIGABRT。
   因此 Bolt 侧所有拆流点统一走 `BoltSession::abandonStream(rollback_explicit)`：连接断开 / GOODBYE / RESET 传 `true`（连挂起的显式事务一起回滚），DISCARD 与新 RUN 传 `false`（显式事务要留给客户端 COMMIT）。它内部顺序同样是"先销毁算子树、再 `rollbackTranNow()`"。Thrift/RPC 侧用 `StreamAbandonRollback`（`eugraph_handler.cpp`）在生成器被提前销毁时做同一件事。仓库里已无"丢句柄不回滚"的路径。
 - **事务起不来必须显式失败**：`prepareStream()` 现在遇到 `beginTran()` 返回 `INVALID_GRAPH_TXN` 会写入 `ctx->error` 并终止，而不是让查询落到共享 session 上变成非事务的逐行写。
+
+### 11. 连接生命周期与读缓冲回卷
+
+单条 Bolt 连接必须能承受**任意次数**的消息往返——官方驱动（如 LDBC 的
+`neo4j-java-driver 4.4.3`）不会为每条语句重连，一次断开就等于整轮基准被打断。
+
+读缓冲的实现要点在 `BoltConnection::getReadBuffer()`：
+
+- **残留字节是常态，不是异常**：`processMessage()` 一旦把当前消息的字节消费完就返回，
+  一个**只收到一半的 chunk 头/数据**会留在缓冲区里等下一次读。因此 `length()` 很少归零。
+- **`trimStart()` 只推进数据指针，不回收前面的空间**：于是"仅在缓冲区为空时才重置"的写法
+  会让偏移一路前进到末尾，最终 `tailroom() == 0`，而 folly 在拿到零长缓冲时抛
+  `ReadCallback::getReadBuffer() returned empty buffer` 并**断开连接**。
+- **修法**：`tailroom()` 低于阈值（`kMinReadTailroom`）时**回卷**——先把未消费残留
+  （必要时 `coalesce()` 成连续段）搬进新分配的缓冲区，再交还给 folly。缓冲区大小
+  取 `kReadBufSize` 与 `残留 + kMinReadTailroom` 的较大者，因此残留很大时也不会退化。
+
+**为什么难发现**：耗尽时间只取决于"每次执行的字节数"，与查询语义无关。
+实测（64 KiB 缓冲）：`RETURN 1`（约 78 B/次）在第 **~840** 次断开，
+`RETURN '<1.5 KB 字面量>'`（约 1560 B/次）在第 **~41** 次断开——
+两者都约等于 `64 KiB ÷ 每次字节数`，这正是"永不回卷"的指纹。
+回归测试见 `tests/bolt/test_python_driver_integration.py::TestConnectionLifetime`
+（用一个约 1 KiB 的、不依赖数据集的查询连跑 300 次）。
 
 ## 文件清单
 
@@ -337,7 +364,20 @@ tests/bolt/test_js_ws_driver.cjs                # JS 驱动 WebSocket 集成测�
 |--------|------|------|
 | C++ PackStream 单元测试 | 27 | 编解码往返（Null/Bool/Int/Float/String/Bytes/List/Dict/Struct） |
 | C++ Bolt 类型映射测试 | 26 | 标量/Vertex/Edge/Path/时间类型 × Param 双方向 |
-| Python 集成测试 | 22 | 连接、CRUD、全部类型往返、参数传递、显式事务提交/回滚 |
+| Python 集成测试 | 36 | 连接、CRUD、全部类型往返、参数传递、显式事务提交/回滚、并发 PULL、**长连接寿命**（`TestConnectionLifetime`） |
+
+### 长连接的验证手段
+
+`TestConnectionLifetime`（pytest）用**不依赖数据集**的查询覆盖读缓冲回卷；但单测只能经驱动间接
+验证，另有一个直接压长连接的脚本：
+
+```bash
+# 起 server 后（单独起，便于保留其日志），单连接/多连接连续执行，报第几次断开
+scripts/repro_bolt_connection.py --port 7688 --database default --queries 300 --threads 4
+```
+
+它存在的理由：本轮所有基准脚本都是"每查询新建连接"，**恰好绕过了**这类连接寿命缺陷；
+而官方 LDBC driver 不会重连，一次断开即整轮 run 失败。详见 §11。
 
 ## 已知缺陷
 
@@ -346,6 +386,15 @@ tests/bolt/test_js_ws_driver.cjs                # JS 驱动 WebSocket 集成测�
 **严重程度**：低 | **影响范围**：长时间连接的会话
 
 `handleLogoff()` 返回 SUCCESS 但不释放任何资源（stream_ctx_、pending_txn_ 等），资源实际在 RESET 或 GOODBYE 时才释放。
+
+### 缺陷 2（已修复）：读缓冲不回卷导致长连接被断开
+
+**严重程度**：高（长连接场景致命）| **影响范围**：任何单连接上的长消息序列
+
+`getReadBuffer()` 仅在读缓冲为空时重置，而残留的半条消息让 `length()` 极少归零，
+于是偏移前进到 64 KiB 末尾后 folly 抛 `getReadBuffer() returned empty buffer` 并断连。
+表现为官方 LDBC driver 跑到 60–100 次操作时整个 run 被 `ServiceUnavailableException` 打断。
+修法与实测见 [§11 连接生命周期与读缓冲回卷](#11-连接生命周期与读缓冲回卷)。
 
 ### 低优先级
 

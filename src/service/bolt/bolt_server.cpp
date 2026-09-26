@@ -14,6 +14,13 @@ namespace eugraph {
 namespace service {
 namespace bolt {
 
+namespace {
+/// Read-buffer geometry. kReadBufSize is what a connection starts with; kMinReadTailroom
+/// is the point at which the consumed prefix is reclaimed (see getReadBuffer).
+constexpr size_t kReadBufSize = 65536;
+constexpr size_t kMinReadTailroom = 8192;
+} // namespace
+
 struct ListenerState {
     std::shared_ptr<folly::EventBase> evb;
     std::shared_ptr<folly::AsyncServerSocket> socket;
@@ -49,10 +56,31 @@ void BoltConnection::setBoltPort(uint16_t port) {
 }
 
 void BoltConnection::getReadBuffer(void** buf, size_t* len) {
-    // Allocate a new buffer for each read
-    constexpr size_t kBufSize = 65536;
     if (!read_buf_) {
-        read_buf_ = folly::IOBuf::create(kBufSize);
+        read_buf_ = folly::IOBuf::create(kReadBufSize);
+    }
+    // trimStart() only advances the data pointer; it never reclaims the space in front
+    // of it. Residual bytes are the norm here, not an exception: processMessage() returns
+    // as soon as the bytes of the current message are consumed, and a partially received
+    // chunk header/data stays behind for the next read. So length() rarely reaches 0,
+    // and a buffer that is only ever refilled "when empty" would march its offset to the
+    // end and then hand folly a zero-length buffer -- folly raises
+    // "getReadBuffer() returned empty buffer" and the connection is dropped.
+    //
+    // Reclaim the consumed prefix by moving whatever is still unconsumed into a fresh
+    // buffer, whenever the tail is too small to read into.
+    if (read_buf_->tailroom() < kMinReadTailroom) {
+        if (read_buf_->isChained()) {
+            read_buf_->coalesce();
+        }
+        const size_t pending = read_buf_->length();
+        auto moved = folly::IOBuf::create(std::max(kReadBufSize, pending + kMinReadTailroom));
+        if (pending > 0) {
+            // coalesce() above guarantees a single, contiguous segment.
+            std::memcpy(moved->writableData(), read_buf_->data(), pending);
+            moved->append(pending);
+        }
+        read_buf_ = std::move(moved);
     }
     *buf = read_buf_->writableData();
     *len = read_buf_->tailroom();

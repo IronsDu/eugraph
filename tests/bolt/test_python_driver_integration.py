@@ -660,3 +660,78 @@ class TestConcurrency:
                 list(pool.map(worker, range(8)))
         finally:
             driver.close()
+
+
+# ---------------------------------------------------------------------------
+# Long-lived connection lifetime
+# ---------------------------------------------------------------------------
+
+
+class TestConnectionLifetime:
+    """One Bolt connection must survive an unbounded number of executions.
+
+    Regression for the read buffer never reclaiming its consumed prefix: `trimStart()`
+    only advances the data pointer, and the buffer was refilled "when empty" -- but a
+    partially received chunk stays behind, so `length()` rarely reaches zero. The offset
+    then marched to the end of the buffer, `getReadBuffer()` handed folly a zero-length
+    buffer, and folly dropped the connection with
+    "ReadCallback::getReadBuffer() returned empty buffer".
+
+    The byte cost per execution decides when it bites: ~78 B/execution (``RETURN 1``)
+    exhausted the 64 KiB buffer around execution 840, and ~1560 B/execution (a ~1.5 KB
+    literal) around execution 41. The query below is deliberately dataset-independent so
+    the test also runs against an empty database.
+    """
+
+    # ~1 KiB of query text => comfortably over the per-execution byte cost that used to
+    # exhaust the buffer in a few dozen executions.
+    BIG_QUERY = "RETURN '" + ("x" * 1024) + "' AS payload"
+    EXECUTIONS = 300
+
+    def test_single_connection_survives_many_executions(self):
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session(database=TEST_DATABASE) as session:
+                for i in range(self.EXECUTIONS):
+                    records = list(session.run(self.BIG_QUERY))
+                    assert records[0]["payload"].startswith("xxx"), f"bad payload at execution {i}"
+        finally:
+            driver.close()
+
+    def test_single_connection_survives_many_small_executions(self):
+        """Same defect through the small-message path, which needs many more executions."""
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session(database=TEST_DATABASE) as session:
+                for _ in range(1000):
+                    assert list(session.run("RETURN 1 AS n"))[0]["n"] == 1
+        finally:
+            driver.close()
+
+    def test_connection_still_usable_after_long_run(self):
+        """The connection must not be left in a half-consumed state after the stress."""
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+        try:
+            with driver.session(database=TEST_DATABASE) as session:
+                for _ in range(self.EXECUTIONS):
+                    list(session.run(self.BIG_QUERY))
+                # A normal query on the same session/connection afterwards.
+                assert list(session.run("RETURN 42 AS n"))[0]["n"] == 42
+        finally:
+            driver.close()
+
+    def test_concurrent_connections_survive_many_executions(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        driver = neo4j.GraphDatabase.driver(get_bolt_url())
+
+        def worker(_):
+            with driver.session(database=TEST_DATABASE) as session:
+                for _ in range(100):
+                    list(session.run(self.BIG_QUERY))
+
+        try:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(worker, range(4)))
+        finally:
+            driver.close()
