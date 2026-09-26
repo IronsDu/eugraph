@@ -421,11 +421,19 @@ driver 侧改动（`ldbc_snb_interactive_v1_impls`，三处）：`Converter.conv
 | eugraph（`id_type=long`） | 13.18 op/s | PASSED |
 | neo4j（默认 string） | **80.65 op/s** | PASSED |
 
-**但 eugraph 的 run 在主阶段 116 个操作后卡死**：单个操作持续 **16 分钟以上**不返回
-（服务端持续消耗约 2 核 CPU，10 s 墙钟吃 19 s CPU），`Operations` 与吞吐冻结在 116。
-服务端日志显示最后处理到 `// IS7. Replies of a message`。这与 §2.3.2 记录的
-"并发下 short-5/7 阻塞"一致，是本轮**唯一尚未定位的并发缺陷**，也是跑完整官方基准的
-下一个拦路虎（此前被 id 类型问题掩盖了）。
+**⚠️ 上表数字不能直接引用**：该轮 run 在 116/120 操作后**不再返回**。经复核，
+**这不是引擎卡死**（已知-defects §11 已更正）：卡住时服务端与客户端**两侧都空闲**
+（服务端唯一 R 状态线程停在等任务队列、客户端 4 个操作线程全部 park），
+`handlePull` 诊断零新增；改 `operation_count` 后缺失数**按比例**（40→39、120→116），
+加 `ignore_scheduled_start_times=true` 无变化。
+
+根因是**测量配置**：`benchmark.properties` 的 `time_compression_ratio=0.001`
+（1000× 压缩时间）要求 40 个操作在 0.04 s 内全部发起，引擎达不到该节奏时部分操作错过窗口，
+driver 随后一直等它们完成而不退出。
+
+⇒ **要拿到可引用的官方口径对照，需先把 `time_compression_ratio` 设为 1.0
+（或按实测吞吐放大）再重跑。** 本节的 13.18 / 80.65 op/s 仅作"两引擎都能通过审计"的
+存在性证据，不作为性能结论。
 
 ## 3. 未纳入对照的查询
 
