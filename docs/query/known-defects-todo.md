@@ -152,40 +152,42 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
    "索引存在且点查命中"的校验，失败即报错退出；
 4. 重测 benchmark：任何 `MATCH (... {id: ...})` 类读数前，先证明目标标签的索引可用。
 
-## 9. 顶点属性读取：每属性一次 B-tree 查找（约 5 µs/属性/行）
+## 9. 顶点逐行物化成本高（约 13 µs/行；回传结果再加到 37 µs/行）
 
-**现象**：全表属性投影很慢，且与属性大小无关——
+**现象**：全表返回任一顶点属性都很慢，且**与属性大小、命中率无关**（交替 3 轮取 min）：
 
 ```
-MATCH (m:Message) RETURN count(m)           40 ms   0.14 µs/行
-MATCH (m:Message) RETURN m.id             4828 ms  16.84 µs/行
-MATCH (m:Message) RETURN m.creationDate   4812 ms  16.78 µs/行
+MATCH (m:Message) RETURN count(m)            124 ms   0.43 µs/行
+MATCH (m:Message) RETURN m.id   LIMIT 100000  3690 ms  12.9 µs/行
+MATCH (m:Message) RETURN m.creationDate LIMIT 100000  3575 ms  12.5 µs/行
+（去掉 LIMIT、把 28 万行回传客户端：10.5 s / 36.7 µs/行）
 ```
 
-小数据量下可分离出单笔成本：在 116,958 条朋友 message 上，"只做成员检查" 542 ms，
-"再加一个属性的过滤" 1140 ms —— **多取一个属性 = +5.1 µs/行**。
+complex-9 形状（451 个 2 跳朋友、116,958 条朋友 message）的成本结构：
 
-**根因**：顶点属性**不是按整行存放**，而是"每属性一行"——`putVertexProperties` 按
-`prop_id` 逐条 `tablePut`。因此读 k 个属性 = k 次以 `(vid, prop_id)` 为键的 B-tree 查找。
-`perf` 归因印证：时间几乎全在 WiredTiger 的 B-tree 路径（`__wt_row_search`、`__wt_row_leaf_key`、
-`__wt_value_return_buf`、`__wt_btcur_next`、`__wt_hazard_set_func`），我们自己的算子 < 1%。
+```
+仅 2 跳朋友                          8 ms
+＋HAS_CREATOR 展开 + count          777 ms   6.6 µs/行   ← 展开遍历本身
+＋creationDate < 过滤              1109 ms   +2.8 µs/行
+＋排序 + LIMIT 20（原查询）        1788 ms   +246 ms
+```
 
-**已否证的三个假设**（都实测过，避免重走）：
-1. 缓存容量/淘汰——cache 256MB → 1GB → **2GB**（工作集 658MB 可全驻留），16.78 µs/行**无变化**；
-2. 缺 `Message(creationDate)` 索引——过滤后仍有 41% 行存活，省不下这些行的属性读取；
-3. 协程派发/游标开销——已实现过 `ProjectionExtract` 的顶点属性批量预取（仿既有
-   `LoadEdgeProp` 写法，新增 `getVertexPropertyBatch` 贯穿 sync/async 接口），**实测无改善**
-   （1140 vs 1012 ms），已回退：批量只减少派发次数、**不减少 B-tree 查找次数**。
+**已否证的三个假设（都实测过，避免重走）**：
+1. ~~"每属性一次 B-tree 查找"~~（一度写进本文件，**已否证**）：直连 WT 的微基准
+   （`tests/tools/prop_lookup_bench.cpp`）显示**未命中的单属性查找仅 0.87 µs/call**、
+   标签扫描 0.13–0.19 µs/行——B-tree 查找不足以解释 13–37 µs/行；
+2. 不是缓存/淘汰：cache 256MB → 1GB → 2GB（工作集 658MB 可全驻留），结果无变化；
+3. 不是协程派发/游标开销：实现过 `ProjectionExtract` 顶点属性批量预取
+   （新增 `getVertexPropertyBatch` 贯穿 sync/async），**实测无改善**，已回退。
 
-**影响**：LDBC complex-9 官方参数下每行取约 3 个属性 → 约 1.1 s（neo4j 约 65 ms，10×）；
-官方 driver 在 4 线程下的调度审计因此报 `TOO_MANY_LATE_OPERATIONS`。
-详见 [benchmark §2.3.4](../benchmark/ldbc-snb-sf0.1-comparison.md)。
+**影响**：LDBC complex-9 官方参数下约 1.1–1.8 s（neo4j 约 65 ms，10–27×）；
+官方 driver 4 线程下调度审计报 `TOO_MANY_LATE_OPERATIONS`。
 
 **待办**：
-1. 查清 `__wt_row_search` 为何占比如此高（缓存命中下常规 1–3 µs，此处约 16 µs），
-   确认是否存在游标复用/键编码的额外开销；
-2. **顶点属性合并存储**（一个 value 存该顶点全部属性）——把 k 次查找降为 1 次，唯一能改变量级的改法；
-3. 或为高频属性（如 `creationDate`）建独立列组，降低单次查找的键比较与页开销。
+1. 拆开"物化一个顶点"这条路径（`ProjectionExtract` 取值 + `VertexValue` 构造 +
+   DataChunk 列写入 + `resolveVertexId`），定位 13 µs/行 落在哪一段；
+2. 让**只返回属性的投影绕过 `VertexValue` 物化**（直接写标量列）——预期收益最大；
+3. 回传大结果集的 24 µs/行差额（序列化 + 列写入 + 网络）单独优化。
 
-**验证手段**：`scripts/profile_query_costs.py`（分离扫描/遍历/投影成本，支持 `--compare-neo4j`）、
-`scripts/profile_concurrency.py`（并发扫描）。
+**验证手段**：`scripts/profile_query_costs.py`、`scripts/profile_concurrency.py`；
+存储层单位成本用 `tests/tools/prop_lookup_bench.cpp`（直连 WT，绕开算子与协程层）。
