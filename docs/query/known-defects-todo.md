@@ -151,3 +151,41 @@ folly 抛 `returned empty buffer` 并断连。耗尽时间只取决于**每次�
 3. loader 的 DDL 超时改为可配置（或对建索引用更长超时），并在加载结束做
    "索引存在且点查命中"的校验，失败即报错退出；
 4. 重测 benchmark：任何 `MATCH (... {id: ...})` 类读数前，先证明目标标签的索引可用。
+
+## 9. 顶点属性读取：每属性一次 B-tree 查找（约 5 µs/属性/行）
+
+**现象**：全表属性投影很慢，且与属性大小无关——
+
+```
+MATCH (m:Message) RETURN count(m)           40 ms   0.14 µs/行
+MATCH (m:Message) RETURN m.id             4828 ms  16.84 µs/行
+MATCH (m:Message) RETURN m.creationDate   4812 ms  16.78 µs/行
+```
+
+小数据量下可分离出单笔成本：在 116,958 条朋友 message 上，"只做成员检查" 542 ms，
+"再加一个属性的过滤" 1140 ms —— **多取一个属性 = +5.1 µs/行**。
+
+**根因**：顶点属性**不是按整行存放**，而是"每属性一行"——`putVertexProperties` 按
+`prop_id` 逐条 `tablePut`。因此读 k 个属性 = k 次以 `(vid, prop_id)` 为键的 B-tree 查找。
+`perf` 归因印证：时间几乎全在 WiredTiger 的 B-tree 路径（`__wt_row_search`、`__wt_row_leaf_key`、
+`__wt_value_return_buf`、`__wt_btcur_next`、`__wt_hazard_set_func`），我们自己的算子 < 1%。
+
+**已否证的三个假设**（都实测过，避免重走）：
+1. 缓存容量/淘汰——cache 256MB → 1GB → **2GB**（工作集 658MB 可全驻留），16.78 µs/行**无变化**；
+2. 缺 `Message(creationDate)` 索引——过滤后仍有 41% 行存活，省不下这些行的属性读取；
+3. 协程派发/游标开销——已实现过 `ProjectionExtract` 的顶点属性批量预取（仿既有
+   `LoadEdgeProp` 写法，新增 `getVertexPropertyBatch` 贯穿 sync/async 接口），**实测无改善**
+   （1140 vs 1012 ms），已回退：批量只减少派发次数、**不减少 B-tree 查找次数**。
+
+**影响**：LDBC complex-9 官方参数下每行取约 3 个属性 → 约 1.1 s（neo4j 约 65 ms，10×）；
+官方 driver 在 4 线程下的调度审计因此报 `TOO_MANY_LATE_OPERATIONS`。
+详见 [benchmark §2.3.4](../benchmark/ldbc-snb-sf0.1-comparison.md)。
+
+**待办**：
+1. 查清 `__wt_row_search` 为何占比如此高（缓存命中下常规 1–3 µs，此处约 16 µs），
+   确认是否存在游标复用/键编码的额外开销；
+2. **顶点属性合并存储**（一个 value 存该顶点全部属性）——把 k 次查找降为 1 次，唯一能改变量级的改法；
+3. 或为高频属性（如 `creationDate`）建独立列组，降低单次查找的键比较与页开销。
+
+**验证手段**：`scripts/profile_query_costs.py`（分离扫描/遍历/投影成本，支持 `--compare-neo4j`）、
+`scripts/profile_concurrency.py`（并发扫描）。
