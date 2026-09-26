@@ -82,8 +82,16 @@ void ExpressionEvaluator::evalBinaryOp(const binder::BoundBinaryOp& op, const Da
 
     // The operand columns are already evaluated; run the typed fast path on
     // their runtime representation when possible.
+    // The typed kernels index rows via the input's selection vector, so they may only
+    // be used when at least one operand is a real input column; a constant/broadcast
+    // operand is indexed at row 0 regardless. Requiring BOTH operands to be input
+    // columns was too strict and silently disabled the typed path for the most common
+    // predicate shape of all -- `column <op> literal`, where the literal arrives as a
+    // broadcast column from acquireTempConstant (`is_temp == true`). Every such
+    // comparison then fell back to building two `Value` objects per row.
+    const bool has_input_operand = !left.is_temp || !right.is_temp;
     const detail::RowIndex rows =
-        (!left.is_temp && !right.is_temp) ? chunkRows(input) : detail::RowIndex{nullptr, count};
+        has_input_operand ? chunkRows(input) : detail::RowIndex{nullptr, count};
     if (tryEvaluateTypedBinaryColumns(op, *left.column, *right.column, rows, result))
         return;
 
