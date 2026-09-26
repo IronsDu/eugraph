@@ -388,6 +388,45 @@ POC 做法（`--io-on-compute-pool`）：
 3. **线程数未必越多越好**：实测 2 线程 ops/s（3.30）**高于** 4 线程（2.84），
    在 L1 争用下"少而快"优于"多而挤"；官方 driver 若要跑满线程，需先降低每查询足迹。
 
+### 2.3.7 官方 driver 的正确跑法：id 必须按 `id_type` 传（此前多轮跑分是空转）
+
+**这是一个必须先修的测量前提**：官方 driver 的 `Converter.convertId()` 是
+`Long.toString(value)`——**所有 id 参数都以字符串发出**。而 eugraph 的 id 是 INTEGER，
+且不做隐式转换：
+
+```
+MATCH (person:Person {id: '32985348834013'}) ...   ->       0 行      4 ms   ← 官方 driver 的传法
+MATCH (person:Person {id: 32985348834013})  ...   ->  116958 行    526 ms
+```
+
+⇒ **此前用官方 driver 对 eugraph 的所有跑分（含记录过的"LdbcQuery9 均值 3.9 s"、
+`TOO_MANY_LATE_OPERATIONS`）都是在测空查询**，那些结论作废。
+
+**正确做法**：在 `benchmark.properties` 里按被测引擎声明 id 形式——
+
+```properties
+# eugraph：id 存为 INTEGER
+id_type=long
+# neo4j：导入时 id 是 STRING（保持上游默认即可，无需设置）
+```
+
+driver 侧改动（`ldbc_snb_interactive_v1_impls`，三处）：`Converter.convertId()` 改为可配置
+（新增 `IdType{STRING,LONG}`，默认 STRING＝上游行为）、`CypherQueryStore.setIdType()`、
+`CypherDb.onInit()` 读 `id_type` 属性。
+
+**修正后两引擎都能通过官方审计**（4 线程 / 120 操作 / warmup 20）：
+
+| 引擎 | 吞吐 | 审计 |
+|---|---:|---|
+| eugraph（`id_type=long`） | 13.18 op/s | PASSED |
+| neo4j（默认 string） | **80.65 op/s** | PASSED |
+
+**但 eugraph 的 run 在主阶段 116 个操作后卡死**：单个操作持续 **16 分钟以上**不返回
+（服务端持续消耗约 2 核 CPU，10 s 墙钟吃 19 s CPU），`Operations` 与吞吐冻结在 116。
+服务端日志显示最后处理到 `// IS7. Replies of a message`。这与 §2.3.2 记录的
+"并发下 short-5/7 阻塞"一致，是本轮**唯一尚未定位的并发缺陷**，也是跑完整官方基准的
+下一个拦路虎（此前被 id 类型问题掩盖了）。
+
 ## 3. 未纳入对照的查询
 
 | 查询 | 原因 |

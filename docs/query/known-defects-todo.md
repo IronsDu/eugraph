@@ -200,3 +200,32 @@ L1（并发查询工作集互挤）而 stall。**这是并发变慢的直接机�
 
 **验证手段**：`scripts/profile_concurrency.py`（并发扫描）、`tests/tools/prop_lookup_bench.cpp`
 （存储层单位成本）；计数器口径见 `docs/benchmark/ldbc-snb-sf0.1-comparison.md` §2.3.6。
+
+## 10. 官方 driver 跑 eugraph 时 id 必须按 `id_type` 传（否则全部空转）
+
+官方 LDBC driver 的 `Converter.convertId()` 是 `Long.toString(value)`，**所有 id 参数以字符串发出**；
+而 eugraph 的 id 是 INTEGER 且不做隐式转换：
+
+```
+MATCH (p:Person {id: '32985348834013'})  ->  0 行      4 ms
+MATCH (p:Person {id: 32985348834013})   ->  116958 行 526 ms
+```
+
+**影响**：此前用官方 driver 对 eugraph 的跑分全部是"空查询"（含曾记录的
+LdbcQuery9 3.9 s 与 `TOO_MANY_LATE_OPERATIONS`），结论作废。
+
+**修法**：在 `benchmark.properties` 声明 `id_type=long`（eugraph）/ 默认 string（neo4j）。
+driver 侧需三处小改（见 `docs/benchmark/ldbc-snb-sf0.1-comparison.md` §2.3.7）：
+`Converter.convertId()` 可配置、`CypherQueryStore.setIdType()`、`CypherDb.onInit()` 读属性。
+
+## 11. 官方 driver 并发跑到 ~116 操作后卡死（short-7 附近）
+
+**现象**：`id_type` 修正后，官方 driver（4 线程 / 120 操作）跑到第 116 个操作后
+**单个操作 16 分钟以上不返回**，`Operations`/吞吐冻结；服务端持续消耗约 2 核
+（10 s 墙钟吃 19 s CPU）。服务端日志最后处理到 `// IS7. Replies of a message`。
+
+**影响**：即使 id 口径修好，eugraph 仍**跑不完一次官方基准**——这是当前跑分的头号拦路虎。
+
+**待办**：对该卡死做栈级定位（客户端卡住时对服务端做 gdb/perf 采样，看四个 compute 线程
+各自卡在哪；重点看 short-7 的 `OPTIONAL MATCH` 与 `HAS_MEMBER`/`HAS_CREATOR` 组合，
+以及并发下的计划/流式状态）。
