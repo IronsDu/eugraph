@@ -291,6 +291,61 @@ Person 1,528 / Organisation 7,955 / **Company 1,575** / **University 6,380** /
 > `MATCH (... {id: ...})` 的对比，都必须先证明目标标签的索引真的可用
 > （`CALL db.indexes()` + 一次毫秒级点查），否则测的是全表扫描。
 
+### 2.3.4 C2 定位：并发下"迟到操作"的根因是**顶点属性物化成本**
+
+官方 driver 的审计失败（`TOO_MANY_LATE_OPERATIONS`，16 次 >1 s）不是连接问题（那是 C1，
+已修），也不是"并发放大 400×"。用官方参数逐层量测后，根因是一处**稳定的单位成本**：
+
+**结论**：**把顶点物化成 `VertexValue` 并解码其属性行，约 17 µs/行；读哪个属性几乎不影响。**
+
+| 变体（全图 286,744 个 Message） | 耗时 | 每次行 |
+|---|---:|---:|
+| `MATCH (m:Message) RETURN count(m)` | **42 ms** | 0.15 µs |
+| `MATCH (m:Message) RETURN m.id` | 4854 ms | 16.9 µs |
+| `MATCH (m:Message) RETURN m.creationDate` | 4723 ms | 16.5 µs |
+| `MATCH (m:Message) RETURN m.content` | 4994 ms | 17.4 µs |
+
+即：`count` 走计数路径、**完全不物化**；只要返回一次顶点属性，就为**每一行**付出
+约 17 µs（解码整行属性，与要取哪个属性无关）。二者相差 **110×**。
+
+**这如何变成 complex-9 的 1.1 s**（官方参数 personId=32985348834013，目标 451 个 2 跳朋友）：
+
+| 步骤 | 耗时 |
+|---|---:|
+| ④ 仅 2 跳朋友（451 人） | **8 ms** |
+| ③ 遍历朋友的 116,958 条 message + `creationDate` 过滤（不物化） | **667 ms** ← 主成本 |
+| ① ③ + 物化 `m.id` | 1036 ms |
+| ② ① + `ORDER BY` + `LIMIT 20`（= 原查询） | 1132 ms |
+
+**排序只占约 100 ms**；主成本是"为 12 万行解码属性以取得 `creationDate`"。
+与 neo4j 对比（同机、同参数、混合缓存状态，`scripts/profile_query_costs.py`）：
+`HAS_CREATOR` 全遍历 419 ms vs 59 ms（**7×**）、complex-9 核心 676 ms vs 65 ms（**10×**）；
+**2 跳本身已打平**（6.3 ms vs 5.7 ms）——差距集中在"逐行读属性"。
+
+`EXPLAIN` 印证计划形态（谓词**没有**下推到扫描）：
+
+```
+ProjectionExtract(specs=[m<pass>, __pe_..._<vprop-coalesce[...]>])   ← 逐行解码属性
+Filter
+LabelScan(variable=m, labels=Message)
+```
+
+**已排除的两个假设**（都实测否证，避免后来人重走）：
+
+1. **不是缓存容量**：把 WiredTiger cache 从 256 MB 提到 1024 MB，同一查询 996–1498 ms，
+   并未优于 256 MB 缓存预热后的 667 ms（数据目录 658 MB）。
+2. **不是缺少 `Message(creationDate)` 索引就必然慢**：我们确实只有各标签 `id` 唯一索引
+   （`CALL db.indexes()` 可验），但即使加上，过滤后仍有 116,958/286,744（41%）的行存活，
+   省不下那 12 万行的属性解码。
+
+**优化方向（待定方案，需对齐）**：
+① **属性按需解码 / 投影下推**——只解码实际用到的属性，而不是物化整行（直击那 17 µs）；
+② **让返回列跳过 `VertexValue` 物化**——`RETURN m.creationDate` 只需属性值，
+   不必构造顶点句柄；
+③ 在 ① 之上再考虑 `LIMIT` 下沉为 top-k（本条只值 ~100 ms，优先级最低）。
+
+复现：`scripts/profile_concurrency.py`（并发扫描）、`scripts/profile_query_costs.py`（成本拆解）。
+
 ## 3. 未纳入对照的查询
 
 | 查询 | 原因 |
@@ -481,7 +536,7 @@ python3 scripts/bench_ldbc_interactive.py \
 | # | 问题 | 证据 | 结论 |
 |---|---|---|---|
 | C1 | **长连接会被服务端断开，并会打挂官方 driver** | 跑到 `LdbcShortQuery2PersonPosts` 时客户端 `ServiceUnavailableException: Connection to the database failed` 并终止整个 run；同一时刻服务端有 `[bolt] read error: ... returned empty buffer` 与 `query cancelled mid-stream` | 即 [known-defects-todo §7](../query/known-defects-todo.md)；自写脚本靠"每查询新建连接"绕过，**官方 driver 不会绕**，是跑完整官方 benchmark 的前置条件 |
-| C2 | **并发下点查延迟显著抬高** | 4 并发 short-7：单线程 550 ms → 并发每个 3.2 s（≈6×） | 官方 driver 默认多线程，读到的延迟会高于单线程直测；对比两引擎时必须同线程数 |
+| C2 | **顶点属性物化 ~17 µs/行，是"迟到操作"的主因** | `RETURN m.id`/`m.creationDate`/`m.content` 全图均 ~4.7–5.0 s（16.5–17.4 µs/行），而 `count(m)` 仅 42 ms（0.15 µs/行，**110×**）；complex-9 官方参数下 667 ms 花在解码 12 万行属性上 | 详见 §2.3.4；已排除缓存容量（1 GB 无改善）与缺 `Message(creationDate)` 索引（41% 行存活）两个假设 |
 | C3 | ~~客户端断开后服务端算子继续算~~ **已复核：取消机制正常** | 严格复测（持续负载 8 s 烧 7.75 s CPU → `kill -9` 客户端）：断开后**只再多算 0.28 s** 即停，随后 45 s 内累计仅 +0.09 s（间断采样） | 取消以**一个迭代为粒度**生效（最坏约 0.44 s），与 [bolt §10](../service/neo4j-bolt-protocol.md) 的设计一致。先前"断开后仍烧 9 分钟"是**误读 `ps` 的累计平均 CPU**所致，已更正 |
 
 ### D. 测量陷阱（含本轮我自己的失误）
