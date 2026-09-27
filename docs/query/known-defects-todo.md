@@ -514,3 +514,68 @@ driver 侧需三处小改（见 `docs/benchmark/ldbc-snb-sf0.1-comparison.md` §
 > `/proc/<tid>/stat` 的**实时增量**与**线程状态**（R vs futex/epoll），不能只看累计 CPU
 > 或"客户端还在等"。本条第一次的误判正是因为抓到的两个 100% CPU 线程**确实是**在跑查询，
 > 但那是**正常但很慢**的工作，而不是死循环——两者需要靠"是否持续产生新工作"来区分。
+
+## 12. 优化器 `Memo::copyIn` 无限递归 → 栈溢出（**main 上既有**，2026-09-27 定证）
+
+**症状**：ASan 构建下跑完整 TCK，在**场景 142**
+（`CREATE (hf:School {name: 'Hilly Fields Technical College'})`）时服务端崩溃：
+
+```
+==53097==ERROR: AddressSanitizer: SEGV on unknown address (WRITE)
+    #0  eugraph::optimizer::Memo::copyIn(...)
+    #1  eugraph::optimizer::Memo::copyIn(...)
+    #2  ...  #36+ 全部是同一个 copyIn 返回地址
+[server] *** Check failure async stack trace: ***
+[run_tck] Failing due to server crash
+```
+
+同一返回地址在 `#1..#36+` 反复出现 ⇒ **单子节点分支的无限自递归**（栈写越界即 SEGV）。
+
+**与本次并发改动的归因（已用判据排除）**：把本分支改动的 4 个文件
+（`wt_store_base.{hpp,cpp}`、`wt_session.hpp`、`eval_binary_op.cpp`）全部回退到 `origin/main`
+版本，用**同一 ASan 构建 + 同一 TCK 命令**重跑：
+
+| 版本 | 崩溃场景 | ASan 报告 |
+|---|---|---|
+| 本分支（含并发修法 + 快路径） | 142 | `Memo::copyIn` 无限递归 |
+| `origin/main`（回退我的改动） | **142** | **同样 `Memo::copyIn` 无限递归** |
+
+⇒ **该崩溃是 main 上既有缺陷，与本轮改动无关**（位置在优化器，不涉及存储/session）。
+
+**复现**（本地稳定复现，非偶发）：
+
+```bash
+cmake -S . -B build/asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_TOOLCHAIN_FILE=$PWD/vcpkg/scripts/buildsystems/vcpkg.cmake \
+  -DVCPKG_INSTALLED_DIR=$PWD/build/release/vcpkg_installed \
+  -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+cmake --build build/asan --target eugraph-server tck_tests -j 8
+ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:log_path=/tmp/asan" \
+  python3 tests/tck/run_tck.py --server-bin ./build/asan/eugraph-server \
+    --tck-bin ./build/asan/tests/tck/tck_tests --port 7730 --data-dir /tmp/tckci \
+    --features third_party/openCypher/tck/features --features tests/tck/features-eugraph
+```
+
+单条 CREATE 在全新库上**不复现**（release 与 ASan 均正常）⇒ 触发依赖前 141 个场景累积的状态。
+
+**怀疑机制**（待证）：`getChildCount` 与 `copyIn` 对"子节点"的判定不一致——
+
+```cpp
+// getChildCount：BoundCreateNodeOp 会检查是否真的还有子节点
+} else if constexpr (std::is_same_v<T, std::unique_ptr<binder::BoundCreateNodeOp>>) {
+    return (val && val->child.has_value()) ? 1 : 0;
+} else {
+    return val ? 1 : 0;          // ← 泛型：只要指针非空就算 1 个
+}
+
+// copyIn 泛型分支：摘除子节点后把 child 重置为默认 BoundScanOp
+auto c = std::move(val->child);
+val->child = binder::BoundScanOp{};   // ← 若该类型重置后仍被判为"有 1 个子节点"，即无限自递归
+return c;
+```
+
+**下一步（定位精确触发链）**：用 `run_tck.py --keep-data` 保留 142 场景后的库，再逐个重放该场景
+序列二分出最小语句集；或在 `copyIn` 加"深度上限 + 打印每层算子类型"的断言，直接看是哪类算子
+构成无限链。
+
