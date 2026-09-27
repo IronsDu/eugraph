@@ -559,7 +559,31 @@ ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:log_path=/tmp/asan" \
 
 单条 CREATE 在全新库上**不复现**（release 与 ASan 均正常）⇒ 触发依赖前 141 个场景累积的状态。
 
-**怀疑机制**（待证）：`getChildCount` 与 `copyIn` 对"子节点"的判定不一致——
+**已定位（2026-09-27，用深度+指针去重诊断实测）**：**不是环，是一条超长无环链**。
+
+在 `Memo::copyIn` 入口加临时诊断（深度计数 + 按 variant 地址去重检测环 + 打印每层 variant 索引），
+并用 `ASAN` 版复现（注意 `run_tck.py` **不收集服务端 stdout**，须手动起服务端并把日志落文件，
+再用 `EUGRAPH_HOST/EUGRAPH_PORT` 直接跑 tck 二进制）：
+
+```
+[diag] no cycle but depth 600 -- long acyclic chain
+depth=30 idx=13 children=1 addr=0x...96d80
+depth=31 idx=13 children=1 addr=0x...98d80     ← 恰好 +0x2000
+depth=32 idx=12 children=1 addr=0x...9ad80     ← 恰好 +0x2000
+...（600+ 层，全部 idx=13 BoundCreateEdgeOp / idx=12 BoundCreateNodeOp）
+```
+
+* `variant_index=12` = `BoundCreateNodeOp`，`13` = `BoundCreateEdgeOp`（顺序见
+  `src/query/planner/bound_logical_plan_fwd.hpp`）；
+* 每层算子对象地址**恰好相差 0x2000（8 KB）** ⇒ 是一条**线性嵌套链**，600+ 层 ≈ 4.8 MB 计划对象；
+* 链长随**已执行的 CREATE 语句数**增长（前 141 个场景累积）⇒ 崩溃点在场景 142 只是"压垮骆驼的
+  最后一根稻草"，而**根因在计划构造侧：CREATE 算子被跨语句累积成一条无界链**；
+* `copyIn` 本身无环（指针去重已排除），它只是递归遍历这条病态链时爆栈。
+
+**因此修复方向**：查 CREATE 的计划构造（binder/physical planner）为何把多次 CREATE 串联成一条
+嵌套链，而不是每语句独立计划；`copyIn` 可另加深度上限做为防御。
+
+**参考（次相关）**：`getChildCount` 与 `copyIn` 对子节点的判定此前被怀疑不一致——
 
 ```cpp
 // getChildCount：BoundCreateNodeOp 会检查是否真的还有子节点
