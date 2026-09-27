@@ -637,3 +637,34 @@ return c;
 需查 CREATE 的计划构造与执行侧（注意：`Auto-creating label:` 日志来自 TCK harness
 `tests/tck/tck_steps.cpp` 而非服务端，排查时勿被其误导）。
 
+### 12.2 第二个崩溃：WT 检查点 SEGV（与 copyIn 递归是**两个独立缺陷**）
+
+同一 ASan 全量 TCK 的另一次运行崩溃在**完全不同的位置**：
+
+```
+==89166==ERROR: AddressSanitizer: SEGV on unknown address 0x03e800015c4e (READ memory access)
+SUMMARY: AddressSanitizer: SEGV
+  third_party/wiredtiger/src/checkpoint/checkpoint_ckptlist.c:41 in __wt_ckptlist_saved_free
+
+调用链（addr2line 解析）：
+  GraphManager::checkpointAll()          <- 检查点线程
+    __session_checkpoint
+      __wt_conn_btree_apply -> __conn_btree_apply_internal
+        __wt_checkpoint_get_handles -> __checkpoint_lock_dirty_tree -> __wt_ckptlist_saved_free
+```
+
+**与 §12 的 `Memo::copyIn` 递归爆栈是两个独立缺陷**（一个在优化器规划期，一个在检查点线程；
+一个表现为栈溢出，一个是 WT 内部野指针读取）。
+
+**可疑触发条件**：TCK 每个场景都 `createGraph`/`dropGraph`（**高频 DDL churn**），同时
+`CreateNode` 在**执行期自动创建标签**（日志可见 `[CreateNode] Phase 0: auto-creating labels`、
+`createLabel ... already exists`）——DDL 与检查点/元数据表操作并发，疑似**表被 drop 后
+检查点仍持有其句柄/ckptlist**（use-after-free / 野指针），需在 DDL 与 checkpoint 的同步上查。
+
+**判定要点**：本次运行的二进制是 **main 内容**的 4 个文件（我当时为归因而回退）+ planDepth 诊断，
+故该崩溃在 main 内容上即可复现，与并发 session 改动无直接关系。
+
+**复现**：与 §12 相同（ASan 全量 TCK），但崩溃点不固定（本次在场景 116，前一次在 142），
+符合"两个缺陷 + 时序敏感"的表现；`ASAN_OPTIONS` 不要设 `log_path`，报告会落到服务端 stderr，
+便于直接取原始错误。
+
