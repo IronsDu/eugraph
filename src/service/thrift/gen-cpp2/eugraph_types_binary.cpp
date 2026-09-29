@@ -43,6 +43,16 @@ template uint32_t EdgeLabelInfo::write<>(apache::thrift::BinaryProtocolWriter*) 
 template uint32_t EdgeLabelInfo::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
 template uint32_t EdgeLabelInfo::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
 
+template void PkKey::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t PkKey::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t PkKey::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t PkKey::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+
+template void PkRef::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t PkRef::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t PkRef::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t PkRef::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+
 template void VertexRecord::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
 template uint32_t VertexRecord::write<>(apache::thrift::BinaryProtocolWriter*) const;
 template uint32_t VertexRecord::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
@@ -57,6 +67,11 @@ template void BatchInsertVerticesResult::readNoXfer<>(apache::thrift::BinaryProt
 template uint32_t BatchInsertVerticesResult::write<>(apache::thrift::BinaryProtocolWriter*) const;
 template uint32_t BatchInsertVerticesResult::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
 template uint32_t BatchInsertVerticesResult::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+
+template void BatchInsertEdgesResult::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t BatchInsertEdgesResult::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t BatchInsertEdgesResult::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t BatchInsertEdgesResult::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
 
 template void ResultValue::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
 template uint32_t ResultValue::write<>(apache::thrift::BinaryProtocolWriter*) const;

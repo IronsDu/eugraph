@@ -17,7 +17,7 @@ typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apac
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::integral, bool*>> EuGraphService_dropGraph_presult;
 typedef apache::thrift::ThriftPresult<false> EuGraphService_listGraphs_pargs;
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::GraphInfo>*>> EuGraphService_listGraphs_presult;
-typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apache::thrift::type_class::string, ::std::string*>, apache::thrift::FieldData<2, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::PropertyDefThrift>*>, apache::thrift::FieldData<3, ::apache::thrift::type_class::string, ::std::string*>> EuGraphService_createLabel_pargs;
+typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apache::thrift::type_class::string, ::std::string*>, apache::thrift::FieldData<2, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::PropertyDefThrift>*>, apache::thrift::FieldData<3, ::apache::thrift::type_class::string, ::std::string*>, apache::thrift::FieldData<4, ::apache::thrift::type_class::list<::apache::thrift::type_class::string>, ::std::vector<::std::string>*>, apache::thrift::FieldData<5, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::PropertyDefThrift>*>> EuGraphService_createLabel_pargs;
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::structure, ::eugraph::thrift_service::LabelInfo*>> EuGraphService_createLabel_presult;
 typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apache::thrift::type_class::string, ::std::string*>> EuGraphService_listLabels_pargs;
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::LabelInfo>*>> EuGraphService_listLabels_presult;
@@ -33,7 +33,7 @@ typedef apache::thrift::ThriftPResultStream<
 typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apache::thrift::type_class::string, ::std::string*>, apache::thrift::FieldData<2, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::VertexRecord>*>, apache::thrift::FieldData<3, ::apache::thrift::type_class::string, ::std::string*>> EuGraphService_batchInsertVertices_pargs;
 typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::structure, ::eugraph::thrift_service::BatchInsertVerticesResult*>> EuGraphService_batchInsertVertices_presult;
 typedef apache::thrift::ThriftPresult<false, apache::thrift::FieldData<1, ::apache::thrift::type_class::string, ::std::string*>, apache::thrift::FieldData<2, ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>, ::std::vector<::eugraph::thrift_service::EdgeRecord>*>, apache::thrift::FieldData<3, ::apache::thrift::type_class::string, ::std::string*>> EuGraphService_batchInsertEdges_pargs;
-typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::integral, ::std::int32_t*>> EuGraphService_batchInsertEdges_presult;
+typedef apache::thrift::ThriftPresult<true, apache::thrift::FieldData<0, ::apache::thrift::type_class::structure, ::eugraph::thrift_service::BatchInsertEdgesResult*>> EuGraphService_batchInsertEdges_presult;
 template <typename ProtocolIn_, typename ProtocolOut_>
 void EuGraphServiceAsyncProcessor::setUpAndProcess_createGraph(apache::thrift::ResponseChannelRequest::UniquePtr req, apache::thrift::SerializedCompressedRequest&& serializedRequest, apache::thrift::Cpp2RequestContext* ctx, folly::EventBase* eb, [[maybe_unused]] apache::thrift::concurrency::ThreadManager* tm) {
   if (!setUpRequestProcessing(req, ctx, eb, tm, apache::thrift::RpcKind::SINGLE_REQUEST_SINGLE_RESPONSE, iface_)) {
@@ -386,11 +386,15 @@ void EuGraphServiceAsyncProcessor::executeRequest_createLabel(apache::thrift::Se
     std::unique_ptr<::std::string> uarg_name = std::make_unique<::std::string>();
     std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> uarg_properties = std::make_unique<::std::vector<::eugraph::thrift_service::PropertyDefThrift>>();
     std::unique_ptr<::std::string> uarg_graph_name = std::make_unique<::std::string>();
+    std::unique_ptr<::std::vector<::std::string>> uarg_pk_props = std::make_unique<::std::vector<::std::string>>();
+    std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> uarg_merge_properties = std::make_unique<::std::vector<::eugraph::thrift_service::PropertyDefThrift>>();
     EuGraphService_createLabel_pargs pargs() {
       EuGraphService_createLabel_pargs args;
       args.get<0>().value = uarg_name.get();
       args.get<1>().value = uarg_properties.get();
       args.get<2>().value = uarg_graph_name.get();
+      args.get<3>().value = uarg_pk_props.get();
+      args.get<4>().value = uarg_merge_properties.get();
       return args;
     }
 
@@ -398,7 +402,9 @@ void EuGraphServiceAsyncProcessor::executeRequest_createLabel(apache::thrift::Se
       return std::tie(
         std::as_const(*uarg_name),
         std::as_const(*uarg_properties),
-        std::as_const(*uarg_graph_name)
+        std::as_const(*uarg_graph_name),
+        std::as_const(*uarg_pk_props),
+        std::as_const(*uarg_merge_properties)
       );
     }
   } args;
@@ -442,7 +448,7 @@ void EuGraphServiceAsyncProcessor::executeRequest_createLabel(apache::thrift::Se
   const auto makeExecuteHandler = [&] {
     return [ifacePtr = iface_](auto&& cb, ArgsState args) mutable {
       (void)args;
-      ifacePtr->async_tm_createLabel(std::move(cb), std::move(args.uarg_name), std::move(args.uarg_properties), std::move(args.uarg_graph_name));
+      ifacePtr->async_tm_createLabel(std::move(cb), std::move(args.uarg_name), std::move(args.uarg_properties), std::move(args.uarg_graph_name), std::move(args.uarg_pk_props), std::move(args.uarg_merge_properties));
     };
   };
 #if FOLLY_HAS_COROUTINES
@@ -1125,7 +1131,7 @@ void EuGraphServiceAsyncProcessor::executeRequest_batchInsertEdges(apache::thrif
   }
   auto requestPileNotification = apache::thrift::detail::ServerRequestHelper::moveRequestPileNotification(serverRequest);
   auto concurrencyControllerNotification = apache::thrift::detail::ServerRequestHelper::moveConcurrencyControllerNotification(serverRequest);
-  auto callback = apache::thrift::HandlerCallbackPtr<::std::int32_t>::make(
+  auto callback = apache::thrift::HandlerCallbackPtr<std::unique_ptr<::eugraph::thrift_service::BatchInsertEdgesResult>>::make(
     apache::thrift::detail::ServerRequestHelper::request(std::move(serverRequest))
     , std::move(ctxStack)
     , this->getServiceName()
@@ -1166,10 +1172,10 @@ void EuGraphServiceAsyncProcessor::executeRequest_batchInsertEdges(apache::thrif
 }
 
 template <class ProtocolIn_, class ProtocolOut_>
-apache::thrift::SerializedResponse EuGraphServiceAsyncProcessor::return_batchInsertEdges(apache::thrift::ContextStack* ctx, ::std::int32_t const& _return) {
+apache::thrift::SerializedResponse EuGraphServiceAsyncProcessor::return_batchInsertEdges(apache::thrift::ContextStack* ctx, ::eugraph::thrift_service::BatchInsertEdgesResult const& _return) {
   ProtocolOut_ prot;
   ::eugraph::thrift_service::EuGraphService_batchInsertEdges_presult result;
-  result.get<0>().value = const_cast<::std::int32_t*>(&_return);
+  result.get<0>().value = const_cast<::eugraph::thrift_service::BatchInsertEdgesResult*>(&_return);
   result.setIsSet(0, true);
   return serializeResponse("batchInsertEdges", &prot, ctx, result);
 }

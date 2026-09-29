@@ -44,8 +44,13 @@ public:
     std::vector<GraphEntry> listGraphs();
 
     // DDL
+    /// pk_props = 主键属性名（有序）；空 = 无主键。
+    /// merge_properties 非空时对已存在的标签做**增量加属性**（同名属性跳过、类型冲突报错）。
+    /// 对应 neo4j-admin import 的语义：同名标签可来自多个文件，属性取并集。
     folly::coro::Task<LabelDef> createLabel(const std::string& name, const std::vector<PropertyDef>& properties,
-                                            const std::string& graph_name);
+                                            const std::string& graph_name,
+                                            const std::vector<std::string>& pk_props = {},
+                                            const std::vector<PropertyDef>& merge_properties = {});
 
     folly::coro::Task<std::vector<LabelDef>> listLabels(const std::string& graph_name);
 
@@ -68,26 +73,47 @@ public:
     /// Batch insert vertices. entries[i].props corresponds to primary label
     /// property positions; entries[i].extra_labels are added as pure labels
     /// (empty property set). The primary label is the batch label_name.
+    /// 端点主键值（有序，顺序与标签的主键声明一致）
+    using PkValues = std::vector<PropertyValue>;
+
     struct BatchVertexEntry {
         VertexId vid;
         std::vector<PropertyValue> props;
         std::vector<std::string> extra_labels;
+        /// 该顶点的主键；空 = 无主键（不可被边引用）
+        PkValues pk;
     };
 
-    folly::coro::Task<std::vector<VertexId>> batchInsertVertices(const std::string& label_name,
-                                                                 std::vector<BatchVertexEntry> entries,
-                                                                 const std::string& graph_name);
+    /// 边端点引用：目标顶点标签 + 主键值。VertexId 不出现在 RPC 协议里。
+    struct BatchEdgeEndpoint {
+        std::string label;
+        PkValues pk;
+        bool valid() const {
+            return !label.empty() && !pk.empty();
+        }
+    };
+
+    struct BatchInsertVerticesOutcome {
+        std::vector<VertexId> vertex_ids; ///< 实际写入的顶点 id（与写入顺序一致）
+        int32_t duplicate_pk = 0;         ///< 因主键已存在/批内重复而跳过的记录数（first-wins）
+    };
+
+    folly::coro::Task<BatchInsertVerticesOutcome> batchInsertVertices(const std::string& label_name,
+                                                                      std::vector<BatchVertexEntry> entries,
+                                                                      const std::string& graph_name);
 
     struct BatchEdgeEntry {
         EdgeId eid;
-        VertexId src_id;
-        VertexId dst_id;
+        BatchEdgeEndpoint src;
+        BatchEdgeEndpoint dst;
         uint64_t seq;
         std::vector<PropertyValue> props;
     };
 
-    folly::coro::Task<int32_t> batchInsertEdges(const std::string& edge_label_name, std::vector<BatchEdgeEntry> entries,
-                                                const std::string& graph_name);
+    /// 返回 {inserted, skipped_unresolved}：端点解析不到的边被跳过并计数。
+    folly::coro::Task<std::pair<int32_t, int32_t>> batchInsertEdges(const std::string& edge_label_name,
+                                                                    std::vector<BatchEdgeEntry> entries,
+                                                                    const std::string& graph_name);
 
 private:
     GraphManager& gm_;

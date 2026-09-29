@@ -1,5 +1,10 @@
 #include "service/graph_service.hpp"
 
+#include "storage/kv/index_key_codec.hpp"
+
+#include <unordered_map>
+#include <unordered_set>
+
 #include "common/types/query_error.hpp"
 #include "query/function/function_registry.hpp"
 #include "query/physical_plan/physical_operator_base.hpp"
@@ -13,6 +18,43 @@
 
 namespace eugraph {
 namespace service {
+
+namespace {
+
+/// 找出覆盖 label 全部主键属性、且 unique 的唯一索引。
+/// 顺序必须与 pk_prop_ids 一致（顺序错了等值点查匹配不上）。
+std::optional<uint32_t> findPrimaryIndexId(const LabelDef& def) {
+    if (def.pk_prop_ids.empty())
+        return std::nullopt;
+    for (const auto& idx : def.indexes) {
+        if (!idx.unique || idx.index_id == 0)
+            continue;
+        if (idx.accessors.size() != def.pk_prop_ids.size())
+            continue;
+        bool same = true;
+        for (size_t i = 0; i < def.pk_prop_ids.size(); ++i) {
+            const auto& acc = idx.accessors[i];
+            if (acc.is_strong)
+                continue; // 主键索引用弱 accessor（按属性名在标签内解析）
+            uint16_t pid = UINT16_MAX;
+            for (const auto& pd : def.properties) {
+                if (pd.name == acc.property_name) {
+                    pid = pd.id;
+                    break;
+                }
+            }
+            if (pid != def.pk_prop_ids[i]) {
+                same = false;
+                break;
+            }
+        }
+        if (same)
+            return idx.index_id;
+    }
+    return std::nullopt;
+}
+
+} // namespace
 namespace {
 
 std::string catalogTypeName(const binder::BoundType& type) {
@@ -189,21 +231,44 @@ std::vector<GraphEntry> GraphService::listGraphs() {
 
 folly::coro::Task<LabelDef> GraphService::createLabel(const std::string& name,
                                                       const std::vector<PropertyDef>& properties,
-                                                      const std::string& graph_name) {
+                                                      const std::string& graph_name,
+                                                      const std::vector<std::string>& pk_props,
+                                                      const std::vector<PropertyDef>& merge_properties) {
     auto* inst = resolveGraph(graph_name);
-    auto label_id = co_await inst->async_meta->createLabel(name, properties);
-    if (label_id == INVALID_LABEL_ID) {
-        LabelDef def;
-        def.id = INVALID_LABEL_ID;
-        def.name = name;
-        co_return def;
+
+    if (!merge_properties.empty()) {
+        std::vector<std::pair<std::string, PropertyType>> defs;
+        defs.reserve(merge_properties.size());
+        for (const auto& pd : merge_properties)
+            defs.emplace_back(pd.name, pd.type);
+        if (!co_await inst->async_meta->addVertexLabelProperties(name, defs)) {
+            throw std::runtime_error("Label not found: " + name);
+        }
+        // 属性增加后重新取一次权威定义
+        auto labels = co_await inst->async_meta->listLabels();
+        for (const auto& l : labels) {
+            if (l.name == name)
+                co_return l;
+        }
+        throw std::runtime_error("Label not found after merge: " + name);
     }
+
+    // createLabel 幂等：已存在且声明一致则复用；不一致抛异常（由 handler 转成 RPC 错误）
+    auto label_id = co_await inst->async_meta->createLabel(name, properties, pk_props);
     co_await inst->async_data->createLabel(label_id);
 
     LabelDef def;
     def.id = label_id;
     def.name = name;
     def.properties = properties;
+    for (const auto& pk_name : pk_props) {
+        for (const auto& pd : properties) {
+            if (pd.name == pk_name) {
+                def.pk_prop_ids.push_back(pd.id);
+                break;
+            }
+        }
+    }
     co_return def;
 }
 
@@ -294,9 +359,9 @@ GraphService::executeCypher(const std::string& query, const std::unordered_map<s
     co_return result;
 }
 
-folly::coro::Task<std::vector<VertexId>> GraphService::batchInsertVertices(const std::string& label_name,
-                                                                           std::vector<BatchVertexEntry> entries,
-                                                                           const std::string& graph_name) {
+folly::coro::Task<GraphService::BatchInsertVerticesOutcome>
+GraphService::batchInsertVertices(const std::string& label_name, std::vector<BatchVertexEntry> entries,
+                                  const std::string& graph_name) {
     auto* inst = resolveGraph(graph_name);
 
     auto label_id_opt = co_await inst->async_meta->getLabelId(label_name);
@@ -305,20 +370,63 @@ folly::coro::Task<std::vector<VertexId>> GraphService::batchInsertVertices(const
     }
     LabelId label_id = *label_id_opt;
 
-    auto count = entries.size();
+    // 索引定义随标签定义一起取（主键索引查找与批量写入维护都要用）
+    std::unordered_map<LabelId, LabelDef> label_defs;
+    for (const auto& l : co_await inst->async_meta->listLabels())
+        label_defs.emplace(l.id, l);
+
+    // 主键唯一索引：声明了主键却没建索引属于配置错误，直接报错
+    auto pk_index_it = label_defs.find(label_id);
+    std::optional<uint32_t> pk_index_id;
+    if (pk_index_it != label_defs.end() && !pk_index_it->second.pk_prop_ids.empty()) {
+        pk_index_id = findPrimaryIndexId(pk_index_it->second);
+        if (!pk_index_id.has_value()) {
+            throw std::runtime_error("Label '" + label_name +
+                                     "' declares a primary key but has no matching unique index");
+        }
+    }
+
+    // first-wins 预检：批内重复 + 已存在的主键值都跳过（不写顶点、不写索引条目）
+    std::vector<size_t> keep;
+    keep.reserve(entries.size());
+    int32_t duplicate_pk = 0;
+    std::unordered_set<std::string> seen_keys; // 批内已见主键（编码后，PropertyValue 通用）
+    for (size_t i = 0; i < entries.size(); i++) {
+        const auto& pk = entries[i].pk;
+        if (pk.empty()) {
+            keep.push_back(i);
+            continue;
+        }
+        auto encoded = IndexKeyCodec::encodeSortableValues(pk);
+        if (!seen_keys.insert(encoded).second) {
+            ++duplicate_pk;
+            continue;
+        }
+        if (pk_index_id.has_value()) {
+            auto existing = co_await inst->async_data->lookupVertexByPrimaryKey(*pk_index_id, pk);
+            if (existing.has_value()) {
+                ++duplicate_pk;
+                continue;
+            }
+        }
+        keep.push_back(i);
+    }
+
+    auto count = keep.size();
     VertexId start_vid = co_await inst->async_meta->nextVertexIdRange(count);
 
     std::vector<IAsyncGraphDataStore::BatchVertexEntry> batch_entries;
     batch_entries.reserve(count);
-    for (size_t i = 0; i < count; i++) {
+    for (size_t n = 0; n < count; n++) {
+        const auto& src = entries[keep[n]];
         IAsyncGraphDataStore::BatchVertexEntry entry;
-        entry.vid = start_vid + i;
+        entry.vid = start_vid + n;
         entry.label_props.emplace_back(label_id, Properties{});
         auto& props = entry.label_props.back().second;
-        for (auto& pv : entries[i].props)
-            props.push_back(std::optional<PropertyValue>(std::move(pv)));
+        for (const auto& pv : src.props)
+            props.push_back(std::optional<PropertyValue>(pv));
 
-        for (const auto& extra_label : entries[i].extra_labels) {
+        for (const auto& extra_label : src.extra_labels) {
             if (extra_label == label_name)
                 continue;
             auto extra_id_opt = co_await inst->async_meta->getLabelId(extra_label);
@@ -330,18 +438,19 @@ folly::coro::Task<std::vector<VertexId>> GraphService::batchInsertVertices(const
         batch_entries.push_back(std::move(entry));
     }
 
-    co_await inst->async_data->batchInsertVertices(std::move(batch_entries));
+    co_await inst->async_data->batchInsertVertices(std::move(batch_entries), label_defs);
 
-    std::vector<VertexId> result;
-    result.reserve(count);
-    for (size_t i = 0; i < count; i++)
-        result.push_back(start_vid + i);
-    co_return result;
+    BatchInsertVerticesOutcome outcome;
+    outcome.duplicate_pk = duplicate_pk;
+    outcome.vertex_ids.reserve(count);
+    for (size_t n = 0; n < count; n++)
+        outcome.vertex_ids.push_back(start_vid + static_cast<VertexId>(n));
+    co_return outcome;
 }
 
-folly::coro::Task<int32_t> GraphService::batchInsertEdges(const std::string& edge_label_name,
-                                                          std::vector<BatchEdgeEntry> entries,
-                                                          const std::string& graph_name) {
+folly::coro::Task<std::pair<int32_t, int32_t>> GraphService::batchInsertEdges(const std::string& edge_label_name,
+                                                                              std::vector<BatchEdgeEntry> entries,
+                                                                              const std::string& graph_name) {
     auto* inst = resolveGraph(graph_name);
 
     auto elabel_id_opt = co_await inst->async_meta->getEdgeLabelId(edge_label_name);
@@ -350,25 +459,112 @@ folly::coro::Task<int32_t> GraphService::batchInsertEdges(const std::string& edg
     }
     EdgeLabelId elabel_id = *elabel_id_opt;
 
-    auto count = entries.size();
-    EdgeId start_eid = co_await inst->async_meta->nextEdgeIdRange(count);
+    // 主键 → 索引：按「主键属性名」反查标签，支持 hint 标签未命中时的回退
+    std::unordered_map<LabelId, LabelDef> label_defs;
+    std::unordered_map<std::string, uint32_t> pk_index_by_label;
+    std::unordered_map<std::string, std::vector<std::string>> pk_names_by_label;
+    std::unordered_map<std::string, std::vector<LabelId>> labels_by_pk_name;
+    for (const auto& l : co_await inst->async_meta->listLabels()) {
+        label_defs.emplace(l.id, l);
+        if (l.pk_prop_ids.empty())
+            continue;
+        std::vector<std::string> names;
+        for (auto pid : l.pk_prop_ids) {
+            if (pid < l.properties.size()) {
+                names.push_back(l.properties[pid].name);
+                labels_by_pk_name[l.properties[pid].name].push_back(l.id);
+            }
+        }
+        if (names.empty())
+            continue;
+        auto idx_id = findPrimaryIndexId(l);
+        if (idx_id.has_value())
+            pk_index_by_label[l.name] = *idx_id;
+        pk_names_by_label[l.name] = std::move(names);
+    }
+
+    auto resolve_endpoint = [&](const BatchEdgeEndpoint& ep) -> folly::coro::Task<std::optional<VertexId>> {
+        if (!ep.valid())
+            co_return std::nullopt;
+
+        auto try_label = [&](const LabelDef& def) -> folly::coro::Task<std::optional<VertexId>> {
+            auto idx_it = pk_index_by_label.find(def.name);
+            if (idx_it == pk_index_by_label.end())
+                co_return std::nullopt;
+            if (ep.pk.size() != def.pk_prop_ids.size())
+                co_return std::nullopt; // 元组长度不符：不做部分匹配
+            co_return co_await inst->async_data->lookupVertexByPrimaryKey(idx_it->second, ep.pk);
+        };
+
+        // 1) hint 标签
+        if (auto hint = co_await inst->async_meta->getLabelId(ep.label); hint.has_value()) {
+            if (auto def_it = label_defs.find(*hint); def_it != label_defs.end()) {
+                if (auto vid = co_await try_label(def_it->second); vid.has_value())
+                    co_return vid;
+                spdlog::debug("[graph_service] endpoint not found on hinted label '{}', falling back", ep.label);
+            }
+        }
+        // 2) 其它声明了同名主键的标签（按标签名排序，保证结果确定）
+        std::vector<LabelId> candidates;
+        for (const auto& [name, lids] : labels_by_pk_name) {
+            (void)name;
+            for (auto lid : lids) {
+                auto it = label_defs.find(lid);
+                if (it == label_defs.end())
+                    continue;
+                if (pk_names_by_label[it->second.name] == pk_names_by_label[ep.label])
+                    candidates.push_back(lid);
+            }
+        }
+        std::sort(candidates.begin(), candidates.end(),
+                  [&](LabelId a, LabelId b) { return label_defs[a].name < label_defs[b].name; });
+        std::optional<VertexId> best;
+        for (auto lid : candidates) {
+            auto it = label_defs.find(lid);
+            if (it == label_defs.end())
+                continue;
+            auto vid = co_await try_label(it->second);
+            if (vid.has_value() && (!best.has_value() || *vid < *best))
+                best = vid;
+        }
+        co_return best;
+    };
 
     std::vector<IAsyncGraphDataStore::BatchEdgeEntry> batch_entries;
-    batch_entries.reserve(count);
-    for (size_t i = 0; i < count; i++) {
+    batch_entries.reserve(entries.size());
+    int32_t skipped = 0;
+    for (size_t i = 0; i < entries.size(); i++) {
+        auto src = co_await resolve_endpoint(entries[i].src);
+        auto dst = co_await resolve_endpoint(entries[i].dst);
+        if (!src.has_value() || !dst.has_value()) {
+            ++skipped;
+            continue;
+        }
         IAsyncGraphDataStore::BatchEdgeEntry entry;
-        entry.eid = start_eid + i;
-        entry.src_id = entries[i].src_id;
-        entry.dst_id = entries[i].dst_id;
+        entry.eid = 0; // 稍后统一分配
+        entry.src_id = *src;
+        entry.dst_id = *dst;
         entry.seq = i;
-        for (auto& pv : entries[i].props)
-            entry.props.push_back(std::optional<PropertyValue>(std::move(pv)));
+        for (const auto& pv : entries[i].props)
+            entry.props.push_back(std::optional<PropertyValue>(pv));
         batch_entries.push_back(std::move(entry));
     }
 
-    co_await inst->async_data->batchInsertEdges(elabel_id, std::move(batch_entries));
+    if (!batch_entries.empty()) {
+        EdgeId start_eid = co_await inst->async_meta->nextEdgeIdRange(batch_entries.size());
+        for (size_t i = 0; i < batch_entries.size(); ++i)
+            batch_entries[i].eid = start_eid + static_cast<EdgeId>(i);
 
-    co_return static_cast<int32_t>(count);
+        std::unordered_map<EdgeLabelId, EdgeLabelDef> edge_label_defs;
+        for (const auto& el : co_await inst->async_meta->listEdgeLabels())
+            edge_label_defs.emplace(el.id, el);
+
+        auto inserted_count = static_cast<int32_t>(batch_entries.size());
+        co_await inst->async_data->batchInsertEdges(elabel_id, std::move(batch_entries), edge_label_defs);
+        co_return std::make_pair(inserted_count, skipped);
+    }
+
+    co_return std::make_pair(0, skipped);
 }
 
 folly::coro::Task<CypherExecutionContext> GraphService::handleDatabaseDdl(const DatabaseDdlStatement& stmt,

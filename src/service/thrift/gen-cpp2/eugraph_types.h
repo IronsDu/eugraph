@@ -51,17 +51,27 @@ struct duration_array;
 struct id;
 struct name;
 struct properties;
+struct pk_props;
 struct id;
 struct name;
 struct properties;
 struct directed;
+struct name;
+struct value;
+struct primary_label;
+struct keys;
 struct properties;
 struct labels;
-struct src_vertex_id;
-struct dst_vertex_id;
+struct pk;
+struct src;
+struct dst;
 struct properties;
 struct vertex_ids;
 struct count;
+struct inserted;
+struct duplicate_pk;
+struct inserted;
+struct skipped_unresolved;
 struct bool_val;
 struct int_val;
 struct double_val;
@@ -239,6 +249,10 @@ APACHE_THRIFT_DEFINE_ACCESSOR(name);
 #define APACHE_THRIFT_ACCESSOR_properties
 APACHE_THRIFT_DEFINE_ACCESSOR(properties);
 #endif
+#ifndef APACHE_THRIFT_ACCESSOR_pk_props
+#define APACHE_THRIFT_ACCESSOR_pk_props
+APACHE_THRIFT_DEFINE_ACCESSOR(pk_props);
+#endif
 #ifndef APACHE_THRIFT_ACCESSOR_id
 #define APACHE_THRIFT_ACCESSOR_id
 APACHE_THRIFT_DEFINE_ACCESSOR(id);
@@ -255,6 +269,22 @@ APACHE_THRIFT_DEFINE_ACCESSOR(properties);
 #define APACHE_THRIFT_ACCESSOR_directed
 APACHE_THRIFT_DEFINE_ACCESSOR(directed);
 #endif
+#ifndef APACHE_THRIFT_ACCESSOR_name
+#define APACHE_THRIFT_ACCESSOR_name
+APACHE_THRIFT_DEFINE_ACCESSOR(name);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_value
+#define APACHE_THRIFT_ACCESSOR_value
+APACHE_THRIFT_DEFINE_ACCESSOR(value);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_primary_label
+#define APACHE_THRIFT_ACCESSOR_primary_label
+APACHE_THRIFT_DEFINE_ACCESSOR(primary_label);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_keys
+#define APACHE_THRIFT_ACCESSOR_keys
+APACHE_THRIFT_DEFINE_ACCESSOR(keys);
+#endif
 #ifndef APACHE_THRIFT_ACCESSOR_properties
 #define APACHE_THRIFT_ACCESSOR_properties
 APACHE_THRIFT_DEFINE_ACCESSOR(properties);
@@ -263,13 +293,17 @@ APACHE_THRIFT_DEFINE_ACCESSOR(properties);
 #define APACHE_THRIFT_ACCESSOR_labels
 APACHE_THRIFT_DEFINE_ACCESSOR(labels);
 #endif
-#ifndef APACHE_THRIFT_ACCESSOR_src_vertex_id
-#define APACHE_THRIFT_ACCESSOR_src_vertex_id
-APACHE_THRIFT_DEFINE_ACCESSOR(src_vertex_id);
+#ifndef APACHE_THRIFT_ACCESSOR_pk
+#define APACHE_THRIFT_ACCESSOR_pk
+APACHE_THRIFT_DEFINE_ACCESSOR(pk);
 #endif
-#ifndef APACHE_THRIFT_ACCESSOR_dst_vertex_id
-#define APACHE_THRIFT_ACCESSOR_dst_vertex_id
-APACHE_THRIFT_DEFINE_ACCESSOR(dst_vertex_id);
+#ifndef APACHE_THRIFT_ACCESSOR_src
+#define APACHE_THRIFT_ACCESSOR_src
+APACHE_THRIFT_DEFINE_ACCESSOR(src);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_dst
+#define APACHE_THRIFT_ACCESSOR_dst
+APACHE_THRIFT_DEFINE_ACCESSOR(dst);
 #endif
 #ifndef APACHE_THRIFT_ACCESSOR_properties
 #define APACHE_THRIFT_ACCESSOR_properties
@@ -282,6 +316,22 @@ APACHE_THRIFT_DEFINE_ACCESSOR(vertex_ids);
 #ifndef APACHE_THRIFT_ACCESSOR_count
 #define APACHE_THRIFT_ACCESSOR_count
 APACHE_THRIFT_DEFINE_ACCESSOR(count);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_inserted
+#define APACHE_THRIFT_ACCESSOR_inserted
+APACHE_THRIFT_DEFINE_ACCESSOR(inserted);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_duplicate_pk
+#define APACHE_THRIFT_ACCESSOR_duplicate_pk
+APACHE_THRIFT_DEFINE_ACCESSOR(duplicate_pk);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_inserted
+#define APACHE_THRIFT_ACCESSOR_inserted
+APACHE_THRIFT_DEFINE_ACCESSOR(inserted);
+#endif
+#ifndef APACHE_THRIFT_ACCESSOR_skipped_unresolved
+#define APACHE_THRIFT_ACCESSOR_skipped_unresolved
+APACHE_THRIFT_DEFINE_ACCESSOR(skipped_unresolved);
 #endif
 #ifndef APACHE_THRIFT_ACCESSOR_bool_val
 #define APACHE_THRIFT_ACCESSOR_bool_val
@@ -485,9 +535,12 @@ class DurationValueThrift;
 class PropertyValueThrift;
 class LabelInfo;
 class EdgeLabelInfo;
+class PkKey;
+class PkRef;
 class VertexRecord;
 class EdgeRecord;
 class BatchInsertVerticesResult;
+class BatchInsertEdgesResult;
 class ResultValue;
 class ResultRow;
 class QueryStreamMeta;
@@ -3252,20 +3305,22 @@ class LabelInfo final  {
   FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
     return "eugraph";
   }
-  static constexpr std::size_t __fbthrift_num_fields = 3;
+  static constexpr std::size_t __fbthrift_num_fields = 4;
 
-  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3};
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3,4};
 
   using __fbthrift_reflection_idents = folly::tag_t<
     ::apache::thrift::ident::id,
     ::apache::thrift::ident::name,
-    ::apache::thrift::ident::properties
+    ::apache::thrift::ident::properties,
+    ::apache::thrift::ident::pk_props
   >;
 
   using __fbthrift_reflection_type_tags = folly::tag_t<
     ::apache::thrift::type::i16_t,
     ::apache::thrift::type::string_t,
-    ::apache::thrift::type::list<::apache::thrift::type::struct_t<::eugraph::thrift_service::PropertyDefThrift>>
+    ::apache::thrift::type::list<::apache::thrift::type::struct_t<::eugraph::thrift_service::PropertyDefThrift>>,
+    ::apache::thrift::type::list<::apache::thrift::type::string_t>
   >;
   void __fbthrift_clear();
   void __fbthrift_clear_terse_fields();
@@ -3285,7 +3340,7 @@ class LabelInfo final  {
 
   // FragileConstructor for use in initialization lists only.
   [[deprecated("This constructor is deprecated")]]
-  LabelInfo(apache::thrift::FragileConstructor, ::std::int16_t id__arg, ::std::string name__arg, ::std::vector<::eugraph::thrift_service::PropertyDefThrift> properties__arg);
+  LabelInfo(apache::thrift::FragileConstructor, ::std::int16_t id__arg, ::std::string name__arg, ::std::vector<::eugraph::thrift_service::PropertyDefThrift> properties__arg, ::std::vector<::std::string> pk_props__arg);
 
   LabelInfo(LabelInfo&&) noexcept;
 
@@ -3304,7 +3359,9 @@ class LabelInfo final  {
  private:
   ::std::vector<::eugraph::thrift_service::PropertyDefThrift> __fbthrift_field_properties;
  private:
-  apache::thrift::detail::isset_bitset<3, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+  ::std::vector<::std::string> __fbthrift_field_pk_props;
+ private:
+  apache::thrift::detail::isset_bitset<4, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
 
  public:
 
@@ -3419,6 +3476,42 @@ class LabelInfo final  {
     return {static_cast<fbthrift_T&&>(this->__fbthrift_field_properties), __isset.at(2), __isset.bit(2)};
   }
 
+  /** Glean { "field": "pk_props" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> pk_props_ref() const& {
+    return {this->__fbthrift_field_pk_props, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "pk_props" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> pk_props_ref() & {
+    return {this->__fbthrift_field_pk_props, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "pk_props" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> pk_props_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_pk_props), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "pk_props" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> pk_props() const& {
+    return {this->__fbthrift_field_pk_props, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "pk_props" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> pk_props() & {
+    return {this->__fbthrift_field_pk_props, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "pk_props" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::std::string>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> pk_props() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_pk_props), __isset.at(3), __isset.bit(3)};
+  }
+
   /** Glean { "field": "id" } */
   [[deprecated("Use `FOO.id().value()` instead of `FOO.get_id()`")]]
   ::std::int16_t get_id() const;
@@ -3461,6 +3554,22 @@ class LabelInfo final  {
   ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& set_properties(T_LabelInfo_properties_struct_setter&& properties_) {
     properties_ref() = std::forward<T_LabelInfo_properties_struct_setter>(properties_);
     return __fbthrift_field_properties;
+  }
+
+  /** Glean { "field": "pk_props" } */
+  [[deprecated("Use `FOO.pk_props().value()` instead of `FOO.get_pk_props()`")]]
+  const ::std::vector<::std::string>& get_pk_props() const&;
+
+  /** Glean { "field": "pk_props" } */
+  [[deprecated("Use `FOO.pk_props().value()` instead of `FOO.get_pk_props()`")]]
+  ::std::vector<::std::string> get_pk_props() &&;
+
+  /** Glean { "field": "pk_props" } */
+  template <typename T_LabelInfo_pk_props_struct_setter = ::std::vector<::std::string>>
+  [[deprecated("Use `FOO.pk_props() = BAR` instead of `FOO.set_pk_props(BAR)`")]]
+  ::std::vector<::std::string>& set_pk_props(T_LabelInfo_pk_props_struct_setter&& pk_props_) {
+    pk_props_ref() = std::forward<T_LabelInfo_pk_props_struct_setter>(pk_props_);
+    return __fbthrift_field_pk_props;
   }
 
   template <class Protocol_>
@@ -3787,8 +3896,8 @@ unsigned long EdgeLabelInfo::read(Protocol_* iprot) {
 }
 
 
-/** Glean {"file": "proto/eugraph.thrift", "name": "VertexRecord", "kind": "struct" } */
-class VertexRecord final  {
+/** Glean {"file": "proto/eugraph.thrift", "name": "PkKey", "kind": "struct" } */
+class PkKey final  {
  private:
   friend struct ::apache::thrift::detail::st::struct_private_access;
   template<class> friend struct ::apache::thrift::detail::invoke_reffer;
@@ -3807,13 +3916,421 @@ class VertexRecord final  {
   static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2};
 
   using __fbthrift_reflection_idents = folly::tag_t<
+    ::apache::thrift::ident::name,
+    ::apache::thrift::ident::value
+  >;
+
+  using __fbthrift_reflection_type_tags = folly::tag_t<
+    ::apache::thrift::type::string_t,
+    ::apache::thrift::type::union_t<::eugraph::thrift_service::PropertyValueThrift>
+  >;
+  void __fbthrift_clear();
+  void __fbthrift_clear_terse_fields();
+  bool __fbthrift_is_empty() const;
+
+ public:
+  using __fbthrift_cpp2_type = PkKey;
+  static constexpr bool __fbthrift_cpp2_is_union =
+    false;
+  static constexpr bool __fbthrift_cpp2_uses_op_encode =
+    false;
+
+
+ public:
+
+  PkKey();
+
+  // FragileConstructor for use in initialization lists only.
+  [[deprecated("This constructor is deprecated")]]
+  PkKey(apache::thrift::FragileConstructor, ::std::string name__arg, ::eugraph::thrift_service::PropertyValueThrift value__arg);
+
+  PkKey(PkKey&&) noexcept;
+
+  PkKey(const PkKey& src);
+
+
+  PkKey& operator=(PkKey&&) noexcept;
+  PkKey& operator=(const PkKey& src);
+
+  ~PkKey();
+
+ private:
+  ::std::string __fbthrift_field_name;
+ private:
+  ::eugraph::thrift_service::PropertyValueThrift __fbthrift_field_value;
+ private:
+  apache::thrift::detail::isset_bitset<2, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+
+ public:
+
+  bool operator==(const PkKey&) const;
+  bool operator<(const PkKey&) const;
+
+  /** Glean { "field": "name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> name_ref() const& {
+    return {this->__fbthrift_field_name, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> name_ref() & {
+    return {this->__fbthrift_field_name, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> name_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_name), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> name() const& {
+    return {this->__fbthrift_field_name, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> name() & {
+    return {this->__fbthrift_field_name, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "name" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> name() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_name), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "value" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PropertyValueThrift>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> value_ref() const& {
+    return {this->__fbthrift_field_value, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "value" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PropertyValueThrift>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> value_ref() & {
+    return {this->__fbthrift_field_value, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "value" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PropertyValueThrift>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> value_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_value), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "value" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PropertyValueThrift>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> value() const& {
+    return {this->__fbthrift_field_value, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "value" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PropertyValueThrift>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> value() & {
+    return {this->__fbthrift_field_value, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "value" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PropertyValueThrift>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> value() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_value), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "name" } */
+  [[deprecated("Use `FOO.name().value()` instead of `FOO.get_name()`")]]
+  const ::std::string& get_name() const& {
+    return __fbthrift_field_name;
+  }
+
+  /** Glean { "field": "name" } */
+  [[deprecated("Use `FOO.name().value()` instead of `FOO.get_name()`")]]
+  ::std::string get_name() && {
+    return static_cast<::std::string&&>(__fbthrift_field_name);
+  }
+
+  /** Glean { "field": "name" } */
+  template <typename T_PkKey_name_struct_setter = ::std::string>
+  [[deprecated("Use `FOO.name() = BAR` instead of `FOO.set_name(BAR)`")]]
+  ::std::string& set_name(T_PkKey_name_struct_setter&& name_) {
+    name_ref() = std::forward<T_PkKey_name_struct_setter>(name_);
+    return __fbthrift_field_name;
+  }
+
+  /** Glean { "field": "value" } */
+  [[deprecated("Use `FOO.value().value()` instead of `FOO.get_value()`")]]
+  const ::eugraph::thrift_service::PropertyValueThrift& get_value() const&;
+
+  /** Glean { "field": "value" } */
+  [[deprecated("Use `FOO.value().value()` instead of `FOO.get_value()`")]]
+  ::eugraph::thrift_service::PropertyValueThrift get_value() &&;
+
+  /** Glean { "field": "value" } */
+  template <typename T_PkKey_value_struct_setter = ::eugraph::thrift_service::PropertyValueThrift>
+  [[deprecated("Use `FOO.value() = BAR` instead of `FOO.set_value(BAR)`")]]
+  ::eugraph::thrift_service::PropertyValueThrift& set_value(T_PkKey_value_struct_setter&& value_) {
+    value_ref() = std::forward<T_PkKey_value_struct_setter>(value_);
+    return __fbthrift_field_value;
+  }
+
+  template <class Protocol_>
+  unsigned long read(Protocol_* iprot);
+  template <class Protocol_>
+  uint32_t serializedSize(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t serializedSizeZC(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t write(Protocol_* prot_) const;
+
+ private:
+  template <class Protocol_>
+  void readNoXfer(Protocol_* iprot);
+
+  friend class ::apache::thrift::Cpp2Ops<PkKey>;
+  friend void swap(PkKey& a, PkKey& b);
+};
+
+template <class Protocol_>
+unsigned long PkKey::read(Protocol_* iprot) {
+  auto _xferStart = iprot->getCursorPosition();
+  readNoXfer(iprot);
+  return iprot->getCursorPosition() - _xferStart;
+}
+
+
+/** Glean {"file": "proto/eugraph.thrift", "name": "PkRef", "kind": "struct" } */
+class PkRef final  {
+ private:
+  friend struct ::apache::thrift::detail::st::struct_private_access;
+  template<class> friend struct ::apache::thrift::detail::invoke_reffer;
+
+  //  used by a static_assert in the corresponding source
+  static constexpr bool __fbthrift_cpp2_gen_json = false;
+  static constexpr bool __fbthrift_cpp2_is_runtime_annotation = false;
+  static std::string_view __fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord);
+  static std::string_view __fbthrift_get_class_name();
+  template <class ...>
+  FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
+    return "eugraph";
+  }
+  static constexpr std::size_t __fbthrift_num_fields = 2;
+
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2};
+
+  using __fbthrift_reflection_idents = folly::tag_t<
+    ::apache::thrift::ident::primary_label,
+    ::apache::thrift::ident::keys
+  >;
+
+  using __fbthrift_reflection_type_tags = folly::tag_t<
+    ::apache::thrift::type::string_t,
+    ::apache::thrift::type::list<::apache::thrift::type::struct_t<::eugraph::thrift_service::PkKey>>
+  >;
+  void __fbthrift_clear();
+  void __fbthrift_clear_terse_fields();
+  bool __fbthrift_is_empty() const;
+
+ public:
+  using __fbthrift_cpp2_type = PkRef;
+  static constexpr bool __fbthrift_cpp2_is_union =
+    false;
+  static constexpr bool __fbthrift_cpp2_uses_op_encode =
+    false;
+
+
+ public:
+
+  PkRef();
+
+  // FragileConstructor for use in initialization lists only.
+  [[deprecated("This constructor is deprecated")]]
+  PkRef(apache::thrift::FragileConstructor, ::std::string primary_label__arg, ::std::vector<::eugraph::thrift_service::PkKey> keys__arg);
+
+  PkRef(PkRef&&) noexcept;
+
+  PkRef(const PkRef& src);
+
+
+  PkRef& operator=(PkRef&&) noexcept;
+  PkRef& operator=(const PkRef& src);
+
+  ~PkRef();
+
+ private:
+  ::std::string __fbthrift_field_primary_label;
+ private:
+  ::std::vector<::eugraph::thrift_service::PkKey> __fbthrift_field_keys;
+ private:
+  apache::thrift::detail::isset_bitset<2, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+
+ public:
+
+  bool operator==(const PkRef&) const;
+  bool operator<(const PkRef&) const;
+
+  /** Glean { "field": "primary_label" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> primary_label_ref() const& {
+    return {this->__fbthrift_field_primary_label, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "primary_label" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> primary_label_ref() & {
+    return {this->__fbthrift_field_primary_label, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "primary_label" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> primary_label_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_primary_label), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "primary_label" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> primary_label() const& {
+    return {this->__fbthrift_field_primary_label, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "primary_label" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> primary_label() & {
+    return {this->__fbthrift_field_primary_label, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "primary_label" } */
+  template <typename..., typename fbthrift_T = ::std::string>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> primary_label() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_primary_label), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "keys" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> keys_ref() const& {
+    return {this->__fbthrift_field_keys, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "keys" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> keys_ref() & {
+    return {this->__fbthrift_field_keys, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "keys" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> keys_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_keys), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "keys" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> keys() const& {
+    return {this->__fbthrift_field_keys, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "keys" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> keys() & {
+    return {this->__fbthrift_field_keys, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "keys" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> keys() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_keys), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "primary_label" } */
+  [[deprecated("Use `FOO.primary_label().value()` instead of `FOO.get_primary_label()`")]]
+  const ::std::string& get_primary_label() const& {
+    return __fbthrift_field_primary_label;
+  }
+
+  /** Glean { "field": "primary_label" } */
+  [[deprecated("Use `FOO.primary_label().value()` instead of `FOO.get_primary_label()`")]]
+  ::std::string get_primary_label() && {
+    return static_cast<::std::string&&>(__fbthrift_field_primary_label);
+  }
+
+  /** Glean { "field": "primary_label" } */
+  template <typename T_PkRef_primary_label_struct_setter = ::std::string>
+  [[deprecated("Use `FOO.primary_label() = BAR` instead of `FOO.set_primary_label(BAR)`")]]
+  ::std::string& set_primary_label(T_PkRef_primary_label_struct_setter&& primary_label_) {
+    primary_label_ref() = std::forward<T_PkRef_primary_label_struct_setter>(primary_label_);
+    return __fbthrift_field_primary_label;
+  }
+
+  /** Glean { "field": "keys" } */
+  [[deprecated("Use `FOO.keys().value()` instead of `FOO.get_keys()`")]]
+  const ::std::vector<::eugraph::thrift_service::PkKey>& get_keys() const&;
+
+  /** Glean { "field": "keys" } */
+  [[deprecated("Use `FOO.keys().value()` instead of `FOO.get_keys()`")]]
+  ::std::vector<::eugraph::thrift_service::PkKey> get_keys() &&;
+
+  /** Glean { "field": "keys" } */
+  template <typename T_PkRef_keys_struct_setter = ::std::vector<::eugraph::thrift_service::PkKey>>
+  [[deprecated("Use `FOO.keys() = BAR` instead of `FOO.set_keys(BAR)`")]]
+  ::std::vector<::eugraph::thrift_service::PkKey>& set_keys(T_PkRef_keys_struct_setter&& keys_) {
+    keys_ref() = std::forward<T_PkRef_keys_struct_setter>(keys_);
+    return __fbthrift_field_keys;
+  }
+
+  template <class Protocol_>
+  unsigned long read(Protocol_* iprot);
+  template <class Protocol_>
+  uint32_t serializedSize(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t serializedSizeZC(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t write(Protocol_* prot_) const;
+
+ private:
+  template <class Protocol_>
+  void readNoXfer(Protocol_* iprot);
+
+  friend class ::apache::thrift::Cpp2Ops<PkRef>;
+  friend void swap(PkRef& a, PkRef& b);
+};
+
+template <class Protocol_>
+unsigned long PkRef::read(Protocol_* iprot) {
+  auto _xferStart = iprot->getCursorPosition();
+  readNoXfer(iprot);
+  return iprot->getCursorPosition() - _xferStart;
+}
+
+
+/** Glean {"file": "proto/eugraph.thrift", "name": "VertexRecord", "kind": "struct" } */
+class VertexRecord final  {
+ private:
+  friend struct ::apache::thrift::detail::st::struct_private_access;
+  template<class> friend struct ::apache::thrift::detail::invoke_reffer;
+
+  //  used by a static_assert in the corresponding source
+  static constexpr bool __fbthrift_cpp2_gen_json = false;
+  static constexpr bool __fbthrift_cpp2_is_runtime_annotation = false;
+  static std::string_view __fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord);
+  static std::string_view __fbthrift_get_class_name();
+  template <class ...>
+  FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
+    return "eugraph";
+  }
+  static constexpr std::size_t __fbthrift_num_fields = 3;
+
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3};
+
+  using __fbthrift_reflection_idents = folly::tag_t<
     ::apache::thrift::ident::properties,
-    ::apache::thrift::ident::labels
+    ::apache::thrift::ident::labels,
+    ::apache::thrift::ident::pk
   >;
 
   using __fbthrift_reflection_type_tags = folly::tag_t<
     ::apache::thrift::type::list<::apache::thrift::type::union_t<::eugraph::thrift_service::PropertyValueThrift>>,
-    ::apache::thrift::type::list<::apache::thrift::type::string_t>
+    ::apache::thrift::type::list<::apache::thrift::type::string_t>,
+    ::apache::thrift::type::list<::apache::thrift::type::struct_t<::eugraph::thrift_service::PkKey>>
   >;
   void __fbthrift_clear();
   void __fbthrift_clear_terse_fields();
@@ -3833,7 +4350,7 @@ class VertexRecord final  {
 
   // FragileConstructor for use in initialization lists only.
   [[deprecated("This constructor is deprecated")]]
-  VertexRecord(apache::thrift::FragileConstructor, ::std::vector<::eugraph::thrift_service::PropertyValueThrift> properties__arg, ::std::vector<::std::string> labels__arg);
+  VertexRecord(apache::thrift::FragileConstructor, ::std::vector<::eugraph::thrift_service::PropertyValueThrift> properties__arg, ::std::vector<::std::string> labels__arg, ::std::vector<::eugraph::thrift_service::PkKey> pk__arg);
 
   VertexRecord(VertexRecord&&) noexcept;
 
@@ -3850,7 +4367,9 @@ class VertexRecord final  {
  private:
   ::std::vector<::std::string> __fbthrift_field_labels;
  private:
-  apache::thrift::detail::isset_bitset<2, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+  ::std::vector<::eugraph::thrift_service::PkKey> __fbthrift_field_pk;
+ private:
+  apache::thrift::detail::isset_bitset<3, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
 
  public:
 
@@ -3929,6 +4448,42 @@ class VertexRecord final  {
     return {static_cast<fbthrift_T&&>(this->__fbthrift_field_labels), __isset.at(1), __isset.bit(1)};
   }
 
+  /** Glean { "field": "pk" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> pk_ref() const& {
+    return {this->__fbthrift_field_pk, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "pk" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> pk_ref() & {
+    return {this->__fbthrift_field_pk, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "pk" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> pk_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_pk), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "pk" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> pk() const& {
+    return {this->__fbthrift_field_pk, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "pk" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> pk() & {
+    return {this->__fbthrift_field_pk, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "pk" } */
+  template <typename..., typename fbthrift_T = ::std::vector<::eugraph::thrift_service::PkKey>>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> pk() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_pk), __isset.at(2), __isset.bit(2)};
+  }
+
   /** Glean { "field": "properties" } */
   [[deprecated("Use `FOO.properties().value()` instead of `FOO.get_properties()`")]]
   const ::std::vector<::eugraph::thrift_service::PropertyValueThrift>& get_properties() const&;
@@ -3959,6 +4514,22 @@ class VertexRecord final  {
   ::std::vector<::std::string>& set_labels(T_VertexRecord_labels_struct_setter&& labels_) {
     labels_ref() = std::forward<T_VertexRecord_labels_struct_setter>(labels_);
     return __fbthrift_field_labels;
+  }
+
+  /** Glean { "field": "pk" } */
+  [[deprecated("Use `FOO.pk().value()` instead of `FOO.get_pk()`")]]
+  const ::std::vector<::eugraph::thrift_service::PkKey>& get_pk() const&;
+
+  /** Glean { "field": "pk" } */
+  [[deprecated("Use `FOO.pk().value()` instead of `FOO.get_pk()`")]]
+  ::std::vector<::eugraph::thrift_service::PkKey> get_pk() &&;
+
+  /** Glean { "field": "pk" } */
+  template <typename T_VertexRecord_pk_struct_setter = ::std::vector<::eugraph::thrift_service::PkKey>>
+  [[deprecated("Use `FOO.pk() = BAR` instead of `FOO.set_pk(BAR)`")]]
+  ::std::vector<::eugraph::thrift_service::PkKey>& set_pk(T_VertexRecord_pk_struct_setter&& pk_) {
+    pk_ref() = std::forward<T_VertexRecord_pk_struct_setter>(pk_);
+    return __fbthrift_field_pk;
   }
 
   template <class Protocol_>
@@ -4006,14 +4577,14 @@ class EdgeRecord final  {
   static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3};
 
   using __fbthrift_reflection_idents = folly::tag_t<
-    ::apache::thrift::ident::src_vertex_id,
-    ::apache::thrift::ident::dst_vertex_id,
+    ::apache::thrift::ident::src,
+    ::apache::thrift::ident::dst,
     ::apache::thrift::ident::properties
   >;
 
   using __fbthrift_reflection_type_tags = folly::tag_t<
-    ::apache::thrift::type::i64_t,
-    ::apache::thrift::type::i64_t,
+    ::apache::thrift::type::struct_t<::eugraph::thrift_service::PkRef>,
+    ::apache::thrift::type::struct_t<::eugraph::thrift_service::PkRef>,
     ::apache::thrift::type::list<::apache::thrift::type::union_t<::eugraph::thrift_service::PropertyValueThrift>>
   >;
   void __fbthrift_clear();
@@ -4034,7 +4605,7 @@ class EdgeRecord final  {
 
   // FragileConstructor for use in initialization lists only.
   [[deprecated("This constructor is deprecated")]]
-  EdgeRecord(apache::thrift::FragileConstructor, ::std::int64_t src_vertex_id__arg, ::std::int64_t dst_vertex_id__arg, ::std::vector<::eugraph::thrift_service::PropertyValueThrift> properties__arg);
+  EdgeRecord(apache::thrift::FragileConstructor, ::eugraph::thrift_service::PkRef src__arg, ::eugraph::thrift_service::PkRef dst__arg, ::std::vector<::eugraph::thrift_service::PropertyValueThrift> properties__arg);
 
   EdgeRecord(EdgeRecord&&) noexcept;
 
@@ -4047,9 +4618,9 @@ class EdgeRecord final  {
   ~EdgeRecord();
 
  private:
-  ::std::int64_t __fbthrift_field_src_vertex_id;
+  ::eugraph::thrift_service::PkRef __fbthrift_field_src;
  private:
-  ::std::int64_t __fbthrift_field_dst_vertex_id;
+  ::eugraph::thrift_service::PkRef __fbthrift_field_dst;
  private:
   ::std::vector<::eugraph::thrift_service::PropertyValueThrift> __fbthrift_field_properties;
  private:
@@ -4060,76 +4631,76 @@ class EdgeRecord final  {
   bool operator==(const EdgeRecord&) const;
   bool operator<(const EdgeRecord&) const;
 
-  /** Glean { "field": "src_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> src_vertex_id_ref() const& {
-    return {this->__fbthrift_field_src_vertex_id, __isset.at(0), __isset.bit(0)};
+  /** Glean { "field": "src" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> src_ref() const& {
+    return {this->__fbthrift_field_src, __isset.at(0), __isset.bit(0)};
   }
 
-  /** Glean { "field": "src_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> src_vertex_id_ref() & {
-    return {this->__fbthrift_field_src_vertex_id, __isset.at(0), __isset.bit(0)};
+  /** Glean { "field": "src" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> src_ref() & {
+    return {this->__fbthrift_field_src, __isset.at(0), __isset.bit(0)};
   }
 
-  /** Glean { "field": "src_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> src_vertex_id_ref() && {
-    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_src_vertex_id), __isset.at(0), __isset.bit(0)};
+  /** Glean { "field": "src" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> src_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_src), __isset.at(0), __isset.bit(0)};
   }
 
-  /** Glean { "field": "src_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> src_vertex_id() const& {
-    return {this->__fbthrift_field_src_vertex_id, __isset.at(0), __isset.bit(0)};
+  /** Glean { "field": "src" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> src() const& {
+    return {this->__fbthrift_field_src, __isset.at(0), __isset.bit(0)};
   }
 
-  /** Glean { "field": "src_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> src_vertex_id() & {
-    return {this->__fbthrift_field_src_vertex_id, __isset.at(0), __isset.bit(0)};
+  /** Glean { "field": "src" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> src() & {
+    return {this->__fbthrift_field_src, __isset.at(0), __isset.bit(0)};
   }
 
-  /** Glean { "field": "src_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> src_vertex_id() && {
-    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_src_vertex_id), __isset.at(0), __isset.bit(0)};
+  /** Glean { "field": "src" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> src() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_src), __isset.at(0), __isset.bit(0)};
   }
 
-  /** Glean { "field": "dst_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> dst_vertex_id_ref() const& {
-    return {this->__fbthrift_field_dst_vertex_id, __isset.at(1), __isset.bit(1)};
+  /** Glean { "field": "dst" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> dst_ref() const& {
+    return {this->__fbthrift_field_dst, __isset.at(1), __isset.bit(1)};
   }
 
-  /** Glean { "field": "dst_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> dst_vertex_id_ref() & {
-    return {this->__fbthrift_field_dst_vertex_id, __isset.at(1), __isset.bit(1)};
+  /** Glean { "field": "dst" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> dst_ref() & {
+    return {this->__fbthrift_field_dst, __isset.at(1), __isset.bit(1)};
   }
 
-  /** Glean { "field": "dst_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> dst_vertex_id_ref() && {
-    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_dst_vertex_id), __isset.at(1), __isset.bit(1)};
+  /** Glean { "field": "dst" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> dst_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_dst), __isset.at(1), __isset.bit(1)};
   }
 
-  /** Glean { "field": "dst_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> dst_vertex_id() const& {
-    return {this->__fbthrift_field_dst_vertex_id, __isset.at(1), __isset.bit(1)};
+  /** Glean { "field": "dst" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> dst() const& {
+    return {this->__fbthrift_field_dst, __isset.at(1), __isset.bit(1)};
   }
 
-  /** Glean { "field": "dst_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> dst_vertex_id() & {
-    return {this->__fbthrift_field_dst_vertex_id, __isset.at(1), __isset.bit(1)};
+  /** Glean { "field": "dst" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> dst() & {
+    return {this->__fbthrift_field_dst, __isset.at(1), __isset.bit(1)};
   }
 
-  /** Glean { "field": "dst_vertex_id" } */
-  template <typename..., typename fbthrift_T = ::std::int64_t>
-  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> dst_vertex_id() && {
-    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_dst_vertex_id), __isset.at(1), __isset.bit(1)};
+  /** Glean { "field": "dst" } */
+  template <typename..., typename fbthrift_T = ::eugraph::thrift_service::PkRef>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> dst() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_dst), __isset.at(1), __isset.bit(1)};
   }
 
   /** Glean { "field": "properties" } */
@@ -4168,21 +4739,37 @@ class EdgeRecord final  {
     return {static_cast<fbthrift_T&&>(this->__fbthrift_field_properties), __isset.at(2), __isset.bit(2)};
   }
 
-  /** Glean { "field": "src_vertex_id" } */
-  [[deprecated("Use `FOO.src_vertex_id().value()` instead of `FOO.get_src_vertex_id()`")]]
-  ::std::int64_t get_src_vertex_id() const;
+  /** Glean { "field": "src" } */
+  [[deprecated("Use `FOO.src().value()` instead of `FOO.get_src()`")]]
+  const ::eugraph::thrift_service::PkRef& get_src() const&;
 
-  /** Glean { "field": "src_vertex_id" } */
-  [[deprecated("Use `FOO.src_vertex_id() = BAR` instead of `FOO.set_src_vertex_id(BAR)`")]]
-  ::std::int64_t& set_src_vertex_id(::std::int64_t src_vertex_id_);
+  /** Glean { "field": "src" } */
+  [[deprecated("Use `FOO.src().value()` instead of `FOO.get_src()`")]]
+  ::eugraph::thrift_service::PkRef get_src() &&;
 
-  /** Glean { "field": "dst_vertex_id" } */
-  [[deprecated("Use `FOO.dst_vertex_id().value()` instead of `FOO.get_dst_vertex_id()`")]]
-  ::std::int64_t get_dst_vertex_id() const;
+  /** Glean { "field": "src" } */
+  template <typename T_EdgeRecord_src_struct_setter = ::eugraph::thrift_service::PkRef>
+  [[deprecated("Use `FOO.src() = BAR` instead of `FOO.set_src(BAR)`")]]
+  ::eugraph::thrift_service::PkRef& set_src(T_EdgeRecord_src_struct_setter&& src_) {
+    src_ref() = std::forward<T_EdgeRecord_src_struct_setter>(src_);
+    return __fbthrift_field_src;
+  }
 
-  /** Glean { "field": "dst_vertex_id" } */
-  [[deprecated("Use `FOO.dst_vertex_id() = BAR` instead of `FOO.set_dst_vertex_id(BAR)`")]]
-  ::std::int64_t& set_dst_vertex_id(::std::int64_t dst_vertex_id_);
+  /** Glean { "field": "dst" } */
+  [[deprecated("Use `FOO.dst().value()` instead of `FOO.get_dst()`")]]
+  const ::eugraph::thrift_service::PkRef& get_dst() const&;
+
+  /** Glean { "field": "dst" } */
+  [[deprecated("Use `FOO.dst().value()` instead of `FOO.get_dst()`")]]
+  ::eugraph::thrift_service::PkRef get_dst() &&;
+
+  /** Glean { "field": "dst" } */
+  template <typename T_EdgeRecord_dst_struct_setter = ::eugraph::thrift_service::PkRef>
+  [[deprecated("Use `FOO.dst() = BAR` instead of `FOO.set_dst(BAR)`")]]
+  ::eugraph::thrift_service::PkRef& set_dst(T_EdgeRecord_dst_struct_setter&& dst_) {
+    dst_ref() = std::forward<T_EdgeRecord_dst_struct_setter>(dst_);
+    return __fbthrift_field_dst;
+  }
 
   /** Glean { "field": "properties" } */
   [[deprecated("Use `FOO.properties().value()` instead of `FOO.get_properties()`")]]
@@ -4240,17 +4827,21 @@ class BatchInsertVerticesResult final  {
   FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
     return "eugraph";
   }
-  static constexpr std::size_t __fbthrift_num_fields = 2;
+  static constexpr std::size_t __fbthrift_num_fields = 4;
 
-  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2};
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2,3,4};
 
   using __fbthrift_reflection_idents = folly::tag_t<
     ::apache::thrift::ident::vertex_ids,
-    ::apache::thrift::ident::count
+    ::apache::thrift::ident::count,
+    ::apache::thrift::ident::inserted,
+    ::apache::thrift::ident::duplicate_pk
   >;
 
   using __fbthrift_reflection_type_tags = folly::tag_t<
     ::apache::thrift::type::list<::apache::thrift::type::i64_t>,
+    ::apache::thrift::type::i32_t,
+    ::apache::thrift::type::i32_t,
     ::apache::thrift::type::i32_t
   >;
   void __fbthrift_clear();
@@ -4271,7 +4862,7 @@ class BatchInsertVerticesResult final  {
 
   // FragileConstructor for use in initialization lists only.
   [[deprecated("This constructor is deprecated")]]
-  BatchInsertVerticesResult(apache::thrift::FragileConstructor, ::std::vector<::std::int64_t> vertex_ids__arg, ::std::int32_t count__arg);
+  BatchInsertVerticesResult(apache::thrift::FragileConstructor, ::std::vector<::std::int64_t> vertex_ids__arg, ::std::int32_t count__arg, ::std::int32_t inserted__arg, ::std::int32_t duplicate_pk__arg);
 
   BatchInsertVerticesResult(BatchInsertVerticesResult&&) noexcept;
 
@@ -4288,7 +4879,11 @@ class BatchInsertVerticesResult final  {
  private:
   ::std::int32_t __fbthrift_field_count;
  private:
-  apache::thrift::detail::isset_bitset<2, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+  ::std::int32_t __fbthrift_field_inserted;
+ private:
+  ::std::int32_t __fbthrift_field_duplicate_pk;
+ private:
+  apache::thrift::detail::isset_bitset<4, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
 
  public:
 
@@ -4367,6 +4962,78 @@ class BatchInsertVerticesResult final  {
     return {static_cast<fbthrift_T&&>(this->__fbthrift_field_count), __isset.at(1), __isset.bit(1)};
   }
 
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> inserted_ref() const& {
+    return {this->__fbthrift_field_inserted, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> inserted_ref() & {
+    return {this->__fbthrift_field_inserted, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> inserted_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_inserted), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> inserted() const& {
+    return {this->__fbthrift_field_inserted, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> inserted() & {
+    return {this->__fbthrift_field_inserted, __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> inserted() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_inserted), __isset.at(2), __isset.bit(2)};
+  }
+
+  /** Glean { "field": "duplicate_pk" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> duplicate_pk_ref() const& {
+    return {this->__fbthrift_field_duplicate_pk, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "duplicate_pk" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> duplicate_pk_ref() & {
+    return {this->__fbthrift_field_duplicate_pk, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "duplicate_pk" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> duplicate_pk_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_duplicate_pk), __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "duplicate_pk" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> duplicate_pk() const& {
+    return {this->__fbthrift_field_duplicate_pk, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "duplicate_pk" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> duplicate_pk() & {
+    return {this->__fbthrift_field_duplicate_pk, __isset.at(3), __isset.bit(3)};
+  }
+
+  /** Glean { "field": "duplicate_pk" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> duplicate_pk() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_duplicate_pk), __isset.at(3), __isset.bit(3)};
+  }
+
   /** Glean { "field": "vertex_ids" } */
   [[deprecated("Use `FOO.vertex_ids().value()` instead of `FOO.get_vertex_ids()`")]]
   const ::std::vector<::std::int64_t>& get_vertex_ids() const&;
@@ -4391,6 +5058,22 @@ class BatchInsertVerticesResult final  {
   [[deprecated("Use `FOO.count() = BAR` instead of `FOO.set_count(BAR)`")]]
   ::std::int32_t& set_count(::std::int32_t count_);
 
+  /** Glean { "field": "inserted" } */
+  [[deprecated("Use `FOO.inserted().value()` instead of `FOO.get_inserted()`")]]
+  ::std::int32_t get_inserted() const;
+
+  /** Glean { "field": "inserted" } */
+  [[deprecated("Use `FOO.inserted() = BAR` instead of `FOO.set_inserted(BAR)`")]]
+  ::std::int32_t& set_inserted(::std::int32_t inserted_);
+
+  /** Glean { "field": "duplicate_pk" } */
+  [[deprecated("Use `FOO.duplicate_pk().value()` instead of `FOO.get_duplicate_pk()`")]]
+  ::std::int32_t get_duplicate_pk() const;
+
+  /** Glean { "field": "duplicate_pk" } */
+  [[deprecated("Use `FOO.duplicate_pk() = BAR` instead of `FOO.set_duplicate_pk(BAR)`")]]
+  ::std::int32_t& set_duplicate_pk(::std::int32_t duplicate_pk_);
+
   template <class Protocol_>
   unsigned long read(Protocol_* iprot);
   template <class Protocol_>
@@ -4410,6 +5093,189 @@ class BatchInsertVerticesResult final  {
 
 template <class Protocol_>
 unsigned long BatchInsertVerticesResult::read(Protocol_* iprot) {
+  auto _xferStart = iprot->getCursorPosition();
+  readNoXfer(iprot);
+  return iprot->getCursorPosition() - _xferStart;
+}
+
+
+/** Glean {"file": "proto/eugraph.thrift", "name": "BatchInsertEdgesResult", "kind": "struct" } */
+class BatchInsertEdgesResult final  {
+ private:
+  friend struct ::apache::thrift::detail::st::struct_private_access;
+  template<class> friend struct ::apache::thrift::detail::invoke_reffer;
+
+  //  used by a static_assert in the corresponding source
+  static constexpr bool __fbthrift_cpp2_gen_json = false;
+  static constexpr bool __fbthrift_cpp2_is_runtime_annotation = false;
+  static std::string_view __fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord);
+  static std::string_view __fbthrift_get_class_name();
+  template <class ...>
+  FOLLY_ERASE static constexpr std::string_view __fbthrift_get_module_name() noexcept {
+    return "eugraph";
+  }
+  static constexpr std::size_t __fbthrift_num_fields = 2;
+
+  static constexpr const int16_t __fbthrift_reflection_field_ids[] = {0,1,2};
+
+  using __fbthrift_reflection_idents = folly::tag_t<
+    ::apache::thrift::ident::inserted,
+    ::apache::thrift::ident::skipped_unresolved
+  >;
+
+  using __fbthrift_reflection_type_tags = folly::tag_t<
+    ::apache::thrift::type::i32_t,
+    ::apache::thrift::type::i32_t
+  >;
+  void __fbthrift_clear();
+  void __fbthrift_clear_terse_fields();
+  bool __fbthrift_is_empty() const;
+
+ public:
+  using __fbthrift_cpp2_type = BatchInsertEdgesResult;
+  static constexpr bool __fbthrift_cpp2_is_union =
+    false;
+  static constexpr bool __fbthrift_cpp2_uses_op_encode =
+    false;
+
+
+ public:
+
+  BatchInsertEdgesResult() :
+      __fbthrift_field_inserted(),
+      __fbthrift_field_skipped_unresolved() {
+  }
+  // FragileConstructor for use in initialization lists only.
+  [[deprecated("This constructor is deprecated")]]
+  BatchInsertEdgesResult(apache::thrift::FragileConstructor, ::std::int32_t inserted__arg, ::std::int32_t skipped_unresolved__arg);
+
+  BatchInsertEdgesResult(BatchInsertEdgesResult&&) = default;
+
+  BatchInsertEdgesResult(const BatchInsertEdgesResult&) = default;
+
+
+  BatchInsertEdgesResult& operator=(BatchInsertEdgesResult&&) = default;
+
+  BatchInsertEdgesResult& operator=(const BatchInsertEdgesResult&) = default;
+ private:
+  ::std::int32_t __fbthrift_field_inserted;
+ private:
+  ::std::int32_t __fbthrift_field_skipped_unresolved;
+ private:
+  apache::thrift::detail::isset_bitset<2, apache::thrift::detail::IssetBitsetOption::Unpacked> __isset;
+
+ public:
+
+  bool operator==(const BatchInsertEdgesResult&) const;
+  bool operator<(const BatchInsertEdgesResult&) const;
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> inserted_ref() const& {
+    return {this->__fbthrift_field_inserted, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> inserted_ref() & {
+    return {this->__fbthrift_field_inserted, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> inserted_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_inserted), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> inserted() const& {
+    return {this->__fbthrift_field_inserted, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> inserted() & {
+    return {this->__fbthrift_field_inserted, __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> inserted() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_inserted), __isset.at(0), __isset.bit(0)};
+  }
+
+  /** Glean { "field": "skipped_unresolved" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> skipped_unresolved_ref() const& {
+    return {this->__fbthrift_field_skipped_unresolved, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "skipped_unresolved" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> skipped_unresolved_ref() & {
+    return {this->__fbthrift_field_skipped_unresolved, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "skipped_unresolved" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> skipped_unresolved_ref() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_skipped_unresolved), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "skipped_unresolved" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<const fbthrift_T&> skipped_unresolved() const& {
+    return {this->__fbthrift_field_skipped_unresolved, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "skipped_unresolved" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&> skipped_unresolved() & {
+    return {this->__fbthrift_field_skipped_unresolved, __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "skipped_unresolved" } */
+  template <typename..., typename fbthrift_T = ::std::int32_t>
+  FOLLY_ERASE ::apache::thrift::field_ref<fbthrift_T&&> skipped_unresolved() && {
+    return {static_cast<fbthrift_T&&>(this->__fbthrift_field_skipped_unresolved), __isset.at(1), __isset.bit(1)};
+  }
+
+  /** Glean { "field": "inserted" } */
+  [[deprecated("Use `FOO.inserted().value()` instead of `FOO.get_inserted()`")]]
+  ::std::int32_t get_inserted() const;
+
+  /** Glean { "field": "inserted" } */
+  [[deprecated("Use `FOO.inserted() = BAR` instead of `FOO.set_inserted(BAR)`")]]
+  ::std::int32_t& set_inserted(::std::int32_t inserted_);
+
+  /** Glean { "field": "skipped_unresolved" } */
+  [[deprecated("Use `FOO.skipped_unresolved().value()` instead of `FOO.get_skipped_unresolved()`")]]
+  ::std::int32_t get_skipped_unresolved() const;
+
+  /** Glean { "field": "skipped_unresolved" } */
+  [[deprecated("Use `FOO.skipped_unresolved() = BAR` instead of `FOO.set_skipped_unresolved(BAR)`")]]
+  ::std::int32_t& set_skipped_unresolved(::std::int32_t skipped_unresolved_);
+
+  template <class Protocol_>
+  unsigned long read(Protocol_* iprot);
+  template <class Protocol_>
+  uint32_t serializedSize(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t serializedSizeZC(Protocol_ const* prot_) const;
+  template <class Protocol_>
+  uint32_t write(Protocol_* prot_) const;
+
+ private:
+  template <class Protocol_>
+  void readNoXfer(Protocol_* iprot);
+
+  friend class ::apache::thrift::Cpp2Ops<BatchInsertEdgesResult>;
+  friend void swap(BatchInsertEdgesResult& a, BatchInsertEdgesResult& b);
+};
+
+template <class Protocol_>
+unsigned long BatchInsertEdgesResult::read(Protocol_* iprot) {
   auto _xferStart = iprot->getCursorPosition();
   readNoXfer(iprot);
   return iprot->getCursorPosition() - _xferStart;
@@ -5984,92 +6850,107 @@ template <> struct TEnumTraits<::eugraph::thrift_service::ResultValue::Type> {
 namespace apache::thrift::detail {
 template <> struct TSchemaAssociation<::eugraph::thrift_service::PropertyDefThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x20\x41\xc9\xbc\x7e\xd6\x08\x05\xc4\xf3\xd9\xbf\xf7\xed\xe2\x0e", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xef\xfd\x38\xe1\x83\x0f\x05\xce\x49\x25\x31\xc8\x61\x81\xe5\x96", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::DateTimeValueThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x2e\x54\x9a\x67\x47\xe0\x60\x80\x43\xbd\x6f\x32\x30\xed\x43\x78", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xeb\x61\x0a\x73\x41\xa9\xe1\x5a\x83\xda\x36\x8b\x45\x3e\x6d\xfe", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::TimeValueThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x47\x97\xe9\x26\x13\x4c\x9a\xdb\x76\x95\xb6\xe5\x6e\x32\xed\xc5", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xdf\x17\xae\xea\xe7\x16\xe6\xb0\x66\x87\xca\x93\xc9\xd1\x63\xfa", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::DurationValueThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\xf2\x7b\xdf\x0b\x8d\xe9\x75\xa3\x11\xe6\x79\xa5\xd0\xa2\x58\x23", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xf2\x00\xfd\x32\x70\x7a\x6b\xb1\x5e\xd8\x59\xf5\xd6\xbb\x86\x37", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::PropertyValueThrift, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\xdb\xd6\x8c\x93\xf5\x10\x2c\x10\x45\x66\x69\xbd\x9c\x4f\x56\xc7", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x3e\x8c\x72\x00\x1c\xe4\x41\x59\x5f\x55\x94\xb2\xb6\xec\x7c\x3a", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::LabelInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x36\xdc\xc0\xfa\x34\x34\x2c\xf8\xc5\x8a\x4b\xa1\x42\x30\xd1\x31", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x20\x1f\xa5\xf4\x45\x52\xea\xe3\x59\xf4\x24\xcd\x87\x54\x51\x8e", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::EdgeLabelInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x9c\xda\x27\x8d\x94\x10\x0e\x98\xa1\xd1\xb4\xd9\x4c\xa4\x4b\xc8", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xd8\xd6\x93\x76\xe4\x0e\x99\x68\x03\xeb\x5c\x54\x3d\xea\x0f\x52", 16};
+};
+template <> struct TSchemaAssociation<::eugraph::thrift_service::PkKey, false> {
+  static ::folly::Range<const ::std::string_view*>(*bundle)();
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x82\x0f\x33\x39\x13\xc8\x1e\x96\x6b\x10\x6f\x7e\x9f\x6b\xef\xae", 16};
+};
+template <> struct TSchemaAssociation<::eugraph::thrift_service::PkRef, false> {
+  static ::folly::Range<const ::std::string_view*>(*bundle)();
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x18\x37\x76\x82\x55\x66\xb7\x48\x01\xde\x1e\x24\x58\x30\xe9\x8d", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::VertexRecord, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x59\x21\xab\x58\xc1\x08\xc1\x93\x67\x23\x2e\xbc\x69\x20\x4d\xe3", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xe9\x88\xe3\xba\xeb\x98\x71\x9d\x4d\x15\xda\x0f\xc8\x0f\xd9\x5e", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::EdgeRecord, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x8b\xeb\xaa\xf4\x47\x24\x4b\x14\xf2\x4a\xf7\xa0\xce\xbe\x24\x45", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xc2\x17\xd3\xcd\x56\xd4\xda\xfb\x75\x07\x3f\x9b\xf7\x21\x73\x75", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::BatchInsertVerticesResult, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\xa7\x75\x24\xd4\xbd\x58\x39\x4c\x63\x3e\x64\x57\xcf\x0c\x90\x00", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x9f\xd1\xdd\xf9\x1b\x28\x86\x8e\x64\xc7\xd3\xd3\xe2\x9f\x16\x00", 16};
+};
+template <> struct TSchemaAssociation<::eugraph::thrift_service::BatchInsertEdgesResult, false> {
+  static ::folly::Range<const ::std::string_view*>(*bundle)();
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xae\xf3\x7f\x79\xca\x96\x1f\x07\x59\x26\x49\xe8\x54\x3f\x78\x56", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::ResultValue, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\xeb\x23\x46\x6c\xa2\x87\x5e\x0b\xe3\x1d\x9a\x5a\x61\x23\x5b\xe2", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xb5\x91\x2c\x8e\x52\xf3\x95\x93\x30\x12\x9d\x0c\x97\x22\x37\xb8", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::ResultRow, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x60\x12\x3d\xa5\xf0\xa7\xc7\x8f\xee\x4e\x54\x54\xcb\x6e\xf1\xbf", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x91\x04\x3d\x8c\xc5\xde\x9a\x6a\x8a\x53\x63\x06\xf8\xbf\x7d\x5d", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::QueryStreamMeta, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x9a\xd1\xdf\xa8\xf8\x53\x09\x85\xbd\x01\xb4\x9a\xf8\x89\xfb\x6b", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x67\xab\xea\xdf\x02\xc4\x6a\x6c\x99\x1b\xf5\xa4\x99\x51\x37\x0f", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::ResultRowBatch, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x19\xe8\x24\x30\xcd\xbf\xdb\x8e\xff\xc6\xd6\x40\x28\x85\x96\x89", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x30\x99\xbc\x3f\x49\xd4\xbf\x7d\x7e\x7c\x40\x85\xb7\x26\x99\xd3", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::GraphInfo, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\xa9\x55\x55\x06\x81\xff\x24\xe2\x0f\x9a\xcf\x43\xf5\x7a\x63\x9e", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x12\x5f\x35\x9c\x73\x52\x17\xbf\x71\x21\x43\x4d\xb8\x91\x3f\x06", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::PropertyType, true> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x34\x57\xc5\xb7\xf3\x5c\xc0\x02\x0e\x7c\x9e\xe2\x82\xd1\x32\x6b", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x9a\xfb\x12\x02\xe6\xe0\x65\xff\xb2\x6a\x0a\x61\xaf\x88\xe6\x1e", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::DateTimeKind, true> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\xf5\x02\x4d\xfe\x8f\x9b\xd2\x14\xc7\x42\xeb\x1f\x9d\x0d\x1a\xc0", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\x10\x5f\x16\x1c\x28\x29\x2a\x4f\xfc\xaa\xd7\x5e\xdc\x64\xfe\x0a", 16};
 };
 template <> struct TSchemaAssociation<::eugraph::thrift_service::TimeKind, true> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x5a\xd1\x1d\x4e\xc3\x35\x9e\xcb\xff\x4b\x1b\x39\x2c\x58\x8c\x66", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xde\x82\x07\x4f\x8b\x9b\x87\x92\x01\x07\xc0\xec\x8c\xeb\x51\x72", 16};
 };
 } // namespace apache::thrift::detail

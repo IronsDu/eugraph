@@ -239,6 +239,11 @@ std::string MetadataCodec::encodeLabelDef(const LabelDef& def) {
     for (const auto& prop : def.properties) {
         encodePropertyDef(buf, prop);
     }
+    // 主键属性 ID（有序）。本次重构不承担存储兼容，直接改格式、不写旧格式解码分支。
+    encodeU16(buf, static_cast<uint16_t>(def.pk_prop_ids.size()));
+    for (auto pid : def.pk_prop_ids) {
+        encodeU16(buf, pid);
+    }
     encodeU16(buf, static_cast<uint16_t>(def.indexes.size()));
     for (const auto& idx : def.indexes) {
         encodeIndexDef(buf, idx);
@@ -255,6 +260,11 @@ LabelDef MetadataCodec::decodeLabelDef(std::string_view data) {
     def.properties.resize(prop_count);
     for (uint16_t i = 0; i < prop_count; ++i) {
         def.properties[i] = decodePropertyDef(data, offset);
+    }
+    auto pk_count = decodeU16(data, offset);
+    def.pk_prop_ids.resize(pk_count);
+    for (uint16_t i = 0; i < pk_count; ++i) {
+        def.pk_prop_ids[i] = decodeU16(data, offset);
     }
     auto idx_count = decodeU16(data, offset);
     def.indexes.resize(idx_count);

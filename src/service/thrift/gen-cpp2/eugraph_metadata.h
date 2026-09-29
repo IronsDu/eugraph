@@ -71,6 +71,16 @@ class StructMetadata<::eugraph::thrift_service::EdgeLabelInfo> {
   static const ::apache::thrift::metadata::ThriftStruct& gen(ThriftMetadata& metadata);
 };
 template <>
+class StructMetadata<::eugraph::thrift_service::PkKey> {
+ public:
+  static const ::apache::thrift::metadata::ThriftStruct& gen(ThriftMetadata& metadata);
+};
+template <>
+class StructMetadata<::eugraph::thrift_service::PkRef> {
+ public:
+  static const ::apache::thrift::metadata::ThriftStruct& gen(ThriftMetadata& metadata);
+};
+template <>
 class StructMetadata<::eugraph::thrift_service::VertexRecord> {
  public:
   static const ::apache::thrift::metadata::ThriftStruct& gen(ThriftMetadata& metadata);
@@ -82,6 +92,11 @@ class StructMetadata<::eugraph::thrift_service::EdgeRecord> {
 };
 template <>
 class StructMetadata<::eugraph::thrift_service::BatchInsertVerticesResult> {
+ public:
+  static const ::apache::thrift::metadata::ThriftStruct& gen(ThriftMetadata& metadata);
+};
+template <>
+class StructMetadata<::eugraph::thrift_service::BatchInsertEdgesResult> {
  public:
   static const ::apache::thrift::metadata::ThriftStruct& gen(ThriftMetadata& metadata);
 };

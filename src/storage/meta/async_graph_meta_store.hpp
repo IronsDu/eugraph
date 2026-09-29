@@ -28,8 +28,9 @@ public:
     folly::coro::Task<void> close() override;
 
     // Label management
-    folly::coro::Task<LabelId> createLabel(const std::string& name,
-                                           const std::vector<PropertyDef>& properties = {}) override;
+    folly::coro::Task<LabelId> createLabel(const std::string& name, const std::vector<PropertyDef>& properties = {},
+                                           const std::vector<std::string>& pk_props = {},
+                                           bool merge_properties = false) override;
     folly::coro::Task<bool>
     addVertexLabelProperties(const std::string& name,
                              const std::vector<std::pair<std::string, PropertyType>>& prop_defs) override;

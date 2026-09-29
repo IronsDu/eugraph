@@ -14,3 +14,10 @@ __pycache__/
 *.pyc
 tck-step-results.json
 bolt-server.log
+
+# LDBC 数据集语料：体积大（sf0.1 约 89MB）且可从上游下载，不入库。
+# 只提交 loader 配置（social_network-*/loader-schema.json）——注意不能排除整个目录，
+# 否则 git 不会进入目录，`!` 例外规则也无法生效。
+social_network-*.tar.zst
+social_network-*/**
+!social_network-*/loader-schema.json

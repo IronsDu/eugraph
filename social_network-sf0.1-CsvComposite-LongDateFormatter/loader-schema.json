@@ -1,0 +1,358 @@
+{
+  "_comment": [
+    "LDBC SNB Interactive v1 sf0.1 —— EuGraph loader schema（对齐 ldbc_snb_interactive_v1_impls/cypher/scripts）。",
+    "生成方式：读语料真实表头；列类型对齐 headers.txt 的 :LONG/:INT/:STRING/:STRING[] 声明。",
+    "命名对齐：顶点标签用 neo4j import 的名字（Person/Comment/Place/TagClass...，见 --nodes）；",
+    "          行级标签按 convert-csvs.sh 的 sed 做首字母大写（city→City, company→Company...）；",
+    "          边类型用 LDBC 官方 UPPER_SNAKE（HAS_CREATOR / IS_LOCATED_IN ...，见 --relationships 与官方查询）；",
+    "          Comment/Post 追加公共父标签 Message（neo4j --nodes=Comment:Message）。",
+    "键的含义：columns 与 pk 用【图里的属性名】，src / dst / label 用【CSV 里的列名】。",
+    "pk 只写属性名（本例都是 id），来源列与类型由 columns 决定 —— 与 neo4j 的 id:ID(Group) 语义等价。",
+    "place.type / organisation.type 是行级标签来源（label.header），取值原样作标签、首字母大写。",
+    "行级标签是追加标签：place 文件的顶点带 [Place, City|Country|Continent]，主标签始终是 Place。",
+    "所有列类型显式声明、不依赖采样推断。",
+    "用法：eugraph-loader --schema ldbc-sf01.schema.json --data-dir <语料目录>",
+    "ignore 列出属于本数据集但【不参与初始装载】的文件：LDBC 的 updateStream_*.csv 属于更新流，另行增量导入。"
+  ],
+  "date_format": "epoch_ms",
+  "labels": {
+    "Person": [
+      {
+        "file": "dynamic/person_0_0.csv",
+        "pk": "id",
+        "columns": {
+          "id": "INT64",
+          "firstName": "STRING",
+          "lastName": "STRING",
+          "gender": "STRING",
+          "birthday": "INT64",
+          "creationDate": "INT64",
+          "locationIP": "STRING",
+          "browserUsed": "STRING",
+          "language": "STRING",
+          "email": "STRING[]"
+        }
+      }
+    ],
+    "Forum": [
+      {
+        "file": "dynamic/forum_0_0.csv",
+        "pk": "id",
+        "columns": {
+          "id": "INT64",
+          "title": "STRING",
+          "creationDate": "INT64"
+        }
+      }
+    ],
+    "Post": [
+      {
+        "file": "dynamic/post_0_0.csv",
+        "pk": "id",
+        "columns": {
+          "id": "INT64",
+          "imageFile": "STRING",
+          "creationDate": "INT64",
+          "locationIP": "STRING",
+          "browserUsed": "STRING",
+          "language": "STRING",
+          "content": "STRING",
+          "length": "INT64"
+        },
+        "label": {
+          "derived": [
+            "Message"
+          ]
+        }
+      }
+    ],
+    "Comment": [
+      {
+        "file": "dynamic/comment_0_0.csv",
+        "pk": "id",
+        "columns": {
+          "id": "INT64",
+          "creationDate": "INT64",
+          "locationIP": "STRING",
+          "browserUsed": "STRING",
+          "content": "STRING",
+          "length": "INT64"
+        },
+        "label": {
+          "derived": [
+            "Message"
+          ]
+        }
+      }
+    ],
+    "Place": [
+      {
+        "file": "static/place_0_0.csv",
+        "pk": "id",
+        "columns": {
+          "id": "INT64",
+          "name": "STRING",
+          "url": "STRING",
+          "type": "STRING"
+        },
+        "label": {
+          "header": "type",
+          "case": "capitalize"
+        }
+      }
+    ],
+    "Organisation": [
+      {
+        "file": "static/organisation_0_0.csv",
+        "pk": "id",
+        "columns": {
+          "id": "INT64",
+          "type": "STRING",
+          "name": "STRING",
+          "url": "STRING"
+        },
+        "label": {
+          "header": "type",
+          "case": "capitalize"
+        }
+      }
+    ],
+    "Tag": [
+      {
+        "file": "static/tag_0_0.csv",
+        "pk": "id",
+        "columns": {
+          "id": "INT64",
+          "name": "STRING",
+          "url": "STRING"
+        }
+      }
+    ],
+    "TagClass": [
+      {
+        "file": "static/tagclass_0_0.csv",
+        "pk": "id",
+        "columns": {
+          "id": "INT64",
+          "name": "STRING",
+          "url": "STRING"
+        }
+      }
+    ]
+  },
+  "relationships": {
+    "HAS_CREATOR": [
+      {
+        "file": "dynamic/comment_hasCreator_person_0_0.csv",
+        "src": "Comment.id",
+        "dst": "Person.id",
+        "src_label": "Comment",
+        "dst_label": "Person"
+      },
+      {
+        "file": "dynamic/post_hasCreator_person_0_0.csv",
+        "src": "Post.id",
+        "dst": "Person.id",
+        "src_label": "Post",
+        "dst_label": "Person"
+      }
+    ],
+    "HAS_TAG": [
+      {
+        "file": "dynamic/comment_hasTag_tag_0_0.csv",
+        "src": "Comment.id",
+        "dst": "Tag.id",
+        "src_label": "Comment",
+        "dst_label": "Tag"
+      },
+      {
+        "file": "dynamic/forum_hasTag_tag_0_0.csv",
+        "src": "Forum.id",
+        "dst": "Tag.id",
+        "src_label": "Forum",
+        "dst_label": "Tag"
+      },
+      {
+        "file": "dynamic/post_hasTag_tag_0_0.csv",
+        "src": "Post.id",
+        "dst": "Tag.id",
+        "src_label": "Post",
+        "dst_label": "Tag"
+      }
+    ],
+    "IS_LOCATED_IN": [
+      {
+        "file": "dynamic/comment_isLocatedIn_place_0_0.csv",
+        "src": "Comment.id",
+        "dst": "Place.id",
+        "src_label": "Comment",
+        "dst_label": "Place"
+      },
+      {
+        "file": "dynamic/person_isLocatedIn_place_0_0.csv",
+        "src": "Person.id",
+        "dst": "Place.id",
+        "src_label": "Person",
+        "dst_label": "Place"
+      },
+      {
+        "file": "dynamic/post_isLocatedIn_place_0_0.csv",
+        "src": "Post.id",
+        "dst": "Place.id",
+        "src_label": "Post",
+        "dst_label": "Place"
+      },
+      {
+        "file": "static/organisation_isLocatedIn_place_0_0.csv",
+        "src": "Organisation.id",
+        "dst": "Place.id",
+        "src_label": "Organisation",
+        "dst_label": "Place"
+      }
+    ],
+    "REPLY_OF": [
+      {
+        "file": "dynamic/comment_replyOf_comment_0_0.csv",
+        "src": "Comment.id",
+        "dst": "Comment.id",
+        "src_label": "Comment",
+        "dst_label": "Comment"
+      },
+      {
+        "file": "dynamic/comment_replyOf_post_0_0.csv",
+        "src": "Comment.id",
+        "dst": "Post.id",
+        "src_label": "Comment",
+        "dst_label": "Post"
+      }
+    ],
+    "CONTAINER_OF": [
+      {
+        "file": "dynamic/forum_containerOf_post_0_0.csv",
+        "src": "Forum.id",
+        "dst": "Post.id",
+        "src_label": "Forum",
+        "dst_label": "Post"
+      }
+    ],
+    "HAS_MEMBER": [
+      {
+        "file": "dynamic/forum_hasMember_person_0_0.csv",
+        "src": "Forum.id",
+        "dst": "Person.id",
+        "src_label": "Forum",
+        "dst_label": "Person",
+        "columns": {
+          "joinDate": "INT64"
+        }
+      }
+    ],
+    "HAS_MODERATOR": [
+      {
+        "file": "dynamic/forum_hasModerator_person_0_0.csv",
+        "src": "Forum.id",
+        "dst": "Person.id",
+        "src_label": "Forum",
+        "dst_label": "Person"
+      }
+    ],
+    "HAS_INTEREST": [
+      {
+        "file": "dynamic/person_hasInterest_tag_0_0.csv",
+        "src": "Person.id",
+        "dst": "Tag.id",
+        "src_label": "Person",
+        "dst_label": "Tag"
+      }
+    ],
+    "KNOWS": [
+      {
+        "file": "dynamic/person_knows_person_0_0.csv",
+        "src": "Person.id",
+        "dst": "Person.id",
+        "src_label": "Person",
+        "dst_label": "Person",
+        "columns": {
+          "creationDate": "INT64"
+        }
+      }
+    ],
+    "LIKES": [
+      {
+        "file": "dynamic/person_likes_comment_0_0.csv",
+        "src": "Person.id",
+        "dst": "Comment.id",
+        "src_label": "Person",
+        "dst_label": "Comment",
+        "columns": {
+          "creationDate": "INT64"
+        }
+      },
+      {
+        "file": "dynamic/person_likes_post_0_0.csv",
+        "src": "Person.id",
+        "dst": "Post.id",
+        "src_label": "Person",
+        "dst_label": "Post",
+        "columns": {
+          "creationDate": "INT64"
+        }
+      }
+    ],
+    "STUDY_AT": [
+      {
+        "file": "dynamic/person_studyAt_organisation_0_0.csv",
+        "src": "Person.id",
+        "dst": "Organisation.id",
+        "src_label": "Person",
+        "dst_label": "Organisation",
+        "columns": {
+          "classYear": "INT64"
+        }
+      }
+    ],
+    "WORK_AT": [
+      {
+        "file": "dynamic/person_workAt_organisation_0_0.csv",
+        "src": "Person.id",
+        "dst": "Organisation.id",
+        "src_label": "Person",
+        "dst_label": "Organisation",
+        "columns": {
+          "workFrom": "INT64"
+        }
+      }
+    ],
+    "IS_PART_OF": [
+      {
+        "file": "static/place_isPartOf_place_0_0.csv",
+        "src": "Place.id",
+        "dst": "Place.id",
+        "src_label": "Place",
+        "dst_label": "Place"
+      }
+    ],
+    "HAS_TYPE": [
+      {
+        "file": "static/tag_hasType_tagclass_0_0.csv",
+        "src": "Tag.id",
+        "dst": "TagClass.id",
+        "src_label": "Tag",
+        "dst_label": "TagClass"
+      }
+    ],
+    "IS_SUBCLASS_OF": [
+      {
+        "file": "static/tagclass_isSubclassOf_tagclass_0_0.csv",
+        "src": "TagClass.id",
+        "dst": "TagClass.id",
+        "src_label": "TagClass",
+        "dst_label": "TagClass"
+      }
+    ]
+  },
+  "ignore": [
+    "updateStream_0_0_forum.csv",
+    "updateStream_0_0_person.csv"
+  ]
+}

@@ -175,7 +175,7 @@ static void insertVertexWithIndex(TestEnv& env, LabelId label_id, VertexId vid, 
             values.push_back(props[pid].value());
         }
         if (all_present)
-            env.data_store->insertIndexEntry(vidxTableById(idx.index_id), values, vid);
+            env.data_store->insertIndexEntry(txn, vidxTableById(idx.index_id), values, vid);
     }
     env.data_store->commitTransaction(txn);
 }

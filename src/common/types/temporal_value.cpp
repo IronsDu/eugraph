@@ -1070,4 +1070,453 @@ std::string temporalToString(const DurationValue& tv) {
     return s;
 }
 
+// ==================== Text → Temporal 解析 ====================
+
+namespace {
+
+void isoWeekToDate(int64_t iso_year, int64_t iso_week, int64_t iso_dow, int64_t& out_year, int64_t& out_month,
+                   int64_t& out_day) {
+    // ISO week date using pure calendar math (works for all years)
+    int64_t jan4 = daysFromCivil(iso_year, 1, 4);
+    // ISO weekday: 1970-01-01 was Thursday = ISO day 4
+    int64_t jan4_dow = ((jan4 % 7) + 10) % 7 + 1; // 1=Mon..7=Sun
+    int64_t week1_monday = jan4 - (jan4_dow - 1);
+    int64_t target = week1_monday + (iso_week - 1) * 7 + (iso_dow - 1);
+    civilFromDays(target, out_year, out_month, out_day);
+}
+
+void ordinalToDate(int64_t year, int64_t ordinal, int64_t& out_month, int64_t& out_day) {
+    int64_t m = 1;
+    while (m <= 12 && ordinal > daysInMonth(year, m)) {
+        ordinal -= daysInMonth(year, m);
+        m++;
+    }
+    out_month = m;
+    out_day = ordinal;
+}
+
+DateTimeValue parseDateFromStringRaw(const std::string& s);
+
+} // namespace
+
+DateTimeValue parseDateFromString(const std::string& s) {
+    auto tv = parseDateFromStringRaw(s);
+    if (tv.year < -999999999 || tv.year > 999999999)
+        throw QueryException(QueryErrorKind::Syntax, "Text cannot be parsed to a Date");
+    return tv;
+}
+
+namespace {
+
+DateTimeValue parseDateFromStringRaw(const std::string& s) {
+    DateTimeValue tv;
+    if (s.empty())
+        return tv;
+
+    auto isDigit = [](char c) { return c >= '0' && c <= '9'; };
+
+    // Extended year format: [+-]?YYYY...-MM-DD (more than 4 year digits)
+    // Find last two dashes: ...-MM-DD
+    if (s.size() >= 10) {
+        size_t last_dash = s.rfind('-');
+        if (last_dash != std::string::npos && last_dash >= 4) {
+            size_t mid_dash = s.rfind('-', last_dash - 1);
+            if (mid_dash != std::string::npos && last_dash - mid_dash == 3) {
+                // Found ...-MM-DD pattern with exactly 2-digit month
+                tv.year = std::stoll(s.substr(0, mid_dash));
+                tv.month = std::stoll(s.substr(mid_dash + 1, 2));
+                tv.day = std::stoll(s.substr(last_dash + 1));
+                return tv;
+            }
+        }
+    }
+
+    if (s.size() >= 10 && s[4] == '-' && s[7] == '-') {
+        // YYYY-MM-DD
+        tv.year = std::stoll(s.substr(0, 4));
+        tv.month = std::stoll(s.substr(5, 2));
+        tv.day = std::stoll(s.substr(8));
+    } else if (s.size() == 8 && s.find('-') == std::string::npos && s.find('W') == std::string::npos &&
+               s.find('w') == std::string::npos) {
+        // YYYYMMDD
+        tv.year = std::stoll(s.substr(0, 4));
+        tv.month = std::stoll(s.substr(4, 2));
+        tv.day = std::stoll(s.substr(6, 2));
+    } else if (s.find('W') != std::string::npos || s.find('w') != std::string::npos) {
+        // ISO week date: YYYY-Www-D, YYYY-Www, YYYYWwwD, YYYYWww
+        size_t wpos = s.find('W');
+        if (wpos == std::string::npos)
+            wpos = s.find('w');
+        int64_t iso_year = std::stoll(s.substr(0, wpos));
+        // Check for extended format: dash before W (year-W...)
+        bool extended = (wpos > 0 && s[wpos - 1] == '-');
+        size_t num_start = wpos + 1;
+        int64_t iso_week = 0;
+        int64_t iso_dow = 1;
+        if (extended) {
+            // Extended: YYYY-Www-D or YYYY-Www
+            // Skip dash after W if present (it shouldn't be in standard, but be tolerant)
+            size_t num_end = num_start;
+            while (num_end < s.size() && isDigit(s[num_end]))
+                num_end++;
+            iso_week = std::stoll(s.substr(num_start, num_end - num_start));
+            if (num_end < s.size()) {
+                if (s[num_end] == '-')
+                    num_end++;
+                iso_dow = std::stoll(s.substr(num_end));
+            }
+        } else {
+            // Compact: YYYYWwwD or YYYYWww (2-digit week, optional 1-digit dow)
+            if (num_start + 2 <= s.size())
+                iso_week = std::stoll(s.substr(num_start, 2));
+            if (num_start + 2 < s.size())
+                iso_dow = std::stoll(s.substr(num_start + 2));
+        }
+        {
+            int64_t _y = 0, _m = 0, _d = 0;
+            isoWeekToDate(iso_year, iso_week, iso_dow, _y, _m, _d);
+            tv.year = static_cast<int32_t>(_y);
+            tv.month = static_cast<int8_t>(_m);
+            tv.day = static_cast<int8_t>(_d);
+        }
+    } else if (s.size() == 7 && s[4] == '-' && s.rfind('-') == 4) {
+        // YYYY-MM (month only, 2 digits — must come before ordinal YYYY-DDD)
+        tv.year = std::stoll(s.substr(0, 4));
+        tv.month = std::stoll(s.substr(5, 2));
+        tv.day = 1;
+    } else if (s.size() == 8 && s[4] == '-') {
+        // YYYY-DDD (ordinal day with dash, 3 digits)
+        tv.year = std::stoll(s.substr(0, 4));
+        int64_t ordinal = std::stoll(s.substr(5));
+        {
+            int64_t _m = 0, _d = 0;
+            ordinalToDate(tv.year, ordinal, _m, _d);
+            tv.month = static_cast<int8_t>(_m);
+            tv.day = static_cast<int8_t>(_d);
+        }
+    } else if (s.size() == 7 && isDigit(s[0]) && isDigit(s[1]) && isDigit(s[2]) && isDigit(s[3]) && isDigit(s[4]) &&
+               isDigit(s[5]) && isDigit(s[6])) {
+        // YYYYDDD (compact ordinal day)
+        tv.year = std::stoll(s.substr(0, 4));
+        int64_t ordinal = std::stoll(s.substr(4));
+        {
+            int64_t _m = 0, _d = 0;
+            ordinalToDate(tv.year, ordinal, _m, _d);
+            tv.month = static_cast<int8_t>(_m);
+            tv.day = static_cast<int8_t>(_d);
+        }
+    } else if (s.size() == 6 && isDigit(s[0]) && isDigit(s[1]) && isDigit(s[2]) && isDigit(s[3]) && isDigit(s[4]) &&
+               isDigit(s[5])) {
+        // YYYYMM (compact month)
+        tv.year = std::stoll(s.substr(0, 4));
+        tv.month = std::stoll(s.substr(4, 2));
+        tv.day = 1;
+    } else if (s.size() == 4 && isDigit(s[0]) && isDigit(s[1]) && isDigit(s[2]) && isDigit(s[3])) {
+        // YYYY (year only)
+        tv.year = std::stoll(s);
+        tv.month = 1;
+        tv.day = 1;
+    }
+    return tv;
+}
+
+} // namespace
+
+TimeValue parseTimeStr(const std::string& s, TimeKind kind, bool allow_named_tz) {
+    TimeValue tv;
+    tv.kind = kind;
+    if (s.empty())
+        return tv;
+    size_t pos = 0;
+    auto isDigit = [](char c) { return c >= '0' && c <= '9'; };
+    // Read initial digit run
+    size_t num_end = pos;
+    while (num_end < s.size() && isDigit(s[num_end]))
+        num_end++;
+    if (num_end == pos)
+        return tv;
+
+    // Compact format: no colon immediately after the initial digits
+    // (e.g., "2140", "214032.142", "22+18:00")
+    bool is_compact = (num_end >= s.size() || s[num_end] != ':') && (num_end - pos >= 4);
+    if (is_compact) {
+        // Fixed 2-digit components: HHMM[SS[.fff]][tz]
+        tv.hour = std::stoll(s.substr(pos, 2));
+        pos += 2;
+        tv.minute = std::stoll(s.substr(pos, 2));
+        pos += 2;
+        if (pos < s.size() && isDigit(s[pos])) {
+            tv.second = std::stoll(s.substr(pos, 2));
+            pos += 2;
+        }
+    } else {
+        // Separator format: variable-length hour, colon-delimited components
+        tv.hour = std::stoll(s.substr(pos, num_end - pos));
+        pos = num_end;
+        if (pos < s.size() && s[pos] == ':')
+            pos++;
+        if (pos < s.size() && isDigit(s[pos])) {
+            tv.minute = std::stoll(s.substr(pos, 2));
+            pos += 2;
+        }
+        if (pos < s.size() && s[pos] == ':') {
+            pos++;
+            tv.second = std::stoll(s.substr(pos, 2));
+            pos += 2;
+        } else if (pos < s.size() && isDigit(s[pos])) {
+            tv.second = std::stoll(s.substr(pos, 2));
+            pos += 2;
+        }
+    }
+    if (pos < s.size() && s[pos] == '.') {
+        pos++;
+        size_t start = pos;
+        while (pos < s.size() && s[pos] >= '0' && s[pos] <= '9')
+            pos++;
+        std::string frac = s.substr(start, pos - start);
+        frac.resize(9, '0');
+        tv.nanos = std::stoll(frac);
+    }
+    if (kind == TimeKind::TIME && pos < s.size()) {
+        std::string tz = s.substr(pos);
+        std::string tz_name_str;
+        auto bracket = tz.find('[');
+        if (bracket != std::string::npos) {
+            auto close = tz.find(']', bracket);
+            if (close != std::string::npos) {
+                tz_name_str = tz.substr(bracket + 1, close - bracket - 1);
+                tz = tz.substr(0, bracket);
+            }
+        }
+        if (tz != "Z" && !tz.empty())
+            tv.tz_offset_sec = parseTzOffset(tz);
+        if (!tz_name_str.empty()) {
+            // 命名时区需要日期才能确定偏移：time('12:00:00[UTC]') 在 neo4j 里是
+            // ArgumentError（改用 '+00:00' 或 datetime）。map 形式仍然允许，
+            // 因为那里的时区用于换算而不是定位某一天。
+            if (!allow_named_tz)
+                throw QueryException(QueryErrorKind::Argument,
+                                     "Using a named time zone e.g. [" + tz_name_str +
+                                         "] is not valid for a time without a date. Instead, use a specific time zone "
+                                         "string e.g. +00:00.");
+            setTzName(tv.tz_name, tz_name_str);
+        }
+    }
+    return tv;
+}
+
+int32_t parseTzOffset(const std::string& tz) {
+    if (tz.empty() || tz == "Z" || tz == "+00:00" || tz == "-00:00")
+        return 0;
+    if (tz.find('/') != std::string::npos)
+        return 0; // named timezone like "Europe/Stockholm" — offset set separately
+    int sign = (tz[0] == '-') ? -1 : 1;
+    size_t start = (tz[0] == '+' || tz[0] == '-') ? 1 : 0;
+    // Parse HH:MM[:SS] or HHMM
+    int64_t hours = 0, minutes = 0, seconds = 0;
+    std::string rest = tz.substr(start);
+    size_t col1 = rest.find(':');
+    if (col1 != std::string::npos) {
+        hours = std::stoll(rest.substr(0, col1));
+        size_t col2 = rest.find(':', col1 + 1);
+        if (col2 != std::string::npos) {
+            minutes = std::stoll(rest.substr(col1 + 1, col2 - col1 - 1));
+            seconds = std::stoll(rest.substr(col2 + 1));
+        } else {
+            minutes = std::stoll(rest.substr(col1 + 1));
+        }
+    } else {
+        size_t len = rest.size();
+        if (len >= 2) {
+            hours = std::stoll(rest.substr(0, 2));
+            if (len >= 4)
+                minutes = std::stoll(rest.substr(2, 2));
+        }
+    }
+    return static_cast<int32_t>(sign * (hours * 3600 + minutes * 60 + seconds));
+}
+
+DateTimeValue parseDatetimeStr(const std::string& s, DateTimeKind kind) {
+    DateTimeValue tv;
+    tv.kind = kind;
+    if (s.empty())
+        return tv;
+
+    // Find the T separator to split date and time parts
+    size_t t_pos = std::string::npos;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == 'T' || s[i] == 't' || s[i] == ' ') {
+            t_pos = i;
+            break;
+        }
+    }
+
+    if (t_pos != std::string::npos) {
+        // Parse date portion using parseDateFromString (handles week, ordinal, etc.)
+        std::string date_part = s.substr(0, t_pos);
+        auto date_tv = parseDateFromString(date_part);
+        tv.year = date_tv.year;
+        tv.month = date_tv.month;
+        tv.day = date_tv.day;
+
+        // Parse time portion using parseTimeStr (handles compact and separator formats)
+        TimeKind time_kind = (kind == DateTimeKind::DATETIME) ? TimeKind::TIME : TimeKind::LOCAL_TIME;
+        auto time_tv = parseTimeStr(s.substr(t_pos + 1), time_kind, /*allow_named_tz=*/true);
+        tv.hour = time_tv.hour;
+        tv.minute = time_tv.minute;
+        tv.second = time_tv.second;
+        tv.nanos = time_tv.nanos;
+        if (kind == DateTimeKind::DATETIME) {
+            tv.tz_offset_sec = time_tv.tz_offset_sec;
+            tv.tz_name = time_tv.tz_name;
+        }
+        return tv;
+    }
+
+    // No T separator — parse as date-only
+    auto date_tv = parseDateFromString(s);
+    tv.year = date_tv.year;
+    tv.month = date_tv.month;
+    tv.day = date_tv.day;
+    return tv;
+}
+
+DurationValue parseDurationFromString(const std::string& s) {
+    DurationValue dv;
+    if (s.empty() || s[0] != 'P')
+        return dv;
+    size_t pos = 1;
+
+    // Check for date-based duration format: PYYYY-MM-DDThh:mm:ss
+    // Must start with 4+ digits followed by '-' after P
+    if (s.size() >= 12 && s[1] >= '0' && s[1] <= '9' && s[2] >= '0' && s[2] <= '9' && s[3] >= '0' && s[3] <= '9' &&
+        s[4] >= '0' && s[4] <= '9' && s[5] == '-') {
+        // Date-based format: extract components from date-time string
+        auto date_tv = parseDatetimeStr(s.substr(1), DateTimeKind::DATE);
+        // year 是 int32：先拓宽再乘（这里年份被 4 位数字门禁限制在 9999 内，
+        // 属于防御性统一，与 temporal_value.hpp 的 absoluteMonths 同一原因）。
+        dv.months = static_cast<int64_t>(date_tv.year) * 12 + date_tv.month;
+        dv.days = date_tv.day;
+        dv.seconds = date_tv.hour * 3600 + date_tv.minute * 60 + date_tv.second;
+        dv.nanos = date_tv.nanos;
+        return dv;
+    }
+
+    static constexpr double kDaysPerMonth = 365.2425 / 12.0;
+    bool in_time = false;
+    while (pos < s.size()) {
+        if (s[pos] == 'T') {
+            in_time = true;
+            pos++;
+            continue;
+        }
+        size_t num_start = pos;
+        bool neg = (s[pos] == '-');
+        if (neg)
+            pos++;
+        while (pos < s.size() && ((s[pos] >= '0' && s[pos] <= '9') || s[pos] == '.'))
+            pos++;
+        double val = std::stod(s.substr(num_start, pos - num_start));
+        if (pos >= s.size())
+            break;
+        char unit = s[pos++];
+        int64_t int_part = static_cast<int64_t>(val);
+        double frac = val - static_cast<double>(int_part);
+        switch (unit) {
+        case 'Y':
+            dv.months += int_part * 12;
+            if (frac != 0) {
+                double frac_days = frac * 12.0 * kDaysPerMonth;
+                int64_t frac_days_int = static_cast<int64_t>(frac_days);
+                dv.days += frac_days_int;
+                double frac_secs = (frac_days - static_cast<double>(frac_days_int)) * 86400.0;
+                int64_t frac_secs_int = static_cast<int64_t>(frac_secs);
+                dv.seconds += frac_secs_int;
+                dv.nanos += static_cast<int64_t>((frac_secs - static_cast<double>(frac_secs_int)) * 1'000'000'000.0);
+            }
+            break;
+        case 'M':
+            if (!in_time) {
+                dv.months += int_part;
+                if (frac != 0) {
+                    double frac_days = frac * kDaysPerMonth;
+                    int64_t frac_days_int = static_cast<int64_t>(frac_days);
+                    dv.days += frac_days_int;
+                    double frac_secs = (frac_days - static_cast<double>(frac_days_int)) * 86400.0;
+                    int64_t frac_secs_int = static_cast<int64_t>(frac_secs);
+                    dv.seconds += frac_secs_int;
+                    dv.nanos +=
+                        static_cast<int64_t>((frac_secs - static_cast<double>(frac_secs_int)) * 1'000'000'000.0);
+                }
+            } else {
+                dv.seconds += int_part * 60;
+                if (frac != 0) {
+                    double frac_secs = frac * 60.0;
+                    int64_t frac_secs_int = static_cast<int64_t>(frac_secs);
+                    dv.seconds += frac_secs_int;
+                    dv.nanos +=
+                        static_cast<int64_t>((frac_secs - static_cast<double>(frac_secs_int)) * 1'000'000'000.0);
+                }
+            }
+            break;
+        case 'W':
+            dv.days += int_part * 7;
+            if (frac != 0) {
+                double frac_secs = frac * 7.0 * 86400.0;
+                dv.seconds += static_cast<int64_t>(frac_secs);
+                dv.nanos += static_cast<int64_t>((frac_secs - static_cast<int64_t>(frac_secs)) * 1'000'000'000.0);
+            }
+            break;
+        case 'D':
+            dv.days += int_part;
+            if (frac != 0) {
+                double frac_secs = frac * 86400.0;
+                dv.seconds += static_cast<int64_t>(frac_secs);
+                dv.nanos += static_cast<int64_t>((frac_secs - static_cast<int64_t>(frac_secs)) * 1'000'000'000.0);
+            }
+            break;
+        case 'H':
+            dv.seconds += int_part * 3600;
+            if (frac != 0) {
+                double frac_secs = frac * 3600.0;
+                dv.seconds += static_cast<int64_t>(frac_secs);
+                dv.nanos += static_cast<int64_t>((frac_secs - static_cast<int64_t>(frac_secs)) * 1'000'000'000.0);
+            }
+            break;
+        case 'S': {
+            dv.seconds += int_part;
+            if (frac != 0) {
+                // Parse fractional seconds as nanoseconds to avoid floating-point precision loss
+                std::string num_str = s.substr(num_start, pos - num_start - 1);
+                auto dot_pos = num_str.find('.');
+                if (dot_pos != std::string::npos) {
+                    std::string frac_str = num_str.substr(dot_pos + 1);
+                    // Pad or truncate to 9 digits
+                    if (frac_str.size() > 9)
+                        frac_str.resize(9);
+                    else if (frac_str.size() < 9)
+                        frac_str.append(9 - frac_str.size(), '0');
+                    int64_t frac_ns = std::stoll(frac_str);
+                    if (neg)
+                        frac_ns = -frac_ns;
+                    dv.nanos += frac_ns;
+                }
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    normalizeDuration(dv);
+    // Normalize seconds into days for parsed durations
+    static constexpr int64_t kSecPerDay = 86'400;
+    if (dv.seconds >= kSecPerDay || dv.seconds <= -kSecPerDay) {
+        int64_t extra_days = dv.seconds / kSecPerDay;
+        dv.days += extra_days;
+        dv.seconds -= extra_days * kSecPerDay;
+    }
+    return dv;
+}
+
 } // namespace eugraph

@@ -112,18 +112,21 @@ public:
     bool dropIndex(const std::string& table_name) override;
 
     // Index Entry Operations
-    bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) override;
-    bool insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+    bool insertIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                           uint64_t entity_id) override;
-    bool insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id,
-                          std::string_view payload) override;
-    bool insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values, uint64_t entity_id,
-                          std::string_view payload) override;
-    bool deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) override;
-    bool deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+    bool insertIndexEntry(GraphTxnHandle txn, const std::string& table, const std::vector<PropertyValue>& values,
                           uint64_t entity_id) override;
-    bool checkUniqueConstraint(const std::string& table, const PropertyValue& value) override;
-    bool checkUniqueConstraint(const std::string& table, const std::vector<PropertyValue>& values) override;
+    bool insertIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value, uint64_t entity_id,
+                          std::string_view payload) override;
+    bool insertIndexEntry(GraphTxnHandle txn, const std::string& table, const std::vector<PropertyValue>& values,
+                          uint64_t entity_id, std::string_view payload) override;
+    bool deleteIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
+                          uint64_t entity_id) override;
+    bool deleteIndexEntry(GraphTxnHandle txn, const std::string& table, const std::vector<PropertyValue>& values,
+                          uint64_t entity_id) override;
+    bool checkUniqueConstraint(GraphTxnHandle txn, const std::string& table, const PropertyValue& value) override;
+    bool checkUniqueConstraint(GraphTxnHandle txn, const std::string& table,
+                               const std::vector<PropertyValue>& values) override;
 
     // Index Scan
     void scanIndexEquality(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,

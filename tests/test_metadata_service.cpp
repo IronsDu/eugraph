@@ -70,12 +70,62 @@ TEST_F(MetadataServiceTest, CreateAndGetLabel) {
     EXPECT_EQ(*name, "Person");
 }
 
-TEST_F(MetadataServiceTest, CreateLabelDuplicateFails) {
+// createLabel 现在是幂等的：声明（属性 + 主键）一致的重复调用返回既有 id，
+// loader 每次运行都会先 createLabel，这是它的正常路径；
+// 声明不一致（属性/类型/主键不同）才抛异常，见 CreateLabelConflictThrows。
+TEST_F(MetadataServiceTest, CreateLabelDuplicateIsIdempotent) {
     auto id1 = blockingWait(async_meta_->createLabel("Person"));
     EXPECT_NE(id1, INVALID_LABEL_ID);
 
     auto id2 = blockingWait(async_meta_->createLabel("Person"));
-    EXPECT_EQ(id2, INVALID_LABEL_ID);
+    EXPECT_EQ(id2, id1);
+}
+
+TEST_F(MetadataServiceTest, CreateLabelConflictThrows) {
+    auto id1 =
+        blockingWait(async_meta_->createLabel("Person", {{0, "name", PropertyType::STRING, false, std::nullopt}}));
+    EXPECT_NE(id1, INVALID_LABEL_ID);
+
+    // 属性数量不同 → 冲突
+    EXPECT_THROW(
+        blockingWait(async_meta_->createLabel("Person", {{0, "name", PropertyType::STRING, false, std::nullopt},
+                                                         {1, "age", PropertyType::INT64, false, std::nullopt}})),
+        std::runtime_error);
+
+    // 属性类型不同 → 冲突
+    EXPECT_THROW(
+        blockingWait(async_meta_->createLabel("Person", {{0, "name", PropertyType::INT64, false, std::nullopt}})),
+        std::runtime_error);
+
+    // 主键声明不同 → 冲突
+    EXPECT_THROW(blockingWait(async_meta_->createLabel(
+                     "Person", {{0, "name", PropertyType::STRING, false, std::nullopt}}, {"name"})),
+                 std::runtime_error);
+}
+
+TEST_F(MetadataServiceTest, CreateLabelWithPrimaryKeyResolvesPropIds) {
+    auto id = blockingWait(async_meta_->createLabel("User",
+                                                    {{0, "tenant", PropertyType::STRING, false, std::nullopt},
+                                                     {1, "uid", PropertyType::INT64, false, std::nullopt}},
+                                                    {"tenant", "uid"}));
+    ASSERT_NE(id, INVALID_LABEL_ID);
+
+    auto labels = blockingWait(async_meta_->listLabels());
+    const LabelDef* def = nullptr;
+    for (const auto& l : labels) {
+        if (l.id == id)
+            def = &l;
+    }
+    ASSERT_NE(def, nullptr);
+    // 顺序即主键元组顺序
+    ASSERT_EQ(def->pk_prop_ids.size(), 2u);
+    EXPECT_EQ(def->pk_prop_ids[0], 0); // tenant
+    EXPECT_EQ(def->pk_prop_ids[1], 1); // uid
+
+    // 主键引用未声明的属性 → 报错
+    EXPECT_THROW(
+        blockingWait(async_meta_->createLabel("Bad", {{0, "a", PropertyType::INT64, false, std::nullopt}}, {"nope"})),
+        std::runtime_error);
 }
 
 TEST_F(MetadataServiceTest, GetLabelNonexistent) {

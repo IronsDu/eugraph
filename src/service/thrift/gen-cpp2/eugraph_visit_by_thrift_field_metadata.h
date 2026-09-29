@@ -153,6 +153,8 @@ struct VisitByFieldId<::eugraph::thrift_service::LabelInfo> {
       return f(1, static_cast<T&&>(t).name_ref());
     case 3:
       return f(2, static_cast<T&&>(t).properties_ref());
+    case 4:
+      return f(3, static_cast<T&&>(t).pk_props_ref());
     default:
       throwInvalidThriftId(fieldId, "::eugraph::thrift_service::LabelInfo");
     }
@@ -179,6 +181,36 @@ struct VisitByFieldId<::eugraph::thrift_service::EdgeLabelInfo> {
 };
 
 template <>
+struct VisitByFieldId<::eugraph::thrift_service::PkKey> {
+  template <typename F, typename T>
+  void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
+    switch (fieldId) {
+    case 1:
+      return f(0, static_cast<T&&>(t).name_ref());
+    case 2:
+      return f(1, static_cast<T&&>(t).value_ref());
+    default:
+      throwInvalidThriftId(fieldId, "::eugraph::thrift_service::PkKey");
+    }
+  }
+};
+
+template <>
+struct VisitByFieldId<::eugraph::thrift_service::PkRef> {
+  template <typename F, typename T>
+  void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
+    switch (fieldId) {
+    case 1:
+      return f(0, static_cast<T&&>(t).primary_label_ref());
+    case 2:
+      return f(1, static_cast<T&&>(t).keys_ref());
+    default:
+      throwInvalidThriftId(fieldId, "::eugraph::thrift_service::PkRef");
+    }
+  }
+};
+
+template <>
 struct VisitByFieldId<::eugraph::thrift_service::VertexRecord> {
   template <typename F, typename T>
   void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
@@ -187,6 +219,8 @@ struct VisitByFieldId<::eugraph::thrift_service::VertexRecord> {
       return f(0, static_cast<T&&>(t).properties_ref());
     case 2:
       return f(1, static_cast<T&&>(t).labels_ref());
+    case 3:
+      return f(2, static_cast<T&&>(t).pk_ref());
     default:
       throwInvalidThriftId(fieldId, "::eugraph::thrift_service::VertexRecord");
     }
@@ -199,9 +233,9 @@ struct VisitByFieldId<::eugraph::thrift_service::EdgeRecord> {
   void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
     switch (fieldId) {
     case 1:
-      return f(0, static_cast<T&&>(t).src_vertex_id_ref());
+      return f(0, static_cast<T&&>(t).src_ref());
     case 2:
-      return f(1, static_cast<T&&>(t).dst_vertex_id_ref());
+      return f(1, static_cast<T&&>(t).dst_ref());
     case 3:
       return f(2, static_cast<T&&>(t).properties_ref());
     default:
@@ -219,8 +253,27 @@ struct VisitByFieldId<::eugraph::thrift_service::BatchInsertVerticesResult> {
       return f(0, static_cast<T&&>(t).vertex_ids_ref());
     case 2:
       return f(1, static_cast<T&&>(t).count_ref());
+    case 3:
+      return f(2, static_cast<T&&>(t).inserted_ref());
+    case 4:
+      return f(3, static_cast<T&&>(t).duplicate_pk_ref());
     default:
       throwInvalidThriftId(fieldId, "::eugraph::thrift_service::BatchInsertVerticesResult");
+    }
+  }
+};
+
+template <>
+struct VisitByFieldId<::eugraph::thrift_service::BatchInsertEdgesResult> {
+  template <typename F, typename T>
+  void operator()([[maybe_unused]] F&& f, int32_t fieldId, [[maybe_unused]] T&& t) const {
+    switch (fieldId) {
+    case 1:
+      return f(0, static_cast<T&&>(t).inserted_ref());
+    case 2:
+      return f(1, static_cast<T&&>(t).skipped_unresolved_ref());
+    default:
+      throwInvalidThriftId(fieldId, "::eugraph::thrift_service::BatchInsertEdgesResult");
     }
   }
 };

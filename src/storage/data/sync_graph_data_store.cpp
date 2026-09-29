@@ -1043,44 +1043,69 @@ bool SyncGraphDataStore::dropIndex(const std::string& table_name) {
 
 // ==================== Index Entry Operations ====================
 
-bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) {
-    auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
-    return tablePut(defaultSession_.get(), table, key, {});
-}
-
-bool SyncGraphDataStore::deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) {
-    auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
-    return tableDel(defaultSession_.get(), table, key);
-}
-
-bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id,
-                                          std::string_view payload) {
-    auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
-    return tablePut(defaultSession_.get(), table, key, payload);
-}
-
-bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+bool SyncGraphDataStore::insertIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                                           uint64_t entity_id) {
-    auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
-    return tablePut(defaultSession_.get(), table, key, {});
+    auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
+    auto session = getSession(txn);
+    if (!session)
+        return false;
+    return tablePutTxn(txn, session, table, key, {});
 }
 
-bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
+bool SyncGraphDataStore::deleteIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
+                                          uint64_t entity_id) {
+    auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
+    auto session = getSession(txn);
+    if (!session)
+        return false;
+    return tableDel(session, table, key);
+}
+
+bool SyncGraphDataStore::insertIndexEntry(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
                                           uint64_t entity_id, std::string_view payload) {
-    auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
-    return tablePut(defaultSession_.get(), table, key, payload);
+    auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
+    auto session = getSession(txn);
+    if (!session)
+        return false;
+    return tablePutTxn(txn, session, table, key, payload);
 }
 
-bool SyncGraphDataStore::deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
-                                          uint64_t entity_id) {
+bool SyncGraphDataStore::insertIndexEntry(GraphTxnHandle txn, const std::string& table,
+                                          const std::vector<PropertyValue>& values, uint64_t entity_id) {
     auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
-    return tableDel(defaultSession_.get(), table, key);
+    auto session = getSession(txn);
+    if (!session)
+        return false;
+    return tablePutTxn(txn, session, table, key, {});
 }
 
-bool SyncGraphDataStore::checkUniqueConstraint(const std::string& table, const PropertyValue& value) {
+bool SyncGraphDataStore::insertIndexEntry(GraphTxnHandle txn, const std::string& table,
+                                          const std::vector<PropertyValue>& values, uint64_t entity_id,
+                                          std::string_view payload) {
+    auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
+    auto session = getSession(txn);
+    if (!session)
+        return false;
+    return tablePutTxn(txn, session, table, key, payload);
+}
+
+bool SyncGraphDataStore::deleteIndexEntry(GraphTxnHandle txn, const std::string& table,
+                                          const std::vector<PropertyValue>& values, uint64_t entity_id) {
+    auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
+    auto session = getSession(txn);
+    if (!session)
+        return false;
+    return tableDel(session, table, key);
+}
+
+bool SyncGraphDataStore::checkUniqueConstraint(GraphTxnHandle txn, const std::string& table,
+                                               const PropertyValue& value) {
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(value);
+    auto session = getSession(txn);
+    if (!session)
+        return false;
     bool found = false;
-    tableScan(defaultSession_.get(), table, prefix, [&](std::string_view key, std::string_view /*val*/) {
+    tableScan(session, table, prefix, [&](std::string_view key, std::string_view /*val*/) {
         if (key.size() >= prefix.size()) {
             found = true;
             return false;
@@ -1090,10 +1115,14 @@ bool SyncGraphDataStore::checkUniqueConstraint(const std::string& table, const P
     return !found;
 }
 
-bool SyncGraphDataStore::checkUniqueConstraint(const std::string& table, const std::vector<PropertyValue>& values) {
+bool SyncGraphDataStore::checkUniqueConstraint(GraphTxnHandle txn, const std::string& table,
+                                               const std::vector<PropertyValue>& values) {
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(values);
+    auto session = getSession(txn);
+    if (!session)
+        return false;
     bool found = false;
-    tableScan(defaultSession_.get(), table, prefix, [&](std::string_view key, std::string_view /*val*/) {
+    tableScan(session, table, prefix, [&](std::string_view key, std::string_view /*val*/) {
         if (key.size() >= prefix.size()) {
             found = true;
             return false;

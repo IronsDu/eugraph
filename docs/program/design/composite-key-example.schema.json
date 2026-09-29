@@ -1,0 +1,84 @@
+{
+  "_comment": [
+    "复合主键（composite primary key）配置示例 —— 不含真实数据，只演示语法。",
+    "场景：多租户图，membership 顶点由 (tenantId, userId) 唯一确定；边文件用两列共同引用端点。",
+    "顶层结构：labels 的键 = 顶点标签，relationships 的键 = 边类型；值为文件列表。",
+    "两句话记住键的含义：columns 与 pk 用【图里的属性名】，src / dst / label 用【CSV 里的列名】。",
+    "属性与列的对应只在 columns 里写一次：pk 只列属性名，不写列名、不写类型。",
+    "要点：",
+    "  1) pk 写成属性名数组，顺序 = 主键元组顺序 = 唯一索引 accessor 顺序，三者必须一致；",
+    "  2) 被 pk 引用的属性必须在 columns 里声明且显式给 type（主键类型不允许推断）；",
+    "  3) 属性的来源列可以与属性名不同（tenantId ← tenant 列），这层映射只写在 columns；",
+    "  4) loader 会建 CREATE UNIQUE INDEX idx_membership_tenantId_userId_unique FOR (n:membership) ON (n.tenantId, n.userId)；",
+    "  5) 边端点的 src/dst 写【列名】，按与目标标签主键相同的顺序给出完整元组，缺列/多列/类型不符即报错。",
+    "用法：eugraph-loader --schema <本文件> --data-dir <数据目录>"
+  ],
+  "date_format": "epoch_ms",
+  "labels": {
+    "user": [
+      {
+        "file": "users.csv",
+        "pk": "userId",
+        "columns": {
+          "userId": {
+            "header": "id",
+            "type": "INT64"
+          },
+          "name": "STRING"
+        }
+      }
+    ],
+    "membership": [
+      {
+        "file": "memberships.csv",
+        "pk": [
+          "tenantId",
+          "userId"
+        ],
+        "columns": {
+          "tenantId": {
+            "header": "tenant",
+            "type": "STRING"
+          },
+          "userId": {
+            "header": "id",
+            "type": "INT64"
+          }
+        }
+      }
+    ],
+    "group": [
+      {
+        "file": "groups.csv",
+        "pk": "gid",
+        "columns": {
+          "gid": "INT64",
+          "title": "STRING"
+        }
+      }
+    ]
+  },
+  "relationships": {
+    "memberOf": [
+      {
+        "file": "user_memberOf_group.csv",
+        "src": "uid",
+        "dst": "gid",
+        "src_label": "user",
+        "dst_label": "group",
+        "columns": {
+          "since": "INT64"
+        }
+      }
+    ],
+    "belongsTo": [
+      {
+        "file": "membership_belongsTo_user.csv",
+        "src": "mid",
+        "dst": "uid",
+        "src_label": "membership",
+        "dst_label": "user"
+      }
+    ]
+  }
+}

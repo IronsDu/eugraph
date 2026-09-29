@@ -28,7 +28,8 @@ public:
     folly::coro::Task<std::unique_ptr<thrift_service::LabelInfo>>
     co_createLabel(std::unique_ptr<std::string> name,
                    std::unique_ptr<std::vector<thrift_service::PropertyDefThrift>> properties,
-                   std::unique_ptr<std::string> graph_name) override;
+                   std::unique_ptr<std::string> graph_name, std::unique_ptr<std::vector<std::string>> pk_props,
+                   std::unique_ptr<std::vector<thrift_service::PropertyDefThrift>> merge_properties) override;
 
     folly::coro::Task<std::unique_ptr<std::vector<thrift_service::LabelInfo>>>
     co_listLabels(std::unique_ptr<std::string> graph_name) override;
@@ -51,7 +52,7 @@ public:
                            std::unique_ptr<std::vector<thrift_service::VertexRecord>> records,
                            std::unique_ptr<std::string> graph_name) override;
 
-    folly::coro::Task<std::int32_t>
+    folly::coro::Task<std::unique_ptr<thrift_service::BatchInsertEdgesResult>>
     co_batchInsertEdges(std::unique_ptr<std::string> edge_label_name,
                         std::unique_ptr<std::vector<thrift_service::EdgeRecord>> records,
                         std::unique_ptr<std::string> graph_name) override;

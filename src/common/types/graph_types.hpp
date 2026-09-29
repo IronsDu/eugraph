@@ -177,6 +177,9 @@ struct LabelDef {
     LabelId id = INVALID_LABEL_ID;
     LabelName name;
     std::vector<PropertyDef> properties;
+    /// 主键属性 ID，**有序**：顺序 = 主键元组顺序 = 唯一索引 accessor 顺序。
+    /// 空 = 该标签未声明主键（其顶点不能被边引用）。
+    std::vector<uint16_t> pk_prop_ids;
 
     struct IndexDef {
         uint32_t index_id = 0;

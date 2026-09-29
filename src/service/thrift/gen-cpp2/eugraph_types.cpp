@@ -1076,6 +1076,7 @@ LabelInfo::LabelInfo([[maybe_unused]] LabelInfo&& other) noexcept :
     __fbthrift_field_id(std::move(other.__fbthrift_field_id)),
     __fbthrift_field_name(std::move(other.__fbthrift_field_name)),
     __fbthrift_field_properties(std::move(other.__fbthrift_field_properties)),
+    __fbthrift_field_pk_props(std::move(other.__fbthrift_field_pk_props)),
     __isset(other.__isset) {
 }
 
@@ -1083,18 +1084,21 @@ LabelInfo& LabelInfo::operator=([[maybe_unused]] LabelInfo&& other) noexcept {
     this->__fbthrift_field_id = std::move(other.__fbthrift_field_id);
     this->__fbthrift_field_name = std::move(other.__fbthrift_field_name);
     this->__fbthrift_field_properties = std::move(other.__fbthrift_field_properties);
+    this->__fbthrift_field_pk_props = std::move(other.__fbthrift_field_pk_props);
     __isset = other.__isset;
     return *this;
 }
 
 
-LabelInfo::LabelInfo(apache::thrift::FragileConstructor, ::std::int16_t id__arg, ::std::string name__arg, ::std::vector<::eugraph::thrift_service::PropertyDefThrift> properties__arg) :
+LabelInfo::LabelInfo(apache::thrift::FragileConstructor, ::std::int16_t id__arg, ::std::string name__arg, ::std::vector<::eugraph::thrift_service::PropertyDefThrift> properties__arg, ::std::vector<::std::string> pk_props__arg) :
     __fbthrift_field_id(std::move(id__arg)),
     __fbthrift_field_name(std::move(name__arg)),
-    __fbthrift_field_properties(std::move(properties__arg)) { 
+    __fbthrift_field_properties(std::move(properties__arg)),
+    __fbthrift_field_pk_props(std::move(pk_props__arg)) { 
   __isset.set(folly::index_constant<0>(), true);
   __isset.set(folly::index_constant<1>(), true);
   __isset.set(folly::index_constant<2>(), true);
+  __isset.set(folly::index_constant<3>(), true);
 }
 
 
@@ -1103,6 +1107,7 @@ void LabelInfo::__fbthrift_clear() {
   this->__fbthrift_field_id = ::std::int16_t();
   this->__fbthrift_field_name = apache::thrift::StringTraits<::std::string>::fromStringLiteral("");
   this->__fbthrift_field_properties.clear();
+  this->__fbthrift_field_pk_props.clear();
   __isset = {};
 }
 
@@ -1139,11 +1144,20 @@ const ::std::vector<::eugraph::thrift_service::PropertyDefThrift>& LabelInfo::ge
   return static_cast<::std::vector<::eugraph::thrift_service::PropertyDefThrift>&&>(__fbthrift_field_properties);
 }
 
+const ::std::vector<::std::string>& LabelInfo::get_pk_props() const& {
+  return __fbthrift_field_pk_props;
+}
+
+::std::vector<::std::string> LabelInfo::get_pk_props() && {
+  return static_cast<::std::vector<::std::string>&&>(__fbthrift_field_pk_props);
+}
+
 void swap([[maybe_unused]] LabelInfo& a, [[maybe_unused]] LabelInfo& b) {
   using ::std::swap;
   swap(a.__fbthrift_field_id, b.__fbthrift_field_id);
   swap(a.__fbthrift_field_name, b.__fbthrift_field_name);
   swap(a.__fbthrift_field_properties, b.__fbthrift_field_properties);
+  swap(a.__fbthrift_field_pk_props, b.__fbthrift_field_pk_props);
   swap(a.__isset, b.__isset);
 }
 
@@ -1322,6 +1336,244 @@ namespace apache {
 namespace thrift {
 namespace detail {
 
+void TccStructTraits<::eugraph::thrift_service::PkKey>::translateFieldName(
+    std::string_view _fname,
+    int16_t& fid,
+    apache::thrift::protocol::TType& _ftype) noexcept {
+  using data = apache::thrift::TStructDataStorage<::eugraph::thrift_service::PkKey>;
+  static const st::translate_field_name_table table{
+      data::fields_size,
+      data::fields_names.data(),
+      data::fields_ids.data(),
+      data::fields_types.data()};
+  st::translate_field_name(_fname, fid, _ftype, table);
+}
+
+} // namespace detail
+} // namespace thrift
+} // namespace apache
+
+namespace eugraph::thrift_service {
+
+std::string_view PkKey::__fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord) {
+  if (ord == ::apache::thrift::FieldOrdinal{0}) { return {}; }
+  return apache::thrift::TStructDataStorage<PkKey>::fields_names[folly::to_underlying(ord) - 1];
+}
+std::string_view PkKey::__fbthrift_get_class_name() {
+  return apache::thrift::TStructDataStorage<PkKey>::name;
+}
+
+PkKey::PkKey(const PkKey&) = default;
+PkKey& PkKey::operator=(const PkKey&) = default;
+PkKey::PkKey() {
+}
+
+
+PkKey::~PkKey() {}
+
+PkKey::PkKey([[maybe_unused]] PkKey&& other) noexcept :
+    __fbthrift_field_name(std::move(other.__fbthrift_field_name)),
+    __fbthrift_field_value(std::move(other.__fbthrift_field_value)),
+    __isset(other.__isset) {
+}
+
+PkKey& PkKey::operator=([[maybe_unused]] PkKey&& other) noexcept {
+    this->__fbthrift_field_name = std::move(other.__fbthrift_field_name);
+    this->__fbthrift_field_value = std::move(other.__fbthrift_field_value);
+    __isset = other.__isset;
+    return *this;
+}
+
+
+PkKey::PkKey(apache::thrift::FragileConstructor, ::std::string name__arg, ::eugraph::thrift_service::PropertyValueThrift value__arg) :
+    __fbthrift_field_name(std::move(name__arg)),
+    __fbthrift_field_value(std::move(value__arg)) { 
+  __isset.set(folly::index_constant<0>(), true);
+  __isset.set(folly::index_constant<1>(), true);
+}
+
+
+void PkKey::__fbthrift_clear() {
+  // clear all fields
+  this->__fbthrift_field_name = apache::thrift::StringTraits<::std::string>::fromStringLiteral("");
+  ::apache::thrift::clear(this->__fbthrift_field_value);
+  __isset = {};
+}
+
+void PkKey::__fbthrift_clear_terse_fields() {
+}
+
+bool PkKey::__fbthrift_is_empty() const {
+  return false;
+}
+
+bool PkKey::operator==([[maybe_unused]] const PkKey& rhs) const {
+  return ::apache::thrift::op::detail::StructEquality{}(*this, rhs);
+}
+
+bool PkKey::operator<([[maybe_unused]] const PkKey& rhs) const {
+  return ::apache::thrift::op::detail::StructLessThan{}(*this, rhs);
+}
+
+
+const ::eugraph::thrift_service::PropertyValueThrift& PkKey::get_value() const& {
+  return __fbthrift_field_value;
+}
+
+::eugraph::thrift_service::PropertyValueThrift PkKey::get_value() && {
+  return static_cast<::eugraph::thrift_service::PropertyValueThrift&&>(__fbthrift_field_value);
+}
+
+void swap([[maybe_unused]] PkKey& a, [[maybe_unused]] PkKey& b) {
+  using ::std::swap;
+  swap(a.__fbthrift_field_name, b.__fbthrift_field_name);
+  swap(a.__fbthrift_field_value, b.__fbthrift_field_value);
+  swap(a.__isset, b.__isset);
+}
+
+#ifndef __FBTHRIFT_INSTANTIATE_COMPACT_BINARY_PROTOCOL_IN_SEPARATE_TU
+template void PkKey::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t PkKey::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t PkKey::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t PkKey::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+template void PkKey::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t PkKey::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t PkKey::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t PkKey::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+#endif
+
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        PkKey,
+        ::apache::thrift::type_class::variant,
+        ::eugraph::thrift_service::PropertyValueThrift>,
+    "inconsistent use of json option");
+
+} // namespace eugraph::thrift_service
+
+namespace apache {
+namespace thrift {
+namespace detail {
+
+void TccStructTraits<::eugraph::thrift_service::PkRef>::translateFieldName(
+    std::string_view _fname,
+    int16_t& fid,
+    apache::thrift::protocol::TType& _ftype) noexcept {
+  using data = apache::thrift::TStructDataStorage<::eugraph::thrift_service::PkRef>;
+  static const st::translate_field_name_table table{
+      data::fields_size,
+      data::fields_names.data(),
+      data::fields_ids.data(),
+      data::fields_types.data()};
+  st::translate_field_name(_fname, fid, _ftype, table);
+}
+
+} // namespace detail
+} // namespace thrift
+} // namespace apache
+
+namespace eugraph::thrift_service {
+
+std::string_view PkRef::__fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord) {
+  if (ord == ::apache::thrift::FieldOrdinal{0}) { return {}; }
+  return apache::thrift::TStructDataStorage<PkRef>::fields_names[folly::to_underlying(ord) - 1];
+}
+std::string_view PkRef::__fbthrift_get_class_name() {
+  return apache::thrift::TStructDataStorage<PkRef>::name;
+}
+
+PkRef::PkRef(const PkRef&) = default;
+PkRef& PkRef::operator=(const PkRef&) = default;
+PkRef::PkRef() {
+}
+
+
+PkRef::~PkRef() {}
+
+PkRef::PkRef([[maybe_unused]] PkRef&& other) noexcept :
+    __fbthrift_field_primary_label(std::move(other.__fbthrift_field_primary_label)),
+    __fbthrift_field_keys(std::move(other.__fbthrift_field_keys)),
+    __isset(other.__isset) {
+}
+
+PkRef& PkRef::operator=([[maybe_unused]] PkRef&& other) noexcept {
+    this->__fbthrift_field_primary_label = std::move(other.__fbthrift_field_primary_label);
+    this->__fbthrift_field_keys = std::move(other.__fbthrift_field_keys);
+    __isset = other.__isset;
+    return *this;
+}
+
+
+PkRef::PkRef(apache::thrift::FragileConstructor, ::std::string primary_label__arg, ::std::vector<::eugraph::thrift_service::PkKey> keys__arg) :
+    __fbthrift_field_primary_label(std::move(primary_label__arg)),
+    __fbthrift_field_keys(std::move(keys__arg)) { 
+  __isset.set(folly::index_constant<0>(), true);
+  __isset.set(folly::index_constant<1>(), true);
+}
+
+
+void PkRef::__fbthrift_clear() {
+  // clear all fields
+  this->__fbthrift_field_primary_label = apache::thrift::StringTraits<::std::string>::fromStringLiteral("");
+  this->__fbthrift_field_keys.clear();
+  __isset = {};
+}
+
+void PkRef::__fbthrift_clear_terse_fields() {
+}
+
+bool PkRef::__fbthrift_is_empty() const {
+  return false;
+}
+
+bool PkRef::operator==([[maybe_unused]] const PkRef& rhs) const {
+  return ::apache::thrift::op::detail::StructEquality{}(*this, rhs);
+}
+
+bool PkRef::operator<([[maybe_unused]] const PkRef& rhs) const {
+  return ::apache::thrift::op::detail::StructLessThan{}(*this, rhs);
+}
+
+
+const ::std::vector<::eugraph::thrift_service::PkKey>& PkRef::get_keys() const& {
+  return __fbthrift_field_keys;
+}
+
+::std::vector<::eugraph::thrift_service::PkKey> PkRef::get_keys() && {
+  return static_cast<::std::vector<::eugraph::thrift_service::PkKey>&&>(__fbthrift_field_keys);
+}
+
+void swap([[maybe_unused]] PkRef& a, [[maybe_unused]] PkRef& b) {
+  using ::std::swap;
+  swap(a.__fbthrift_field_primary_label, b.__fbthrift_field_primary_label);
+  swap(a.__fbthrift_field_keys, b.__fbthrift_field_keys);
+  swap(a.__isset, b.__isset);
+}
+
+#ifndef __FBTHRIFT_INSTANTIATE_COMPACT_BINARY_PROTOCOL_IN_SEPARATE_TU
+template void PkRef::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t PkRef::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t PkRef::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t PkRef::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+template void PkRef::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t PkRef::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t PkRef::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t PkRef::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+#endif
+
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        PkRef,
+        ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>,
+        ::std::vector<::eugraph::thrift_service::PkKey>>,
+    "inconsistent use of json option");
+
+} // namespace eugraph::thrift_service
+
+namespace apache {
+namespace thrift {
+namespace detail {
+
 void TccStructTraits<::eugraph::thrift_service::VertexRecord>::translateFieldName(
     std::string_view _fname,
     int16_t& fid,
@@ -1360,22 +1612,26 @@ VertexRecord::~VertexRecord() {}
 VertexRecord::VertexRecord([[maybe_unused]] VertexRecord&& other) noexcept :
     __fbthrift_field_properties(std::move(other.__fbthrift_field_properties)),
     __fbthrift_field_labels(std::move(other.__fbthrift_field_labels)),
+    __fbthrift_field_pk(std::move(other.__fbthrift_field_pk)),
     __isset(other.__isset) {
 }
 
 VertexRecord& VertexRecord::operator=([[maybe_unused]] VertexRecord&& other) noexcept {
     this->__fbthrift_field_properties = std::move(other.__fbthrift_field_properties);
     this->__fbthrift_field_labels = std::move(other.__fbthrift_field_labels);
+    this->__fbthrift_field_pk = std::move(other.__fbthrift_field_pk);
     __isset = other.__isset;
     return *this;
 }
 
 
-VertexRecord::VertexRecord(apache::thrift::FragileConstructor, ::std::vector<::eugraph::thrift_service::PropertyValueThrift> properties__arg, ::std::vector<::std::string> labels__arg) :
+VertexRecord::VertexRecord(apache::thrift::FragileConstructor, ::std::vector<::eugraph::thrift_service::PropertyValueThrift> properties__arg, ::std::vector<::std::string> labels__arg, ::std::vector<::eugraph::thrift_service::PkKey> pk__arg) :
     __fbthrift_field_properties(std::move(properties__arg)),
-    __fbthrift_field_labels(std::move(labels__arg)) { 
+    __fbthrift_field_labels(std::move(labels__arg)),
+    __fbthrift_field_pk(std::move(pk__arg)) { 
   __isset.set(folly::index_constant<0>(), true);
   __isset.set(folly::index_constant<1>(), true);
+  __isset.set(folly::index_constant<2>(), true);
 }
 
 
@@ -1383,6 +1639,7 @@ void VertexRecord::__fbthrift_clear() {
   // clear all fields
   this->__fbthrift_field_properties.clear();
   this->__fbthrift_field_labels.clear();
+  this->__fbthrift_field_pk.clear();
   __isset = {};
 }
 
@@ -1418,10 +1675,19 @@ const ::std::vector<::std::string>& VertexRecord::get_labels() const& {
   return static_cast<::std::vector<::std::string>&&>(__fbthrift_field_labels);
 }
 
+const ::std::vector<::eugraph::thrift_service::PkKey>& VertexRecord::get_pk() const& {
+  return __fbthrift_field_pk;
+}
+
+::std::vector<::eugraph::thrift_service::PkKey> VertexRecord::get_pk() && {
+  return static_cast<::std::vector<::eugraph::thrift_service::PkKey>&&>(__fbthrift_field_pk);
+}
+
 void swap([[maybe_unused]] VertexRecord& a, [[maybe_unused]] VertexRecord& b) {
   using ::std::swap;
   swap(a.__fbthrift_field_properties, b.__fbthrift_field_properties);
   swap(a.__fbthrift_field_labels, b.__fbthrift_field_labels);
+  swap(a.__fbthrift_field_pk, b.__fbthrift_field_pk);
   swap(a.__isset, b.__isset);
 }
 
@@ -1441,6 +1707,12 @@ static_assert(
         VertexRecord,
         ::apache::thrift::type_class::list<::apache::thrift::type_class::variant>,
         ::std::vector<::eugraph::thrift_service::PropertyValueThrift>>,
+    "inconsistent use of json option");
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        VertexRecord,
+        ::apache::thrift::type_class::list<::apache::thrift::type_class::structure>,
+        ::std::vector<::eugraph::thrift_service::PkKey>>,
     "inconsistent use of json option");
 
 } // namespace eugraph::thrift_service
@@ -1478,33 +1750,31 @@ std::string_view EdgeRecord::__fbthrift_get_class_name() {
 
 EdgeRecord::EdgeRecord(const EdgeRecord&) = default;
 EdgeRecord& EdgeRecord::operator=(const EdgeRecord&) = default;
-EdgeRecord::EdgeRecord() :
-    __fbthrift_field_src_vertex_id(),
-    __fbthrift_field_dst_vertex_id() {
+EdgeRecord::EdgeRecord() {
 }
 
 
 EdgeRecord::~EdgeRecord() {}
 
 EdgeRecord::EdgeRecord([[maybe_unused]] EdgeRecord&& other) noexcept :
-    __fbthrift_field_src_vertex_id(std::move(other.__fbthrift_field_src_vertex_id)),
-    __fbthrift_field_dst_vertex_id(std::move(other.__fbthrift_field_dst_vertex_id)),
+    __fbthrift_field_src(std::move(other.__fbthrift_field_src)),
+    __fbthrift_field_dst(std::move(other.__fbthrift_field_dst)),
     __fbthrift_field_properties(std::move(other.__fbthrift_field_properties)),
     __isset(other.__isset) {
 }
 
 EdgeRecord& EdgeRecord::operator=([[maybe_unused]] EdgeRecord&& other) noexcept {
-    this->__fbthrift_field_src_vertex_id = std::move(other.__fbthrift_field_src_vertex_id);
-    this->__fbthrift_field_dst_vertex_id = std::move(other.__fbthrift_field_dst_vertex_id);
+    this->__fbthrift_field_src = std::move(other.__fbthrift_field_src);
+    this->__fbthrift_field_dst = std::move(other.__fbthrift_field_dst);
     this->__fbthrift_field_properties = std::move(other.__fbthrift_field_properties);
     __isset = other.__isset;
     return *this;
 }
 
 
-EdgeRecord::EdgeRecord(apache::thrift::FragileConstructor, ::std::int64_t src_vertex_id__arg, ::std::int64_t dst_vertex_id__arg, ::std::vector<::eugraph::thrift_service::PropertyValueThrift> properties__arg) :
-    __fbthrift_field_src_vertex_id(std::move(src_vertex_id__arg)),
-    __fbthrift_field_dst_vertex_id(std::move(dst_vertex_id__arg)),
+EdgeRecord::EdgeRecord(apache::thrift::FragileConstructor, ::eugraph::thrift_service::PkRef src__arg, ::eugraph::thrift_service::PkRef dst__arg, ::std::vector<::eugraph::thrift_service::PropertyValueThrift> properties__arg) :
+    __fbthrift_field_src(std::move(src__arg)),
+    __fbthrift_field_dst(std::move(dst__arg)),
     __fbthrift_field_properties(std::move(properties__arg)) { 
   __isset.set(folly::index_constant<0>(), true);
   __isset.set(folly::index_constant<1>(), true);
@@ -1514,8 +1784,8 @@ EdgeRecord::EdgeRecord(apache::thrift::FragileConstructor, ::std::int64_t src_ve
 
 void EdgeRecord::__fbthrift_clear() {
   // clear all fields
-  this->__fbthrift_field_src_vertex_id = ::std::int64_t();
-  this->__fbthrift_field_dst_vertex_id = ::std::int64_t();
+  ::apache::thrift::clear(this->__fbthrift_field_src);
+  ::apache::thrift::clear(this->__fbthrift_field_dst);
   this->__fbthrift_field_properties.clear();
   __isset = {};
 }
@@ -1536,22 +1806,20 @@ bool EdgeRecord::operator<([[maybe_unused]] const EdgeRecord& rhs) const {
 }
 
 
-::std::int64_t EdgeRecord::get_src_vertex_id() const {
-  return __fbthrift_field_src_vertex_id;
+const ::eugraph::thrift_service::PkRef& EdgeRecord::get_src() const& {
+  return __fbthrift_field_src;
 }
 
-::std::int64_t& EdgeRecord::set_src_vertex_id(::std::int64_t src_vertex_id_) {
-  src_vertex_id_ref() = src_vertex_id_;
-  return __fbthrift_field_src_vertex_id;
+::eugraph::thrift_service::PkRef EdgeRecord::get_src() && {
+  return static_cast<::eugraph::thrift_service::PkRef&&>(__fbthrift_field_src);
 }
 
-::std::int64_t EdgeRecord::get_dst_vertex_id() const {
-  return __fbthrift_field_dst_vertex_id;
+const ::eugraph::thrift_service::PkRef& EdgeRecord::get_dst() const& {
+  return __fbthrift_field_dst;
 }
 
-::std::int64_t& EdgeRecord::set_dst_vertex_id(::std::int64_t dst_vertex_id_) {
-  dst_vertex_id_ref() = dst_vertex_id_;
-  return __fbthrift_field_dst_vertex_id;
+::eugraph::thrift_service::PkRef EdgeRecord::get_dst() && {
+  return static_cast<::eugraph::thrift_service::PkRef&&>(__fbthrift_field_dst);
 }
 
 const ::std::vector<::eugraph::thrift_service::PropertyValueThrift>& EdgeRecord::get_properties() const& {
@@ -1564,8 +1832,8 @@ const ::std::vector<::eugraph::thrift_service::PropertyValueThrift>& EdgeRecord:
 
 void swap([[maybe_unused]] EdgeRecord& a, [[maybe_unused]] EdgeRecord& b) {
   using ::std::swap;
-  swap(a.__fbthrift_field_src_vertex_id, b.__fbthrift_field_src_vertex_id);
-  swap(a.__fbthrift_field_dst_vertex_id, b.__fbthrift_field_dst_vertex_id);
+  swap(a.__fbthrift_field_src, b.__fbthrift_field_src);
+  swap(a.__fbthrift_field_dst, b.__fbthrift_field_dst);
   swap(a.__fbthrift_field_properties, b.__fbthrift_field_properties);
   swap(a.__isset, b.__isset);
 }
@@ -1581,6 +1849,18 @@ template uint32_t EdgeRecord::serializedSize<>(apache::thrift::CompactProtocolWr
 template uint32_t EdgeRecord::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
 #endif
 
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        EdgeRecord,
+        ::apache::thrift::type_class::structure,
+        ::eugraph::thrift_service::PkRef>,
+    "inconsistent use of json option");
+static_assert(
+    ::apache::thrift::detail::st::gen_check_json<
+        EdgeRecord,
+        ::apache::thrift::type_class::structure,
+        ::eugraph::thrift_service::PkRef>,
+    "inconsistent use of json option");
 static_assert(
     ::apache::thrift::detail::st::gen_check_json<
         EdgeRecord,
@@ -1624,7 +1904,9 @@ std::string_view BatchInsertVerticesResult::__fbthrift_get_class_name() {
 BatchInsertVerticesResult::BatchInsertVerticesResult(const BatchInsertVerticesResult&) = default;
 BatchInsertVerticesResult& BatchInsertVerticesResult::operator=(const BatchInsertVerticesResult&) = default;
 BatchInsertVerticesResult::BatchInsertVerticesResult() :
-    __fbthrift_field_count() {
+    __fbthrift_field_count(),
+    __fbthrift_field_inserted(),
+    __fbthrift_field_duplicate_pk() {
 }
 
 
@@ -1633,22 +1915,30 @@ BatchInsertVerticesResult::~BatchInsertVerticesResult() {}
 BatchInsertVerticesResult::BatchInsertVerticesResult([[maybe_unused]] BatchInsertVerticesResult&& other) noexcept :
     __fbthrift_field_vertex_ids(std::move(other.__fbthrift_field_vertex_ids)),
     __fbthrift_field_count(std::move(other.__fbthrift_field_count)),
+    __fbthrift_field_inserted(std::move(other.__fbthrift_field_inserted)),
+    __fbthrift_field_duplicate_pk(std::move(other.__fbthrift_field_duplicate_pk)),
     __isset(other.__isset) {
 }
 
 BatchInsertVerticesResult& BatchInsertVerticesResult::operator=([[maybe_unused]] BatchInsertVerticesResult&& other) noexcept {
     this->__fbthrift_field_vertex_ids = std::move(other.__fbthrift_field_vertex_ids);
     this->__fbthrift_field_count = std::move(other.__fbthrift_field_count);
+    this->__fbthrift_field_inserted = std::move(other.__fbthrift_field_inserted);
+    this->__fbthrift_field_duplicate_pk = std::move(other.__fbthrift_field_duplicate_pk);
     __isset = other.__isset;
     return *this;
 }
 
 
-BatchInsertVerticesResult::BatchInsertVerticesResult(apache::thrift::FragileConstructor, ::std::vector<::std::int64_t> vertex_ids__arg, ::std::int32_t count__arg) :
+BatchInsertVerticesResult::BatchInsertVerticesResult(apache::thrift::FragileConstructor, ::std::vector<::std::int64_t> vertex_ids__arg, ::std::int32_t count__arg, ::std::int32_t inserted__arg, ::std::int32_t duplicate_pk__arg) :
     __fbthrift_field_vertex_ids(std::move(vertex_ids__arg)),
-    __fbthrift_field_count(std::move(count__arg)) { 
+    __fbthrift_field_count(std::move(count__arg)),
+    __fbthrift_field_inserted(std::move(inserted__arg)),
+    __fbthrift_field_duplicate_pk(std::move(duplicate_pk__arg)) { 
   __isset.set(folly::index_constant<0>(), true);
   __isset.set(folly::index_constant<1>(), true);
+  __isset.set(folly::index_constant<2>(), true);
+  __isset.set(folly::index_constant<3>(), true);
 }
 
 
@@ -1656,6 +1946,8 @@ void BatchInsertVerticesResult::__fbthrift_clear() {
   // clear all fields
   this->__fbthrift_field_vertex_ids.clear();
   this->__fbthrift_field_count = ::std::int32_t();
+  this->__fbthrift_field_inserted = ::std::int32_t();
+  this->__fbthrift_field_duplicate_pk = ::std::int32_t();
   __isset = {};
 }
 
@@ -1692,10 +1984,30 @@ const ::std::vector<::std::int64_t>& BatchInsertVerticesResult::get_vertex_ids()
   return __fbthrift_field_count;
 }
 
+::std::int32_t BatchInsertVerticesResult::get_inserted() const {
+  return __fbthrift_field_inserted;
+}
+
+::std::int32_t& BatchInsertVerticesResult::set_inserted(::std::int32_t inserted_) {
+  inserted_ref() = inserted_;
+  return __fbthrift_field_inserted;
+}
+
+::std::int32_t BatchInsertVerticesResult::get_duplicate_pk() const {
+  return __fbthrift_field_duplicate_pk;
+}
+
+::std::int32_t& BatchInsertVerticesResult::set_duplicate_pk(::std::int32_t duplicate_pk_) {
+  duplicate_pk_ref() = duplicate_pk_;
+  return __fbthrift_field_duplicate_pk;
+}
+
 void swap([[maybe_unused]] BatchInsertVerticesResult& a, [[maybe_unused]] BatchInsertVerticesResult& b) {
   using ::std::swap;
   swap(a.__fbthrift_field_vertex_ids, b.__fbthrift_field_vertex_ids);
   swap(a.__fbthrift_field_count, b.__fbthrift_field_count);
+  swap(a.__fbthrift_field_inserted, b.__fbthrift_field_inserted);
+  swap(a.__fbthrift_field_duplicate_pk, b.__fbthrift_field_duplicate_pk);
   swap(a.__isset, b.__isset);
 }
 
@@ -1708,6 +2020,108 @@ template void BatchInsertVerticesResult::readNoXfer<>(apache::thrift::CompactPro
 template uint32_t BatchInsertVerticesResult::write<>(apache::thrift::CompactProtocolWriter*) const;
 template uint32_t BatchInsertVerticesResult::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
 template uint32_t BatchInsertVerticesResult::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
+#endif
+
+
+} // namespace eugraph::thrift_service
+
+namespace apache {
+namespace thrift {
+namespace detail {
+
+void TccStructTraits<::eugraph::thrift_service::BatchInsertEdgesResult>::translateFieldName(
+    std::string_view _fname,
+    int16_t& fid,
+    apache::thrift::protocol::TType& _ftype) noexcept {
+  using data = apache::thrift::TStructDataStorage<::eugraph::thrift_service::BatchInsertEdgesResult>;
+  static const st::translate_field_name_table table{
+      data::fields_size,
+      data::fields_names.data(),
+      data::fields_ids.data(),
+      data::fields_types.data()};
+  st::translate_field_name(_fname, fid, _ftype, table);
+}
+
+} // namespace detail
+} // namespace thrift
+} // namespace apache
+
+namespace eugraph::thrift_service {
+
+std::string_view BatchInsertEdgesResult::__fbthrift_get_field_name(::apache::thrift::FieldOrdinal ord) {
+  if (ord == ::apache::thrift::FieldOrdinal{0}) { return {}; }
+  return apache::thrift::TStructDataStorage<BatchInsertEdgesResult>::fields_names[folly::to_underlying(ord) - 1];
+}
+std::string_view BatchInsertEdgesResult::__fbthrift_get_class_name() {
+  return apache::thrift::TStructDataStorage<BatchInsertEdgesResult>::name;
+}
+
+
+BatchInsertEdgesResult::BatchInsertEdgesResult(apache::thrift::FragileConstructor, ::std::int32_t inserted__arg, ::std::int32_t skipped_unresolved__arg) :
+    __fbthrift_field_inserted(std::move(inserted__arg)),
+    __fbthrift_field_skipped_unresolved(std::move(skipped_unresolved__arg)) { 
+  __isset.set(folly::index_constant<0>(), true);
+  __isset.set(folly::index_constant<1>(), true);
+}
+
+
+void BatchInsertEdgesResult::__fbthrift_clear() {
+  // clear all fields
+  this->__fbthrift_field_inserted = ::std::int32_t();
+  this->__fbthrift_field_skipped_unresolved = ::std::int32_t();
+  __isset = {};
+}
+
+void BatchInsertEdgesResult::__fbthrift_clear_terse_fields() {
+}
+
+bool BatchInsertEdgesResult::__fbthrift_is_empty() const {
+  return false;
+}
+
+bool BatchInsertEdgesResult::operator==([[maybe_unused]] const BatchInsertEdgesResult& rhs) const {
+  return ::apache::thrift::op::detail::StructEquality{}(*this, rhs);
+}
+
+bool BatchInsertEdgesResult::operator<([[maybe_unused]] const BatchInsertEdgesResult& rhs) const {
+  return ::apache::thrift::op::detail::StructLessThan{}(*this, rhs);
+}
+
+
+::std::int32_t BatchInsertEdgesResult::get_inserted() const {
+  return __fbthrift_field_inserted;
+}
+
+::std::int32_t& BatchInsertEdgesResult::set_inserted(::std::int32_t inserted_) {
+  inserted_ref() = inserted_;
+  return __fbthrift_field_inserted;
+}
+
+::std::int32_t BatchInsertEdgesResult::get_skipped_unresolved() const {
+  return __fbthrift_field_skipped_unresolved;
+}
+
+::std::int32_t& BatchInsertEdgesResult::set_skipped_unresolved(::std::int32_t skipped_unresolved_) {
+  skipped_unresolved_ref() = skipped_unresolved_;
+  return __fbthrift_field_skipped_unresolved;
+}
+
+void swap([[maybe_unused]] BatchInsertEdgesResult& a, [[maybe_unused]] BatchInsertEdgesResult& b) {
+  using ::std::swap;
+  swap(a.__fbthrift_field_inserted, b.__fbthrift_field_inserted);
+  swap(a.__fbthrift_field_skipped_unresolved, b.__fbthrift_field_skipped_unresolved);
+  swap(a.__isset, b.__isset);
+}
+
+#ifndef __FBTHRIFT_INSTANTIATE_COMPACT_BINARY_PROTOCOL_IN_SEPARATE_TU
+template void BatchInsertEdgesResult::readNoXfer<>(apache::thrift::BinaryProtocolReader*);
+template uint32_t BatchInsertEdgesResult::write<>(apache::thrift::BinaryProtocolWriter*) const;
+template uint32_t BatchInsertEdgesResult::serializedSize<>(apache::thrift::BinaryProtocolWriter const*) const;
+template uint32_t BatchInsertEdgesResult::serializedSizeZC<>(apache::thrift::BinaryProtocolWriter const*) const;
+template void BatchInsertEdgesResult::readNoXfer<>(apache::thrift::CompactProtocolReader*);
+template uint32_t BatchInsertEdgesResult::write<>(apache::thrift::CompactProtocolWriter*) const;
+template uint32_t BatchInsertEdgesResult::serializedSize<>(apache::thrift::CompactProtocolWriter const*) const;
+template uint32_t BatchInsertEdgesResult::serializedSizeZC<>(apache::thrift::CompactProtocolWriter const*) const;
 #endif
 
 

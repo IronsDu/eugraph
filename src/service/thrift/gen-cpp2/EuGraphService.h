@@ -77,15 +77,15 @@ class ServiceHandler<::eugraph::thrift_service::EuGraphService> : public apache:
   virtual folly::coro::Task<std::unique_ptr<::std::vector<::eugraph::thrift_service::GraphInfo>>> co_listGraphs(apache::thrift::RequestParams params);
 #endif
   virtual void async_tm_listGraphs(apache::thrift::HandlerCallbackPtr<std::unique_ptr<::std::vector<::eugraph::thrift_service::GraphInfo>>> callback);
-  virtual void sync_createLabel(::eugraph::thrift_service::LabelInfo& /*_return*/, std::unique_ptr<::std::string> /*name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> /*properties*/, std::unique_ptr<::std::string> /*graph_name*/);
-  [[deprecated("Use sync_createLabel instead")]] virtual void createLabel(::eugraph::thrift_service::LabelInfo& /*_return*/, std::unique_ptr<::std::string> /*name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> /*properties*/, std::unique_ptr<::std::string> /*graph_name*/);
-  virtual folly::Future<std::unique_ptr<::eugraph::thrift_service::LabelInfo>> future_createLabel(std::unique_ptr<::std::string> p_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_properties, std::unique_ptr<::std::string> p_graph_name);
-  virtual folly::SemiFuture<std::unique_ptr<::eugraph::thrift_service::LabelInfo>> semifuture_createLabel(std::unique_ptr<::std::string> p_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_properties, std::unique_ptr<::std::string> p_graph_name);
+  virtual void sync_createLabel(::eugraph::thrift_service::LabelInfo& /*_return*/, std::unique_ptr<::std::string> /*name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> /*properties*/, std::unique_ptr<::std::string> /*graph_name*/, std::unique_ptr<::std::vector<::std::string>> /*pk_props*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> /*merge_properties*/);
+  [[deprecated("Use sync_createLabel instead")]] virtual void createLabel(::eugraph::thrift_service::LabelInfo& /*_return*/, std::unique_ptr<::std::string> /*name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> /*properties*/, std::unique_ptr<::std::string> /*graph_name*/, std::unique_ptr<::std::vector<::std::string>> /*pk_props*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> /*merge_properties*/);
+  virtual folly::Future<std::unique_ptr<::eugraph::thrift_service::LabelInfo>> future_createLabel(std::unique_ptr<::std::string> p_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_properties, std::unique_ptr<::std::string> p_graph_name, std::unique_ptr<::std::vector<::std::string>> p_pk_props, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_merge_properties);
+  virtual folly::SemiFuture<std::unique_ptr<::eugraph::thrift_service::LabelInfo>> semifuture_createLabel(std::unique_ptr<::std::string> p_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_properties, std::unique_ptr<::std::string> p_graph_name, std::unique_ptr<::std::vector<::std::string>> p_pk_props, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_merge_properties);
 #if FOLLY_HAS_COROUTINES
-  virtual folly::coro::Task<std::unique_ptr<::eugraph::thrift_service::LabelInfo>> co_createLabel(std::unique_ptr<::std::string> p_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_properties, std::unique_ptr<::std::string> p_graph_name);
-  virtual folly::coro::Task<std::unique_ptr<::eugraph::thrift_service::LabelInfo>> co_createLabel(apache::thrift::RequestParams params, std::unique_ptr<::std::string> p_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_properties, std::unique_ptr<::std::string> p_graph_name);
+  virtual folly::coro::Task<std::unique_ptr<::eugraph::thrift_service::LabelInfo>> co_createLabel(std::unique_ptr<::std::string> p_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_properties, std::unique_ptr<::std::string> p_graph_name, std::unique_ptr<::std::vector<::std::string>> p_pk_props, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_merge_properties);
+  virtual folly::coro::Task<std::unique_ptr<::eugraph::thrift_service::LabelInfo>> co_createLabel(apache::thrift::RequestParams params, std::unique_ptr<::std::string> p_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_properties, std::unique_ptr<::std::string> p_graph_name, std::unique_ptr<::std::vector<::std::string>> p_pk_props, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_merge_properties);
 #endif
-  virtual void async_tm_createLabel(apache::thrift::HandlerCallbackPtr<std::unique_ptr<::eugraph::thrift_service::LabelInfo>> callback, std::unique_ptr<::std::string> p_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_properties, std::unique_ptr<::std::string> p_graph_name);
+  virtual void async_tm_createLabel(apache::thrift::HandlerCallbackPtr<std::unique_ptr<::eugraph::thrift_service::LabelInfo>> callback, std::unique_ptr<::std::string> p_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_properties, std::unique_ptr<::std::string> p_graph_name, std::unique_ptr<::std::vector<::std::string>> p_pk_props, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> p_merge_properties);
   virtual void sync_listLabels(::std::vector<::eugraph::thrift_service::LabelInfo>& /*_return*/, std::unique_ptr<::std::string> /*graph_name*/);
   [[deprecated("Use sync_listLabels instead")]] virtual void listLabels(::std::vector<::eugraph::thrift_service::LabelInfo>& /*_return*/, std::unique_ptr<::std::string> /*graph_name*/);
   virtual folly::Future<std::unique_ptr<::std::vector<::eugraph::thrift_service::LabelInfo>>> future_listLabels(std::unique_ptr<::std::string> p_graph_name);
@@ -131,15 +131,15 @@ class ServiceHandler<::eugraph::thrift_service::EuGraphService> : public apache:
   virtual folly::coro::Task<std::unique_ptr<::eugraph::thrift_service::BatchInsertVerticesResult>> co_batchInsertVertices(apache::thrift::RequestParams params, std::unique_ptr<::std::string> p_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::VertexRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
 #endif
   virtual void async_tm_batchInsertVertices(apache::thrift::HandlerCallbackPtr<std::unique_ptr<::eugraph::thrift_service::BatchInsertVerticesResult>> callback, std::unique_ptr<::std::string> p_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::VertexRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
-  virtual ::std::int32_t sync_batchInsertEdges(std::unique_ptr<::std::string> /*edge_label_name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> /*records*/, std::unique_ptr<::std::string> /*graph_name*/);
-  [[deprecated("Use sync_batchInsertEdges instead")]] virtual ::std::int32_t batchInsertEdges(std::unique_ptr<::std::string> /*edge_label_name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> /*records*/, std::unique_ptr<::std::string> /*graph_name*/);
-  virtual folly::Future<::std::int32_t> future_batchInsertEdges(std::unique_ptr<::std::string> p_edge_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
-  virtual folly::SemiFuture<::std::int32_t> semifuture_batchInsertEdges(std::unique_ptr<::std::string> p_edge_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
+  virtual void sync_batchInsertEdges(::eugraph::thrift_service::BatchInsertEdgesResult& /*_return*/, std::unique_ptr<::std::string> /*edge_label_name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> /*records*/, std::unique_ptr<::std::string> /*graph_name*/);
+  [[deprecated("Use sync_batchInsertEdges instead")]] virtual void batchInsertEdges(::eugraph::thrift_service::BatchInsertEdgesResult& /*_return*/, std::unique_ptr<::std::string> /*edge_label_name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> /*records*/, std::unique_ptr<::std::string> /*graph_name*/);
+  virtual folly::Future<std::unique_ptr<::eugraph::thrift_service::BatchInsertEdgesResult>> future_batchInsertEdges(std::unique_ptr<::std::string> p_edge_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
+  virtual folly::SemiFuture<std::unique_ptr<::eugraph::thrift_service::BatchInsertEdgesResult>> semifuture_batchInsertEdges(std::unique_ptr<::std::string> p_edge_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
 #if FOLLY_HAS_COROUTINES
-  virtual folly::coro::Task<::std::int32_t> co_batchInsertEdges(std::unique_ptr<::std::string> p_edge_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
-  virtual folly::coro::Task<::std::int32_t> co_batchInsertEdges(apache::thrift::RequestParams params, std::unique_ptr<::std::string> p_edge_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
+  virtual folly::coro::Task<std::unique_ptr<::eugraph::thrift_service::BatchInsertEdgesResult>> co_batchInsertEdges(std::unique_ptr<::std::string> p_edge_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
+  virtual folly::coro::Task<std::unique_ptr<::eugraph::thrift_service::BatchInsertEdgesResult>> co_batchInsertEdges(apache::thrift::RequestParams params, std::unique_ptr<::std::string> p_edge_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
 #endif
-  virtual void async_tm_batchInsertEdges(apache::thrift::HandlerCallbackPtr<::std::int32_t> callback, std::unique_ptr<::std::string> p_edge_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
+  virtual void async_tm_batchInsertEdges(apache::thrift::HandlerCallbackPtr<std::unique_ptr<::eugraph::thrift_service::BatchInsertEdgesResult>> callback, std::unique_ptr<::std::string> p_edge_label_name, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> p_records, std::unique_ptr<::std::string> p_graph_name);
  private:
   static ::eugraph::thrift_service::EuGraphServiceServiceInfoHolder __fbthrift_serviceInfoHolder;
   std::atomic<apache::thrift::detail::si::InvocationType> __fbthrift_invocation_createGraph{apache::thrift::detail::si::InvocationType::AsyncTm};
@@ -157,8 +157,8 @@ class ServiceHandler<::eugraph::thrift_service::EuGraphService> : public apache:
 namespace detail {
 template <> struct TSchemaAssociation<::eugraph::thrift_service::EuGraphService, false> {
   static ::folly::Range<const ::std::string_view*>(*bundle)();
-  static constexpr int64_t programId = 7580036639856744772;
-  static constexpr ::std::string_view definitionKey = {"\x27\xb3\xcb\x56\x9c\x2d\xbd\x0d\xa2\x5b\x83\xd0\xb6\x5b\x3c\x42", 16};
+  static constexpr int64_t programId = -707735861551392123;
+  static constexpr ::std::string_view definitionKey = {"\xf0\x59\xbc\xdc\x4a\x9c\x4a\xca\xcd\x9c\x81\xbb\x5e\x1f\x75\x38", 16};
 };
 }
 } // namespace apache::thrift
@@ -173,12 +173,12 @@ class EuGraphServiceSvNull : public ::apache::thrift::ServiceHandler<EuGraphServ
   void createGraph(::eugraph::thrift_service::GraphInfo& /*_return*/, std::unique_ptr<::std::string> /*name*/) override;
   bool dropGraph(std::unique_ptr<::std::string> /*name*/) override;
   void listGraphs(::std::vector<::eugraph::thrift_service::GraphInfo>& /*_return*/) override;
-  void createLabel(::eugraph::thrift_service::LabelInfo& /*_return*/, std::unique_ptr<::std::string> /*name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> /*properties*/, std::unique_ptr<::std::string> /*graph_name*/) override;
+  void createLabel(::eugraph::thrift_service::LabelInfo& /*_return*/, std::unique_ptr<::std::string> /*name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> /*properties*/, std::unique_ptr<::std::string> /*graph_name*/, std::unique_ptr<::std::vector<::std::string>> /*pk_props*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> /*merge_properties*/) override;
   void listLabels(::std::vector<::eugraph::thrift_service::LabelInfo>& /*_return*/, std::unique_ptr<::std::string> /*graph_name*/) override;
   void createEdgeLabel(::eugraph::thrift_service::EdgeLabelInfo& /*_return*/, std::unique_ptr<::std::string> /*name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::PropertyDefThrift>> /*properties*/, std::unique_ptr<::std::string> /*graph_name*/) override;
   void listEdgeLabels(::std::vector<::eugraph::thrift_service::EdgeLabelInfo>& /*_return*/, std::unique_ptr<::std::string> /*graph_name*/) override;
   void batchInsertVertices(::eugraph::thrift_service::BatchInsertVerticesResult& /*_return*/, std::unique_ptr<::std::string> /*label_name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::VertexRecord>> /*records*/, std::unique_ptr<::std::string> /*graph_name*/) override;
-  ::std::int32_t batchInsertEdges(std::unique_ptr<::std::string> /*edge_label_name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> /*records*/, std::unique_ptr<::std::string> /*graph_name*/) override;
+  void batchInsertEdges(::eugraph::thrift_service::BatchInsertEdgesResult& /*_return*/, std::unique_ptr<::std::string> /*edge_label_name*/, std::unique_ptr<::std::vector<::eugraph::thrift_service::EdgeRecord>> /*records*/, std::unique_ptr<::std::string> /*graph_name*/) override;
 };
 
 class EuGraphServiceAsyncProcessor : public ::apache::thrift::GeneratedAsyncProcessorBase {
@@ -275,7 +275,7 @@ class EuGraphServiceAsyncProcessor : public ::apache::thrift::GeneratedAsyncProc
   template <typename ProtocolIn_, typename ProtocolOut_>
   void executeRequest_batchInsertEdges(apache::thrift::ServerRequest&& serverRequest);
   template <class ProtocolIn_, class ProtocolOut_>
-  static apache::thrift::SerializedResponse return_batchInsertEdges(apache::thrift::ContextStack* ctx, ::std::int32_t const& _return);
+  static apache::thrift::SerializedResponse return_batchInsertEdges(apache::thrift::ContextStack* ctx, ::eugraph::thrift_service::BatchInsertEdgesResult const& _return);
   template <class ProtocolIn_, class ProtocolOut_>
   static void throw_wrapped_batchInsertEdges(apache::thrift::ResponseChannelRequest::UniquePtr req,int32_t protoSeqId,apache::thrift::ContextStack* ctx,folly::exception_wrapper ew,apache::thrift::Cpp2RequestContext* reqCtx);
  public:
