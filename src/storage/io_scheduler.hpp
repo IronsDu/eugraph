@@ -1,9 +1,12 @@
 #pragma once
 
+#include "common/thread/numa_thread_factory.hpp"
 #include <folly/coro/CurrentExecutor.h>
 #include <folly/coro/Task.h>
+
 #include <folly/executors/IOThreadPoolExecutor.h>
 
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <type_traits>
@@ -16,7 +19,9 @@ namespace eugraph {
 class IoScheduler {
 public:
     explicit IoScheduler(size_t num_threads = 4)
-        : io_pool_(std::make_shared<folly::IOThreadPoolExecutor>(num_threads)), io_ka_(io_pool_.get()) {}
+        : io_pool_(std::make_shared<folly::IOThreadPoolExecutor>(num_threads,
+                                                                 eugraph::common::makeThreadFactory("eugraph-io"))),
+          io_ka_(io_pool_.get()) {}
 
     /// Get the underlying folly executor.
     folly::Executor* executor() const {

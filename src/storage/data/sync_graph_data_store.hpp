@@ -49,6 +49,13 @@ public:
 
     // Vertex Properties
     std::optional<Properties> getVertexProperties(GraphTxnHandle txn, VertexId vid, LabelId label_id) override;
+    /// One cursor covers the whole batch: `openCursor` once, then a point `search` per
+    /// (row, property). Measured (see docs/storage/session-cursor-ownership.md, POC-1):
+    /// cursor open/close is 51.6% of a point lookup, so paying it once per batch instead of
+    /// once per lookup is the single biggest per-row saving available in the storage layer.
+    std::vector<std::optional<Properties>>
+    getVertexPropertiesBatchProjected(GraphTxnHandle txn, LabelId label_id, const std::vector<VertexId>& vids,
+                                      const std::vector<uint16_t>& proj) override;
     std::optional<PropertyValue> getVertexProperty(GraphTxnHandle txn, VertexId vid, LabelId label_id,
                                                    uint16_t prop_id) override;
     bool putVertexProperty(GraphTxnHandle txn, VertexId vid, LabelId label_id, uint16_t prop_id,

@@ -41,7 +41,8 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | Async 元数据服务 | Label/EdgeLabel/索引管理、ID 分配、GraphSchema | `IAsyncGraphMetaStore`, `AsyncGraphMetaStore`, `GraphSchema` | `src/storage/meta/`, `src/storage/graph_schema.hpp` | [storage/metadata-service-design.md] |
 | KV 编解码 | Key/Value 序列化（多表 WT，无前缀字节） | `KeyCodec`, `ValueCodec`, `IndexKeyCodec` | `src/storage/kv/` | [storage/kv-encoding.md] |
 | IO 调度器 | IO 线程池封装，协程调度 | `IoScheduler` | `src/storage/io_scheduler.hpp` | [architecture/system-architecture.md] |
-| 存储基类 | WT 连接管理、session/cursor 缓存 | `WtStoreBase` | `src/storage/wt_store_base.hpp` | [architecture/system-architecture.md] |
+| 存储基类 | WT 连接管理、每执行上下文独占的 WT_SESSION | `WtStoreBase` | `src/storage/wt_store_base.hpp` | [architecture/system-architecture.md] |
+| 线程基础设施 | NUMA 拓扑发现与线程绑节点（可选，默认关闭） | `NumaTopology`, `NumaThreadFactory` | `src/common/thread/` | [architecture/system-architecture.md] |
 | Cypher 解析器 | ANTLR4 语法，Parse Tree → AST | `CypherQueryParser`, `AstBuilder` | `src/query/parser/` | [query/syntax/cypher-parser-design.md] |
 | 语义绑定 | AST → `BoundStatement`（符号解析，类型推断） | `Binder`, `BoundLogicalOperator`, `ColumnResolver` | `src/query/planner/`, `src/query/planner/binder/` | [query/engine/query-engine-design.md] |
 | 逻辑优化 | Cascades 框架逻辑优化（Filter 下推等） | `LogicalOptimizer`, `Memo`, `OptRule`, `TaskQueue` | `src/query/optimizer/` | [query/optimizer/cascades-optimizer.md] |

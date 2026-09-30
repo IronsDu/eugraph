@@ -2,6 +2,7 @@
 
 #include "common/types/graph_types.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -67,6 +68,31 @@ public:
     virtual std::vector<LabelIdSet> getVertexLabelsBatch(GraphTxnHandle txn, const std::vector<VertexId>& vids) = 0;
     virtual std::vector<std::optional<Properties>> getVertexPropertiesBatch(GraphTxnHandle txn, LabelId label_id,
                                                                             const std::vector<VertexId>& vids) = 0;
+    /// Batch fetch of a SUBSET of properties. Default implementation falls back to one
+    /// point lookup per (row, property); implementations may override it to read the whole
+    /// batch with a single cursor. Semantics must match the fallback exactly: `props` is
+    /// sized max(proj)+1, only the requested ids are filled, and a row with none of them
+    /// present yields nullopt.
+    virtual std::vector<std::optional<Properties>>
+    getVertexPropertiesBatchProjected(GraphTxnHandle txn, LabelId label_id, const std::vector<VertexId>& vids,
+                                      const std::vector<uint16_t>& proj) {
+        std::vector<std::optional<Properties>> out;
+        out.reserve(vids.size());
+        for (VertexId vid : vids) {
+            Properties props;
+            props.resize(*std::max_element(proj.begin(), proj.end()) + 1);
+            bool found = false;
+            for (uint16_t pid : proj) {
+                auto pv = getVertexProperty(txn, vid, label_id, pid);
+                if (pv) {
+                    props[pid] = std::move(*pv);
+                    found = true;
+                }
+            }
+            out.emplace_back(found ? std::optional<Properties>{std::move(props)} : std::nullopt);
+        }
+        return out;
+    }
     virtual bool addVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) = 0;
     virtual bool removeVertexLabel(GraphTxnHandle txn, VertexId vid, LabelId label_id) = 0;
 

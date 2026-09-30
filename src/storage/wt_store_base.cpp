@@ -76,6 +76,8 @@ void WtStoreBase::closeConnection() {
         }
         defaultSession_ = WtSession{};
     }
+    // Per-thread sessions must be closed before the connection.
+    closeThreadSessions();
     conn_.close();
 }
 
@@ -126,9 +128,62 @@ bool WtStoreBase::openConnection(const std::string& db_path, const std::string& 
 
 // ==================== Session/Cursor Helpers ====================
 
+namespace {
+/// Process-wide epoch for per-thread sessions. Bumped whenever a store closes its sessions,
+/// which invalidates every thread-local cache without any lock on the hot path. It must be
+/// process-wide (not per-instance): a destroyed store can be replaced at the same address,
+/// and a per-instance counter would then match a stale thread-local entry and hand out a
+/// session belonging to the closed connection.
+std::atomic<uint64_t> g_sessionEpoch{1};
+} // namespace
+
+WT_SESSION* WtStoreBase::threadSession() {
+    // One session per thread. The thread-local entry deliberately holds no ownership and has
+    // no destructor that closes the session: a thread can outlive the connection, and closing
+    // a session after its connection is undefined behaviour. Sessions are released when the
+    // connection is torn down (closeThreadSessions() closes them just before conn_.close()),
+    // i.e. at store/process teardown -- never at thread exit.
+    struct TlsSession {
+        const WtStoreBase* store = nullptr;
+        uint64_t epoch = 0;
+        WT_SESSION* session = nullptr;
+    };
+    thread_local TlsSession tls;
+
+    const uint64_t epoch = g_sessionEpoch.load(std::memory_order_relaxed);
+    if (tls.store == this && tls.epoch == epoch && tls.session != nullptr)
+        return tls.session; // hot path: no lock, no thread-id lookup, no hashing
+
+    // Slow path: first call on this thread, or the store was closed and re-created.
+    WtSession session = conn_.openSession();
+    if (!session)
+        return nullptr;
+    WT_SESSION* raw = session.release();
+    {
+        std::lock_guard<std::mutex> lock(sessionPoolMutex_);
+        sessionPool_.push_back(raw);
+    }
+    tls = TlsSession{this, epoch, raw};
+    return raw;
+}
+
+void WtStoreBase::closeThreadSessions() {
+    // Invalidate every thread-local entry first (process-wide), then close the sessions.
+    g_sessionEpoch.fetch_add(1, std::memory_order_relaxed);
+    std::vector<WT_SESSION*> sessions;
+    {
+        std::lock_guard<std::mutex> lock(sessionPoolMutex_);
+        sessions.swap(sessionPool_);
+    }
+    for (WT_SESSION* session : sessions) {
+        if (session)
+            session->close(session, nullptr);
+    }
+}
+
 WT_SESSION* WtStoreBase::getSession(GraphTxnHandle txn) {
     if (txn == INVALID_GRAPH_TXN)
-        return defaultSession_.get();
+        return threadSession();
     std::lock_guard<std::mutex> lock(txnMutex_);
     auto it = txns_.find(txn);
     return it != txns_.end() ? it->second->session.get() : nullptr;
@@ -211,7 +266,6 @@ bool WtStoreBase::checkpoint() {
 
 bool WtStoreBase::tablePut(WT_SESSION* session, const std::string& table, std::string_view key,
                            std::string_view value) {
-    std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
     auto cursor = openCursor(session, table);
     if (!cursor)
         return false;
@@ -228,7 +282,6 @@ bool WtStoreBase::tablePut(WT_SESSION* session, const std::string& table, std::s
 }
 
 std::optional<std::string> WtStoreBase::tableGet(WT_SESSION* session, const std::string& table, std::string_view key) {
-    std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
     auto cursor = openCursor(session, table);
     if (!cursor)
         return std::nullopt;
@@ -243,7 +296,6 @@ std::optional<std::string> WtStoreBase::tableGet(WT_SESSION* session, const std:
 }
 
 bool WtStoreBase::tableDel(WT_SESSION* session, const std::string& table, std::string_view key) {
-    std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
     auto cursor = openCursor(session, table);
     if (!cursor)
         return false;
@@ -260,7 +312,6 @@ bool WtStoreBase::tableDel(WT_SESSION* session, const std::string& table, std::s
 
 void WtStoreBase::tableScan(WT_SESSION* session, const std::string& table, std::string_view prefix,
                             const std::function<bool(std::string_view, std::string_view)>& callback) {
-    std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
     auto cursor = openCursor(session, table);
     if (!cursor)
         return;

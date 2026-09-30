@@ -358,6 +358,38 @@ std::optional<Properties> SyncGraphDataStore::getVertexProperties(GraphTxnHandle
     return props;
 }
 
+std::vector<std::optional<Properties>> SyncGraphDataStore::getVertexPropertiesBatchProjected(
+    GraphTxnHandle txn, LabelId label_id, const std::vector<VertexId>& vids, const std::vector<uint16_t>& proj) {
+    std::vector<std::optional<Properties>> out(vids.size());
+    if (proj.empty())
+        return out;
+    auto session = getSession(txn);
+    if (!session)
+        return out;
+    // One cursor for the whole batch (see the header comment for the measured rationale).
+    auto cursor = openCursor(session, vpropTable(label_id));
+    if (!cursor)
+        return out;
+    auto* c = cursor.get();
+    const size_t width = static_cast<size_t>(*std::max_element(proj.begin(), proj.end())) + 1;
+    for (size_t i = 0; i < vids.size(); ++i) {
+        Properties props;
+        props.resize(width);
+        bool found = false;
+        for (uint16_t pid : proj) {
+            auto key = KeyCodec::encodeVPropKey(vids[i], pid);
+            setItem(c, key);
+            if (c->search(c) != 0)
+                continue;
+            props[pid] = ValueCodec::decode(getValueFromCursor(c));
+            found = true;
+        }
+        if (found)
+            out[i] = std::move(props);
+    }
+    return out;
+}
+
 std::optional<PropertyValue> SyncGraphDataStore::getVertexProperty(GraphTxnHandle txn, VertexId vid, LabelId label_id,
                                                                    uint16_t prop_id) {
     auto session = getSession(txn);
