@@ -1458,3 +1458,39 @@ TEST_F(IndexE2ETest, WeakIndexBackfillAcrossTwoSourceLabels) {
     env.data_store->commitTransaction(txn2);
     std::printf("[probe] 用不存在的值扫描命中=%zu（>0 说明 scan 有返回）\n", any_entries);
 }
+
+// 弱 accessor 索引的回填**在 3000 顶点规模上完整**（本用例守住这一点）。
+//
+// 注意：这不是"回填总是对的"的证明。同一条代码路径在 sf0.1 的 28.6 万顶点
+// `Message` 标签上回填**完全不落地**（索引表 0 条，点查返回 0）——见
+// [loader-design.md §12.1](../../docs/program/design/loader-design.md)。
+// 本用例的价值：把"小规模是对的"钉住，供索引构建重构时对照与二分临界点。
+TEST_F(IndexE2ETest, WeakIndexBackfillScalesWithVertexCount) {
+    createLabel(env, "Comment",
+                {{0, "id", PropertyType::INT64, false, std::nullopt},
+                 {1, "content", PropertyType::STRING, false, std::nullopt}});
+    createLabel(env, "Message", {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+
+    const int N = 3000;
+    for (int i = 0; i < N; ++i) {
+        auto r = execSync(executor, "CREATE (n:Comment:Message {id: " + std::to_string(i) + ", content: 'x'})");
+        ASSERT_TRUE(r.error.empty()) << r.error;
+    }
+
+    auto ddl = execSync(executor, "CREATE INDEX idx_scale FOR (n:Message) ON (n.id)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+    auto idx = env.async_meta->schema().findIndexByName("idx_scale");
+    ASSERT_TRUE(idx.has_value());
+
+    size_t hits = 0;
+    auto txn = env.data_store->beginTransaction();
+    for (int i = 0; i < N; ++i)
+        env.data_store->scanIndexEquality(txn, vidxTableById(idx->index_id), int64_t(i), [&](uint64_t) {
+            ++hits;
+            return true;
+        });
+    env.data_store->commitTransaction(txn);
+    std::printf("[scale] N=%d 索引命中=%zu（期望 %d）\n", N, hits, N);
+    EXPECT_EQ(hits, static_cast<size_t>(N)) << "回填不完整";
+}
