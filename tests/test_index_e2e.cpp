@@ -1368,3 +1368,93 @@ TEST_F(IndexE2ETest, DdlCreateDuplicateEdgeIndex) {
     EXPECT_FALSE(result.error.empty());
     EXPECT_NE(result.error.find("duplicate"), std::string::npos);
 }
+// ==================== 弱 accessor 索引：顶点由多个来源标签供给 ====================
+
+// 回归防护（**已确认这条路径是好的**）：LDBC sf0.1 的 Message 由 Comment/Post
+// 两个文件供给，排查 "Message 点查返回 0" 时第一嫌疑是"两个来源标签给 id 分配的
+// prop_id 不同"。本用例把该假设钉住：即使 prop_id 不一致（0 vs 2），
+// 弱 accessor 回填与点查都正确 —— 所以那个缺陷**不在**这里，别再往这个方向查。
+//
+// （真正的原因见 index-e2e 之外：在大标签上用 CREATE INDEX 建派生标签索引时，
+//   回填写进索引的值不是该属性的真实值 —— 见 docs/query/known-defects-todo.md）
+TEST_F(IndexE2ETest, WeakIndexPointLookupWithDisagreeingSourcePropIds) {
+    // Comment: id -> prop_id 0
+    createLabel(env, "Comment",
+                {{0, "id", PropertyType::INT64, false, std::nullopt},
+                 {1, "content", PropertyType::STRING, false, std::nullopt}});
+    // Post: id -> prop_id 2（与 Comment 不一致）
+    createLabel(env, "Post",
+                {{0, "imageFile", PropertyType::STRING, false, std::nullopt},
+                 {1, "language", PropertyType::STRING, false, std::nullopt},
+                 {2, "id", PropertyType::INT64, false, std::nullopt}});
+    createLabel(env, "Message", {});
+
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    ASSERT_TRUE(execSync(executor, "CREATE (n:Comment:Message {id: 7, content: 'hi'})").error.empty());
+    ASSERT_TRUE(
+        execSync(executor, "CREATE (n:Post:Message {imageFile: 'p.jpg', language: 'en', id: 7})").error.empty());
+
+    auto ddl = execSync(executor, "CREATE INDEX idx_msg_id FOR (n:Message) ON (n.id)");
+    ASSERT_TRUE(ddl.error.empty()) << ddl.error;
+    auto idx = env.async_meta->schema().findIndexByName("idx_msg_id");
+    ASSERT_TRUE(idx.has_value());
+
+    // 判据 1：索引表里两个顶点都要有条目（回填不能漏）
+    std::vector<VertexId> in_index;
+    {
+        auto txn = env.data_store->beginTransaction();
+        env.data_store->scanIndexEquality(txn, vidxTableById(idx->index_id), int64_t(7), [&](uint64_t eid) {
+            in_index.push_back(static_cast<VertexId>(eid));
+            return true;
+        });
+        env.data_store->commitTransaction(txn);
+    }
+    EXPECT_EQ(in_index.size(), 2u) << "id=7 的索引条目数不对（回填漏了顶点）";
+
+    // 判据 2：点查必须命中两个顶点（用户可见的行为）
+    auto rows = runQuery(executor, "MATCH (n:Message {id: 7}) RETURN n");
+    EXPECT_EQ(rows.size(), 2u) << "Message{id:7} 点查漏结果";
+}
+
+// 同上，打印 accessor 解析结果，便于怀疑"弱 accessor 取错属性"时先看这里：
+// 期望 is_strong=0、prop='id'，且两个来源顶点都进索引
+TEST_F(IndexE2ETest, WeakIndexBackfillAcrossTwoSourceLabels) {
+    createLabel(env, "Comment",
+                {{0, "id", PropertyType::INT64, false, std::nullopt},
+                 {1, "content", PropertyType::STRING, false, std::nullopt}});
+    createLabel(env, "Post",
+                {{0, "imageFile", PropertyType::STRING, false, std::nullopt},
+                 {1, "language", PropertyType::STRING, false, std::nullopt},
+                 {2, "id", PropertyType::INT64, false, std::nullopt}});
+    createLabel(env, "Message", {});
+    QueryExecutor executor(*env.async_data, *env.async_meta, {});
+    ASSERT_TRUE(execSync(executor, "CREATE (n:Comment:Message {id: 7, content: 'hi'})").error.empty());
+    ASSERT_TRUE(
+        execSync(executor, "CREATE (n:Post:Message {imageFile: 'p.jpg', language: 'en', id: 7})").error.empty());
+    ASSERT_TRUE(execSync(executor, "CREATE INDEX idx_m_id FOR (n:Message) ON (n.id)").error.empty());
+
+    auto idx = env.async_meta->schema().findIndexByName("idx_m_id");
+    ASSERT_TRUE(idx.has_value());
+    std::vector<VertexId> got;
+    auto txn = env.data_store->beginTransaction();
+    env.data_store->scanIndexEquality(txn, vidxTableById(idx->index_id), int64_t(7), [&](uint64_t eid) {
+        got.push_back(static_cast<VertexId>(eid));
+        return true;
+    });
+    env.data_store->commitTransaction(txn);
+    // 打印 accessor 与命中数，判断是"没回填"还是"回填值不对"
+    for (const auto& a : idx->accessors)
+        std::printf("[probe] accessor is_strong=%d source_label=%u prop='%s'\n", (int)a.is_strong, a.source_label_id,
+                    a.property_name.c_str());
+    std::printf("[probe] Message index_id=%u 命中=%zu\n", idx->index_id, got.size());
+
+    // 再查"任意值"：若按 null 前缀能扫出条目，说明条目存在但值不对
+    size_t any_entries = 0;
+    auto txn2 = env.data_store->beginTransaction();
+    env.data_store->scanIndexEquality(txn2, vidxTableById(idx->index_id), int64_t(999999), [&](uint64_t) {
+        ++any_entries;
+        return true;
+    });
+    env.data_store->commitTransaction(txn2);
+    std::printf("[probe] 用不存在的值扫描命中=%zu（>0 说明 scan 有返回）\n", any_entries);
+}

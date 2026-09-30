@@ -8,7 +8,7 @@
 命令行只控制「怎么跑」（连哪儿、批多大、几路并发），不含任何数据声明 —— 因此**同一份 schema 必然装出同一张图**，
 命令行历史不会影响结果。
 
-设计文档见 [loader-primary-key-design.md](../design/loader-primary-key-design.md)（主键化与类型配置）。
+设计文档见 [loader-design.md](../design/loader-design.md)（权威版本；含已知缺陷 §12）。
 
 ---
 
