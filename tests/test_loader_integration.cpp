@@ -183,7 +183,7 @@ TEST_F(LoaderE2ETest, RenamesPropertiesAndKeepsRowLabelAsExtra) {
     writeSchema(R"({
       "labels": { "place": [ { "file": "place.csv", "pk": "id",
                                "columns": { "id": "INT64", "name": "STRING", "url": "STRING" },
-                               "label": { "header": "type" } } ],
+                               "label": [{ "header": "type" }] } ],
                   "person": [ { "file": "person.csv", "pk": "id",
                                 "columns": { "id": "INT64" } } ] },
       "relationships": { "isLocatedIn": [ { "file": "person_located.csv", "src": "Person.id", "dst": "Place.id",
@@ -220,7 +220,7 @@ TEST_F(LoaderE2ETest, RenamedPropertyKeepsSourceColumn) {
                                       "columns": { "id": "INT64",
                                                    "kind": { "header": "type", "type": "STRING" },
                                                    "name": "STRING" },
-                                      "label": { "header": "type" } } ] },
+                                      "label": [{ "header": "type" }] } ] },
       "relationships": {}
     })");
     runLoad();
@@ -506,6 +506,185 @@ TEST_F(LoaderE2ETest, RejectsBadDelimiterInSchema) {
       "relationships": {}
     })");
     EXPECT_THROW(loadConfig(), std::runtime_error);
+}
+
+// ==================== 多来源行级标签（label 数组） ====================
+
+// 判据：一个文件两个列各自贡献标签。只支持单列时 tier 那个标签根本不存在。
+TEST_F(LoaderE2ETest, MultipleLabelColumnsEachContribute) {
+    writeFile("p.csv", "id|name|type|tier\n1|Delhi|city|gold\n2|India|country|silver\n");
+    writeSchema(R"({
+      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+                               "columns": { "id": "INT64", "name": "STRING", "type": "STRING", "tier": "STRING" },
+                               "label": [ { "header": "type", "case": "capitalize" },
+                                          { "header": "tier", "case": "capitalize" } ] } ] },
+      "relationships": {}
+    })");
+    runLoad();
+
+    // 两个来源都生效
+    auto both = querySingle("MATCH (n:City:Gold) RETURN count(n)");
+    ASSERT_TRUE(both.has_value()) << "City/Tier 标签未同时生效";
+    EXPECT_EQ(*both, "1");
+
+    // 第二个来源（tier）单独也能查到 —— 单列实现下这里必然是 0
+    auto tier = querySingle("MATCH (n:Silver) RETURN count(n)");
+    ASSERT_TRUE(tier.has_value());
+    EXPECT_EQ(*tier, "1");
+
+    auto country = querySingle("MATCH (n:Country) RETURN count(n)");
+    ASSERT_TRUE(country.has_value());
+    EXPECT_EQ(*country, "1");
+}
+
+// 判据：静态标签与列来源混合（你选定的写法）。
+TEST_F(LoaderE2ETest, StaticAndColumnSourcesMix) {
+    writeFile("p.csv", "id|type\n1|city\n2|country\n");
+    writeSchema(R"({
+      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+                               "columns": { "id": "INT64", "type": "STRING" },
+                               "label": [ { "derived": ["Entity"] },
+                                          { "header": "type", "case": "capitalize" } ] } ] },
+      "relationships": {}
+    })");
+    runLoad();
+
+    // 每个顶点都带静态标签 Entity，同时各自带列来源的标签
+    auto entity = querySingle("MATCH (n:Entity) RETURN count(n)");
+    ASSERT_TRUE(entity.has_value());
+    EXPECT_EQ(*entity, "2");
+    auto combo = querySingle("MATCH (n:Entity:City) RETURN count(n)");
+    ASSERT_TRUE(combo.has_value());
+    EXPECT_EQ(*combo, "1");
+}
+
+// 判据：多个来源产出同名标签时**去重**（不去重会变成 2 个标签，但 Cypher 的
+// :City 查询仍返回 1 个顶点，所以这里用 labels() 的基数来判断）。
+TEST_F(LoaderE2ETest, DuplicateRowLabelsAreDeduplicated) {
+    writeFile("p.csv", "id|type\n1|city\n");
+    writeSchema(R"({
+      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+                               "columns": { "id": "INT64", "type": "STRING" },
+                               "label": [ { "derived": ["City"] },
+                                          { "header": "type", "case": "capitalize" } ] } ] },
+      "relationships": {}
+    })");
+    runLoad();
+
+    auto n = querySingle("MATCH (n:Place) RETURN size(labels(n))");
+    ASSERT_TRUE(n.has_value()) << "labels() 查询失败";
+    EXPECT_EQ(*n, "2") << "应为 [Place, City]（City 只出现一次）: " << *n;
+}
+
+// 判据：列值等于主标签名时丢弃，不重复贴主标签。
+TEST_F(LoaderE2ETest, RowLabelEqualToPrimaryIsDropped) {
+    writeFile("p.csv", "id|type\n1|place\n2|city\n");
+    writeSchema(R"({
+      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+                               "columns": { "id": "INT64", "type": "STRING" },
+                               "label": [ { "header": "type", "case": "capitalize" } ] } ] },
+      "relationships": {}
+    })");
+    runLoad();
+
+    auto rows = querySingle("MATCH (n:Place {id: 1}) RETURN size(labels(n))");
+    ASSERT_TRUE(rows.has_value());
+    EXPECT_EQ(*rows, "1") << "type=place 行不应产生额外标签: " << *rows;
+}
+
+// 判据：index 与 header 两种写法对同一份数据结果**逐项相等**。
+TEST_F(LoaderE2ETest, LabelByIndexEqualsLabelByHeader) {
+    writeFile("by_header.csv", "id|type\n1|city\n2|country\n");
+    writeFile("by_index.csv", "id|type\n1|city\n2|country\n");
+    writeSchema(R"({
+      "labels": {
+        "A": [ { "file": "by_header.csv", "pk": "id", "columns": { "id": "INT64", "type": "STRING" },
+                 "label": [ { "header": "type", "case": "capitalize" } ] } ],
+        "B": [ { "file": "by_index.csv", "pk": "id", "columns": { "id": "INT64", "type": "STRING" },
+                 "label": [ { "index": 1, "case": "capitalize" } ] } ]
+      },
+      "relationships": {}
+    })");
+    runLoad();
+
+    for (const char* lab : {"City", "Country"}) {
+        auto a = querySingle(std::string("MATCH (n:A:") + lab + ") RETURN count(n)");
+        auto b = querySingle(std::string("MATCH (n:B:") + lab + ") RETURN count(n)");
+        ASSERT_TRUE(a.has_value()) << lab;
+        ASSERT_TRUE(b.has_value()) << lab;
+        EXPECT_EQ(*a, *b) << lab << " 的 header 与 index 写法结果不一致";
+    }
+}
+
+// 判据：同名表头必须能出两个不同标签（neo4j :LABEL|:LABEL 惯例），
+// 且只用 header 时应报错提示改 index。
+TEST_F(LoaderE2ETest, DuplicateHeaderLabelsRequireIndex) {
+    writeFile("p.csv", "id|:LABEL|:LABEL\n1|Comment|Message\n");
+    writeSchema(R"({
+      "labels": { "Comment": [ { "file": "p.csv", "pk": "id",
+                                 "columns": { "id": "INT64" },
+                                 "label": [ { "index": 1 }, { "index": 2 } ] } ] },
+      "relationships": {}
+    })");
+    auto summary = runLoad();
+    EXPECT_NE(summary.find("vertices=1"), std::string::npos) << summary;
+
+    auto n = querySingle("MATCH (n:Comment:Message) RETURN count(n)");
+    ASSERT_TRUE(n.has_value()) << "两个 :LABEL 列未同时生效";
+    EXPECT_EQ(*n, "1");
+
+    // 只用 header 指向重名列 → 报错并提示用 index
+    writeFile("q.csv", "id|:LABEL|:LABEL\n1|X|Y\n");
+    writeSchema(R"({
+      "labels": { "Comment": [ { "file": "q.csv", "pk": "id",
+                                 "columns": { "id": "INT64" },
+                                 "label": [ { "header": ":LABEL" } ] } ] },
+      "relationships": {}
+    })");
+    try {
+        loadConfig();
+        FAIL() << "expected duplicate header without index to be rejected";
+    } catch (const std::exception& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find("appears 2 times"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("index"), std::string::npos) << msg;
+    }
+}
+
+// 判据：旧的对象写法被明确拒绝，且报错里带上改法。
+TEST_F(LoaderE2ETest, ObjectLabelFormIsRejectedWithMigrationHint) {
+    writeFile("p.csv", "id|type\n1|city\n");
+    writeSchema(R"({
+      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+                               "columns": { "id": "INT64", "type": "STRING" },
+                               "label": { "header": "type", "case": "capitalize" } } ] },
+      "relationships": {}
+    })");
+    try {
+        loadConfig();
+        FAIL() << "expected object form of 'label' to be rejected";
+    } catch (const std::exception& e) {
+        const std::string msg = e.what();
+        EXPECT_NE(msg.find("must be an array"), std::string::npos) << msg;
+        EXPECT_NE(msg.find("Write it as"), std::string::npos) << msg;
+    }
+}
+
+// 判据：元素内 derived 与 header 同时给出必须报错（旧写法是静默取 derived）。
+TEST_F(LoaderE2ETest, DerivedAndHeaderTogetherAreRejected) {
+    writeFile("p.csv", "id|type\n1|city\n");
+    writeSchema(R"({
+      "labels": { "Place": [ { "file": "p.csv", "pk": "id",
+                               "columns": { "id": "INT64", "type": "STRING" },
+                               "label": [ { "derived": ["City"], "header": "type" } ] } ] },
+      "relationships": {}
+    })");
+    try {
+        loadConfig();
+        FAIL() << "expected derived+header combination to be rejected";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("mutually exclusive"), std::string::npos) << e.what();
+    }
 }
 
 TEST_F(LoaderE2ETest, ReportsUndeclaredCsvFiles) {

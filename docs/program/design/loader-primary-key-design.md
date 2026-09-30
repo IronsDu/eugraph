@@ -299,7 +299,7 @@ service EuGraphService {
         //   {"header": "type"}                        原样使用列值
         //   {"header": "type", "case": "capitalize"}  → Country/City/Continent（对齐 neo4j）
         //   {"derived": ["country","city","continent"]} 不解析列值，直接枚举
-        "label": { "header": "type" } }
+        "label": [{ "header": "type" }] }
     ],
 
     "organisation": [
@@ -308,7 +308,7 @@ service EuGraphService {
         // 同一列 type 在这里既作行级标签、也保留为属性（属性名 kind，用 header 指回来源列）
         "columns": { "id": "INT64", "kind": { "header": "type", "type": "STRING" },
                      "name": "STRING", "url": "STRING" },
-        "label": { "header": "type" } }
+        "label": [{ "header": "type" }] }
     ]
   },
 
@@ -380,7 +380,7 @@ service EuGraphService {
 - `columns` 的键**就是属性名**；来源列由 `header` 指定，**缺省 = 与键同名**。于是 `"id": "INT64"` 表示「属性 `id`，取自同名列」，`"kind": {"header": "type"}` 表示「属性 `kind`，取自 `type` 列」；
 - **`pk` 只写属性名**，不写列名也不写类型 —— 列由 `columns` 决定，类型也由 `columns` 决定：「属性 `userId` 是主键」就写 `"pk": "userId"`，它从哪一列来、什么类型，全看 `columns` 里那条声明；复合主键写数组 `"pk": ["tenantId", "userId"]`（顺序即元组顺序）；
 - 列**只作标签来源**：写了 `label.header` 但不写进 `columns`（如 sf0.1 的 `place.type`），它就不成为属性；
-- 同一物理列也可以**既作标签来源、又以改名后的属性保留**：`"columns": {"kind": {"header": "type"}}` + `"label": {"header": "type"}` → 值 `company` 成为标签 `company`、同时以属性 `kind` 存下来（sf0.1 的 `organisation.type` 就是这么配的）；
+- 同一物理列也可以**既作标签来源、又以改名后的属性保留**：`"columns": {"kind": {"header": "type"}}` + `"label": [{"header": "type"}]` → 值 `company` 成为标签 `company`、同时以属性 `kind` 存下来（sf0.1 的 `organisation.type` 就是这么配的）；
 - `label` 也可用 `label.column`（0-based 列号）定位，用于表头不可靠/重名的文件；
 - `header` 与 `index` 二者取一，`index` 用于同名表头列（`Person.id\|Person.id`）——此时用 `index` 而不是 `header` 定位。
 
@@ -703,11 +703,11 @@ CREATE UNIQUE INDEX idx_membership_tenantId_userId_unique FOR (n:membership) ON 
 // static/place_0_0.csv 的第 4 列 type 取值 country / city / continent
 "place": [ { "file": "static/place_0_0.csv", "pk": "id",
              "columns": { "id": "INT64", "name": "STRING", "url": "STRING" },
-             "label": { "header": "type" } } ]                       // 原样：country/city/continent
+             "label": [{ "header": "type" }] } ]                      // 原样：country/city/continent
 // 或
-"label": { "header": "type", "case": "capitalize" }                  // 归一化：Country/City/Continent
+"label": [{ "header": "type", "case": "capitalize" }]                 // 归一化：Country/City/Continent
 // 或
-"label": { "derived": ["country", "city", "continent"] }              // 不解析列值，直接枚举
+"label": [{ "derived": ["country", "city", "continent"] }]             // 不解析列值，直接枚举
 ```
 
 **与上一版的关键差别（本轮简化后更清晰）**：
@@ -858,7 +858,7 @@ for each edge file:
 | Cypher 语义 | **不变**：不动 `CREATE` / `MERGE` / `MATCH` | — |
 | 时序解析器位置 | `parseDatetimeStr` 等从 `function/scalar` 匿名命名空间**上提到 `common/types`** | 纯搬家 + TCK 回归；属代码组织变更，不是行为变更 |
 | 行级标签 | **语义变化（简化）**：不再抢占主标签，只追加；主标签 = schema 键 | 属性与索引归属统一到 schema 键，消除「属性在 `city` 下、索引建在 `place` 上」的错位 |
-| Loader 命令行 | **行为变化（刻意）**：`--nodes` / `--relationships` 与目录扫描模式**删除**；`--schema`、`--data-dir` 变为必填 | 装载入口唯一（schema 文件），少约 158 行代码与两条并行代码路径；现有调用脚本需改写：`--nodes=Place:City=static/place.csv` ⇒ `"place": [{"file": "static/place.csv", "label": {"derived": ["City"]}}]`（[loader.md](../usage/loader.md) 待同步） |
+| Loader 命令行 | **行为变化（刻意）**：`--nodes` / `--relationships` 与目录扫描模式**删除**；`--schema`、`--data-dir` 变为必填 | 装载入口唯一（schema 文件），少约 158 行代码与两条并行代码路径；现有调用脚本需改写：`--nodes=Place:City=static/place.csv` ⇒ `"place": [{"file": "static/place.csv", "label": [{"header": "type", "case": "capitalize"}]}]`（[loader.md](../usage/loader.md) 待同步） |
 | 主键索引的 filter label | **明确**：建在 schema 键（主标签）上 + 弱 accessor，一条覆盖该标签全部顶点（§6.3） | 行级标签不影响覆盖面；`MATCH (n:place {id:X})` 走索引 |
 | 批量导入路径 | **行为变化（修缺陷）**：`batchInsertVertices` 由「不维护索引」改为「维护索引」（§6.2） | 消除「批量导入后索引静默变脏」；该端点只有 loader 使用 |
 | 重复主键 | **语义不变**（first-wins），现状是静默 | 新增告警日志；可选开关 `--on-duplicate-pk`（取值 `error` 或 `skip`） |

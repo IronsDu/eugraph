@@ -47,12 +47,20 @@ struct PropertySpec {
 };
 
 /// 行级标签来源（追加标签，不抢主标签）。
+/// 一个行级标签来源。三种方式**互斥**（同时给出是配置错误，不再静默取其一）：
+///   - 静态：`derived` 非空 → 直接产出这些标签，不读 CSV；
+///   - 按列名：`header` → 该列每个非空值产出一个标签（表头重名时需改用 index）；
+///   - 按列号：`index`（0 基）→ 用于表头不可靠/重名的文件。
 struct LabelSource {
     std::string header;
     int index = -1;
     std::string case_mode = "none"; ///< none | capitalize | lower
     std::vector<std::string> derived;
 };
+
+/// 一个文件的全部行级标签来源。多个来源的结果取**并集并去重**；
+/// 与主标签（schema 键）同名的标签被丢弃，主标签永不被抢占。
+using LabelSpec = std::vector<LabelSource>;
 
 /// 一个数据文件（点或边）的声明。
 struct FileSpec {
@@ -62,7 +70,7 @@ struct FileSpec {
     std::vector<PropertySpec> columns; ///< 属性声明（键 = 属性名）
     bool has_pk = false;
     std::vector<PropertySpec> pk; ///< 主键属性（按元组顺序；来源列在其中）
-    std::optional<LabelSource> row_label;
+    LabelSpec row_labels;         ///< 空 = 该文件不产生行级标签
     // 仅边文件：端点列（单列主键 1 项；复合主键逐列列出，顺序与目标标签主键一致）
     std::vector<PropertySpec> src, dst;
     std::string src_label, dst_label;

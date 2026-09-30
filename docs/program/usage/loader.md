@@ -77,7 +77,7 @@ eugraph-loader --schema ./loader-schema.json --data-dir ./csv-data \
         "email": "STRING[]",
         "kind": { "header": "type", "type": "STRING" }   // 改名：属性 kind 来自列 type
       },
-      "label": { "header": "type", "case": "capitalize" } // 行级标签：列 type 的值首字母大写后作**追加**标签
+      "label": [ { "header": "type", "case": "capitalize" } ] // 行级标签来源（数组）：列 type 的值首字母大写后作**追加**标签
     }]
   },
   "relationships": {
@@ -99,6 +99,23 @@ eugraph-loader --schema ./loader-schema.json --data-dir ./csv-data \
 - **主键冲突是 first-wins**：重复主键的顶点被跳过并告警，不阻断装载。
 - **行级标签是追加标签**，不抢主标签：`place` 文件里 `type=city` 的顶点带 `[Place, City]`，
   属性始终写在 schema 键（`Place`）下。
+- **`label` 是数组**：一个文件可以有**多个**标签来源，结果取**并集去重**（与主标签同名则丢弃）。
+  每个来源恰好是三种之一（**互斥**，同时给出会报错）：
+
+  | 写法 | 含义 |
+  |---|---|
+  | `{ "derived": ["Message"] }` | 静态标签，不读 CSV；可列多个 |
+  | `{ "header": "type", "case": "capitalize" }` | 该列每个非空值产出一个标签 |
+  | `{ "index": 6, "case": "capitalize" }` | 按列号（0 基）；**表头重名时必须用这个** |
+
+  ```jsonc
+  // 静态 + 列 混合；一行可同时得到 Message 与 City
+  "label": [ { "derived": ["Message"] }, { "header": "type", "case": "capitalize" } ]
+  // neo4j 的 :LABEL|:LABEL 惯例：两列同名，只能靠列号区分
+  "label": [ { "index": 5 }, { "index": 6 } ]
+  ```
+
+  `case` 可选 `none`（默认）/ `capitalize` / `lower`。
 - **边端点必须声明 `src_label`/`dst_label`**，且目标标签必须声明主键 —— 否则启动即报错，
   不会等到装载时静默跳过。
 

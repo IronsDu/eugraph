@@ -463,6 +463,82 @@ int resolveColumn(const PropertySpec& spec, const std::vector<std::string>& head
 
 } // namespace
 
+// ==================== 行级标签解析 ====================
+
+namespace {
+
+/// 定位一个标签来源列。
+/// - 给了 index：**以 index 为准**（header 只用于报错可读性）——同名表头必须靠它；
+/// - 只给 header：按名找；表头重名则报错并提示改用 index。
+int resolveLabelColumn(const LabelSource& src, const std::vector<std::string>& header, const std::string& where) {
+    if (src.index >= 0) {
+        if (src.index >= static_cast<int>(header.size())) {
+            throw std::runtime_error(where + ": label index " + std::to_string(src.index) +
+                                     " out of range (header has " + std::to_string(header.size()) + " columns)");
+        }
+        return src.index;
+    }
+    if (src.header.empty())
+        return -1; // derived 来源，不占列
+    int found = -1, hits = 0;
+    for (size_t i = 0; i < header.size(); ++i) {
+        if (header[i] == src.header) {
+            if (found < 0)
+                found = static_cast<int>(i);
+            ++hits;
+        }
+    }
+    if (hits == 0) {
+        std::string available;
+        for (const auto& h : header)
+            available += (available.empty() ? "" : ", ") + h;
+        throw std::runtime_error(where + ": label column '" + src.header + "' not found in header [" + available + "]");
+    }
+    if (hits > 1) {
+        throw std::runtime_error(where + ": label column '" + src.header + "' appears " + std::to_string(hits) +
+                                 " times in the header; specify \"index\" instead of \"header\"");
+    }
+    return found;
+}
+
+/// 求一份 LabelSpec 对某个文件的**有效列**：derived 项返回 -1（不读列）。
+std::vector<int> resolveLabelColumns(const LabelSpec& spec, const std::vector<std::string>& header,
+                                     const std::string& where) {
+    std::vector<int> cols;
+    cols.reserve(spec.size());
+    for (const auto& src : spec)
+        cols.push_back(resolveLabelColumn(src, header, where));
+    return cols;
+}
+
+/// 由一行求出行级标签：所有来源的**并集去重**（保持首次出现顺序）。
+/// 空值与等于主标签的值被丢弃（主标签永不被抢占）。
+std::vector<std::string> labelsForRow(const FileSpec& fs, const std::vector<int>& cols,
+                                      const std::vector<std::string>& fields) {
+    std::vector<std::string> out;
+    auto push = [&](const std::string& v) {
+        if (v.empty() || v == fs.element)
+            return;
+        if (std::find(out.begin(), out.end(), v) == out.end())
+            out.push_back(v);
+    };
+    for (size_t i = 0; i < fs.row_labels.size(); ++i) {
+        const auto& src = fs.row_labels[i];
+        if (!src.derived.empty()) {
+            for (const auto& d : src.derived)
+                push(d);
+            continue;
+        }
+        const int col = cols[i];
+        if (col < 0 || col >= static_cast<int>(fields.size()))
+            continue;
+        push(applyCase(trim(fields[static_cast<size_t>(col)]), src.case_mode));
+    }
+    return out;
+}
+
+} // namespace
+
 // ==================== schema 装载 ====================
 
 SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const std::filesystem::path& data_dir,
@@ -598,22 +674,59 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
 
             if (entry.contains("label")) {
                 const auto& lj = entry["label"];
-                LabelSource src;
-                if (!lj.is_object())
-                    throw std::runtime_error("schema: " + where + ".label must be an object");
-                if (lj.contains("derived")) {
-                    src.derived = lj["derived"].get<std::vector<std::string>>();
-                } else {
-                    if (lj.contains("header"))
-                        src.header = reqString(lj, "header", where + ".label");
-                    if (lj.contains("column"))
-                        src.index = lj["column"].get<int>();
-                    if (src.header.empty() && src.index < 0)
-                        throw std::runtime_error("schema: " + where + ".label needs header, column, or derived");
+                const std::string lwhere = where + ".label";
+                // 只接受数组：单个对象是旧写法，靠"derived 赢、header 被静默忽略"消歧，
+                // 正是要消掉的静默行为。这里直接给出改法，而不是丢一句类型错误。
+                if (lj.is_object()) {
+                    throw std::runtime_error("schema: " + lwhere +
+                                             " must be an array of label sources.\n  Got an object: " + lj.dump() +
+                                             "\n  Write it as:   \"label\": [" + lj.dump() +
+                                             "]\n  Mixing is allowed: \"label\": [{ \"derived\": [\"Message\"] }, "
+                                             "{ \"header\": \"type\" }]");
                 }
-                if (lj.contains("case"))
-                    src.case_mode = reqString(lj, "case", where + ".label");
-                fs.row_label = std::move(src);
+                if (!lj.is_array())
+                    throw std::runtime_error("schema: " + lwhere + " must be an array of label sources");
+                if (lj.empty())
+                    throw std::runtime_error("schema: " + lwhere + " must not be empty (omit 'label' to produce none)");
+                size_t si = 0;
+                for (const auto& item : lj) {
+                    const std::string ewhere = lwhere + "[" + std::to_string(si++) + "]";
+                    if (!item.is_object())
+                        throw std::runtime_error("schema: " + ewhere +
+                                                 " must be an object ({derived:[...]} or {header:...} or {index:...})");
+                    const bool has_derived = item.contains("derived");
+                    const bool has_header = item.contains("header");
+                    const bool has_index = item.contains("index");
+                    if (has_derived && (has_header || has_index)) {
+                        throw std::runtime_error("schema: " + ewhere +
+                                                 ": 'derived' and 'header'/'index' are mutually exclusive "
+                                                 "(unlike the old object form, this is no longer silently resolved)");
+                    }
+                    if (!has_derived && !has_header && !has_index)
+                        throw std::runtime_error("schema: " + ewhere + " needs one of: derived, header, index");
+                    LabelSource src;
+                    if (has_derived) {
+                        src.derived = item["derived"].get<std::vector<std::string>>();
+                        if (src.derived.empty())
+                            throw std::runtime_error("schema: " + ewhere + ".derived must not be empty");
+                    } else {
+                        if (has_header)
+                            src.header = reqString(item, "header", ewhere);
+                        if (has_index) {
+                            src.index = item["index"].get<int>();
+                            if (src.index < 0)
+                                throw std::runtime_error("schema: " + ewhere + ".index must be >= 0");
+                        }
+                    }
+                    if (item.contains("case")) {
+                        src.case_mode = reqString(item, "case", ewhere);
+                        static const std::set<std::string> kCases = {"none", "capitalize", "lower"};
+                        if (!kCases.count(src.case_mode))
+                            throw std::runtime_error("schema: " + ewhere + ": unknown case '" + src.case_mode +
+                                                     "' (none | capitalize | lower)");
+                    }
+                    fs.row_labels.push_back(std::move(src));
+                }
             }
             cfg.vertex_files.push_back(std::move(fs));
         }
@@ -718,9 +831,9 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
                 std::set<std::string> declared;
                 for (const auto& c : fs.columns)
                     declared.insert(c.header.empty() ? c.name : c.header);
-                for (const auto& rl : std::vector<std::optional<LabelSource>>{fs.row_label}) {
-                    if (rl.has_value() && !rl->header.empty())
-                        declared.insert(rl->header);
+                for (const auto& rl : fs.row_labels) {
+                    if (!rl.header.empty())
+                        declared.insert(rl.header);
                 }
                 bool has_dup_header = false;
                 {
@@ -803,30 +916,88 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
         }
     }
 
+    // ---- 行级标签来源的列先解析一次 ----
+    // 必须在"未声明列"检查之前：同名表头（neo4j 的 `:LABEL|:LABEL` 惯例）只能靠 index
+    // 区分，若等到装载时才报，用户先看到的是误导性的"列未声明"。
+    for (const auto& fs : cfg.vertex_files) {
+        if (fs.row_labels.empty())
+            continue;
+        CsvFile csv = readCsvFile(fs.path, resolveDialect(cfg, fs));
+        (void)resolveLabelColumns(fs.row_labels, csv.header, fs.declared_file + " (label)");
+    }
+
     // ---- strict：未声明的列必须报错（指出文件与列名），而不是静默丢弃 ----
     if (strict_types) {
+        // 按「表头第 i 列是否被任何声明消费」逐个匹配，而不是用 set<string>。
+        // 后者无法表达同名表头出现两次（neo4j 惯例的 `:LABEL|:LABEL`），会把两列
+        // 当成一列从而误报"未声明"。
         auto check_declared = [&](const FileSpec& fs, bool is_edge) {
             CsvFile csv = readCsvFile(fs.path, resolveDialect(cfg, fs));
-            std::set<std::string> declared;
+            const size_t ncols = csv.header.size();
+            std::vector<bool> claimed(ncols, false);
+
+            // 按名字认领（返回是否认领成功）
+            auto claim_by_name = [&](const std::string& name) {
+                for (size_t i = 0; i < ncols; ++i) {
+                    if (!claimed[i] && csv.header[i] == name) {
+                        claimed[i] = true;
+                        return true;
+                    }
+                }
+                return false;
+            };
+            // 只做「认领」，不做存在性判断：同一个来源可能被多次引用（如 pk 列已在
+            // columns 里认领过），而"列到底存不存在"由装载时的 resolveColumn 报错——
+            // 那里能给出更准确的上下文，这里只负责不漏判「未声明的列」。
+            auto claim_spec = [&](const PropertySpec& c) {
+                if (c.index >= 0) {
+                    if (c.index >= static_cast<int>(ncols)) {
+                        throw std::runtime_error("schema: " + fs.declared_file + ": column index " +
+                                                 std::to_string(c.index) + " out of range (header has " +
+                                                 std::to_string(ncols) + " columns)");
+                    }
+                    claimed[static_cast<size_t>(c.index)] = true;
+                    return;
+                }
+                claim_by_name(c.header.empty() ? c.name : c.header);
+            };
+
             for (const auto& c : fs.columns)
-                declared.insert(c.header.empty() ? (c.index >= 0 && c.index < static_cast<int>(csv.header.size())
-                                                        ? csv.header[static_cast<size_t>(c.index)]
-                                                        : c.name)
-                                                 : c.header);
-            if (fs.row_label.has_value() && !fs.row_label->header.empty())
-                declared.insert(fs.row_label->header);
+                claim_spec(c);
+            for (const auto& rl : fs.row_labels) {
+                if (rl.index >= 0) {
+                    if (rl.index >= static_cast<int>(ncols))
+                        throw std::runtime_error("schema: " + fs.declared_file + ": label index " +
+                                                 std::to_string(rl.index) + " out of range (header has " +
+                                                 std::to_string(ncols) + " columns)");
+                    claimed[static_cast<size_t>(rl.index)] = true;
+                } else if (!rl.header.empty()) {
+                    // 标签来源的列可以是"列声明已用掉的那一列"（同一列既作属性又作标签），
+                    // 也可以是独立的一列；两种都算已声明。
+                    bool already = false;
+                    for (size_t i = 0; i < ncols; ++i) {
+                        if (csv.header[i] == rl.header && claimed[i]) {
+                            already = true;
+                            break;
+                        }
+                    }
+                    if (!already)
+                        claim_by_name(rl.header);
+                }
+            }
             for (const auto& c : fs.pk)
-                declared.insert(c.header.empty() ? c.name : c.header);
+                claim_spec(c);
             if (is_edge) {
                 for (const auto& c : fs.src)
-                    declared.insert(c.header.empty() ? c.name : c.header);
+                    claim_spec(c);
                 for (const auto& c : fs.dst)
-                    declared.insert(c.header.empty() ? c.name : c.header);
+                    claim_spec(c);
             }
+
             std::vector<std::string> missing;
-            for (const auto& h : csv.header) {
-                if (!declared.count(h))
-                    missing.push_back(h);
+            for (size_t i = 0; i < ncols; ++i) {
+                if (!claimed[i])
+                    missing.push_back(csv.header[i]);
             }
             if (!missing.empty()) {
                 std::string list;
@@ -1068,32 +1239,36 @@ struct PkKey {
     }
 };
 
-/// 行级标签（label.header / derived）在装载前必须先建好标签，否则批量写入时
-/// 服务端会报 "Label not found"。属性定义跟随主标签：这些标签下的顶点由同一批
-/// CSV 列供给，属性与主标签一致（主标签负责索引，行级标签用于按名字查询）。
+/// 行级标签在装载前必须先建好标签，否则批量写入时服务端会报 "Label not found"。
+/// 属性定义跟随主标签：这些标签下的顶点由同一批 CSV 列供给，属性与主标签一致
+/// （主标签负责索引，行级标签用于按名字查询）。
 void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config) {
-    if (!fs.row_label.has_value())
+    if (fs.row_labels.empty())
         return;
     const auto& merged = config.merged_properties.at(fs.element);
 
+    // 按来源逐个取样：derived 直接建，列来源扫一遍取值（并集去重）
     std::vector<std::string> names;
-    if (!fs.row_label->derived.empty()) {
-        for (const auto& d : fs.row_label->derived) {
-            if (d != fs.element)
-                names.push_back(d);
+    std::set<std::string> seen;
+    CsvFile csv;
+    bool csv_loaded = false;
+    for (const auto& src : fs.row_labels) {
+        if (!src.derived.empty()) {
+            for (const auto& d : src.derived) {
+                if (d != fs.element && seen.insert(d).second)
+                    names.push_back(d);
+            }
+            continue;
         }
-    } else {
-        CsvFile csv = readCsvFile(fs.path, resolveDialect(config, fs));
-        PropertySpec tmp;
-        tmp.header = fs.row_label->header;
-        tmp.index = fs.row_label->index;
-        tmp.name = "__row_label__";
-        int col = resolveColumn(tmp, csv.header, fs.declared_file + " (label)", /*required=*/true);
-        std::set<std::string> seen;
+        if (!csv_loaded) {
+            csv = readCsvFile(fs.path, resolveDialect(config, fs));
+            csv_loaded = true;
+        }
+        const int col = resolveLabelColumn(src, csv.header, fs.declared_file + " (label)");
         for (const auto& row : csv.rows) {
             if (col >= static_cast<int>(row.fields.size()))
                 continue;
-            std::string v = applyCase(trim(row.fields[static_cast<size_t>(col)]), fs.row_label->case_mode);
+            std::string v = applyCase(trim(row.fields[static_cast<size_t>(col)]), src.case_mode);
             if (v.empty() || v == fs.element)
                 continue;
             if (seen.insert(v).second)
@@ -1147,26 +1322,9 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const FileSpec& fs, cons
         p = resolved;
     }
 
-    // derived 模式：整份文件共享同一组额外标签
-    std::vector<std::string> extra_labels;
-    if (fs.row_label.has_value() && !fs.row_label->derived.empty()) {
-        for (const auto& d : fs.row_label->derived) {
-            if (d != fs.element)
-                extra_labels.push_back(d);
-        }
-    }
-
-    int row_label_col = -1;
-    if (fs.row_label.has_value()) {
-        const auto& rl = *fs.row_label;
-        if (rl.derived.empty()) {
-            PropertySpec tmp;
-            tmp.header = rl.header;
-            tmp.index = rl.index;
-            tmp.name = "__row_label__";
-            row_label_col = resolveColumn(tmp, csv.header, where + " (label)", /*required=*/true);
-        }
-    }
+    // 行级标签：把所有来源解析成列号（derived 来源为 -1），逐行求并集去重
+    const std::vector<int> label_cols =
+        fs.row_labels.empty() ? std::vector<int>{} : resolveLabelColumns(fs.row_labels, csv.header, where + " (label)");
 
     // 属性按该标签合并后的顺序排列，保证不同文件的列顺序不影响结果
     const auto& merged = config.merged_properties.at(fs.element);
@@ -1186,22 +1344,11 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const FileSpec& fs, cons
     for (const auto& row : csv.rows) {
         thrift_service::VertexRecord rec;
 
-        std::string primary_label = fs.element;
-        std::string extra_label;
-        if (row_label_col >= 0) {
-            const auto& v = row.fields[static_cast<size_t>(row_label_col)];
-            extra_label = applyCase(trim(v), fs.row_label->case_mode);
-            if (extra_label.empty())
-                extra_label.clear();
-        }
-
         auto& labels = *rec.labels();
-        labels.push_back(primary_label);
-        if (!extra_label.empty() && extra_label != primary_label)
-            labels.push_back(extra_label);
-        for (const auto& d : extra_labels) {
-            if (std::find(labels.begin(), labels.end(), d) == labels.end())
-                labels.push_back(d);
+        labels.push_back(fs.element);
+        for (const auto& l : labelsForRow(fs, label_cols, row.fields)) {
+            if (std::find(labels.begin(), labels.end(), l) == labels.end())
+                labels.push_back(l);
         }
 
         auto& out_props = *rec.properties();
@@ -1226,7 +1373,7 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const FileSpec& fs, cons
 
         batch.push_back(std::move(rec));
         if (static_cast<int>(batch.size()) >= batch_size) {
-            auto resp = client.batchInsertVertices(primary_label, std::move(batch), "default");
+            auto resp = client.batchInsertVertices(fs.element, std::move(batch), "default");
             file_written += *resp.inserted();
             file_dup += *resp.duplicate_pk();
             batch.clear();
