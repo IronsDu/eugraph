@@ -1,6 +1,13 @@
-# Loader 设计
+# Loader 设计（历史：CLI 映射 + 目录扫描双模式）
 
-> [当前实现] 参见 [README.md](README.md) 返回文档导航
+> **[已被取代]** 本文描述的是「`--nodes`/`--relationships` 显式映射 + 目录扫描」的旧形态，
+> 那两个模式与相关参数**均已删除**。当前实现见
+> [loader-primary-key-design.md](loader-primary-key-design.md)（schema 单一入口、主键化、类型配置），
+> 使用方式见 [loader.md](../usage/loader.md)。
+>
+> 本文保留作历史记录与设计理由的追溯，**不要据此实现**。
+>
+> 参见 [README.md](README.md) 返回文档导航
 
 使用文档见 [loader.md](../usage/loader.md)。
 

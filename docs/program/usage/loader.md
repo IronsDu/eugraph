@@ -4,117 +4,136 @@
 
 批量 CSV 数据装载工具（`eugraph-loader`），通过 RPC 连接 eugraph server，将 CSV 数据导入图数据库。
 
-设计文档见 [loader-design.md](../design/loader-design.md)。
+**装载的一切声明都来自 schema JSON 文件**（标签、属性名与类型、主键、行级标签、边端点、分隔符、时间格式）。
+命令行只控制「怎么跑」（连哪儿、批多大、几路并发），不含任何数据声明 —— 因此**同一份 schema 必然装出同一张图**，
+命令行历史不会影响结果。
+
+设计文档见 [loader-primary-key-design.md](../design/loader-primary-key-design.md)（主键化与类型配置）。
 
 ---
 
 ## 启动
 
 ```bash
-eugraph-loader --host 127.0.0.1 --port 9090 --data-dir ./csv-data
+eugraph-loader --schema ./loader-schema.json --data-dir ./csv-data --host 127.0.0.1 --port 9090
 ```
 
 并行装载示例：
 
 ```bash
-eugraph-loader --host 127.0.0.1 --port 9090 --data-dir ./csv-data \
-    --batch-size 500 --rpc-connections 4 --parallel-files 4
+eugraph-loader --schema ./loader-schema.json --data-dir ./csv-data \
+    --host 127.0.0.1 --port 9090 \
+    --batch-size 2000 --rpc-connections 2 --parallel-files 2
 ```
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
+| `--schema` | 无（**必填**） | schema JSON 路径，唯一的声明入口 |
+| `--data-dir` | 无（**必填**） | CSV 根目录；schema 里 `file` 的相对路径以此为基准 |
 | `--host` | 127.0.0.1 | Server 地址 |
 | `--port` | 9090 | Server 端口 |
-| `--data-dir` | 无 | CSV 文件根目录。目录扫描模式（未给 `--nodes`/`--relationships`）下**必填**；CLI 模式下作为其中相对路径的基准，全部用绝对路径时可不填 |
-| `--nodes` | 无 | 点文件映射 `Label[:Label...]=file`，可重复 |
-| `--relationships` | 无 | 边文件映射 `TYPE=file`，可重复 |
-| `--delimiter` | `\|` | CSV 分隔符，当前仅支持 `\|` |
 | `--batch-size` | 500 | 每 RPC 批次的记录数 |
 | `--rpc-connections` | 1 | 到 server 的并发 RPC 连接数；每个连接对应一个独立 EventBase 线程 |
 | `--parallel-files` | 1 | 最多同时装载多少个 CSV 文件 |
+| `--no-schema-strict` | 关 | 打开后：schema 未声明的列回落到采样推断（默认报错并列出列名） |
 
-## 两种使用方式
+> **没有** `--nodes` / `--relationships` / `--pk` / `--types` / `--date-format` / `--delimiter` /
+> `--skip-undeclared-check`：这些都是数据声明，已全部收进 schema 文件。传入会直接报未知参数。
 
-### 1. CLI 显式映射（主模式）
+## schema 文件
 
-用 `--nodes` / `--relationships` 显式声明文件与标签/关系类型的映射，文件名不参与 schema 解析。适合 LDBC/Neo4j import 风格数据：
+### 顶层字段
 
-```bash
-eugraph-loader --host 127.0.0.1 --port 9090 \
-  --data-dir /path/to/neo4j-converted \
-  --delimiter '|' \
-  --nodes=Place=static/place_0_0.csv \
-  --nodes=Organisation=static/organisation_0_0.csv \
-  --nodes=Comment:Message=dynamic/comment_0_0.csv \
-  --nodes=Post:Message=dynamic/post_0_0.csv \
-  --relationships=IS_PART_OF=static/place_isPartOf_place_0_0.csv \
-  --relationships=KNOWS=dynamic/person_knows_person_0_0.csv
+| 字段 | 说明 |
+|------|------|
+| `labels` | 顶点：`标签名 → [文件条目, ...]` |
+| `relationships` | 边：`边类型名 → [文件条目, ...]` |
+| `delimiter` | 字段分隔符**全局默认**（默认 `"|"`；支持多字符，如 `"::"`；`"\t"`/`"tab"` 表示制表符） |
+| `date_format` | 时间列解析格式**全局默认**（默认 `"epoch_ms"`；可选 `epoch_s`/`epoch_us`/`epoch_ns`/`iso`） |
+| `undeclared_files` | 数据目录里有未声明 CSV 时的行为：`"error"`（默认，报错并列出文件）或 `"ignore"` |
+| `ignore` | 属于本数据集但不参与初始装载的文件（如 LDBC 的 `updateStream_*.csv`） |
+
+### 命名规则（容易踩的一点）
+
+| 位置 | 用哪种名字 |
+|------|-----------|
+| `columns` 的键、`pk` | **图里的属性名** |
+| `src` / `dst` / `label.header` / `columns.*.header` | **CSV 里的列名** |
+
+### 文件条目
+
+```jsonc
+{
+  "delimiter": "|",              // 全局默认；文件条目里可覆盖
+  "date_format": "epoch_ms",     // 全局默认；文件条目里可覆盖
+  "undeclared_files": "error",
+  "labels": {
+    "Person": [{
+      "file": "dynamic/person_0_0.csv",
+      "pk": "id",                                   // 属性名；复合主键写成数组 ["tenantId","userId"]
+      "columns": {
+        "id": "INT64",                              // 属性名 → 类型（列名同名时可简写）
+        "creationDate": "DATETIME",
+        "email": "STRING[]",
+        "kind": { "header": "type", "type": "STRING" }   // 改名：属性 kind 来自列 type
+      },
+      "label": { "header": "type", "case": "capitalize" } // 行级标签：列 type 的值首字母大写后作**追加**标签
+    }]
+  },
+  "relationships": {
+    "KNOWS": [{
+      "file": "dynamic/person_knows_person_0_0.csv",
+      "src": "Person.id",                           // 列名（可带目标标签前缀）；复合主键写成数组
+      "dst": "Person.id",
+      "src_label": "Person", "dst_label": "Person",
+      "columns": { "creationDate": "INT64" }
+    }]
+  }
+}
 ```
 
-`Comment:Message` 表示：该文件每个节点同时打上 `Comment` 和 `Message` 两个标签；第一个标签 `Comment` 为主标签，属性写入 `Comment` 下。若某点文件表头有 `:LABEL` 列，则行级标签优先成为主标签（如 Place 行按 `type` 得到 `Country`，属性写入 `Country` 下，便于创建 `Country(name)` 索引）。
+要点：
 
-### 2. 目录扫描模式（兼容）
+- **主键可选**：不写 `pk` 也能导入，只是不能用它解析边端点。写了 `pk` 就会建一个 `UNIQUE` 索引，
+  装载期由它解析边端点，同时让 `MATCH (n:Person {id: 5})` 走索引。
+- **主键冲突是 first-wins**：重复主键的顶点被跳过并告警，不阻断装载。
+- **行级标签是追加标签**，不抢主标签：`place` 文件里 `type=city` 的顶点带 `[Place, City]`，
+  属性始终写在 schema 键（`Place`）下。
+- **边端点必须声明 `src_label`/`dst_label`**，且目标标签必须声明主键 —— 否则启动即报错，
+  不会等到装载时静默跳过。
 
-不提供 `--nodes` / `--relationships` 时，扫描 `--data-dir` 下的 CSV 文件，按文件名约定分类：
+### 类型写法
 
-- 点文件：`{labels}_0_0.csv`，例如 `Person_0_0.csv`、`Comment+Message_0_0.csv`
-- 边文件：`{srcLabel}_{edgeType}_{dstLabel}_0_0.csv`，其中 `edgeType` 可以包含下划线，例如 `Comment_HAS_CREATOR_Person_0_0.csv`
+| 配置写法 | 说明 | CSV 值解析 |
+|---|---|---|
+| `BOOL` | 布尔 | `true`/`false` |
+| `INT` / `INT64` / `LONG` | 64 位整数 | `stoll` |
+| `DOUBLE` | 浮点 | `stod` |
+| `STRING` | 字符串 | 原样 |
+| `INT[]` / `LONG[]` | 整数数组 | `;` 拆分后逐项解析 |
+| `DOUBLE[]` | 浮点数组 | `;` 拆分后逐项解析 |
+| `STRING[]` | 字符串数组 | `;` 拆分 |
+| `DATE` | 日期 | 按 `date_format` |
+| `DATETIME` | 本地时间（无时区） | 按 `date_format` |
+| `DATETIME_WITH_TZ` | 带时区时间 | 按 `date_format` |
+| `TIME` / `DURATION` | 时间 / 时长 | 见设计文档 |
 
-## 数据格式
+`date_format` 为 `epoch_*` 时，纯数字按对应单位解释；否则按 ISO-8601 文本解析；
+显式写 `"iso"` 表示一律按文本解析。
 
-### 目录结构
+### CSV 读取能力
 
-```
-data-dir/
-├── static/          # 静态数据
-└── dynamic/         # 动态数据
-```
+- UTF-8 BOM 自动剥离（Excel「另存为 CSV」默认带）；
+- RFC 4180 引号：`"a|b"` 是一个字段，`""` 解转义为 `"`，引号内可含分隔符与换行；
+- 分隔符按**整体**匹配，支持多字符（`"::"`）；
+- 每行做列数校验，不等于表头列数即报错，消息含 `文件:行号:期望:实际`。
 
-目录结构对 loader 不是强制的，路径由 `--data-dir` 和 CLI 参数决定。
+## 与 neo4j-admin import 的对照
 
-### CSV 格式
+`neo4j-admin import` 的 `--nodes` / `--relationships` 在这里的等价物就是 schema 的
+`labels` / `relationships`；`headers.txt` 的列类型声明对应 `columns`；
+`:LABEL` 列对应 `label`；`--delimiter` 对应顶层 `delimiter`。
 
-分隔符默认 `|`，首行为表头。
-
-**点文件**：
-- 若无 `:ID` 列，第一列为 CSV 主键（INT64），且作为 `id` 属性写入；
-- 若表头有 `:ID` 或 `:ID(Group)`，用该列作为 CSV 主键，仍作为属性写入；
-- 若表头有 `:LABEL`，该列每行的值作为行级标签，且**行级标签优先成为主标签**；
-- 其余列作为属性。
-
-**边文件**：
-- 若无 `:START_ID` / `:END_ID` 列，前两列为 src/dst 的 CSV 主键；
-- 若表头有 `:START_ID(Group)` / `:END_ID(Group)`，用其所在列作为 src/dst 主键，并用 `Group` 作为分组名；
-- 其余列作为边属性。
-
-### 表头类型后缀
-
-| 后缀 | 说明 |
-|---|---|
-| `name:STRING` | 字符串属性 |
-| `length:INT` / `creationDate:LONG` | 64 位整数属性 |
-| `score:DOUBLE` | 浮点属性 |
-| `flag:BOOL` | 布尔属性 |
-| `speaks:STRING[]` | 字符串数组，CSV 中按 `;` 分隔 |
-| `ids:INT[]` / `ids:LONG[]` | 整数数组 |
-| `values:DOUBLE[]` | 浮点数组 |
-
-无后缀列自动推断：采样前 100 行，能全解析为 INT64 则 INT64，否则 STRING。
-
-### Neo4j converted 数据集示例
-
-Neo4j import 转换后的 LDBC CSV 可直接导入：
-
-```text
-点文件 Place_0_0.csv:
-id:ID|name:STRING|url:STRING|:LABEL
-0|India|http://dbpedia.org/resource/India|Country
-
-点文件 Person_0_0.csv:
-id:ID|firstName:STRING|lastName:STRING|gender:STRING|birthday:LONG|creationDate:LONG|locationIP:STRING|browserUsed:STRING|speaks:STRING[]|email:STRING[]
-933|Mahinda|Perera|male|628646400000|1266161530447|119.235.7.103|Firefox|si;en|Mahinda933@boarderzone.com
-
-边文件 comment_hasCreator_person_0_0.csv:
-:START_ID(Comment)|:END_ID(Person)
-618475290625|933
-```
+sf0.1 语料的现成配置：[ldbc-sf01.schema.json](../design/ldbc-sf01.schema.json)
+（数据一致性可用 `scripts/verify_loader_vs_neo4j.py` 核对，判据取自
+`ldbc_snb_interactive_v1_impls/cypher/scripts`）。

@@ -181,7 +181,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 |------|------|
 | [Server + Shell 设计](program/design/server-shell-design.md) | 启动流程、双模式架构、Shell REPL 设计 |
 | [Loader 设计](program/design/loader-design.md) | 装载流程、服务端批量端点、错误处理 |
-| [Loader 主键化与类型配置（当前实现）](program/design/loader-primary-key-design.md) | schema 文件是唯一装载入口（`--nodes`/`--relationships` 与目录扫描删除）；主键 = 一个普通 `UNIQUE` 索引、支持复合主键；Thrift 写协议去 VertexId；列类型/属性重命名/行级标签/端点标签全部外部声明；配套样例：[sf0.1 配置](program/design/ldbc-sf01.schema.json)、[复合主键示例](program/design/composite-key-example.schema.json) |
+| [Loader 主键化与类型配置（当前实现）](program/design/loader-primary-key-design.md) | schema 文件是唯一装载入口（`--nodes`/`--relationships` 与目录扫描删除，`--pk`/`--types`/`--date-format`/`--delimiter` 等声明类参数也已收进 schema）；主键 = 一个普通 `UNIQUE` 索引、支持复合主键；Thrift 写协议去 VertexId；列类型/属性重命名/行级标签/端点标签/分隔符/时间格式全部外部声明，分隔符与时间格式支持**文件级覆盖**；配套样例：[sf0.1 配置](program/design/ldbc-sf01.schema.json)、[复合主键示例](program/design/composite-key-example.schema.json) |
 
 ## 调试
 

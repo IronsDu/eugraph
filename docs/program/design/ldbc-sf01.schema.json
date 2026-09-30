@@ -12,7 +12,9 @@
     "行级标签是追加标签：place 文件的顶点带 [Place, City|Country|Continent]，主标签始终是 Place。",
     "所有列类型显式声明、不依赖采样推断。",
     "用法：eugraph-loader --schema ldbc-sf01.schema.json --data-dir <语料目录>",
-    "ignore 列出属于本数据集但【不参与初始装载】的文件：LDBC 的 updateStream_*.csv 属于更新流，另行增量导入。"
+    "ignore 列出属于本数据集但【不参与初始装载】的文件：LDBC 的 updateStream_*.csv 属于更新流，另行增量导入。",
+    "声明只来自本文件：主键/类型/分隔符/时间格式都写在这里，命令行不再提供覆盖，因此同一份 schema 必然装出同一张图。",
+    "本语料各文件都是 \"|\" 分隔、时间列都是 epoch 毫秒，故用顶层默认值（delimiter / date_format）；如需按文件区分，可在文件条目里写 \"delimiter\" / \"date_format\" 覆盖。"
   ],
   "date_format": "epoch_ms",
   "labels": {

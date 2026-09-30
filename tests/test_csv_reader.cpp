@@ -165,21 +165,53 @@ TEST_F(CsvReaderTest, CommaDelimitedWithQuotedPipe) {
     EXPECT_EQ(f.rows[0].fields, (std::vector<std::string>{"x,y", "z"}));
 }
 
-TEST(ParseDelimiterTest, AcceptsSupportedForms) {
-    char d = 0;
-    EXPECT_TRUE(eugraph::loader::parseDelimiter("|", d));
-    EXPECT_EQ(d, '|');
-    EXPECT_TRUE(eugraph::loader::parseDelimiter(",", d));
-    EXPECT_EQ(d, ',');
-    EXPECT_TRUE(eugraph::loader::parseDelimiter(";", d));
-    EXPECT_EQ(d, ';');
-    EXPECT_TRUE(eugraph::loader::parseDelimiter("\\t", d));
-    EXPECT_EQ(d, '\t');
-    EXPECT_TRUE(eugraph::loader::parseDelimiter("\t", d));
-    EXPECT_EQ(d, '\t');
-    EXPECT_FALSE(eugraph::loader::parseDelimiter("::", d));
-    EXPECT_FALSE(eugraph::loader::parseDelimiter("x", d));
-    EXPECT_FALSE(eugraph::loader::parseDelimiter("", d));
+TEST(ResolveDelimiterTest, AcceptsSupportedForms) {
+    using eugraph::loader::resolveDelimiter;
+    auto is = [](const char* raw, const std::string& expect) {
+        auto got = resolveDelimiter(raw);
+        return got.has_value() && *got == expect;
+    };
+    EXPECT_TRUE(is("|", "|"));
+    EXPECT_TRUE(is(",", ","));
+    EXPECT_TRUE(is(";", ";"));
+    EXPECT_TRUE(is("\\t", "\t")); // 转义写法
+    EXPECT_TRUE(is("tab", "\t"));
+    EXPECT_TRUE(is("\t", "\t")); // 真实制表符（TSV 是合法方言）
+    // 多字符分隔符（原先被 --delimiter 的单字符限制挡住）
+    EXPECT_TRUE(is("::", "::"));
+    EXPECT_TRUE(is("||", "||"));
+    EXPECT_TRUE(is("<>", "<>"));
+}
+
+TEST(ResolveDelimiterTest, RejectsUnusableForms) {
+    using eugraph::loader::resolveDelimiter;
+    EXPECT_FALSE(resolveDelimiter("").has_value());
+    EXPECT_FALSE(resolveDelimiter("   ").has_value()); // 纯空白无意义
+    EXPECT_FALSE(resolveDelimiter(" ").has_value());   // 空格分隔符会让空字段语义不可预测
+    EXPECT_FALSE(resolveDelimiter("\"").has_value());  // 与引号规则冲突
+    EXPECT_FALSE(resolveDelimiter("\n").has_value());  // 与行结束符冲突
+}
+
+// 多字符分隔符必须**整体**匹配，不能被逐字符切开
+TEST_F(CsvReaderTest, MultiCharDelimiterMatchesWholeToken) {
+    write("a::b::c\n1::2::3\n");
+    eugraph::loader::CsvDialect d;
+    d.delimiter = "::";
+    auto csv = eugraph::loader::readCsvFile(path_, d);
+    EXPECT_EQ(csv.header, (std::vector<std::string>{"a", "b", "c"}));
+    ASSERT_EQ(csv.rows.size(), 1u);
+    EXPECT_EQ(csv.rows[0].fields, (std::vector<std::string>{"1", "2", "3"}));
+}
+
+// 多字符分隔符中的单个字符不应被当作分隔符
+TEST_F(CsvReaderTest, MultiCharDelimiterDoesNotSplitOnPartialMatch) {
+    write("a::b\n:1::2:\n");
+    eugraph::loader::CsvDialect d;
+    d.delimiter = "::";
+    auto csv = eugraph::loader::readCsvFile(path_, d);
+    ASSERT_EQ(csv.rows.size(), 1u);
+    // ":1" 与 "2:" 各是一整个字段（单冒号不是分隔符）
+    EXPECT_EQ(csv.rows[0].fields, (std::vector<std::string>{":1", "2:"}));
 }
 
 // ==================== R4：列数与畸形输入 ====================

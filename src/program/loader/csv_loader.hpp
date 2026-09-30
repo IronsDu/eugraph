@@ -66,13 +66,24 @@ struct FileSpec {
     // 仅边文件：端点列（单列主键 1 项；复合主键逐列列出，顺序与目标标签主键一致）
     std::vector<PropertySpec> src, dst;
     std::string src_label, dst_label;
+    /// 文件级覆盖（缺省 = 用 SchemaConfig 的全局值）。与 columns/pk/label 同一套分层：
+    /// 全局默认 → 文件级覆盖。
+    std::optional<std::string> delimiter;
+    std::optional<std::string> date_format;
 };
 
 /// schema 配置（JSON）解析结果：装载入口的唯一来源。
 struct SchemaConfig {
     std::filesystem::path schema_path;
     std::filesystem::path data_dir;
-    std::string date_format = "epoch_ms"; ///< epoch_ms | epoch_s | epoch_us | epoch_ns | iso
+    /// 时间列的默认解析格式（全局）：epoch_ms | epoch_s | epoch_us | epoch_ns | iso。
+    /// 文件级可用 FileSpec::date_format 覆盖。
+    std::string date_format = "epoch_ms";
+    /// 字段分隔符的全局默认值（可多字符）；文件级可用 FileSpec::delimiter 覆盖。
+    std::string delimiter = "|";
+    /// 数据目录里存在「未在 schema 声明」的 CSV 时的行为：
+    ///   "error"（默认）→ 报错并列出文件名；"ignore" → 只记日志。
+    std::string undeclared_files = "error";
     /// 明确排除的文件（相对 data_dir）：属于本数据集但不参与初始装载，
     /// 例如 LDBC 的 updateStream_*.csv（更新流，另行增量导入）。
     std::vector<std::string> ignored_files;
@@ -82,25 +93,22 @@ struct SchemaConfig {
     std::unordered_map<std::string, std::vector<PropertySpec>> merged_properties;
 };
 
-/// CLI 覆盖（优先级高于 schema 文件；键的含义与 JSON 一致）：
-///   pk[label]        = 该标签的主键【属性名】（顺序即元组顺序；复合主键用逗号分隔）
-///   types[label][p]  = 该标签属性 p 的类型（键是属性名；不存在则按 p 为属性名、列名同名新增）
-///   props[type][p]   = 该边类型属性 p 的类型（同上）
-///   date_format      = 覆盖 schema 的 date_format
-struct CliOverrides {
-    std::unordered_map<std::string, std::vector<std::string>> pk;                        // label -> pk 属性名
-    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> types; // label/type -> prop -> type
-    std::optional<std::string> date_format;
-};
-
 /// 解析 --schema JSON 并做完整校验（文件存在性、pk 引用、端点标签、冲突等）。
 /// 失败抛 std::runtime_error，消息含文件/标签/字段名。
+///
+/// 声明只有这一个来源：**没有命令行覆盖**（主键/类型/分隔符/时间格式全在 JSON 里），
+/// 这样「同一份 schema 必然装出同一张图」，命令行历史不影响结果。
+///
 /// - strict_types=true（默认）：columns 未声明的列直接报错（要求显式声明）。
 /// - strict_types=false：未声明的列按采样推断类型补上（前 200 行，INT64 否则 STRING）。
-/// - overrides 非空时先应用到配置上再做校验。
 SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const std::filesystem::path& data_dir,
-                              const CsvDialect& dialect = CsvDialect{}, bool strict_types = true,
-                              const CliOverrides* overrides = nullptr);
+                              bool strict_types = true);
+
+/// 某个文件的有效 CSV 方言 = schema 全局默认 + 文件级覆盖。
+CsvDialect resolveDialect(const SchemaConfig& config, const FileSpec& fs);
+
+/// 某个文件的有效时间解析格式 = schema 全局默认 + 文件级覆盖。
+const std::string& resolveDateFormat(const SchemaConfig& config, const FileSpec& fs);
 
 // ==================== 装载阶段 ====================
 
@@ -113,12 +121,11 @@ void createPrimaryKeyIndexes(shell::EuGraphRpcClient& client, const SchemaConfig
 
 /// 装载全部顶点文件。返回 {写入顶点数, 主键重复跳过数}。
 std::pair<int64_t, int64_t> loadVertices(const std::vector<shell::EuGraphRpcClient*>& clients,
-                                         const SchemaConfig& config, const CsvDialect& dialect, int batch_size,
-                                         int concurrency);
+                                         const SchemaConfig& config, int batch_size, int concurrency);
 
 /// 装载全部边文件。返回 {写入边数, 端点未解析跳过数}。
 std::pair<int64_t, int64_t> loadEdges(const std::vector<shell::EuGraphRpcClient*>& clients, const SchemaConfig& config,
-                                      const CsvDialect& dialect, int batch_size, int concurrency);
+                                      int batch_size, int concurrency);
 
 /// 校验：数据目录下的 CSV 是否都在 schema 里声明过（未声明的文件多半是配置漏写）。
 /// 返回未声明的文件列表（相对 data_dir）。

@@ -466,7 +466,7 @@ int resolveColumn(const PropertySpec& spec, const std::vector<std::string>& head
 // ==================== schema 装载 ====================
 
 SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const std::filesystem::path& data_dir,
-                              const CsvDialect& dialect, bool strict_types, const CliOverrides* overrides) {
+                              bool strict_types) {
     SchemaConfig cfg;
     cfg.schema_path = schema_path;
     cfg.data_dir = data_dir;
@@ -491,12 +491,39 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
             cfg.ignored_files.push_back(item.get<std::string>());
         }
     }
+    if (doc.contains("delimiter")) {
+        if (!doc["delimiter"].is_string())
+            throw std::runtime_error("schema: 'delimiter' must be a string");
+        auto d = resolveDelimiter(doc["delimiter"].get<std::string>());
+        if (!d.has_value())
+            throw std::runtime_error("schema: 'delimiter' value is not usable as a field separator: " +
+                                     doc["delimiter"].get<std::string>());
+        cfg.delimiter = *d;
+    }
+    if (doc.contains("undeclared_files")) {
+        const auto& v = doc["undeclared_files"];
+        if (v.is_boolean()) {
+            cfg.undeclared_files = v.get<bool>() ? "ignore" : "error";
+        } else if (v.is_string()) {
+            const std::string mode = v.get<std::string>();
+            if (mode != "error" && mode != "ignore")
+                throw std::runtime_error("schema: 'undeclared_files' must be \"error\" or \"ignore\"");
+            cfg.undeclared_files = mode;
+        } else {
+            throw std::runtime_error("schema: 'undeclared_files' must be a string (\"error\" | \"ignore\")");
+        }
+    }
     if (doc.contains("date_format")) {
         cfg.date_format = reqString(doc, "date_format", "schema");
         static const std::set<std::string> kFormats = {"epoch_ms", "epoch_s", "epoch_us", "epoch_ns", "iso"};
         if (!kFormats.count(cfg.date_format))
             throw std::runtime_error("schema: unknown date_format '" + cfg.date_format + "'");
     }
+
+    // 读文件（用于非 strict 推断 / strict 校验 / 方言相关的表头解析）统一用「全局默认方言」；
+    // 文件级覆盖在 FileSpec 解析完成后由 resolveDialect 生效。
+    CsvDialect dialect;
+    dialect.delimiter = cfg.delimiter;
 
     auto resolve_file = [&](const std::string& rel) {
         std::filesystem::path p(rel);
@@ -521,6 +548,20 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
             fs.element = label;
             fs.declared_file = reqString(entry, "file", where);
             fs.path = resolve_file(fs.declared_file);
+            if (entry.contains("delimiter")) {
+                if (!entry["delimiter"].is_string())
+                    throw std::runtime_error("schema: " + where + ".delimiter must be a string");
+                auto d = resolveDelimiter(entry["delimiter"].get<std::string>());
+                if (!d.has_value())
+                    throw std::runtime_error("schema: " + where + ".delimiter is not usable as a field separator: " +
+                                             entry["delimiter"].get<std::string>());
+                fs.delimiter = *d;
+            }
+            if (entry.contains("date_format")) {
+                if (!entry["date_format"].is_string())
+                    throw std::runtime_error("schema: " + where + ".date_format must be a string");
+                fs.date_format = entry["date_format"].get<std::string>();
+            }
             if (!std::filesystem::exists(fs.path))
                 throw std::runtime_error("schema: " + where + ": data file not found: " + fs.path.string());
 
@@ -669,69 +710,11 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
         }
     }
 
-    // ---- CLI 覆盖：date_format / types / pk ----
-    if (overrides != nullptr) {
-        if (overrides->date_format.has_value())
-            cfg.date_format = *overrides->date_format;
-        auto apply_types = [&](std::vector<FileSpec>& files, const std::string& element_name,
-                               const std::unordered_map<std::string, std::string>& type_map) {
-            for (auto& fs : files) {
-                if (fs.element != element_name)
-                    continue;
-                for (const auto& [prop, type_name] : type_map) {
-                    CsvColumnType t = parseTypeName(type_name);
-                    auto it = std::find_if(fs.columns.begin(), fs.columns.end(),
-                                           [&](const PropertySpec& c) { return c.name == prop; });
-                    if (it != fs.columns.end()) {
-                        it->type = t;
-                        it->type_declared = true;
-                    } else {
-                        // 未声明过：按「属性名 = 列名」新增（需要表头里真的有这一列）
-                        PropertySpec spec;
-                        spec.name = prop;
-                        spec.header = prop;
-                        spec.type = t;
-                        spec.type_declared = true;
-                        fs.columns.push_back(std::move(spec));
-                    }
-                }
-            }
-        };
-        for (const auto& fs : cfg.vertex_files) {
-            auto it = overrides->types.find(fs.element);
-            if (it != overrides->types.end())
-                apply_types(cfg.vertex_files, fs.element, it->second);
-        }
-        for (const auto& fs : cfg.edge_files) {
-            auto it = overrides->types.find(fs.element);
-            if (it != overrides->types.end())
-                apply_types(cfg.edge_files, fs.element, it->second);
-        }
-        for (const auto& [label, pk_names] : overrides->pk) {
-            bool found = false;
-            for (auto& fs : cfg.vertex_files) {
-                if (fs.element != label)
-                    continue;
-                found = true;
-                fs.pk.clear();
-                for (const auto& n : pk_names) {
-                    PropertySpec spec;
-                    spec.name = n;
-                    spec.header = n;
-                    fs.pk.push_back(std::move(spec));
-                }
-                fs.has_pk = true;
-            }
-            if (!found)
-                throw std::runtime_error("--pk: label '" + label + "' is not declared in the schema");
-        }
-    }
-
     // ---- 非 strict：对未在 columns 声明的列按采样推断补上类型 ----
     if (!strict_types) {
         auto infer_missing = [&](std::vector<FileSpec>& files, bool is_edge) {
             for (auto& fs : files) {
-                CsvFile csv = readCsvFile(fs.path, dialect);
+                CsvFile csv = readCsvFile(fs.path, resolveDialect(cfg, fs));
                 std::set<std::string> declared;
                 for (const auto& c : fs.columns)
                     declared.insert(c.header.empty() ? c.name : c.header);
@@ -823,7 +806,7 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
     // ---- strict：未声明的列必须报错（指出文件与列名），而不是静默丢弃 ----
     if (strict_types) {
         auto check_declared = [&](const FileSpec& fs, bool is_edge) {
-            CsvFile csv = readCsvFile(fs.path, dialect);
+            CsvFile csv = readCsvFile(fs.path, resolveDialect(cfg, fs));
             std::set<std::string> declared;
             for (const auto& c : fs.columns)
                 declared.insert(c.header.empty() ? (c.index >= 0 && c.index < static_cast<int>(csv.header.size())
@@ -1020,6 +1003,18 @@ void createPrimaryKeyIndexes(shell::EuGraphRpcClient& client, const SchemaConfig
     }
 }
 
+// ==================== 有效配置解析 ====================
+
+CsvDialect resolveDialect(const SchemaConfig& config, const FileSpec& fs) {
+    CsvDialect d;
+    d.delimiter = fs.delimiter.has_value() ? *fs.delimiter : config.delimiter;
+    return d;
+}
+
+const std::string& resolveDateFormat(const SchemaConfig& config, const FileSpec& fs) {
+    return fs.date_format.has_value() ? *fs.date_format : config.date_format;
+}
+
 // ==================== 装载 ====================
 
 namespace {
@@ -1076,8 +1071,7 @@ struct PkKey {
 /// 行级标签（label.header / derived）在装载前必须先建好标签，否则批量写入时
 /// 服务端会报 "Label not found"。属性定义跟随主标签：这些标签下的顶点由同一批
 /// CSV 列供给，属性与主标签一致（主标签负责索引，行级标签用于按名字查询）。
-void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config,
-                     const CsvDialect& dialect) {
+void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config) {
     if (!fs.row_label.has_value())
         return;
     const auto& merged = config.merged_properties.at(fs.element);
@@ -1089,7 +1083,7 @@ void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
                 names.push_back(d);
         }
     } else {
-        CsvFile csv = readCsvFile(fs.path, dialect);
+        CsvFile csv = readCsvFile(fs.path, resolveDialect(config, fs));
         PropertySpec tmp;
         tmp.header = fs.row_label->header;
         tmp.index = fs.row_label->index;
@@ -1121,8 +1115,9 @@ void createRowLabels(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
     }
 }
 
-void loadOneVertexFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config,
-                       const CsvDialect& dialect, int batch_size, int64_t& written, int64_t& duplicates) {
+void loadOneVertexFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config, int batch_size,
+                       int64_t& written, int64_t& duplicates) {
+    const CsvDialect dialect = resolveDialect(config, fs);
     CsvFile csv = readCsvFile(fs.path, dialect);
 
     // 解析列号（属性 / 主键 / 行级标签）
@@ -1218,7 +1213,7 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const FileSpec& fs, cons
             PropertySpec spec = merged[mi];
             spec.column = col;
             out_props[mi] = toThriftValue(fs.declared_file, row.line_number, spec, row.fields[static_cast<size_t>(col)],
-                                          config.date_format);
+                                          resolveDateFormat(config, fs));
         }
 
         for (const auto& p : pk) {
@@ -1249,8 +1244,9 @@ void loadOneVertexFile(shell::EuGraphRpcClient& client, const FileSpec& fs, cons
     duplicates += file_dup;
 }
 
-void loadOneEdgeFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config,
-                     const CsvDialect& dialect, int batch_size, int64_t& written, int64_t& skipped) {
+void loadOneEdgeFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const SchemaConfig& config, int batch_size,
+                     int64_t& written, int64_t& skipped) {
+    const CsvDialect dialect = resolveDialect(config, fs);
     CsvFile csv = readCsvFile(fs.path, dialect);
     const std::string where = fs.declared_file;
 
@@ -1363,18 +1359,17 @@ void loadOneEdgeFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
 } // namespace
 
 std::pair<int64_t, int64_t> loadVertices(const std::vector<shell::EuGraphRpcClient*>& clients,
-                                         const SchemaConfig& config, const CsvDialect& dialect, int batch_size,
-                                         int concurrency) {
+                                         const SchemaConfig& config, int batch_size, int concurrency) {
     // 行级标签必须在并发装载之前建好（并发阶段边建边写会有竞态）
     if (!clients.empty()) {
         for (const auto& fs : config.vertex_files)
-            createRowLabels(*clients.front(), fs, config, dialect);
+            createRowLabels(*clients.front(), fs, config);
     }
 
     std::atomic<int64_t> written{0}, duplicates{0};
     runFilesParallel(clients, config.vertex_files.size(), concurrency, [&](shell::EuGraphRpcClient& client, size_t i) {
         int64_t w = 0, d = 0;
-        loadOneVertexFile(client, config.vertex_files[i], config, dialect, batch_size, w, d);
+        loadOneVertexFile(client, config.vertex_files[i], config, batch_size, w, d);
         written += w;
         duplicates += d;
     });
@@ -1382,11 +1377,11 @@ std::pair<int64_t, int64_t> loadVertices(const std::vector<shell::EuGraphRpcClie
 }
 
 std::pair<int64_t, int64_t> loadEdges(const std::vector<shell::EuGraphRpcClient*>& clients, const SchemaConfig& config,
-                                      const CsvDialect& dialect, int batch_size, int concurrency) {
+                                      int batch_size, int concurrency) {
     std::atomic<int64_t> written{0}, skipped{0};
     runFilesParallel(clients, config.edge_files.size(), concurrency, [&](shell::EuGraphRpcClient& client, size_t i) {
         int64_t w = 0, s = 0;
-        loadOneEdgeFile(client, config.edge_files[i], config, dialect, batch_size, w, s);
+        loadOneEdgeFile(client, config.edge_files[i], config, batch_size, w, s);
         written += w;
         skipped += s;
     });

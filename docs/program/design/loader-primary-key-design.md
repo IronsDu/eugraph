@@ -50,7 +50,7 @@
 |---|---|---|
 | G1 | Loader 不再维护「主键 → VertexId」映射 | 边记录携带**主键引用**，服务端解析 |
 | G2 | Thrift 写点/写边协议不携带 `VertexId` | `VertexRecord.pk` / `EdgeRecord.src,dst` 改为 `(label, pk_name, pk_value)` |
-| G3 | 属性类型与主键外部声明，不改写 CSV | JSON schema 配置 + CLI 覆盖；含时序类型 |
+| G3 | 属性类型与主键外部声明，不改写 CSV | **JSON schema 配置（唯一声明来源）**；含时序类型 |
 
 ### 1.3 非目标
 
@@ -71,7 +71,7 @@
 | 2 | 主键 = 一个普通 `UNIQUE` 索引，**不新增任何存储** | 由现有索引管理器承载（`LabelDef.indexes` → `vidx_{index_id}`）；未声明主键的标签零额外开销 |
 | 3 | 主键冲突 | **first-wins**：保留先写入者，仅告警（不阻断装载） |
 | 4 | 声明主键 → **必须创建该列的唯一索引**（它就是主键） | 建在 **schema 键（主标签）** 上 + 弱 accessor；一条索引覆盖该标签全部顶点（含行级标签产生的额外标签）（§4 决定 1、§6.3） |
-| 5 | 类型/主键声明载体 | **JSON 配置文件**（`--schema`）+ CLI 覆盖（`--pk` / `--types`） |
+| 5 | 类型/主键声明载体 | **JSON 配置文件**（`--schema`）——**没有命令行覆盖**：主键/类型/分隔符/时间格式全在 JSON 里，保证「同一份 schema 必然装出同一张图」 |
 | 6 | 行级标签 | **指定即所用**：配置里写 `city` 就是 `city`，写 `City` 就是 `City`，不做隐式转换；它只是**追加**标签，不再抢占主标签（§6.4） |
 | 7 | 时序类型 | **本次一起做**：按 `date_format` 解析 epoch 或 ISO-8601 |
 | 8 | 存储兼容性 | **不承担**：元数据编码直接改，不写旧格式解码分支、不做迁移测试 |
@@ -88,10 +88,11 @@
 |---|---|---|---|
 | R1 | **UTF-8 BOM**：Excel「另存为 CSV」默认带 BOM | 表头首列变成 `"\uFEFFid"`，与 schema 里的 `id` 不匹配 → strict 报「列未声明」；非 strict 下变成一个**幽灵属性** `\uFEFFid` | 读表头时剥离 BOM（仅首列、仅表头行）；同时在启动时检查文件内是否存在其它 BOM |
 | R2 | **带引号的字段**（RFC 4180 合法）：`"a&#124;b"`、`"say ""hi"""` | 引号被当普通字符；**引号内的分隔符会把字段错误切开**：`"a&#124;b"&#124;x` → 切成 3 个字段，导致列错位（静默数据损坏） | 实现规范引号解析：引号内的分隔符/换行不切分，`""` 解转义为 `"` |
-| R3 | **非 `&#124;` 分隔符**：Excel 默认逗号，TSV 制表符 | `--delimiter` 只接受 `&#124;`，其它直接报错退出 | 支持 `,` / `;` / `\t` / `&#124;`；**支持引号包裹即可覆盖 Excel 导出**，不引入第三方 CSV 库 |
-| R4 | **字段内含未转义分隔符**（脏数据） | 该行列数多于表头 → 静默错位 | 每行做**列数校验**：不等于表头列数即报错，消息含 `文件:行号:期望列数:实际列数`，并提示"如字段本身含分隔符请加引号或换 `--delimiter`" |
+| R3 | **非 `&#124;` 分隔符**：Excel 默认逗号、TSV 制表符，个别语料用多字符分隔符 | 旧 loader 的 `--delimiter` 只接受 `&#124;`，其它直接报错退出 | 分隔符写在 schema（顶层默认 + 文件级覆盖），支持 `,` / `;` / `\t` / `&#124;` **及任意多字符**；不引入第三方 CSV 库 |
+| R4 | **字段内含未转义分隔符**（脏数据） | 该行列数多于表头 → 静默错位 | 每行做**列数校验**：不等于表头列数即报错，消息含 `文件:行号:期望列数:实际列数`，并提示"如字段本身含分隔符请加引号，或在 schema 里改 `delimiter`" |
 
-**不做的（明确边界）**：不支持无表头文件（loader 的前置假设就是"都有标头"）；不做编码嗅探（非 UTF-8 需用户自行转码，报错时会提示）；不处理多字符分隔符。
+**不做的（明确边界）**：不支持无表头文件（loader 的前置假设就是"都有标头"）；不做编码嗅探（非 UTF-8 需用户自行转码，报错时会提示）。
+~~不处理多字符分隔符~~ —— **已支持**：分隔符进 schema 后摆脱了 CLI 的单字符限制，`resolveDelimiter` 接受任意非空、非纯空白、不含引号/换行的字符串，读取时按**整体**匹配。
 
 **错误消息的可操作性**（与 §5.3 的解析错误同一要求）：
 
@@ -249,15 +250,20 @@ service EuGraphService {
 | 表头作为声明来源（`:ID` / `:START_ID(Group)` / `name:TYPE`） | **不再读取**（表头只用于**按名定位列**） |
 | 采样推断 / STRING 兜底 | **仅作用于未在 `columns` 声明的列**，且受 `schema-strict` 控制 |
 
-于是优先级链从五层塌缩成两层：
+于是优先级链从一个五层叠加体系塌缩成「一份声明 + 一个宽松开关」：
 
 ```text
-① CLI 覆盖（--pk / --types / --date-format）   单次临时调整
-② --schema <file.json>                        唯一的完整声明
-③ 未声明的列：strict 报错；--no-schema-strict 时回落到采样推断并打 INFO
+① --schema <file.json>   唯一的完整声明（主键 / 类型 / 分隔符 / 时间格式 / 行级标签）
+② 未声明的列：strict 报错（列出文件与列名）；`--no-schema-strict` 时回落到采样推断并打 INFO
 ```
 
+命令行不再提供任何声明覆盖（旧的 `--pk` / `--types` / `--date-format` / `--delimiter` 已删除）：
+它们会制造**第二份真相**——schema 是入库、可 review 的，命令行历史不是；同一个 `--pk` 改一下
+就能装出另一张图（主键换列 → 唯一索引变 → 边端点连到别的顶点），而仓库里没有任何记录。
+
 **`schema-strict` 默认值（已定）**：默认**开启**（`--schema` 已是必填，配置的意义就是显式声明，漏列应当报错指出）；`--no-schema-strict` 可显式关闭，此时未声明的列才回落到采样推断。
+
+> `--no-schema-strict` 是**运行方式**（同一次运行要不要宽容），不是数据声明，因此它是唯一保留在命令行上的宽松开关。
 
 **站点收益**：loader 少掉约 158 行（`scanCsvFiles` 的文件分类 + `parseNodeSpec`/`parseRelationshipSpec`），`CsvFileInfo` 的 `is_vertex` / `src_label` / `edge_type` / `dst_label` / `labels` 五个 legacy 字段与 4 个函数声明一并消失（[csv_loader.hpp](../../../src/program/loader/csv_loader.hpp#L25-L35)、[csv_loader.cpp](../../../src/program/loader/csv_loader.cpp#L142)）。
 
@@ -350,7 +356,7 @@ service EuGraphService {
 | `relationships.<type>[].src` / `.dst` | 端点**列名**：`"列名"` 或 `{"列名": {"type":…, "label":…}}`（列名，不是属性名 —— 这里读的是本文件的列值；端点列不成为边属性，也不必写进 `columns`） |
 | `relationships.<type>[].src_label` / `.dst_label` | **必填**：端点顶点标签，必须在 `labels` 中声明过且该标签声明了主键；也可写在端点对象里的 `label` |
 | `relationships.<type>[].columns` | 边属性：规则同 `labels.<label>[].columns` |
-| `date_format` | 时间列的解析格式（全局）：`epoch_ms`(默认) / `epoch_s` / `epoch_us` / `epoch_ns` / `iso`；可用 `--date-format` 覆盖 |
+| `date_format` | 时间列的解析格式**全局默认**：`epoch_ms`(默认) / `epoch_s` / `epoch_us` / `epoch_ns` / `iso`；文件级可覆盖 |
 | `ignore` | 属于本数据集但**不参与初始装载**的文件（相对 `--data-dir`）；用于 LDBC 的 `updateStream_*.csv` 等更新流，避免被「文件未声明」校验拦下 |
 | `_comment` 及其它 `_` 前缀键 | 忽略（承载说明文字） |
 
@@ -431,25 +437,59 @@ service EuGraphService {
 
 **实现载体**：JSON 解析用仓库已有的 `nlohmann-json`（vcpkg.json 已声明、`src/service/thrift/result_format.cpp` 已使用），**不新增第三方依赖**；`SchemaConfig` 与解析逻辑目前在 `csv_loader.{hpp,cpp}` 内（后续可拆出 `schema_config.*`，属代码组织优化，不影响接口）。
 
-**CLI 覆盖**（已实现；`--schema` 与 `--data-dir` 必填，其余可选）：
+**命令行只剩「运行方式」**（声明全部在 schema 文件里）：
 
 ```bash
 --schema <file.json>                                 # 必填：唯一的声明入口
 --data-dir <dir>                                     # 必填：schema 里 file 的基准目录
---pk 'membership=tenantId,userId'                    # 覆盖主键：键=标签名，值=【属性名】（逗号=复合键，有序）
---types 'person=email:STRING[],birthday:INT64'       # 覆盖/新增列类型：键=【属性名】（不存在则按同名新增）
---date-format epoch_ms                               # 覆盖 schema 的 date_format
---no-schema-strict                                   # 未声明的列回落到采样推断（默认 strict：报错并列出列名）
---delimiter '|'                                      # '|' , ';' 或 '\t'
+--host 127.0.0.1 --port 9090                         # 连哪个服务端
 --batch-size 2000 --rpc-connections 2 --parallel-files 2
---skip-undeclared-check                              # 不校验「数据目录里有文件未在 schema 声明」
+--no-schema-strict                                   # 未声明的列回落到采样推断（默认 strict：报错并列出列名）
 ```
 
-> - `--pk` / `--types` 的键与 JSON 同一套含义（`--pk` 用属性名、`--types` 用属性名），避免"配置里一套、命令行另一套"；
-> - CLI 只能覆盖 schema 里**已声明**的标签/边类型，不能新增文件或标签（结构性变更改 schema 文件）；
-> - **strict 语义**（已实现并有用例）：默认要求每个 CSV 列都被 `columns`/`pk`/`label`/`src`/`dst` 覆盖，否则报错并列出列名；
->   `--no-schema-strict` 时对未声明列按前 200 行采样推断（全整数 → INT64，否则 STRING）并打 INFO 日志。
->   同名表头列在推断模式下会被跳过并告警（列名无法唯一标识，需要显式声明）。
+> **已删除**：`--pk` / `--types` / `--date-format` / `--delimiter` / `--skip-undeclared-check`。
+> 前四个是**数据声明**，进 schema（见下）；最后一个的等价物是 schema 的 `undeclared_files`。
+> 删除后能力无损失：属性改名由 `columns` 的 `header`/`index` 承担，类型与主键本来就在 JSON 里。
+
+**strict 语义**（已实现并有用例）：默认要求每个 CSV 列都被 `columns` / `pk` / `label` / `src` / `dst` 覆盖，
+否则**报错并列出列名**（`column(s) not declared: [a, b]`），不会静默丢弃；
+`--no-schema-strict` 时对未声明列按前 200 行采样推断（全整数 → INT64，否则 STRING）并打 INFO 日志。
+同名表头列在推断模式下会被跳过并告警（列名无法唯一标识来源，需显式声明）。
+
+**schema 顶层字段**
+
+| 字段 | 含义 |
+|---|---|
+| `delimiter` | 字段分隔符**全局默认**（默认 `"|"`；支持多字符，如 `"::"`） |
+| `date_format` | 时间列解析格式**全局默认**（默认 `"epoch_ms"`；可选 `epoch_s` / `epoch_us` / `epoch_ns` / `iso`） |
+| `undeclared_files` | 数据目录里有「未声明 CSV」时的行为：`"error"`（默认，报错列出文件）或 `"ignore"` |
+| `ignore` | 属于本数据集但**不参与初始装载**的文件列表（如 LDBC 的 `updateStream_*.csv`） |
+
+**文件级覆盖**（与 `columns` / `pk` / `label` 同一套分层：全局默认 → 文件级覆盖）
+
+```jsonc
+{
+  "delimiter": "|",              // 全局默认
+  "date_format": "epoch_ms",     // 全局默认
+  "labels": {
+    "Person": [{
+      "file": "dynamic/person_0_0.csv",
+      "pk": "id",
+      "columns": { "id": "INT64", "creationDate": "DATETIME" }
+    }],
+    "LegacyPerson": [{
+      "file": "legacy/person.csv",
+      "delimiter": ";",          // 本文件用分号
+      "date_format": "epoch_s",  // 本文件的时间列是秒
+      "pk": "id",
+      "columns": { "id": "INT64", "creationDate": "DATETIME" }
+    }]
+  }
+}
+```
+
+> 一处例外要记住：**时间列的解析必须按文件取值**（`resolveDateFormat(config, fs)`），
+> 因为同一批 CSV 里不同文件的时间单位可能不同；分隔符同理（`resolveDialect(config, fs)`）。
 
 **类型表**
 
@@ -844,16 +884,17 @@ for each edge file:
 |---|---|---|
 | 单元：CSV 读取（R1 BOM） | 表头首列带 UTF-8 BOM 的文件 + 不带 BOM 的文件，各声明同一份 schema | 两者都导入成功且**属性名一致**（都是 `id`，不是 `\uFEFFid`）；缺陷存在时 BOM 那份会报「列 id 未声明」或产生幽灵属性 |
 | 单元：CSV 读取（R2 引号） | 引号内含分隔符（`"a&#124;b"&#124;x`）、转义引号（`"say ""hi"""`）、引号内含换行 | 首字段 = `a&#124;b`（**不是**被切成两列）、`say "hi"`、含换行的单个字段；缺陷存在时字段被错误切分 —— 属静默数据损坏，必须能区分 |
-| 单元：CSV 读取（R3 分隔符） | 同一份数据分别以 `&#124;` / `,` / `\t` / `;` 保存，各配 `--delimiter` | 四者导入结果完全相同（顶点/边数与属性值逐项相等） |
+| 单元：CSV 读取（R3 分隔符） | 同一份数据分别以 `&#124;` / `,` / `\t` / `;` / **多字符 `::`** 保存，各在 schema 里声明 `delimiter` | 结果完全相同（顶点/边数与属性值逐项相等）；多字符分隔符按**整体**匹配，不被部分切分 |
 | 单元：CSV 读取（R4 列数） | 构造一行字段数比表头多一列（未转义分隔符） | 报错含 `文件:行号:表头 N 列 / 本行 M 列`，并提示加引号或换分隔符；**不得静默按位错位** |
 | 单元：schema 文件校验 | `--schema` 里写一个不存在的 `file`；或语料里存在未声明的文件 | 前者启动即报错并列出缺失文件；后者报错同时指出「文件未在 schema 中声明」，与「列漏声明」可区分 |
-| 单元：JSON 解析 | [ldbc-sf01.schema.json](ldbc-sf01.schema.json) 能完整解析；CLI 覆盖优先级；非法 JSON / 未知类型 / 列名不存在 / `pk` 与 `columns` 类型冲突 | 优先级 ①②③ 各构造一例断言最终 `LabelSchema`；每类非法配置的报错都含文件与字段名 |
+| 单元：JSON 解析 | [ldbc-sf01.schema.json](ldbc-sf01.schema.json) 能完整解析；**文件级 `delimiter` / `date_format` 覆盖全局默认**；非法 JSON / 未知类型 / 列名不存在 / 不可用分隔符 / `pk` 与 `columns` 类型冲突 | 全局与文件级各构造一例（同一批文件用不同分隔符、不同时间单位），断言**都能正确解析**；每类非法配置的报错都含文件与字段名 |
 | 单元：配置校验（唯一入口） | ① `src_label` 缺失；② `src_label` 指向未声明的标签；③ `src_label` 指向的标签未声明主键；④ schema 里的 `file` 不存在；⑤ 数据目录里有文件未在 schema 声明；⑥ 同一标签的多文件主键属性名/类型不一致 | 六种情况**全部在启动时报错**并指出具体文件/标签/字段（缺陷存在时会在运行期静默跳过边或错值，边数/属性数可判据） |
 | 单元：标签值 vs 属性名 | 同一列同时作标签来源与属性：`label.header=type` + `columns.type.name=kind`；以及同一列只作标签来源（不写进 columns） | 前者：标签 = 单元格原值（`company`，**不是** `kind`），属性 = `kind`；后者：标签存在、**该列不产生任何属性**；缺陷存在时会出现「标签被改写成属性名」或「标签列变成幽灵属性」 |
 | 单元：标签来源定位 | `label.header` 与 `label.column`（0-based）两种写法指向同一列 | 两种写法得到同一组行级标签；`column` 写法在表头被改名后仍能工作 |
 | 单元：重命名与白名单 | 列声明键=属性名、`header` 指来源列（`"kind": {"header": "type"}`）→ 属性 `kind` 取自 `type` 列；未在 `columns` 声明的列（如仅作 `label.header` 的 `type`）**不产生属性** | 读回顶点：`organisation.kind` 存在且值等于 CSV 的 `type` 列、属性 `type` 不存在；`place` 上不存在 `type` 属性（缺陷存在时会多出该属性）；声明 `"pk": "personId"` + `"columns": {"personId": {"header": "id", "type": "INT64"}}` 时唯一索引建在属性 `personId` 上（列是 `id`） |
 | 单元：配置冲突检测 | 两个属性指向同一列 / `pk` 引用未声明的属性 / `pk` 里出现 `header` 或 `type` / `header` 在表头中不存在 | 各自**启动即报错**并指出冲突双方；缺陷存在时会静默取其一（数据错值难以发现） |
-| 单元：strict 语义 | 给了 `--schema` 时漏声明一列 → 报错；显式 `--no-schema-strict` → 回退推断并打 INFO | 同一份残缺配置在两种模式下分别报错 / 成功，能区分 |
+| 单元：strict 语义 | 漏声明一列 → 报错**并列出该列名**；显式 `--no-schema-strict` → 回退推断并打 INFO | 同一份残缺配置在两种模式下分别报错 / 成功，能区分 |
+| 单元：`undeclared_files` | schema 未声明某文件：默认 `"error"` → 报错；`"ignore"` → 不报错且文件仍被列出 | 同一目录两种配置行为不同 |
 | 单元：类型解析 | 每种 `CsvColumnType` 的正常/空值/非法值 | 非法值报错含「文件:行:列:值」 |
 | 单元：时序解析 | `DATE`/`DATETIME`/`DATETIME_WITH_TZ`/`TIME`/`DURATION` × {ISO, epoch_ms, 空值, 非法} | 与 `date()/datetime()/duration()` 函数的解析结果**逐字段相等**（复用同一解析器，验证搬家没走样） |
 | 单元：批量写入维护索引 | `batchInsertVertices(entries, label_defs)` 后：唯一索引、非唯一索引、`WRITE_ONLY` 索引都产生条目；accessor 缺值的顶点不产生条目 | 装载后直接 `scanVerticesByIndexId` 能查到刚写入的顶点（缺陷存在时查不到 —— 这是本次机制改造的核心判据）；边侧同理覆盖 `batchInsertEdges` |
@@ -875,12 +916,12 @@ for each edge file:
 
 ## 11. 实施顺序（每步可独立验证）
 
-1. **CSV 读取能力（§3）**：BOM 剥离、RFC 4180 引号解析、`--delimiter` 放开到 `,`/`;`/`\t`、每行列数校验与可操作报错；`--schema` 的文件存在性校验。这一步**独立于主键化**，可单独合并与验证（用构造的 Excel 形态样本）；
+1. **CSV 读取能力（§3）**：BOM 剥离、RFC 4180 引号解析、分隔符进 schema（`,`,`;`,`\t`,`|` 及任意多字符）、每行列数校验与可操作报错；`--schema` 的文件存在性校验。这一步**独立于主键化**，可单独合并与验证（用构造的 Excel 形态样本）；
 2. **时序解析器上提**：`common/types/temporal_value` 公开 `parseXxxString`，`temporal_functions.hpp` 改为调用 → TCK 回归（纯搬家，先做以隔离风险）；
 3. **批量写入维护索引（机制改造）**：索引条目收集/校验逻辑从 `query/physical_plan/operator` 下沉到 `storage/data`，`batchInsertVertices` / `batchInsertEdges` 改签名带 `label_defs` 并在同事务写索引条目；query 算子改调新位置 + 全量回归（这一步独立于 loader，可单独验证）；
 4. **元数据**：`LabelDef.pk_prop_ids`（**有序**，复合主键即多元素）、`meta_codec` 编解码（直接改格式，不做兼容分支）、`createLabel` 的主键声明与「配套唯一索引按同序覆盖」校验 + 单元测试；
 5. **Thrift 协议 + 服务端解析**：`PkKey` / `PkRef`（`keys` 列表天然支持复合键）/ 返回类型变更、`GraphService` 两条路径改为走索引（**按元组**预检 + `scanVerticesByIndexId`）+ `test_rpc_integration`；
 6. **Loader 改造（单一入口）**：删除 `--nodes`/`--relationships` 与目录扫描（约 158 行）、`LoadedIdMaps` → `PkNameMap`、顶点/边装载按 `labels`/`relationships` 分组改写（含**复合主键的元组取值与索引 DDL**、行级标签只追加不抢主标签）、`createUniqueIdIndexes` 改为「按 schema 键 + 声明的 pk 列」并**移到点装载之前**（§6.3）+ 集成测试；
-7. **JSON schema + 类型配置**：schema 解析并并入 `csv_loader.{hpp,cpp}`（未单独拆 `schema_config.*`）、CLI 覆盖（`--pk`/`--types`/`--date-format`/`--no-schema-strict`）、strict/推断两种语义、时序类型接入；用交付配置 `social_network-sf0.1-CsvComposite-LongDateFormatter/loader-schema.json` 做 sf0.1 全量装载验收；
+7. **JSON schema + 类型配置**：schema 解析并并入 `csv_loader.{hpp,cpp}`（未单独拆 `schema_config.*`）、分隔符与时间格式的**全局默认 + 文件级覆盖**、`undeclared_files`、`--no-schema-strict` 与 strict/推断两种语义、时序类型接入；用交付配置 `social_network-sf0.1-CsvComposite-LongDateFormatter/loader-schema.json` 做 sf0.1 全量装载验收；
 8. **文档同步**（实施过程中逐步做）：[loader-design.md](loader-design.md) 第 6/7/8 节改写、[loader.md](../usage/loader.md) 补配置说明、[rpc-service.md](../../service/rpc-service.md) 更新批量端点、[data-model.md](../../architecture/data-model.md) 补主键语义；全部完成后把本文件头部标记从「设计已对齐，待实施」改为「当前实现」；
 9. **基准复测**：SF0.1 装载耗时 + 查询结果对照（§9 判据）。

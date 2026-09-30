@@ -1,7 +1,9 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace eugraph {
@@ -9,16 +11,17 @@ namespace loader {
 
 /// CSV 方言。字段分隔符与引号规则由这里描述，文件本身不需要预处理。
 struct CsvDialect {
-    /// 字段分隔符，默认 '|'。支持 ',' / ';' / '\t' / '|'。
-    char delimiter = '|';
+    /// 字段分隔符，默认 "|"。可多字符（如 "::"）；"\t" 与 "tab" 视为制表符。
+    std::string delimiter = "|";
     /// 引号字符，默认双引号；设为 '\0' 表示不启用引号解析。
     char quote = '"';
     /// 文件首字符为 UTF-8 BOM 时剥离（Excel「另存为 CSV」默认带 BOM）。
     bool strip_bom = true;
 };
 
-/// 从命令行参数解析分隔符（支持 "\\t" 字面量写法）。返回 std::nullopt 表示不支持。
-bool parseDelimiter(const std::string& raw, char& out);
+/// 解析分隔符写法："\t" / "tab" → 制表符，其余原样保留（含多字符）。
+/// 空串、纯空白、含引号或换行的写法不可用作分隔符 → 返回 std::nullopt。
+std::optional<std::string> resolveDelimiter(std::string_view raw);
 
 /// 一行 CSV：字段 + 该行在文件中的**起始**行号（1-based，含表头计算）。
 /// 带引号的字段可以跨物理行，此时起始行号仍指向该记录开始的那一行。

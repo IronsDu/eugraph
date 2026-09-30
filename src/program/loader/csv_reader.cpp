@@ -23,23 +23,22 @@ std::string formatExpectedActual(size_t expected, size_t actual) {
 
 } // namespace
 
-bool parseDelimiter(const std::string& raw, char& out) {
-    if (raw == "\\t" || raw == "tab") {
-        out = '\t';
-        return true;
-    }
-    if (raw.size() != 1)
-        return false;
-    switch (raw[0]) {
-    case ',':
-    case ';':
-    case '|':
-    case '\t':
-        out = raw[0];
-        return true;
-    default:
-        return false;
-    }
+std::optional<std::string> resolveDelimiter(std::string_view raw) {
+    if (raw == "\\t" || raw == "tab")
+        return std::string("\t");
+    if (raw.empty())
+        return std::nullopt;
+    // 制表符是合法分隔符（TSV），必须先于「纯空白」规则接受
+    if (raw == "\t")
+        return std::string("\t");
+    // 其它纯空白（空格等）没有意义：会让「空字段」的语义无法预测
+    if (raw.find_first_not_of(" \r\n\t") == std::string_view::npos)
+        return std::nullopt;
+    // 引号与换行与解析规则本身冲突
+    if (raw.find('"') != std::string_view::npos || raw.find('\n') != std::string_view::npos ||
+        raw.find('\r') != std::string_view::npos)
+        return std::nullopt;
+    return std::string(raw);
 }
 
 CsvFile readCsvFile(const std::filesystem::path& path, const CsvDialect& dialect) {
@@ -55,7 +54,7 @@ CsvFile readCsvFile(const std::filesystem::path& path, const CsvDialect& dialect
     CsvFile out;
     out.path = path;
 
-    const char delim = dialect.delimiter;
+    const std::string delim = dialect.delimiter.empty() ? std::string("|") : dialect.delimiter;
     const char quote = dialect.quote;
     const bool quoting = quote != '\0';
 
@@ -81,7 +80,9 @@ CsvFile readCsvFile(const std::filesystem::path& path, const CsvDialect& dialect
             if (fields.size() != out.header.size()) {
                 fail(path, row_line,
                      "field count mismatch: " + formatExpectedActual(out.header.size(), fields.size()) +
-                         " (if a field contains the delimiter, quote it or change --delimiter)");
+                         " (if a field contains the delimiter '" + delim +
+                         "', quote it or change the schema's "
+                         "delimiter)");
             }
             out.rows.push_back(CsvRow{std::move(fields), row_line});
         }
@@ -115,7 +116,9 @@ CsvFile readCsvFile(const std::filesystem::path& path, const CsvDialect& dialect
             continue;
         }
 
-        if (c == delim) {
+        // 分隔符按**整体**匹配（支持多字符），不能逐字符比较
+        if (c == delim[0] && data.compare(i, delim.size(), delim) == 0) {
+            i += delim.size() - 1;
             end_field();
             row_started = true;
             continue;

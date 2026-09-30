@@ -26,6 +26,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <folly/SocketAddress.h>
 #include <folly/coro/BlockingWait.h>
@@ -96,8 +97,9 @@ protected:
         ofs << content;
     }
 
-    loader::SchemaConfig loadConfig(loader::CsvDialect dialect = loader::CsvDialect{}) {
-        return loader::loadSchemaConfig(std::filesystem::path(work_dir_) / "schema.json", work_dir_ + "/data", dialect);
+    loader::SchemaConfig loadConfig(bool strict_types = true) {
+        return loader::loadSchemaConfig(std::filesystem::path(work_dir_) / "schema.json", work_dir_ + "/data",
+                                        strict_types);
     }
 
     /// 执行 Cypher 并返回「第一行第一列」的格式化文本；查询报错或空结果返回 nullopt。
@@ -123,13 +125,12 @@ protected:
 
     std::string runLoad() {
         auto config = loadConfig();
-        loader::CsvDialect dialect;
         loader::createLabels(*client_, config);
         loader::createEdgeLabels(*client_, config);
         loader::createPrimaryKeyIndexes(*client_, config);
         std::vector<shell::EuGraphRpcClient*> clients{client_.get()};
-        auto [vw, vd] = loader::loadVertices(clients, config, dialect, 100, 1);
-        auto [ew, es] = loader::loadEdges(clients, config, dialect, 100, 1);
+        auto [vw, vd] = loader::loadVertices(clients, config, 100, 1);
+        auto [ew, es] = loader::loadEdges(clients, config, 100, 1);
         return "vertices=" + std::to_string(vw) + " dup=" + std::to_string(vd) + " edges=" + std::to_string(ew) +
                " skipped=" + std::to_string(es);
     }
@@ -379,8 +380,7 @@ TEST_F(LoaderE2ETest, NonStrictInfersUndeclaredColumns) {
       "labels": { "person": [ { "file": "p.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
       "relationships": {}
     })");
-    auto config = loader::loadSchemaConfig(std::filesystem::path(work_dir_) / "schema.json", work_dir_ + "/data",
-                                           loader::CsvDialect{}, /*strict_types=*/false);
+    auto config = loadConfig(/*strict_types=*/false);
     // 未声明的列被补上：name=STRING（非全整数），score=INT64（全整数）
     const auto& merged = config.merged_properties.at("person");
     auto type_of = [&](const std::string& prop) -> std::optional<loader::CsvColumnType> {
@@ -395,36 +395,107 @@ TEST_F(LoaderE2ETest, NonStrictInfersUndeclaredColumns) {
     EXPECT_EQ(*type_of("score"), loader::CsvColumnType::INT64);
 }
 
-TEST_F(LoaderE2ETest, CliOverridesApplyPkAndTypes) {
-    writeFile("p.csv", "id|name|score\n1|alice|7\n");
+// ==================== 文件级 delimiter 覆盖 ====================
+
+// 判据：同一批文件用**不同分隔符**，全局默认只对其中一个成立。
+// 若文件级覆盖没生效，另一个文件会整体被当成单列 → 列数校验失败或字段对不上。
+TEST_F(LoaderE2ETest, PerFileDelimiterOverridesGlobal) {
+    writeFile("a.csv", "id|name\n1|alice\n"); // 用全局默认 '|'
+    writeFile("b.csv", "id::score\n2::99\n"); // 用文件级 '::'（多字符）
     writeSchema(R"({
-      "labels": { "person": [ { "file": "p.csv", "pk": "id",
-                                "columns": { "id": "INT64", "name": "STRING" } } ] },
+      "delimiter": "|",
+      "labels": {
+        "person": [ { "file": "a.csv", "pk": "id",
+                      "columns": { "id": "INT64", "name": "STRING" } } ],
+        "thing":  [ { "file": "b.csv", "pk": "id", "delimiter": "::",
+                      "columns": { "id": "INT64", "score": "INT64" } } ]
+      },
       "relationships": {}
     })");
-    // --pk 'person=id' + --types 'person=score:INT64' 应把 score 补成显式 INT64（strict 下也通过）
-    loader::CliOverrides ov;
-    ov.pk["person"] = {"id"};
-    ov.types["person"]["score"] = "INT64";
-    auto config = loader::loadSchemaConfig(std::filesystem::path(work_dir_) / "schema.json", work_dir_ + "/data",
-                                           loader::CsvDialect{}, /*strict_types=*/true, &ov);
-    const auto& merged = config.merged_properties.at("person");
-    bool found_score = false;
-    for (const auto& c : merged) {
-        if (c.name == "score") {
-            found_score = true;
-            EXPECT_EQ(c.type, loader::CsvColumnType::INT64);
-            EXPECT_TRUE(c.type_declared);
-        }
-    }
-    EXPECT_TRUE(found_score);
+    auto summary = runLoad();
+    EXPECT_NE(summary.find("vertices=2"), std::string::npos) << summary;
 
-    // --pk 指向未声明属性 → 报错
-    loader::CliOverrides bad;
-    bad.pk["person"] = {"nope"};
-    EXPECT_THROW(loader::loadSchemaConfig(std::filesystem::path(work_dir_) / "schema.json", work_dir_ + "/data",
-                                          loader::CsvDialect{}, /*strict_types=*/true, &bad),
-                 std::runtime_error);
+    auto name = querySingle("MATCH (p:person) RETURN p.name");
+    ASSERT_TRUE(name.has_value());
+    EXPECT_NE(name->find("alice"), std::string::npos) << *name;
+
+    // '::' 被整体当作分隔符：score 必须是 99（若被逐字符切分则解析不出这个值）
+    auto score = querySingle("MATCH (t:thing) RETURN t.score");
+    ASSERT_TRUE(score.has_value());
+    EXPECT_NE(score->find("99"), std::string::npos) << *score;
+}
+
+// ==================== 文件级 date_format 覆盖 ====================
+
+// 判据：两个文件的时间列单位不同（ms / s），各自按自己的 date_format 解析。
+// 期望值来自外部换算（1700000000s == 1700000000000ms），不是自己推断。
+TEST_F(LoaderE2ETest, PerFileDateFormatOverridesGlobal) {
+    writeFile("ms.csv", "id|creationDate\n1|1700000000000\n");
+    writeFile("sec.csv", "id|creationDate\n2|1700000000\n");
+    writeSchema(R"({
+      "date_format": "epoch_ms",
+      "labels": {
+        "msEvent":  [ { "file": "ms.csv", "pk": "id",
+                        "columns": { "id": "INT64", "creationDate": "DATETIME" } } ],
+        "secEvent": [ { "file": "sec.csv", "pk": "id", "date_format": "epoch_s",
+                        "columns": { "id": "INT64", "creationDate": "DATETIME" } } ]
+      },
+      "relationships": {}
+    })");
+    auto summary = runLoad();
+    EXPECT_NE(summary.find("vertices=2"), std::string::npos) << summary;
+
+    // 两个文件写的是**同一时刻**（1700000000000ms == 1700000000s）。
+    // 判据用外部换算：正确解析时二者相差 0 毫秒；若文件级 date_format 未生效
+    // （sec.csv 被按 epoch_ms 解释），差值会是 1699999998300 秒级的巨大偏移。
+    auto diff = querySingle("MATCH (a:msEvent), (b:secEvent) "
+                            "RETURN duration.inSeconds(b.creationDate, a.creationDate).seconds");
+    ASSERT_TRUE(diff.has_value()) << "duration.inSeconds 查询失败（时间列可能未解析）";
+    ASSERT_EQ(diff->find("null"), std::string::npos) << "时间列为 null: " << *diff;
+    // 必须解析成**数值 0**：不能用 find('0') 之类的子串判断
+    // （错误解析得到的 1698300000 也含 '0'，会被误判为通过）。
+    int64_t seconds = -1;
+    try {
+        seconds = std::stoll(*diff);
+    } catch (const std::exception&) {
+        FAIL() << "差值的返回值无法解析为整数: " << *diff;
+    }
+    EXPECT_EQ(seconds, 0) << "两个文件的时间未解析为同一时刻（文件级 date_format 未生效）: " << *diff;
+}
+
+// ==================== undeclared_files ====================
+
+TEST_F(LoaderE2ETest, UndeclaredFilesIgnoreSuppressesFailure) {
+    writeFile("a.csv", "id\n1\n");
+    writeFile("extra.csv", "id\n1\n");
+    writeSchema(R"({
+      "undeclared_files": "ignore",
+      "labels": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "relationships": {}
+    })");
+    auto config = loadConfig();
+    EXPECT_EQ(config.undeclared_files, "ignore");
+    // 未声明文件仍能被列出（只是调用方不再据此失败）
+    EXPECT_EQ(loader::findUndeclaredCsvFiles(config).size(), 1u);
+}
+
+TEST_F(LoaderE2ETest, UndeclaredFilesDefaultsToError) {
+    writeFile("a.csv", "id\n1\n");
+    writeSchema(R"({
+      "labels": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "relationships": {}
+    })");
+    EXPECT_EQ(loadConfig().undeclared_files, "error");
+}
+
+TEST_F(LoaderE2ETest, RejectsBadDelimiterInSchema) {
+    writeFile("a.csv", "id\n1\n");
+    writeSchema(R"({
+      "delimiter": "   ",
+      "labels": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
+      "relationships": {}
+    })");
+    EXPECT_THROW(loadConfig(), std::runtime_error);
 }
 
 TEST_F(LoaderE2ETest, ReportsUndeclaredCsvFiles) {
@@ -457,20 +528,20 @@ TEST_F(LoaderE2ETest, HandlesBomAndQuotedFields) {
     EXPECT_NE(name->find("a|b"), std::string::npos) << *name;
 }
 
-TEST_F(LoaderE2ETest, HandlesCommaDelimiter) {
+// 分隔符现在来自 schema（不再有 --delimiter）
+TEST_F(LoaderE2ETest, HandlesCommaDelimiterFromSchema) {
     writeFile("p.csv", "id,name\n1,alice\n");
     writeSchema(R"({
+      "delimiter": ",",
       "labels": { "person": [ { "file": "p.csv", "pk": "id",
                                 "columns": { "id": "INT64", "name": "STRING" } } ] },
       "relationships": {}
     })");
-    loader::CsvDialect dialect;
-    dialect.delimiter = ',';
-    auto config = loadConfig(dialect);
+    auto config = loadConfig();
     loader::createLabels(*client_, config);
     loader::createPrimaryKeyIndexes(*client_, config);
     std::vector<shell::EuGraphRpcClient*> clients{client_.get()};
-    auto [w, d] = loader::loadVertices(clients, config, dialect, 100, 1);
+    auto [w, d] = loader::loadVertices(clients, config, 100, 1);
     EXPECT_EQ(w, 1);
     EXPECT_EQ(d, 0);
     auto name = querySingle("MATCH (p:person) RETURN p.name");
