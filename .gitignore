@@ -21,3 +21,6 @@ bolt-server.log
 social_network-*.tar.zst
 social_network-*/**
 !social_network-*/loader-schema.json
+
+# 本地草稿（文件头通常写明不入库）：*.local.md 一律不提交
+*.local.md
