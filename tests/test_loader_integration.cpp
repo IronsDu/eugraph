@@ -51,8 +51,13 @@ protected:
     std::unique_ptr<shell::EuGraphRpcClient> client_;
 
     void SetUp() override {
-        work_dir_ = "/tmp/eugraph_loader_e2e_" + std::to_string(getpid());
-        std::filesystem::remove_all(work_dir_);
+        // 唯一临时目录：不写死 /tmp（TMPDIR 可能不同），也不只用 getpid
+        // （并行 ctest 下同进程多用例会共用同一路径）。
+        auto tmpl = (std::filesystem::temp_directory_path() / "eugraph_loader_e2e_XXXXXX").string();
+        std::vector<char> buf(tmpl.begin(), tmpl.end());
+        buf.push_back('\0');
+        ASSERT_NE(::mkdtemp(buf.data()), nullptr) << "mkdtemp failed: " << tmpl;
+        work_dir_ = buf.data();
         std::filesystem::create_directories(work_dir_ + "/data");
 
         graph_manager_ = std::make_shared<GraphManager>();
@@ -62,20 +67,25 @@ protected:
         handler_ = std::make_shared<service::thrift::EuGraphHandler>(*graph_service_);
 
         auto ts = std::make_shared<apache::thrift::ThriftServer>();
-        ts->setAddress(folly::SocketAddress("::1", 0));
+        // 显式 IPv4 回环：CI 容器里 IPv6 回环不一定可用，且失败信息会很含糊。
+        ts->setAddress(folly::SocketAddress("127.0.0.1", 0));
         ts->setInterface(handler_);
         ts->setThreadManagerType(apache::thrift::ThriftServer::ThreadManagerType::SIMPLE);
         ts->setMaxFinishedDebugPayloadsPerWorker(0);
         ts->setThreadManagerFromExecutor(ts->getIOThreadPool().get());
         server_ = std::make_unique<apache::thrift::ScopedServerInterfaceThread>(ts);
 
-        client_ = std::make_unique<shell::EuGraphRpcClient>("::1", server_->getPort());
-        ASSERT_TRUE(client_->connect());
+        client_ = std::make_unique<shell::EuGraphRpcClient>("127.0.0.1", server_->getPort());
+        ASSERT_TRUE(client_->connect()) << "connect to 127.0.0.1:" << server_->getPort() << " failed";
     }
 
     void TearDown() override {
         client_.reset();
-        (void)server_.release(); // 避免在析构里 join 线程导致偶发挂住（沿用既有测试做法）
+        // 这里刻意用 release() 而非 reset()：本夹具把 ThriftServer 的 thread manager
+        // 换成了它自己的 IO 线程池，「析构」与「先 stop() 再析构」两种写法实测都会卡在
+        // join 上。代价是每个用例泄漏一个事件循环线程（进程结束即回收，用例数封顶）。
+        // 要根治得单独排查该 thread manager 的关闭顺序，不要在别处顺手改。
+        (void)server_.release();
         handler_.reset();
         graph_service_.reset();
         graph_manager_->shutdown();
