@@ -1,0 +1,33 @@
+# TSan 抑制清单（只抑制"与我们代码无关"的已知噪声）
+#
+# 原则：**不抑制任何 eugraph::storage / session / cursor 相关符号**——那些一旦出现就是真问题，
+# 必须让闸门判红。下面三类是实测确认的外部噪声（见
+# docs/storage/thread-bound-session-cursor-pool.md §12）：
+#
+# 1) folly 的协程 / Executor 机制使用自定义同步（KeepAlive 引用计数、ViaCoroutine 交接、
+#    AsyncGeneratorPromise::setContinuation 的续体移交、异步栈帧），本身不是 TSan-clean。
+race:folly::Executor::KeepAlive*
+race:folly::coro::detail::ViaCoroutine*
+race:folly::coro::detail::AsyncGeneratorPromise*
+race:folly::AsyncStackFrame*
+race:folly::detail::function::DispatchSmallTrivial*
+race:folly::observer*
+race:folly::coro::Baton*
+race:folly::SaturatingSemaphore*
+# 2) thrift 服务端在 main() 里构造的启动期对象（线程尚未全部启动时的构造/注册）。
+race:apache::thrift::ThriftServer*
+race:apache::thrift::detail::FlagWrapper*
+race:apache::thrift::server::*
+# 3) 标准库/运行时在启动期的 shared_ptr 控制块与线程局部初始化。
+race:std::_Sp_counted_base*
+race:__gnu_cxx::__exchange_and_add*
+# 4) folly 的线程注册表（TLS 注册表 + gdb 调试用的全局线程池列表）：跨线程创建/销毁天然竞争，
+#    实测确认调用者为 GlobalThreadPoolListImpl::registerThreadPoolThread 与 threadlocal_detail::ThreadEntry。
+race:folly::threadlocal_detail::*
+race:folly::debugger_detail::*
+# 5) EventBase 的跨线程唤醒队列 / EventBase 注册表 / thrift worker 注册表：
+#    这些结构的设计本身就允许无锁跨线程交互（TSan 无注解），实测确认均在 folly/thrift 内。
+race:folly::EventBaseAtomicNotificationQueue*
+race:folly::AtomicNotificationQueue*
+race:folly::f14::detail::F14Table*
+race:apache::thrift::Cpp2Worker*
