@@ -253,6 +253,70 @@ while (offset < vids.size() && batch.size() < BATCH) {
 修法是给同步层加**可恢复的索引游标**（与 `createVertexScanCursor` 同构）；一旦改成跨批持有 cursor，
 **它们也必须同时加 R3 的 EventBase 钉扎**——与本节的池化议题是两件独立但会合流的事。
 
+### 不变量 I10：session 永不共享（已实施）
+
+**I10（现行，强不变量）**：
+
+> **每一把 `WT_SESSION` 从创建到销毁只被一个线程使用。**
+> `tablePut/tableGet/tableDel/tableScan` **不加任何锁**；并发控制由**业务级锁**承担
+> （`schemaMutex_` 只保护 DDL/生命周期序列）。
+
+**session 的三个来源**（全部满足 I10）：
+
+| 来源 | 用途 | 生命周期 |
+|---|---|---|
+| `getSession(INVALID_GRAPH_TXN)` → `threadSession()` | **全部 KV 数据路径**：点查/属性、边与索引读写、元数据（label/计数）、图目录（catalog） | 每线程一把，长期；`closeThreadSessions()` 在 `conn_.close()` 之前统一关闭 |
+| `getSession(txn)` | 事务内访问 | 随事务 |
+| `openAdminSession()` | **DDL/生命周期**：`ensureGlobalTable`、`dropIndex`、`dropLabel`、`dropEdgeLabel`、`checkpoint`、`closeConnection` | 单次调用内创建并关闭（RAII） |
+
+**业务级锁**：`schemaMutex_`（`std::recursive_mutex`）只被 DDL/生命周期序列持有
+（`ensureGlobalTable` / `dropIndex` / `dropLabel` / `dropEdgeLabel` / `checkpoint` / `closeConnection`），
+它保证的是 **create/drop 序列不交错**（否则"判定已存在"会被并发 drop 作废），**而非 session 内存**。
+热路径（每次存储调用）**完全不涉及任何锁**。
+
+**历史（供追溯）**：本仓库曾用"共享 `defaultSession_` + 全局锁"，随后改为"每线程 session + 条件加锁
+（`isSharedSession` 判定只有共享 session 才取锁）"。条件加锁是一次**折中**：它同时带来
+① 每次调用一次原子读+分支、② **契约由显式变隐式**（"要不要加锁"由运行期数据而非 API 表达，
+曾因此产生一次 CI 回归：`defaultSession_` 仍被 21 处显式传入已解锁的原语，导致
+`WT_SESSION.open_cursor: lock_success == 0` → `__wt_abort`）、③ 一个函数承担两种所有权语义。
+**现已彻底移除**：不存在共享 session，因此不存在条件判断，也不需要审计"谁会把共享 session 传进来"。
+
+**DDL 与长流的交互（仍需注意）**：`WT_SESSION::drop` 要求目标表上**没有打开的 cursor**。
+跨批次持有 cursor 的长流（`scanVerticesByLabel` 等 4 条）若正在扫该表，drop 可能 `EBUSY`
+⇒ DDL 前需静默表（quiesce）或容忍 `EBUSY` 重试。此风险与 session 模型无关（共享 session
+从来不保护 cursor）。
+
+**回归记录**：
+
+| 项 | 结果 |
+|---|---|
+| 条件加锁版本 | 修复了 main CI 的 `lock_success` 崩溃；TCK 1601 场景 0 断言；8 线程 4.2–4.5 M/s |
+| 本重构后 | TCK `features-eugraph` **31/31 场景、144/144 步骤通过**；并发 DDL × 查询压力（9,618 次 DDL + 165,169 次查询）**0 断言、0 错误**；完整 feature 集与 TSan 闸门见下 |
+
+**测量方法提醒**：本机单次测量可抖动 **±30%**（无锁变体自身跑出过 3.08 M/s，而同二进制其它轮为
+4.2–4.5 M/s）。**性能结论必须同二进制、交错、多轮取最优**，否则会把环境抖动误判为代码回归。
+
+### 共享 session 的移除（已实施记录）
+
+原"目标设计（技术债）"已落地，过程与要点留档：
+
+**改动**：
+
+| 项 | 内容 |
+|---|---|
+| 删除 | `defaultSession_`、`sharedSessionSnapshot_`、`setDefaultSession()`、`isSharedSession()`、四原语中的条件加锁 |
+| 重命名 | `sessionMutex_` → `schemaMutex_`（语义由"保护 session 内存"变为"保护 DDL/生命周期序列"） |
+| 新增 | `openAdminSession()`：单次管理/DDL 操作用一把临时 session（RAII 关闭） |
+| 数据/元数据/目录路径 | 一律改用 `getSession(INVALID_GRAPH_TXN)`（**每线程**，不每次开——索引条目写入是每条被索引的点/边一次的高频路径） |
+| **简化** | `dropLabel`/`dropEdgeLabel` 里"关闭默认 session → drop → 重开默认 session"的舞蹈**整体删除**：它从来没能静默任何东西（其它线程各有自己的 session），而它正是共享 session 的来源 |
+
+**实施中发现并修复的缺陷（记录以免重犯）**：`closeConnection()` 原先靠 `if (defaultSession_)` 隐式
+获得幂等性；移除该成员后，**第二次 close（析构会再调一次）会在已关闭的连接上开 session** ⇒ SIGSEGV
+（栈：`WtSession::WtSession(WT_CONNECTION*)` ← `closeConnection()` ← `~SyncGraphMetaStore()` ←
+`~GraphInstance()` ← `dropGraph`）。修复：`closeConnection()`/`checkpoint()`/`ensureGlobalTable()`
+加 `if (!conn_) return ...;` 显式幂等守卫，并让 `WtSession(WT_CONNECTION*)` 对 `nullptr` 安全。
+**教训**：移除成员时，要检查该成员是否在**隐式**承担生命周期/幂等语义。
+
 ### NUMA 亲和（可选，默认关闭）
 
 `EUGRAPH_NUMA_BIND=1` 启用。`src/common/thread/{numa_topology,numa_thread_factory}.hpp`：

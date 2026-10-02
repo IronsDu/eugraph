@@ -14,7 +14,7 @@ bool SyncGraphMetaStore::open(const std::string& db_path) {
     if (!openConnection(db_path))
         return false;
 
-    if (!ensureGlobalTable(defaultSession_.get(), TABLE_METADATA)) {
+    if (!ensureGlobalTable(TABLE_METADATA)) {
         close();
         return false;
     }
@@ -108,20 +108,20 @@ bool SyncGraphMetaStore::rollbackTransaction(GraphTxnHandle txn) {
 // ==================== Metadata Raw KV ====================
 
 bool SyncGraphMetaStore::metadataPut(std::string_view key, std::string_view value) {
-    return tablePut(defaultSession_.get(), TABLE_METADATA, key, value);
+    return tablePut(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, key, value);
 }
 
 std::optional<std::string> SyncGraphMetaStore::metadataGet(std::string_view key) {
-    return tableGet(defaultSession_.get(), TABLE_METADATA, key);
+    return tableGet(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, key);
 }
 
 bool SyncGraphMetaStore::metadataDel(std::string_view key) {
-    return tableDel(defaultSession_.get(), TABLE_METADATA, key);
+    return tableDel(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, key);
 }
 
 void SyncGraphMetaStore::metadataScan(std::string_view prefix,
                                       const std::function<bool(std::string_view, std::string_view)>& callback) {
-    tableScan(defaultSession_.get(), TABLE_METADATA, prefix, callback);
+    tableScan(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, prefix, callback);
 }
 
 // ==================== DDL ====================
