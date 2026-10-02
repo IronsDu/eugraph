@@ -1464,7 +1464,7 @@ TEST_F(IndexE2ETest, WeakIndexBackfillAcrossTwoSourceLabels) {
 // 历史：同一条代码路径曾在 sf0.1 的 28.6 万顶点 `Message` 标签上"回填不落地"（索引表 0 条、
 // 点查返回 0）。该问题已随 main 的 session 修复（#241/#244：session 永不共享）消除，
 // 并在 sf0.1 上按判据验证（索引被规划器选中、60/60 真实 id 命中）——见
-// [loader-design.md §12.1](../../docs/program/design/loader-design.md)。
+// 与端点/索引相关的设计约束见 [loader-design.md](../../docs/program/design/loader-design.md) §4、§12。
 // 本用例仍作为小规模基线保留：规模相关的回填回归应先在这里失败。
 TEST_F(IndexE2ETest, WeakIndexBackfillScalesWithVertexCount) {
     createLabel(env, "Comment",

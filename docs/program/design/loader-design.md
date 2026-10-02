@@ -260,7 +260,7 @@ service EuGraphService {
 
 **站点收益**：loader 少掉约 158 行（`scanCsvFiles` 的文件分类 + `parseNodeSpec`/`parseRelationshipSpec`），`CsvFileInfo` 的 `is_vertex` / `src_label` / `edge_type` / `dst_label` / `labels` 五个 legacy 字段与 4 个函数声明一并消失（[csv_loader.hpp](../../../src/program/loader/csv_loader.hpp#L25-L35)、[csv_loader.cpp](../../../src/program/loader/csv_loader.cpp#L142)）。
 
-**连带简化：端点标签不再需要「推导」**。既然边文件由 schema 列出，`src_label`/`dst_label` 就是**必填字段**（或写在端点对象里的 `label`），上一版的四级推导链（配置 → 表头 `(Group)` → 列名 `Person.id` 前缀 → 文件名约定）**整条删除**，§7.3 只剩「schema 里写什么用什么」。
+**连带简化：端点标签不再需要「推导」**。既然边文件由 schema 列出，`src_label`/`dst_label` 就是**必填字段**（端点对象只接受列引用，不再接受 `label`），上一版的四级推导链（配置 → 表头 `(Group)` → 列名 `Person.id` 前缀 → 文件名约定）**整条删除**，§7.3 只剩「schema 里写什么用什么」。
 
 **JSON 结构**：顶层按**图元素**分组（`labels` = 顶点标签 → 文件列表，`relationships` = 边类型 → 文件列表），标签名/边类型名**就是配置的键**，不再需要任何推导。完整可用的 sf0.1 配置见 [ldbc-sf01.schema.json](ldbc-sf01.schema.json)（8 个标签、23 个边文件）。
 
@@ -346,8 +346,8 @@ service EuGraphService {
 | `labels.<label>[].label` | 可选。行的**额外标签**来源：`{"header": "列名", "case": …}`、`{"column": n}` 或 `{"derived": [...]}`；不写则该文件的行只带本键声明的标签 |
 | `relationships` | **键 = 边类型名**（这就是要创建的边类型），值为该边类型的**文件列表** |
 | `relationships.<type>[].file` | 数据文件路径（必填） |
-| `relationships.<type>[].src` / `.dst` | 端点**列名**：`"列名"` 或 `{"列名": {"type":…, "label":…}}`（列名，不是属性名 —— 这里读的是本文件的列值；端点列不成为边属性，也不必写进 `columns`） |
-| `relationships.<type>[].src_label` / `.dst_label` | **必填**：端点顶点标签，必须在 `labels` 中声明过且该标签声明了主键；也可写在端点对象里的 `label` |
+| `relationships.<type>[].src` / `.dst` | 端点列引用，**只有两种写法**：`"列名"`（须在本文件表头中**唯一匹配**）或 `{"index": N}`（0 基列号，列名重复时使用） |
+| `relationships.<type>[].src_label` / `.dst_label` | **必填**：端点顶点标签，必须在 `labels` 中声明过且该标签声明了主键（`label` 不再写在端点对象里） |
 | `relationships.<type>[].columns` | 边属性：规则同 `labels.<label>[].columns` |
 | `date_format` | 时间列的解析格式**全局默认**：`epoch_ms`(默认) / `epoch_s` / `epoch_us` / `epoch_ns` / `iso`；文件级可覆盖 |
 | `ignore` | 属于本数据集但**不参与初始装载**的文件（相对 `--data-dir`）；用于 LDBC 的 `updateStream_*.csv` 等更新流，避免被「文件未声明」校验拦下 |
@@ -360,7 +360,7 @@ service EuGraphService {
 | `columns` | **图属性** | 键 = **属性名**；值 = 类型（短形式）或 `{"header": 列名, "type": …}` | `header`、`index`、`type` |
 | `pk` | **主键由哪些属性构成** | **属性名**（字符串）或属性名数组（复合键，顺序即元组顺序） | — |
 | `label` | **文件的一列**（行级标签来源） | `{"header": 列名}` / `{"column": n}` / `{"derived": [...]}` | `case` |
-| `src` / `dst` | **文件的一列**（端点主键值来源） | 列名（字符串）或 `{"列名": {…}}` | `type`、`index` |
+| `src` / `dst` | **文件的一列**（端点主键值来源） | `"列名"` 或 `{"index": N}` | 不接受其它形式 |
 
 > **一句话规则**：
 > **`columns` 与 `pk` 用「图里的属性名」；`src` / `dst` / `label` 用「CSV 里的列名」。**
@@ -395,12 +395,26 @@ service EuGraphService {
 
 | 冲突 | 例子 | 处理 |
 |---|---|---|
-| `columns` 里两个属性指向同一列 | `{"a": {"header": "x"}, "b": {"header": "x"}}` | 报错（同一列被声明为两个属性）。**例外**：边的 `src` 与 `dst` 指向同一列是合法且常见的（自指边，如 `person_knows_person`、`place_isPartOf_place`） |
+| `columns` 里两个属性指向同一列 | `{"a": {"header": "x"}, "b": {"header": "x"}}` | 报错（同一列被声明为两个属性）。边的 `src` 与 `dst` **不得**解析到同一列（见下「端点解析的三条校验」）；自指边必须来自数据里真实的 `src==dst` 行 |
 | 属性名与 `pk` 属性名重名但指向不同列 | `pk` 用 `id`（列 `id`），`columns` 里又有 `"id": {"header": "uuid"}` | 报错（主键属性必须是它实际读取的那一列，不允许解耦） |
 | `header` 在表头中不存在（且未给 `index`） | `{"kind": {"header": "typo"}}` | 报错并列出该文件实际表头（strict 下必然报错；非 strict 下同样报错——这是配置错误而非数据问题） |
 | 同一属性名在同一文件重复出现 | JSON 对象键重复 | 由 JSON 解析器报错（键=属性名后，这类冲突天然被 JSON 语法拦住） |
 
-**为什么边的端点用对象而属性列用「列名 → 声明」的映射**：合法 JSON 不能有重复键（`Person.id|Person.id` 那种重名列无法用对象表达），所以 `src`/`dst` 显式命名、其余属性列用按名匹配的对象；重名列只出现在 src/dst 位置，程序可按列号定位（loader 已有「按列号定位 src/dst + 按名匹配属性」的实现，见 [csv_loader.cpp](../../../src/program/loader/csv_loader.cpp#L836-L891)）。
+**端点为什么是「列名 | 列号」而不是「列名 → 声明」的映射**：合法 JSON 无法表达重复键，
+而官方 LDBC 的 KNOWS/REPLY_OF/IS_PART_OF/IS_SUBCLASS_OF 表头里两个端点列**同名**
+（如 `Person.id|Person.id|creationDate`）——按名匹配无法区分。因此端点用**列引用**表达：
+默认写列名（可读、不惧列序调整），列名重复时写 0 基列号 `{"index": N}`。
+
+**端点解析的三条校验**（"别猜"：宁可拒绝装载，也不要静默写错）：
+
+1. **列名歧义 ⇒ 拒绝装载**，错误信息给出改法
+   （`column 'X' appears 2 times in header [...] -- ambiguous; use {"index": N} to pick one`）；
+2. **`src` 与 `dst` 解析到同一列 ⇒ 拒绝装载**——自环只能来自数据里真实的 `src==dst` 行，
+   不能来自 schema 写错（复合端点数组逐元素同样校验）；
+3. **端点解析结果打 INFO 日志**（列号 + 列名，如 `src = #0 'Person.id', dst = #1 'Person.id'`）：
+   用列号写法时若指错列，装载开始即可见。
+
+被这三条覆盖的官方条目：`KNOWS`、`REPLY_OF`、`IS_PART_OF`、`IS_SUBCLASS_OF`（两端点同名列，用 `{"index": 0}` / `{"index": 1}`）。
 
 **为什么必须支持重命名（不只是好看）**：本仓语料就撞上了语义冲突 —— `place_0_0.csv` 的 `type` 列是**行级标签来源**（值 `country/city/continent`），`organisation_0_0.csv` 的同名列却是**公司/大学的 kind**（值 `company/university`）。若列名即属性名且不可改：
 
@@ -409,7 +423,7 @@ service EuGraphService {
 
 所以 `columns` 是**白名单**：写进去的列才成为属性，写法可带 `name` 重命名；没写进去的列只在被 `label`/`pk`/`src`/`dst` 引用时才读。这同时解决了「标签列被误当属性」的问题。
 
-**端点标签是必填配置**（`src_label`/`dst_label`，或写在端点对象里的 `label`）。因为边文件由 schema 列出、标签也由 schema 定义，端点指向哪个标签是**已知信息**，不需要也不应该靠推导：
+**端点标签是必填配置**（`src_label`/`dst_label`）。因为边文件由 schema 列出、标签也由 schema 定义，端点指向哪个标签是**已知信息**，不需要也不应该靠推导：
 
 ```jsonc
 "relationships": {
@@ -921,208 +935,32 @@ for each edge file:
 
 ---
 
-## 12. 已知缺陷
+## 12. 当前限制
 
-> 本节记录**已复现但未修**的缺陷。它们直接影响"跑官方 LDBC 查询"的正确性与性能，
-> 在修复前不要据此判定引擎性能。
+### 12.1 loader 不为派生标签与二级属性建索引
 
-### 12.1 ~~派生标签上的 `CREATE INDEX` 会写入错误的值（P0，静默漏结果）~~ **已修复：合并 main（#241/#244）后不再复现**
+loader 只为 schema 声明的主键建 `UNIQUE` 索引；查询里对**派生标签**（如 `Message`，由 `Post`/`Comment`
+带出）或**二级属性**（非主键）建索引需要显式 `CREATE INDEX`（回填由服务端完成）。
+官方 `short` 系列依赖 `Person.id`（loader 已建）与 `Message.id`（需显式建）——
+不建索引时这些查询退化为全表扫描。
 
-**原现象**（sf0.1，327,588 顶点）：对行级派生标签建索引后，点查返回**空**：
+### 12.2 不支持 neo4j 的 `CREATE CONSTRAINT` 语法
 
-```cypher
-CREATE INDEX idx_msg_id FOR (n:Message) ON (n.id);          -- 报 "Index created"，状态 ONLINE 100%
-MATCH (m:Message {id: 893353237791}) RETURN count(m);       -- 0（错）
-MATCH (p:Post   {id: 893353237791}) RETURN count(p);        -- 1（同一顶点，正确）
-```
-
-**原定位**：只在**大标签（28 万顶点）+ 弱 accessor 回填**这个组合上复现，表现为
-**写入未落地**（索引表 0 条）而非写错值；同一代码路径在 3000 顶点规模回填完整
-（`index_e2e` 的 `WeakIndexBackfillScalesWithVertexCount`）。
-
-#### 复现与验证（合并 main 之后，2026-10-02 实测）
-
-环境：本分支 loader 全新装载 sf0.1（**327,588 顶点 / 1,477,965 边**，33 个 CSV），
-schema 用 `ldbc-sf01.schema.json` 的本地变体（该数据集把 `email`/`language` 放在独立文件里，
-故去掉 Person 的这两列；与索引无关）。装载后建索引：
-
-| 判据 | 结果 |
-|---|---|
-| `CREATE INDEX idx_msg_id FOR (n:Message) ON (n.id)` | 6.98s 完成，状态 `PUBLIC`（索引 id=9 → `vidx_9`） |
-| **点查是否真的走索引** | `MATCH (m:Message {id: …})`：建索引前 **868ms**（LabelScan）→ 建索引后 **1ms** ⇒ 规划器**确实选中**了该索引 |
-| 结果正确性 | 点查返回 **1**（正确），不再返回 0 |
-| **索引内容完整性** | 取 30 个真实 `Post.id` + 30 个真实 `Comment.id`，逐个经 Message 索引点查：**60/60 命中** |
-| 假阳性排除 | 两个返回 0 的 id 用独立路径核对（`Comment`/`Post` 各自的唯一索引）：均为 0 ⇒ 确实不存在，不是索引漏条目 |
-| 服务端日志 | **无** `WiredTiger commit failed`，无断言、无异常 |
-| 回归套件 | `index_e2e_tests` **53/53 通过** |
-
-#### 归因（最可能机制）
-
-本分支原先基于合并 #241/#244 **之前**的 main。那版存储层有一把**共享 `WT_SESSION`**，
-其中**批量写入路径（`batchInsertVertices` / `batchInsertEdges` 等 7 处）完全没有加锁**，
-而同一 session 又被其它路径在锁内使用 ⇒ 同一 session 可能被并发使用。
-装载器的索引条目正是经这些批量路径写入：并发误用下写入可以**静默丢失**，
-而所有调用方都拿到"成功"——与"索引表 0 条、索引自报 ONLINE 100%"的现象一致；
-小规模下并发窗口小，故 3000 顶点用例通过。
-
-#241/#244 把 session 改为**每执行上下文独占**（不变量 I10：一把 `WT_SESSION` 从生到死只被一个
-线程使用），该失败类别被整体消除；合并后本问题不再复现。
-
-> 若要**确证**归因，可在合并前的提交上重跑本节复现步骤（预期索引表为空）。当前证据是
-> "合并前用户/文档复现 + 合并后按同一判据不复现"，机制解释与之一致。
-
-#### 防回归判据（若再次出现，按此判定）
-
-1. 建索引后点查必须**显著快于** LabelScan（本例 868ms → 1ms）；若仍 ~800ms，说明规划器没用索引，
-   本次验证不成立，需换查询形状；
-2. 随机取 ≥50 个真实 id（分别来自各具体标签的强索引）逐个经该索引点查，必须 **100% 命中**；
-3. 服务端日志必须**没有** `WiredTiger commit failed`；
-4. 返回 0 的 id 必须用**独立路径**（具体标签的唯一索引）确认确实不存在。
-
-#### 附带发现：旧数据目录不再兼容（现已优雅失败）
-
-本次装载使用的 loader 变更了元数据编码，**合并前生成的旧数据目录**在新代码上打开时，
-元数据解码会抛 `MetadataCodec: unexpected end of data decoding U16`。
-原先该异常**无人捕获** → `std::terminate` → SIGABRT（整个服务端起不来，只有一句 what()）。
-
-已修（`graph_manager.cpp`）：
-
-* `openGraphInstance` 捕获异常 → 打印**可操作**的错误（图名、id、目录、解码器消息、处置建议）并返回
-  nullptr，不再终止进程；其余图不受影响；
-* 启动时**只在图目录缺失**（陈旧 catalog 条目）时才删除条目；**目录存在但打不开**
-  （不兼容/截断）时**保留条目**——否则等于静默把图从 catalog 移除、数据再也回不来。
-
-实测：对旧格式数据目录启动 ⇒ 打印上述错误、**保留条目**、服务端**正常监听**（不再 abort）。
-
-
-
-官方 `ldbc_snb_interactive_v1_impls/cypher/scripts/indices.cypher` 要求：
-
-- 10 个标签的 `id` **唯一约束**：`City` / `Comment` / `Country` / `Forum` / `Message` /
-  `Organisation` / `Person` / `Post` / `Tag` / `TagClass`（注意含**派生标签** `City`/`Country`/`Message`）；
-- 6 个二级索引：`Country(name)`、`Message(creationDate)`、`Person(firstName)`、
-  `Post(creationDate)`、`Tag(name)`、`TagClass(name)`。
-
-而 loader 只为 **schema 键（8 个主标签）** 建 `id` 唯一索引，**没有**派生标签索引，
-也没有任何二级索引，schema 里也无法声明索引。
-
-**后果**（实测，同库同数据）：`short-4/5/6/7` 查询的 `MATCH (m:Message {id: …})` 走
-`LabelScan`（28 万顶点）：
-
-| 条件 | 计划 | 耗时 |
-|---|---|---|
-| `Message(id)` 无索引 | `LabelScan` | **3144.85 ms** |
-| 索引存在且内容正确 | `IndexScan` | **2.39 ms** |
-
-约 **1300×**。文档 [ldbc-snb-sf0.1-comparison.md](../../benchmark/ldbc-snb-sf0.1-comparison.md)
-里 short-4/5/6/7「快 34–93×」的读数取自带索引的图（该文档 §2.3.2 第 1 条的日志留有
-`Created vertex index 'idx_msg_cd' … on Message.(creationDate)`），**不是**当前 loader 产物。
-
-**待办**：① 修 §12.1；② 让 schema 能声明索引（对齐 `indices.cypher`），loader 建完后
-**校验可用性**（`populationPercent` + 一次点查自检），而不是只看 "Index created"。
-
-### 12.3 不支持 neo4j 的 `CREATE CONSTRAINT` 语法
-
-`indices.cypher` 用的是 neo4j 语法：
+`indices.cypher` 使用 neo4j 语法：
 
 ```cypher
 CREATE CONSTRAINT ON (n:Person) ASSERT n.id IS UNIQUE;
 ```
 
-当前只支持 `CREATE UNIQUE INDEX idx_name FOR (n:Label) ON (n.prop)`；上面那种写法报
-`SyntaxError: UnexpectedSyntax`。若要让用户"直接照抄 indices.cypher"，需要补这个语法
-（或提供等价的迁移说明）。
+本引擎的等价写法是 `CREATE UNIQUE INDEX ... FOR (n:Person) ON (n.id)`；
+官方脚本需要改写成后者（或由 loader 依据 schema 的 `pk` 直接建，已实现）。
 
-### 12.4 ~~重复列名的边端点被解析成同一列 ⇒ 边全部写成自环~~ **已修复**（端点改用列引用两写法 + 三条校验）
+### 12.3 索引回填的提交结果未校验（服务端）
 
-**现象（LDBC 查询验证发现）**：用本分支 loader 装载 sf0.1 后跑官方 interactive 查询，
-凡**遍历 `KNOWS`** 的语句结果全错，且错得"很像真的"：
+`CREATE INDEX` 的回填把整段扫描放在**一个事务**里，且 `commitTran` 的返回值被忽略：
+提交失败时仍会把索引置为 `PUBLIC` 并回 "Index created"。此时索引条目为空却状态 ONLINE，
+规划器选中它 ⇒ **静默漏结果**（空索引比没有索引更危险：没有索引会走全表扫、结果正确）。
 
-| 查询 | eugraph | neo4j | 说明 |
-|---|---|---|---|
-| `MATCH (r:Person {id:933})-[:KNOWS]-(a:Person) RETURN a.id` | `933,933,933` | 3 个真实好友 | 展开出的"好友"就是**锚点自己** |
-| `... RETURN a.firstName` | `Mahinda`（锚点） | 邻居的名字 | 同上 |
-| `MATCH (r:Person {id:933})-[:KNOWS*1..2]-(f) RETURN count(f)` | 30 | 185 | 变长展开塌缩 |
-| `... WHERE NOT f = r RETURN count(f)` | **0** | 185 | 谓词恒假 |
-| `count(DISTINCT a.id)` | 1 | 3 | 邻居全等于锚点 |
-
-**根因（已确证到机制）**：官方 LDBC 的 KNOWS CSV 表头是 **`Person.id|Person.id|creationDate`**
-——两个端点列**同名**。schema 里写的是 `"src": "Person.id", "dst": "Person.id"`，而 loader
-**按列名**解析端点 ⇒ 两列都命中**第一个** `Person.id` ⇒ `src == dst` ⇒ **每条边都写成自环**。
-
-**证据（sf0.1 实测）**：
-
-| 检查 | 结果 |
-|---|---|
-| `MATCH ()-[r:KNOWS]->() RETURN count(r)` | 14,073（数量对得上 neo4j 的 14,073 ⇒ 计数类核对**发现不了**） |
-| `MATCH (a:Person)-[:KNOWS]->(b) WHERE a.id = b.id RETURN count(*)` | **14,073（全部自环）** |
-| `MATCH (a:Person)-[:KNOWS]->(b) WHERE a.id <> b.id RETURN count(*)` | **0** |
-| `LIKES` 自环 / 总数 | **0** / 109,440 ✓ —— 它的表头是 `Person.id\|Post.id`（**列名不同**） |
-
-**最小复现（3 点 2 边，无需 sf0.1）**：CSV `1|2|10` / `2|3|20`，表头
-`Person.id|Person.id|creationDate` ⇒ 装载后 `MATCH (a:Person)-[:KNOWS]->(b) RETURN a.id,b.id`
-得到 `(1,1)`、`(2,2)`（应为 `(1,2)`、`(2,3)`）。
-
-**为什么之前的验证没抓到**：所有"按类型计数"的核对（各标签/各关系条数）**完全一致**（见
-`scripts/verify_loader_vs_neo4j.py` 的判据），而 `Person {id}` 的一跳邻居数在两边**恰好都等于 3**
-（自环数 = 真实好友数）——**只有把邻居的身份投影出来看，才会暴露**。
-
-**影响**：所有遍历 `KNOWS` 的查询（LDBC interactive 的 complex-2/6/8/9/11/12、short-3 等）在
-loader 装载的数据上**结果错误**，而不是报错。装载器分支的目标（用官方查询验证装载结果）因此不成立。
-
-**修复方向**：端点必须按**角色/位置**解析，而不是按列名——官方 `neo4j-admin import` 用的是
-`:START_ID` / `:END_ID` 角色列名。可选实现：
-① schema 允许 `"src": "Person.id#0"`（第 0 个同名列）/ `"src_column": 0` 这类**列序号**写法；
-② 或在重复列名时**回退到"第一个 ID 列 = src、第二个 = dst"**，并在日志里明确说明采用了哪个；
-③ 装载前**校验 `src != dst` 的列解析结果**，若解析到同一列则**报错拒绝装载**（宁可失败，不要静默写错）。
-
-**同时应加的判据（防回归）**：装载后校验 `MATCH (a)-[r:T]->(b) WHERE a=b RETURN count(*)`，
-对**不允许自环**的关系类型必须为 0；并把"投影邻居身份"这类**身份级**核对纳入
-`scripts/verify_loader_vs_neo4j.py`（现有实现只比条数，抓不到本缺陷）。
-
-
-#### 12.4.1 修复：端点列引用只有两种写法 + 三条校验（已实施）
-
-**端点写法（`src` / `dst`，复合端点数组内每个元素同）**：
-
-| 写法 | 语义 | 何时用 |
-|---|---|---|
-| `"Person.id"` | 按**列名**解析，**必须唯一匹配** | **默认**（可读，且不惧列序调整） |
-| `{"index": 1}` | 按 **0 基列序号**解析 | **仅当列名重复**时（如官方 `Person.id\|Person.id\|creationDate`） |
-
-**三条校验（"别猜"，把静默写错变成启动即失败）**：
-
-1. **列名歧义 ⇒ 拒绝装载**，错误信息直接给改法：
-   `column 'Person.id' appears 2 times in header [...] (positions 0, 1) -- ambiguous; use {"index": N} to pick one`
-2. **`src` 与 `dst` 解析到同一列 ⇒ 拒绝装载**：
-   `src and dst both resolve to column #0 ('Person.id') -- the two endpoints must be different columns; ...`
-   （自环只能来自数据里真实的 `src==dst` 行，不能来自 schema 写错；复合端点逐元素校验）
-3. **端点解析后打 INFO 日志**（列号 + 列名）：
-   `person_knows_person_0_0.csv: src = #0 'Person.id', dst = #1 'Person.id'`
-   —— 用 `{"index": N}` 时若指错列，装载开始即可见（补偿 index 写法失去的名字自校验）。
-
-被修复的 4 个 schema 条目（表头两端点同名，已改用 index）：`KNOWS`、`REPLY_OF`、
-`IS_PART_OF`、`IS_SUBCLASS_OF`。端点写法收敛为两种后，`parse_endpoint` 也统一到同一解析器，
-不再有"属性列支持 index、端点不支持"的不一致。
-
-**SF0.1 验证（修复后）**：
-
-| 检查 | 修复前 | 修复后 |
-|---|---:|---:|
-| `KNOWS` 自环 / 总数 | 14,073 / 14,073 | **0** / 14,073 |
-| `REPLY_OF` 自环 / 总数 | 151,043 / 151,043 | **0** / 151,043 |
-| `IS_PART_OF` 自环 / 总数 | 1,454 / 1,454 | **0** / 1,454 |
-| `IS_SUBCLASS_OF` 自环 / 总数 | 70 / 70 | **0** / 70 |
-| `KNOWS` 端点示例 | `(1,1)`、`(2,2)` | `933 → 24189255811254`（真实好友） |
-
-**LDBC interactive 对照（`scripts/verify_ldbc_results.py`，修复前 7 条 DIFF ⇒ 修复后全部 MATCH）**：
-
-| 查询 | 修复前 | 修复后 |
-|---|---|---|
-| complex-2 / 6 / 8 / 9 / 11 / 12、short-3 | 0 行或行集不同 | **行数与内容与 neo4j 完全一致** |
-
-⇒ 之前所有 LDBC 差异都源自本缺陷，**查询引擎本身没有问题**。
-
-**待补（下一步）**：把 6 个用例固化为 gtest（`tests/test_loader_integration.cpp`）——
-①裸名重复 ⇒ 报错；②`{"index":1}` ⇒ 取第 2 列；③`src=dst` 同列 ⇒ 报错；④复合端点撞列 ⇒ 报错；
-⑤无重复时裸名照常工作；⑥端到端 `1|2`/`2|3` ⇒ `(1,2)`、`(2,3)` 且自环 0。
+需要补的三件事：① 校验 `commitTran` 返回值，失败置 `ERROR` 并回报错误，不得留 `PUBLIC`；
+② 回填**分块提交**（单事务数十万条写入是缓存/更新链表的规模风险）；③ 置 `PUBLIC` 前校验
+条目数（目标集合非空而条目为 0 ⇒ 拒绝上线）。

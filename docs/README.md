@@ -181,7 +181,7 @@ DDL 操作（CREATE GRAPH / DROP LABEL 等）由 `EuGraphHandler` 直接协调�
 | 文档 | 说明 |
 |------|------|
 | [Server + Shell 设计](program/design/server-shell-design.md) | 启动流程、双模式架构、Shell REPL 设计 |
-| [Loader 设计](program/design/loader-design.md) | **权威版本**：schema 文件是唯一声明入口；主键 = 普通 `UNIQUE` 索引、支持复合主键；Thrift 写协议去 VertexId；列类型/属性重命名/行级标签（多来源数组）/端点标签/分隔符/时间格式全部外部声明（后两者支持文件级覆盖）；装载流程、服务端批量端点、错误处理；§12 记录已知缺陷 |
+| [Loader 设计](program/design/loader-design.md) | **权威版本**：schema 文件是唯一声明入口；主键 = 普通 `UNIQUE` 索引、支持复合主键；Thrift 写协议去 VertexId；列类型/属性重命名/行级标签（多来源数组）/端点标签/分隔符/时间格式全部外部声明（后两者支持文件级覆盖）；装载流程、服务端批量端点、错误处理；§12 记录当前限制 |
 
 ## 调试
 
