@@ -504,7 +504,15 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 }
             } // gen destroyed before commit
 
-            co_await async_data_.commitTran(txn);
+            // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
+            // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
+            const bool committed = co_await async_data_.commitTran(txn);
+            if (!committed) {
+                ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
+                result.error = "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
+                               "see the server log for the WiredTiger error";
+                co_return;
+            }
         }
 
         if (hasConflict) {
@@ -611,7 +619,15 @@ folly::coro::Task<void> QueryExecutor::handleIndexDdl(const IndexDdlStatement& s
                 }
             } // gen destroyed before commit
 
-            co_await async_data_.commitTran(txn);
+            // 提交失败绝不能继续往下走：索引会被标成 PUBLIC 而条目为空，
+            // 规划器随后选中它 ⇒ 静默漏结果（空索引比没有索引更危险）。
+            const bool committed = co_await async_data_.commitTran(txn);
+            if (!committed) {
+                ok = co_await async_meta_.updateIndexState(stmt.index_name, IndexState::ERROR);
+                result.error = "Index backfill transaction failed to commit (index left in ERROR, not ONLINE); "
+                               "see the server log for the WiredTiger error";
+                co_return;
+            }
         }
 
         if (hasConflict) {
