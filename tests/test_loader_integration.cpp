@@ -7,6 +7,8 @@
 //   - 端点标签缺失/未声明主键 → 启动即报错，而不是运行期静默跳过边。
 #include <gtest/gtest.h>
 
+#include <vector>
+
 #include <folly/init/Init.h>
 
 #include "program/loader/csv_loader.hpp"
@@ -85,7 +87,12 @@ protected:
         // 换成了它自己的 IO 线程池，「析构」与「先 stop() 再析构」两种写法实测都会卡在
         // join 上。代价是每个用例泄漏一个事件循环线程（进程结束即回收，用例数封顶）。
         // 要根治得单独排查该 thread manager 的关闭顺序，不要在别处顺手改。
-        (void)server_.release();
+        // 刻意不析构 ThriftServer（原因见上），但**不能让它变成不可达内存**：
+        // CI 的 ASan 作业以 detect_leaks=1:halt_on_error=1 运行，LeakSanitizer 会把
+        // 不可达的泄漏直接判失败。挂到进程级容器里保持"可达"，行为不变（仍不析构），
+        // 也不再被报成泄漏。
+        static std::vector<apache::thrift::ScopedServerInterfaceThread*> retained_servers;
+        retained_servers.push_back(server_.release());
         handler_.reset();
         graph_service_.reset();
         graph_manager_->shutdown();
