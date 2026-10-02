@@ -53,9 +53,21 @@ bool GraphManager::init(const std::string& data_dir, int io_threads, int compute
             graphs_[entry.name] = std::move(instance);
             spdlog::info("Loaded graph '{}' (id={}) in {}ms", entry.name, entry.graph_id, ms);
         } else {
-            spdlog::warn("Failed to open graph '{}' (id={}) in {}ms, cleaning up catalog entry", entry.name,
-                         entry.graph_id, ms);
-            catalog_.dropGraph(entry.name);
+            // A MISSING directory means a stale catalog entry (the data is gone) -> drop the entry.
+            // A directory that EXISTS but cannot be opened (incompatible/truncated format) must keep
+            // its entry: dropping it would silently remove the graph from the catalog and make the
+            // data unreachable with no way back.
+            std::error_code ec;
+            const std::string graph_dir = data_dir_ + "/graph_" + std::to_string(entry.graph_id);
+            if (!std::filesystem::exists(graph_dir, ec)) {
+                spdlog::warn("Graph '{}' (id={}) has no directory ({}); dropping its stale catalog entry", entry.name,
+                             entry.graph_id, graph_dir);
+                catalog_.dropGraph(entry.name);
+            } else {
+                spdlog::error("Graph '{}' (id={}) could not be opened in {}ms; keeping its catalog entry (see the "
+                              "error above). Fix or re-import this graph's data, then restart.",
+                              entry.name, entry.graph_id, ms);
+            }
         }
     }
 
@@ -190,6 +202,22 @@ GraphInstance* GraphManager::getGraph(const std::string& name) {
 }
 
 std::unique_ptr<GraphInstance> GraphManager::openGraphInstance(uint32_t graph_id, const std::string& name) {
+    // Opening a store can throw: the metadata decoders reject a truncated or older on-disk format
+    // ("MetadataCodec: unexpected end of data decoding ..."). Without this catch the exception
+    // escaped main() and reached std::terminate -> SIGABRT, so one unreadable graph took the whole
+    // server down with no actionable message. A failed graph now reports itself and is skipped.
+    try {
+        return openGraphInstanceUnchecked(graph_id, name);
+    } catch (const std::exception& e) {
+        spdlog::error("Failed to open graph '{}' (id={}) under {}/graph_{}: {}", name, graph_id, data_dir_, graph_id,
+                      e.what());
+        spdlog::error("The graph directory exists but its data could not be read (incompatible or truncated on-disk "
+                      "format). Re-import the data for this graph; other graphs are unaffected.");
+        return nullptr;
+    }
+}
+
+std::unique_ptr<GraphInstance> GraphManager::openGraphInstanceUnchecked(uint32_t graph_id, const std::string& name) {
     std::string graph_dir = data_dir_ + "/graph_" + std::to_string(graph_id);
     std::string data_dir = graph_dir + "/data";
     std::string meta_dir = graph_dir + "/meta";

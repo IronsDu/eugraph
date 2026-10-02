@@ -52,7 +52,11 @@ public:
     GraphInstance* getGraph(const std::string& name);
 
 private:
+    /// Opens a graph's stores; never throws (logs and returns nullptr on failure).
     std::unique_ptr<GraphInstance> openGraphInstance(uint32_t graph_id, const std::string& name);
+
+    /// The actual open path; may throw (decoders reject an incompatible on-disk format).
+    std::unique_ptr<GraphInstance> openGraphInstanceUnchecked(uint32_t graph_id, const std::string& name);
     void checkpointAll();
     void checkpointLoop();
 

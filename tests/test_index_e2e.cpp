@@ -1461,10 +1461,11 @@ TEST_F(IndexE2ETest, WeakIndexBackfillAcrossTwoSourceLabels) {
 
 // 弱 accessor 索引的回填**在 3000 顶点规模上完整**（本用例守住这一点）。
 //
-// 注意：这不是"回填总是对的"的证明。同一条代码路径在 sf0.1 的 28.6 万顶点
-// `Message` 标签上回填**完全不落地**（索引表 0 条，点查返回 0）——见
+// 历史：同一条代码路径曾在 sf0.1 的 28.6 万顶点 `Message` 标签上"回填不落地"（索引表 0 条、
+// 点查返回 0）。该问题已随 main 的 session 修复（#241/#244：session 永不共享）消除，
+// 并在 sf0.1 上按判据验证（索引被规划器选中、60/60 真实 id 命中）——见
 // [loader-design.md §12.1](../../docs/program/design/loader-design.md)。
-// 本用例的价值：把"小规模是对的"钉住，供索引构建重构时对照与二分临界点。
+// 本用例仍作为小规模基线保留：规模相关的回填回归应先在这里失败。
 TEST_F(IndexE2ETest, WeakIndexBackfillScalesWithVertexCount) {
     createLabel(env, "Comment",
                 {{0, "id", PropertyType::INT64, false, std::nullopt},
