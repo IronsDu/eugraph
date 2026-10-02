@@ -1033,7 +1033,7 @@ CREATE CONSTRAINT ON (n:Person) ASSERT n.id IS UNIQUE;
 `SyntaxError: UnexpectedSyntax`。若要让用户"直接照抄 indices.cypher"，需要补这个语法
 （或提供等价的迁移说明）。
 
-### 12.4 重复列名的边端点被解析成同一列 ⇒ 边全部写成自环（P0，静默数据损坏）
+### 12.4 ~~重复列名的边端点被解析成同一列 ⇒ 边全部写成自环~~ **已修复**（端点改用列引用两写法 + 三条校验）
 
 **现象（LDBC 查询验证发现）**：用本分支 loader 装载 sf0.1 后跑官方 interactive 查询，
 凡**遍历 `KNOWS`** 的语句结果全错，且错得"很像真的"：
@@ -1080,3 +1080,49 @@ loader 装载的数据上**结果错误**，而不是报错。装载器分支的
 对**不允许自环**的关系类型必须为 0；并把"投影邻居身份"这类**身份级**核对纳入
 `scripts/verify_loader_vs_neo4j.py`（现有实现只比条数，抓不到本缺陷）。
 
+
+#### 12.4.1 修复：端点列引用只有两种写法 + 三条校验（已实施）
+
+**端点写法（`src` / `dst`，复合端点数组内每个元素同）**：
+
+| 写法 | 语义 | 何时用 |
+|---|---|---|
+| `"Person.id"` | 按**列名**解析，**必须唯一匹配** | **默认**（可读，且不惧列序调整） |
+| `{"index": 1}` | 按 **0 基列序号**解析 | **仅当列名重复**时（如官方 `Person.id\|Person.id\|creationDate`） |
+
+**三条校验（"别猜"，把静默写错变成启动即失败）**：
+
+1. **列名歧义 ⇒ 拒绝装载**，错误信息直接给改法：
+   `column 'Person.id' appears 2 times in header [...] (positions 0, 1) -- ambiguous; use {"index": N} to pick one`
+2. **`src` 与 `dst` 解析到同一列 ⇒ 拒绝装载**：
+   `src and dst both resolve to column #0 ('Person.id') -- the two endpoints must be different columns; ...`
+   （自环只能来自数据里真实的 `src==dst` 行，不能来自 schema 写错；复合端点逐元素校验）
+3. **端点解析后打 INFO 日志**（列号 + 列名）：
+   `person_knows_person_0_0.csv: src = #0 'Person.id', dst = #1 'Person.id'`
+   —— 用 `{"index": N}` 时若指错列，装载开始即可见（补偿 index 写法失去的名字自校验）。
+
+被修复的 4 个 schema 条目（表头两端点同名，已改用 index）：`KNOWS`、`REPLY_OF`、
+`IS_PART_OF`、`IS_SUBCLASS_OF`。端点写法收敛为两种后，`parse_endpoint` 也统一到同一解析器，
+不再有"属性列支持 index、端点不支持"的不一致。
+
+**SF0.1 验证（修复后）**：
+
+| 检查 | 修复前 | 修复后 |
+|---|---:|---:|
+| `KNOWS` 自环 / 总数 | 14,073 / 14,073 | **0** / 14,073 |
+| `REPLY_OF` 自环 / 总数 | 151,043 / 151,043 | **0** / 151,043 |
+| `IS_PART_OF` 自环 / 总数 | 1,454 / 1,454 | **0** / 1,454 |
+| `IS_SUBCLASS_OF` 自环 / 总数 | 70 / 70 | **0** / 70 |
+| `KNOWS` 端点示例 | `(1,1)`、`(2,2)` | `933 → 24189255811254`（真实好友） |
+
+**LDBC interactive 对照（`scripts/verify_ldbc_results.py`，修复前 7 条 DIFF ⇒ 修复后全部 MATCH）**：
+
+| 查询 | 修复前 | 修复后 |
+|---|---|---|
+| complex-2 / 6 / 8 / 9 / 11 / 12、short-3 | 0 行或行集不同 | **行数与内容与 neo4j 完全一致** |
+
+⇒ 之前所有 LDBC 差异都源自本缺陷，**查询引擎本身没有问题**。
+
+**待补（下一步）**：把 6 个用例固化为 gtest（`tests/test_loader_integration.cpp`）——
+①裸名重复 ⇒ 报错；②`{"index":1}` ⇒ 取第 2 列；③`src=dst` 同列 ⇒ 报错；④复合端点撞列 ⇒ 报错；
+⑤无重复时裸名照常工作；⑥端到端 `1|2`/`2|3` ⇒ `(1,2)`、`(2,3)` 且自环 0。

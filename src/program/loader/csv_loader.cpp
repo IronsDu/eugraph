@@ -441,14 +441,27 @@ std::string applyCase(const std::string& value, const std::string& mode) {
 int resolveColumn(const PropertySpec& spec, const std::vector<std::string>& header, const std::string& where,
                   bool required) {
     if (!spec.header.empty()) {
+        // 收集**全部**匹配位置：官方 LDBC 的 KNOWS/REPLY_OF/IS_PART_OF/IS_SUBCLASS_OF 表头里两列同名
+        // （如 `Person.id|Person.id|creationDate`），"取第一个匹配"会把两端点解析成同一列，
+        // 把 16 万条边静默写成自环。列名重复时必须由 schema 显式给出 {"index": N}，这里拒绝猜。
+        std::vector<size_t> matches;
         for (size_t i = 0; i < header.size(); ++i) {
             if (header[i] == spec.header)
-                return static_cast<int>(i);
+                matches.push_back(i);
         }
+        if (matches.size() == 1)
+            return static_cast<int>(matches[0]);
         std::string available;
         for (const auto& h : header)
             available += (available.empty() ? "" : ", ") + h;
-        throw std::runtime_error(where + ": column '" + spec.header + "' not found in header [" + available + "]");
+        if (matches.empty())
+            throw std::runtime_error(where + ": column '" + spec.header + "' not found in header [" + available + "]");
+        std::string positions;
+        for (size_t i : matches)
+            positions += (positions.empty() ? "" : ", ") + std::to_string(i);
+        throw std::runtime_error(where + ": column '" + spec.header + "' appears " + std::to_string(matches.size()) +
+                                 " times in header [" + available + "] (positions " + positions +
+                                 ") -- ambiguous; use {\"index\": N} to pick one");
     }
     if (spec.index >= 0) {
         if (spec.index >= static_cast<int>(header.size()))
@@ -459,6 +472,27 @@ int resolveColumn(const PropertySpec& spec, const std::vector<std::string>& head
     if (required)
         throw std::runtime_error(where + ": column '" + spec.name + "' needs header or index");
     return -1;
+}
+
+/// 边端点的列引用：**只有两种写法**——列名字符串，或 {"index": N}（0 基列号）。
+/// 列名重复时（官方 LDBC 的 `Person.id|Person.id|...`）必须用 index：列名解析会因歧义报错。
+/// 端点不支持对象里的 name/type —— 端点值的类型取目标标签的主键声明。
+PropertySpec parseEndpointRef(const json& v, const std::string& where) {
+    PropertySpec spec;
+    if (v.is_string()) {
+        spec.header = v.get<std::string>();
+        spec.name = spec.header;
+        return spec;
+    }
+    if (v.is_object() && v.size() == 1 && v.contains("index")) {
+        const auto& idx = v["index"];
+        if (!idx.is_number_integer() || idx.get<int>() < 0)
+            throw std::runtime_error(where + ": endpoint index must be a non-negative integer");
+        spec.index = idx.get<int>();
+        spec.name = "#" + std::to_string(spec.index);
+        return spec;
+    }
+    throw std::runtime_error(where + ": endpoint must be a column name string or {\"index\": N}, got " + v.dump());
 }
 
 } // namespace
@@ -751,40 +785,17 @@ SchemaConfig loadSchemaConfig(const std::filesystem::path& schema_path, const st
             auto parse_endpoint = [&](const char* key) {
                 if (!entry.contains(key))
                     throw std::runtime_error("schema: " + where + " (" + fs.declared_file + "): missing '" + key + "'");
-                const auto& v = entry[key];
-                PropertySpec spec;
-                std::string ep_label;
-                if (v.is_string()) {
-                    spec.header = v.get<std::string>();
-                    spec.name = spec.header;
-                } else if (v.is_object() && v.size() == 1 && !v.contains("header")) {
-                    auto it = v.begin();
-                    CsvColumnType t = CsvColumnType::INT64;
-                    bool declared = false;
-                    spec = parsePkElement(v, where + "." + key, &t, &declared);
-                    if (v.begin().value().is_object() && v.begin().value().contains("label"))
-                        ep_label = reqString(v.begin().value(), "label", where);
-                    if (declared)
-                        spec.type = t;
-                } else if (v.is_object()) {
-                    spec = parseColumnSpec(std::string(key), v, /*key_is_property=*/false, where);
-                    if (v.contains("label") && v["label"].is_string())
-                        ep_label = v["label"].get<std::string>();
-                } else {
-                    throw std::runtime_error("schema: " + where + "." + key + " must be a string or object");
-                }
-                return std::make_pair(spec, ep_label);
+                // 端点只有两种写法：列名或 {"index": N}；标签用顶层 src_label/dst_label。
+                PropertySpec spec = parseEndpointRef(entry[key], "schema: " + where + "." + key);
+                return std::make_pair(spec, std::string{});
             };
 
             auto parse_endpoint_list = [&](const char* key) {
                 std::vector<PropertySpec> specs;
                 std::string ep_label;
                 if (entry.contains(key) && entry[key].is_array()) {
-                    for (const auto& e : entry[key]) {
-                        CsvColumnType t = CsvColumnType::INT64;
-                        bool declared = false;
-                        specs.push_back(parsePkElement(e, where + "." + key, &t, &declared));
-                    }
+                    for (const auto& e : entry[key])
+                        specs.push_back(parseEndpointRef(e, "schema: " + where + "." + key + "[]"));
                     return std::make_pair(specs, ep_label);
                 }
                 auto [spec, lbl] = parse_endpoint(key);
@@ -1403,6 +1414,29 @@ void loadOneEdgeFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
         c.column = resolveColumn(c, csv.header, where + " (src)", /*required=*/true);
     for (auto& c : dst_cols)
         c.column = resolveColumn(c, csv.header, where + " (dst)", /*required=*/true);
+
+    // 校验：schema 写错不得让两端点落在同一列——自环只能来自数据里真实的 src==dst 行。
+    // （历史缺陷：KNOWS / REPLY_OF / IS_PART_OF / IS_SUBCLASS_OF 的两端列同名，按列名解析时都取到
+    //   第一列，166,640 条边被静默写成自环，计数类核对完全看不出来。）
+    if (src_cols.size() == 1 && dst_cols.size() == 1 && src_cols[0].column == dst_cols[0].column) {
+        const auto col = static_cast<size_t>(src_cols[0].column);
+        throw std::runtime_error(where + ": src and dst both resolve to column #" + std::to_string(col) + " ('" +
+                                 (col < csv.header.size() ? csv.header[col] : std::string("?")) +
+                                 "') -- the two endpoints must be different columns; duplicated column names "
+                                 "need an explicit {\"index\": N}");
+    }
+    // 端点解析结果打一行 INFO：用 {"index": N} 时若指错列，装载开始就能看见。
+    auto describe_endpoint = [&](const std::vector<PropertySpec>& cols) {
+        std::string text;
+        for (const auto& c : cols) {
+            const auto col = static_cast<size_t>(c.column);
+            text += (text.empty() ? "" : "+") + ("#" + std::to_string(c.column) + " '" +
+                                                 (col < csv.header.size() ? csv.header[col] : std::string("?")) + "'");
+        }
+        return text;
+    };
+    spdlog::info("[loader] {}: src = {}, dst = {}", fs.declared_file, describe_endpoint(src_cols),
+                 describe_endpoint(dst_cols));
 
     // 端点主键值来自本文件的列，但发给服务端时要带上**目标标签**的主键属性名与类型
     // （类型必须取目标标签的声明，否则 INT64 主键会被当成 STRING 编码，索引查不到）。

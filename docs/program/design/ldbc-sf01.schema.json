@@ -224,8 +224,12 @@
     "REPLY_OF": [
       {
         "file": "dynamic/comment_replyOf_comment_0_0.csv",
-        "src": "Comment.id",
-        "dst": "Comment.id",
+        "src": {
+          "index": 0
+        },
+        "dst": {
+          "index": 1
+        },
         "src_label": "Comment",
         "dst_label": "Comment"
       },
@@ -279,8 +283,12 @@
     "KNOWS": [
       {
         "file": "dynamic/person_knows_person_0_0.csv",
-        "src": "Person.id",
-        "dst": "Person.id",
+        "src": {
+          "index": 0
+        },
+        "dst": {
+          "index": 1
+        },
         "src_label": "Person",
         "dst_label": "Person",
         "columns": {
@@ -337,8 +345,12 @@
     "IS_PART_OF": [
       {
         "file": "static/place_isPartOf_place_0_0.csv",
-        "src": "Place.id",
-        "dst": "Place.id",
+        "src": {
+          "index": 0
+        },
+        "dst": {
+          "index": 1
+        },
         "src_label": "Place",
         "dst_label": "Place"
       }
@@ -355,8 +367,12 @@
     "IS_SUBCLASS_OF": [
       {
         "file": "static/tagclass_isSubclassOf_tagclass_0_0.csv",
-        "src": "TagClass.id",
-        "dst": "TagClass.id",
+        "src": {
+          "index": 0
+        },
+        "dst": {
+          "index": 1
+        },
         "src_label": "TagClass",
         "dst_label": "TagClass"
       }
