@@ -64,9 +64,8 @@ bool SyncGraphDataStore::open(const std::string& db_path, const std::string& wt_
     if (!openConnection(db_path, wt_extra_config))
         return false;
 
-    if (!ensureGlobalTable(defaultSession_.get(), TABLE_LABEL_REVERSE) ||
-        !ensureGlobalTable(defaultSession_.get(), TABLE_EDGE_INDEX) ||
-        !ensureGlobalTable(defaultSession_.get(), TABLE_VERTEX_EXISTENCE)) {
+    if (!ensureGlobalTable(TABLE_LABEL_REVERSE) || !ensureGlobalTable(TABLE_EDGE_INDEX) ||
+        !ensureGlobalTable(TABLE_VERTEX_EXISTENCE)) {
         close();
         return false;
     }
@@ -177,43 +176,30 @@ bool SyncGraphDataStore::dropLabel(LabelId label_id) {
     auto fwd = labelFwdTable(label_id);
     auto vprop = vpropTable(label_id);
 
-    // Drop requires exclusive access; close default session first
-    {
-        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
-        defaultSession_ = WtSession{};
-    }
-    auto reopen = [this]() {
-        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
-        defaultSession_ = conn_.openSession();
-    };
+    // Business-level (schema/lifecycle) exclusivity: serialises this DDL sequence against other
+    // DDL and against checkpoint/close. Sessions are never shared any more, so the old
+    // "close the default session, then reopen it" dance is gone -- it never quiesced anything
+    // (other threads keep their own sessions), and it was the source of the shared session.
+    std::lock_guard<std::recursive_mutex> lock(schemaMutex_);
 
-    WtSession ddl_session(conn_.get());
-    if (!ddl_session) {
-        reopen();
+    WtSession ddl_session = openAdminSession();
+    if (!ddl_session)
         return false;
-    }
 
     ddl_session.get()->checkpoint(ddl_session.get(), nullptr);
 
     int ret = ddl_session.get()->drop(ddl_session.get(), fwd.c_str(), nullptr);
     if (ret != 0) {
         spdlog::error("Failed to drop label fwd table {}: error {}", fwd, wiredtiger_strerror(ret));
-        reopen();
         return false;
     }
 
     ret = ddl_session.get()->drop(ddl_session.get(), vprop.c_str(), nullptr);
     if (ret != 0) {
         spdlog::error("Failed to drop vprop table {}: error {}", vprop, wiredtiger_strerror(ret));
-        reopen();
         return false;
     }
-
-    reopen();
-    {
-        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
-        return defaultSession_.operator bool();
-    }
+    return true;
 }
 
 bool SyncGraphDataStore::createEdgeLabel(EdgeLabelId edge_label_id) {
@@ -236,43 +222,28 @@ bool SyncGraphDataStore::dropEdgeLabel(EdgeLabelId edge_label_id) {
     auto etype = etypeTable(edge_label_id);
     auto eprop = epropTable(edge_label_id);
 
-    // Drop requires exclusive access; close default session first
-    {
-        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
-        defaultSession_ = WtSession{};
-    }
-    auto reopen = [this]() {
-        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
-        defaultSession_ = conn_.openSession();
-    };
+    // Same as dropLabel: schema/lifecycle exclusivity via the business lock; no session is
+    // shared, so no close/reopen dance is needed.
+    std::lock_guard<std::recursive_mutex> lock(schemaMutex_);
 
-    WtSession ddl_session(conn_.get());
-    if (!ddl_session) {
-        reopen();
+    WtSession ddl_session = openAdminSession();
+    if (!ddl_session)
         return false;
-    }
 
     ddl_session.get()->checkpoint(ddl_session.get(), nullptr);
 
     int ret = ddl_session.get()->drop(ddl_session.get(), etype.c_str(), nullptr);
     if (ret != 0) {
         spdlog::error("Failed to drop etype table {}: error {}", etype, wiredtiger_strerror(ret));
-        reopen();
         return false;
     }
 
     ret = ddl_session.get()->drop(ddl_session.get(), eprop.c_str(), nullptr);
     if (ret != 0) {
         spdlog::error("Failed to drop eprop table {}: error {}", eprop, wiredtiger_strerror(ret));
-        reopen();
         return false;
     }
-
-    reopen();
-    {
-        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
-        return defaultSession_.operator bool();
-    }
+    return true;
 }
 
 // ==================== Vertex ====================
@@ -1059,13 +1030,18 @@ void EdgeTypeScanCursorImpl::next() {
 // ==================== Index DDL ====================
 
 bool SyncGraphDataStore::createIndex(const std::string& table_name) {
-    return ensureGlobalTable(defaultSession_.get(), table_name.c_str());
+    return ensureGlobalTable(table_name.c_str());
 }
 
 bool SyncGraphDataStore::dropIndex(const std::string& table_name) {
     std::string uri = table_name;
-    // ensureGlobalTable stores as "table:xxx", drop needs "table:xxx"
-    int ret = defaultSession_->drop(defaultSession_.get(), uri.c_str(), nullptr);
+    // ensureGlobalTable stores as "table:xxx", drop needs "table:xxx".
+    // DDL sequence => business-level exclusivity, and a short-lived session of our own.
+    std::lock_guard<std::recursive_mutex> lock(schemaMutex_);
+    WtSession admin = openAdminSession();
+    if (!admin)
+        return false;
+    int ret = admin.get()->drop(admin.get(), uri.c_str(), nullptr);
     if (ret != 0 && ret != ENOENT) {
         spdlog::error("dropIndex: failed to drop {}: {}", uri, wiredtiger_strerror(ret));
         return false;
@@ -1077,42 +1053,42 @@ bool SyncGraphDataStore::dropIndex(const std::string& table_name) {
 
 bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) {
     auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
-    return tablePut(defaultSession_.get(), table, key, {});
+    return tablePut(getSession(INVALID_GRAPH_TXN), table, key, {});
 }
 
 bool SyncGraphDataStore::deleteIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id) {
     auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
-    return tableDel(defaultSession_.get(), table, key);
+    return tableDel(getSession(INVALID_GRAPH_TXN), table, key);
 }
 
 bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const PropertyValue& value, uint64_t entity_id,
                                           std::string_view payload) {
     auto key = IndexKeyCodec::encodeIndexKey(value, entity_id);
-    return tablePut(defaultSession_.get(), table, key, payload);
+    return tablePut(getSession(INVALID_GRAPH_TXN), table, key, payload);
 }
 
 bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                           uint64_t entity_id) {
     auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
-    return tablePut(defaultSession_.get(), table, key, {});
+    return tablePut(getSession(INVALID_GRAPH_TXN), table, key, {});
 }
 
 bool SyncGraphDataStore::insertIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                           uint64_t entity_id, std::string_view payload) {
     auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
-    return tablePut(defaultSession_.get(), table, key, payload);
+    return tablePut(getSession(INVALID_GRAPH_TXN), table, key, payload);
 }
 
 bool SyncGraphDataStore::deleteIndexEntry(const std::string& table, const std::vector<PropertyValue>& values,
                                           uint64_t entity_id) {
     auto key = IndexKeyCodec::encodeIndexKey(values, entity_id);
-    return tableDel(defaultSession_.get(), table, key);
+    return tableDel(getSession(INVALID_GRAPH_TXN), table, key);
 }
 
 bool SyncGraphDataStore::checkUniqueConstraint(const std::string& table, const PropertyValue& value) {
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(value);
     bool found = false;
-    tableScan(defaultSession_.get(), table, prefix, [&](std::string_view key, std::string_view /*val*/) {
+    tableScan(getSession(INVALID_GRAPH_TXN), table, prefix, [&](std::string_view key, std::string_view /*val*/) {
         if (key.size() >= prefix.size()) {
             found = true;
             return false;
@@ -1125,7 +1101,7 @@ bool SyncGraphDataStore::checkUniqueConstraint(const std::string& table, const P
 bool SyncGraphDataStore::checkUniqueConstraint(const std::string& table, const std::vector<PropertyValue>& values) {
     auto prefix = IndexKeyCodec::encodeEqualityPrefix(values);
     bool found = false;
-    tableScan(defaultSession_.get(), table, prefix, [&](std::string_view key, std::string_view /*val*/) {
+    tableScan(getSession(INVALID_GRAPH_TXN), table, prefix, [&](std::string_view key, std::string_view /*val*/) {
         if (key.size() >= prefix.size()) {
             found = true;
             return false;
@@ -1472,8 +1448,8 @@ void SyncGraphDataStore::scanIndexRangeWithValue(GraphTxnHandle txn, const std::
 // ==================== Index Cleanup ====================
 
 void SyncGraphDataStore::dropAllIndexEntries(const std::string& table) {
-    tableScan(defaultSession_.get(), table, {}, [&](std::string_view key, std::string_view /*val*/) {
-        tableDel(defaultSession_.get(), table, key);
+    tableScan(getSession(INVALID_GRAPH_TXN), table, {}, [&](std::string_view key, std::string_view /*val*/) {
+        tableDel(getSession(INVALID_GRAPH_TXN), table, key);
         return true; // continue
     });
 }

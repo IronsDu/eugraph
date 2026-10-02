@@ -51,6 +51,11 @@ WtStoreBase::~WtStoreBase() {
 }
 
 void WtStoreBase::closeConnection() {
+    // Idempotent: the destructor calls this too, and `close()` may already have been called
+    // explicitly. Without the guard the code below would open a session on a dead connection
+    // (and close already-closed sessions a second time).
+    if (!conn_)
+        return;
     {
         std::lock_guard<std::mutex> lock(txnMutex_);
         for (auto& [h, ts] : txns_) {
@@ -62,10 +67,14 @@ void WtStoreBase::closeConnection() {
         txns_.clear();
     }
     {
-        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
-        if (defaultSession_) {
+        // One short-lived session for the final checkpoint: it cannot outlive this call, and no
+        // other thread uses it. `schemaMutex_` keeps it mutually exclusive with a periodic
+        // checkpoint that may be in flight (lifecycle exclusivity, not session memory).
+        std::lock_guard<std::recursive_mutex> lock(schemaMutex_);
+        WtSession session(conn_.get());
+        if (session) {
             auto t0 = std::chrono::steady_clock::now();
-            int ret = defaultSession_.get()->checkpoint(defaultSession_.get(), nullptr);
+            int ret = session.get()->checkpoint(session.get(), nullptr);
             auto ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
             if (ret != 0) {
@@ -74,7 +83,6 @@ void WtStoreBase::closeConnection() {
                 spdlog::info("Checkpoint completed ({}ms)", ms);
             }
         }
-        defaultSession_ = WtSession{};
     }
     // Per-thread sessions must be closed before the connection.
     closeThreadSessions();
@@ -113,29 +121,10 @@ bool WtStoreBase::openConnection(const std::string& db_path, const std::string& 
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
     spdlog::info("Opened WT connection at {} ({}ms)", db_path, ms);
 
-    {
-        std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
-        defaultSession_ = conn_.openSession();
-        if (!defaultSession_) {
-            spdlog::error("Failed to open default session");
-            conn_.close();
-            return false;
-        }
-    }
-
     return true;
 }
 
 // ==================== Session/Cursor Helpers ====================
-
-namespace {
-/// Process-wide epoch for per-thread sessions. Bumped whenever a store closes its sessions,
-/// which invalidates every thread-local cache without any lock on the hot path. It must be
-/// process-wide (not per-instance): a destroyed store can be replaced at the same address,
-/// and a per-instance counter would then match a stale thread-local entry and hand out a
-/// session belonging to the closed connection.
-std::atomic<uint64_t> g_sessionEpoch{1};
-} // namespace
 
 WT_SESSION* WtStoreBase::threadSession() {
     // One session per thread. The thread-local entry deliberately holds no ownership and has
@@ -143,33 +132,52 @@ WT_SESSION* WtStoreBase::threadSession() {
     // a session after its connection is undefined behaviour. Sessions are released when the
     // connection is torn down (closeThreadSessions() closes them just before conn_.close()),
     // i.e. at store/process teardown -- never at thread exit.
-    struct TlsSession {
-        const WtStoreBase* store = nullptr;
+    // One cached session PER (thread, store) pair -- not a single slot: a thread routinely
+    // alternates between several stores (a graph's data store, its meta store, the process-wide
+    // catalog store, ...), and a single-slot cache would then open a brand-new session on every
+    // switch and push it into this store's pool. Across a long run that grows the pool without
+    // bound until WT refuses to open more sessions (which used to surface as a null session and a
+    // segfault in WtCursor). The map is tiny (a handful of stores per thread) and the hot path is
+    // one hash lookup, i.e. nanoseconds against the ~0.6us of a lookup.
+    struct TlsEntry {
         uint64_t epoch = 0;
         WT_SESSION* session = nullptr;
     };
-    thread_local TlsSession tls;
+    // Keyed by the store's process-unique id (NOT its address: addresses are recycled, and a new
+    // store at a dead store's address must never inherit its -- closed -- session).
+    thread_local std::unordered_map<uint64_t, TlsEntry> tls_sessions;
 
-    const uint64_t epoch = g_sessionEpoch.load(std::memory_order_relaxed);
-    if (tls.store == this && tls.epoch == epoch && tls.session != nullptr)
-        return tls.session; // hot path: no lock, no thread-id lookup, no hashing
+    const uint64_t epoch = sessionGeneration_.load(std::memory_order_relaxed);
+    auto it = tls_sessions.find(sessionStoreId_);
+    if (it != tls_sessions.end() && it->second.epoch == epoch && it->second.session != nullptr)
+        return it->second.session; // hot path: no lock, no thread-id lookup
 
-    // Slow path: first call on this thread, or the store was closed and re-created.
+    // Slow path: first call on this thread for this store, or the store was closed and re-created.
     WtSession session = conn_.openSession();
-    if (!session)
+    if (!session) {
+        // Never hand out a null session: callers would dereference it (see the null guards in the
+        // KV primitives). Logged because reaching it means the connection is closing or the
+        // process is out of sessions -- both worth knowing about.
+        spdlog::error("threadSession: failed to open a session for store {}", static_cast<const void*>(this));
         return nullptr;
+    }
     WT_SESSION* raw = session.release();
     {
         std::lock_guard<std::mutex> lock(sessionPoolMutex_);
         sessionPool_.push_back(raw);
     }
-    tls = TlsSession{this, epoch, raw};
+    if (tls_sessions.size() > 256)
+        tls_sessions.clear(); // bound per-thread growth over a long run (rare; forces re-open)
+    tls_sessions[sessionStoreId_] = TlsEntry{epoch, raw};
     return raw;
 }
 
 void WtStoreBase::closeThreadSessions() {
-    // Invalidate every thread-local entry first (process-wide), then close the sessions.
-    g_sessionEpoch.fetch_add(1, std::memory_order_relaxed);
+    // Invalidate this store's thread-local entries first, then close its sessions. Scoped to this
+    // store on purpose: a process-wide bump would evict other stores' cached sessions as well,
+    // and those would be re-opened on the next visit while the old ones stayed pooled -- i.e. a
+    // session leak that ends in WT's "out of sessions".
+    sessionGeneration_.fetch_add(1, std::memory_order_relaxed);
     std::vector<WT_SESSION*> sessions;
     {
         std::lock_guard<std::mutex> lock(sessionPoolMutex_);
@@ -240,9 +248,19 @@ void WtStoreBase::closeTxnCursors(TxnState* state) {
     state->cursors.clear();
 }
 
-bool WtStoreBase::ensureGlobalTable(WT_SESSION* session, const char* table_name) {
-    std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
-    int ret = session->create(session, table_name, WT_TABLE_CONFIG);
+bool WtStoreBase::ensureGlobalTable(const char* table_name) {
+    if (!conn_)
+        return false;
+    // Business-level exclusivity: without it, two interleaved create/drop sequences could each
+    // observe "table exists" and still end up with the table missing. The lock guards the
+    // SEQUENCE, not a session.
+    std::lock_guard<std::recursive_mutex> lock(schemaMutex_);
+    WtSession session(conn_.get());
+    if (!session) {
+        spdlog::error("Failed to open a session for creating table {}", table_name);
+        return false;
+    }
+    int ret = session.get()->create(session.get(), table_name, WT_TABLE_CONFIG);
     if (ret != 0 && ret != EBUSY) {
         spdlog::error("Failed to create table {}: error {}", table_name, ret);
         return false;
@@ -251,10 +269,13 @@ bool WtStoreBase::ensureGlobalTable(WT_SESSION* session, const char* table_name)
 }
 
 bool WtStoreBase::checkpoint() {
-    std::lock_guard<std::recursive_mutex> lock(sessionMutex_);
-    if (!defaultSession_)
+    if (!conn_)
         return false;
-    int ret = defaultSession_.get()->checkpoint(defaultSession_.get(), nullptr);
+    std::lock_guard<std::recursive_mutex> lock(schemaMutex_);
+    WtSession session(conn_.get());
+    if (!session)
+        return false;
+    int ret = session.get()->checkpoint(session.get(), nullptr);
     if (ret != 0) {
         spdlog::error("Checkpoint failed: error {}", ret);
         return false;
@@ -266,6 +287,10 @@ bool WtStoreBase::checkpoint() {
 
 bool WtStoreBase::tablePut(WT_SESSION* session, const std::string& table, std::string_view key,
                            std::string_view value) {
+    if (session == nullptr) {
+        spdlog::error("tablePut: null session");
+        return false;
+    }
     auto cursor = openCursor(session, table);
     if (!cursor)
         return false;
@@ -282,6 +307,10 @@ bool WtStoreBase::tablePut(WT_SESSION* session, const std::string& table, std::s
 }
 
 std::optional<std::string> WtStoreBase::tableGet(WT_SESSION* session, const std::string& table, std::string_view key) {
+    if (session == nullptr) {
+        spdlog::error("tableGet: null session");
+        return std::nullopt;
+    }
     auto cursor = openCursor(session, table);
     if (!cursor)
         return std::nullopt;
@@ -296,6 +325,10 @@ std::optional<std::string> WtStoreBase::tableGet(WT_SESSION* session, const std:
 }
 
 bool WtStoreBase::tableDel(WT_SESSION* session, const std::string& table, std::string_view key) {
+    if (session == nullptr) {
+        spdlog::error("tableDel: null session");
+        return false;
+    }
     auto cursor = openCursor(session, table);
     if (!cursor)
         return false;
@@ -312,6 +345,10 @@ bool WtStoreBase::tableDel(WT_SESSION* session, const std::string& table, std::s
 
 void WtStoreBase::tableScan(WT_SESSION* session, const std::string& table, std::string_view prefix,
                             const std::function<bool(std::string_view, std::string_view)>& callback) {
+    if (session == nullptr) {
+        spdlog::error("tableScan: null session");
+        return;
+    }
     auto cursor = openCursor(session, table);
     if (!cursor)
         return;
