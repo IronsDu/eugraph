@@ -1032,3 +1032,51 @@ CREATE CONSTRAINT ON (n:Person) ASSERT n.id IS UNIQUE;
 当前只支持 `CREATE UNIQUE INDEX idx_name FOR (n:Label) ON (n.prop)`；上面那种写法报
 `SyntaxError: UnexpectedSyntax`。若要让用户"直接照抄 indices.cypher"，需要补这个语法
 （或提供等价的迁移说明）。
+
+### 12.4 重复列名的边端点被解析成同一列 ⇒ 边全部写成自环（P0，静默数据损坏）
+
+**现象（LDBC 查询验证发现）**：用本分支 loader 装载 sf0.1 后跑官方 interactive 查询，
+凡**遍历 `KNOWS`** 的语句结果全错，且错得"很像真的"：
+
+| 查询 | eugraph | neo4j | 说明 |
+|---|---|---|---|
+| `MATCH (r:Person {id:933})-[:KNOWS]-(a:Person) RETURN a.id` | `933,933,933` | 3 个真实好友 | 展开出的"好友"就是**锚点自己** |
+| `... RETURN a.firstName` | `Mahinda`（锚点） | 邻居的名字 | 同上 |
+| `MATCH (r:Person {id:933})-[:KNOWS*1..2]-(f) RETURN count(f)` | 30 | 185 | 变长展开塌缩 |
+| `... WHERE NOT f = r RETURN count(f)` | **0** | 185 | 谓词恒假 |
+| `count(DISTINCT a.id)` | 1 | 3 | 邻居全等于锚点 |
+
+**根因（已确证到机制）**：官方 LDBC 的 KNOWS CSV 表头是 **`Person.id|Person.id|creationDate`**
+——两个端点列**同名**。schema 里写的是 `"src": "Person.id", "dst": "Person.id"`，而 loader
+**按列名**解析端点 ⇒ 两列都命中**第一个** `Person.id` ⇒ `src == dst` ⇒ **每条边都写成自环**。
+
+**证据（sf0.1 实测）**：
+
+| 检查 | 结果 |
+|---|---|
+| `MATCH ()-[r:KNOWS]->() RETURN count(r)` | 14,073（数量对得上 neo4j 的 14,073 ⇒ 计数类核对**发现不了**） |
+| `MATCH (a:Person)-[:KNOWS]->(b) WHERE a.id = b.id RETURN count(*)` | **14,073（全部自环）** |
+| `MATCH (a:Person)-[:KNOWS]->(b) WHERE a.id <> b.id RETURN count(*)` | **0** |
+| `LIKES` 自环 / 总数 | **0** / 109,440 ✓ —— 它的表头是 `Person.id\|Post.id`（**列名不同**） |
+
+**最小复现（3 点 2 边，无需 sf0.1）**：CSV `1|2|10` / `2|3|20`，表头
+`Person.id|Person.id|creationDate` ⇒ 装载后 `MATCH (a:Person)-[:KNOWS]->(b) RETURN a.id,b.id`
+得到 `(1,1)`、`(2,2)`（应为 `(1,2)`、`(2,3)`）。
+
+**为什么之前的验证没抓到**：所有"按类型计数"的核对（各标签/各关系条数）**完全一致**（见
+`scripts/verify_loader_vs_neo4j.py` 的判据），而 `Person {id}` 的一跳邻居数在两边**恰好都等于 3**
+（自环数 = 真实好友数）——**只有把邻居的身份投影出来看，才会暴露**。
+
+**影响**：所有遍历 `KNOWS` 的查询（LDBC interactive 的 complex-2/6/8/9/11/12、short-3 等）在
+loader 装载的数据上**结果错误**，而不是报错。装载器分支的目标（用官方查询验证装载结果）因此不成立。
+
+**修复方向**：端点必须按**角色/位置**解析，而不是按列名——官方 `neo4j-admin import` 用的是
+`:START_ID` / `:END_ID` 角色列名。可选实现：
+① schema 允许 `"src": "Person.id#0"`（第 0 个同名列）/ `"src_column": 0` 这类**列序号**写法；
+② 或在重复列名时**回退到"第一个 ID 列 = src、第二个 = dst"**，并在日志里明确说明采用了哪个；
+③ 装载前**校验 `src != dst` 的列解析结果**，若解析到同一列则**报错拒绝装载**（宁可失败，不要静默写错）。
+
+**同时应加的判据（防回归）**：装载后校验 `MATCH (a)-[r:T]->(b) WHERE a=b RETURN count(*)`，
+对**不允许自环**的关系类型必须为 0；并把"投影邻居身份"这类**身份级**核对纳入
+`scripts/verify_loader_vs_neo4j.py`（现有实现只比条数，抓不到本缺陷）。
+
