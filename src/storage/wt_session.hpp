@@ -22,6 +22,14 @@ public:
     WT_SESSION* get() const {
         return session_;
     }
+    /// Relinquish ownership WITHOUT closing: the caller takes over the session's lifetime.
+    /// Used for per-thread sessions, whose lifetime is bounded by the connection rather than
+    /// by the object that opened them.
+    WT_SESSION* release() {
+        WT_SESSION* released = session_;
+        session_ = nullptr;
+        return released;
+    }
     WT_SESSION* operator->() const {
         return session_;
     }

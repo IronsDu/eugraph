@@ -17,8 +17,7 @@ bool CatalogStore::open(const std::string& db_path) {
     if (!openConnection(db_path))
         return false;
 
-    auto* session = defaultSession_.get();
-    if (!ensureGlobalTable(session, TABLE_METADATA))
+    if (!ensureGlobalTable(TABLE_METADATA))
         return false;
 
     return true;
@@ -30,7 +29,7 @@ void CatalogStore::close() {
 
 std::optional<GraphEntry> CatalogStore::createGraph(const std::string& name) {
     std::string key = std::string(kGraphPrefix) + name;
-    auto existing = tableGet(defaultSession_.get(), TABLE_METADATA, key);
+    auto existing = tableGet(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, key);
     if (existing.has_value())
         return std::nullopt;
 
@@ -45,7 +44,7 @@ std::optional<GraphEntry> CatalogStore::createGraph(const std::string& name) {
     entry.created_at = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
 
     std::string value = encodeGraphEntry(entry);
-    if (!tablePut(defaultSession_.get(), TABLE_METADATA, key, value))
+    if (!tablePut(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, key, value))
         return std::nullopt;
 
     return entry;
@@ -53,12 +52,12 @@ std::optional<GraphEntry> CatalogStore::createGraph(const std::string& name) {
 
 bool CatalogStore::dropGraph(const std::string& name) {
     std::string key = std::string(kGraphPrefix) + name;
-    return tableDel(defaultSession_.get(), TABLE_METADATA, key);
+    return tableDel(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, key);
 }
 
 std::optional<GraphEntry> CatalogStore::getGraph(const std::string& name) {
     std::string key = std::string(kGraphPrefix) + name;
-    auto data = tableGet(defaultSession_.get(), TABLE_METADATA, key);
+    auto data = tableGet(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, key);
     if (!data.has_value())
         return std::nullopt;
     return decodeGraphEntry(*data);
@@ -66,12 +65,13 @@ std::optional<GraphEntry> CatalogStore::getGraph(const std::string& name) {
 
 std::vector<GraphEntry> CatalogStore::listGraphs() {
     std::vector<GraphEntry> entries;
-    tableScan(defaultSession_.get(), TABLE_METADATA, kGraphPrefix, [&](std::string_view key, std::string_view value) {
-        auto entry = decodeGraphEntry(value);
-        entry.name = std::string(key.substr(kGraphPrefix.size()));
-        entries.push_back(std::move(entry));
-        return true;
-    });
+    tableScan(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, kGraphPrefix,
+              [&](std::string_view key, std::string_view value) {
+                  auto entry = decodeGraphEntry(value);
+                  entry.name = std::string(key.substr(kGraphPrefix.size()));
+                  entries.push_back(std::move(entry));
+                  return true;
+              });
     return entries;
 }
 
@@ -97,7 +97,7 @@ GraphEntry CatalogStore::decodeGraphEntry(std::string_view data) {
 }
 
 uint32_t CatalogStore::allocateNextId() {
-    auto existing = tableGet(defaultSession_.get(), TABLE_METADATA, std::string(kNextIdKey));
+    auto existing = tableGet(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, std::string(kNextIdKey));
     uint32_t next_id = 0;
     if (existing.has_value() && existing->size() >= 4) {
         uint32_t val;
@@ -109,7 +109,7 @@ uint32_t CatalogStore::allocateNextId() {
     uint32_t new_next = next_id + 1;
     uint32_t new_next_be = __builtin_bswap32(new_next);
     std::string val_buf(reinterpret_cast<const char*>(&new_next_be), 4);
-    if (!tablePut(defaultSession_.get(), TABLE_METADATA, std::string(kNextIdKey), val_buf))
+    if (!tablePut(getSession(INVALID_GRAPH_TXN), TABLE_METADATA, std::string(kNextIdKey), val_buf))
         return UINT32_MAX;
 
     return new_id;

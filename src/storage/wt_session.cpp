@@ -5,6 +5,10 @@
 namespace eugraph {
 
 WtSession::WtSession(WT_CONNECTION* conn) {
+    if (conn == nullptr) {
+        return; // no connection (never opened or already closed): stay empty
+    }
+
     int ret = conn->open_session(conn, nullptr, nullptr, &session_);
     if (ret != 0) {
         spdlog::error("Failed to open session: error {}", ret);

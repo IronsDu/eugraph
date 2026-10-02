@@ -81,6 +81,10 @@
 
 关键设计：
 - **IoScheduler**：`dispatch()` 将同步调用调度到 IO 线程池，协程挂起直到完成
+- **session 归属**：`WT_SESSION` 由**每个 IO 执行上下文独占**（非事务访问用本线程 session，
+  热路径无锁）；详见下文「线程模型 → Session / Cursor 的归属与复用」
+- **扫描流钉线程**：分多批读取的 `AsyncGenerator` **不在批次之间任选 IO 线程**，而是每批
+  `co_viaIfAsync` 回到**创建其 cursor 的那个具体 `EventBase`**（`co_viaIfAsync(池)` 不足以保证）
 - **GraphSchema**：元数据服务维护的内存 schema，避免计算层直接访问元数据存储
 - 所有 async 方法返回 `folly::coro::Task` 或 `AsyncGenerator`
 
@@ -154,6 +158,189 @@ Bolt EventBase ──scheduleOn(computeExecutor())──▶ Compute 池 (CPUThre
 ```
 
 Bolt 连接把整个 session 消息处理放到 Compute 池，以便 socket EventBase 腾出来服务其他连接。
+
+**注意（分批读取的流）**：上图的"Storage IO 池"对**单次**存储调用成立；对**跨多批的扫描流**，
+第一批所在的 IO 线程会被记住，后续每批都回到**同一个线程**（而非重新任选）——原因与规则见下节 R3。
+
+### Session / Cursor 的归属与复用（存储层并发正确性的基础）
+
+**背景**：`WT_SESSION` / `WT_CURSOR` 非线程安全。官方文档（`third_party/wiredtiger/src/docs/threads.dox`）
+明确两点：**不能被并发访问**，但**可以被不同线程串行使用**；且"**WiredTiger 没有 thread-local 状态**"
+（hazard pointer 数组是 `WT_SESSION` 的成员，session/cursor 结构内无线程身份字段）。因此
+"必须由创建它的物理线程使用"是**误解**；官方也**从未**要求跨线程前必须 `reset()`。
+注意 **cursor 操作即访问其 session**（`cursor.h`：`CUR2S(c)` 从 cursor 取 session）——要交接 cursor
+就必须**连 session 一起交接并独占**。
+
+**曾经的缺陷（已修）**：`getSession(INVALID_GRAPH_TXN)` 返回共享 `defaultSession_`，点查路径加锁使用它，
+而 7 处批量/扫描路径（`sync_graph_data_store.cpp:433/466/664/1134/1207/1299/1372`）**完全没加锁**
+⇒ 同一 session 可被两线程并发使用（表现为 WT 断言 `lock_success == 0` → abort）；同时那把全局锁是
+全进程唯一、而每次属性点查都走它，且引擎/服务层从不调用 `beginTransaction()` ⇒ 必然全程争用
+（8 线程吞吐 0.65 M/s，**低于**单线程 1.64）。此外 4 条扫描流（`scanVerticesByLabel` /
+`scanAllVertices` / `scanEdgesByType` / `scanEdges`）在 `io_.dispatch`（线程 A）里创建 cursor
+（绑定 A 的 session），后续每批却由 `dispatchVoid` 分派到**任意线程**使用。
+
+**现行规则**：
+
+| # | 规则 |
+|---|---|
+| R1 | session **每个 IO 执行上下文独占**、长期持有（数量 = IO 线程数，不随并发增长）；非事务访问一律用本线程 session，热路径**无锁** |
+| R2 | cursor **归一条读流**；流内跨批次**不 reset**（保持已定位 ⇒ `next()` 为 O(1)，无需 `search_near` 重定位） |
+| R3 | **流钉在创建其 cursor 的具体 `EventBase`**：每批 `co_viaIfAsync(bound_evb, …)`。**不能**用 `co_viaIfAsync(io_pool)`——对线程池 via 不保证回到原线程 |
+| R4 | 流结束 / 取消 / 异常：归队 → `reset()` → 关闭（RAII 或 `co_scope_exit` 兜底） |
+| R5 | cursor 生命周期 **⊆ 单次调用**（批量路径一次 `open_cursor` 覆盖整批）；**不做跨调用池化**（见下方实测） |
+| R6 | 所有权：TLS 只放**非拥有句柄**，session 归 store 拥有并在 `conn_.close()` **之前**统一释放（线程退出可能晚于连接关闭） |
+| R7 | 归还语义：不再使用的 cursor **`close()`**（当前做法）；若要缓存复用则必须先 `reset()`（`reset()` 本职是释放 page pin，与线程无关） |
+
+**实测与取舍**：
+
+| 项 | 结果 | 决定 |
+|---|---|---|
+| 一次 cursor 覆盖整批 | 属性密集查询 **−27%**（cursor 开关原占单次点查 **51.6%**） | ✅ 采纳 |
+| executor 独占 session + 去全局锁 | 存储层 8 线程 **0.65 → 4.88 M/s（7.5×）**；引擎 4 线程 QPS 2.51 → 6.44 ops/s；每查询 CPU 1227 → 609 ms；消除上述 7 处竞争 | ✅ 采纳 |
+| 4 条扫描流钉 EventBase | 结果与基线一致；**TSan 闸门 PASS** | ✅ 采纳 |
+| 线程配比 | 瓶颈在 **compute**：4→8 使 8 线程 QPS 5.51 → 9.36（io 2 vs 8 无差异），天花板 ~9.5 ops/s | ✅ **`compute_threads ≥ 并发客户端数`** |
+| 存储内联（去 IO 跳转） | 8 线程 **−4.3%** | ❌ 否决 |
+| cursor 池（跨线程共享 / 跨调用复用：4 个变体） | 崩溃 ×2、**−8~15%** ×2 | ❌ 否决 |
+
+**五个负结果的统一根因**：**WT 自身已有 per-session cursor cache**——"同一 session 反复开同一 URI"
+本已被 WT 缓存，自建池是在本已便宜的操作上叠加哈希查找与容器操作。
+⇒ cursor 的正确形态是"**调用内复用（跨批次保持位置）**"，不是"跨调用池化"。
+（适用边界：若将来出现"**调用粒度极小且高频**"的形态，需重新测量——本阶段未覆盖。）
+
+**计算侧不绑定**：每批回到的 compute 线程可能是任意 worker（不涉及 session/cursor，无正确性问题）。
+代价是 IO 线程写出的 chunk 可能被另一个核读取（**跨核搬运 dirty line**；同节点 L3 仍命中）。
+不消除它的原因：唯一干净做法是"同核生产+消费"= 存储内联，实测 −4.3%；而钉核会恶化 P99。
+
+### 待定议题：**短命 cursor 场景**是否值得引入 cursor 池（需实测，尚未做）
+
+上面"不做跨调用池化"的结论有**明确的适用边界**，不要外推：
+
+| 场景 | cursor 寿命 | 每次 open 的开销是否被摊薄 | 池化价值 |
+|---|---|---|---|
+| **长时间扫描**（如整表/索引扫描，一把 cursor 拉整段） | 整条流 | **被摊薄**（一次 open vs 毫秒~秒级工作） | ❌ 无价值（POC-10 实测 −7~15%） |
+| **短命 cursor**（如 **expand 的邻接扫描：每个源点一把 cursor**） | 只覆盖一个点的少量边 | **不被摊薄** | ⚠️ **可能值得，待测** |
+
+**具体例证**（`src/storage/data/async_graph_data_store.hpp`，`scanEdgesBatch`）：
+
+```cpp
+while (offset < vids.size() && batch.size() < BATCH) {
+    VertexId vid = vids[offset++];
+    auto cursor = store_.createEdgeScanCursor(txn, vid, dir, filter);   // ← 每个源点开一把
+    while (cursor->valid() && batch.size() < BATCH) { batch.push_back(...); cursor->next(); }
+}                                                                        // ← 用完即关
+```
+
+即 **`open_cursor` / `close` 次数 = 源点个数**。当 expand 的邻接点很多时，这类"**大量短命 cursor**"
+的每查询开关次数可达数十万次，此时 **POC-1 的量级重新适用**：
+**cursor 开关占单次小查询的 51.6%**（0.744 → 0.360 µs）。
+
+**处置顺序（先穷尽"不需要池"的办法，再考虑池）**：
+
+1. **首选：把 N 把短命 cursor 合并成 1 把** —— 即"一次 `open_cursor` + 按源点 `set_key`/`search` 重定位"
+   （与 `loadVertexProperties` 路径在 POC-2 中已验证的 `getVertexPropertiesBatchProjected` 同构：
+   一把 cursor 覆盖整批）。**不需要池**，直接消除 N−1 次开关；
+2. 若某些访问形态无法这样合并（例如每个点的扫描范围不同、需要独立游标状态），
+   **再考虑"每执行上下文私有的 cursor 池"**——注意它必须满足既有约束：
+   **不跨线程**（R1/R3）、归还前**必 `reset()`**（R7）、**idle 上限 + 关闭**、取消/异常路径必须归还；
+   **绝不**回到"跨线程共享池"（POC-7 实测崩溃）；
+3. **判据（必须实测）**：选一个 expand 密集的真实查询（高连接度顶点、或 complex-9 的
+   `HAS_CREATOR` 展开），做**同二进制、多轮交错取 min** 的 A/B；
+   **开关次数下降但吞吐改善 < 5%** ⇒ 不值得引入池；否则先做第 1 步、再评估第 2 步。
+
+**同时要记住的独立问题**：那 9 个**索引扫描**生成器目前是"**一次性把整个匹配集物化**"
+（`std::vector<VertexId> all` + 回调跑完再分块 `co_yield`），代价是
+**内存 O(匹配集)、无流式性（首批要等全扫完）、无法提前取消、且整段扫描独占一个 IO 线程**。
+修法是给同步层加**可恢复的索引游标**（与 `createVertexScanCursor` 同构）；一旦改成跨批持有 cursor，
+**它们也必须同时加 R3 的 EventBase 钉扎**——与本节的池化议题是两件独立但会合流的事。
+
+### 不变量 I10：session 永不共享（已实施）
+
+**I10（现行，强不变量）**：
+
+> **每一把 `WT_SESSION` 从创建到销毁只被一个线程使用。**
+> `tablePut/tableGet/tableDel/tableScan` **不加任何锁**；并发控制由**业务级锁**承担
+> （`schemaMutex_` 只保护 DDL/生命周期序列）。
+
+**session 的三个来源**（全部满足 I10）：
+
+| 来源 | 用途 | 生命周期 |
+|---|---|---|
+| `getSession(INVALID_GRAPH_TXN)` → `threadSession()` | **全部 KV 数据路径**：点查/属性、边与索引读写、元数据（label/计数）、图目录（catalog） | 每线程一把，长期；`closeThreadSessions()` 在 `conn_.close()` 之前统一关闭 |
+| `getSession(txn)` | 事务内访问 | 随事务 |
+| `openAdminSession()` | **DDL/生命周期**：`ensureGlobalTable`、`dropIndex`、`dropLabel`、`dropEdgeLabel`、`checkpoint`、`closeConnection` | 单次调用内创建并关闭（RAII） |
+
+**业务级锁**：`schemaMutex_`（`std::recursive_mutex`）只被 DDL/生命周期序列持有
+（`ensureGlobalTable` / `dropIndex` / `dropLabel` / `dropEdgeLabel` / `checkpoint` / `closeConnection`），
+它保证的是 **create/drop 序列不交错**（否则"判定已存在"会被并发 drop 作废），**而非 session 内存**。
+热路径（每次存储调用）**完全不涉及任何锁**。
+
+**历史（供追溯）**：本仓库曾用"共享 `defaultSession_` + 全局锁"，随后改为"每线程 session + 条件加锁
+（`isSharedSession` 判定只有共享 session 才取锁）"。条件加锁是一次**折中**：它同时带来
+① 每次调用一次原子读+分支、② **契约由显式变隐式**（"要不要加锁"由运行期数据而非 API 表达，
+曾因此产生一次 CI 回归：`defaultSession_` 仍被 21 处显式传入已解锁的原语，导致
+`WT_SESSION.open_cursor: lock_success == 0` → `__wt_abort`）、③ 一个函数承担两种所有权语义。
+**现已彻底移除**：不存在共享 session，因此不存在条件判断，也不需要审计"谁会把共享 session 传进来"。
+
+**DDL 与长流的交互（仍需注意）**：`WT_SESSION::drop` 要求目标表上**没有打开的 cursor**。
+跨批次持有 cursor 的长流（`scanVerticesByLabel` 等 4 条）若正在扫该表，drop 可能 `EBUSY`
+⇒ DDL 前需静默表（quiesce）或容忍 `EBUSY` 重试。此风险与 session 模型无关（共享 session
+从来不保护 cursor）。
+
+**回归记录**：
+
+| 项 | 结果 |
+|---|---|
+| 条件加锁版本 | 修复了 main CI 的 `lock_success` 崩溃；TCK 1601 场景 0 断言；8 线程 4.2–4.5 M/s |
+| 本重构后 | TCK `features-eugraph` **31/31 场景、144/144 步骤通过**；并发 DDL × 查询压力（9,618 次 DDL + 165,169 次查询）**0 断言、0 错误**；完整 feature 集与 TSan 闸门见下 |
+
+**测量方法提醒**：本机单次测量可抖动 **±30%**（无锁变体自身跑出过 3.08 M/s，而同二进制其它轮为
+4.2–4.5 M/s）。**性能结论必须同二进制、交错、多轮取最优**，否则会把环境抖动误判为代码回归。
+
+### 共享 session 的移除（已实施记录）
+
+原"目标设计（技术债）"已落地，过程与要点留档：
+
+**改动**：
+
+| 项 | 内容 |
+|---|---|
+| 删除 | `defaultSession_`、`sharedSessionSnapshot_`、`setDefaultSession()`、`isSharedSession()`、四原语中的条件加锁 |
+| 重命名 | `sessionMutex_` → `schemaMutex_`（语义由"保护 session 内存"变为"保护 DDL/生命周期序列"） |
+| 新增 | `openAdminSession()`：单次管理/DDL 操作用一把临时 session（RAII 关闭） |
+| 数据/元数据/目录路径 | 一律改用 `getSession(INVALID_GRAPH_TXN)`（**每线程**，不每次开——索引条目写入是每条被索引的点/边一次的高频路径） |
+| **简化** | `dropLabel`/`dropEdgeLabel` 里"关闭默认 session → drop → 重开默认 session"的舞蹈**整体删除**：它从来没能静默任何东西（其它线程各有自己的 session），而它正是共享 session 的来源 |
+
+**实施中发现并修复的缺陷（记录以免重犯）**：`closeConnection()` 原先靠 `if (defaultSession_)` 隐式
+获得幂等性；移除该成员后，**第二次 close（析构会再调一次）会在已关闭的连接上开 session** ⇒ SIGSEGV
+（栈：`WtSession::WtSession(WT_CONNECTION*)` ← `closeConnection()` ← `~SyncGraphMetaStore()` ←
+`~GraphInstance()` ← `dropGraph`）。修复：`closeConnection()`/`checkpoint()`/`ensureGlobalTable()`
+加 `if (!conn_) return ...;` 显式幂等守卫，并让 `WtSession(WT_CONNECTION*)` 对 `nullptr` 安全。
+**教训**：移除成员时，要检查该成员是否在**隐式**承担生命周期/幂等语义。
+
+### NUMA 亲和（可选，默认关闭）
+
+`EUGRAPH_NUMA_BIND=1` 启用。`src/common/thread/{numa_topology,numa_thread_factory}.hpp`：
+按 `/sys/devices/system/node/nodeN/cpulist` 发现拓扑（**不依赖 libnuma**），创建 IO 池线程时
+用 `pthread_setaffinity_np` **按节点绑定（不绑核**——节点内多核保留负载均衡与 P99，同时保住
+节点内共享 L3）。目标是让"存储读"与"消费它的计算"留在同一节点，避免跨 socket。
+**单节点机器上为 no-op**；CPU 池按节点分组与"派发/回算按节点选池"尚待接入。
+
+### 存储层并发验证
+
+| 手段 | 结果 |
+|---|---|
+| 单元测试 | `tests/common/numa_topology_test.cpp`（ctest，7 组断言：cpulist 解析与节点归属，脱离 WT/硬件） |
+| **TSan 闸门** `scripts/check_tsan.sh` | 8 线程 × 15s 混合查询 ⇒ **未抑制报告 0、存储/session/cursor 相关行 0、服务端存活 ⇒ PASS**；抑制清单 `tests/tsan/tsan.supp` 只覆盖 folly/thrift 外部噪声（5 类，均有 addr2line 佐证），**不抑制 eugraph 存储符号** |
+| 结果一致性 | `count(Message)=286744`、`count(所有点)=330126`、`count(KNOWS)=14073`、两跳好友=451 |
+| 性能 | complex-9 4/8 线程 6.10/8.41 ops/s；全表 3 属性 2.91/4.83 ops/s |
+
+**环境注意**：本机 `/tmp` 是 7.5G **tmpfs（内存盘）**⇒ 测试数据目录必须放磁盘；直连 WT 的工具前须
+**优雅关闭**服务端（强杀后库需 recovery）；TCK 验证必须用 **CI 同款 feature 集**
+（`third_party/openCypher/tck/features` + `tests/tck/features-eugraph`）。
+
+**遗留**：多节点机器验证 NUMA 收益；把 TSan 闸门挂进 CI；优化器 `Memo::copyIn` 深链爆栈、
+WT 检查点 `__wt_ckptlist_saved_free` SEGV、谓词多属性 +235 ms/属性、WT 内部并发成本
+（见 `docs/query/known-defects-todo.md` §12/§12.2/§9）。
 
 ## DDL 协调流程
 

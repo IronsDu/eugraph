@@ -492,6 +492,11 @@ if(EUGRAPH_BUILD_TESTS)
 
     include(GoogleTest)
     gtest_add_tests(TARGET eugraph_tests)
+    # 单元测试：NUMA 拓扑解析与节点归属（纯函数，无需 libnuma / NUMA 硬件）
+    add_executable(numa_topology_tests tests/common/numa_topology_test.cpp)
+    target_include_directories(numa_topology_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME numa_topology_tests COMMAND numa_topology_tests)
+
 
     # WiredTiger raw API tests
     add_executable(wt_tests

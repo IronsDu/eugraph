@@ -10,6 +10,9 @@
 
 #include <folly/coro/AsyncGenerator.h>
 #include <folly/coro/Task.h>
+#include <folly/coro/ViaIfAsync.h>
+#include <folly/io/async/EventBase.h>
+#include <folly/io/async/EventBaseManager.h>
 
 #include <algorithm>
 #include <memory>
@@ -142,27 +145,10 @@ public:
         auto result = co_await io_.dispatch([this, txn, label_id, ids = std::move(ids), proj = std::move(proj)]() {
             if (proj.empty())
                 return store_.getVertexPropertiesBatch(txn, label_id, ids);
-            std::vector<std::optional<Properties>> out;
-            out.reserve(ids.size());
-            for (VertexId vid : ids) {
-                {
-                    Properties props;
-                    props.resize(*std::max_element(proj.begin(), proj.end()) + 1);
-                    bool found = false;
-                    for (uint16_t pid : proj) {
-                        auto pv = store_.getVertexProperty(txn, vid, label_id, pid);
-                        if (pv) {
-                            props[pid] = std::move(*pv);
-                            found = true;
-                        }
-                    }
-                    if (found)
-                        out.emplace_back(std::move(props));
-                    else
-                        out.emplace_back(std::nullopt);
-                }
-            }
-            return out;
+            // One cursor covers the whole batch instead of one open/close per (row, property):
+            // cursor open/close measured at 51.6% of a point lookup
+            // (docs/storage/session-cursor-ownership.md, POC-1).
+            return store_.getVertexPropertiesBatchProjected(txn, label_id, ids, proj);
         });
         co_return std::move(result);
     }
@@ -219,8 +205,18 @@ public:
     folly::coro::AsyncGenerator<std::vector<VertexId>> scanVerticesByLabel(LabelId label_id) override {
         constexpr size_t BATCH = 1024;
         auto txn = txn_;
-        auto cursor =
-            co_await io_.dispatch([this, txn, label_id]() { return store_.createVertexScanCursor(txn, label_id); });
+        // The scan cursor belongs to the session of the IO thread that creates it. Handing the
+        // cursor to another IO thread would touch that session concurrently with its owner's
+        // work -- the shared-session race that WiredTiger aborts on
+        // (`WT_SESSION.open_cursor: lock_success == 0`). Pin the stream to the EXACT EventBase
+        // that created the cursor and run every batch there: one thread => no concurrent use,
+        // and the cursor keeps its position across batches (O(1) next()).
+        // `co_viaIfAsync(io_pool)` would NOT be enough: the pool balances over its threads.
+        folly::EventBase* bound_evb = nullptr;
+        auto cursor = co_await io_.dispatch([this, txn, label_id, &bound_evb]() {
+            bound_evb = folly::EventBaseManager::get()->getEventBase();
+            return store_.createVertexScanCursor(txn, label_id);
+        });
         if (!cursor)
             co_return;
 
@@ -229,12 +225,15 @@ public:
             // out, so one allocation replaces the log2 growths push_back would do.
             std::vector<VertexId> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([&]() {
-                for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
-                    batch.push_back(cursor->vertexId());
-                    cursor->next();
-                }
-            });
+            // Run the batch on the cursor's own EventBase (see the comment above). Wrapped in a
+            // task because folly's co_viaIfAsync takes (executor, awaitable).
+            co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+                                                    for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
+                                                        batch.push_back(cursor->vertexId());
+                                                        cursor->next();
+                                                    }
+                                                    co_return;
+                                                }));
             if (batch.empty()) {
                 co_return;
             }
@@ -246,19 +245,25 @@ public:
         // 与 scanVerticesByLabel 同样的游标式流：vid 升序、每点一次，内存只有一个批。
         constexpr size_t BATCH = 1024;
         auto txn = txn_;
-        auto cursor = co_await io_.dispatch([this, txn]() { return store_.createAllVertexScanCursor(txn); });
+        // 同 scanVerticesByLabel：cursor 绑定创建它的那个 IO 线程的 session，必须钉在该线程上使用。
+        folly::EventBase* bound_evb = nullptr;
+        auto cursor = co_await io_.dispatch([this, txn, &bound_evb]() {
+            bound_evb = folly::EventBaseManager::get()->getEventBase();
+            return store_.createAllVertexScanCursor(txn);
+        });
         if (!cursor)
             co_return;
 
         while (true) {
             std::vector<VertexId> batch;
             batch.reserve(BATCH); // 同上：填充上限已知
-            co_await io_.dispatchVoid([&]() {
-                for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
-                    batch.push_back(cursor->vertexId());
-                    cursor->next();
-                }
-            });
+            co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+                                                    for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
+                                                        batch.push_back(cursor->vertexId());
+                                                        cursor->next();
+                                                    }
+                                                    co_return;
+                                                }));
             if (batch.empty())
                 co_return;
             co_yield std::move(batch);
@@ -271,7 +276,10 @@ public:
     scanEdges(VertexId vid, Direction direction, std::optional<EdgeLabelId> label_filter) override {
         constexpr size_t BATCH = 65536;
         auto txn = txn_;
-        auto cursor = co_await io_.dispatch([this, txn, vid, direction, label_filter]() {
+        // 同 scanVerticesByLabel：cursor 绑定创建它的那个 IO 线程的 session，必须钉在该线程上使用。
+        folly::EventBase* bound_evb = nullptr;
+        auto cursor = co_await io_.dispatch([this, txn, vid, direction, label_filter, &bound_evb]() {
+            bound_evb = folly::EventBaseManager::get()->getEventBase();
             return store_.createEdgeScanCursor(txn, vid, direction, label_filter);
         });
         if (!cursor)
@@ -280,12 +288,13 @@ public:
         while (true) {
             std::vector<ISyncGraphDataStore::EdgeIndexEntry> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([&]() {
-                for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
-                    batch.push_back(cursor->entry());
-                    cursor->next();
-                }
-            });
+            co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+                                                    for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
+                                                        batch.push_back(cursor->entry());
+                                                        cursor->next();
+                                                    }
+                                                    co_return;
+                                                }));
             if (batch.empty()) {
                 co_return;
             }
@@ -332,7 +341,10 @@ public:
                     std::optional<VertexId> dst_filter) override {
         constexpr size_t BATCH = 1024;
         auto txn = txn_;
-        auto cursor = co_await io_.dispatch([this, txn, label_id, src_filter, dst_filter]() {
+        // 同 scanVerticesByLabel：cursor 绑定创建它的那个 IO 线程的 session，必须钉在该线程上使用。
+        folly::EventBase* bound_evb = nullptr;
+        auto cursor = co_await io_.dispatch([this, txn, label_id, src_filter, dst_filter, &bound_evb]() {
+            bound_evb = folly::EventBaseManager::get()->getEventBase();
             return store_.createEdgeTypeScanCursor(txn, label_id, src_filter, dst_filter);
         });
         if (!cursor)
@@ -341,12 +353,13 @@ public:
         while (true) {
             std::vector<ISyncGraphDataStore::EdgeTypeIndexEntry> batch;
             batch.reserve(BATCH);
-            co_await io_.dispatchVoid([&]() {
-                for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
-                    batch.push_back(cursor->entry());
-                    cursor->next();
-                }
-            });
+            co_await folly::coro::co_viaIfAsync(bound_evb, folly::coro::co_invoke([&]() -> folly::coro::Task<void> {
+                                                    for (size_t i = 0; i < BATCH && cursor->valid(); ++i) {
+                                                        batch.push_back(cursor->entry());
+                                                        cursor->next();
+                                                    }
+                                                    co_return;
+                                                }));
             if (batch.empty()) {
                 co_return;
             }
