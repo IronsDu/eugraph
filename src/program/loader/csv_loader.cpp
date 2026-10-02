@@ -1425,6 +1425,17 @@ void loadOneEdgeFile(shell::EuGraphRpcClient& client, const FileSpec& fs, const 
                                  "') -- the two endpoints must be different columns; duplicated column names "
                                  "need an explicit {\"index\": N}");
     }
+    // 复合端点同样不得共用列：任一列同时出现在 src 与 dst 中只可能来自 schema 写错。
+    for (const auto& a : src_cols) {
+        for (const auto& b : dst_cols) {
+            if (a.column != b.column)
+                continue;
+            const auto col = static_cast<size_t>(a.column);
+            throw std::runtime_error(where + ": column #" + std::to_string(col) + " ('" +
+                                     (col < csv.header.size() ? csv.header[col] : std::string("?")) +
+                                     "') is shared by both endpoints (src and dst) -- they must not share a column");
+        }
+    }
     // 端点解析结果打一行 INFO：用 {"index": N} 时若指错列，装载开始就能看见。
     auto describe_endpoint = [&](const std::vector<PropertySpec>& cols) {
         std::string text;

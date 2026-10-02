@@ -154,7 +154,7 @@ TEST_F(LoaderE2ETest, LoadsVerticesAndResolvesEdgesByPrimaryKey) {
     writeSchema(R"({
       "labels": { "person": [ { "file": "person.csv", "pk": "id",
                                 "columns": { "id": "INT64", "name": "STRING" } } ] },
-      "relationships": { "knows": [ { "file": "knows.csv", "src": "Person.id", "dst": "Person.id",
+      "relationships": { "knows": [ { "file": "knows.csv", "src": {"index": 0}, "dst": {"index": 1},
                                       "src_label": "person", "dst_label": "person",
                                       "columns": { "since": "INT64" } } ] }
     })");
@@ -169,6 +169,12 @@ TEST_F(LoaderE2ETest, LoadsVerticesAndResolvesEdgesByPrimaryKey) {
     EXPECT_EQ(*count, "2");
 
     // 主键唯一索引让点查可走索引（结果正确即可验证索引里确实有条目）
+    // 端点列同名（官方 LDBC 的写法），必须以 {"index": N} 区分；写成裸列名会被拒绝（歧义）。
+    // 这条断言守住"两端点解析到同一列 ⇒ 全部写成自环"的回归。
+    auto self_loops = querySingle("MATCH (a:person)-[:knows]->(b:person) WHERE a.id = b.id RETURN count(*)");
+    ASSERT_TRUE(self_loops.has_value());
+    EXPECT_EQ(*self_loops, "0");
+
     auto by_id = querySingle("MATCH (p:person {id: 2}) RETURN p.name");
     ASSERT_TRUE(by_id.has_value());
     EXPECT_NE(by_id->find("bob"), std::string::npos) << *by_id;
@@ -324,10 +330,10 @@ TEST_F(LoaderE2ETest, RejectsEndpointLabelWithoutPrimaryKey) {
 }
 
 TEST_F(LoaderE2ETest, RejectsUndeclaredEndpointLabel) {
-    writeFile("a.csv", "id\n1\n");
+    writeFile("a.csv", "id|ref\n1|1\n");
     writeSchema(R"({
       "labels": { "thing": [ { "file": "a.csv", "pk": "id", "columns": { "id": "INT64" } } ] },
-      "relationships": { "rel": [ { "file": "a.csv", "src": "id", "dst": "id",
+      "relationships": { "rel": [ { "file": "a.csv", "src": "id", "dst": "ref",
                                     "src_label": "thing", "dst_label": "nonexistent" } ] }
     })");
     try {
@@ -739,6 +745,92 @@ TEST_F(LoaderE2ETest, HandlesCommaDelimiterFromSchema) {
 }
 
 } // namespace
+
+// ==================== 端点列引用（两种写法）与三条校验 ====================
+
+// 列名重复时必须显式给列号：裸列名一律拒绝（"别猜"）。
+TEST_F(LoaderE2ETest, RejectsAmbiguousEndpointColumnName) {
+    writeFile("person.csv", "id|name\n1|alice\n2|bob\n");
+    writeFile("knows.csv", "Person.id|Person.id|since\n1|2|2020\n");
+    writeSchema(R"({
+      "labels": { "person": [ { "file": "person.csv", "pk": "id",
+                                "columns": { "id": "INT64", "name": "STRING" } } ] },
+      "relationships": { "knows": [ { "file": "knows.csv", "src": "Person.id", "dst": "Person.id",
+                                      "src_label": "person", "dst_label": "person",
+                                      "columns": { "since": "INT64" } } ] }
+    })");
+    try {
+        runLoad();
+        FAIL() << "expected an ambiguous endpoint column name to be rejected";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("ambiguous"), std::string::npos) << e.what();
+        EXPECT_NE(std::string(e.what()).find("index"), std::string::npos) << e.what();
+    }
+}
+
+// {"index": N} 选中第 N 列：3 点 2 边装成 (1,2)、(2,3)，自环为 0。
+TEST_F(LoaderE2ETest, ResolvesEndpointByColumnIndex) {
+    writeFile("person.csv", "id|name\n1|a\n2|b\n3|c\n");
+    writeFile("knows.csv", "Person.id|Person.id|since\n1|2|2020\n2|3|2021\n");
+    writeSchema(R"({
+      "labels": { "person": [ { "file": "person.csv", "pk": "id",
+                                "columns": { "id": "INT64", "name": "STRING" } } ] },
+      "relationships": { "knows": [ { "file": "knows.csv", "src": {"index": 0}, "dst": {"index": 1},
+                                      "src_label": "person", "dst_label": "person",
+                                      "columns": { "since": "INT64" } } ] }
+    })");
+    auto summary = runLoad();
+    EXPECT_NE(summary.find("edges=2"), std::string::npos) << summary;
+    auto self_loops = querySingle("MATCH (a:person)-[:knows]->(b:person) WHERE a.id = b.id RETURN count(*)");
+    ASSERT_TRUE(self_loops.has_value());
+    EXPECT_EQ(*self_loops, "0");
+    auto from_one = querySingle("MATCH (a:person {id: 1})-[:knows]->(b:person) RETURN b.id");
+    ASSERT_TRUE(from_one.has_value());
+    EXPECT_EQ(*from_one, "2");
+}
+
+// src 与 dst 解析到同一列必须拒绝：自环只能来自数据，不能来自 schema 写错。
+TEST_F(LoaderE2ETest, RejectsSrcAndDstResolvingToSameColumn) {
+    writeFile("person.csv", "id|name\n1|alice\n2|bob\n");
+    writeFile("knows.csv", "Person.id|Person.id|since\n1|2|2020\n");
+    writeSchema(R"({
+      "labels": { "person": [ { "file": "person.csv", "pk": "id",
+                                "columns": { "id": "INT64", "name": "STRING" } } ] },
+      "relationships": { "knows": [ { "file": "knows.csv", "src": {"index": 0}, "dst": {"index": 0},
+                                      "src_label": "person", "dst_label": "person",
+                                      "columns": { "since": "INT64" } } ] }
+    })");
+    try {
+        runLoad();
+        FAIL() << "expected src and dst resolving to the same column to be rejected";
+    } catch (const std::exception& e) {
+        // 两种拒法都算通过（都是 fail-closed，都不会静默写自环）：
+        //   - 端点校验先跑：both resolve to column #0 ...；
+        //   - 严格列校验先跑：该列第 2 次出现无人声明 ⇒ column(s) not declared。
+        const std::string msg = e.what();
+        EXPECT_TRUE(msg.find("both resolve to column") != std::string::npos ||
+                    msg.find("not declared") != std::string::npos)
+            << msg;
+    }
+}
+
+// 复合端点不得共用列。
+TEST_F(LoaderE2ETest, RejectsCollidingCompositeEndpoints) {
+    writeFile("thing.csv", "a|b|c\n1|2|3\n");
+    writeFile("edge.csv", "a|b|c\n1|2|3\n");
+    writeSchema(R"({
+      "labels": { "thing": [ { "file": "thing.csv", "pk": "a",
+                               "columns": { "a": "INT64", "b": "INT64", "c": "INT64" } } ] },
+      "relationships": { "rel": [ { "file": "edge.csv", "src": ["a","b"], "dst": ["b","c"],
+                                    "src_label": "thing", "dst_label": "thing" } ] }
+    })");
+    try {
+        runLoad();
+        FAIL() << "expected colliding composite endpoints to be rejected";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string(e.what()).find("endpoint"), std::string::npos) << e.what();
+    }
+}
 
 int main(int argc, char** argv) {
     testing::InitGoogleTest(&argc, argv);

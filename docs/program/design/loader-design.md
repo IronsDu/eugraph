@@ -416,6 +416,11 @@ service EuGraphService {
 
 被这三条覆盖的官方条目：`KNOWS`、`REPLY_OF`、`IS_PART_OF`、`IS_SUBCLASS_OF`（两端点同名列，用 `{"index": 0}` / `{"index": 1}`）。
 
+这三条校验由 `tests/test_loader_integration.cpp` 的
+`RejectsAmbiguousEndpointColumnName` / `RejectsSrcAndDstResolvingToSameColumn` /
+`RejectsCollidingCompositeEndpoints` / `ResolvesEndpointByColumnIndex` 守住
+（后者端到端断言 `(1,2)`、`(2,3)` 且自环为 0）。
+
 **为什么必须支持重命名（不只是好看）**：本仓语料就撞上了语义冲突 —— `place_0_0.csv` 的 `type` 列是**行级标签来源**（值 `country/city/continent`），`organisation_0_0.csv` 的同名列却是**公司/大学的 kind**（值 `company/university`）。若列名即属性名且不可改：
 
 - `place.type` 会存一份与标签值完全重复的属性（`city` 顶点带 `type = "city"`），既是冗余也容易误解；
