@@ -15,7 +15,8 @@
     "ignore 列出属于本数据集但【不参与初始装载】的文件：LDBC 的 updateStream_*.csv 属于更新流，另行增量导入。",
     "声明只来自本文件：主键/类型/分隔符/时间格式都写在这里，命令行不再提供覆盖，因此同一份 schema 必然装出同一张图。",
     "本语料各文件都是 \"|\" 分隔、时间列都是 epoch 毫秒，故用顶层默认值（delimiter / date_format）；如需按文件区分，可在文件条目里写 \"delimiter\" / \"date_format\" 覆盖。",
-    "label 是**数组**（一个文件可声明多个标签来源，结果取并集去重）：[{\"derived\":[\"Message\"]}, {\"header\":\"type\",\"case\":\"capitalize\"}]。三种来源：derived（静态，不读 CSV）、header（按列名）、index（按列号，同名表头时必须用）。"
+    "label 是**数组**（一个文件可声明多个标签来源，结果取并集去重）：[{\"derived\":[\"Message\"]}, {\"header\":\"type\",\"case\":\"capitalize\"}]。三种来源：derived（静态，不读 CSV）、header（按列名）、index（按列号，同名表头时必须用）。",
+    "本 schema 面向 CsvBasic / CsvComposite 两种变体：CsvBasic 的 person CSV 不含 language/email（它们在独立的多值文件里，已在 ignore 中忽略），故不声明这两列；CsvComposite 变体若需要可自行加回。"
   ],
   "date_format": "epoch_ms",
   "labels": {
@@ -31,9 +32,7 @@
           "birthday": "INT64",
           "creationDate": "INT64",
           "locationIP": "STRING",
-          "browserUsed": "STRING",
-          "language": "STRING",
-          "email": "STRING[]"
+          "browserUsed": "STRING"
         }
       }
     ],
@@ -380,6 +379,8 @@
   },
   "ignore": [
     "updateStream_0_0_forum.csv",
-    "updateStream_0_0_person.csv"
+    "updateStream_0_0_person.csv",
+    "dynamic/person_email_emailaddress_0_0.csv",
+    "dynamic/person_speaks_language_0_0.csv"
   ]
 }
