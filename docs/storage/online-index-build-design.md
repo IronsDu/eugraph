@@ -846,3 +846,26 @@ state == PUBLIC  ⟹  基础扫描已完成 ∧ delta 已逻辑清空 ∧ 唯一
 的分批续扫——用**游标位置**（key 续扫或 `set_key` 定位）而非"重新扫描 + 满批即停"；
 并以"结果 > 2×BATCH 的查询"为回归判据（先确认其当前失败）。
 
+### 17.3 第二个缺陷的修复范式（已查明，待实施）
+
+**对比证据（同一文件内两种写法）**：
+
+| | 顶点扫描（**正确**） | 边索引扫描（**缺陷**） |
+|---|---|---|
+| 游标 | `store_.createVertexScanCursor(txn, label_id)` **持久游标**，钉在创建它的 EventBase 线程上 | 每批调用 `store_.scanIndexEqualityWithValue/scanIndexRangeWithValue(...)`，**无位置** |
+| 续扫 | `cursor->next()` 保留位置（O(1)） | 每批**从头重扫**，满批即停 ⇒ 只交付 1 批 |
+| 代码注释 | 已明确写出"pin 到同一 EventBase、跨批保持游标位置"的**理由**（共享 session 竞态） | — |
+
+**结论**：边索引扫描的分批逻辑**从不推进**；`batch.size() == BATCH` 时它既未续扫也未正确终止，
+最终只返回第一批（实测 1024 = `BATCH`），>1024 行的查询**静默少结果**。
+
+**修复范式（照抄顶点扫描）**：
+1. 新增**索引扫描游标抽象**（`IIndexScanCursor`：`valid()/entityId()/adjacency()/next()`）与工厂
+   （`createIndexEqualityCursor(txn, table, value)` / `createIndexRangeCursor(txn, table, start, end)`），
+   实现放在 `sync_graph_data_store` + KV 层（等值用前缀 `set_key` + `search_near` 定位，范围用左右边界）；
+2. 把 `scanEdgesByIndex`/`...Range`/`...Composite`（以及**顶点索引的 `scanVerticesByIndex*` 同类实现**）
+   改为"持久游标 + 每批填至 BATCH 或游标耗尽"的循环，并把游标**钉在创建它的 EventBase**上
+   （沿用 `scanVerticesByLabel` 的 `bound_evb` + `co_viaIfAsync` 写法，避免共享 session 竞态）；
+3. **回归判据（必须先确认当前失败）**：同一查询在"有索引 / 无索引"下结果**逐行一致**，且**结果行数 > 2×BATCH**
+   （例如 LIKES 109,440 行）；再加等值与范围的边界用例（恰好 1024、1025、2048 行）。
+
