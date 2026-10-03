@@ -230,20 +230,27 @@ public:
                                 const std::optional<std::vector<PropertyValue>>& end,
                                 const std::function<bool(uint64_t)>& callback) = 0;
 
-    // Index scan that also returns the stored value (for edge indexes with adjacency info)
+    // 带存储值的索引扫描（边索引用它取邻接信息）。
+    // **分批续扫**：`start_after` 非空 ⇒ 从该键**之后**继续；`last_key_out` 非空 ⇒ 回填本次最后交给回调的键。
+    // 二者都可选（默认不启用），因此既有调用点无需改动。
+    // 背景：先前每批都从头重扫且满批即停 ⇒ 只交付第一批（BATCH=1024），>1 批的结果被静默截断。
     virtual void scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
-                                            const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                            const std::function<bool(uint64_t, std::string_view)>& callback,
+                                            std::string_view start_after = {}, std::string* last_key_out = nullptr) = 0;
     virtual void scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table,
                                             const std::vector<PropertyValue>& values,
-                                            const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                            const std::function<bool(uint64_t, std::string_view)>& callback,
+                                            std::string_view start_after = {}, std::string* last_key_out = nullptr) = 0;
     virtual void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
                                          const std::optional<PropertyValue>& start,
                                          const std::optional<PropertyValue>& end,
-                                         const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                         const std::function<bool(uint64_t, std::string_view)>& callback,
+                                         std::string_view start_after = {}, std::string* last_key_out = nullptr) = 0;
     virtual void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
                                          const std::optional<std::vector<PropertyValue>>& start,
                                          const std::optional<std::vector<PropertyValue>>& end,
-                                         const std::function<bool(uint64_t, std::string_view)>& callback) = 0;
+                                         const std::function<bool(uint64_t, std::string_view)>& callback,
+                                         std::string_view start_after = {}, std::string* last_key_out = nullptr) = 0;
 
     // ==================== Index Cleanup ====================
 

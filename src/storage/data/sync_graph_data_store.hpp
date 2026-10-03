@@ -148,17 +148,21 @@ public:
                         const std::optional<std::vector<PropertyValue>>& end,
                         const std::function<bool(uint64_t)>& callback) override;
     void scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table, const PropertyValue& value,
-                                    const std::function<bool(uint64_t, std::string_view)>& callback) override;
+                                    const std::function<bool(uint64_t, std::string_view)>& callback,
+                                    std::string_view start_after = {}, std::string* last_key_out = nullptr) override;
     void scanIndexEqualityWithValue(GraphTxnHandle txn, const std::string& table,
                                     const std::vector<PropertyValue>& values,
-                                    const std::function<bool(uint64_t, std::string_view)>& callback) override;
+                                    const std::function<bool(uint64_t, std::string_view)>& callback,
+                                    std::string_view start_after = {}, std::string* last_key_out = nullptr) override;
     void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
                                  const std::optional<PropertyValue>& start, const std::optional<PropertyValue>& end,
-                                 const std::function<bool(uint64_t, std::string_view)>& callback) override;
+                                 const std::function<bool(uint64_t, std::string_view)>& callback,
+                                 std::string_view start_after = {}, std::string* last_key_out = nullptr) override;
     void scanIndexRangeWithValue(GraphTxnHandle txn, const std::string& table,
                                  const std::optional<std::vector<PropertyValue>>& start,
                                  const std::optional<std::vector<PropertyValue>>& end,
-                                 const std::function<bool(uint64_t, std::string_view)>& callback) override;
+                                 const std::function<bool(uint64_t, std::string_view)>& callback,
+                                 std::string_view start_after = {}, std::string* last_key_out = nullptr) override;
 
     // Index Cleanup
     void dropAllIndexEntries(const std::string& table) override;
