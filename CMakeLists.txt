@@ -498,6 +498,15 @@ if(EUGRAPH_BUILD_TESTS)
     add_executable(index_runtime_state_tests tests/test_index_runtime_state.cpp)
     # 索引构建调度器（FIFO + 可配并发度 + 取消；注入假运行器 ⇒ 确定性测试）
     add_executable(index_build_scheduler_tests tests/test_index_build_scheduler.cpp)
+    # 索引构建相位机（相位顺序 / 多轮追赶 / 失败绝不 PUBLIC / 阶段边界取消）
+    add_executable(index_build_task_tests tests/test_index_build_task.cpp)
+    target_include_directories(index_build_task_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(index_build_task_tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+    )
+    gtest_add_tests(TARGET index_build_task_tests)
+
     target_include_directories(index_build_scheduler_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(index_build_scheduler_tests PRIVATE
         GTest::gtest
